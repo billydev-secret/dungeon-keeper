@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web_server.auth import AuthenticatedUser
@@ -19,6 +20,7 @@ router = APIRouter()
 async def home_data(
     request: Request,
     fields: Optional[str] = Query(None),
+    include_bots: bool = Query(False),
     user: AuthenticatedUser = Depends(require_perms(set())),
 ):
     # If fields is provided, only compute those field groups.
@@ -59,6 +61,7 @@ async def home_data(
         wanted = (_ALL_GROUPS if wanted is None else wanted) - restricted
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
 
@@ -182,26 +185,29 @@ async def home_data(
             # Message counts
             if _need("messages"):
                 msgs_1h = conn.execute(
-                    "SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ?",
-                    (guild_id, int(one_hour)),
+                    f"SELECT COUNT(*) FROM messages "
+                    f"WHERE guild_id = ? AND ts >= ?{bot_clause}",
+                    (guild_id, int(one_hour), *bot_params),
                 ).fetchone()[0]
                 msgs_24h = conn.execute(
-                    "SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ?",
-                    (guild_id, int(one_day)),
+                    f"SELECT COUNT(*) FROM messages "
+                    f"WHERE guild_id = ? AND ts >= ?{bot_clause}",
+                    (guild_id, int(one_day), *bot_params),
                 ).fetchone()[0]
                 spark_rows = conn.execute(
-                    """
+                    f"""
                     SELECT CAST((ts - ?) / 3600 AS INTEGER) AS bucket, COUNT(*) AS cnt
                     FROM messages
-                    WHERE guild_id = ? AND ts >= ?
+                    WHERE guild_id = ? AND ts >= ?{bot_clause}
                     GROUP BY bucket ORDER BY bucket
                     """,
-                    (int(one_day), guild_id, int(one_day)),
+                    (int(one_day), guild_id, int(one_day), *bot_params),
                 ).fetchall()
                 spark_map = {int(r[0]): int(r[1]) for r in spark_rows}
                 unique_today = conn.execute(
-                    "SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id = ? AND ts >= ?",
-                    (guild_id, int(one_day)),
+                    f"SELECT COUNT(DISTINCT author_id) FROM messages "
+                    f"WHERE guild_id = ? AND ts >= ?{bot_clause}",
+                    (guild_id, int(one_day), *bot_params),
                 ).fetchone()[0]
                 result.update(
                     msgs_1h=msgs_1h,
@@ -219,27 +225,34 @@ async def home_data(
                 if nsfw_channel_ids:
                     placeholders = ",".join("?" * len(nsfw_channel_ids))
                     nsfw_1h = conn.execute(
-                        f"SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ? AND channel_id IN ({placeholders})",
-                        [guild_id, int(one_hour)] + nsfw_channel_ids,
+                        f"SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ? "
+                        f"AND channel_id IN ({placeholders}){bot_clause}",
+                        [guild_id, int(one_hour)] + nsfw_channel_ids + list(bot_params),
                     ).fetchone()[0]
                     nsfw_24h = conn.execute(
-                        f"SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ? AND channel_id IN ({placeholders})",
-                        [guild_id, int(one_day)] + nsfw_channel_ids,
+                        f"SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ? "
+                        f"AND channel_id IN ({placeholders}){bot_clause}",
+                        [guild_id, int(one_day)] + nsfw_channel_ids + list(bot_params),
                     ).fetchone()[0]
                     nsfw_spark_rows = conn.execute(
                         f"""
                         SELECT CAST((ts - ?) / 3600 AS INTEGER) AS bucket, COUNT(*) AS cnt
                         FROM messages
-                        WHERE guild_id = ? AND ts >= ? AND channel_id IN ({placeholders})
+                        WHERE guild_id = ? AND ts >= ?
+                          AND channel_id IN ({placeholders}){bot_clause}
                         GROUP BY bucket ORDER BY bucket
                         """,
-                        [int(one_day), guild_id, int(one_day)] + nsfw_channel_ids,
+                        [int(one_day), guild_id, int(one_day)]
+                        + nsfw_channel_ids
+                        + list(bot_params),
                     ).fetchall()
                     nsfw_spark_map = {int(r[0]): int(r[1]) for r in nsfw_spark_rows}
                     nsfw_sparkline = [nsfw_spark_map.get(i, 0) for i in range(24)]
                     nsfw_unique = conn.execute(
-                        f"SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id = ? AND ts >= ? AND channel_id IN ({placeholders})",
-                        [guild_id, int(one_day)] + nsfw_channel_ids,
+                        f"SELECT COUNT(DISTINCT author_id) FROM messages "
+                        f"WHERE guild_id = ? AND ts >= ? "
+                        f"AND channel_id IN ({placeholders}){bot_clause}",
+                        [guild_id, int(one_day)] + nsfw_channel_ids + list(bot_params),
                     ).fetchone()[0]
                 result.update(
                     nsfw_1h=nsfw_1h,
@@ -252,13 +265,13 @@ async def home_data(
             top_channels: list[dict] = []
             if _need("top_channels"):
                 top_channels_rows = conn.execute(
-                    """
+                    f"""
                     SELECT channel_id, COUNT(*) AS cnt
                     FROM messages
-                    WHERE guild_id = ? AND ts >= ?
+                    WHERE guild_id = ? AND ts >= ?{bot_clause}
                     GROUP BY channel_id ORDER BY cnt DESC LIMIT 5
                     """,
-                    (guild_id, int(one_hour)),
+                    (guild_id, int(one_hour), *bot_params),
                 ).fetchall()
                 top_channels = [
                     {"channel_id": str(r[0]), "channel_name": "", "count": int(r[1])}
@@ -270,13 +283,13 @@ async def home_data(
             top_users: list[dict] = []
             if _need("top_users"):
                 top_users_rows = conn.execute(
-                    """
+                    f"""
                     SELECT author_id, COUNT(*) AS cnt
                     FROM messages
-                    WHERE guild_id = ? AND ts >= ?
+                    WHERE guild_id = ? AND ts >= ?{bot_clause}
                     GROUP BY author_id ORDER BY cnt DESC LIMIT 5
                     """,
-                    (guild_id, int(one_hour)),
+                    (guild_id, int(one_hour), *bot_params),
                 ).fetchall()
                 top_users = [
                     {"user_id": str(r[0]), "user_name": "", "count": int(r[1])}
@@ -392,12 +405,12 @@ async def home_data(
                 seven_days_ago = now - 7 * 86400
                 thirty_days_ago = now - 30 * 86400
                 return_rows = conn.execute(
-                    """
+                    f"""
                     WITH recent_msgs AS (
                         SELECT author_id, ts,
                                LAG(ts) OVER (PARTITION BY author_id ORDER BY ts) AS prev_ts
                         FROM messages
-                        WHERE guild_id = ? AND ts >= ?
+                        WHERE guild_id = ? AND ts >= ?{bot_clause}
                     ),
                     returns AS (
                         SELECT author_id, ts AS return_ts, (ts - prev_ts) AS gap,
@@ -415,7 +428,12 @@ async def home_data(
                     ORDER BY return_ts DESC
                     LIMIT 50
                     """,
-                    (guild_id, int(thirty_days_ago), int(seven_days_ago)),
+                    (
+                        guild_id,
+                        int(thirty_days_ago),
+                        *bot_params,
+                        int(seven_days_ago),
+                    ),
                 ).fetchall()
                 return_candidates = [
                     {
@@ -482,12 +500,12 @@ async def home_data(
             conversation_starters: list[dict] = []
             if _need("starters"):
                 starter_rows = conn.execute(
-                    """
+                    f"""
                     WITH ranked AS (
                         SELECT author_id, ts,
                                LAG(ts) OVER (PARTITION BY channel_id ORDER BY ts) AS prev_ts
                         FROM messages
-                        WHERE guild_id = ? AND ts >= ? - 1800
+                        WHERE guild_id = ? AND ts >= ? - 1800{bot_clause}
                     )
                     SELECT author_id, COUNT(*) AS starts
                     FROM ranked
@@ -496,7 +514,7 @@ async def home_data(
                     ORDER BY starts DESC
                     LIMIT 5
                     """,
-                    (guild_id, int(one_day), int(one_day)),
+                    (guild_id, int(one_day), *bot_params, int(one_day)),
                 ).fetchall()
                 conversation_starters = [
                     {
@@ -543,18 +561,18 @@ async def home_data(
             channel_loyalists: list[dict] = []
             if _need("loyalists"):
                 loyalty_rows = conn.execute(
-                    """
+                    f"""
                     WITH user_totals AS (
                         SELECT author_id, COUNT(*) AS total
                         FROM messages
-                        WHERE guild_id = ? AND ts >= ?
+                        WHERE guild_id = ? AND ts >= ?{bot_clause}
                         GROUP BY author_id
                         HAVING total >= 10
                     ),
                     user_channel AS (
                         SELECT author_id, channel_id, COUNT(*) AS ch_count
                         FROM messages
-                        WHERE guild_id = ? AND ts >= ?
+                        WHERE guild_id = ? AND ts >= ?{bot_clause}
                         GROUP BY author_id, channel_id
                     )
                     SELECT uc.author_id, uc.channel_id, uc.ch_count, ut.total,
@@ -565,7 +583,14 @@ async def home_data(
                     ORDER BY ut.total DESC
                     LIMIT 5
                     """,
-                    (guild_id, int(one_day), guild_id, int(one_day)),
+                    (
+                        guild_id,
+                        int(one_day),
+                        *bot_params,
+                        guild_id,
+                        int(one_day),
+                        *bot_params,
+                    ),
                 ).fetchall()
                 channel_loyalists = [
                     {

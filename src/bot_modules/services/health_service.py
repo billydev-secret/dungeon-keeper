@@ -55,6 +55,16 @@ def init_health_tables(conn: sqlite3.Connection) -> None:
 DEFAULT_TTL = 900  # 15 minutes
 
 
+def cache_key(metric_key: str, *, include_bots: bool = False) -> str:
+    """Namespace a metric key so bot-inclusive payloads can't serve the default.
+
+    The cache is keyed on ``(guild_id, metric_key)`` alone, so without this a
+    single ``include_bots=1`` request would poison the default view for the
+    whole TTL (and vice versa).
+    """
+    return f"{metric_key}+bots" if include_bots else metric_key
+
+
 def get_cached(conn: sqlite3.Connection, guild_id: int, key: str) -> dict | None:
     """Return cached payload if fresh, else ``None``."""
     row = conn.execute(

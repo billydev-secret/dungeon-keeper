@@ -9,6 +9,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
+from bot_modules.core.bot_exclusion import bot_ids_subquery
 from bot_modules.services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
@@ -59,6 +60,7 @@ async def search_messages(
     min_length: int | None = Query(None, ge=0, description="Minimum content length"),
     max_length: int | None = Query(None, ge=0, description="Maximum content length"),
     sort: SORT_OPTIONS = "newest",
+    include_bots: bool = Query(False),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
 ):
@@ -210,6 +212,13 @@ async def search_messages(
             if max_length is not None:
                 clauses.append("LENGTH(m.content) <= ?")
                 params.append(max_length)
+
+            # Bots are excluded from the browser by default, matching every
+            # other message-volume surface. An explicit ``author`` filter is an
+            # override: searching *for* a bot must still return its messages.
+            if not include_bots and not author:
+                clauses.append(f"m.author_id NOT IN ({bot_ids_subquery()})")
+                params.append(guild_id)
 
             where = " AND ".join(clauses)
 
@@ -400,6 +409,7 @@ async def export_messages(
     min_length: int | None = Query(None, ge=0),
     max_length: int | None = Query(None, ge=0),
     sort: SORT_OPTIONS = "newest",
+    include_bots: bool = Query(False),
 ):
     """Export all matching messages as a downloadable JSON file (capped at 5000 rows)."""
     ctx = get_ctx(request)
@@ -526,6 +536,13 @@ async def export_messages(
             if max_length is not None:
                 clauses.append("LENGTH(m.content) <= ?")
                 params.append(max_length)
+
+            # Bots are excluded from the browser by default, matching every
+            # other message-volume surface. An explicit ``author`` filter is an
+            # override: searching *for* a bot must still return its messages.
+            if not include_bots and not author:
+                clauses.append(f"m.author_id NOT IN ({bot_ids_subquery()})")
+                params.append(guild_id)
 
             where = " AND ".join(clauses)
 

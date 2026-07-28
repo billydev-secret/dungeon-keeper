@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
+from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
+
 # The unit runs with ProtectHome=read-only, so matplotlib cannot write its
 # default config dir (~/.config/matplotlib): it warns and falls back to a fresh
 # temp dir on every boot, rebuilding the font cache each time. Point it at this
@@ -745,6 +747,7 @@ def query_dropoff_profiles(
     min_previous: int = 5,
     limit: int = 10,
     target_user_id: int | None = None,
+    include_bots: bool = False,
 ) -> list[DropoffProfile]:
     """Compute enriched engagement profiles for users with message-rate drops.
 
@@ -815,6 +818,15 @@ def query_dropoff_profiles(
             min_previous=min_previous,
             limit=limit,
         )
+
+    # Every enrichment query below is scoped by ``author_id IN (user_ids)``, so
+    # filtering the candidate list here is the single point that keeps bots out
+    # of the whole profile set.
+    if not include_bots and candidates:
+        bot_ids = {
+            r[0] for r in conn.execute(bot_ids_subquery(), (guild_id,)).fetchall()
+        }
+        candidates = [c for c in candidates if c[0] not in bot_ids]
 
     if not candidates:
         return []
@@ -1532,6 +1544,7 @@ def query_nsfw_gender_activity(
     *,
     utc_offset_hours: float = 0,
     media_only: bool = False,
+    include_bots: bool = False,
 ) -> tuple[list[str], dict[str, list[int]]]:
     """
     Query channel message counts per time bucket, grouped by gender.
@@ -1560,6 +1573,12 @@ def query_nsfw_gender_activity(
     # classification, not a URL), so the media split works even at storage level
     # "none". 'media' = non-gif image/video — exactly what this metric counts.
     media_filter = "AND m.media_kind = 'media'" if media_only else ""
+    # LEFT JOIN, so bot authors are not dropped by the gender join — they fall
+    # into the 'unknown' bucket and inflate it. Filter them explicitly.
+    bot_clause, bot_params = bot_filter_clause(
+        guild_id, column="m.author_id", include_bots=include_bots
+    )
+    params.extend(bot_params)
     rows = conn.execute(
         f"""
         SELECT
@@ -1571,7 +1590,7 @@ def query_nsfw_gender_activity(
             ON mg.guild_id = m.guild_id AND mg.user_id = m.author_id
         WHERE m.guild_id = ? AND m.ts >= ?
             AND m.channel_id IN ({ch_placeholders})
-            {media_filter}
+            {media_filter}{bot_clause}
         GROUP BY bucket, gender
         """,
         params,

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 import discord
 
+from bot_modules.core.bot_exclusion import bot_ids_subquery
 from bot_modules.services.gender_service import get_gender_map
 
 # ---------------------------------------------------------------------------
@@ -249,6 +250,7 @@ def compute_quality_scores(
     now: datetime | None = None,
     window_days: int | None = None,
     min_active_days: int | None = None,
+    include_bots: bool = False,
 ) -> list[QualityScore]:
     """Compute quality scores for all provided members.
 
@@ -381,13 +383,24 @@ def compute_quality_scores(
     msgs_by_author: dict[int, list[tuple[int, int, int | None, int | None]]] = (
         defaultdict(list)
     )  # author -> [(message_id, ts, content_len, reply_to_id)]
+    # ``members`` is already bot-free (``if m.bot: continue`` above), but the
+    # *replies* counted below come from every author in the window. A bot
+    # auto-replying to a member would otherwise inflate that member's content
+    # resonance and reverse-engagement. ``msg_author_map`` stays complete so
+    # reply targets still resolve — only the reply's author is filtered.
+    reply_bot_ids: set[int] = set()
+    if not include_bots:
+        reply_bot_ids = {
+            r[0] for r in conn.execute(bot_ids_subquery(), (guild_id,)).fetchall()
+        }
+
     msg_author_map: dict[int, int] = {}  # message_id -> author_id
     reply_rows: list[tuple[int, int, int]] = []  # (ts, author_id, reply_to_id)
     for mid, uid, ts, content_len, reply_to in msg_rows:
         msg_author_map[mid] = uid
         if uid in id_set:
             msgs_by_author[uid].append((mid, ts, content_len, reply_to))
-        if reply_to is not None:
+        if reply_to is not None and uid not in reply_bot_ids:
             reply_rows.append((ts, uid, reply_to))
 
     # Reaction log data: outbound (reactor -> [(author, ts)]) and inbound
@@ -691,6 +704,7 @@ def build_quality_report(
     now: datetime | None = None,
     window_days: int | None = None,
     min_active_days: int | None = None,
+    include_bots: bool = False,
 ) -> dict:
     """Compute scores and shape them for the dashboard report.
 
@@ -705,6 +719,7 @@ def build_quality_report(
         now=now,
         window_days=window_days,
         min_active_days=min_active_days,
+        include_bots=include_bots,
     )
     # Gender tags for the panel's per-gender totals (member_gender is the
     # mod-maintained roster; absent rows render as "unknown").

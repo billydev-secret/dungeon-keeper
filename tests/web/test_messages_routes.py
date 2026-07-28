@@ -446,3 +446,58 @@ def test_messages_routes_require_auth(fake_ctx, path):
     resp = client.get(path)
     assert resp.status_code in (401, 403)
     client.close()
+
+
+# ── Bot exclusion ─────────────────────────────────────────────────────
+#
+# Bots are ~21% of stored volume, so the browser hides them by default. An
+# explicit ``author`` filter is the override — searching *for* a bot must
+# still work, otherwise the panel could never surface bot activity at all.
+
+
+def _seed_bot_corpus(db_path, guild_id):
+    _seed(
+        db_path,
+        guild_id=guild_id,
+        messages=[
+            {"message_id": 1, "channel_id": 10, "author_id": 100, "content": "human", "ts": 100},
+            {"message_id": 2, "channel_id": 10, "author_id": 999, "content": "beep", "ts": 200},
+            {"message_id": 3, "channel_id": 10, "author_id": 999, "content": "boop", "ts": 300},
+        ],
+    )
+    with open_db(db_path) as conn:
+        for uid, is_bot in ((100, 0), (999, 1)):
+            conn.execute(
+                "INSERT OR REPLACE INTO known_users "
+                "(guild_id, user_id, username, display_name, updated_at, is_bot,"
+                " current_member) VALUES (?,?,?,?,?,?,1)",
+                (guild_id, uid, f"u{uid}", f"u{uid}", 0.0, is_bot),
+            )
+
+
+def test_search_excludes_bots_by_default(authed_client, fake_ctx):
+    _seed_bot_corpus(fake_ctx.db_path, fake_ctx.guild_id)
+    body = authed_client.get("/api/messages/search").json()
+    assert body["total"] == 1
+    assert [m["message_id"] for m in body["messages"]] == ["1"]
+
+
+def test_search_includes_bots_when_opted_in(authed_client, fake_ctx):
+    _seed_bot_corpus(fake_ctx.db_path, fake_ctx.guild_id)
+    body = authed_client.get("/api/messages/search?include_bots=true").json()
+    assert body["total"] == 3
+
+
+def test_search_explicit_bot_author_overrides_exclusion(authed_client, fake_ctx):
+    """Searching for a bot by id returns its messages without include_bots."""
+    _seed_bot_corpus(fake_ctx.db_path, fake_ctx.guild_id)
+    body = authed_client.get("/api/messages/search?author=999").json()
+    assert body["total"] == 2
+
+
+def test_export_excludes_bots_by_default(authed_client, fake_ctx):
+    _seed_bot_corpus(fake_ctx.db_path, fake_ctx.guild_id)
+    resp = authed_client.get("/api/messages/search/export")
+    payload = json.loads(resp.content)
+    rows = payload["messages"] if isinstance(payload, dict) else payload
+    assert len(rows) == 1

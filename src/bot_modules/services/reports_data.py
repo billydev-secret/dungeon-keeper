@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal, TypedDict
 
+from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.services.activity_graphs import (
     Resolution,
     query_dropoff_profiles,
@@ -205,6 +206,7 @@ def get_nsfw_gender_data(
     channel_ids: list[int],
     utc_offset_hours: float,
     media_only: bool,
+    include_bots: bool = False,
 ) -> NsfwGenderData:
     labels, gender_counts = query_nsfw_gender_activity(
         conn,
@@ -213,6 +215,7 @@ def get_nsfw_gender_data(
         channel_ids,
         utc_offset_hours=utc_offset_hours,
         media_only=media_only,
+        include_bots=include_bots,
     )
     series: list[GenderSeries] = [
         {"gender": g, "counts": c, "color": _GENDER_COLORS.get(g, "#72767d")}
@@ -343,9 +346,15 @@ def _query_greeter_response_details(
     sessions: list[GreeterSession],
     *,
     now_ts: float,
+    include_bots: bool = False,
 ) -> list[GreeterResponseEntry]:
     if not sessions:
         return []
+
+    # With no configured greeter list this falls back to "everyone who posted in
+    # the greeter channel", which would otherwise let a welcome bot count as the
+    # greeter and report a ~0s response time.
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
 
     if greeter_ids:
         placeholders = ",".join("?" * len(greeter_ids))
@@ -360,12 +369,12 @@ def _query_greeter_response_details(
         ).fetchall()
     else:
         greeter_msgs = conn.execute(
-            """
+            f"""
             SELECT author_id, ts FROM messages
-            WHERE guild_id = ? AND channel_id = ?
+            WHERE guild_id = ? AND channel_id = ?{bot_clause}
             ORDER BY ts
             """,
-            (guild_id, greeter_channel_id),
+            (guild_id, greeter_channel_id, *bot_params),
         ).fetchall()
 
     greeter_times = [(int(r[0]), float(r[1])) for r in greeter_msgs]
@@ -447,6 +456,7 @@ def get_greeter_response_data(
     sessions: list[GreeterSession],
     *,
     now_ts: float | None = None,
+    include_bots: bool = False,
 ) -> GreeterResponseData:
     now_ts = now_ts or datetime.now(timezone.utc).timestamp()
     entries = _query_greeter_response_details(
@@ -456,6 +466,7 @@ def get_greeter_response_data(
         greeter_ids,
         sessions,
         now_ts=now_ts,
+        include_bots=include_bots,
     )
     response_times = [
         float(entry["response_seconds"])
@@ -922,6 +933,7 @@ def get_retention_data(
     period_days: int = 30,
     min_previous: int = 5,
     limit: int = 25,
+    include_bots: bool = False,
 ) -> RetentionData:
     period_seconds = period_days * 86400
     profiles = query_dropoff_profiles(
@@ -930,6 +942,7 @@ def get_retention_data(
         period_seconds,
         min_previous=min_previous,
         limit=limit,
+        include_bots=include_bots,
     )
 
     # Server-wide activity ratio for normalization (from first profile)
@@ -1379,24 +1392,29 @@ def get_channel_comparison_data(
     conn: sqlite3.Connection,
     guild_id: int,
     days: int = 30,
+    include_bots: bool = False,
 ) -> ChannelComparisonData:
     now = int(datetime.now(timezone.utc).timestamp())
     cutoff = now - days * 86400
     mid = now - days * 86400 // 2  # midpoint for trend
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
+    msg_bot_clause, msg_bot_params = bot_filter_clause(
+        guild_id, column="m.author_id", include_bots=include_bots
+    )
 
     rows = conn.execute(
-        """
+        f"""
         SELECT channel_id,
             COUNT(*) AS total,
             COUNT(DISTINCT author_id) AS authors,
             SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS recent,
             SUM(CASE WHEN ts < ? THEN 1 ELSE 0 END) AS prev
         FROM messages
-        WHERE guild_id = ? AND ts >= ?
+        WHERE guild_id = ? AND ts >= ?{bot_clause}
         GROUP BY channel_id
         ORDER BY total DESC
         """,
-        (mid, mid, guild_id, cutoff),
+        (mid, mid, guild_id, cutoff, *bot_params),
     ).fetchall()
 
     # XP earned per channel in the window
@@ -1413,13 +1431,13 @@ def get_channel_comparison_data(
 
     # Per-channel Gini: message distribution among authors
     author_msg_rows = conn.execute(
-        """
+        f"""
         SELECT channel_id, author_id, COUNT(*) AS cnt
         FROM messages
-        WHERE guild_id = ? AND ts >= ?
+        WHERE guild_id = ? AND ts >= ?{bot_clause}
         GROUP BY channel_id, author_id
         """,
-        (guild_id, cutoff),
+        (guild_id, cutoff, *bot_params),
     ).fetchall()
     ch_author_counts: dict[str, list[float]] = {}
     for r in author_msg_rows:
@@ -1441,14 +1459,14 @@ def get_channel_comparison_data(
 
     # Average sentiment per channel
     sentiment_rows = conn.execute(
-        """
+        f"""
         SELECT m.channel_id, AVG(ms.sentiment) AS avg_s
         FROM message_sentiment ms
         JOIN messages m ON ms.message_id = m.message_id
-        WHERE ms.guild_id = ? AND m.ts >= ?
+        WHERE ms.guild_id = ? AND m.ts >= ?{msg_bot_clause}
         GROUP BY m.channel_id
         """,
-        (guild_id, cutoff),
+        (guild_id, cutoff, *msg_bot_params),
     ).fetchall()
     sentiment_by_channel: dict[str, float | None] = {
         str(r[0]): round(float(r[1]), 3) if r[1] is not None else None

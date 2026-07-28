@@ -78,8 +78,8 @@ export function mount(container, initialParams) {
           </div>
         </label>
         <label style="flex-direction:row;align-items:center;gap:6px;">
-          <input type="checkbox" data-control="exclude-bots" />
-          Exclude Bots
+          <input type="checkbox" data-control="include-bots" />
+          Show Bots
         </label>
       </div>
       <div data-excluded-channels style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
@@ -90,16 +90,15 @@ export function mount(container, initialParams) {
 
   const resEl  = container.querySelector('[data-control="resolution"]');
   const modeEl = container.querySelector('[data-control="mode"]');
-  const excludeBotsEl = container.querySelector('[data-control="exclude-bots"]');
+  const includeBotsEl = container.querySelector('[data-control="include-bots"]');
   const excludeInput = container.querySelector("[data-exclude-input]");
   const excludeList  = container.querySelector("[data-exclude-list]");
   const excludePills = container.querySelector("[data-excluded-channels]");
 
   resEl.value  = initialParams.resolution || "day";
   modeEl.value = initialParams.mode || "xp";
-  excludeBotsEl.checked = initialParams.exclude_bots === undefined
-    ? true
-    : initialParams.exclude_bots === "1";
+  // Bots are excluded everywhere by default; this box opts back in.
+  includeBotsEl.checked = initialParams.include_bots === "1";
 
   let chart = null;
   let slider = null;
@@ -212,7 +211,7 @@ export function mount(container, initialParams) {
     if (userFS.getValue()) params.user_id = userFS.getValue();
     if (chanFS.getValue()) params.channel_id = chanFS.getValue();
     if (excludedChannels.size) params.exclude_channel_ids = [...excludedChannels].join(",");
-    if (excludeBotsEl.checked) params.exclude_bots = "true";
+    if (includeBotsEl.checked) params.include_bots = "true";
 
     const qs = new URLSearchParams();
     qs.set("resolution", resEl.value);
@@ -220,7 +219,7 @@ export function mount(container, initialParams) {
     if (userFS.getValue()) qs.set("user_id", userFS.getValue());
     if (chanFS.getValue()) qs.set("channel_id", chanFS.getValue());
     qs.set("exclude_channels", [...excludedChannels].join(","));
-    qs.set("exclude_bots", excludeBotsEl.checked ? "1" : "0");
+    qs.set("include_bots", includeBotsEl.checked ? "1" : "0");
     history.replaceState(null, "", `#/activity?${qs}`);
 
     const wrap = container.querySelector(".chart-wrap");
@@ -276,7 +275,7 @@ export function mount(container, initialParams) {
     }
   }
 
-  for (const el of [resEl, modeEl, excludeBotsEl]) el.addEventListener("change", refresh);
+  for (const el of [resEl, modeEl, includeBotsEl]) el.addEventListener("change", refresh);
 
   (async () => { await loadDropdowns(); await refresh(); })();
 

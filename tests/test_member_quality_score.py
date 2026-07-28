@@ -25,7 +25,10 @@ from bot_modules.services.member_quality_score import (
     init_quality_score_tables,
 )
 from bot_modules.services.gender_service import init_gender_tables, set_gender
-from bot_modules.services.message_store import init_message_tables
+from bot_modules.services.message_store import (
+    init_known_users_table,
+    init_message_tables,
+)
 
 GUILD = 111
 
@@ -46,6 +49,7 @@ def conn():
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     init_message_tables(c)
+    init_known_users_table(c)
     init_quality_score_tables(c)
     init_gender_tables(c)
     yield c
@@ -304,3 +308,66 @@ def test_custom_window_params(conn):
     )
     assert by_id(scores_90, 1).status == STATUS_ACTIVE
     assert by_id(scores_30, 1).status == STATUS_INSUFFICIENT
+
+
+# ── Bot replies must not inflate a member's resonance ──────────────────
+#
+# ``members`` was already bot-free (bots never get *scored*), but the replies
+# counted toward content resonance came from every author in the window — so a
+# welcome/auto-responder bot replying to a member credited that member as if a
+# human had engaged with them.
+
+
+def _mark_bot(conn, uid: int):
+    conn.execute(
+        "INSERT OR REPLACE INTO known_users "
+        "(guild_id, user_id, username, display_name, updated_at, is_bot,"
+        " current_member) VALUES (?,?,?,?,?,?,1)",
+        (GUILD, uid, f"u{uid}", f"u{uid}", 0.0, 1),
+    )
+
+
+def test_bot_replies_do_not_count_as_resonance(conn):
+    """A bot replying to only one member must not rank them above their peer.
+
+    ``content_resonance`` is percentile-normalized across the scored cohort, so
+    the effect is only visible with two members: identical humans should tie,
+    and only the bot's replies can break that tie.
+    """
+    seed_active(conn, 1, days=12)
+    seed_active(conn, 2, days=12)
+    target = add_msg(conn, 1, days_ago=5)
+    add_msg(conn, 2, days_ago=5)
+    _mark_bot(conn, 99)
+    for _ in range(5):
+        add_msg(conn, 99, days_ago=4, reply_to=target)
+
+    members = [FakeMember(1, 200), FakeMember(2, 200)]
+    quiet = compute_quality_scores(conn, GUILD, members, now=NOW)
+    assert by_id(quiet, 1).content_resonance == by_id(quiet, 2).content_resonance
+
+    loud = compute_quality_scores(conn, GUILD, members, now=NOW, include_bots=True)
+    assert by_id(loud, 1).content_resonance > by_id(loud, 2).content_resonance
+
+
+def test_human_replies_still_count_as_resonance(conn):
+    """The filter must not suppress genuine human engagement."""
+    seed_active(conn, 1, days=12)
+    seed_active(conn, 2, days=12)
+    target = add_msg(conn, 1, days_ago=5)
+
+    before = by_id(
+        compute_quality_scores(
+            conn, GUILD, [FakeMember(1, 200), FakeMember(2, 200)], now=NOW
+        ),
+        1,
+    )
+    for _ in range(5):
+        add_msg(conn, 2, days_ago=4, reply_to=target)
+    after = by_id(
+        compute_quality_scores(
+            conn, GUILD, [FakeMember(1, 200), FakeMember(2, 200)], now=NOW
+        ),
+        1,
+    )
+    assert after.content_resonance > before.content_resonance

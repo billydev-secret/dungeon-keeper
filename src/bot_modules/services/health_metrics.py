@@ -14,6 +14,8 @@ import time
 from collections import defaultdict
 from collections.abc import Sequence
 
+from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -96,21 +98,26 @@ def compute_dau_mau(
     now: float | None = None,
     member_count: int = 0,
     voice_active_count: int = 0,
+    include_bots: bool = False,
 ) -> dict:
     now = now or time.time()
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
 
     # DAU / WAU / MAU counts
     dau = conn.execute(
-        "SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id=? AND ts>=?",
-        (guild_id, _ts(1, now=now)),
+        f"SELECT COUNT(DISTINCT author_id) FROM messages "
+        f"WHERE guild_id=? AND ts>=?{bot_clause}",
+        (guild_id, _ts(1, now=now), *bot_params),
     ).fetchone()[0]
     wau = conn.execute(
-        "SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id=? AND ts>=?",
-        (guild_id, _ts(7, now=now)),
+        f"SELECT COUNT(DISTINCT author_id) FROM messages "
+        f"WHERE guild_id=? AND ts>=?{bot_clause}",
+        (guild_id, _ts(7, now=now), *bot_params),
     ).fetchone()[0]
     mau = conn.execute(
-        "SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id=? AND ts>=?",
-        (guild_id, _ts(30, now=now)),
+        f"SELECT COUNT(DISTINCT author_id) FROM messages "
+        f"WHERE guild_id=? AND ts>=?{bot_clause}",
+        (guild_id, _ts(30, now=now), *bot_params),
     ).fetchone()[0]
 
     dau_mau = _pct(dau, mau)
@@ -122,9 +129,9 @@ def compute_dau_mau(
         day_start = _ts(d + 1, now=now)
         day_end = _ts(d, now=now)
         cnt = conn.execute(
-            "SELECT COUNT(DISTINCT author_id) FROM messages "
-            "WHERE guild_id=? AND ts>=? AND ts<?",
-            (guild_id, day_start, day_end),
+            f"SELECT COUNT(DISTINCT author_id) FROM messages "
+            f"WHERE guild_id=? AND ts>=? AND ts<?{bot_clause}",
+            (guild_id, day_start, day_end, *bot_params),
         ).fetchone()[0]
         sparkline.append(cnt)
 
@@ -150,17 +157,18 @@ def compute_dau_mau(
 
     # Users active today
     todays_authors = conn.execute(
-        "SELECT DISTINCT author_id FROM messages WHERE guild_id=? AND ts>=?",
-        (guild_id, _ts(1, now=now)),
+        f"SELECT DISTINCT author_id FROM messages "
+        f"WHERE guild_id=? AND ts>=?{bot_clause}",
+        (guild_id, _ts(1, now=now), *bot_params),
     ).fetchall()
     today_ids = {r[0] for r in todays_authors}
 
     # First-ever message timestamp per user (within 90 days to limit scan)
     first_msg = {}
     rows = conn.execute(
-        "SELECT author_id, MIN(ts) AS first_ts FROM messages "
-        "WHERE guild_id=? AND ts>=? GROUP BY author_id",
-        (guild_id, _ts(90, now=now)),
+        f"SELECT author_id, MIN(ts) AS first_ts FROM messages "
+        f"WHERE guild_id=? AND ts>=?{bot_clause} GROUP BY author_id",
+        (guild_id, _ts(90, now=now), *bot_params),
     ).fetchall()
     for r in rows:
         first_msg[r["author_id"]] = r["first_ts"]
@@ -193,22 +201,22 @@ def compute_dau_mau(
     # Lurker activation rate: users whose first message is within last 30 days
     # out of total members
     first_timers_30d = conn.execute(
-        """SELECT COUNT(*) FROM (
+        f"""SELECT COUNT(*) FROM (
             SELECT author_id, MIN(ts) AS first_ts FROM messages
-            WHERE guild_id=? GROUP BY author_id
+            WHERE guild_id=?{bot_clause} GROUP BY author_id
             HAVING first_ts >= ?
         )""",
-        (guild_id, thirty_days_ago),
+        (guild_id, *bot_params, thirty_days_ago),
     ).fetchone()[0]
     lurker_activation = _pct(first_timers_30d, member_count) if member_count else 0
 
     # Day-of-week breakdown (avg DAU per weekday, 0=Mon)
     dow_rows = conn.execute(
-        """SELECT CAST(((ts % 604800) + 259200) / 86400 AS INTEGER) % 7 AS dow,
+        f"""SELECT CAST(((ts % 604800) + 259200) / 86400 AS INTEGER) % 7 AS dow,
                   COUNT(DISTINCT author_id) AS cnt
-           FROM messages WHERE guild_id=? AND ts>=?
+           FROM messages WHERE guild_id=? AND ts>=?{bot_clause}
            GROUP BY dow ORDER BY dow""",
-        (guild_id, thirty_days_ago),
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
     dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     dow_map = {r["dow"]: r["cnt"] for r in dow_rows}
@@ -248,21 +256,23 @@ def compute_heatmap(
     *,
     now: float | None = None,
     utc_offset_hours: float = 0.0,
+    include_bots: bool = False,
 ) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
     offset_secs = int(utc_offset_hours * 3600)
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
 
     # 7x24 grid: day_of_week (0=Mon) x hour_of_day -> avg msgs/hr, bucketed in
     # guild-local time (ts shifted by the guild's tz offset before bucketing).
     rows = conn.execute(
-        """SELECT
+        f"""SELECT
              CAST((((ts + ?) % 604800) + 259200) / 86400 AS INTEGER) % 7 AS dow,
              ((ts + ?) % 86400) / 3600 AS hod,
              COUNT(*) AS cnt
-           FROM messages WHERE guild_id=? AND ts>=?
+           FROM messages WHERE guild_id=? AND ts>=?{bot_clause}
            GROUP BY dow, hod""",
-        (offset_secs, offset_secs, guild_id, thirty_days_ago),
+        (offset_secs, offset_secs, guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
 
     weeks = 4.3  # ~30 days
@@ -294,14 +304,14 @@ def compute_heatmap(
 
     # Per-channel mini heatmaps (top 10 channels by volume)
     ch_rows = conn.execute(
-        """SELECT channel_id,
+        f"""SELECT channel_id,
              CAST((((ts + ?) % 604800) + 259200) / 86400 AS INTEGER) % 7 AS dow,
              ((ts + ?) % 86400) / 3600 AS hod,
              COUNT(*) AS cnt
-           FROM messages WHERE guild_id=? AND ts>=?
+           FROM messages WHERE guild_id=? AND ts>=?{bot_clause}
            GROUP BY channel_id, dow, hod
            ORDER BY cnt DESC""",
-        (offset_secs, offset_secs, guild_id, thirty_days_ago),
+        (offset_secs, offset_secs, guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
 
     ch_totals: dict[int, int] = defaultdict(int)
@@ -341,51 +351,56 @@ def compute_channel_health(
     *,
     now: float | None = None,
     nsfw_channel_ids: list[int] | None = None,
+    include_bots: bool = False,
 ) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
     nsfw_ids = set(nsfw_channel_ids or [])
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
 
     # Per-channel stats
     ch_rows = conn.execute(
-        """SELECT channel_id,
+        f"""SELECT channel_id,
                   COUNT(*) AS msg_count,
                   COUNT(DISTINCT author_id) AS unique_users
-           FROM messages WHERE guild_id=? AND ts>=?
+           FROM messages WHERE guild_id=? AND ts>=?{bot_clause}
            GROUP BY channel_id""",
-        (guild_id, thirty_days_ago),
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
 
     # Thread depth: avg replies per thread starter
     depth_rows = conn.execute(
-        """SELECT m.channel_id,
+        f"""SELECT m.channel_id,
                   AVG(reply_cnt) AS avg_depth
            FROM (
                SELECT channel_id, reply_to_id, COUNT(*) AS reply_cnt
                FROM messages
-               WHERE guild_id=? AND ts>=? AND reply_to_id IS NOT NULL
+               WHERE guild_id=? AND ts>=? AND reply_to_id IS NOT NULL{bot_clause}
                GROUP BY channel_id, reply_to_id
            ) m
            GROUP BY m.channel_id""",
-        (guild_id, thirty_days_ago),
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
     depth_map = {r["channel_id"]: round(r["avg_depth"], 2) for r in depth_rows}
 
     # Per-channel Gini (message distribution among authors)
     author_counts_rows = conn.execute(
-        """SELECT channel_id, author_id, COUNT(*) AS cnt
-           FROM messages WHERE guild_id=? AND ts>=?
+        f"""SELECT channel_id, author_id, COUNT(*) AS cnt
+           FROM messages WHERE guild_id=? AND ts>=?{bot_clause}
            GROUP BY channel_id, author_id""",
-        (guild_id, thirty_days_ago),
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
     ch_author_counts: dict[int, list[int]] = defaultdict(list)
     for r in author_counts_rows:
         ch_author_counts[r["channel_id"]].append(r["cnt"])
 
-    # Last message per channel (for dormant detection)
+    # Last message per channel (for dormant detection). Bot-excluded too, so a
+    # channel kept "alive" only by bot posts reads as dormant — which is the
+    # point: #register's 2.9k messages are 99% our own bot.
     last_msg_rows = conn.execute(
-        "SELECT channel_id, MAX(ts) AS last_ts FROM messages WHERE guild_id=? GROUP BY channel_id",
-        (guild_id,),
+        f"SELECT channel_id, MAX(ts) AS last_ts FROM messages "
+        f"WHERE guild_id=?{bot_clause} GROUP BY channel_id",
+        (guild_id, *bot_params),
     ).fetchall()
     last_msg_map = {r["channel_id"]: r["last_ts"] for r in last_msg_rows}
 
@@ -464,16 +479,22 @@ def compute_channel_health(
 
 
 def compute_gini(
-    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    include_bots: bool = False,
 ) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
 
-    # Message counts per user
+    # Message counts per user. Bots skew this metric harder than any other — a
+    # single high-volume bot reads as extreme participation inequality.
     rows = conn.execute(
-        "SELECT author_id, COUNT(*) AS cnt FROM messages "
-        "WHERE guild_id=? AND ts>=? GROUP BY author_id ORDER BY cnt",
-        (guild_id, thirty_days_ago),
+        f"SELECT author_id, COUNT(*) AS cnt FROM messages "
+        f"WHERE guild_id=? AND ts>=?{bot_clause} GROUP BY author_id ORDER BY cnt",
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
     msg_counts = [r["cnt"] for r in rows]
 
@@ -524,9 +545,10 @@ def compute_gini(
         w_start = _ts((w + 1) * 7, now=now)
         w_end = _ts(w * 7, now=now)
         w_rows = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM messages "
-            "WHERE guild_id=? AND ts>=? AND ts<? GROUP BY author_id ORDER BY cnt",
-            (guild_id, w_start, w_end),
+            f"SELECT COUNT(*) AS cnt FROM messages "
+            f"WHERE guild_id=? AND ts>=? AND ts<?{bot_clause} "
+            f"GROUP BY author_id ORDER BY cnt",
+            (guild_id, w_start, w_end, *bot_params),
         ).fetchall()
         w_vals = [r["cnt"] for r in w_rows]
         sparkline.append(round(_gini(w_vals), 3))
@@ -537,9 +559,10 @@ def compute_gini(
         w_start = _ts((w + 1) * 7, now=now)
         w_end = _ts(w * 7, now=now)
         h_rows = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM messages "
-            "WHERE guild_id=? AND ts>=? AND ts<? GROUP BY author_id ORDER BY cnt",
-            (guild_id, w_start, w_end),
+            f"SELECT COUNT(*) AS cnt FROM messages "
+            f"WHERE guild_id=? AND ts>=? AND ts<?{bot_clause} "
+            f"GROUP BY author_id ORDER BY cnt",
+            (guild_id, w_start, w_end, *bot_params),
         ).fetchall()
         h_vals = [r["cnt"] for r in h_rows]
         dt = datetime.datetime.utcfromtimestamp(w_start)
@@ -548,10 +571,10 @@ def compute_gini(
 
     # Per-channel Gini (top 10 channels)
     ch_rows = conn.execute(
-        """SELECT channel_id, author_id, COUNT(*) AS cnt
-           FROM messages WHERE guild_id=? AND ts>=?
+        f"""SELECT channel_id, author_id, COUNT(*) AS cnt
+           FROM messages WHERE guild_id=? AND ts>=?{bot_clause}
            GROUP BY channel_id, author_id""",
-        (guild_id, thirty_days_ago),
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
     ch_counts: dict[int, list[int]] = defaultdict(list)
     for r in ch_rows:
@@ -701,32 +724,41 @@ def compute_social_graph(
 
 
 def compute_sentiment(
-    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    include_bots: bool = False,
 ) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
+    # Bot output is scored by VADER like any other text, so a chatty bot's tone
+    # lands in the guild's average sentiment. Filter on the *message* author.
+    bot_clause, bot_params = bot_filter_clause(
+        guild_id, column="m.author_id", include_bots=include_bots
+    )
 
     # Overall stats — use message timestamp (m.ts) so backfilled scores
     # are attributed to the day the message was actually sent, not the day
     # the VADER score was computed.
     row = conn.execute(
-        "SELECT AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt "
-        "FROM message_sentiment ms "
-        "JOIN messages m ON ms.message_id = m.message_id "
-        "WHERE ms.guild_id=? AND m.ts>=?",
-        (guild_id, thirty_days_ago),
+        f"SELECT AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt "
+        f"FROM message_sentiment ms "
+        f"JOIN messages m ON ms.message_id = m.message_id "
+        f"WHERE ms.guild_id=? AND m.ts>=?{bot_clause}",
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchone()
     avg_sentiment = round(row["avg_s"], 3) if row["avg_s"] is not None else 0
     scored_count = row["cnt"]
 
     # Emotion category breakdown
     emotion_rows = conn.execute(
-        "SELECT ms.emotion, COUNT(*) AS cnt "
-        "FROM message_sentiment ms "
-        "JOIN messages m ON ms.message_id = m.message_id "
-        "WHERE ms.guild_id=? AND m.ts>=? AND ms.emotion IS NOT NULL "
-        "GROUP BY ms.emotion",
-        (guild_id, thirty_days_ago),
+        f"SELECT ms.emotion, COUNT(*) AS cnt "
+        f"FROM message_sentiment ms "
+        f"JOIN messages m ON ms.message_id = m.message_id "
+        f"WHERE ms.guild_id=? AND m.ts>=? AND ms.emotion IS NOT NULL{bot_clause} "
+        f"GROUP BY ms.emotion",
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
     emotions = {r["emotion"]: r["cnt"] for r in emotion_rows}
     emotion_total = sum(emotions.values()) or 1
@@ -734,16 +766,16 @@ def compute_sentiment(
 
     # Positive / negative ratio
     pos_count = conn.execute(
-        "SELECT COUNT(*) FROM message_sentiment ms "
-        "JOIN messages m ON ms.message_id = m.message_id "
-        "WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment>0.05",
-        (guild_id, thirty_days_ago),
+        f"SELECT COUNT(*) FROM message_sentiment ms "
+        f"JOIN messages m ON ms.message_id = m.message_id "
+        f"WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment>0.05{bot_clause}",
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchone()[0]
     neg_count = conn.execute(
-        "SELECT COUNT(*) FROM message_sentiment ms "
-        "JOIN messages m ON ms.message_id = m.message_id "
-        "WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment<-0.05",
-        (guild_id, thirty_days_ago),
+        f"SELECT COUNT(*) FROM message_sentiment ms "
+        f"JOIN messages m ON ms.message_id = m.message_id "
+        f"WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment<-0.05{bot_clause}",
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchone()[0]
     pos_neg_ratio = round(pos_count / neg_count, 1) if neg_count else 0
 
@@ -753,27 +785,27 @@ def compute_sentiment(
         day_start = _ts(d + 1, now=now)
         day_end = _ts(d, now=now)
         r = conn.execute(
-            "SELECT AVG(ms.sentiment) AS avg_s "
-            "FROM message_sentiment ms "
-            "JOIN messages m ON ms.message_id = m.message_id "
-            "WHERE ms.guild_id=? AND m.ts>=? AND m.ts<?",
-            (guild_id, day_start, day_end),
+            f"SELECT AVG(ms.sentiment) AS avg_s "
+            f"FROM message_sentiment ms "
+            f"JOIN messages m ON ms.message_id = m.message_id "
+            f"WHERE ms.guild_id=? AND m.ts>=? AND m.ts<?{bot_clause}",
+            (guild_id, day_start, day_end, *bot_params),
         ).fetchone()
         sparkline.append(round(r["avg_s"], 3) if r["avg_s"] is not None else 0)
 
     # Negative spikes: 5-minute windows where avg sentiment < -0.3
     spike_rows = conn.execute(
-        """SELECT CAST(m.ts / 300 AS INTEGER) * 300 AS window_start,
+        f"""SELECT CAST(m.ts / 300 AS INTEGER) * 300 AS window_start,
                   AVG(ms.sentiment) AS avg_s,
                   COUNT(*) AS cnt
            FROM message_sentiment ms
            JOIN messages m ON ms.message_id = m.message_id
-           WHERE ms.guild_id=? AND m.ts>=?
+           WHERE ms.guild_id=? AND m.ts>=?{bot_clause}
            GROUP BY CAST(m.ts / 300 AS INTEGER)
            HAVING avg_s < -0.3 AND cnt >= 3
            ORDER BY window_start DESC
            LIMIT 20""",
-        (guild_id, _ts(7, now=now)),
+        (guild_id, _ts(7, now=now), *bot_params),
     ).fetchall()
     spikes = [
         {
@@ -786,13 +818,13 @@ def compute_sentiment(
 
     # Per-channel sentiment
     ch_rows = conn.execute(
-        """SELECT ms.channel_id, AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt
+        f"""SELECT ms.channel_id, AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt
            FROM message_sentiment ms
            JOIN messages m ON ms.message_id = m.message_id
-           WHERE ms.guild_id=? AND m.ts>=?
+           WHERE ms.guild_id=? AND m.ts>=?{bot_clause}
            GROUP BY ms.channel_id
            ORDER BY avg_s DESC""",
-        (guild_id, thirty_days_ago),
+        (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
     per_channel = [
         {
@@ -832,12 +864,19 @@ def compute_newcomer_funnel(
     *,
     now: float | None = None,
     recent_join_ids: dict[int, float] | None = None,
+    include_bots: bool = False,
 ) -> dict:
     """*recent_join_ids* maps user_id -> join_timestamp for members who joined
     in the last 90 days (sourced from guild cache by the caller)."""
     now = now or time.time()
     if not recent_join_ids:
         recent_join_ids = {}
+    # The newcomer's own messages are scoped by author_id=uid (already bot-free
+    # once recent_join_ids is filtered below), so only the *replier* needs a
+    # clause.
+    replier_bot_clause, replier_bot_params = bot_filter_clause(
+        guild_id, column="m.author_id", include_bots=include_bots
+    )
 
     # Also try invite_edges for join times
     invite_rows = conn.execute(
@@ -847,6 +886,15 @@ def compute_newcomer_funnel(
     for r in invite_rows:
         if r["invitee_id"] not in recent_join_ids:
             recent_join_ids[r["invitee_id"]] = r["joined_at"]
+
+    # A bot that joined in the window is not a "newcomer" to activate.
+    if not include_bots and recent_join_ids:
+        bot_ids = {
+            r[0] for r in conn.execute(bot_ids_subquery(), (guild_id,)).fetchall()
+        }
+        recent_join_ids = {
+            uid: ts for uid, ts in recent_join_ids.items() if uid not in bot_ids
+        }
 
     if not recent_join_ids:
         return {
@@ -884,12 +932,23 @@ def compute_newcomer_funnel(
         ttfm_hours.append((first_msg["first_ts"] - join_ts) / 3600)
 
         # First reply received
+        # A welcome bot auto-replying is not the community responding, so the
+        # reply's author is bot-filtered even though the newcomer's own messages
+        # (scoped by author_id=uid above) need no filter.
         first_reply_row = conn.execute(
-            """SELECT MIN(m.ts) AS reply_ts FROM messages m
+            f"""SELECT MIN(m.ts) AS reply_ts FROM messages m
                WHERE m.guild_id=? AND m.reply_to_id IN (
                    SELECT message_id FROM messages WHERE guild_id=? AND author_id=? AND ts>=?
-               ) AND m.author_id != ? AND m.ts>=?""",
-            (guild_id, guild_id, uid, int(join_ts), uid, int(join_ts)),
+               ) AND m.author_id != ? AND m.ts>=?{replier_bot_clause}""",
+            (
+                guild_id,
+                guild_id,
+                uid,
+                int(join_ts),
+                uid,
+                int(join_ts),
+                *replier_bot_params,
+            ),
         ).fetchone()
         if first_reply_row and first_reply_row["reply_ts"] is not None:
             first_reply += 1
@@ -971,10 +1030,12 @@ def compute_cohort_retention(
     *,
     now: float | None = None,
     join_times: dict[int, float] | None = None,
+    include_bots: bool = False,
 ) -> dict:
     now = now or time.time()
     if not join_times:
         join_times = {}
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
     # Supplement from invite_edges
     rows = conn.execute(
         "SELECT invitee_id, joined_at FROM invite_edges WHERE guild_id=?",
@@ -986,12 +1047,21 @@ def compute_cohort_retention(
 
     # Fall back to first-message-ever as proxy for join date
     first_msg_rows = conn.execute(
-        "SELECT author_id, MIN(ts) AS first_ts FROM messages WHERE guild_id=? GROUP BY author_id",
-        (guild_id,),
+        f"SELECT author_id, MIN(ts) AS first_ts FROM messages "
+        f"WHERE guild_id=?{bot_clause} GROUP BY author_id",
+        (guild_id, *bot_params),
     ).fetchall()
     for r in first_msg_rows:
         if r["author_id"] not in join_times:
             join_times[r["author_id"]] = r["first_ts"]
+
+    # invite_edges and the caller's guild-cache join_times can still carry bots,
+    # and a bot in a cohort inflates every retention curve it appears in.
+    if not include_bots and join_times:
+        bot_ids = {
+            r[0] for r in conn.execute(bot_ids_subquery(), (guild_id,)).fetchall()
+        }
+        join_times = {u: t for u, t in join_times.items() if u not in bot_ids}
 
     if not join_times:
         return {

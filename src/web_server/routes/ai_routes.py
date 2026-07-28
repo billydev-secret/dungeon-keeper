@@ -7,6 +7,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from bot_modules.core.bot_exclusion import bot_ids_subquery
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
 
@@ -227,6 +228,7 @@ class AiQueryBody(BaseModel):
     author: str | list[str] | None = None
     channel: str | list[str] | None = None
     days: int = 7
+    include_bots: bool = False
 
 
 @router.post("/messages/ai-query")
@@ -278,6 +280,13 @@ async def messages_ai_query(
                 placeholders = ",".join("?" * len(channels))
                 where.append(f"channel_id IN ({placeholders})")
                 params.extend(int(c) for c in channels)
+
+            # Without this, asking the assistant "who posts most here?" is
+            # answered from a corpus that is ~21% bot output. An explicit author
+            # filter overrides, so you can still ask about a specific bot.
+            if not body.include_bots and not authors:
+                where.append(f"author_id NOT IN ({bot_ids_subquery()})")
+                params.append(guild_id)
 
             rows = conn.execute(
                 "SELECT message_id, author_id, content, reply_to_id, ts, channel_id "
