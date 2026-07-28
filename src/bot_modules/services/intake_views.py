@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import sqlite3
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -385,7 +386,7 @@ def _attach_message(ctx: AppContext, card_id: int, channel_id: int, message_id: 
 
 
 async def handle_intake_message(ctx: AppContext, message: discord.Message) -> None:
-    """Greet + completion-code detection for a message mentioning open cards.
+    """Greet + step/completion-code detection for a message addressing cards.
 
     Caller has already pre-filtered with :func:`intake_service.is_watched`.
     """
@@ -394,7 +395,12 @@ async def handle_intake_message(ctx: AppContext, message: discord.Message) -> No
     if guild is None or not isinstance(author, discord.Member):
         return
     guild_id = guild.id
+    # A reply addresses its target as surely as an @ does — fold it in so a
+    # pasted canned reply lands without hand-editing a mention into it.
     mentioned = [u.id for u in message.mentions]
+    replied_to = svc.reply_target_id(message)
+    if replied_to and replied_to not in mentioned:
+        mentioned.append(replied_to)
     author_role_ids = {r.id for r in author.roles}
     author_is_mod = _is_mod(ctx, author)
     content = message.content
@@ -414,11 +420,22 @@ async def handle_intake_message(ctx: AppContext, message: discord.Message) -> No
                 author_is_mod=author_is_mod,
             )
             results = []
-            for action, uid in actions:
+            for action, uid, step_key in actions:
                 if action == svc.ACTION_COMPLETE:
                     completed = svc.complete_card(conn, guild_id, uid, author.id, now)
                     if completed is not None:
                         results.append((svc.ACTION_COMPLETE, completed[0], uid))
+                elif action == svc.ACTION_STEP:
+                    card = svc.get_open_card(conn, guild_id, uid)
+                    if card is not None and svc.set_step_state(
+                        conn,
+                        int(card["id"]),
+                        step_key,
+                        done=True,
+                        actor_id=author.id,
+                        at=now,
+                    ):
+                        results.append((svc.ACTION_STEP, card, uid))
                 else:
                     card, ticked = svc.auto_tick(
                         conn, guild_id, uid, svc.AUTO_GREETED, now, actor_id=author.id
@@ -433,6 +450,9 @@ async def handle_intake_message(ctx: AppContext, message: discord.Message) -> No
         log.exception("intake: message handling failed in guild %s", guild_id)
         return
 
+    # One message can greet *and* carry step codes for the same card; collapse
+    # those into a single re-render instead of editing the message N times.
+    rerender: dict[int, sqlite3.Row] = {}
     for action, card, uid in results:
         if action == svc.ACTION_COMPLETE:
             svc.discard(guild_id, uid)
@@ -444,7 +464,9 @@ async def handle_intake_message(ctx: AppContext, message: discord.Message) -> No
             except discord.HTTPException:
                 log.debug("intake: completion reaction failed", exc_info=True)
         else:
-            await _rerender_card(ctx, guild, card)
+            rerender.setdefault(int(card["id"]), card)
+    for card in rerender.values():
+        await _rerender_card(ctx, guild, card)
 
 
 async def handle_role_changes(

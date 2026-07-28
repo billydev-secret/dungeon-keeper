@@ -10,9 +10,17 @@ and running ``/grant`` exactly as before, and the card watches:
   role is removed), ``role_gained`` (the member gains the step's configured
   role, whether via ``/grant`` or a manual add);
 * **manual steps** (the SFW/NSFW question phases) are buttons on the card;
-* **completion** is the configured code appearing in a greeter/mod message
+* **step codes** tick one step from a greeter/mod message carrying that
+  step's own configured phrase — any channel. Each canned message in the
+  procedure reference can carry its own code, so pasting it ticks the step
+  it belongs to without anyone touching the card;
+* **completion** is the guild-wide code appearing in a greeter/mod message
   that mentions the newcomer — any channel. Unticked steps are stamped
   *skipped*, never blocking.
+
+"Mentions the newcomer" includes **replying** to one of their messages: the
+reply's target author is folded into the mention set at the cog boundary, so
+a canned reply works without hand-editing an @ into the text.
 
 Cards close only on completion, Dismiss, or the member leaving / being
 banned — never by timeout. A background loop nudges a stale card once.
@@ -67,12 +75,19 @@ AUTO_ACTOR = 0
 
 @dataclass(frozen=True)
 class StepDef:
-    """One configured checklist step (``auto_kind`` '' = manual button)."""
+    """One configured checklist step (``auto_kind`` '' = manual button).
+
+    ``code`` is an optional free-text phrase that ticks this step when a
+    greeter or mod posts it (see :func:`evaluate_message`) — the point being
+    that each canned message in the procedure reference can carry its own
+    code, so pasting it ticks the step it corresponds to. Empty = no code.
+    """
 
     key: str
     label: str
     auto_kind: str = ""
     auto_role_id: int = 0
+    code: str = ""
 
 
 # The two role steps default to MANUAL: a role_gained step with no
@@ -93,8 +108,10 @@ DEFAULT_STEPS: tuple[StepDef, ...] = (
 def parse_steps(raw: str) -> list[StepDef]:
     """Parse the ``intake_steps`` JSON config into step definitions.
 
-    Expected shape: ``[{"key": ..., "label": ..., "auto": ..., "role_id": ...}]``
-    with ``auto``/``role_id`` optional. Malformed JSON, a non-list, or a list
+    Expected shape: ``[{"key": ..., "label": ..., "auto": ..., "role_id": ...,
+    "code": ...}]`` with ``auto``/``role_id``/``code`` optional (configs
+    written before step codes existed simply have no ``code`` key). Malformed
+    JSON, a non-list, or a list
     that yields no valid entries falls back to :data:`DEFAULT_STEPS`; invalid
     or duplicate-key entries are dropped individually so one bad row doesn't
     nuke the rest of the procedure.
@@ -119,8 +136,9 @@ def parse_steps(raw: str) -> list[StepDef]:
             role_id = int(entry.get("role_id") or 0)
         except (TypeError, ValueError):
             role_id = 0
+        code = str(entry.get("code") or "").strip()
         seen.add(key)
-        steps.append(StepDef(key, label, auto, role_id))
+        steps.append(StepDef(key, label, auto, role_id, code))
     return steps if steps else list(DEFAULT_STEPS)
 
 
@@ -176,6 +194,79 @@ def stale_hours(conn: sqlite3.Connection, guild_id: int) -> float:
 def code_matches(content: str, code: str) -> bool:
     """Case-insensitive containment; an empty code never matches."""
     return bool(code) and code.lower() in content.lower()
+
+
+def reply_target_id(message: object) -> int:
+    """Author id of the message ``message`` replies to, or 0.
+
+    Lives here rather than in ``intake_views`` so the message hot path in
+    ``events_cog`` can widen its pre-filter without importing the view
+    layer. Duck-typed (``getattr`` all the way down) to keep this module
+    free of ``discord`` imports.
+
+    Why it's needed: Discord only puts the reply target in
+    ``message.mentions`` when the reply pings them. A greeter whose reply
+    ping is off still means "this is addressed to you", so intake reads the
+    reference directly. ``resolved`` is a ``DeletedReferencedMessage`` when
+    the target is gone — that has no ``author``, hence the second getattr.
+    """
+    ref = getattr(message, "reference", None)
+    resolved = getattr(ref, "resolved", None)
+    author = getattr(resolved, "author", None)
+    author_id = getattr(author, "id", None)
+    return int(author_id) if author_id is not None else 0
+
+
+#: How the guild-wide completion code names itself in a clash message.
+COMPLETION_CODE_LABEL = "the completion code"
+
+Coded = tuple[str, str]  # (owner_label, code)
+
+
+def code_conflict(codes: list[Coded]) -> tuple[Coded, Coded] | None:
+    """First pair of codes where one contains the other, case-insensitively.
+
+    Matching is containment, so a code that sits inside another one always
+    fires alongside it — posting "DK-SFW-DONE" would tick both it and a
+    "DK-SFW" step, silently. Worse when the container is the *completion*
+    code: pasting one step's canned message would close the card and stamp
+    every remaining step skipped.
+
+    Takes and returns ``(owner_label, code)`` pairs, ordered
+    ``(container, contained)``. The codes ride along because step labels
+    aren't unique — two steps sharing a label would otherwise produce a
+    self-referential message. Empty codes never match anything.
+    """
+    live = [pair for pair in codes if pair[1]]
+    for i, a in enumerate(live):
+        for b in live[i + 1:]:
+            if a[1].lower() in b[1].lower():
+                return b, a
+            if b[1].lower() in a[1].lower():
+                return a, b
+    return None
+
+
+def config_code_conflict(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    completion: str | None = None,
+    steps: list[StepDef] | None = None,
+) -> tuple[Coded, Coded] | None:
+    """:func:`code_conflict` across a guild's step codes + completion code.
+
+    Either side may be overridden with the value a pending save is about to
+    write; whatever isn't overridden is read from storage. That matters
+    because the two are writable independently — a completion-code-only save
+    still has to be checked against the *stored* step codes, or the clash
+    walks in through the side door.
+    """
+    code = completion if completion is not None else completion_code(conn, guild_id)
+    defs = steps if steps is not None else step_config(conn, guild_id)
+    pairs: list[Coded] = [(s.label, s.code) for s in defs]
+    pairs.append((COMPLETION_CODE_LABEL, code.strip()))
+    return code_conflict(pairs)
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +503,7 @@ def complete_card(
 
 ACTION_GREET = "greet"
 ACTION_COMPLETE = "complete"
+ACTION_STEP = "step"
 
 
 def evaluate_message(
@@ -423,34 +515,57 @@ def evaluate_message(
     mentioned_ids: list[int],
     author_is_greeter: bool,
     author_is_mod: bool,
-) -> list[tuple[str, int]]:
-    """What a message means for intake: ``(action, newcomer_id)`` pairs.
+) -> list[tuple[str, int, str]]:
+    """What a message means for intake: ``(action, newcomer_id, step_key)``.
 
-    For each mentioned member with an open card:
+    ``step_key`` is only meaningful for :data:`ACTION_STEP`; the others carry
+    ``""``. For each mentioned member with an open card:
 
-    * :data:`ACTION_COMPLETE` — the message carries the completion code and
-      comes from a greeter or mod; any channel. Wins over a greet (the card
-      is closing anyway).
+    * :data:`ACTION_COMPLETE` — the message carries the guild-wide completion
+      code and comes from a greeter or mod; any channel. Wins over everything
+      else (the card is closing anyway).
+    * :data:`ACTION_STEP` — the message carries a step's own code, from a
+      greeter or mod, any channel. One action per matching step, so a message
+      may tick several. Unlike completion this doesn't close the card.
     * :data:`ACTION_GREET` — a greeter-role member mentioned them in the
       intake channel (the same signal the Greeter Response report measures).
+      Can co-occur with a step code: the greeting message is allowed to carry
+      one.
+
+    ``mentioned_ids`` is what the caller resolved as "this message addresses
+    them" — real @mentions **plus** the author of a replied-to message, so a
+    canned reply lands without hand-editing an @ into it.
+
+    Step codes are matched against the *live* step config rather than the
+    card's snapshot: a code is a lookup phrase, not per-card state, so an
+    admin fixing a typo in a code shouldn't leave in-flight cards unmatchable.
+    A code whose step isn't on this card simply ticks nothing.
 
     Pure decision logic so the whole matrix is unit-testable; the caller
     supplies the Discord-side facts (roles, mentions) as primitives.
     """
     if not mentioned_ids or not is_enabled(conn, guild_id):
         return []
-    completes = (
-        (author_is_greeter or author_is_mod)
-        and code_matches(content, completion_code(conn, guild_id))
-    )
+    privileged = author_is_greeter or author_is_mod
+    completes = privileged and code_matches(content, completion_code(conn, guild_id))
+    coded_keys: list[str] = []
+    if privileged and not completes:
+        coded_keys = [
+            s.key for s in step_config(conn, guild_id) if code_matches(content, s.code)
+        ]
     greets = author_is_greeter and channel_id == intake_channel_id(conn, guild_id)
-    if not completes and not greets:
+    if not completes and not coded_keys and not greets:
         return []
-    actions: list[tuple[str, int]] = []
+    actions: list[tuple[str, int, str]] = []
     for uid in dict.fromkeys(mentioned_ids):  # dedupe, keep order
         if get_open_card(conn, guild_id, uid) is None:
             continue
-        actions.append((ACTION_COMPLETE if completes else ACTION_GREET, uid))
+        if completes:
+            actions.append((ACTION_COMPLETE, uid, ""))
+            continue
+        if greets:
+            actions.append((ACTION_GREET, uid, ""))
+        actions.extend((ACTION_STEP, uid, key) for key in coded_keys)
     return actions
 
 

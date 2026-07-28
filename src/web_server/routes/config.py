@@ -1014,6 +1014,7 @@ async def get_config(
                             "label": s.label,
                             "auto": s.auto_kind,
                             "role_id": str(s.auto_role_id),
+                            "code": s.code,
                         }
                         for s in intake_svc.step_config(conn, guild_id)
                     ],
@@ -1387,6 +1388,7 @@ class IntakeStepIn(BaseModel):
     label: str
     auto: str = ""
     role_id: str = "0"
+    code: str = ""
 
 
 class IntakeConfigUpdate(BaseModel):
@@ -1436,9 +1438,30 @@ def _canonical_intake_steps(steps: list[IntakeStepIn]) -> str:
         base, n = key, 2
         while key in seen:
             key, n = f"{base}_{n}", n + 1
+        code = s.code.strip()
+        if len(code) > 80:
+            raise HTTPException(422, f"Step '{label}': the code is too long.")
         seen.add(key)
-        out.append({"key": key, "label": label, "auto": auto, "role_id": role_id})
+        out.append(
+            {
+                "key": key,
+                "label": label,
+                "auto": auto,
+                "role_id": role_id,
+                "code": code,
+            }
+        )
     return json.dumps(out)
+
+
+def _code_clash_message(clash: tuple[tuple[str, str], tuple[str, str]]) -> str:
+    """Both codes are quoted: step labels aren't unique, so naming them alone
+    can read as a step conflicting with itself."""
+    (outer_label, outer_code), (inner_label, inner_code) = clash
+    return (
+        f"Code '{outer_code}' for '{outer_label}' contains '{inner_code}' for "
+        f"'{inner_label}' — posting it would fire both. Make them distinct."
+    )
 
 
 @router.put("/config/intake")
@@ -1458,6 +1481,26 @@ async def update_intake(
 
     def _q():
         with ctx.open_db() as conn:
+            # Codes match by containment, so one sitting inside another fires
+            # both. Checked whenever this request touches EITHER side: the
+            # step codes and the completion code are writable independently,
+            # so guarding only the steps path lets a completion-code-only
+            # save walk a clash in. Whichever side the body doesn't carry is
+            # read from storage. Before any write, so a rejected save leaves
+            # nothing half-stored for the editor to disagree with.
+            if steps_json is not None or body.completion_code is not None:
+                clash = intake_svc.config_code_conflict(
+                    conn,
+                    guild_id,
+                    completion=body.completion_code,
+                    steps=(
+                        intake_svc.parse_steps(steps_json)
+                        if steps_json is not None
+                        else None
+                    ),
+                )
+                if clash is not None:
+                    raise HTTPException(422, _code_clash_message(clash))
             if body.enabled is not None:
                 set_config_value(
                     conn, "intake_enabled", "1" if body.enabled else "0", guild_id

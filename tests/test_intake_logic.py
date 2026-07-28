@@ -8,6 +8,7 @@ Discord embed/buttons in intake_views are glue exercised via this layer.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -128,6 +129,109 @@ def test_parse_steps_drops_invalid_entries_individually():
     steps = svc.parse_steps(raw)
     assert [s.key for s in steps] == ["ok", "badrole"]
     assert steps[1].auto_role_id == 0  # unparseable role id degrades to 0
+
+
+def test_parse_steps_code_is_optional_and_stripped():
+    # Configs written before step codes existed have no "code" key at all.
+    raw = json.dumps(
+        [
+            {"key": "legacy", "label": "No code key"},
+            {"key": "coded", "label": "Coded", "code": "  DK-SFW  "},
+            {"key": "blank", "label": "Blank", "code": "   "},
+        ]
+    )
+    assert [s.code for s in svc.parse_steps(raw)] == ["", "DK-SFW", ""]
+
+
+@pytest.mark.parametrize(
+    ("codes", "expected"),
+    [
+        pytest.param([("a", "DK-SFW"), ("b", "DK-NSFW")], None, id="distinct"),
+        # Matching is containment, so a code inside another fires both. The
+        # codes ride along in the result because labels aren't unique.
+        pytest.param(
+            [("a", "DK-SFW"), ("b", "DK-SFW-DONE")],
+            (("b", "DK-SFW-DONE"), ("a", "DK-SFW")),
+            id="substring",
+        ),
+        pytest.param(
+            [("a", "dk-sfw"), ("b", "DK-SFW")],
+            (("b", "DK-SFW"), ("a", "dk-sfw")),
+            id="case-insensitive-dupe",
+        ),
+        # Empty codes are "off" and never collide, not even with each other.
+        pytest.param([("a", ""), ("b", ""), ("c", "DK")], None, id="empties-ignored"),
+    ],
+)
+def test_code_conflict(codes, expected):
+    assert svc.code_conflict(codes) == expected
+
+
+def test_config_code_conflict_reads_the_side_that_is_not_overridden(db_path):
+    # The two sides are writable independently, so a save touching only one
+    # of them still has to be checked against what's stored for the other.
+    with open_db(db_path) as conn:
+        _use_coded_steps(conn)  # DK-SFW / DK-NSFW
+        set_config_value(conn, svc.CODE_KEY, "DK-DONE", GUILD)
+        assert svc.config_code_conflict(conn, GUILD) is None
+        # A completion code the stored step code contains: any message
+        # carrying "DK-SFW" carries "DK" too, so completion fires.
+        assert svc.config_code_conflict(conn, GUILD, completion="DK") == (
+            ("SFW questions", "DK-SFW"),
+            (svc.COMPLETION_CODE_LABEL, "DK"),
+        )
+        # …and the mirror: a step code that swallows the stored completion.
+        clash = svc.config_code_conflict(
+            conn, GUILD, steps=[svc.StepDef("s", "Wrap", code="say DK-DONE now")]
+        )
+        assert clash == (
+            ("Wrap", "say DK-DONE now"),
+            (svc.COMPLETION_CODE_LABEL, "DK-DONE"),
+        )
+
+
+def test_completion_code_containing_a_step_code_closes_the_card(db_path):
+    # Why the guard exists, stated as behavior: with the clash in place, the
+    # SFW canned message doesn't tick the SFW step — it completes the card and
+    # stamps every remaining step skipped.
+    with open_db(db_path) as conn:
+        _enable(conn)
+        _use_coded_steps(conn)
+        set_config_value(conn, svc.CODE_KEY, "DK", GUILD)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert _eval(conn, content="all done DK-SFW", channel_id=999) == [
+            (svc.ACTION_COMPLETE, NEWCOMER, "")
+        ]
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        pytest.param(SimpleNamespace(reference=None), 0, id="not-a-reply"),
+        pytest.param(
+            SimpleNamespace(reference=SimpleNamespace(resolved=None)), 0, id="unresolved"
+        ),
+        # DeletedReferencedMessage has no .author at all.
+        pytest.param(
+            SimpleNamespace(
+                reference=SimpleNamespace(resolved=SimpleNamespace(spec=1))
+            ),
+            0,
+            id="deleted-target",
+        ),
+        pytest.param(
+            SimpleNamespace(
+                reference=SimpleNamespace(
+                    resolved=SimpleNamespace(author=SimpleNamespace(id=NEWCOMER))
+                )
+            ),
+            NEWCOMER,
+            id="reply-to-newcomer",
+        ),
+    ],
+)
+def test_reply_target_id(message, expected):
+    assert svc.reply_target_id(message) == expected
 
 
 # ── card ledger + dedup ───────────────────────────────────────────────
@@ -314,7 +418,7 @@ def test_close_for_member_on_leave(db_path):
         ) is None
 
 
-# ── message evaluation (greet + completion code) ──────────────────────
+# ── message evaluation (greet + step/completion codes) ────────────────
 
 
 def _eval(conn, **kw):
@@ -342,7 +446,7 @@ def test_evaluate_message_greet_gating(db_path):
     with open_db(db_path) as conn:
         _enable(conn)
         svc.create_card(conn, GUILD, NEWCOMER, 100.0)
-        assert _eval(conn) == [(svc.ACTION_GREET, NEWCOMER)]
+        assert _eval(conn) == [(svc.ACTION_GREET, NEWCOMER, "")]
         # Wrong channel → no greet; non-greeter (even a mod) → no greet.
         assert _eval(conn, channel_id=999) == []
         assert _eval(conn, author_is_greeter=False, author_is_mod=True) == []
@@ -357,7 +461,7 @@ def test_evaluate_message_completion_code(db_path):
         svc.create_card(conn, GUILD, NEWCOMER, 100.0)
         # Code + mention from a greeter, any channel → complete beats greet.
         assert _eval(conn, content="all set, dk-7734!", channel_id=999) == [
-            (svc.ACTION_COMPLETE, NEWCOMER)
+            (svc.ACTION_COMPLETE, NEWCOMER, "")
         ]
         # A mod who isn't a greeter can also complete…
         assert _eval(
@@ -366,7 +470,7 @@ def test_evaluate_message_completion_code(db_path):
             author_is_greeter=False,
             author_is_mod=True,
             channel_id=999,
-        ) == [(svc.ACTION_COMPLETE, NEWCOMER)]
+        ) == [(svc.ACTION_COMPLETE, NEWCOMER, "")]
         # …but a regular member saying the code does nothing.
         assert _eval(
             conn, content="dk-7734", author_is_greeter=False, channel_id=999
@@ -378,7 +482,7 @@ def test_evaluate_message_no_code_configured_never_completes(db_path):
         _enable(conn)
         svc.create_card(conn, GUILD, NEWCOMER, 100.0)
         # Without a configured code, a chatty message still only greets.
-        assert _eval(conn, content="dk-7734") == [(svc.ACTION_GREET, NEWCOMER)]
+        assert _eval(conn, content="dk-7734") == [(svc.ACTION_GREET, NEWCOMER, "")]
 
 
 def test_evaluate_message_dedupes_mentions_keeps_order(db_path):
@@ -390,7 +494,141 @@ def test_evaluate_message_dedupes_mentions_keeps_order(db_path):
         actions = _eval(
             conn, content="dk-7734", mentioned_ids=[8, NEWCOMER, 8]
         )
-        assert actions == [(svc.ACTION_COMPLETE, 8), (svc.ACTION_COMPLETE, NEWCOMER)]
+        assert actions == [
+            (svc.ACTION_COMPLETE, 8, ""),
+            (svc.ACTION_COMPLETE, NEWCOMER, ""),
+        ]
+
+
+def _use_coded_steps(conn):
+    """Steps where the two question phases carry their own codes."""
+    set_config_value(
+        conn,
+        svc.STEPS_KEY,
+        json.dumps(
+            [
+                {"key": "greeted", "label": "Greeted", "auto": "greeted"},
+                {"key": "sfw_questions", "label": "SFW questions", "code": "DK-SFW"},
+                {"key": "nsfw_questions", "label": "NSFW questions", "code": "DK-NSFW"},
+            ]
+        ),
+        GUILD,
+    )
+
+
+def test_evaluate_message_step_code_ticks_one_step_any_channel(db_path):
+    with open_db(db_path) as conn:
+        _enable(conn)
+        _use_coded_steps(conn)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        # Any channel, case-insensitive, and the card is NOT closed.
+        assert _eval(conn, content="done here -# dk-sfw", channel_id=999) == [
+            (svc.ACTION_STEP, NEWCOMER, "sfw_questions")
+        ]
+        # A mod who isn't a greeter can tick too…
+        assert _eval(
+            conn,
+            content="DK-NSFW",
+            channel_id=999,
+            author_is_greeter=False,
+            author_is_mod=True,
+        ) == [(svc.ACTION_STEP, NEWCOMER, "nsfw_questions")]
+        # …but a regular member posting the code does nothing.
+        assert (
+            _eval(
+                conn, content="DK-NSFW", channel_id=999, author_is_greeter=False
+            )
+            == []
+        )
+
+
+def test_evaluate_message_greeting_may_also_carry_a_step_code(db_path):
+    # The canned greeting is both a greet and (optionally) a coded message —
+    # unlike completion, a step code doesn't suppress the greet.
+    with open_db(db_path) as conn:
+        _enable(conn)
+        _use_coded_steps(conn)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert _eval(conn, content="hi! dk-sfw") == [
+            (svc.ACTION_GREET, NEWCOMER, ""),
+            (svc.ACTION_STEP, NEWCOMER, "sfw_questions"),
+        ]
+
+
+def test_evaluate_message_completion_code_beats_step_codes(db_path):
+    with open_db(db_path) as conn:
+        _enable(conn)
+        _use_coded_steps(conn)
+        set_config_value(conn, svc.CODE_KEY, "DK-DONE", GUILD)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        # The card is closing and stamps the rest skipped, so ticking a step
+        # first would be noise.
+        assert _eval(conn, content="dk-sfw dk-done", channel_id=999) == [
+            (svc.ACTION_COMPLETE, NEWCOMER, "")
+        ]
+
+
+def test_evaluate_message_one_message_may_tick_several_steps(db_path):
+    with open_db(db_path) as conn:
+        _enable(conn)
+        _use_coded_steps(conn)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert _eval(conn, content="DK-SFW and DK-NSFW", channel_id=999) == [
+            (svc.ACTION_STEP, NEWCOMER, "sfw_questions"),
+            (svc.ACTION_STEP, NEWCOMER, "nsfw_questions"),
+        ]
+
+
+def test_evaluate_message_uncoded_steps_never_match(db_path):
+    with open_db(db_path) as conn:
+        _enable(conn)
+        _use_coded_steps(conn)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        # "greeted" has no code; an empty code must never match a message,
+        # or every message would tick every uncoded step.
+        assert _eval(conn, content="nothing special", channel_id=999) == []
+
+
+def test_step_code_tick_lands_on_the_card(db_path):
+    # The service-level effect the cog wires up: ACTION_STEP -> set_step_state
+    # on the open card, and re-posting the code is a no-op.
+    with open_db(db_path) as conn:
+        _enable(conn)
+        _use_coded_steps(conn)
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        (_, uid, key), = _eval(conn, content="dk-sfw", channel_id=999)
+        assert svc.set_step_state(
+            conn, cid, key, done=True, actor_id=GREETER, at=200.0
+        )
+        row = next(s for s in svc.steps_for(conn, cid) if s["step_key"] == key)
+        assert row["done_at"] == 200.0 and row["done_by"] == GREETER
+        # Already ticked → no second write, so the original ticker stands.
+        assert not svc.set_step_state(
+            conn, cid, key, done=True, actor_id=999, at=300.0
+        )
+
+
+def test_step_code_for_a_step_not_on_this_card_ticks_nothing(db_path):
+    # Codes match the LIVE config but ticks land on the card's snapshot, so a
+    # step added after the card was created has nothing to tick — the match
+    # still happens, it just doesn't land.
+    with open_db(db_path) as conn:
+        _enable(conn)
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 100.0)  # default steps
+        set_config_value(
+            conn,
+            svc.STEPS_KEY,
+            json.dumps(
+                [{"key": "brand_new", "label": "Added later", "code": "DK-NEW"}]
+            ),
+            GUILD,
+        )
+        assert _eval(conn, content="dk-new", channel_id=999) == [
+            (svc.ACTION_STEP, NEWCOMER, "brand_new")
+        ]
+        assert not svc.set_step_state(
+            conn, cid, "brand_new", done=True, actor_id=GREETER, at=200.0
+        )
 
 
 def test_inviter_for(db_path):

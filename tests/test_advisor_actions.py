@@ -93,6 +93,29 @@ def test_registry_key_marked_panel_only_is_rejected_with_a_pointer():
         aa.validate_config_change(conn, _guild(), "ticket_category_id", "123")
 
 
+def test_intake_completion_code_clashing_with_a_step_code_is_rejected():
+    """The dashboard rejects this on save, but the advisor writes the key
+    directly — and intake matches codes by containment, so a completion code
+    swallowing a step code turns that step's canned message into a card
+    close that stamps every remaining step skipped."""
+    import json
+
+    conn = _conn([
+        ("intake_completion_code", "DK-DONE"),
+        (
+            "intake_steps",
+            json.dumps([{"key": "sfw", "label": "SFW questions", "code": "DK-SFW"}]),
+        ),
+    ])
+    with pytest.raises(ValueError, match="DK-SFW"):
+        aa.validate_config_change(conn, _guild(), "intake_completion_code", "DK")
+    # A code that doesn't overlap any step code still goes through.
+    prop = aa.validate_config_change(
+        conn, _guild(), "intake_completion_code", "ALL-WELCOMED"
+    )
+    assert prop.value == "ALL-WELCOMED"
+
+
 # ── admin_only settings ─────────────────────────────────────────────────────
 
 

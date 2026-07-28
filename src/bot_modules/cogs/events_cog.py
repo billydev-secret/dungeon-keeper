@@ -626,13 +626,18 @@ class EventsCog(commands.Cog):
 
             await post_review_card(self.ctx, message.author, message.channel.id)
 
-        # Intake: a message mentioning a newcomer with an open card may be
-        # the greeting (greeter, in the intake channel) or the completion
-        # code. is_watched keeps the common case to set lookups per mention;
-        # the DB-truth evaluation happens inside handle_intake_message.
-        if message.mentions and any(
-            intake_svc.is_watched(guild_id, u.id) for u in message.mentions
-        ):
+        # Intake: a message addressing a newcomer with an open card may be
+        # the greeting (greeter, in the intake channel), a step code, or the
+        # completion code. Replying counts as addressing them, and a reply
+        # with its ping suppressed isn't in message.mentions at all — so the
+        # reply target joins the pre-filter, not just the mention list.
+        # is_watched keeps the common case to set lookups; the DB-truth
+        # evaluation happens inside handle_intake_message.
+        _intake_ids = [u.id for u in message.mentions]
+        _replied_to = intake_svc.reply_target_id(message)
+        if _replied_to:
+            _intake_ids.append(_replied_to)
+        if any(intake_svc.is_watched(guild_id, uid) for uid in _intake_ids):
             from bot_modules.services.intake_views import handle_intake_message
 
             # Guarded: an intake failure must never abort the rest of the

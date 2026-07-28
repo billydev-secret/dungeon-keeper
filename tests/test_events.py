@@ -199,6 +199,32 @@ async def test_greeting_watch_skips_reply_that_opens_with_hello_token(
     mock_record_greeting.assert_not_called()
 
 
+@patch("bot_modules.services.intake_views.handle_intake_message", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.intake_svc.is_watched", return_value=True)
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+async def test_intake_sees_a_reply_with_no_mention(
+    mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level,
+    mock_watched, mock_intake, cog,
+):
+    # Wiring guard: a reply with its ping suppressed isn't in message.mentions
+    # at all, so a pre-filter that only looked there dropped every canned
+    # reply before intake's own logic ever ran.
+    mock_spoiler.return_value = False
+    mock_award.return_value = None
+    msg = _make_message(channel_id=10, message_id=2003)
+    msg.mentions = []
+    msg.reference = SimpleNamespace(
+        message_id=1999, resolved=SimpleNamespace(author=SimpleNamespace(id=77))
+    )
+    await cog.on_message(msg)
+    assert 77 in [c.args[1] for c in mock_watched.call_args_list]
+    mock_intake.assert_awaited_once()
+
+
 @patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.track_auto_delete_message")
 @patch("bot_modules.cogs.events_cog.record_member_activity")

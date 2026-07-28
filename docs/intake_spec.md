@@ -37,11 +37,39 @@ slash commands:
   never ticks, and the dashboard refuses to store it). Step keys are
   normalized to `[\w-]` and capped at 64 chars on save so persistent-button
   custom_ids always fullmatch the dispatch template after a restart.
+- **Step codes:** each step may carry its own free-text `code`. A
+  greeter/mod message in **any channel** containing it, addressed to the
+  newcomer, ticks **that step only** — the card stays open. The point is
+  that each canned message in the procedure reference can carry the code
+  for the step it corresponds to, so pasting the message ticks the step
+  without anyone touching the card. One message may tick several steps;
+  an empty code never matches. Codes are matched against the **live**
+  config rather than the card's snapshot (a code is a lookup phrase, not
+  per-card state, so fixing a typo doesn't strand in-flight cards) — a
+  code whose step isn't on this card simply ticks nothing. Matching is
+  case-insensitive containment, so a save where one code contains another
+  (or contains the completion code) is rejected: it would silently fire
+  both, and a completion code swallowed by a step code is worse than a
+  double-tick — pasting that step's message would close the card and stamp
+  the rest skipped. Step codes and the completion code are writable
+  independently, so `intake_service.config_code_conflict` (which reads
+  whichever side the caller isn't overriding) is enforced at **both**
+  writers: the dashboard route, and `advisor_actions.validate_config_change`
+  for the advisor, which writes the key straight through
+  `set_config_value`.
 - **Completion:** a greeter/mod message in **any channel** containing
-  `intake_completion_code` and @mentioning the newcomer. Unticked steps
-  are stamped **skipped** (code always wins), the poster becomes the
-  welcomer of record, the card flips to "🎉 Intake complete", 🎉 reaction
-  on the trigger message. Empty code = detection off.
+  `intake_completion_code` and addressed to the newcomer. Wins over step
+  codes (the card is closing anyway). Unticked steps are stamped
+  **skipped** (code always wins), the poster becomes the welcomer of
+  record, the card flips to "🎉 Intake complete", 🎉 reaction on the
+  trigger message. Empty code = detection off.
+- **"Addressed to the newcomer"** means an @mention **or a reply to one of
+  their messages**. Discord only lists the reply target in
+  `message.mentions` when the reply pings, so both the `on_message`
+  pre-filter and `evaluate_message`'s mention set fold in
+  `intake_service.reply_target_id` — otherwise a canned reply with its ping
+  off is dropped before intake ever evaluates it. Applies to greets and
+  both kinds of code alike.
 - **Close paths:** completion, mod-only Dismiss button, member leave
   (`left`) or ban (`banned` — the ban hook closes first so the remove hook
   finds nothing). **No expiry**: cards otherwise stay open; the queue is
@@ -70,11 +98,15 @@ Steps carry `done_at`/`done_by`/`skipped` — no message content, no answers
 ## Procedure reference
 
 Blocks (`intake_reference_blocks` config JSON: `text` | `questions`, title,
-body) render to messages — text chunks on line boundaries under the
-2000-char cap (rejoined with the newline they were split on, so the channel
-matches the editor); questions one message per line with an optional bold
-header, and a question longer than the cap is rejected on save rather than
-400-ing mid-sync. Sync
+body) render to messages. A block's **title is always its own bold
+message** — Discord's Copy Text takes the whole message, and most text
+blocks are canned messages a greeter copy-pastes, so a heading sharing the
+message means trimming it off every paste. Below the heading: text chunks
+on line boundaries under the 2000-char cap (rejoined with the newline they
+were split on, so the channel matches the editor); questions one message
+per line, and a question longer than the cap is rejected on save rather
+than 400-ing mid-sync. Either half is omitted when empty (a title-only
+block is a bare section heading). Sync
 (`intake_reference_service.sync_channel`, run inline on dashboard save) is
 a position-wise diff against `intake_reference_messages` (migration 116):
 unchanged kept, changed edited in place (ids/links stable), tail posted,

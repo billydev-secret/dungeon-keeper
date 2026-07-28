@@ -4,7 +4,11 @@ The procedure text + question lists live on the dashboard as an ordered
 list of **blocks** (config value ``intake_reference_blocks``); the bot keeps
 a configured channel in sync with them:
 
-* a ``text`` block renders as one message (chunked if very long);
+A block's title is always its own bold message, so the content below it is
+copy-pasteable as-is (Discord's Copy Text takes the whole message):
+
+* a ``text`` block renders as an optional bold header message plus its body
+  as one message (chunked if very long);
 * a ``questions`` block renders as an optional bold header message plus
   **one message per question**, so a greeter can Copy Text on exactly the
   question they need.
@@ -183,16 +187,22 @@ def _chunk_text(content: str) -> list[str]:
 
 
 def render_blocks(blocks: list[Block]) -> list[str]:
-    """The full channel as an ordered list of message contents."""
+    """The full channel as an ordered list of message contents.
+
+    A title always posts as its **own** message, never as a first line of the
+    body — most text blocks are canned messages a greeter copy-pastes, and
+    Discord's Copy Text takes the whole message, so a heading sharing the
+    message means trimming it off every single paste. Both block kinds render
+    the same way now: heading message, then content message(s).
+    """
     messages: list[str] = []
     for b in blocks:
+        if b.title:
+            messages.append(f"**{b.title}**")
         if b.kind == KIND_QUESTIONS:
-            if b.title:
-                messages.append(f"**{b.title}**")
             messages.extend(_question_lines(b.body))
-        else:
-            content = f"**{b.title}**\n{b.body}".strip() if b.title else b.body.strip()
-            messages.extend(_chunk_text(content))
+        elif b.body.strip():
+            messages.extend(_chunk_text(b.body.strip()))
     return messages
 
 
