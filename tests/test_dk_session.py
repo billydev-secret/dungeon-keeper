@@ -8,6 +8,7 @@ all have to agree — so each transform gets a case. The subprocess plumbing
 
 from __future__ import annotations
 
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -307,3 +308,50 @@ def test_parse_worktrees_marks_detached_heads():
 
 def test_parse_worktrees_handles_empty_input():
     assert dk_session.parse_worktrees("") == []
+
+
+# ── agent scratch cleanup ────────────────────────────────────────────────
+
+def test_agent_tmp_name_mangles_slashes():
+    """The agent names a session's scratch dir after its cwd, / -> -."""
+    assert dk_session.agent_tmp_name(
+        Path("/home/ben/discord-bots/dk-sessions/casino-derby")
+    ) == "-home-ben-discord-bots-dk-sessions-casino-derby"
+
+
+@pytest.mark.skipif(os.name != "posix", reason=
+    "mangles an absolute path into a single filename; a Windows drive letter\n     makes that name illegal. The code path is /tmp/claude-<uid>, POSIX-only.")
+def test_agent_tmp_dirs_finds_the_matching_scratch(tmp_path):
+    wt = Path("/home/ben/discord-bots/dk-sessions/casino-derby")
+    scratch = tmp_path / "claude-1000" / dk_session.agent_tmp_name(wt)
+    scratch.mkdir(parents=True)
+    assert dk_session.agent_tmp_dirs(wt, tmp_root=tmp_path) == [scratch]
+
+
+@pytest.mark.skipif(os.name != "posix", reason=
+    "mangles an absolute path into a single filename; a Windows drive letter\n     makes that name illegal. The code path is /tmp/claude-<uid>, POSIX-only.")
+def test_agent_tmp_dirs_ignores_unrelated_dirs(tmp_path):
+    wt = Path("/home/ben/discord-bots/dk-sessions/casino-derby")
+    (tmp_path / "claude-1000" / "-home-ben-somewhere-else").mkdir(parents=True)
+    (tmp_path / "not-claude" / dk_session.agent_tmp_name(wt)).mkdir(parents=True)
+    assert dk_session.agent_tmp_dirs(wt, tmp_root=tmp_path) == []
+
+
+@pytest.mark.parametrize("wt", [Path("/"), Path("/a")])
+def test_agent_tmp_dirs_refuses_degenerate_paths(wt, tmp_path):
+    """This drives rm -rf under /tmp — a one-char or empty name must not match."""
+    assert dk_session.agent_tmp_dirs(wt, tmp_root=tmp_path) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason=
+    "mangles an absolute path into a single filename; a Windows drive letter\n     makes that name illegal. The code path is /tmp/claude-<uid>, POSIX-only.")
+def test_orphan_scratch_dirs_only_lists_dead_sessions(tmp_path):
+    sessions = tmp_path / "dk-sessions"
+    (sessions / "alive").mkdir(parents=True)
+    pre = sessions.as_posix().replace("/", "-") + "-"
+    claude = tmp_path / "claude-1000"
+    (claude / f"{pre}alive").mkdir(parents=True)
+    (claude / f"{pre}dead").mkdir(parents=True)
+    (claude / "-home-ben-unrelated").mkdir(parents=True)
+    found = dk_session.orphan_scratch_dirs(sessions, tmp_root=tmp_path)
+    assert found == [claude / f"{pre}dead"]

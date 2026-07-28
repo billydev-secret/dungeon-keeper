@@ -190,6 +190,27 @@ very window it runs in; without the delay the ship report dies with the pane. Pa
 Teardown deletes the branch with `git branch -d`, so unmerged work is never silently
 dropped — it says "kept branch — not merged into main" and leaves it.
 
+## Scratch space under /tmp
+
+Each session's agent keeps a scratch directory at /tmp/claude-<uid>/<cwd with
+slashes turned into dashes>. It is **not** part of the worktree, so removing the
+worktree does not remove it.
+
+teardown now deletes it along with everything else. Before that it didn't, and
+the leak was substantial: 33 dead sessions had accumulated **4.3 GB** on a 5.8 GB
+tmpfs, one of them 1.9 GB on its own. The symptom is a full /tmp that looks
+like a pytest problem and isn't — pytest's own footprint stays flat at ~20 KB via
+tmp_path_retention_count = 1.
+
+To clear scratch left by sessions torn down before the fix:
+
+    python scripts/dk_session.py sweep            # dry run, lists what it would take
+    python scripts/dk_session.py sweep --apply
+
+The sweep only ever considers directories whose name was mangled from
+dk-sessions/ **and** whose worktree no longer exists, so a live session's
+scratch is never a candidate.
+
 ## Cleaning up by hand
 
     python scripts/dk_session.py teardown <name>

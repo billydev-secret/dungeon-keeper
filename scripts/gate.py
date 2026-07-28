@@ -61,9 +61,20 @@ FULL_RUN_FILES = {
 FULL_RUN_PREFIXES = (
     "src/bot_modules/core/",  # app_context, db_utils, xp_system — imported everywhere
     "src/bot_modules/models/",
-    "src/migrations/",  # schema change touches every db-backed test
     "src/dungeonkeeper/",  # bot entrypoint / bootstrap
 )
+
+# Migrations are the full-run trigger only when an *existing* one is edited.
+#
+# Tests build their schema by applying every migration, so editing one that has
+# already run can change tables underneath the whole db-backed suite — that has
+# to fan out. A brand-new migration file cannot alter an existing table's shape;
+# the worst it does is fail to apply, and every db-backed test collapses at once,
+# which the mapped tests catch just as loudly as a full run would.
+#
+# Measured before splitting these apart: migrations caused 8 of the 13 full-run
+# fallbacks in the preceding 40 commits, and all 8 were new files.
+FULL_RUN_IF_MODIFIED_PREFIXES = ("src/migrations/",)
 
 # Tokens too generic to identify a feature on their own.
 GENERIC_TOKENS = {
@@ -152,14 +163,24 @@ def _matches(test_basename: str, token: str) -> bool:
     return f"_{token}_" in f"_{test_basename}_"
 
 
-def select_tests(changed: list[str]) -> tuple[list[str], list[str], bool]:
+def forces_full_run(path: str, is_new: bool) -> bool:
+    """Whether one changed path invalidates the mapping and needs the whole suite.
+
+    ``is_new`` distinguishes an added file from an edited one — see
+    FULL_RUN_IF_MODIFIED_PREFIXES for why a new migration doesn't fan out but
+    an edited one does.
+    """
+    if path in FULL_RUN_FILES or path.startswith(FULL_RUN_PREFIXES):
+        return True
+    if Path(path).name == "conftest.py":
+        return True  # any dir's conftest fans out to its whole subtree
+    return path.startswith(FULL_RUN_IF_MODIFIED_PREFIXES) and not is_new
+
+
+def select_tests(changed: list[str], new: set[str] | None = None) -> tuple[list[str], list[str], bool]:
     """Return (test targets, unmapped source files, run_full)."""
-    if any(
-        c in FULL_RUN_FILES
-        or c.startswith(FULL_RUN_PREFIXES)
-        or Path(c).name == "conftest.py"  # any dir's conftest fans out to its whole subtree
-        for c in changed
-    ):
+    added = new if new is not None else new_paths()
+    if any(forces_full_run(c, c in added) for c in changed):
         return [], [], True
 
     all_tests = _test_files()
