@@ -1011,7 +1011,7 @@ def _shop_panel_stored(db) -> tuple[int, int]:
 @pytest.mark.asyncio
 async def test_post_shop_posts_panel_and_saves_ids(ctx, db):
     """Entry point is post_shop_panel(guild, channel) now — /bank post-shop was
-    replaced by Config → Channel Panels on 2026-07-28."""
+    replaced by Economy → Settings → Post to Discord on 2026-07-28."""
     _enable(db)
     cog = _make_cog(ctx)
     channel = _panel_channel()

@@ -8,6 +8,10 @@ holds the table; this module owns only the Discord plumbing each of those
 commands used to repeat: resolve the guild, resolve the channel, check the bot
 can actually post there, call the cog, report what happened.
 
+Still one route after the Channel Panels page was split up and its controls
+moved onto each feature's own config page — see the registry's module docstring
+for why the posting path didn't split with the UI.
+
 Follows the bridge already used by ``/config/dms/post-panel`` — look the cog up
 on the live bot and call a public method — rather than reaching into cog
 internals from a route.
@@ -55,7 +59,6 @@ async def list_panels(request: Request, _: AuthenticatedUser = _ADMIN):
                 "key": spec.key,
                 "label": spec.label,
                 "description": spec.description,
-                "related_page": spec.related_page,
                 "targets_own_channel": spec.method in _OWN_CHANNEL_METHODS,
                 "options": _describe_options(request, spec),
             }

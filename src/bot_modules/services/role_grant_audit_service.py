@@ -787,7 +787,7 @@ async def place_grant_audit_card(
     elsewhere moves it and deletes the stale copy when reachable, and the hourly
     ``grant_audit_card_loop`` keeps whichever message is stored fresh.
 
-    Lifted out of ``/grant_audit`` on 2026-07-28 so Config → Channel Panels can
+    Lifted out of ``/grant_audit`` on 2026-07-28 so the dashboard can
     call it; the command's body was the only thing that knew how to place this
     card, and it was interaction-coupled.
     """

@@ -6,10 +6,16 @@ first sign would be a 503 in production when an admin presses Post. The
 resolution test below is the compile-time check the dynamic lookup doesn't get.
 
 Added 2026-07-28 with the route that replaced six panel-posting slash commands.
+The ``host_page`` checks below arrived the same day, when the shared Channel
+Panels page was split and each control moved onto its feature's config page:
+with no page listing every panel, nothing else notices a spec whose control was
+never drawn anywhere.
 """
 from __future__ import annotations
 
 import importlib
+import pathlib
+import re
 
 import pytest
 
@@ -89,6 +95,59 @@ def test_registry_covers_the_commands_it_replaced():
         "ticket-panel",       # /ticket panel
         "grant-audit",        # /grant_audit
     }
+
+
+# ── where each panel's control is drawn ──────────────────────────────
+
+_PANELS_DIR = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "src" / "web_server" / "static" / "js" / "panels"
+)
+# mountPanelPoster(<anything>, "key"  — the helper's second argument.
+_MOUNT_RE = re.compile(r"""mountPanelPoster\([^)]*?["'](?P<key>[a-z0-9-]+)["']""", re.S)
+
+
+def _mounted_keys(page_id: str) -> set[str]:
+    """Registry keys the given dashboard page mounts a poster for."""
+    source = _PANELS_DIR / f"{page_id}.js"
+    if not source.exists():
+        return set()
+    # Explicit encoding: the panel sources carry emoji and em dashes, and the
+    # Windows test runner's default is cp1252, which can't decode them.
+    text = source.read_text(encoding="utf-8")
+    return {m.group("key") for m in _MOUNT_RE.finditer(text)}
+
+
+@pytest.mark.parametrize("spec", PANEL_SPECS, ids=lambda s: s.key)
+def test_every_panel_is_mounted_on_the_page_it_names(spec):
+    """``host_page`` is a claim about where an admin finds this control.
+
+    Nothing else checks it now that no page lists every panel: a spec added to
+    the registry without a page mounting it is postable only by hand-crafting
+    the request, and the button an admin goes looking for is simply absent.
+    """
+    assert (_PANELS_DIR / f"{spec.host_page}.js").exists(), (
+        f"{spec.key} names host page {spec.host_page!r}, which has no panel module"
+    )
+    assert spec.key in _mounted_keys(spec.host_page), (
+        f"{spec.host_page}.js does not call mountPanelPoster for {spec.key!r}"
+    )
+
+
+def test_no_page_mounts_a_panel_the_registry_never_declared():
+    """The other direction: a key renamed in the registry leaves a page calling
+    for one that no longer exists, which fails only in the browser."""
+    known = {spec.key for spec in PANEL_SPECS}
+    for source in _PANELS_DIR.glob("*.js"):
+        stray = _mounted_keys(source.stem) - known
+        assert not stray, f"{source.name} mounts unregistered panel(s): {sorted(stray)}"
+
+
+def test_the_retired_channel_panels_page_is_gone():
+    """Its seven controls moved onto their features' config pages on
+    2026-07-28. A page left behind would post the same panels from a second
+    place, which is the sprawl the split was undoing."""
+    assert not (_PANELS_DIR / "channel-panels.js").exists()
 
 
 # ── domain gates that live on the cog, not the route ─────────────────

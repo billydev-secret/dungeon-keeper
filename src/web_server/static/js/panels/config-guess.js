@@ -9,6 +9,7 @@ import {
   mountChannelPicker,
   mountRolePicker,
 } from "../config-helpers.js";
+import { mountPanelPoster } from "../panel-post.js";
 
 const DIFFICULTIES = [
   ["easy", "Easy — a generous crop, most people get it"],
@@ -104,8 +105,18 @@ export function mount(container) {
             <span data-status></span>
           </div>
         </form>
+
+        <div class="card" style="margin-top:16px;" data-poster="guess-prompt"></div>
       </div>
     `;
+
+    // Goes to the Game Channel set above — the prompt's buttons are only
+    // watched there. Replaces the previous prompt rather than stacking one.
+    mountPanelPoster(
+      container.querySelector('[data-poster="guess-prompt"]'),
+      "guess-prompt",
+      { heading: "Post Submit Prompt", buttonLabel: "Post Prompt" },
+    );
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");

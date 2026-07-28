@@ -1,5 +1,6 @@
 import { api, apiPost, apiDelete, esc } from "../api.js";
 import { showStatus, guardForm, mountPicker, mountRolePicker } from "../config-helpers.js";
+import { mountPanelPoster } from "../panel-post.js";
 import { toast } from "../ui.js";
 
 // Saveable-profile fields owners may persist between sessions.
@@ -134,6 +135,8 @@ export function mount(container) {
           </div>
         </form>
 
+        <div style="margin-top:20px;" data-poster="voice-control"></div>
+
         <div class="section-label" style="margin-top:20px;">Post How-To Guide</div>
         <form class="form" data-howto-form>
           <div class="field">
@@ -156,6 +159,14 @@ export function mount(container) {
         </form>
         <ul data-bl-list style="margin-top:10px;"></ul>
       </div>`;
+
+    // The owner panel goes to the Control Channel set above, not a picked one —
+    // its buttons drive a flow the cog only watches there.
+    mountPanelPoster(
+      container.querySelector('[data-poster="voice-control"]'),
+      "voice-control",
+      { heading: "Post Owner Control Panel", buttonLabel: "Post Panel" },
+    );
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");

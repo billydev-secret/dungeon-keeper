@@ -216,7 +216,7 @@ def _interaction(actor, channel, guild=None):
 async def _post_guide(cog, interaction, channel=None):
     """Post the guide panel.
 
-    /bank post-guide was replaced by Config → Channel Panels on 2026-07-28, so
+    /bank post-guide was replaced by a dashboard post control on 2026-07-28, so
     this drives the cog method the route calls. ``interaction`` is kept in the
     signature to leave the call sites alone — only its guild is used now, since
     permission is the route's job.

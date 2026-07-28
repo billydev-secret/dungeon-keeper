@@ -269,7 +269,7 @@ async def test_cog_unload_cancels_pending_repost_tasks():
 
 # ── post_prompt_panel (dashboard entry point) ────────────────────────────────
 #
-# /guess prompt was replaced by Config → Channel Panels on 2026-07-28. The
+# /guess prompt was replaced by a dashboard post control on 2026-07-28. The
 # method ignores any channel handed to it — the prompt belongs in the configured
 # Guess channel, since that is the only place the cog's sticky listener looks.
 

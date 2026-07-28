@@ -4,6 +4,7 @@ import { toast, promptDialog, confirmDialog } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { syncHash } from "../report-helpers.js";
+import { mountPanelPoster } from "../panel-post.js";
 
 // The queue is a live workspace, so it re-fetches itself while you have it
 // open. Long enough not to hammer the API, short enough that a ticket raised
@@ -356,8 +357,17 @@ export function mount(container, initialParams = {}) {
           ${renderLoading("Loading…")}
         </div>
       </section>
+
+      <div style="margin-top:20px;" data-poster="ticket-panel"></div>
     </div>
   `;
+
+  // Where members enter the queue this page works through. Admin-only, so it
+  // renders locked for the moderators who otherwise live on this page.
+  mountPanelPoster(container.querySelector('[data-poster="ticket-panel"]'), "ticket-panel", {
+    heading: "Post Support Ticket Panel",
+    buttonLabel: "Post Panel",
+  });
 
   const statsEl = container.querySelector("[data-stats]");
   const listEl = container.querySelector("[data-list]");

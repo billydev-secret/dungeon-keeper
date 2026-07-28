@@ -9,11 +9,11 @@ Let trusted members hand out specific community roles with `/grant`, without giv
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/grant role:<key> member:<@member>` | Slash | Per-grant allowlist, or mod | Give a configured community role to a member |
-| **Config → Channel Panels → Grant Audit Card** | Web | Admin | Post (or refresh/move) the auto-updating grant-audit card. Takes the grant role and minimum level as panel options |
+| **Grant Audit → Post Card** | Web | Admin | Post (or refresh/move) the auto-updating grant-audit card. Uses the page's own grant-role and minimum-level controls, so the card matches the tables above it |
 
 The `role` argument autocompletes from the guild's configured grant roles, matching against both the internal key and the display label (max 25 choices). Members who can grant at least one role also get a "Role Grants" page in `/help` listing their available grants.
 
-(The old `/grant_missing` audit command was replaced by the dashboard's **Grant Audit** report panel; the Discord card it also posts moved to Channel Panels on 2026-07-28, retiring `/grant_audit`.)
+(The old `/grant_missing` audit command was replaced by the dashboard's **Grant Audit** report panel; the Discord card it also posts moved onto that same report panel on 2026-07-28, retiring `/grant_audit`.)
 
 ## Grant Audit panel
 
@@ -40,7 +40,7 @@ A one-off backfill helper (`role_grant_audit_service.backfill_prune_events_from_
 
 ### The auto-updating card
 
-The same three buckets also render as a channel embed a mod can pin anywhere. **Config → Channel Panels → Grant Audit Card** posts it — pick a channel, and set the grant role and minimum level as panel options (defaults: `nsfw`, level 5). Behavior mirrors the economy leaderboard panel:
+The same three buckets also render as a channel embed a mod can pin anywhere. The **Post Card** control at the bottom of that report panel posts it — pick a channel and press Post Card; the card audits whatever grant role and level bar the page is currently showing. Behavior mirrors the economy leaderboard panel:
 
 - The card's channel/message ids and grant/min-level parameters are stored per guild in config (`grant_audit_card_*` keys); one card per guild.
 - Re-running the command in the same channel refreshes in place; a different channel moves the card (the stale message is deleted when reachable).

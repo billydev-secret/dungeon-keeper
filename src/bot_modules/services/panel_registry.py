@@ -5,6 +5,15 @@ Before 2026-07-28 every panel had its own slash command whose whole job was
 of admin plumbing CLAUDE.md keeps on the web. They collapse into one route
 (``POST /api/panels/{key}/post``) reading this table.
 
+They first landed on a single Channel Panels page, which put seven unrelated
+controls in one place — an admin configuring the perk shop had to leave the
+Sinks page to place the shop panel. Later the same day each control moved onto
+the config page of the feature it belongs to (``host_page`` below); the page is
+gone. The registry deliberately did *not* dissolve with it. Seven bespoke
+endpoints would be seven chances to get the channel resolution, the bot-
+permission check, or the option coercion subtly different, so the posting path
+stayed one route and one table — only where the button is drawn changed.
+
 Each cog exposes a uniform ``async post_*(guild, channel)`` method rather than
 the route reaching into cog internals, so the registry stays plain data: a key,
 a place to find the method, and the copy the dashboard renders. That uniformity
@@ -61,8 +70,11 @@ class PanelSpec:
     description: str
     cog: str
     method: str
-    #: Nav page whose settings govern this panel, for a dashboard cross-link.
-    related_page: str | None = None
+    #: Dashboard page that renders this panel's post control. Since 2026-07-28
+    #: each control sits on the config page for the feature it belongs to
+    #: rather than on one shared page, and this is where. Enforced by
+    #: tests/test_panel_registry.py, which checks that page actually mounts it.
+    host_page: str
     #: Settings the poster needs. Empty for panels that render themselves.
     options: tuple[PanelOption, ...] = ()
 
@@ -72,23 +84,24 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         key="economy-guide",
         label="Economy How-To",
         description=(
-            "Explains the currency, how to earn it, and what it buys. Sits at the "
-            "bottom of the channel and refreshes in place when re-posted."
+            "Explains the currency, how to earn it, and what it buys, and carries "
+            "the 🔔 button members use to opt into economy DMs. Sticks to the "
+            "bottom of its channel."
         ),
         cog="EconomyCog",
         method="post_guide_panel",
-        related_page="economy-config",
+        host_page="economy-config",
     ),
     PanelSpec(
         key="economy-leaderboard",
         label="Economy Leaderboard",
         description=(
-            "Auto-updating richest-members board. Re-posting moves it to a new "
-            "channel; posting into the channel it already occupies just refreshes it."
+            "Auto-updating richest-members board — today's pulse, top earners, "
+            "quest and community-goal progress. Repaints itself after economy activity."
         ),
         cog="EconomyCog",
         method="post_leaderboard_panel",
-        related_page="economy-config",
+        host_page="economy-config",
     ),
     PanelSpec(
         key="economy-shop",
@@ -99,19 +112,21 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         ),
         cog="EconomyCog",
         method="post_shop_panel",
-        related_page="economy-sinks",
+        # Settings, not Sinks: all three economy panels are placed in one
+        # sitting when the economy is set up, and Sinks is about prices.
+        host_page="economy-config",
     ),
     PanelSpec(
         key="voice-control",
         label="Voice Control Owner Panel",
         description=(
-            "The persistent owner-control panel for temporary voice channels. Posts "
-            "into the control channel set on the Voice Control config page, not the "
-            "channel picked here."
+            "The persistent owner-control panel for temporary voice channels. "
+            "Goes to the Control Channel set above; it keeps itself at the bottom "
+            "of that channel, so this is a once-per-setup action."
         ),
         cog="VoiceMasterCog",
         method="post_control_panel",
-        related_page="config-voice-master",
+        host_page="config-voice-master",
     ),
     PanelSpec(
         key="guess-prompt",
@@ -122,7 +137,7 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         ),
         cog="GuessCog",
         method="post_prompt_panel",
-        related_page="config-guess",
+        host_page="config-guess",
     ),
     PanelSpec(
         key="grant-audit",
@@ -134,7 +149,7 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         ),
         cog="RoleGrantCog",
         method="post_audit_card",
-        related_page="grant-audit",
+        host_page="grant-audit",
         options=(
             PanelOption(
                 name="role_key",
@@ -162,7 +177,7 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         ),
         cog="JailCog",
         method="post_ticket_panel",
-        related_page="mod-tickets",
+        host_page="mod-tickets",
     ),
 )
 
