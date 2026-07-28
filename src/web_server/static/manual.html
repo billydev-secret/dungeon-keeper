@@ -1767,11 +1767,13 @@
     <h3 id="inactive">Inactive Members</h3>
     <p>A softer sibling of the jail system for idle members: instead of a per-user cell, everyone held inactive shares one channel. Roles are snapshotted and stripped, the member gets an <code>@Inactive</code> role that can only see that channel, and a persistent panel there lets them open a ticket to be reactivated. Members enter manually or via a sweep; the only way out is <code>/inactive release</code>.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/inactive panel channel:#inactive</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
-      <span class="cmd-desc">One-time setup: sets the shared inactive channel, creates/wires the <code>@Inactive</code> role, and posts the info panel with an "Open Ticket" button. Required before <code>mark</code> or <code>sweep</code> will run. Re-run it with a different channel to move the inactive area — the old channel's <code>@Inactive</code> access is removed automatically.</span>
-    </div>
+    <p class="note">One-time setup lives on the dashboard under
+      <strong>Config → Inactive Sweep → Inactive Channel</strong>: pick a channel and press
+      <strong>Set Up Channel</strong>. That sets the shared inactive channel, creates and
+      wires the <code>@Inactive</code> role, and posts the info panel with its "Open Ticket"
+      button. It's required before <code>mark</code> or a sweep will run. Point it at a
+      different channel any time to move the inactive area — the old channel's
+      <code>@Inactive</code> access is removed for you.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/inactive mark user:@member [reason]</span>
@@ -1785,11 +1787,11 @@
       <span class="cmd-desc">Restore whichever snapshotted roles still exist and remove <code>@Inactive</code>.</span>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/inactive sweep [apply:true|false]</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
-      <span class="cmd-desc">Defaults to a dry run: lists members idle past the threshold without touching anyone. Pass <code>apply:true</code> to actually move each listed candidate through the mark flow.</span>
-    </div>
+    <p class="note">Sweeps also run from <strong>Config → Inactive Sweep</strong>.
+      <strong>Check Now</strong> is a dry run — it lists members idle past the threshold
+      without touching anyone. <strong>Move Them Now</strong> moves exactly those members
+      through the same mark flow, and tells you how many a single run reached if the
+      per-run cap held some back.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
@@ -2008,7 +2010,7 @@
         <tr><td><strong><a href="/#/config-voice-master">Voice Control</a></strong></td><td>Hub channel, default category, name template, control panel placement, saveable fields</td></tr>
         <tr><td><strong><a href="/#/config-voice-transcription">Voice Transcription</a></strong></td><td>Auto-transcribe Discord voice notes in chosen channels. Privacy note: clips are transcribed locally on the bot's own hardware — audio never leaves the server</td></tr>
         <tr><td><strong><a href="/#/role-menus">Role Menus</a></strong></td><td>Build and post <a href="#role-menus">self-assign role menus</a> (modes, roles, channel, re-sync)</td></tr>
-        <tr><td><strong><a href="/#/docs">Docs</a></strong></td><td>Author the documents posted into channels via <a href="#docs"><code>/docs</code></a></td></tr>
+        <tr><td><strong><a href="/#/docs">Docs</a></strong></td><td>Author the documents posted into channels, and place them there</td></tr>
         <tr><td><strong><a href="/#/config-birthday">Birthdays</a></strong> / <a href="/#/birthday-calendar">Calendar</a></td><td>Announcement channel and time; browsable birthday calendar</td></tr>
         <tr><td><strong><a href="/#/config-bios">Bios</a></strong></td><td>Profile field set, icebreaker question pool, wiring (channel, wizard category, embed color), trigger-button copy</td></tr>
         <tr><td><strong><a href="/#/config-confessions">Confessions</a></strong></td><td>Channel, mod-log channel, panic mode</td></tr>

@@ -273,11 +273,12 @@ async def test_post_guide_disabled_gate(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(admin=True), _channel(CHANNEL_ID))
 
-    result = await _post_guide(cog, interaction)
-
     # Domain rule, kept on the cog: no currency, no currency guide, however you
-    # got here. The route renders the refusal.
-    assert result is None
+    # got here. It raises rather than returning None so the route can name the
+    # actual fix — a bare None surfaces as "Discord rejected the post", which
+    # sends the admin to check bot permissions instead of the economy toggle.
+    with pytest.raises(ValueError, match="disabled"):
+        await _post_guide(cog, interaction)
 
 
 # "Plain member refused" and "rejects a non-text channel" moved with the

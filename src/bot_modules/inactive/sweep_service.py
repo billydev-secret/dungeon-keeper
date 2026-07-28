@@ -215,12 +215,10 @@ async def setup_inactive_channel(ctx, guild, channel) -> tuple[bool, str]:
     previous_raw = await asyncio.to_thread(_read_previous)
     stale_channel_id = stale_inactive_channel_id(previous_raw, channel.id)
 
-    def _persist() -> None:
-        with ctx.open_db() as conn:
-            set_config_value(conn, "inactive_channel_id", str(channel.id), guild_id)
-
-    await asyncio.to_thread(_persist)
-
+    # Order matters. Everything that can fail runs before anything destructive:
+    # a failure below leaves the guild exactly as it was, rather than half
+    # re-pointed with the old channel's access already revoked and no working
+    # replacement. So the config write and the revoke come last.
     role = await ensure_inactive_role(ctx, guild)
     if role is None:
         return False, "Missing **Manage Roles** — can't create the Inactive role."
@@ -234,22 +232,6 @@ async def setup_inactive_channel(ctx, guild, channel) -> tuple[bool, str]:
             f"Couldn't grant the Inactive role access to #{channel.name} — "
             "check my channel permissions."
         )
-
-    note = ""
-    if stale_channel_id:
-        old_channel = guild.get_channel(stale_channel_id)
-        if old_channel is not None:
-            try:
-                await old_channel.set_permissions(role, overwrite=None)
-            except discord.HTTPException:
-                log.warning(
-                    "Could not revoke @Inactive from old inactive channel %s",
-                    stale_channel_id, exc_info=True,
-                )
-                note = (
-                    f"Couldn't remove the Inactive role's access to "
-                    f"<#{stale_channel_id}> — clear it by hand."
-                )
 
     accent = await resolve_accent_color(ctx.db_path, guild)
     embed = discord.Embed(
@@ -268,6 +250,31 @@ async def setup_inactive_channel(ctx, guild, channel) -> tuple[bool, str]:
         await channel.send(embed=embed, view=view)
     except discord.HTTPException:
         return False, f"Couldn't post the info panel in #{channel.name}."
+
+    def _persist() -> None:
+        with ctx.open_db() as conn:
+            set_config_value(conn, "inactive_channel_id", str(channel.id), guild_id)
+
+    await asyncio.to_thread(_persist)
+
+    # Last, and only once the new channel is known good: take the old channel's
+    # access away so it doesn't stay visible to inactive members forever. A
+    # failure here is a warning, not a failure — the new channel already works.
+    note = ""
+    if stale_channel_id:
+        old_channel = guild.get_channel(stale_channel_id)
+        if old_channel is not None:
+            try:
+                await old_channel.set_permissions(role, overwrite=None)
+            except discord.HTTPException:
+                log.warning(
+                    "Could not revoke @Inactive from old inactive channel %s",
+                    stale_channel_id, exc_info=True,
+                )
+                note = (
+                    f"Couldn't remove the Inactive role's access to "
+                    f"<#{stale_channel_id}> — clear it by hand."
+                )
     return True, note
 
 

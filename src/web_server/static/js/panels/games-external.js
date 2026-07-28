@@ -150,7 +150,7 @@ export function mount(container) {
       // The row is saved either way; "live" only reports whether the running
       // bot picked it up. Saying so beats a silent no-op until restart.
       if (res && res.live === false) {
-        toast("Saved, but the bot is offline — it takes effect on next restart.", "warn");
+        toast("Saved, but the bot is offline — it takes effect on next restart.", "info");
       }
     }
 

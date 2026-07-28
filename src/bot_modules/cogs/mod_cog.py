@@ -343,7 +343,6 @@ def _build_help_pages(
                     ("/games join / /games leave", "Hop into or out of the game running in this channel."),
                     ("/games end", "End the game running in this channel (host or mod)."),
                     ("/games help", "Full game-mode browser."),
-                    ("/games support", "Link to the support server."),
                 ]
             ),
         )

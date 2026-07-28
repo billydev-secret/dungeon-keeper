@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from starlette.testclient import TestClient
@@ -2126,3 +2126,55 @@ def test_running_the_sweep_reports_what_it_moved(authed_client, fake_ctx, monkey
     # considered and overflow both reported: "moved 3" alone hides that two
     # more qualified but were held back by the per-run cap.
     assert (body["moved"], body["considered"], body["overflow"]) == (3, 5, 2)
+
+
+def test_inactive_channel_setup_leaves_the_old_channel_alone_when_posting_fails(
+    authed_client, fake_ctx, monkeypatch
+):
+    """Nothing destructive may run before the last thing that can fail.
+
+    The revoke used to happen before the panel post, so a failed post (missing
+    Embed Links, say) returned an error *after* the old channel's @Inactive
+    access was already gone — reported as a failure while leaving the guild with
+    no working inactive channel at all.
+    """
+    import asyncio
+
+    import discord
+
+    import bot_modules.inactive.sweep_service as svc
+
+    guild = MagicMock()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.name = "new-inactive"
+    channel.set_permissions = AsyncMock()
+    channel.send = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(status=403), "no embeds")
+    )
+    old_channel = MagicMock(spec=discord.TextChannel)
+    old_channel.set_permissions = AsyncMock()
+    guild.id = fake_ctx.guild_id
+    guild.get_channel.side_effect = lambda cid: (
+        channel if cid == 5 else old_channel
+    )
+
+    # setup_inactive_channel imports these inside the function, so patch them
+    # where they're defined rather than on the calling module.
+    monkeypatch.setattr(
+        "bot_modules.inactive.apply.ensure_inactive_role",
+        AsyncMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        "bot_modules.inactive.logic.stale_inactive_channel_id",
+        lambda prev, new: 999,
+    )
+    monkeypatch.setattr(
+        "bot_modules.core.branding.resolve_accent_color", AsyncMock(return_value=None)
+    )
+
+    ok, note = asyncio.run(svc.setup_inactive_channel(fake_ctx, guild, channel))
+
+    assert ok is False
+    assert "info panel" in note
+    # The old channel keeps its access; the admin's previous setup still works.
+    old_channel.set_permissions.assert_not_awaited()

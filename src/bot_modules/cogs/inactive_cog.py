@@ -13,7 +13,7 @@ Two ways in:
   Inactive Sweep panel) that moves members idle past a configurable
   threshold. The sweep is a
   destructive mass role-strip, so it never touches bots/mods/admins/the owner,
-  is hard-capped per run, and ``/inactive sweep`` defaults to a dry-run preview.
+  is hard-capped per run, and the dashboard's Check Now is a dry-run preview.
 
 One way out: ``/inactive release @user`` restores roles and removes ``@Inactive``.
 """
@@ -96,8 +96,9 @@ class InactiveCog(commands.Cog):
 
         if not read_inactive_channel_id(ctx, guild.id):
             await interaction.response.send_message(
-                "❌ No inactive channel is set up yet. Run `/inactive panel` first so "
-                "moved members have somewhere to land.",
+                "❌ No inactive channel is set up yet. Set one on the dashboard "
+                "(Config → Inactive Sweep → Inactive Channel) so moved members have "
+                "somewhere to land.",
                 ephemeral=True,
             )
             return
