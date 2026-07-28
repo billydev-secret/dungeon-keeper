@@ -48,6 +48,7 @@ export const KIND_LABELS = {
   voice_partner: "👥 Share voice with different members",
   thread_deep: "🧵 Be part of a deep thread",
   welcome: "👋 Welcome a new member",
+  intake_step: "📋 Tick a step on a newcomer's intake card",
   conversation_starter: "✨ Start a conversation that takes off",
   cat_catch: "🐱 Catch a cat with Cat Bot",
   greeting_answered: "🙋 Answer someone's hello",

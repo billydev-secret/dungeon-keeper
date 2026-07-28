@@ -478,6 +478,7 @@ async def list_income_sources(
                     "reward_game_win": settings.reward_game_win,
                     "reward_cah_win_max": settings.reward_cah_win_max,
                     "reward_photo_post": settings.reward_photo_post,
+                    "reward_intake_step": settings.reward_intake_step,
                     "xp_per_coin": settings.xp_per_coin,
                     "conversion_daily_cap": settings.conversion_daily_cap,
                 },

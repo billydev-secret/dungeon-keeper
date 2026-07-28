@@ -74,6 +74,18 @@ slash commands:
   (`left`) or ban (`banned` — the ban hook closes first so the remove hook
   finds nothing). **No expiry**: cards otherwise stay open; the queue is
   always the truth.
+- **Payouts:** ticking a step pays the greeter through the `intake_step`
+  income source (`economy/intake_rewards.pay_intake_steps`, called from all
+  three human tick paths — the `greeted` auto-tick, a posted step code, and
+  the manual toggle button — riding the tick's own transaction). Per *step*, not per completed card — completion credits
+  whoever posted the code, so a per-card award would miss shared and
+  half-finished intakes. Only ticks with a real actor pay: `verified` and
+  `role_gained` record `AUTO_ACTOR` (0) and credit nobody, as do skipped
+  steps. Dedup is `econ_intake_rewards (guild_id, card_id, step_key)`
+  (migration 138) — **not** the step's `done_at`/`done_by`, which the toggle
+  button clears, so unticking and re-ticking mints nothing and a second
+  greeter cannot re-claim a ticked step. Each award is savepointed so an
+  economy failure can never roll back the tick. See economy_spec.md §4.5.
 - **Stale nudge:** `intake_loop` (10-min tick) replies once under any open
   card with no step progress for `intake_stale_hours` (default 24; any
   tick resets the clock), pinging the greeter role; `nudged_at` stamps
@@ -93,7 +105,10 @@ slash commands:
 (guild, member) via partial unique index; resolving records
 `resolved_by`/`resolution` (`completed`/`dismissed`/`left`/`banned`).
 Steps carry `done_at`/`done_by`/`skipped` — no message content, no answers
-(the question lists stay conversational by design).
+(the question lists stay conversational by design). `econ_intake_rewards`
+(migration 138) anchors the per-step payout: one row per (guild, card, step),
+`user_id`/`amount` recorded for attribution only — the PK excludes them so a
+re-tick by anyone pays nothing.
 
 ## Procedure reference
 

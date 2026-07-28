@@ -103,6 +103,15 @@ class EconSettings:
     # (the quest, if any, still pays). Gated by the photo_post income-source
     # toggle like the quest is.
     reward_photo_post: int = 5
+    # Flat award to the greeter for each intake-card checklist step they tick
+    # (see bot_modules/economy/intake_rewards.py). Paid per step rather than
+    # per finished card so two greeters sharing one welcome each get paid for
+    # what they actually did. Only steps with a real actor pay: the auto-tick
+    # hooks for `verified`/`role_gained` record AUTO_ACTOR (0) and credit
+    # nobody. Anchored once per (card, step) in econ_intake_rewards, so
+    # toggling a step off and on again mints nothing. 0 turns it off; gated by
+    # the intake_step income-source toggle.
+    reward_intake_step: int = 5
     # Coin Drops (see economy_drops_service/_loop): the bot drops a pouch of
     # coins in this channel at random moments; the first member to reply to
     # the drop message claims it. The channel picker is the toggle — 0

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, cast
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.economy.intake_rewards import pay_intake_steps
 from bot_modules.economy.leaderboard import progress_bar
 from bot_modules.services import intake_service as svc
 
@@ -435,12 +436,39 @@ async def handle_intake_message(ctx: AppContext, message: discord.Message) -> No
                         actor_id=author.id,
                         at=now,
                     ):
+                        # Pasting a step's code is doing the step — it pays
+                        # like the button does, and the same anchor means
+                        # re-pasting the message earns nothing more.
+                        pay_intake_steps(
+                            conn,
+                            guild_id,
+                            card_id=int(card["id"]),
+                            newcomer_id=uid,
+                            step_keys=(step_key,),
+                            actor_id=author.id,
+                            booster=author.premium_since is not None,
+                            at=now,
+                        )
                         results.append((svc.ACTION_STEP, card, uid))
                 else:
                     card, ticked = svc.auto_tick(
                         conn, guild_id, uid, svc.AUTO_GREETED, now, actor_id=author.id
                     )
                     if card is not None and ticked:
+                        # The greeter earns for the step they just ticked —
+                        # rides this transaction so the coins commit with the
+                        # tick (intake_rewards savepoints each step, so an
+                        # economy failure can't roll the tick back).
+                        pay_intake_steps(
+                            conn,
+                            guild_id,
+                            card_id=int(card["id"]),
+                            newcomer_id=uid,
+                            step_keys=ticked,
+                            actor_id=author.id,
+                            booster=author.premium_since is not None,
+                            at=now,
+                        )
                         results.append((svc.ACTION_GREET, card, uid))
             return results
 
@@ -573,14 +601,29 @@ async def _toggle_step(
             )
             if step is None or str(step["auto_kind"]):
                 return ("closed",)  # unknown or auto step — buttons never carry these
-            svc.set_step_state(
+            ticking = step["done_at"] is None
+            changed = svc.set_step_state(
                 conn,
                 card_id,
                 step_key,
-                done=step["done_at"] is None,
+                done=ticking,
                 actor_id=actor.id,
                 at=now,
             )
+            if ticking and changed:
+                # Only ticking pays, and only the first time this step is
+                # ticked on this card — the anchor in intake_rewards makes
+                # toggling the button off and on again worth nothing.
+                pay_intake_steps(
+                    conn,
+                    guild.id,
+                    card_id=card_id,
+                    newcomer_id=int(card["user_id"]),
+                    step_keys=(step_key,),
+                    actor_id=actor.id,
+                    booster=actor.premium_since is not None,
+                    at=now,
+                )
             return (
                 "ok",
                 card,
