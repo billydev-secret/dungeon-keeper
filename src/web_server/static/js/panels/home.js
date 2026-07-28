@@ -12,6 +12,7 @@ function entryId(e) { return typeof e === "string" ? e : e?.id; }
 // flag stays set and it doesn't come back.
 const ONE_TIME_ADDITIONS = [
   { id: "setup-suggestions", flag: "dk_seen_setup_suggestions", adminOnly: true },
+  { id: "config-problems", flag: "dk_seen_config_problems", adminOnly: true },
 ];
 
 function injectNewWidgets(layout, userId, isAdmin) {
@@ -75,7 +76,9 @@ export function mount(container) {
   let layout = getLayout(userId, isAdmin, isMod);
   let editMode = false;
   let refreshTimer = null;
-  let data = { home: null, health: null, economy: null, suggestions: null };
+  let data = {
+    home: null, health: null, economy: null, suggestions: null, channelHealth: null,
+  };
 
   async function fetchData() {
     // Determine which sources are needed
@@ -83,6 +86,7 @@ export function mount(container) {
     const needsHealth = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "health");
     const needsEconomy = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "economy");
     const needsSuggestions = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "suggestions");
+    const needsChannelHealth = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "channelHealth");
 
     const promises = [];
     if (needsHome) promises.push(api("/api/home").then(d => { data.home = d; }));
@@ -97,6 +101,15 @@ export function mount(container) {
         api("/api/help/suggestions?limit=3")
           .then(d => { data.suggestions = d; })
           .catch(() => { data.suggestions = { suggestions: [] }; }),
+      );
+    } else promises.push(Promise.resolve());
+    // Advisory like suggestions — a failure must not blank the dashboard, and
+    // "I couldn't check" is reported as unavailable rather than as all-clear.
+    if (needsChannelHealth) {
+      promises.push(
+        api("/api/config/channel-health")
+          .then(d => { data.channelHealth = d; })
+          .catch(() => { data.channelHealth = { available: false, issues: [] }; }),
       );
     } else promises.push(Promise.resolve());
 

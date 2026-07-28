@@ -127,7 +127,11 @@ class CombinedStepView(discord.ui.View):
         on_question_pick: Callable[[discord.Interaction, int], Awaitable[None]] | None = None,
         question_options: list[tuple[int, str]] | None = None,
         current_question_id: int | None = None,
-        timeout: float = 900.0,
+        # Required, deliberately. This used to default to 900s while the guild's
+        # `bios_wizard_timeout` went up to 120 minutes, so past 15 minutes every
+        # control here silently stopped responding while the wizard's watchdog
+        # slept on. Callers pass `logic.input_timeout_seconds(...)`.
+        timeout: float,
     ) -> None:
         super().__init__(timeout=timeout)
         self._owner_id = owner_id
@@ -265,7 +269,10 @@ class BrowseQuestionsView(discord.ui.View):
         can_prev: bool,
         can_next: bool,
         can_done: bool,
-        timeout: float = 900.0,
+        #: Required — see the note on ``CombinedStepView``. This step is the
+        #: one where a dead control strands the member completely: there is no
+        #: text capture here, so the select and Done are the only way on.
+        timeout: float,
     ) -> None:
         super().__init__(timeout=timeout)
         self._owner_id = owner_id

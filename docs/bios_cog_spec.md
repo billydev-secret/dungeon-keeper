@@ -174,6 +174,21 @@ When editing, each step shows the user's stored value/answer and lets them keep 
 ### 5.7 Timeout
 If the session is idle longer than `wizard_timeout`, auto-cancel: delete the channel, discard state, and (if possible) notify the user briefly via the triggering context.
 
+Every way of answering a step — the step views' buttons and selects, and the
+message listener — stays live for `wizard_timeout + 30s`
+(`logic.input_timeout_seconds`), so the idle watchdog always fires first. That
+ordering is the point: the watchdog is the only path that tells the member
+what happened, so a control must never die before it runs. The step views
+previously hardcoded 900s regardless of configuration, which was harmless at
+the 15-minute default (identical to the watchdog window) and stranded members
+at any higher setting — past 15 minutes every button returned "This
+interaction failed" while the watchdog slept on. The views now take `timeout`
+as a **required** argument so the two can't drift apart again.
+
+A step's view is stopped once its action is consumed, so a tap on a
+scrolled-back earlier prompt can't push an action that the current step
+consumes as its own.
+
 ### 5.8 Completion
 - Render the embed (§6).
 - **New:** post to the bios channel; insert the `bios` row, all `bio_field_values` rows, and all `bio_answers` rows. Wrap the writes so a posting failure does not leave partial rows.
@@ -203,6 +218,7 @@ The embed is built **from the user's snapshotted values/answers**, never from li
 ### 6.2 Length handling
 - Cap each field value at **1024 chars** (Discord's embed field limit); truncate with a trailing `…`. Because the wizard enforces `max_len` at input, this is a rarely-hit safety net.
 - If total embed content approaches the **6000-char** ceiling, truncate the longest `paragraph` fields first until under budget.
+- A question renders as `logic.QUESTION_NAME_PREFIX` + its text, both as the posted bio's field name and as the wizard's own prompt title. The text is capped at **254** chars so the prefixed result lands on Discord's 256-char limit rather than two past it, and `logic.question_field_name` is the single place that applies it. This is not a theoretical cap: `bio_questions.prompt` accepts **512** chars through the dashboard, and an over-long name makes Discord reject the whole embed with a 400 — which, inside the wizard's step loop, becomes a silent `cancel("error")` that deletes the member's channel with nothing saved.
 
 ---
 
@@ -251,6 +267,38 @@ Slots into the existing self-hosted DK dashboard (Discord OAuth, admin-gated). T
 
 ### 10.3 Config editor
 - `bios_channel_id`, `wizard_category_id`, `questions_per_bio`, `embed_color`, `wizard_timeout`, `archive_grace`.
+
+### 10.4 Channel health warnings
+`GET /api/bios/config` returns a `channel_issues` list alongside the settings,
+computed from live Discord state (empty when the bot client is down — an
+unknown state is not reported as a fault). The panel renders it as an error
+banner above the form, and `POST /api/bios/post-trigger-button` returns the
+same messages in a `warnings` list so posting the button into a channel nobody
+can open reports as a failure rather than a clean success.
+
+Checked for `bios_channel_id` (`diagnose_channel`): the channel is missing,
+isn't a channel that takes messages, the bot can't post (View / Send / Embed
+Links), or **no non-bot member can see it**. Checked for `wizard_category_id`
+(`diagnose_category`): missing, not a category, or the bot lacks Manage
+Channels. Categories deliberately use different rules — being message-less and
+member-invisible is correct for the wizard category and a fault for the bios
+channel.
+
+The "nobody can see it" rule exists because of a live outage: on 2026-07-19 a
+role holding the only overwrite granting `view_channel` was deleted, which
+silently removes its channel overwrite. `bios_channel_id` still pointed at a
+real text channel, the bot held Administrator and could post fine, and no
+config value changed — but for nine days no member could see the channel, the
+trigger button, or any posted bio. Zero is the threshold rather than a small
+share: a channel restricted on purpose still has its staff, so it lands on a
+small number, never none. Measured against the live server, a share threshold
+would have flagged eleven channels to catch the one real fault.
+
+The same rules run across every channel setting in `settings_registry` for the
+dashboard Home panel's **Configuration Problems** card
+(`GET /api/config/channel-health`), so a feature that registers a channel
+setting is covered automatically. Settings sharing one channel group into a
+single row — one channel, one fault, one fix.
 
 ---
 

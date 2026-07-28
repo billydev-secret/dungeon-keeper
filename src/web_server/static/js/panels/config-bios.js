@@ -15,6 +15,25 @@ import {
 
 let _fieldSeq = 0;
 
+// A bios channel can be correctly configured here and still reach nobody —
+// deleting a role silently takes its channel permission overwrite with it.
+// The server checks the live channel; this just shows what it found.
+function renderChannelIssues(issues) {
+  if (!issues || !issues.length) return "";
+  const rows = issues
+    .map((i) => {
+      const where = i.channel_name ? ` (#${esc(i.channel_name)})` : "";
+      return `<li><strong>${esc(i.label)}${where}:</strong> ${esc(i.message)}</li>`;
+    })
+    .join("");
+  return `
+    <div class="save-status save-err" role="alert" style="margin-bottom:0.75rem;">
+      <div>Bios won't work properly until these are fixed:</div>
+      <ul style="margin:0.4rem 0 0; padding-left:1.2rem;">${rows}</ul>
+    </div>
+  `;
+}
+
 // buildField renders a bare <label>; tie it to its control by id so screen
 // readers announce the label and a label tap focuses the field (W-A7).
 function labeledField(labelText, control, hint) {
@@ -97,6 +116,7 @@ async function renderConfigTab(pane) {
 
   pane.innerHTML = `
     ${renderMetaWarning()}
+    ${renderChannelIssues(config.channel_issues)}
     <form class="form form-cards" data-form></form>
     <div class="card" style="margin-top:12px;">
       <div class="section-label">Start Button</div>
@@ -242,9 +262,13 @@ async function renderConfigTab(pane) {
     postStatus.className = "save-status";
     postStatus.textContent = "Posting…";
     try {
-      await apiPost("/api/bios/post-trigger-button");
+      const res = await apiPost("/api/bios/post-trigger-button");
       // One feedback channel per surface (W-C8): everything goes via showStatus.
-      showStatus(postStatus, true, "Button posted");
+      // A warning here means the post worked but nobody can reach it — report
+      // that as a failure, because from a member's side it is one.
+      const warnings = res?.warnings || [];
+      if (warnings.length) showStatus(postStatus, false, `Posted, but: ${warnings[0]}`);
+      else showStatus(postStatus, true, "Button posted");
     } catch (err) {
       showStatus(postStatus, false, err.message);
     } finally {

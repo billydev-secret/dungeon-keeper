@@ -27,6 +27,9 @@ from bot_modules.bios.logic import (
     QuestionSnapshot,
     WizardState,
     headline_value,
+    idle_timeout_seconds,
+    input_timeout_seconds,
+    question_field_name,
 )
 from bot_modules.bios.trigger import reposition_trigger_button
 from bot_modules.bios.views import BrowseQuestionsView, CombinedStepView
@@ -151,7 +154,7 @@ class WizardSession:
 
     async def _idle_watch(self) -> None:
         try:
-            await asyncio.sleep(self.config.wizard_timeout_minutes * 60)
+            await asyncio.sleep(idle_timeout_seconds(self.config.wizard_timeout_minutes))
         except asyncio.CancelledError:
             return
         self._action_q.put_nowait(Action(kind="timeout"))
@@ -229,6 +232,7 @@ class WizardSession:
             on_choice_pick=on_pick if (is_choice and f.choices) else None,
             choice_options=list(f.choices) if (is_choice and f.choices) else None,
             current_choice=prior,
+            timeout=input_timeout_seconds(self.config.wizard_timeout_minutes),
         )
 
         assert self.channel is not None
@@ -242,10 +246,14 @@ class WizardSession:
         except asyncio.CancelledError:
             if text_capture_task is not None:
                 text_capture_task.cancel()
+            view.stop()
             raise
 
         if text_capture_task is not None and not text_capture_task.done():
             text_capture_task.cancel()
+        # This step is over. Retire its controls so a later tap on a
+        # scrolled-back prompt can't push an action the *next* step consumes.
+        view.stop()
         return action
 
     async def _render_question_browse_step(self) -> Action:
@@ -329,12 +337,17 @@ class WizardSession:
             can_prev=page > 0,
             can_next=page < total_pages - 1,
             can_done=True,
+            timeout=input_timeout_seconds(self.config.wizard_timeout_minutes),
         )
 
         assert self.channel is not None
         await self.channel.send(embed=embed, view=view)
 
-        return await self._action_q.get()
+        try:
+            action = await self._action_q.get()
+        finally:
+            view.stop()
+        return action
 
     async def _render_question_answer_step(self, q: BioQuestion) -> Action:
         """Render the prompt for the user's picked question and capture their text answer."""
@@ -354,6 +367,7 @@ class WizardSession:
             on_back=on_back,
             on_cancel=on_cancel,
             on_keep=None,
+            timeout=input_timeout_seconds(self.config.wizard_timeout_minutes),
         )
 
         assert self.channel is not None
@@ -365,6 +379,7 @@ class WizardSession:
         finally:
             if not capture_task.done():
                 capture_task.cancel()
+            view.stop()
         return action
 
     async def _capture_one_message(self, max_len: int) -> None:
@@ -383,7 +398,7 @@ class WizardSession:
                         lambda m: m.author.id == self.member.id
                         and m.channel.id == (self.channel.id if self.channel else 0)
                     ),
-                    timeout=self.config.wizard_timeout_minutes * 60 + 30,
+                    timeout=input_timeout_seconds(self.config.wizard_timeout_minutes),
                 )
             except asyncio.TimeoutError:
                 return
@@ -692,7 +707,11 @@ class WizardSession:
 
     def _build_question_prompt_embed(self, q: BioQuestion) -> discord.Embed:
         e = discord.Embed(
-            title=f"› {q.prompt}",
+            # Prompts accept 512 chars from the dashboard; an over-long title
+            # would make Discord reject this embed, and a failed send inside
+            # the step loop tears the member's session down with no
+            # explanation.
+            title=question_field_name(q.prompt),
             description="Reply with your answer, or use **Back** to pick a different question.",
             color=self.config.embed_color,
         )

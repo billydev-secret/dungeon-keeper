@@ -22,6 +22,12 @@ from bot_modules.bios.trigger import (
     post_trigger_button as _post_trigger_button,
 )
 from bot_modules.core.db_utils import get_config_value, set_config_value
+from bot_modules.services.channel_health import snapshot_channel
+from bot_modules.services.channel_health_logic import (
+    diagnose_category,
+    diagnose_channel,
+    issue_to_dict,
+)
 from bot_modules.services.embeds import BIOS_PRIMARY
 from web_server.auth import AuthenticatedUser
 from web_server.deps import (
@@ -37,6 +43,58 @@ router = APIRouter()
 
 
 FieldTypeLit = Literal["short", "paragraph", "choice"]
+
+
+def _bios_channel_issues(ctx, guild_id: int, cfg: dict) -> list[dict]:
+    """Live health of the two channels the bios wizard depends on.
+
+    Returns an empty list when the bot client isn't up — an unknown state must
+    read as "nothing to report", never as a fault. See
+    ``channel_health_logic`` for why "nobody can see it" is the rule that
+    matters here: the bios channel spent nine days invisible to every member
+    while looking perfectly configured from this endpoint.
+    """
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        return []
+
+    def _as_id(raw) -> int:
+        try:
+            return int(str(raw).strip() or "0")
+        except (TypeError, ValueError):
+            return 0
+
+    issues = []
+    channel_id = _as_id(cfg.get("bios_channel_id"))
+    if channel_id > 0:
+        issues.extend(
+            diagnose_channel(
+                snapshot_channel(
+                    guild,
+                    key="bios_channel_id",
+                    label="Bios channel",
+                    panel="Config → Bios",
+                    channel_id=channel_id,
+                )
+            )
+        )
+
+    category_id = _as_id(cfg.get("wizard_category_id"))
+    if category_id > 0:
+        issues.extend(
+            diagnose_category(
+                snapshot_channel(
+                    guild,
+                    key="bios_wizard_category_id",
+                    label="Wizard category",
+                    panel="Config → Bios",
+                    channel_id=category_id,
+                )
+            )
+        )
+
+    return [issue_to_dict(i) for i in issues]
 
 
 # ── Pydantic bodies ────────────────────────────────────────────────────
@@ -139,7 +197,10 @@ async def get_bios_config(
                 ),
             }
 
-    return await run_query(_q)
+    cfg = await run_query(_q)
+    # Computed outside the DB thread: this reads live Discord state, not rows.
+    cfg["channel_issues"] = _bios_channel_issues(ctx, guild_id, cfg)
+    return cfg
 
 
 @router.put("/config")
@@ -502,4 +563,18 @@ async def post_trigger_button(
         )
 
     msg = await _post_trigger_button(ctx, channel, embed_color=BIOS_PRIMARY)
-    return {"message_id": str(msg.id), "channel_id": str(channel.id)}
+
+    # Posting succeeded — but a button in a channel no member can open is a
+    # button nobody will ever press, and that failure is completely silent
+    # from Discord's side. Say so rather than reporting a clean success.
+    warnings = [
+        i["message"]
+        for i in _bios_channel_issues(
+            ctx, guild_id, {"bios_channel_id": str(channel.id)}
+        )
+    ]
+    return {
+        "message_id": str(msg.id),
+        "channel_id": str(channel.id),
+        "warnings": warnings,
+    }
