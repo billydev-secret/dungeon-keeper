@@ -76,9 +76,9 @@ def test_validate_blocks_strict_and_canonical():
 def test_render_questions_one_message_per_line():
     messages = ref.render_blocks(ref.parse_blocks(json.dumps(BLOCKS)))
     assert messages == [
-        "**How intake works**",
+        "## How intake works",
         "Greet them.\nBe kind.",
-        "**SFW questions**",
+        "## SFW questions",
         "Q one?",
         "Q two?",
     ]
@@ -89,7 +89,7 @@ def test_render_title_is_its_own_message_so_the_body_copies_clean():
     # Discord's Copy Text takes the whole message — a heading sharing the
     # message means trimming it off every paste.
     blocks = [ref.Block("text", "Example Greeting", "Hi, welcome!")]
-    assert ref.render_blocks(blocks) == ["**Example Greeting**", "Hi, welcome!"]
+    assert ref.render_blocks(blocks) == ["## Example Greeting", "Hi, welcome!"]
 
 
 @pytest.mark.parametrize(
@@ -104,7 +104,7 @@ def test_render_title_is_its_own_message_so_the_body_copies_clean():
         # validate_blocks allows a title with no body (a bare section heading).
         pytest.param(
             ref.Block("text", "Heading only", "  "),
-            ["**Heading only**"],
+            ["## Heading only"],
             id="text-no-body",
         ),
     ],
@@ -360,7 +360,7 @@ async def test_sync_posts_and_maps(db_path):
     channel = _FakeChannel()
     result = await ref.sync_channel(_Ctx(db_path), _guild(channel))
     assert result["posted"] == 3 and result["incomplete"] is False
-    assert channel.sent == ["**SFW**", "Q1?", "Q2?"]
+    assert channel.sent == ["## SFW", "Q1?", "Q2?"]
     with open_db(db_path) as conn:
         assert len(ref.stored_messages(conn, GUILD)) == 3
 
@@ -437,7 +437,7 @@ async def test_sync_reposts_a_message_deleted_by_hand(db_path):
     ctx = _Ctx(db_path)
     channel = _FakeChannel()
     ids = await _sync_ids(ctx, db_path, channel)
-    assert channel.sent == ["**SFW**", "Q1?", "Q2?"]
+    assert channel.sent == ["## SFW", "Q1?", "Q2?"]
 
     channel.live.remove(ids[1])  # someone deletes "Q1?" in Discord
     channel.sent.clear()
@@ -494,7 +494,7 @@ async def test_sync_fills_a_freshly_repointed_channel(db_path):
 
     fresh = _FakeChannel()  # different channel, holds none of them
     result = await ref.sync_channel(ctx, _guild(fresh))
-    assert fresh.sent == ["**SFW**", "Q1?", "Q2?"]
+    assert fresh.sent == ["## SFW", "Q1?", "Q2?"]
     assert fresh.deletes == []  # nothing of ours to clean up there
     assert result["repaired"] == 3
 
