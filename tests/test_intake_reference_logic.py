@@ -307,6 +307,7 @@ class _FakeChannel(discord.TextChannel):
         self.live = set(live)
         self.history_fails = history_fails
         self.history_limit = None  # last limit the sweep asked for
+        self.yielded = 0  # messages the sweep actually read
         self._next_id = 1000
 
     async def send(self, content, **kwargs):
@@ -330,6 +331,7 @@ class _FakeChannel(discord.TextChannel):
             if fails:
                 raise discord.HTTPException(_FakeResponse(500), "boom")
             for i in ids:
+                self.yielded += 1
                 yield SimpleNamespace(id=i)
 
         return _gen()
@@ -497,10 +499,12 @@ async def test_sync_fills_a_freshly_repointed_channel(db_path):
     assert result["repaired"] == 3
 
 
-async def test_sync_never_deletes_a_message_it_still_tracks(db_path):
-    # A rebuild that fails mid-send keeps the old messages tracked for the
-    # positions it never reached. Deleting them anyway would orphan real
-    # messages the bot then refuses to touch.
+async def test_sync_heals_a_rebuild_that_died_mid_send(db_path):
+    # A rebuild that fails partway keeps the old ids tracked for the
+    # positions it never reached AND deletes those messages. That pairing
+    # is what makes the next save finish the job: skipping the delete left
+    # stale copies whose hashes still matched, so the next sync saw nothing
+    # to do and the channel read out of order forever.
     _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?\nQ3?"}])
     ctx = _Ctx(db_path)
     channel = _FakeChannel()
@@ -512,10 +516,70 @@ async def test_sync_never_deletes_a_message_it_still_tracks(db_path):
 
     result = await ref.sync_channel(ctx, _guild(channel))
     assert result["incomplete"] is True
-    assert channel.deletes == []  # ids[1] / ids[2] are still tracked
+    assert result["repaired"] == 1  # the gap itself did get re-sent
+
+    # The follow-up save must actually have work to do, and must leave the
+    # channel reading in order.
+    channel.send_fails_at = None
+    channel.sent.clear()
+    result = await ref.sync_channel(ctx, _guild(channel))
+    assert result["incomplete"] is False
+    assert channel.sent == ["Q2?", "Q3?"]
     with open_db(db_path) as conn:
-        after = [m for m, _ in ref.stored_messages(conn, GUILD)]
-    assert set(after) & set(ids) == {ids[1], ids[2]}
+        final = [m for m, _ in ref.stored_messages(conn, GUILD)]
+    assert final == sorted(final)  # ids ascend ⇒ channel is in reading order
+    assert set(final) <= channel.live and len(channel.live) == 3
+
+
+async def test_sync_does_not_claim_a_restore_it_never_made(db_path):
+    # The gap lands past the rendered range: the message is surplus the
+    # delete pass removes anyway, so nothing is restored and the panel must
+    # not print "1 restored".
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?\nQ3?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    ids = await _sync_ids(ctx, db_path, channel)
+
+    channel.sent.clear()
+    channel.live.remove(ids[2])  # deleted in Discord...
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?"}])  # ...and cut
+
+    result = await ref.sync_channel(ctx, _guild(channel))
+    assert result["repaired"] == 0
+    assert channel.sent == [] and channel.deletes == []
+
+
+async def test_sync_flags_a_sweep_that_ran_out_of_history(monkeypatch, db_path):
+    # Past the cap the sweep assumes the unread ids are present (right), but
+    # it must not report a clean sync — a deletion in the unread tail goes
+    # unnoticed until someone looks.
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?\nQ3?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    ids = await _sync_ids(ctx, db_path, channel)
+
+    channel.sent.clear()
+    channel.live.remove(ids[0])  # forces the sweep to read the whole window
+    monkeypatch.setattr(ref, "_SWEEP_LIMIT", 1)
+
+    result = await ref.sync_channel(ctx, _guild(channel))
+    assert result["incomplete"] is True
+    assert channel.history_limit == 1
+
+
+async def test_sweep_stops_once_every_tracked_message_is_found(db_path):
+    # The fast path shouldn't read the whole channel: with nothing missing
+    # the sweep bails at the last tracked message rather than trawling
+    # whatever humans posted afterwards.
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    ids = await _sync_ids(ctx, db_path, channel)
+    channel.live.update({max(ids) + 1, max(ids) + 2})  # human chatter after
+
+    swept = await ref._sweep_existing(channel, [(m, "") for m in ids])
+    assert swept == (set(ids), None)  # conclusive: nothing missing
+    assert channel.yielded == len(ids)  # the chatter was never read
 
 
 def test_blocks_from_messages_drafts_text_blocks():

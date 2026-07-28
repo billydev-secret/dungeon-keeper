@@ -56,9 +56,11 @@ KINDS = (KIND_TEXT, KIND_QUESTIONS)
 #: Discord's message cap is 2000; leave headroom for markdown we add.
 _CHUNK_LIMIT = 1900
 _IMPORT_HISTORY_LIMIT = 200
-#: Cap on the per-sync existence sweep (~1 request per 100 messages). Ample
-#: for a reference channel — the block editor caps out at 100 blocks — while
-#: bounding the cost when humans have chattered past the tracked range.
+#: Backstop on the per-sync existence sweep (~1 request per 100 messages).
+#: The sweep stops as soon as every tracked message is accounted for, so
+#: this only bites when something really is missing *and* the channel has a
+#: lot of untracked posts. A sweep that hits it reports ``incomplete``
+#: rather than quietly declaring the unread tail intact.
 _SWEEP_LIMIT = 500
 
 
@@ -236,6 +238,21 @@ def missing_message_ids(
     }
 
 
+def rebuild_gap(
+    stored: list[tuple[int, str]],
+    missing: set[int] | frozenset[int],
+    rendered_count: int,
+) -> int | None:
+    """First position the channel has to be rebuilt from, or ``None``.
+
+    A gap at or past the rendered range is ``None``: those messages are
+    surplus the delete pass removes anyway, so there is nothing to restore
+    and no reason to churn the positions above it.
+    """
+    gap = next((i for i, (mid, _) in enumerate(stored) if mid in missing), None)
+    return None if gap is None or gap >= rendered_count else gap
+
+
 def diff_messages(
     rendered: list[str],
     stored: list[tuple[int, str]],
@@ -257,9 +274,7 @@ def diff_messages(
     lands past the rendered range is ignored: those messages are surplus
     the delete pass removes anyway.
     """
-    gap = next((i for i, (mid, _) in enumerate(stored) if mid in missing), None)
-    if gap is not None and gap >= len(rendered):
-        gap = None
+    gap = rebuild_gap(stored, missing, len(rendered))
     reusable = len(stored) if gap is None else gap
     ops: list[tuple[str, int, str]] = []
     for i, content in enumerate(rendered):
@@ -336,21 +351,29 @@ async def _sweep_existing(
     Discord wouldn't tell us (the caller must then assume nothing is
     missing).
     """
-    oldest = min(mid for mid, _ in stored)
+    tracked = {mid for mid, _ in stored}
     seen: set[int] = set()
+    read = 0
     last = 0
     try:
         async for msg in channel.history(
             limit=_SWEEP_LIMIT,
-            after=discord.Object(id=oldest - 1),
+            after=discord.Object(id=min(tracked) - 1),
             oldest_first=True,
         ):
-            seen.add(msg.id)
+            read += 1
             last = msg.id
+            if msg.id in tracked:
+                seen.add(msg.id)
+                if len(seen) == len(tracked):
+                    # Nothing is missing — stop rather than reading whatever
+                    # humans have posted since. This is the common case, and
+                    # it usually lands inside the first request.
+                    return seen, None
     except discord.HTTPException:
         log.warning("intake reference: history sweep failed")
         return None
-    return seen, (last if len(seen) >= _SWEEP_LIMIT else None)
+    return seen, (last if read >= _SWEEP_LIMIT else None)
 
 
 async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
@@ -391,11 +414,18 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
             # "no information" as "everything was deleted".
             incomplete = True
         else:
-            missing = missing_message_ids(stored, *swept)
+            seen, horizon = swept
+            # A truncated sweep left part of the channel unread, so a
+            # deletion in there goes unnoticed this pass. Say so instead of
+            # reporting a clean sync.
+            incomplete = horizon is not None
+            missing = missing_message_ids(stored, seen, horizon)
 
-    ops, deletes = diff_messages(render_blocks(blocks), stored, missing)
+    rendered = render_blocks(blocks)
+    gap = rebuild_gap(stored, missing, len(rendered))
+    ops, deletes = diff_messages(rendered, stored, missing)
     mapping: list[tuple[int, str]] = []
-    edited = posted = deleted = 0
+    edited = posted = deleted = repaired = 0
     for index, (op, mid, content) in enumerate(ops):
         h = content_hash(content)
         if op == "keep":
@@ -434,14 +464,20 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
             break
         mapping.append((sent.id, h))
         posted += 1
-    # Never delete a message we still track. A rebuild that dies mid-send
-    # keeps the old ids for the positions it never reached (see the send
-    # failure branch above); deleting them anyway would orphan real messages
-    # the bot then refuses to touch.
-    still_tracked = {mid for mid, _ in mapping}
+        # Count a restore only once the replacement is really in the
+        # channel, so the "restored" the panel prints is what happened
+        # rather than what was planned.
+        if gap is not None and index < len(stored) and stored[index][0] in missing:
+            repaired += 1
+    # A rebuild that dies mid-send keeps the old ids tracked for the
+    # positions it never reached (see the send-failure branch above) *and*
+    # deletes those messages here. That pairing is deliberate: the next
+    # sync's sweep finds them missing and rebuilds from there, so the
+    # channel heals into the right order. Skipping the delete instead would
+    # leave the stale copies in place, matching their stored hashes — the
+    # next sync would see nothing to do and the procedure would read out of
+    # order permanently.
     for mid in deletes:
-        if mid in still_tracked:
-            continue
         try:
             await channel.get_partial_message(mid).delete()
             deleted += 1
@@ -458,8 +494,8 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
         "edited": edited,
         "posted": posted,
         "deleted": deleted,
-        # Tracked messages found deleted from the channel and restored.
-        "repaired": len(missing),
+        # Tracked messages found deleted from the channel and put back.
+        "repaired": repaired,
         # Discord rejected an edit/send, or wouldn't hand over the history
         # the existence check needs: the channel is only partially
         # reconciled and the next save retries the rest. Surfaced so the

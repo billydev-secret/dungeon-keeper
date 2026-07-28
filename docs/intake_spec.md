@@ -113,24 +113,32 @@ unchanged kept, changed edited in place (ids/links stable), tail posted,
 surplus deleted. Only tracked messages are ever touched.
 
 **Hand-deleted messages.** Each sync first sweeps the channel history once
-(`after` the oldest tracked message, so it costs ~1 request per 100
-messages rather than a fetch per position) to learn which tracked ids still
-exist. Without that check an unchanged config hashes `keep` at every
-position and the sync makes **no Discord calls at all** — which is how a
-deleted message used to stay gone however often you saved. Discord can't
-insert into the middle of a channel, so the diff rebuilds from the *first*
-gap onward (re-send + delete the stale copies) to preserve reading order;
-positions above the gap keep their ids. A sweep that Discord refuses, or
-that hits the 500-message cap, assumes the unseen ids are **present** —
-guessing would delete and re-send a stretch of live messages. The count is
-returned as `repaired`.
+(`after` the oldest tracked message, stopping as soon as every tracked id
+is accounted for — normally inside one request, versus a fetch per
+position) to learn which tracked ids still exist. Without that check an
+unchanged config hashes `keep` at every position and the sync makes **no
+Discord calls at all** — which is how a deleted message used to stay gone
+however often you saved. Discord can't insert into the middle of a channel,
+so the diff rebuilds from the *first* gap onward (re-send + delete the
+stale copies) to preserve reading order; positions above the gap keep their
+ids. A gap at or past the rendered range is ignored — that message is
+surplus the delete pass removes anyway. `repaired` counts replacements that
+actually landed, not ones merely planned.
 
-A Discord failure mid-plan keeps the affected
-message tracked under its **old** hash (so the next save retries it rather
-than believing it already synced) and returns `incomplete: true`, which the
-panel reports instead of a clean "synced"; a failed history sweep sets it
-too. The delete pass skips any id still in the mapping, so a rebuild that
-dies mid-send can't orphan the messages it never reached. One-time import
+A sweep Discord refuses, or one that hits the 500-message backstop, assumes
+the unseen ids are **present** (guessing would delete and re-send a stretch
+of live messages) and returns `incomplete: true` so the panel doesn't
+report a clean sync — a deletion in the unread tail is simply not noticed
+that pass.
+
+A Discord failure mid-plan keeps the affected message tracked under its
+**old** hash (so the next save retries it rather than believing it already
+synced) and also sets `incomplete`. Note the delete pass still deletes ids
+that a failed rebuild left in the mapping, and that pairing is what makes
+the next save finish the job: the following sweep sees them missing and
+rebuilds from there. Skipping those deletes instead leaves stale copies
+whose hashes still match, so the next sync finds nothing to do and the
+channel reads out of order permanently. One-time import
 (`POST /config/intake/reference/import`) drafts text blocks from a
 channel's history, oldest first; refuses a non-empty editor.
 
