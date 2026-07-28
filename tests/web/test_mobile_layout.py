@@ -208,10 +208,13 @@ def _faults(res: dict) -> list[str]:
 # the tool structurally could not observe. Treat any future entry as a
 # hypothesis, not a measurement — re-measure before trusting it.
 #
-# If the gate ever starts failing on qa-tracker or wellness-caps on a commit
-# that did not touch them, suspect the old flap rather than a new regression:
-# both were historically borderline. Confirm with the diagnostic tool, and
-# re-add the entry rather than chasing phantom CSS.
+# qa-tracker and wellness-caps were the two historically borderline ones. They
+# were clean at all three widths across five consecutive full sweeps before
+# being removed, and wellness-caps' flap is attributable to a fixed cause
+# (`_settle`), so this is not an expected-to-flake gate. Recorded only so that
+# if one of them ever fails on a commit that did not touch it, that history is
+# the first thing to check — confirm with the diagnostic tool and re-add the
+# entry rather than chasing phantom CSS.
 KNOWN_OVERFLOW: set[str] = set()
 
 

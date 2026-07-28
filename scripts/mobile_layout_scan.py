@@ -116,6 +116,16 @@ AUDIT_JS = r"""
   // element's own padding and is immune to a <td> stretched tall by its row —
   // both of which made a height-based count report a 934px-wide empty-state box
   // as "5 lines" and flag ~50 false positives across the sweep.
+  //
+  // KNOWN GAP: only elements with no *element* children are examined, so text
+  // that shares a parent with an inline child is never measured — e.g.
+  // `<td>${initiations} <span class="home-dim">(37%)</span></td>` in this very
+  // panel, or a manual.html step whose prose wraps around an <a>. Measuring
+  // those means ranging over individual text nodes and reasoning about which
+  // fragments belong to which line; the leaf case covers every collapse seen so
+  // far (all six mod-engagement headings, and the links and <code> the first
+  // full sweep turned up). Do not read a clean run as proof that mixed-content
+  // text is fine.
   const range = document.createRange();
   for (const el of document.querySelectorAll('body *')) {
     if (el.children.length) continue;               // leaf text nodes only

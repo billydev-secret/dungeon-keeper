@@ -3754,14 +3754,19 @@ select option { background: var(--bg-input); color: var(--ink); }
   gap: 6px 8px;
   min-width: 0;
 }
-.sugg-name { font-weight: 600; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+/* break-word, not anywhere, on both of these: they are flex items of .sugg-head
+   with min-width: 0, which is exactly the combination that collapses text to a
+   one-character stack when the row runs short of space (see .home-card-label).
+   .sugg-head wraps, so an item that no longer shrinks below its longest word
+   moves to its own line instead of pushing the row off-screen. */
+.sugg-name { font-weight: 600; color: var(--ink); min-width: 0; overflow-wrap: break-word; }
 .sugg-badge {
   font-size: 11px;
   padding: 1px 7px;
   border-radius: var(--r-sm);
   /* No nowrap: on a phone these labels are wide enough to push the row
      off-screen, and the mobile sweep fails the panel for it. */
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   min-width: 0;
 }
 .sugg-ready   { background: var(--green-soft); color: var(--green); }
@@ -3988,15 +3993,13 @@ select:focus-visible {
 /* The quick-reference tables come from manual.html (which carries its own
    \3c style>) and have no wrapper element to make scrollable. Promoting the
    table itself to a block box gives it its own scroll container, so the rows
-   stay reachable instead of being clipped by .panel's overflow-x:hidden. */
-/* Every help table, not just .qr-table: these carry command strings like
-   `/guess submit image:<attachment>` that cannot wrap below their longest word,
-   so on a phone the widest of them pushed .panel 9px past its edge and got
-   clipped. Scrolling is the sanctioned answer for wide tabular data — the
-   alternative (letting the text break mid-token) is what collapsed these cells
-   into vertical letter stacks in the first place. */
-.qr-table,
-.dk-help table {
+   stay reachable instead of being clipped by .panel's overflow-x:hidden.
+   These are ~1195px and need it at every width — they overflow a 920px desktop
+   panel too. Other help tables get the same treatment only on narrow screens
+   (see the media query below), because `display: block` makes a table's rows
+   shrink-to-fit: a table whose content is narrower than the panel would stop
+   hugging its container. Three help panels do exactly that at desktop. */
+.qr-table {
   display: block;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -4010,6 +4013,26 @@ select:focus-visible {
    min-content at the longest word so the cell keeps a sane width. */
 #panel-root a,
 #panel-root code { overflow-wrap: break-word; }
+
+/* Help tables carry command strings like `/guess submit image:<attachment>`
+   that cannot wrap below their longest word, so the widest of them pushed .panel
+   9px past its edge on a phone. Scrolling is the sanctioned answer for wide
+   tabular data.
+
+   Deliberately NOT in the 768px block, and deliberately not global: `display:
+   block` makes a table's rows shrink-to-fit, so a table narrower than its panel
+   stops hugging it — globally that left help-self and help-music ~250px short at
+   desktop, and ~70px short at 768. Measured, the overflow exists only at phone
+   width: help-guess clips 9px at 390 and nothing at 430 or above. 480px scopes
+   the fix to where the bug is with headroom to spare. */
+@media (max-width: 480px) {
+  .dk-help table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+}
 
 @media (max-width: 768px) {
   /* Filter/action button rows must wrap instead of running off-screen

@@ -9,7 +9,7 @@ none of them opened a browser. This is that check.
 
 A real headless Chromium (Playwright) loads every dashboard panel at three
 widths — **390 / 768 / 1280** (phone / tablet / desktop) — and each panel must
-pass two rules:
+pass three rules:
 
 - **viewport** — no element's right edge extends past the viewport unless it
   sits inside a genuinely scrollable box. A wide data table in an
@@ -32,7 +32,7 @@ heading came out one character per line and the cards overlapped — and both
 width rules scored it perfectly clean, because an element collapsed to width 0
 is skipped by the visibility filter entirely.
 
-Both rules, and the in-page audit script itself, live in one place —
+All three rules, and the in-page audit script itself, live in one place —
 `scripts/mobile_layout_scan.py` (`AUDIT_JS`) — shared by the diagnostic tool and
 the gate so they can never disagree.
 
@@ -71,10 +71,10 @@ when a new editor hides layout behind a click.
 
 **Layout can hide behind *data*, not just behind a click.** The sweep serves a
 freshly-migrated (empty) DB, so a report panel renders its empty state and
-nothing else. `health-mod-engagement` sat on the allowlist for two years'
-worth of sweeps without a single run ever rendering its stat tiles, chart or
-table — the panel was badly broken on a real phone the whole time and the gate
-scored it clean. If a panel's layout only exists once it has rows, stub its API
+nothing else. `health-mod-engagement` sat on the allowlist from the day the gate
+was written without a single run ever rendering its stat tiles, chart or table —
+the panel was badly broken on a real phone the whole time and the gate scored it
+clean. If a panel's layout only exists once it has rows, stub its API
 and audit that (`test_mod_engagement_populated_fits_on_phone`,
 `test_inactive_sweep_preview_fits_on_phone`); a green sweep over an empty state
 proves nothing. Prefer a stub over seeding the DB when the data originates at
@@ -83,9 +83,9 @@ the gateway, which the test dashboard has no connection to.
 ## Known debt (the allowlist)
 
 Six panels already overflowed on mobile the day this gate was written. Fixing
-six unrelated panels wasn't in scope, so they're listed in `KNOWN_OVERFLOW` — an
-**allowlist**: the gate hard-fails only when a panel *outside* the list
-overflows (a new regression); a listed panel is allowed to fail.
+six unrelated panels wasn't in scope, so they were listed in `KNOWN_OVERFLOW` —
+an **allowlist**: the gate hard-failed only when a panel *outside* the list
+overflowed (a new regression); a listed panel was allowed to fail.
 
 **All six were cleared on 2026-07-28 and `KNOWN_OVERFLOW` is now empty** — every
 panel is enforced, and any overflow *or collapse* fails the build. What the six
@@ -105,10 +105,13 @@ measurement.** Three of these six descriptions named the wrong mechanism, and
 one named a bug the tool structurally could not observe. Re-measure before
 trusting an entry — and when you fix one, delete it.
 
-`qa-tracker` and `wellness-caps` were historically borderline. If the gate starts
-failing on either from a commit that didn't touch them, suspect the old flap
-rather than a new regression: confirm with the diagnostic tool and re-add the
-entry rather than chasing phantom CSS.
+`qa-tracker` and `wellness-caps` were the two historically borderline ones. They
+were clean at all three widths across five consecutive full sweeps before being
+removed, and `wellness-caps`' flap has a known fixed cause (`_settle`), so this
+isn't a gate expected to flake. The history is recorded only so that if either
+ever fails on a commit that didn't touch it, that's the first thing to check —
+confirm with the diagnostic tool and re-add the entry rather than chasing
+phantom CSS.
 
 ## Where it runs
 
