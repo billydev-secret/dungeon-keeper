@@ -35,8 +35,8 @@ import discord
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.logic import is_economy_manager, local_day_for
-from bot_modules.economy.leaderboard import _pad, bar_fill, progress_bar
-from bot_modules.economy.view_helpers import EMBED_FIELD_LIMIT, fit_lines
+from bot_modules.economy.leaderboard import bar_fill, progress_bar
+from bot_modules.economy.view_helpers import unit as _unit
 from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
     claim_quest,
@@ -52,7 +52,13 @@ from bot_modules.services.economy_service import (
     member_is_booster,
     notify_member,
 )
-from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.services.embeds import (
+    COLOR_GREEN,
+    COLOR_RED,
+    EMBED_FIELD_LIMIT,
+    fit_lines,
+    pad_cell as _pad,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -111,10 +117,6 @@ def can_manage_economy(member: discord.Member, settings: EconSettings) -> bool:
     )
 
 
-def _unit(settings: EconSettings, amount: int) -> str:
-    return settings.currency_name if abs(amount) == 1 else settings.currency_plural
-
-
 def _reward_text(settings: EconSettings, reward: int) -> str:
     return f"{settings.currency_emoji} **{reward:,}** {_unit(settings, reward)}"
 
@@ -127,6 +129,12 @@ def _reward_text(settings: EconSettings, reward: int) -> str:
 # modules — the cog held the half nobody looked at — so the vocabulary drifted
 # apart by construction.
 
+# The /bank quests board is two sections: the member's own board (daily/weekly
+# board draws) and the guild-wide goals everyone moves together (the monthly
+# goal + the weekly community goals — both shared counters, no self-claim).
+# Event ("Anytime") quests aren't board-drawn and don't get a section here —
+# they stay a surprise payout rather than a proactively-listed menu; they're
+# still claimable via the details select if one lands in a claimable state.
 # Each section is one embed field; within it, a cadence sub-label separates
 # the groups when more than one is present. The long per-state explainer text
 # lives in QUEST_STATE_LABEL, shown by the details select — the list itself

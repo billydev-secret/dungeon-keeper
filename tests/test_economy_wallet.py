@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bot_modules.economy.view_helpers import fit_lines
 from bot_modules.economy.wallet import ellipsis, memo_of, rental_lines
 
 
@@ -20,16 +19,6 @@ def test_memo_of_tolerates_missing_and_malformed_meta():
     assert memo_of("not json") is None
     # A non-string memo must not crash the render.
     assert memo_of('{"memo": 5}') is None
-
-
-def test_fit_lines_keeps_newest_rows_under_the_field_cap():
-    short = ["a", "b", "c"]
-    assert fit_lines(short) == "a\nb\nc"
-    # Ten max-length memo rows must not overrun the 1024-char embed field.
-    fat = [("x" * 200) for _ in range(10)]
-    out = fit_lines(fat)
-    assert len(out) <= 1024
-    assert out.startswith("x")
 
 
 def test_ellipsis_trims_trailing_space_before_the_dot():

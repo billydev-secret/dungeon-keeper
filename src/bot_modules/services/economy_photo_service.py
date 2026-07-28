@@ -26,6 +26,7 @@ from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.logic import local_day_for
 from bot_modules.services.economy_quests_service import (
     fire_trigger_quests,
+    has_active_kind_quest,
     source_enabled,
 )
 from bot_modules.services.economy_service import (
@@ -95,12 +96,7 @@ def payout_possible(conn: sqlite3.Connection, guild_id: int) -> bool:
         return False
     if settings.reward_photo_post > 0:
         return True
-    row = conn.execute(
-        "SELECT 1 FROM econ_quests WHERE guild_id = ? AND active = 1"
-        " AND trigger_kind = 'photo_post' LIMIT 1",
-        (guild_id,),
-    ).fetchone()
-    return row is not None
+    return has_active_kind_quest(conn, guild_id, "photo_post")
 
 
 def award_photo_post(

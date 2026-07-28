@@ -22,8 +22,9 @@ import sqlite3
 import discord
 
 from bot_modules.economy.register import kind_display
-from bot_modules.economy.shop import PERK_LABELS
-from bot_modules.economy.view_helpers import fit_lines, unit
+from bot_modules.economy.perks import PERK_LABELS
+from bot_modules.economy.view_helpers import unit
+from bot_modules.services.embeds import fit_lines
 from bot_modules.services.economy_service import EconSettings
 
 # Memos are shortened in the one-line wallet render.

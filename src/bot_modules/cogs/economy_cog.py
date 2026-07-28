@@ -37,17 +37,20 @@ from bot_modules.economy.view_helpers import (
     unit as _unit,
 )
 from bot_modules.economy.wallet import build_wallet_embed
-from bot_modules.economy.shop import (
+from bot_modules.economy.perks import (
+    CUSTOMISE_LABELS as _CUSTOMISE_LABELS,
     FEATURE_GATED,
     GIFTABLE_PERKS,
     NO_CONFIG_PERKS,
     PERK_EMOJI,
     PERK_LABELS,
+    PERK_REFUSAL as _PERK_REFUSAL,
+    PERK_REFUSAL_FALLBACK as _PERK_REFUSAL_FALLBACK,
     PERK_SHORT,
     SELF_PERKS,
-    build_shop_embed,
     perk_price,
 )
+from bot_modules.economy.shop import build_shop_embed
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -183,18 +186,6 @@ _CATALOG_LOCKED_MSG = (
     "pick **Custom** from the shop's icon picker first (/bank shop)."
 )
 _QOTD_CARD_FILENAME = "qotd.png"
-# What each role-studio setter says when the member hasn't rented its perk.
-# The wording differs per perk (colour can also arrive as a gift) and is
-# asserted verbatim by the setter-refusal tests — keep the strings as they are.
-_PERK_REFUSAL = {
-    "role_name": "❌ Rent the **Custom Role Name** perk first (/bank shop).",
-    "role_color": (
-        "❌ Rent the **Custom Role Color** perk or get one gifted (/bank shop)."
-    ),
-    "role_gradient": "❌ Rent the **Gradient Role** perk first (/bank shop).",
-    "role_icon": "❌ Rent the **Role Icon** perk first (/bank shop).",
-}
-_PERK_REFUSAL_FALLBACK = "❌ Rent that perk first (/bank shop)."
 _NO_ROLE_ICONS_MSG = "❌ This server doesn't support role icons right now."
 
 # Transfers above this need an explicit confirm step (spec §5, "over 100").
@@ -277,15 +268,20 @@ async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:
     return None
 
 
-# The /bank quests board is two sections: the member's own board (daily/weekly
-# board draws) and the guild-wide goals everyone moves together (the monthly
-# goal + the weekly community goals — both shared counters, no self-claim).
-# Event ("Anytime") quests aren't board-drawn and don't get a section here —
-# they stay a surprise payout rather than a proactively-listed menu; they're
-# still claimable via the details select if one lands in a claimable state.
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
 # next message after at most this many seconds.
 _TRIGGER_CACHE_TTL = 60.0
+
+
+class _Unread:
+    """Sentinel for an optional read the caller may already have done.
+
+    Distinct from ``None``, which is a real answer (this guild has no icon
+    catalog) rather than "you didn't tell me".
+    """
+
+
+_UNREAD = _Unread()
 
 
 class _ShopContext(NamedTuple):
@@ -616,13 +612,6 @@ _CFG_MODALS = {
     "role_icon": _RoleIconModal,
 }
 
-# Short button labels for the customise flows (the perk label is on the row).
-_CUSTOMISE_LABELS = {
-    "role_color": "Set Color",
-    "role_name": "Set Name",
-    "role_gradient": "Set Gradient",
-    "role_icon": "Set Icon",
-}
 
 
 # Discord caps a select at 25 options; the last slot is the bring-your-own
@@ -1327,6 +1316,10 @@ class EconomyCog(commands.Cog):
 
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
+                if not settings.enabled:
+                    # The caller refuses before rendering, so the other five
+                    # reads would be thrown away (mirrors _shop_context).
+                    return settings, 0, [], [], 0, None
                 balance = get_balance(conn, guild_id, user_id)
                 ledger = get_ledger(conn, guild_id, user_id, limit=10)
                 rentals = list_member_rentals(conn, guild_id, user_id)
@@ -3724,22 +3717,40 @@ class EconomyCog(commands.Cog):
         )
 
     async def _build_shop_panel_embed(
-        self, guild: discord.Guild, settings: EconSettings
+        self,
+        guild: discord.Guild,
+        settings: EconSettings,
+        icon_range: tuple[int, int, int] | None | _Unread = _UNREAD,
     ) -> discord.Embed:
         """The channel shop panel's embed with current gating, icon prices and
         accent — shared by ``/bank post-shop`` and the sticky repost so the two
-        can't render different panels."""
+        can't render different panels.
+
+        ``icon_range`` lets a caller that already had a connection open pass
+        the price span in rather than paying for a second one; the sentinel
+        distinguishes that from a guild with no catalog, which is ``None``.
+        """
         gated = await self._gated_perks(guild.id)
-        icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
+        if isinstance(icon_range, _Unread):
+            icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         return build_shop_embed(
             settings, gated, accent, panel=True, icon_catalog=icon_range
         )
 
     async def _build_shop_panel(self, guild: discord.Guild) -> PanelContent:
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        def _read() -> tuple[EconSettings, tuple[int, int, int] | None]:
+            # One connection for both, like _build_leaderboard_panel — this
+            # runs on every debounced sticky repost.
+            with self.ctx.open_db() as conn:
+                return (
+                    load_econ_settings(conn, guild.id),
+                    catalog_price_range(conn, guild.id),
+                )
+
+        settings, icon_range = await asyncio.to_thread(_read)
         return PanelContent(
-            embed=await self._build_shop_panel_embed(guild, settings),
+            embed=await self._build_shop_panel_embed(guild, settings, icon_range),
             view=ShopPanelView(),
         )
 

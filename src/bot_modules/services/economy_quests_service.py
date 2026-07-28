@@ -564,6 +564,22 @@ def list_kind_triggered_quests(
     ).fetchall()
 
 
+def has_active_kind_quest(
+    conn: sqlite3.Connection, guild_id: int, trigger_kind: str
+) -> bool:
+    """Whether any active quest is auto-paid by ``trigger_kind``.
+
+    The cheap form of ``list_kind_triggered_quests``, for the per-event gates
+    that only need the yes/no — those run on a hot path and shouldn't
+    materialise rows they immediately discard.
+    """
+    return conn.execute(
+        "SELECT 1 FROM econ_quests WHERE guild_id = ? AND active = 1"
+        " AND trigger_kind = ? LIMIT 1",
+        (guild_id, trigger_kind),
+    ).fetchone() is not None
+
+
 def list_active_pool_ids(
     conn: sqlite3.Connection, guild_id: int, qtype: str
 ) -> list[int]:

@@ -13,7 +13,11 @@ import time
 
 import pytest
 
-from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.core.db_utils import (
+    get_tz_offset_hours,
+    open_db,
+    set_config_value,
+)
 from bot_modules.economy.logic import local_day_for
 from bot_modules.services.economy_photo_service import (
     award_photo_post,
@@ -154,36 +158,28 @@ def test_malformed_config_options_do_not_raise(db):
 # ── the payout-possible gate ──────────────────────────────────────────────
 
 
-def test_payout_impossible_while_the_economy_is_off(db):
-    _mk_photo_quest(db)
+@pytest.mark.parametrize(
+    ("overrides", "with_quest", "expected"),
+    [
+        pytest.param({"enabled": False}, True, False, id="economy-off"),
+        pytest.param({}, False, True, id="flat-award-only"),
+        pytest.param({"reward_photo_post": 0}, True, True, id="quest-only"),
+        pytest.param({"reward_photo_post": 0}, False, False, id="nothing-to-pay"),
+    ],
+)
+def test_payout_possible_gate(db, overrides, with_quest, expected):
+    _enable(db, **overrides)
+    if with_quest:
+        _mk_photo_quest(db)
     with open_db(db) as conn:
-        assert payout_possible(conn, GUILD_ID) is False
+        assert payout_possible(conn, GUILD_ID) is expected
 
 
 def test_payout_impossible_when_the_income_source_is_disabled(db):
+    """Its own test: the toggle lives in a different table from settings."""
     _enable(db)
     with open_db(db) as conn:
         set_income_source(conn, GUILD_ID, "photo_post", False)
-    with open_db(db) as conn:
-        assert payout_possible(conn, GUILD_ID) is False
-
-
-def test_payout_possible_from_the_flat_award_alone(db):
-    _enable(db, reward_photo_post=5)
-    with open_db(db) as conn:
-        assert payout_possible(conn, GUILD_ID) is True
-
-
-def test_payout_possible_from_an_active_quest_alone(db):
-    """Zero flat award, but an active photo_post quest still pays."""
-    _enable(db, reward_photo_post=0)
-    _mk_photo_quest(db)
-    with open_db(db) as conn:
-        assert payout_possible(conn, GUILD_ID) is True
-
-
-def test_payout_impossible_with_nothing_to_pay(db):
-    _enable(db, reward_photo_post=0)
     with open_db(db) as conn:
         assert payout_possible(conn, GUILD_ID) is False
 
@@ -271,8 +267,13 @@ def test_signoff_quest_files_a_claim_instead_of_paying(db):
 
 
 def test_the_dedup_row_records_the_guild_local_day(db):
+    """The key is the *guild's* day, not UTC — pinned with a real offset."""
     _enable(db, reward_photo_post=5)
-    now = time.time()
+    with open_db(db) as conn:
+        set_config_value(conn, "tz_offset_hours", "-8", GUILD_ID)
+
+    # 2027-01-15 04:00 UTC is still 2027-01-14 at UTC-8.
+    now = 1_799_985_600.0
     _award(db, now=now)
     with open_db(db) as conn:
         offset = get_tz_offset_hours(conn, GUILD_ID)
@@ -281,4 +282,6 @@ def test_the_dedup_row_records_the_guild_local_day(db):
             " WHERE guild_id = ? AND user_id = ?",
             (GUILD_ID, USER_ID),
         ).fetchone()
+    assert offset == -8
     assert row["local_day"] == local_day_for(now, offset)
+    assert row["local_day"] != local_day_for(now, 0)

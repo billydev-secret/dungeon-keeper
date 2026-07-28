@@ -18,29 +18,6 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.economy")
 
 
-# Discord rejects an embed field over 1024 chars — and rejects the whole
-# embed with it, not just the offending field.
-EMBED_FIELD_LIMIT = 1024
-
-
-def fit_lines(lines: list[str], limit: int = EMBED_FIELD_LIMIT) -> str:
-    """Join as many leading lines as fit an embed field.
-
-    Variable-length rows (wallet memos, quest titles) can overrun the field
-    cap and make Discord reject the entire embed. Dropping the overflow keeps
-    the leading rows visible rather than 400-ing the whole render.
-    """
-    out: list[str] = []
-    used = 0
-    for line in lines:
-        cost = len(line) + (1 if out else 0)
-        if used + cost > limit:
-            break
-        out.append(line)
-        used += cost
-    return "\n".join(out)
-
-
 def unit(settings: EconSettings, amount: int) -> str:
     """Currency name matching ``amount``'s grammatical number.
 

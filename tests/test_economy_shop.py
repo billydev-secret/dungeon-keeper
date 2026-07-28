@@ -143,3 +143,37 @@ def test_shop_shows_balance_to_a_member_but_not_in_the_panel(db):
     panel = build_shop_embed(settings, set(), None, panel=True)
     assert "1,240" not in panel.description
     assert "you have" not in panel.description
+
+
+# ── conditional rows ──────────────────────────────────────────────────────
+
+
+def test_shop_embed_shield_row_and_held_marker(db):
+    _enable(db)
+    embed = build_shop_embed(_settings(db), set(), None, panel=True)
+    row = next(f for f in embed.fields if f.name == "One-shot")
+    assert "Streak shield" in row.value
+    assert "held" not in row.value
+    held = build_shop_embed(_settings(db), set(), None, shields_held=1)
+    assert "held" in next(f for f in held.fields if f.name == "One-shot").value
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field", "token"),
+    [
+        # token None → the row must be absent entirely.
+        ({"price_streak_shield": 0}, "One-shot", None),
+        ({}, "Voice", None),  # price_voice_style defaults to 0 — shipped dark
+        ({"price_voice_style": 30}, "Voice", "30"),
+        ({}, "Weekly Raffle", None),
+        ({"raffle_enabled": True}, "Weekly Raffle", "10"),  # ticket price
+    ],
+)
+def test_shop_embed_row_visibility(db, overrides, field, token):
+    _enable(db, **overrides)
+    embed = build_shop_embed(_settings(db), set(), None, panel=True)
+    if token is None:
+        assert not any(f.name == field for f in embed.fields)
+    else:
+        row = next(f for f in embed.fields if f.name == field)
+        assert token in row.value

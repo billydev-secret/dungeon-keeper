@@ -1,11 +1,7 @@
-"""Perk shop — the rentable-perk vocabulary and the shop listing embed.
+"""Perk shop — the shop listing embed.
 
-The last of the economy's channel panels to leave the cog. ``guide.py`` and
-``leaderboard.py`` already owned their renderers; the shop's tables and embed
-builder stayed behind in ``economy_cog.py`` long enough to accrete the whole
-perk vocabulary around them, so ``bank_gift``'s command choices, the wallet's
-rental lines and the refund picker were all reaching into a 4,500-line cog for
-the name of a perk.
+The vocabulary it renders lives in ``perks.py``; this module is the storefront,
+not the dictionary.
 
 Two surfaces render from here and must not diverge: the ephemeral per-member
 shop (``/bank shop`` and the panel's Open Shop button), which knows the
@@ -22,75 +18,16 @@ from __future__ import annotations
 
 import discord
 
-from bot_modules.economy.leaderboard import _pad
+from bot_modules.economy.perks import (
+    PERK_BLURBS,
+    PERK_SHORT,
+    PERK_TIERS,
+    SELF_PERKS,
+    perk_price,
+)
+from bot_modules.services.embeds import pad_cell as _pad
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_service import EconSettings
-
-# Human labels for the rentable perks (shop rows, wallet field, DMs).
-PERK_LABELS = {
-    "role_color": "Custom Role Color",
-    "role_name": "Custom Role Name",
-    "role_icon": "Role Icon",
-    "role_gradient": "Gradient Role",
-    "role_holographic": "Holographic Role",
-    "voice_style": "Voice Style",
-}
-# The role perks a member rents for themselves, in shop display order. Every
-# giftable perk (these + the voice-style lease) is gifted as the same perk
-# kind rented with the friend as beneficiary (gift_color retired in 091).
-SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_holographic", "role_icon")
-# Self-perks with no member-side customisation: renting IS the whole thing
-# (holographic is a fixed Discord preset, not a colour the member picks), so
-# these skip the "Set …" modal and post-rent button.
-NO_CONFIG_PERKS = ("role_holographic",)
-GIFTABLE_PERKS = (*SELF_PERKS, "voice_style")
-# Feature-gated perks and the friendly reason shown when the gate is closed.
-FEATURE_GATED = ("role_gradient", "role_holographic", "role_icon")
-
-# Shop-table furniture. The full `PERK_LABELS` names are too wide for an
-# aligned two-cell row, so the shop uses a short cell label plus a one-line
-# blurb — most members have never seen a gradient role and can't price what
-# they can't picture. Blurbs stay under ~27 chars so a row survives mobile.
-PERK_SHORT = {
-    "role_color": "Color",
-    "role_name": "Name",
-    "role_gradient": "Gradient",
-    "role_holographic": "Holo",
-    "role_icon": "Icon",
-    "voice_style": "Voice",
-}
-# Blurbs stay under ~15 chars: the shop row is one code cell of
-# label + blurb, and anything wider pushes the price onto its own
-# line on a phone-width embed.
-PERK_BLURBS = {
-    "role_color": "any solid color",
-    "role_name": "nickname + role",
-    "role_gradient": "two-color fade",
-    "role_holographic": "shimmer preset",
-    "role_icon": "badge by name",
-    "voice_style": "your voice room",
-}
-PERK_EMOJI = {
-    "role_color": "🎨",
-    "role_name": "✨",
-    "role_gradient": "🌈",
-    "role_holographic": "🪩",
-    "role_icon": "🖼️",
-    "voice_style": "🎙️",
-}
-# Self-perks grouped into a price ladder — cheap everyday tweaks first, the
-# showy ones second — so the shop reads as tiers to climb rather than a flat
-# spreadsheet. Rows sort by price inside each tier at render time, since
-# prices are guild-configurable and can reorder.
-PERK_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Essentials", ("role_name", "role_color")),
-    ("Signature", ("role_gradient", "role_icon", "role_holographic")),
-)
-
-
-def perk_price(settings: EconSettings, perk: str) -> int:
-    return int(getattr(settings, f"price_{perk}"))
-
 
 def shop_row_price(
     settings: EconSettings,
