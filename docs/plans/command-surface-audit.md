@@ -11,6 +11,13 @@ before being recommended. Two candidates failed that trace and were kept — see
 
 **Count:** 190 commands before, 181 after.
 
+**Naming caveat.** Several groups are attached to a parent at *runtime*
+(`games.add_command(...)` in each cog's `setup()`, over the shared groups in
+`bot_modules/games/command_groups.py`), which a static AST walk cannot see. Every
+game command actually lives under `/games` or `/games play` — `/wyr` is
+`/games play wyr`, `/track watch` is `/games track watch`. The counts here are
+right; flat-looking paths for game commands are not.
+
 Classification used throughout: **member self-service** (keep) / **mod action in
 the moment** (keep) / **admin config** (delete, panel should exist) /
 **report-or-analytics** (delete, the website has it).
@@ -81,8 +88,8 @@ Almost all of them are the same shape: *post a sticky panel into a channel*.
 | `/guess prompt` | No route |
 | `/quote-role` | No route |
 | `/risky reset_state` | No route |
-| `/config game-status` | No route |
-| `/config game-end` | No route |
+| `/games config game-status` | No route |
+| `/games config game-end` | No route |
 | `/inactive panel` | **Load-bearing.** `config-inactive.js:68` and `:265` tell admins to "Run `/inactive panel` in Discord first" — the dashboard depends on it |
 | `/inactive sweep` | Half-covered: the dry-run preview exists (`config.py:2187`) and `auto_sweep` runs 6-hourly, but there is no manual "run now" on the web |
 | `/setup` | A DM/button config wizard — a textbook violation, but also the only in-Discord path for a fresh server admin who hasn't found the dashboard. Needs a decision, not a reflex |
@@ -105,7 +112,7 @@ leave them in place for now.
 | Feature | Commands | Notes |
 |---|---|---|
 | Quality leave | `/quality_leave add\|remove\|list` | `add_leave`/`remove_leave` are called **only** from `reports_cog.py`. The dashboard *reads* leaves (`member_quality_score.py:268`, feeding Quality Score) but has no write path |
-| External game tracking | `/track watch\|status\|disable\|enable\|sample` | `economy-income-sources.js:23` only sets the *payout amount*; nothing configures which channel/bot to watch |
+| External game tracking | `/games track watch\|status\|disable\|enable\|sample` | `economy-income-sources.js:23` only sets the *payout amount*; nothing configures which channel/bot to watch |
 | Hidden channels | `/hidden hide\|restore\|list` | No panel, no route. Also carries an open S3 finding (`docs/reviews/2026-07-22-deep-review.md`): the hide/restore state machine is inline in the cog with zero coverage — a web migration would fix both at once |
 | Voice 24/7 | `/247`, `/247_status` | No panel, no route |
 
@@ -113,6 +120,55 @@ leave them in place for now.
 arguably self-service for mods rather than config.
 
 ---
+
+## Usage data — and why it can't drive deletions
+
+There is **no command-usage telemetry**. Invocations are only written to the log
+(`events_cog.py:1792` → `Command /<name> by <user> …`); nothing lands in a table.
+`log.txt` is wiped on every boot (`__main__.py:86`) and rotates at 2 MB, so the
+only usable history is journald: `journalctl -u dungeon-keeper`.
+
+Window available at the time of the audit: **2026-07-25 15:33 → 07-28 07:26
+(2.7 days)**, containing **144 invocations across 27 distinct commands** — out of
+181. Top of the distribution:
+
+| Count | Command |
+|---|---|
+| 43 | `/bank wallet` |
+| 21 | `/bank quests` |
+| 10 | `/ask` |
+| 9 | `/modinfo` |
+| 8 | `/bank shop` |
+| 8 | `/purge` |
+| 7 | `/risky start` |
+| 6 | `/guess submit` |
+| 5 | `/bank pay` |
+
+The long tail is 1–4 uses each: `/birthday set`, `/penpals status`, `/grant`,
+`/bump status`, `/bio`, `/play`, `/steal_emoji`, `/games track watch`,
+`/games hotpotato challenge`, `/bank post-leaderboard`, `/guess prompt`, plus the
+context menus (`Quote`, `Jail User`, `Steal Emoji`).
+
+**This is not a deletion signal, and must not be used as one.** Three reasons:
+
+1. **The window is 2.7 days.** Command frequency is not uniform — `/setup` runs
+   once per server *ever*, `/jail` only when someone misbehaves, `/quality_leave`
+   only when a member goes on leave. Absence over three days is not evidence of
+   disuse.
+2. **The sample is 144 events.** Anything used monthly is statistically invisible.
+3. **journald retention is size-based** (defaults, 141.7 MB in use), not
+   time-based, so the window silently shrinks as log volume grows.
+
+What it *is* good for: it corroborates that the nine commands deleted in this
+round (`/rules-watch …`, `/warnings`, `/docs …`) saw **zero** use in the window,
+which is consistent with them being duplicates of dashboard pages people already
+use. That's supporting evidence, not the reason — the reason was verified route +
+panel parity.
+
+If usage should actually inform future rounds, the fix is a counter table
+(command name, guild, timestamp) written from the existing `on_interaction`
+hook — a small change that would make the next audit evidence-driven instead of
+inference-driven.
 
 ## Coordination note
 
