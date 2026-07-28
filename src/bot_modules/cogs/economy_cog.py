@@ -471,14 +471,12 @@ def _quest_section_lines(
 _TRIGGER_CACHE_TTL = 60.0
 
 
-
 @dataclass(frozen=True)
 class _TriggerQuest:
     """One active trigger-word quest, pre-compiled for the message listener."""
 
     quest_id: int
     qtype: str
-    signoff: bool
     channel_id: int | None  # None = any channel counts
     pattern: re.Pattern[str]
 
@@ -499,11 +497,6 @@ def _has_image_attachment(message: discord.Message) -> bool:
         if not ctype and att.filename.lower().endswith(_IMAGE_EXTENSIONS):
             return True
     return False
-
-
-# A text meter for a community quest's running total — shared with the
-# leaderboard panel so the two surfaces render one way.
-_progress_bar = progress_bar
 
 
 def _can_grant(user: discord.Member, settings: EconSettings) -> bool:
@@ -1617,7 +1610,7 @@ class EconomyCog(commands.Cog):
         # message listener; empty lists are cached too so guilds without
         # trigger quests cost one dict lookup per message.
         self._trigger_cache: dict[int, tuple[float, list[_TriggerQuest]]] = {}
-        # Three channel-bottom panels, all on the shared machinery in
+        # Four channel-bottom panels, all on the shared machinery in
         # core.sticky (locks, debounce, id cache, post-before-delete). This cog
         # only says where each panel's ids live and what it should look like.
         self.guide_panel = StickyPanel(
@@ -2855,8 +2848,8 @@ class EconomyCog(commands.Cog):
         # `/bank role icon` (upload) hard-refuses catalog servers, so only hint it
         # off-catalog; on a catalog server the recipient picks from /bank shop.
         note = ""
-        if perk == "role_icon" and not await asyncio.to_thread(
-            self._has_catalog, guild.id
+        if perk == "role_icon" and (
+            await asyncio.to_thread(self._icon_price_range, guild.id) is None
         ):
             note = " They can upload one with `/bank role icon`."
         if perk == "voice_style":
@@ -3508,10 +3501,6 @@ class EconomyCog(commands.Cog):
         with self.ctx.open_db() as conn:
             return catalog_price_range(conn, guild_id)
 
-    def _has_catalog(self, guild_id: int) -> bool:
-        """Whether the guild has at least one enabled catalog icon."""
-        return self._icon_price_range(guild_id) is not None
-
     def _catalog_locked(self, guild_id: int, user_id: int) -> bool:
         """Whether this member's live icon rental is tied to a catalog icon.
 
@@ -3704,7 +3693,6 @@ class EconomyCog(commands.Cog):
                 _TriggerQuest(
                     quest_id=int(row["id"]),
                     qtype=str(row["qtype"]),
-                    signoff=bool(row["signoff"]),
                     channel_id=int(channel_id) if channel_id is not None else None,
                     pattern=pattern,
                 )
@@ -4282,9 +4270,12 @@ class EconomyCog(commands.Cog):
 
     # ── channel-bottom panels ────────────────────────────────────────────
     #
-    # All three run on core.sticky.StickyPanel. Each supplies only: where its
+    # All four run on core.sticky.StickyPanel. Each supplies only: where its
     # ids live, and what it should look like. A panel is treated as unposted
     # while the economy is disabled, so a disabled guild never re-sticks.
+    #
+    # _PANEL_FIELDS covers the three permanent panels; the auction card keeps
+    # its ids elsewhere and supplies its own callbacks (see below).
 
     _PANEL_FIELDS = {
         "guide": ("guide_channel_id", "guide_message_id"),
@@ -4417,7 +4408,6 @@ class EconomyCog(commands.Cog):
             self.auction_panel,
         ):
             await panel.on_message(message)
-
 
     # ── auto-updating leaderboard panel ──────────────────────────────────
 
