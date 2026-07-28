@@ -1,17 +1,25 @@
-"""Sweep every dashboard panel in a real browser and report horizontal-overflow faults.
+"""Sweep every dashboard panel in a real browser and report layout faults.
 
-Two signals, both validated against the announcement-button regression this was
-built for (a flex row of controls that ran off a phone screen):
+Three signals. The first two were validated against the announcement-button
+regression this was built for (a flex row of controls that ran off a phone
+screen); the third against the mod-engagement collapse (below):
 
-  viewport — an element's right edge extends past the viewport and no
-             auto/scroll ancestor makes it reachable. This is content sticking
-             out / a horizontally-scrolling page.
-  clipped  — a container clips its overflow (overflow-x: hidden|clip) while
-             holding content wider than itself, so children are cut off and
-             unreachable. This is what the regression actually did.
+  viewport  — an element's right edge extends past the viewport and no
+              auto/scroll ancestor makes it reachable. This is content sticking
+              out / a horizontally-scrolling page.
+  clipped   — a container clips its overflow (overflow-x: hidden|clip) while
+              holding content wider than itself, so children are cut off and
+              unreachable. This is what the regression actually did.
+  collapsed — text is being broken mid-word over and over (more rendered lines
+              than it has words), i.e. its column has shrunk towards one
+              character wide. This is the *opposite* failure to the first two:
+              nothing overflows, the layout implodes. health-mod-engagement
+              rendered its whole report inside a leftover `.panel-loading`
+              centering flex box, so every stat-tile heading came out one
+              character per line — and scored clean under both width rules.
 
 A deliberately scrollable box (overflow-x: auto|scroll — a wide data table) is
-NOT a fault under either signal: the user can reach the rest by scrolling.
+NOT a fault under either width signal: the user can reach the rest by scrolling.
 
 This is the measurement/diagnostic tool. The gate lives in
 tests/web/test_mobile_layout.py and shares AUDIT_JS with this file.
@@ -51,7 +59,7 @@ VIEWPORTS = {"phone": 390, "tablet": 768, "desktop": 1280}
 AUDIT_JS = r"""
 (slop) => {
   const vw = document.documentElement.clientWidth;
-  const out = { viewport: [], clipped: [] };
+  const out = { viewport: [], clipped: [], collapsed: [] };
   const desc = (el) => {
     let s = el.tagName.toLowerCase();
     if (el.id) s += '#' + el.id;
@@ -87,6 +95,46 @@ AUDIT_JS = r"""
     if ((ox === 'hidden' || ox === 'clip') && !ellipsis
         && el.scrollWidth > el.clientWidth + slop) {
       out.clipped.push({ sel: desc(el), hides: el.scrollWidth - el.clientWidth });
+    }
+  }
+  // ── collapsed ──────────────────────────────────────────────────────────
+  // The two rules above only see content that is too *wide*. The mod-engagement
+  // bug was the opposite: a container that centred its children as flex items
+  // squeezed each track to min-content, so headings rendered one character per
+  // line ("U/N/I/Q/U/E"). Nothing overflowed — it shrank — and an element
+  // collapsed to width 0 is skipped by visible() entirely, so both rules scored
+  // it clean.
+  //
+  // The scale-free signal for "broken mid-word, repeatedly" is comparing lines
+  // to words: wrapping between words can never produce more lines than words.
+  // Requiring whitespace exempts a single long token (a URL wrapping under
+  // break-word is deliberate); the +1 margin and the 3-line floor keep an
+  // ordinary tight two-word wrap from tripping it.
+  //
+  // Line count comes from a Range over the text, NOT from height / line-height.
+  // getClientRects() returns one rect per rendered line box, so it ignores the
+  // element's own padding and is immune to a <td> stretched tall by its row —
+  // both of which made a height-based count report a 934px-wide empty-state box
+  // as "5 lines" and flag ~50 false positives across the sweep.
+  const range = document.createRange();
+  for (const el of document.querySelectorAll('body *')) {
+    if (el.children.length) continue;               // leaf text nodes only
+    const text = (el.textContent || '').trim();
+    if (text.length < 6 || !/\s/.test(text)) continue;
+    const st = getComputedStyle(el);
+    if (st.visibility === 'hidden' || st.display === 'none') continue;
+    if (st.writingMode && st.writingMode.startsWith('vertical')) continue;  // intentional
+    if (st.whiteSpace === 'pre' || st.whiteSpace === 'pre-wrap') continue;  // author's own breaks
+    range.selectNodeContents(el);
+    const rects = [...range.getClientRects()].filter(r => r.width > 0 && r.height > 0);
+    if (!rects.length) continue;
+    const lines = rects.length;
+    const words = text.split(/\s+/).length;
+    if (lines >= 3 && lines > words + 1) {
+      out.collapsed.push({
+        sel: desc(el), lines: lines, words: words,
+        width: Math.round(Math.max(...rects.map(r => r.width))),
+      });
     }
   }
   return out;
@@ -271,7 +319,7 @@ def main() -> int:
                         findings["error"].append({"panel": pid, "viewport": vp, "err": str(e)[:200]})
                         counts["error"] += 1
                         continue
-                    for kind in ("viewport", "clipped"):
+                    for kind in ("viewport", "clipped", "collapsed"):
                         if res[kind]:
                             counts[kind] += len(res[kind])
                             pairs[f"{kind}:{vp}"] += 1
@@ -285,7 +333,7 @@ def main() -> int:
         server.should_exit = True
 
     print("\n── findings ──────────────────────────────────────")
-    for kind in ("viewport", "clipped", "error"):
+    for kind in ("viewport", "clipped", "collapsed", "error"):
         hits = sum(v for k, v in pairs.items() if k.startswith(kind + ":"))
         print(f"{kind:9} {counts[kind]:5} findings across {hits} panel/viewport pairs")
     if any(pairs):

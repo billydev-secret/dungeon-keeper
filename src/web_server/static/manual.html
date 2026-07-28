@@ -297,15 +297,23 @@
 
   /* ── Step list ─────────────────────────────────────────────── */
   .steps { list-style: none; padding: 0; counter-reset: steps; }
+  /* Badge is positioned, not a flex sibling: under `display: flex` each inline
+     child of the step (every link in the prose) becomes its own flex item and
+     can be squeezed to a fraction of its width on a narrow screen, stacking the
+     letters vertically. Indenting past an absolute badge keeps the step body as
+     one normal inline flow. Mirrors .dk-help .steps li in help-panel.css. */
   .steps li {
     counter-increment: steps;
-    display: flex;
-    gap: 0.75rem;
-    align-items: flex-start;
+    position: relative;
+    padding-left: 2.15rem;   /* 1.4rem badge + the 0.75rem gap flex used to add */
     margin-bottom: 0.75rem;
+    overflow-wrap: break-word;
   }
   .steps li::before {
     content: counter(steps);
+    position: absolute;
+    left: 0;
+    top: 0.15rem;
     background: var(--brand);
     color: #fff;
     font-size: 0.75rem;
@@ -316,8 +324,6 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-shrink: 0;
-    margin-top: 0.15rem;
   }
 
   /* ── Perm matrix ────────────────────────────────────────────── */

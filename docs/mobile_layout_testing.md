@@ -19,6 +19,18 @@ pass two rules:
   than itself. That content is silently cut off and can't be reached — exactly
   what the role-button bug did. `text-overflow: ellipsis` is exempt: a
   truncated label with a visible `…` is a deliberate design, not lost content.
+- **collapsed** — no text element may be broken mid-word repeatedly (more
+  rendered lines than it has words), which means its column has shrunk towards
+  one character wide. This is the *opposite* failure to the other two: nothing
+  overflows, the layout implodes. A single long token with no spaces (a URL
+  wrapping under `break-word`) is exempt — that's deliberate.
+
+Note the asymmetry the third rule exists to fix: the first two only ever detect
+content that is too **wide**. `health-mod-engagement` rendered its whole report
+inside a leftover `.panel-loading` (a centering flex box), so every stat-tile
+heading came out one character per line and the cards overlapped — and both
+width rules scored it perfectly clean, because an element collapsed to width 0
+is skipped by the visibility filter entirely.
 
 Both rules, and the in-page audit script itself, live in one place —
 `scripts/mobile_layout_scan.py` (`AUDIT_JS`) — shared by the diagnostic tool and
@@ -57,29 +69,46 @@ wouldn't be seen. Interaction-heavy editors get their own scenario;
 and adds role-button rows — the exact broken flow — then audits. Add a scenario
 when a new editor hides layout behind a click.
 
+**Layout can hide behind *data*, not just behind a click.** The sweep serves a
+freshly-migrated (empty) DB, so a report panel renders its empty state and
+nothing else. `health-mod-engagement` sat on the allowlist for two years'
+worth of sweeps without a single run ever rendering its stat tiles, chart or
+table — the panel was badly broken on a real phone the whole time and the gate
+scored it clean. If a panel's layout only exists once it has rows, stub its API
+and audit that (`test_mod_engagement_populated_fits_on_phone`,
+`test_inactive_sweep_preview_fits_on_phone`); a green sweep over an empty state
+proves nothing. Prefer a stub over seeding the DB when the data originates at
+the gateway, which the test dashboard has no connection to.
+
 ## Known debt (the allowlist)
 
 Six panels already overflowed on mobile the day this gate was written. Fixing
 six unrelated panels wasn't in scope, so they're listed in `KNOWN_OVERFLOW` — an
 **allowlist**: the gate hard-fails only when a panel *outside* the list
-overflows (a new regression); a listed panel is allowed to fail. Across four
-full sweeps the dirty set was always a subset of these six, never a new panel.
+overflows (a new regression); a listed panel is allowed to fail.
 
-| Panel | Problem |
-|---|---|
-| `help-overview` | ~1195px quick-reference table, no horizontal scroll — cut off on a phone |
-| `health-mod-engagement` | wide data table / card grid overflows its panel |
-| `help-setup` | a long inline link overflows on a phone |
-| `config-ai` | a primary button sits a few px off the right edge |
-| `qa-tracker` | filter-button row doesn't wrap (same class as the announcement editor) |
-| `wellness-caps` | histogram-slider grid sized to full width before the scrollbar appears — clips ~197px |
+**All six were cleared on 2026-07-28 and `KNOWN_OVERFLOW` is now empty** — every
+panel is enforced, and any overflow *or collapse* fails the build. What the six
+turned out to be is worth keeping, because most of the notes were wrong:
 
-The first three overflow by a lot (tens to ~1200px) and fail every run; the last
-three overflow only marginally (a few px, or a grid sized at a transient width)
-and flap between clean and dirty. A strict "must stay dirty" ratchet would itself
-flake on those, so the list is a plain allowlist instead — not a ratchet. When a
-run finds a listed panel clean it prints a note (verify with the diagnostic tool,
-then delete it from the set); it never fails on that.
+| Panel | Was annotated | Actually |
+|---|---|---|
+| `health-mod-engagement` | "a wide data table / card grid overflows its panel" | Not an overflow, and no run had ever seen it — the sweep's DB is empty, so the panel only rendered its "no moderator messages" state. With data it laid the whole report out inside a leftover `.panel-loading` centering flex box, collapsing every heading to one character per line. Fixed; now covered with data. |
+| `help-setup` | "a long inline link overflows" | It *collapsed*, it didn't overflow: `display: flex` on the step row made each inline link its own flex item, squeezed to 13px. Fixed. |
+| `help-overview` | "~1195px quick-reference table, no horizontal scroll" | Already fixed — the table sits in an `overflow-x: auto` container. The note had outlived it. |
+| `config-ai` | "a primary button sits a few px off the right edge" | No longer reproduces at any width. |
+| `qa-tracker` | "filter-button row doesn't wrap" | No longer reproduces at any width. |
+| `wellness-caps` | "histogram-slider grid sized to full width before the scrollbar appears" | No longer reproduces. That flap is exactly what `_settle()` was written to cure — the fix was in the measurement, not the CSS. |
+
+The lesson worth keeping: **an allowlist entry is a hypothesis, not a
+measurement.** Three of these six descriptions named the wrong mechanism, and
+one named a bug the tool structurally could not observe. Re-measure before
+trusting an entry — and when you fix one, delete it.
+
+`qa-tracker` and `wellness-caps` were historically borderline. If the gate starts
+failing on either from a commit that didn't touch them, suspect the old flap
+rather than a new regression: confirm with the diagnostic tool and re-add the
+entry rather than chasing phantom CSS.
 
 ## Where it runs
 
