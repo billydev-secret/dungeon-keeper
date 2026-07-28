@@ -30,15 +30,26 @@ from bot_modules.economy.guide import (
     build_guide_embed,
 )
 from bot_modules.economy.leaderboard import (
-    _pad,
-    bar_fill,
     build_leaderboard_embed,
     collect_leaderboard_data,
-    progress_bar,
 )
 from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.logic import local_day_for
-from bot_modules.economy.register import kind_display
+from bot_modules.economy.view_helpers import (
+    unit as _unit,
+)
+from bot_modules.economy.wallet import build_wallet_embed
+from bot_modules.economy.shop import (
+    FEATURE_GATED,
+    GIFTABLE_PERKS,
+    NO_CONFIG_PERKS,
+    PERK_EMOJI,
+    PERK_LABELS,
+    PERK_SHORT,
+    SELF_PERKS,
+    build_shop_embed,
+    perk_price,
+)
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -47,6 +58,7 @@ from bot_modules.economy.perk_actions import (
     revoke_role_perks,
 )
 from bot_modules.economy.quest_views import (
+    build_quest_board_embed,
     QuestApproveButton,
     QuestBoardView,
     QuestClaimView,
@@ -199,78 +211,12 @@ _NO_ROLE_ICONS_MSG = "❌ This server doesn't support role icons right now."
 _PAY_CONFIRM_THRESHOLD = 100
 _MAX_ROLE_NAME_LEN = 32
 _MAX_MEMO_LEN = 100
-# Memos are shortened further in the one-line wallet render, and the joined
-# field is bounded — Discord rejects an embed field over 1024 chars.
-_WALLET_MEMO_LEN = 40
-_EMBED_FIELD_LIMIT = 1024
 _MAX_ICON_BYTES = 256 * 1024
 # Emoji upload types Discord accepts, mapped to whether they're animated.
 _EMOJI_CONTENT_TYPES = {
     "image/png": False, "image/jpeg": False,
     "image/webp": False, "image/gif": True,
 }
-
-# Human labels for the rentable perks (shop rows, wallet field, DMs).
-_PERK_LABELS = {
-    "role_color": "Custom Role Color",
-    "role_name": "Custom Role Name",
-    "role_icon": "Role Icon",
-    "role_gradient": "Gradient Role",
-    "role_holographic": "Holographic Role",
-    "voice_style": "Voice Style",
-}
-# The role perks a member rents for themselves, in shop display order. Every
-# giftable perk (these + the voice-style lease) is gifted as the same perk
-# kind rented with the friend as beneficiary (gift_color retired in 091).
-_SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_holographic", "role_icon")
-# Self-perks with no member-side customisation: renting IS the whole thing
-# (holographic is a fixed Discord preset, not a colour the member picks), so
-# these skip the "Set …" modal and post-rent button.
-_NO_CONFIG_PERKS = ("role_holographic",)
-_GIFTABLE_PERKS = (*_SELF_PERKS, "voice_style")
-# Feature-gated perks and the friendly reason shown when the gate is closed.
-_FEATURE_GATED = ("role_gradient", "role_holographic", "role_icon")
-
-# Shop-table furniture. The full `_PERK_LABELS` names are too wide for an
-# aligned two-cell row, so the shop uses a short cell label plus a one-line
-# blurb — most members have never seen a gradient role and can't price what
-# they can't picture. Blurbs stay under ~27 chars so a row survives mobile.
-_PERK_SHORT = {
-    "role_color": "Color",
-    "role_name": "Name",
-    "role_gradient": "Gradient",
-    "role_holographic": "Holo",
-    "role_icon": "Icon",
-    "voice_style": "Voice",
-}
-# Blurbs stay under ~15 chars: the shop row is one code cell of
-# label + blurb, and anything wider pushes the price onto its own
-# line on a phone-width embed.
-_PERK_BLURBS = {
-    "role_color": "any solid color",
-    "role_name": "nickname + role",
-    "role_gradient": "two-color fade",
-    "role_holographic": "shimmer preset",
-    "role_icon": "badge by name",
-    "voice_style": "your voice room",
-}
-_PERK_EMOJI = {
-    "role_color": "🎨",
-    "role_name": "✨",
-    "role_gradient": "🌈",
-    "role_holographic": "🪩",
-    "role_icon": "🖼️",
-    "voice_style": "🎙️",
-}
-# Self-perks grouped into a price ladder — cheap everyday tweaks first, the
-# showy ones second — so the shop reads as tiers to climb rather than a flat
-# spreadsheet. Rows sort by price inside each tier at render time, since
-# prices are guild-configurable and can reorder.
-_PERK_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Essentials", ("role_name", "role_color")),
-    ("Signature", ("role_gradient", "role_icon", "role_holographic")),
-)
-
 
 # The custom-name perk renames the member's personal role AND sets their
 # server nickname to match — "call yourself anything" has to actually change
@@ -294,10 +240,6 @@ def _custom_name_confirmation(text: str, *, nick_ok: bool, nick_reason: str = ""
         )
     base = f"Your role name is now **{text}**."
     return f"{base} {nick_reason}" if nick_reason else base
-
-
-def _perk_price(settings: EconSettings, perk: str) -> int:
-    return int(getattr(settings, f"price_{perk}"))
 
 
 def _icon_store_path(db_path, guild_id: int, user_id: int):
@@ -329,31 +271,6 @@ def _resolve_guild_emoji(guild: discord.Guild, raw: str) -> discord.Emoji | None
     return discord.utils.get(guild.emojis, name=name)
 
 
-def _rental_lines(settings: EconSettings, rentals: list, user_id: int) -> list[str]:
-    """One line per live rental for the wallet's 'Active rentals' field."""
-    emoji = settings.currency_emoji
-    lines: list[str] = []
-    for r in rentals:
-        perk = str(r["perk"])
-        label = _PERK_LABELS.get(perk, perk)
-        price = int(r["price"])
-        next_bill = int(r["next_bill_at"])
-        owner_id = int(r["user_id"])
-        beneficiary_id = int(r["beneficiary_id"])
-        attribution = ""
-        if beneficiary_id != owner_id:
-            if beneficiary_id == user_id:
-                attribution = " (gift received)"
-            elif owner_id == user_id:
-                attribution = f" (gift to <@{beneficiary_id}>)"
-        grace = " · ⏳ in grace" if str(r["state"]) == "grace" else ""
-        lines.append(
-            f"**{label}**{attribution} — {emoji} {price:,}/wk · "
-            f"renews <t:{next_bill}:R>{grace}"
-        )
-    return lines
-
-
 async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:
     """Bytes for the QOTD card background — the server icon, bot avatar fallback."""
     if guild.icon is not None:
@@ -370,119 +287,12 @@ async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:
     return None
 
 
-def _unit(settings: EconSettings, amount: int) -> str:
-    """Currency name matching ``amount``'s grammatical number."""
-    return settings.currency_name if abs(amount) == 1 else settings.currency_plural
-
-
 # The /bank quests board is two sections: the member's own board (daily/weekly
 # board draws) and the guild-wide goals everyone moves together (the monthly
 # goal + the weekly community goals — both shared counters, no self-claim).
 # Event ("Anytime") quests aren't board-drawn and don't get a section here —
 # they stay a surprise payout rather than a proactively-listed menu; they're
 # still claimable via the details select if one lands in a claimable state.
-# Each section is one embed field; within it, a cadence sub-label separates
-# the groups when more than one is present. The long per-state explainer text
-# lives in quest_views.QUEST_STATE_LABEL, shown by the details select — the
-# list itself stays one line per quest.
-_CADENCE_LABEL = {
-    "daily": "Daily",
-    "weekly": "Weekly",
-    "monthly": "Monthly",
-    "community": "Weekly",
-}
-_QUEST_SECTIONS = (
-    ("🧍 Your quests", ("daily", "weekly")),
-    # Weekly community goals lead, the slower monthly goal anchors the foot —
-    # same near-term-first order as the member's own board above.
-    ("🌐 Community goals", ("community", "monthly")),
-)
-
-
-# The ``/bank quests`` list draws the same ``▰▱`` meter the details popup and
-# login digest use, just narrower so a bar + reward still fit one line on
-# mobile. Counted daily/weekly show ``{bar} n/target`` — the small personal
-# counts are the point ("7/10 messages"). The guild-wide community/monthly
-# goals show the **bar alone**: their shared totals run into five or six
-# figures (``7,875/68,935``), which bloated the column and read as noise next
-# to the fill — the exact numbers live in the details popup and login digest.
-# One-shot quests keep a glyph phrase.
-_QUEST_BAR_WIDTH = 8
-
-
-def _quest_line_status(q: dict) -> str:
-    """The status column: a progress bar for counted/community quests, else
-    one short glyph phrase."""
-    state = str(q.get("state") or "")
-    if state == "community":
-        return bar_fill(int(q["current"]), int(q["target"]), _QUEST_BAR_WIDTH)
-    if state == "done":
-        return "✅ done"
-    if state == "pending":
-        return "⏳ sign-off"
-    if state == "claimable":
-        return "🔶 claim below"
-    if q.get("progress_target"):
-        return progress_bar(
-            int(q["progress_current"]), int(q["progress_target"]), _QUEST_BAR_WIDTH
-        )
-    return "☐ to do"
-
-
-def _quest_line_reward(q: dict, settings: EconSettings) -> str:
-    """The payment column: coins, optional XP, optional spotlight bolt.
-    The XP suffix stays glyph-free — on phone widths the reward column
-    hugs the wrap point, and a ⭐ was enough to push it onto its own line."""
-    reward = f"{settings.currency_emoji} {int(q['reward']):,}"
-    if q.get("reward_xp"):
-        reward += f" +{int(q['reward_xp']):,}xp"
-    if q.get("spotlight"):
-        reward += " ⚡"
-    return reward
-
-
-# Emoji-presentation glyphs that appear in a status cell render ~2 monospace
-# columns wide (unlike ☐/▰▱, which sit at ~1). Counting them as 2 when sizing
-# the status column keeps the reward column that follows the code cell aligned.
-_WIDE_STATUS_GLYPHS = ("✅", "⏳", "🔶")
-
-
-def _status_disp_width(text: str) -> int:
-    """Approximate monospace column width of a status cell for padding."""
-    return len(text) + sum(text.count(g) for g in _WIDE_STATUS_GLYPHS)
-
-
-def _quest_section_lines(
-    cadences: tuple[str, ...],
-    groups: dict[str, list[dict]],
-    settings: EconSettings,
-    width: int,
-) -> list[str]:
-    """Display lines for one board section — each present cadence's quests,
-    one line apiece, with a bold cadence sub-label above them when the section
-    spans more than one cadence (a single-cadence section needs no sub-label,
-    the field heading already names it).
-
-    Title and status share one monospace code cell (per the embed style
-    guide's one-cell-per-row rule) so their columns line up; the status column
-    is padded to the section's widest status so the reward — which stays
-    *outside* the backticks, emoji and all — starts at the same column on every
-    row."""
-    present = [c for c in cadences if groups.get(c)]
-    show_labels = len(present) > 1
-    rows = [(c, q, _quest_line_status(q)) for c in present for q in groups[c]]
-    status_w = max((_status_disp_width(s) for _, _, s in rows), default=0)
-    lines: list[str] = []
-    seen: set[str] = set()
-    for cadence, q, status in rows:
-        if show_labels and cadence not in seen:
-            lines.append(f"**{_CADENCE_LABEL[cadence]}**")
-            seen.add(cadence)
-        pad = " " * max(0, status_w - _status_disp_width(status))
-        cell = f"{_pad(str(q['title']), width)}  {status}{pad}"
-        lines.append(f"`{cell}` {_quest_line_reward(q, settings)}")
-    return lines
-
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
 # next message after at most this many seconds.
 _TRIGGER_CACHE_TTL = 60.0
@@ -550,40 +360,6 @@ def _clean_memo(memo: str | None) -> str | None:
     if not cleaned:
         return None
     return cleaned[:_MAX_MEMO_LEN]
-
-
-def _ellipsis(text: str, limit: int = _WALLET_MEMO_LEN) -> str:
-    """Shorten a memo for the cramped one-line wallet render."""
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
-
-
-def _fit_lines(lines: list[str], limit: int = _EMBED_FIELD_LIMIT) -> str:
-    """Join as many leading lines as fit an embed field.
-
-    Memos make each activity row variable-length, so ten of them can overrun
-    the 1024-char field cap and make Discord reject the whole wallet embed.
-    Dropping the oldest rows keeps the newest visible rather than 400-ing.
-    """
-    out: list[str] = []
-    used = 0
-    for line in lines:
-        cost = len(line) + (1 if out else 0)
-        if used + cost > limit:
-            break
-        out.append(line)
-        used += cost
-    return "\n".join(out)
-
-
-def _memo_of(row_meta: str | None) -> str | None:
-    """Pull the memo out of a ledger row's meta JSON, tolerating junk."""
-    if not row_meta:
-        return None
-    try:
-        memo = json.loads(row_meta).get("memo")
-    except (ValueError, TypeError, AttributeError):
-        return None
-    return memo if isinstance(memo, str) and memo else None
 
 
 class _MemberScopedView(discord.ui.View):
@@ -965,7 +741,7 @@ class _RefundSelect(discord.ui.Select):
         now = time.time()
         options: list[discord.SelectOption] = []
         for r in rentals:
-            label = _PERK_LABELS.get(str(r["perk"]), str(r["perk"]))
+            label = PERK_LABELS.get(str(r["perk"]), str(r["perk"]))
             if r["state"] == "active":
                 preview = prorated_refund(
                     int(r["price"]), float(r["next_bill_at"]), now
@@ -1089,7 +865,7 @@ class _ShopView(_MemberScopedView):
         self.guild = guild
         self.refundable = refundable or []
         self.shield_price = shield_price
-        for perk in _SELF_PERKS:
+        for perk in SELF_PERKS:
             if perk == "role_icon" and has_catalog:
                 # A curated catalog replaces the rent/customise buttons with a
                 # single picker — renting and restyling both happen by choosing
@@ -1113,12 +889,12 @@ class _ShopView(_MemberScopedView):
                 button.callback = self._make_icons_callback()
                 self.add_item(button)
                 continue
-            if perk in owned and perk in _NO_CONFIG_PERKS:
+            if perk in owned and perk in NO_CONFIG_PERKS:
                 # Nothing to customise (a fixed preset) — show it as active,
                 # like the voice lease's "Leased" chip, rather than a dead
                 # "Set …" button that opens an empty modal.
                 button = discord.ui.Button(
-                    label=f"{_PERK_EMOJI[perk]} Active",
+                    label=f"{PERK_EMOJI[perk]} Active",
                     style=discord.ButtonStyle.success,
                     disabled=True,
                     custom_id=f"econ_shop_active:{perk}",
@@ -1135,7 +911,7 @@ class _ShopView(_MemberScopedView):
                 # No price in the label — the table above carries it, and a
                 # short emoji-led label keeps the row scannable.
                 button = discord.ui.Button(
-                    label=f"{_PERK_EMOJI[perk]} {_PERK_SHORT[perk]}",
+                    label=f"{PERK_EMOJI[perk]} {PERK_SHORT[perk]}",
                     style=discord.ButtonStyle.primary,
                     disabled=perk in gated,
                     custom_id=f"econ_shop_rent:{perk}",
@@ -1279,7 +1055,7 @@ async def _rent_perk_flow(
         msg = str(exc)
         if "insufficient" in msg:
             text = await cog._short_funds_text(
-                settings, guild.id, user_id, _perk_price(settings, perk)
+                settings, guild.id, user_id, perk_price(settings, perk)
             )
         elif "already rented" in msg:
             text = "❌ You're already renting that perk."
@@ -1299,11 +1075,11 @@ async def _rent_perk_flow(
         )
         return
     await apply_role_perks(cog.bot, ctx.db_path, guild.id, user_id)
-    if perk in _NO_CONFIG_PERKS:
+    if perk in NO_CONFIG_PERKS:
         # A fixed preset — there's nothing to set, so it's live the moment the
         # role projects. No customise button (an empty modal would confuse).
         await interaction.response.send_message(
-            f"Rented **{_PERK_LABELS[perk]}**! Your personal role now wears "
+            f"Rented **{PERK_LABELS[perk]}**! Your personal role now wears "
             "Discord's holographic shimmer — no setup needed.",
             ephemeral=True,
         )
@@ -1314,7 +1090,7 @@ async def _rent_perk_flow(
         else ""
     )
     await interaction.response.send_message(
-        f"Rented **{_PERK_LABELS[perk]}**! Set it up right here:{note}",
+        f"Rented **{PERK_LABELS[perk]}**! Set it up right here:{note}",
         view=_PostRentView(cog, perk),
         ephemeral=True,
     )
@@ -1388,7 +1164,7 @@ class ShopRentButton(
     ) -> None:
         super().__init__(
             discord.ui.Button(
-                label=label or f"Rent {_PERK_LABELS.get(perk, perk)}",
+                label=label or f"Rent {PERK_LABELS.get(perk, perk)}",
                 style=style,
                 disabled=disabled,
                 custom_id=f"econ_shop_panel:{perk}",
@@ -1407,157 +1183,6 @@ class ShopRentButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _open_shop_from_panel(interaction)
-
-
-def _shop_row_price(
-    settings: EconSettings,
-    perk: str,
-    icon_catalog: tuple[int, int, int] | None,
-) -> tuple[int, str]:
-    """(sort key, display string) for a shop row's price.
-
-    A curated icon catalog prices per icon, so the role-icon row shows a span
-    and sorts on its floor. The flat ``price_role_icon`` folds into that span —
-    the picker's bring-your-own Custom entry sells at it, so it's a price the
-    row genuinely offers.
-    """
-    if perk == "role_icon" and icon_catalog is not None:
-        lo, hi, _count = icon_catalog
-        lo = min(lo, settings.price_role_icon)
-        hi = max(hi, settings.price_role_icon)
-        return lo, f"{lo:,}" if lo == hi else f"{lo:,}–{hi:,}"
-    price = _perk_price(settings, perk)
-    return price, f"{price:,}"
-
-
-def _build_shop_embed(
-    settings: EconSettings,
-    gated: set[str],
-    accent: discord.Color | None,
-    *,
-    panel: bool = False,
-    owned: set[str] | frozenset[str] = frozenset(),
-    icon_catalog: tuple[int, int, int] | None = None,
-    balance: int | None = None,
-    shields_held: int = 0,
-) -> discord.Embed:
-    """The shop listing, shared by /bank shop and the channel panel.
-
-    Rendered as the aligned code-cell table the leaderboard, guide and quest
-    panels use: one ``label  blurb`` cell then the price, grouped into price
-    tiers (the quest-board row shape — a single cell keeps the whole row
-    inside a phone-width line). Five ``inline=False`` fields carrying four
-    words each read as an airy list; a table reads as a storefront.
-
-    ``owned`` marks the viewer's rented rows, ``balance`` puts their wallet
-    in the description, and ``shields_held`` marks the shield row — all only
-    meaningful for the ephemeral per-member view; the channel panel is
-    member-agnostic and passes none of them.
-    ``icon_catalog`` is (min price, max price, icon count) across the guild's
-    curated catalog; when set, the role-icon row shows that span and its size
-    instead of a single flat price.
-    """
-    # The balance lives in the description, not the footer: footers render
-    # plain text, so a custom currency emoji would show as raw <:name:id>.
-    header = "Weekly rentals · cancel any time"
-    if balance is not None:
-        header += f" · you have {settings.currency_emoji} **{balance:,}**"
-    description = (
-        header
-        + "\n"
-        + (
-            "Tap **Open Shop** for your personal menu — rent, customize, "
-            "and refund, all private to you."
-            if panel
-            else "Green buttons customize what you've already rented."
-        )
-        + "\n​"
-    )
-    embed = discord.Embed(
-        title="🛍️ Perk Shop", description=description, color=accent
-    )
-    if settings.currency_icon_url:
-        embed.set_thumbnail(url=settings.currency_icon_url)
-
-    # The Voice tier exists only while the lease is priced (> 0 = the paywall
-    # is armed); at the price-0 dark default the shop shows no trace of it.
-    tiers = list(_PERK_TIERS)
-    table_perks: list[str] = list(_SELF_PERKS)
-    if settings.price_voice_style > 0:
-        tiers.append(("Voice", ("voice_style",)))
-        table_perks.append("voice_style")
-
-    # One width per table, not per tier, so cells line up across the whole
-    # embed rather than jumping at each heading.
-    label_width = max(len(_PERK_SHORT[p]) for p in table_perks)
-    blurb_width = max(len(_PERK_BLURBS[p]) for p in table_perks)
-
-    def _line(perk: str) -> str:
-        _sort, price_str = _shop_row_price(settings, perk, icon_catalog)
-        note = ""
-        if perk in gated:
-            note = " · _needs a server feature not enabled here_"
-        elif perk in owned:
-            note = " · ✅"
-        elif perk == "role_icon" and icon_catalog is not None:
-            note = f" · {icon_catalog[2]} + your own"
-        return (
-            f"`{_pad(_PERK_SHORT[perk], label_width)}  "
-            f"{_pad(_PERK_BLURBS[perk], blurb_width)}` "
-            f"{settings.currency_emoji} **{price_str}**{note}"
-        )
-
-    for tier_name, perks in tiers:
-        ordered = sorted(
-            perks, key=lambda p: _shop_row_price(settings, p, icon_catalog)[0]
-        )
-        embed.add_field(
-            name=tier_name,
-            value="\n".join(_line(p) for p in ordered) + "\n​",
-            inline=False,
-        )
-    if settings.price_streak_shield > 0:
-        # One-shot, not a rental — the only non-weekly row, so it carries its
-        # own field with the "once" spelled out instead of joining the table.
-        held = " · 🛡️ **held**" if shields_held > 0 else ""
-        embed.add_field(
-            name="One-shot",
-            value=(
-                f"🛡️ Streak shield — {settings.currency_emoji} "
-                f"**{settings.price_streak_shield:,}** once{held}\n"
-                "Auto-burns to save your login streak from a missed day the "
-                "free grace can't cover. Hold one at a time."
-            ),
-            inline=False,
-        )
-    if raffle_svc.raffle_enabled(settings):
-        embed.add_field(
-            name="Weekly Raffle",
-            value=(
-                f"🎟️ Tickets — {settings.currency_emoji} "
-                f"**{settings.price_raffle_ticket:,}** each, up to "
-                f"{settings.raffle_max_tickets}/week. Drawn at the week "
-                "roll; the winner's next weekly perk payment is free "
-                "(and they're announced by name)."
-            ),
-            inline=False,
-        )
-    embed.add_field(
-        name="For a Friend",
-        value=(
-            "🎁 Any perk above can be gifted at its listed price — "
-            "you pay the weekly rent, they wear it. Send one with `/bank gift`."
-        ),
-        inline=False,
-    )
-
-    embed.set_footer(
-        text=(
-            "Prices are per week, billed every 7 days. A short grace period "
-            "covers a missed renewal."
-        )
-    )
-    return embed
 
 
 class EconomyCog(commands.Cog):
@@ -1735,73 +1360,16 @@ class EconomyCog(commands.Cog):
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        description = (
-            f"{settings.currency_emoji} **{balance:,}** {_unit(settings, balance)}"
-        )
-        if shields > 0:
-            description += "\n🛡️ Streak shield held"
-        embed = discord.Embed(
-            title=f"{settings.currency_emoji} {settings.wallet_name}",
-            description=description,
+        embed = build_wallet_embed(
+            settings,
+            balance=balance,
+            ledger=ledger,
+            rentals=rentals,
+            shields=shields,
+            casino=casino,
+            viewer_id=user_id,
             color=accent,
         )
-        if settings.currency_icon_url:
-            embed.set_thumbnail(url=settings.currency_icon_url)
-
-        if ledger:
-            lines = []
-            for row in ledger:
-                amount = int(row["amount"])
-                sign = "+" if amount >= 0 else "−"
-                ts = int(row["created_at"])
-                glyph, label = kind_display(str(row["kind"]))
-                line = (
-                    f"{sign}{abs(amount):,} {settings.currency_emoji} · "
-                    f"{glyph} {label} · <t:{ts}:R>"
-                )
-                memo = _memo_of(row["meta"])
-                if memo:
-                    line += f" — *{discord.utils.escape_markdown(_ellipsis(memo))}*"
-                lines.append(line)
-            embed.add_field(
-                name="Recent Activity", value=_fit_lines(lines), inline=False
-            )
-        else:
-            embed.add_field(
-                name="Recent Activity", value="_No activity yet._", inline=False
-            )
-
-        rental_lines = _rental_lines(settings, rentals, user_id)
-        if rental_lines:
-            # A dozen+ gifted perks can overrun the 1024-char field and 400 the
-            # whole embed — trim to what fits (mirrors Recent Activity above).
-            embed.add_field(
-                name="Active Rentals", value=_fit_lines(rental_lines), inline=False
-            )
-
-        if casino is not None and int(casino["plays"]) > 0:
-            wagered = int(casino["wagered"])
-            returned = int(casino["returned"])
-            net = returned - wagered
-            streak = int(casino["streak"])
-            lines = [
-                f"Wagered **{wagered:,}** · returned **{returned:,}** · "
-                f"net **{'+' if net >= 0 else '−'}{abs(net):,}**"
-            ]
-            if int(casino["biggest_win"]) > 0:
-                lines.append(
-                    f"Biggest win: {settings.currency_emoji} "
-                    f"**{int(casino['biggest_win']):,}** "
-                    f"({str(casino['biggest_win_game'])})"
-                )
-            if streak >= 3:
-                lines.append(f"🔥 {streak}-win streak going")
-            elif streak <= -3:
-                lines.append(f"🧊 {abs(streak)} losses running — walk away?")
-            embed.add_field(
-                name="🎰 At the Tables", value="\n".join(lines), inline=False
-            )
-
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bank.command(name="grant", description="Award currency to a member (staff only).")
@@ -2082,7 +1650,7 @@ class EconomyCog(commands.Cog):
         gated = await self._gated_perks(guild.id)
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = _build_shop_embed(
+        embed = build_shop_embed(
             settings,
             gated,
             accent,
@@ -2247,7 +1815,7 @@ class EconomyCog(commands.Cog):
                     embed=None, view=None,
                 )
                 return
-            label = _PERK_LABELS.get(str(rental["perk"]), str(rental["perk"]))
+            label = PERK_LABELS.get(str(rental["perk"]), str(rental["perk"]))
             if rental["state"] == "active":
                 preview = prorated_refund(
                     int(rental["price"]), float(rental["next_bill_at"]), time.time()
@@ -2329,7 +1897,7 @@ class EconomyCog(commands.Cog):
                 "Economy shop refund: failed to revoke perk for beneficiary %s.",
                 result.beneficiary_id,
             )
-        label = _PERK_LABELS.get(result.perk, result.perk)
+        label = PERK_LABELS.get(result.perk, result.perk)
         if result.refund > 0:
             text = (
                 f"✅ **{label}** cancelled — {settings.currency_emoji} "
@@ -2714,8 +2282,8 @@ class EconomyCog(commands.Cog):
     @app_commands.describe(member="Who to gift it to", perk="Which perk to gift")
     @app_commands.choices(
         perk=[
-            app_commands.Choice(name=_PERK_LABELS[p], value=p)
-            for p in _GIFTABLE_PERKS
+            app_commands.Choice(name=PERK_LABELS[p], value=p)
+            for p in GIFTABLE_PERKS
         ]
     )
     async def bank_gift(
@@ -2743,7 +2311,7 @@ class EconomyCog(commands.Cog):
                 "❌ Rent your own perks with /bank shop.", ephemeral=True
             )
             return
-        if perk_key in _FEATURE_GATED and not await feature_gate_ok(
+        if perk_key in FEATURE_GATED and not await feature_gate_ok(
             self.bot, guild.id, perk_key
         ):
             await interaction.response.send_message(
@@ -2766,7 +2334,7 @@ class EconomyCog(commands.Cog):
             # Probably a mistake — the perk stacks silently (their role
             # already shows it), so make the double-spend an explicit choice.
             await interaction.response.send_message(
-                f"{member.display_name} already has **{_PERK_LABELS[perk_key]}**. "
+                f"{member.display_name} already has **{PERK_LABELS[perk_key]}**. "
                 "Gift it anyway?",
                 view=_GiftConfirmView(self, settings, guild, gifter, member, perk_key),
                 ephemeral=True,
@@ -2798,14 +2366,14 @@ class EconomyCog(commands.Cog):
                     beneficiary_id=member.id, now=time.time(),
                 )
 
-        label = _PERK_LABELS[perk]
+        label = PERK_LABELS[perk]
         try:
             await asyncio.to_thread(_rent)
         except ValueError as exc:
             msg = str(exc)
             if "insufficient" in msg:
                 text = await self._short_funds_text(
-                    settings, guild.id, gifter.id, _perk_price(settings, perk)
+                    settings, guild.id, gifter.id, perk_price(settings, perk)
                 )
             elif "already rented" in msg:
                 text = f"❌ You're already gifting them **{label}**."
@@ -2819,7 +2387,7 @@ class EconomyCog(commands.Cog):
         # single 429 can't push the first response past the 3s budget and leave
         # the charged gifter staring at "This interaction failed."
         await self._defer(interaction, via_confirm=via_confirm)
-        if perk in _SELF_PERKS:
+        if perk in SELF_PERKS:
             await apply_role_perks(self.bot, self.ctx.db_path, guild.id, member.id)
         # `/bank role icon` (upload) hard-refuses catalog servers, so only hint it
         # off-catalog; on a catalog server the recipient picks from /bank shop.
@@ -2830,7 +2398,7 @@ class EconomyCog(commands.Cog):
             note = " They can upload one with `/bank role icon`."
         if perk == "voice_style":
             gift_hint = "Renaming and sizing your voice channel are unlocked."
-        elif perk in _NO_CONFIG_PERKS:
+        elif perk in NO_CONFIG_PERKS:
             gift_hint = "It's already live on your personal role — no setup needed."
         else:
             gift_hint = "Set it up from /bank shop."
@@ -3359,7 +2927,7 @@ class EconomyCog(commands.Cog):
         """The feature-gated perks this guild currently can't offer."""
         return {
             perk
-            for perk in _FEATURE_GATED
+            for perk in FEATURE_GATED
             if not await feature_gate_ok(self.bot, guild_id, perk)
         }
 
@@ -3527,45 +3095,10 @@ class EconomyCog(commands.Cog):
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = discord.Embed(title=f"{settings.currency_emoji} Quests", color=accent)
-
+        embed = build_quest_board_embed(settings, quests_state, color=accent)
         if not quests_state:
-            embed.description = "_No active quests right now — check back soon!_"
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-
-        # One line per quest — title | status | payment — split into two
-        # sections (your board vs the guild-wide goals), cadence sub-labelled
-        # within each. Descriptions and the how-it-completes explainers live
-        # behind the details select, so the list stays scannable.
-        desc_bits = []
-        if any(q.get("spotlight") for q in quests_state):
-            desc_bits.append("⚡ Spotlight quests pay **double** this week!")
-        desc_bits.append(
-            "Pick a quest from the menu below for its full story."
-        )
-        embed.description = "\n".join(desc_bits) + "\n\u200b"
-
-        groups: dict[str, list[dict]] = {}
-        for q in quests_state:
-            groups.setdefault(str(q["qtype"]), []).append(q)
-        width = min(max(len(str(q["title"])) for q in quests_state), 22)
-        sections = [
-            (heading, _quest_section_lines(cadences, groups, settings, width))
-            for heading, cadences in _QUEST_SECTIONS
-        ]
-        sections = [(heading, lines) for heading, lines in sections if lines]
-        for i, (heading, quest_lines) in enumerate(sections):
-            # Defensive cap: a large quest_board_* size could still blow the
-            # 1024-char field cap and 400 the whole command guild-wide.
-            # (Reserve room for the "+N more" tail + breathing-room line.)
-            value = _fit_lines(quest_lines, _EMBED_FIELD_LIMIT - 40)
-            shown = value.count("\n") + 1 if value else 0
-            if shown < len(quest_lines):
-                value += f"\n_…and {len(quest_lines) - shown} more_"
-            if i < len(sections) - 1:  # breathing room above the next heading
-                value += "\n\u200b"
-            embed.add_field(name=heading, value=value, inline=False)
 
         claimable = [q for q in quests_state if q["state"] == "claimable"]
         rerollable = board_meta.get("rerollable") or []
@@ -4346,7 +3879,7 @@ class EconomyCog(commands.Cog):
         gated = await self._gated_perks(guild.id)
         icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        return _build_shop_embed(
+        return build_shop_embed(
             settings, gated, accent, panel=True, icon_catalog=icon_range
         )
 

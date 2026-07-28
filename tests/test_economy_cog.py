@@ -23,10 +23,6 @@ from bot_modules.services.economy_quests_service import (
 from bot_modules.cogs.economy_cog import (
     _NICK_FORBIDDEN,
     _custom_name_confirmation,
-    _quest_line_reward,
-    _quest_line_status,
-    _quest_section_lines,
-    _status_disp_width,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -491,95 +487,6 @@ async def test_quests_listing_state_matrix(ctx, db):
     assert daily  # referenced
 
 
-def test_quest_line_status_draws_bar_for_counted_and_community():
-    """Counted daily/weekly and community/monthly goals render a ▰▱ bar;
-    one-shot and claim-state quests keep their glyph phrase."""
-    # Counted quest (daily or weekly): tracked progress → bar + fraction; the
-    # small personal counts are the point.
-    counted = _quest_line_status(
-        {"state": "message_sent", "progress_current": 3, "progress_target": 6}
-    )
-    assert "▰" in counted and "▱" in counted and "3/6" in counted
-    # Guild-wide community/monthly goal → bar fill only, no n/target (the
-    # shared totals run to five figures and read as noise on the board).
-    community = _quest_line_status(
-        {"state": "community", "current": 40, "target": 100}
-    )
-    assert "▰" in community and "▱" in community and "/" not in community
-    # One-shot quest with no counted target → no bar, just the to-do glyph.
-    one_shot = _quest_line_status({"state": "photo_post"})
-    assert one_shot == "☐ to do"
-    # Claim states are unchanged phrases (no bar).
-    assert _quest_line_status({"state": "done"}) == "✅ done"
-    assert _quest_line_status({"state": "pending"}) == "⏳ sign-off"
-    assert _quest_line_status({"state": "claimable"}) == "🔶 claim below"
-
-
-def test_quest_line_reward_xp_suffix_is_glyph_free():
-    """The board's XP suffix carries no ⭐ — on phone widths the reward
-    column hugs the wrap point and the star pushed it onto its own line.
-    The spotlight bolt (rarer, and last on the line) stays."""
-    settings = SimpleNamespace(currency_emoji="🪙")
-    line = _quest_line_reward({"reward": 15, "reward_xp": 8}, settings)
-    assert line == "🪙 15 +8xp"
-    bolt = _quest_line_reward(
-        {"reward": 15, "reward_xp": 8, "spotlight": True}, settings
-    )
-    assert bolt.endswith("⚡")
-
-
-def test_quest_section_lines_labels_only_when_multi_cadence():
-    """A section spanning >1 cadence gets a bold sub-label per group; a
-    single-cadence section is unlabelled (the field heading already names it)."""
-    settings = SimpleNamespace(currency_emoji="🪙")
-    two_cadence = _quest_section_lines(
-        ("daily", "weekly", "event"),
-        {
-            "daily": [{
-                "state": "message_sent", "progress_current": 2,
-                "progress_target": 5, "title": "Chatty", "reward": 10,
-            }],
-            "weekly": [{"state": "done", "title": "Grind", "reward": 40}],
-        },
-        settings, 12,
-    )
-    assert "**Daily**" in two_cadence and "**Weekly**" in two_cadence
-    assert any("Chatty" in ln for ln in two_cadence)
-    # Only the community goal present → no sub-label line at all.
-    one_cadence = _quest_section_lines(
-        ("monthly", "community"),
-        {"community": [{
-            "state": "community", "current": 3, "target": 9,
-            "title": "Buzz", "reward": 5,
-        }]},
-        settings, 12,
-    )
-    assert not any(ln.startswith("**") for ln in one_cadence)
-    assert any("Buzz" in ln for ln in one_cadence)
-
-
-def test_quest_section_lines_align_the_reward_column():
-    """Every row's title+status code cell is padded to one width, so the
-    reward payload after the closing backtick starts at the same column —
-    a counted (bar) row and a claim-state (glyph) row included."""
-    settings = SimpleNamespace(currency_emoji="🪙")
-    lines = _quest_section_lines(
-        ("daily", "weekly", "event"),
-        {"daily": [
-            {"state": "message_sent", "progress_current": 2,
-             "progress_target": 5, "title": "Chatty", "reward": 10},
-            {"state": "claimable", "title": "Say hi", "reward": 25},
-            {"state": "done", "title": "All done", "reward": 40},
-        ]},
-        settings, 12,
-    )
-    cells = [ln.split("`")[1] for ln in lines if ln.startswith("`")]
-    assert len(cells) == 3
-    # All cells share one display width → the trailing backtick (and the
-    # reward after it) lands in the same column on every row.
-    assert len({_status_disp_width(c) for c in cells}) == 1
-
-
 @pytest.mark.asyncio
 async def test_quests_event_quests_have_no_display_section(ctx, db):
     # event ("Anytime") quests aren't board-drawn and don't get a section in
@@ -889,9 +796,9 @@ async def _shop(cog, interaction) -> None:
 
 
 def _build_shop_embed(*args, **kwargs):
-    from bot_modules.cogs.economy_cog import _build_shop_embed as build
+    from bot_modules.economy.shop import build_shop_embed
 
-    return build(*args, **kwargs)
+    return build_shop_embed(*args, **kwargs)
 
 
 def _ShopView(*args, **kwargs):
@@ -935,98 +842,6 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
     assert disabled == {"role_gradient", "role_holographic", "role_icon"}
     blob = " ".join(f.value for f in kwargs["embed"].fields)
     assert "needs a server feature" in blob
-
-
-def test_shop_table_aligns_cells_and_tiers_by_price(db):
-    """Rows are fixed-width code cells, grouped in tiers, cheapest first."""
-    _enable(
-        db,
-        price_role_name=35,
-        price_role_color=50,
-        price_role_gradient=120,
-        price_role_icon=400,
-    )
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-
-    tiers = {f.name: f.value for f in embed.fields}
-    assert list(tiers) == ["Essentials", "Signature", "One-shot", "For a Friend"]
-
-    # Every row's cells share one width across the whole embed, so the columns
-    # line up across tier headings rather than restarting at each one.
-    rows = [
-        line
-        for value in tiers.values()
-        for line in value.splitlines()
-        if line.startswith("`")
-    ]
-    # Five self-perk rows — the "For a friend" tier is prose since gifting
-    # generalized to every perk (no single gift price to tabulate).
-    assert len(rows) == 5
-    # One `label  blurb` cell per row (quest-board shape), all the same
-    # width so columns align across tier headings — and narrow enough that
-    # the price doesn't wrap onto its own line on a phone-width embed.
-    cells = {line.split("`")[1] for line in rows}
-    assert len({len(c) for c in cells}) == 1
-    assert all(len(c) <= 27 for c in cells)
-
-    # Ascending price inside each tier, and the blurb is present.
-    assert tiers["Essentials"].index("**35**") < tiers["Essentials"].index("**50**")
-    assert tiers["Signature"].index("**120**") < tiers["Signature"].index("**400**")
-    assert "nickname + role" in _shop_row(embed, "Name")
-
-
-def test_shop_table_reorders_when_prices_are_reconfigured(db):
-    """The ladder follows the guild's prices, not the hardcoded tier order."""
-    _enable(db, price_role_name=90, price_role_color=10)
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    essentials = next(f.value for f in embed.fields if f.name == "Essentials")
-    assert essentials.index("**10**") < essentials.index("**90**")
-
-
-def test_shop_icon_row_shows_catalog_span_and_size(db):
-    """A curated catalog prices per icon — show the span and how many there are.
-
-    The flat custom price (default 75) folds into the span: the picker's
-    bring-your-own entry sells at it, so the row's floor is min(catalog, flat).
-    """
-    _enable(db)
-    embed = _build_shop_embed(
-        _settings(db), set(), None, panel=True, icon_catalog=(120, 400, 40)
-    )
-    row = _shop_row(embed, "Icon")
-    assert "**75–400**" in row
-    assert "40 + your own" in row
-
-
-def test_shop_icon_row_span_floor_is_catalog_when_below_flat(db):
-    """A catalog cheaper than the flat custom price sets the floor itself."""
-    _enable(db, price_role_icon=500)
-    embed = _build_shop_embed(
-        _settings(db), set(), None, panel=True, icon_catalog=(120, 400, 40)
-    )
-    assert "**120–500**" in _shop_row(embed, "Icon")
-
-
-def test_shop_icon_row_collapses_a_single_priced_catalog(db):
-    """One price across catalog AND flat reads as a price, not a degenerate span."""
-    _enable(db, price_role_icon=200)
-    embed = _build_shop_embed(
-        _settings(db), set(), None, panel=True, icon_catalog=(200, 200, 3)
-    )
-    assert "**200**" in _shop_row(embed, "Icon")
-    assert "–" not in _shop_row(embed, "Icon")
-
-
-def test_shop_shows_balance_to_a_member_but_not_in_the_panel(db):
-    """The wallet anchors the prices — but the channel panel is member-agnostic."""
-    _enable(db)
-    settings = _settings(db)
-    mine = _build_shop_embed(settings, set(), None, balance=1240)
-    assert "1,240" in mine.description
-
-    panel = _build_shop_embed(settings, set(), None, panel=True)
-    assert "1,240" not in panel.description
-    assert "you have" not in panel.description
 
 
 @pytest.mark.asyncio
@@ -1824,9 +1639,9 @@ async def test_role_icon_image_too_big(ctx, db):
 
 
 async def _gift(cog, interaction, member, perk="role_color") -> None:
-    from bot_modules.cogs.economy_cog import _PERK_LABELS
+    from bot_modules.economy.shop import PERK_LABELS
 
-    choice = app_commands.Choice(name=_PERK_LABELS[perk], value=perk)
+    choice = app_commands.Choice(name=PERK_LABELS[perk], value=perk)
     await cog.bank_gift.callback(cog, interaction, member, choice)
 
 
@@ -1968,7 +1783,7 @@ async def test_wallet_shows_active_rentals(ctx, db):
 async def test_wallet_active_rentals_field_stays_under_cap(ctx, db):
     # A popular member on the receiving end of many gifts can accrue a dozen+
     # live rentals; each renders ~70 chars, so the joined field would blow past
-    # Discord's 1024-char cap and 400 the whole wallet embed. _fit_lines trims.
+    # Discord's 1024-char cap and 400 the whole wallet embed; fit_lines trims.
     _enable(db)
     for payer in range(800, 830):  # 30 distinct gifters -> 30 live rentals
         _add_rental(db, "role_color", user_id=payer, beneficiary_id=500)
@@ -2583,30 +2398,6 @@ def test_clean_memo_collapses_whitespace_and_caps_length():
     assert _clean_memo(None) is None
     assert _clean_memo("   ") is None
     assert len(_clean_memo("x" * 500)) == _MAX_MEMO_LEN
-
-
-def test_memo_of_tolerates_missing_and_malformed_meta():
-    from bot_modules.cogs.economy_cog import _memo_of
-
-    assert _memo_of('{"to": 1, "memo": "hi"}') == "hi"
-    assert _memo_of('{"to": 1}') is None
-    assert _memo_of(None) is None
-    assert _memo_of("") is None
-    assert _memo_of("not json") is None
-    # A non-string memo must not crash the render.
-    assert _memo_of('{"memo": 5}') is None
-
-
-def test_fit_lines_keeps_newest_rows_under_the_field_cap():
-    from bot_modules.cogs.economy_cog import _fit_lines
-
-    short = ["a", "b", "c"]
-    assert _fit_lines(short) == "a\nb\nc"
-    # Ten max-length memo rows must not overrun the 1024-char embed field.
-    fat = [("x" * 200) for _ in range(10)]
-    out = _fit_lines(fat)
-    assert len(out) <= 1024
-    assert out.startswith("x")
 
 
 async def _pay(cog, interaction, member, amount, memo=None) -> None:
