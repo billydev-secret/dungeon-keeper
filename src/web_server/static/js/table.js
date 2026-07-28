@@ -67,7 +67,8 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
       rows = rows.slice(0, maxRows);
     }
     const headCells = columns.map((c) => {
-      const cls = c.key === sortKey ? (sortAsc ? "sort-asc" : "sort-desc") : "";
+      const sortCls = c.key === sortKey ? (sortAsc ? "sort-asc" : "sort-desc") : "";
+      const cls = [sortCls, c.cls].filter(Boolean).join(" ");
       return `<th data-sort="${c.key}" class="${cls}">${c.label}</th>`;
     }).join("");
 
@@ -75,7 +76,9 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
       const cells = columns.map((c) => {
         const raw = row[c.key];
         const display = c.format ? c.format(raw, row, idx) : (raw ?? "");
-        return `<td>${display}</td>`;
+        // `cls` lets a column carry .num (right-aligned tabular figures) —
+        // otherwise numeric tables have to be hand-rolled to get it.
+        return c.cls ? `<td class="${c.cls}">${display}</td>` : `<td>${display}</td>`;
       }).join("");
       return `<tr>${cells}</tr>`;
     }).join("");

@@ -69,6 +69,10 @@ def purge_user_data(
         "quality_score_leaves",
         "member_gender",
         "member_events",
+        # Slash-command and dashboard-panel usage telemetry. Retained
+        # indefinitely for reporting (no routine pruning), so this hard-erasure
+        # path is the only thing that clears it.
+        "usage_events",
         "known_users",
     ):
         conn.execute(

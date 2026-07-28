@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services import reports_data
+from bot_modules.services import usage_telemetry_service as usage_telemetry
 from bot_modules.services.member_quality_score import (
     MemberStandIn,
     build_quality_report,
@@ -40,6 +41,7 @@ from web_server.schemas import (
     QualityScoreResponse,
     RetentionResponse,
     TimeToLevel5Response,
+    UsageReportResponse,
     VoiceActivityResponse,
     XpLeaderboardResponse,
 )
@@ -1055,3 +1057,108 @@ async def grant_audit(
     }
 
 
+# ── Usage telemetry ──────────────────────────────────────────────────────
+
+
+@router.get("/usage", response_model=UsageReportResponse)
+async def usage_report(
+    request: Request,
+    days: int = 30,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Slash-command and dashboard-panel usage.
+
+    Never-opened panels are *not* computed here. The dashboard nav lives in
+    ``app.js``, so the browser is the only source of truth for "every panel
+    that exists" — and that list is ~139 ids / 2.4 KB and grows with every
+    panel added, which is more than belongs in a query string behind a proxy.
+    Instead this returns ``seen_panels`` (the distinct names actually
+    recorded, a much smaller set) and the client subtracts it from its own
+    list. Commands are different: the bot's own command tree is server-side,
+    so ``unused_commands`` is computed here.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    days = max(1, min(int(days), 365))
+
+    def _q():
+        with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
+            return {
+                "totals": usage_telemetry.totals(conn, guild_id, days=days),
+                "commands": usage_telemetry.name_usage(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND, days=days
+                ),
+                "panels": usage_telemetry.name_usage(
+                    conn, guild_id, usage_telemetry.KIND_PANEL, days=days
+                ),
+                # Never-used is judged against ALL history, not the window —
+                # a command last run 90 days ago is "unpopular", not "unused",
+                # and calling it deletable would be wrong.
+                "seen_commands": usage_telemetry.used_names(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND
+                ),
+                "seen_panels": usage_telemetry.used_names(
+                    conn, guild_id, usage_telemetry.KIND_PANEL
+                ),
+                "top_users": usage_telemetry.user_usage(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND, days=days, limit=25
+                ),
+                "dashboard_users": usage_telemetry.user_usage(
+                    conn, guild_id, usage_telemetry.KIND_PANEL, days=days, limit=25
+                ),
+                "daily_commands": usage_telemetry.daily_series(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND, days=days,
+                    tz_offset_hours=tz,
+                ),
+                "daily_panels": usage_telemetry.daily_series(
+                    conn, guild_id, usage_telemetry.KIND_PANEL, days=days,
+                    tz_offset_hours=tz,
+                ),
+                "hours": usage_telemetry.hour_histogram(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND, days=days,
+                    tz_offset_hours=tz,
+                ),
+            }
+
+    data = await run_query(_q)
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+
+    def _users(rows):
+        # str() — snowflakes must not cross the wire as JSON numbers. `name` is
+        # the slot _resolve_names fills in below.
+        return [{**r._asdict(), "user_id": str(r.user_id), "name": ""} for r in rows]
+
+    top_users = _users(data["top_users"])
+    dashboard_users = _users(data["dashboard_users"])
+    # One pass, not two: resolve_names batches its DB lookup and mutates in
+    # place, and these two lists overlap heavily (dashboard visitors are mods,
+    # who are also command users), so resolving them together dedupes the id
+    # set and saves a thread hop plus a connection open.
+    await _resolve_names(
+        ctx, guild, top_users + dashboard_users, ("user_id", "name")
+    )
+
+    return {
+        "days": days,
+        "totals": data["totals"],
+        "commands": [r._asdict() for r in data["commands"]],
+        "panels": [r._asdict() for r in data["panels"]],
+        "unused_commands": usage_telemetry.unused_names(
+            usage_telemetry.registered_command_names(getattr(bot, "tree", None)),
+            data["seen_commands"],
+        ),
+        # The client subtracts this from its own nav list — see the docstring.
+        "seen_panels": sorted(data["seen_panels"]),
+        "top_users": top_users,
+        "dashboard_users": dashboard_users,
+        "daily_commands": [
+            {"day": d.day, "count": d.total} for d in data["daily_commands"]
+        ],
+        "daily_panels": [
+            {"day": d.day, "count": d.total} for d in data["daily_panels"]
+        ],
+        "hours": data["hours"],
+    }

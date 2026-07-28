@@ -7,6 +7,11 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from tests.db_template import migrated_db
 from bot_modules.services.privacy_service import purge_user_data
+from bot_modules.services.usage_telemetry_service import (
+    KIND_COMMAND,
+    KIND_PANEL,
+    record_event,
+)
 
 GUILD = 123
 USER = 1001
@@ -125,6 +130,33 @@ def test_deletes_known_users(db):
             (GUILD, USER),
         ).fetchone()[0]
     assert row == 0
+
+
+def test_deletes_usage_events(db):
+    """Usage telemetry is retained indefinitely, so this hard-erasure path is
+    the only thing that ever clears it — if it drops out of the purge list the
+    data becomes genuinely unreachable."""
+    with open_db(db) as conn:
+        record_event(conn, GUILD, KIND_COMMAND, "bank", USER)
+        record_event(conn, GUILD, KIND_PANEL, "home", USER)
+        purge_user_data(conn, GUILD, USER)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM usage_events WHERE guild_id = ? AND user_id = ?",
+            (GUILD, USER),
+        ).fetchone()[0]
+    assert row == 0
+
+
+def test_does_not_delete_other_users_usage_events(db):
+    with open_db(db) as conn:
+        record_event(conn, GUILD, KIND_COMMAND, "bank", USER)
+        record_event(conn, GUILD, KIND_COMMAND, "bank", OTHER_USER)
+        purge_user_data(conn, GUILD, USER)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM usage_events WHERE guild_id = ? AND user_id = ?",
+            (GUILD, OTHER_USER),
+        ).fetchone()[0]
+    assert row == 1
 
 
 def test_idempotent_on_empty_db(db):

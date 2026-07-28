@@ -917,6 +917,15 @@ textarea.field-input { resize: vertical; }
 .chip-danger  { background: var(--red-soft);   color: var(--red); }
 .chip-neutral { background: var(--rule-soft);  color: var(--ink-dim); }
 
+/* Wrapping row of chips. Wraps rather than scrolling because the lists it
+   holds (e.g. never-used commands) can be long and are read as a set. */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 14px;
+}
+
 /* ── Stat tile ─────────────────────────────────────────────────────
    Kpi-style number with label and optional accent. */
 
