@@ -188,6 +188,65 @@ def test_diff_middle_insert_shifts_content_not_ids():
     assert deletes == []
 
 
+# ── diff: hand-deleted messages ───────────────────────────────────────
+
+
+def test_diff_rebuilds_from_a_hand_deleted_message():
+    # Regression: an unchanged block hashed "keep" at every position, so a
+    # message someone deleted by hand was never noticed and never came back.
+    # Discord can't insert, so the only way to restore reading order is to
+    # re-send everything from the gap onward.
+    stored = _stored(["a", "b", "c", "d"])
+    ops, deletes = ref.diff_messages(
+        ["a", "b", "c", "d"], stored, missing={102}  # "c" was deleted
+    )
+    assert ops == [
+        ("keep", 100, "a"),  # untouched prefix keeps its ids
+        ("keep", 101, "b"),
+        ("post", 0, "c"),  # the gap itself
+        ("post", 0, "d"),  # and everything after it, to preserve order
+    ]
+    assert deletes == [103]  # the stale "d"; 102 is already gone
+
+
+def test_diff_rebuild_starts_at_the_first_gap_only():
+    stored = _stored(["a", "b", "c"])
+    ops, deletes = ref.diff_messages(["a", "b", "c"], stored, missing={100, 102})
+    assert [op for op, _, _ in ops] == ["post", "post", "post"]
+    assert deletes == [101]  # neither missing id is re-deleted
+
+
+def test_diff_gap_in_surplus_is_just_a_delete():
+    # The gap sits past the rendered range: those messages are surplus the
+    # delete pass removes anyway — no reason to churn the messages above it.
+    stored = _stored(["a", "b", "c"])
+    ops, deletes = ref.diff_messages(["a", "b"], stored, missing={102})
+    assert ops == [("keep", 100, "a"), ("keep", 101, "b")]
+    assert deletes == []  # 102 is already gone; nothing else is surplus
+
+
+def test_diff_without_missing_ids_is_unchanged():
+    ops, deletes = ref.diff_messages(["a", "b"], _stored(["a", "b"]))
+    assert ops == [("keep", 100, "a"), ("keep", 101, "b")]
+    assert deletes == []
+
+
+# ── sweep: which tracked messages still exist ─────────────────────────
+
+
+def test_missing_ids_reports_what_the_sweep_proved_absent():
+    stored = _stored(["a", "b", "c"])
+    assert ref.missing_message_ids(stored, {100, 102}, None) == {101}
+
+
+def test_missing_ids_never_guesses_past_a_truncated_sweep():
+    # A capped sweep only covered up to id 101. Calling 102 "missing" on
+    # that evidence would delete and re-send real messages, so ids past the
+    # horizon are assumed present.
+    stored = _stored(["a", "b", "c"])
+    assert ref.missing_message_ids(stored, {100}, 101) == {101}
+
+
 # ── mapping bookkeeping ───────────────────────────────────────────────
 
 
@@ -227,16 +286,28 @@ class _FakePartial:
 
     async def delete(self):
         self._channel.deletes.append(self._mid)
+        self._channel.live.discard(self._mid)
 
 
 class _FakeChannel(discord.TextChannel):
-    """Minimal stand-in: records sends/edits/deletes, can fail on demand."""
+    """Minimal stand-in: records sends/edits/deletes, can fail on demand.
 
-    def __init__(self, *, send_fails_at=None, edit_fails=()):
+    ``live`` is the set of ids the channel actually holds — the existence
+    sweep reads it, so a test deletes a message by hand with
+    ``channel.live.remove(mid)``.
+    """
+
+    def __init__(
+        self, *, send_fails_at=None, edit_fails=(), live=(), history_fails=False
+    ):
         self.id = 555
         self.sent, self.edits, self.deletes = [], [], []
         self.send_fails_at = send_fails_at  # nth send (0-based) raises
         self.edit_fails = set(edit_fails)
+        self.live = set(live)
+        self.history_fails = history_fails
+        self.history_limit = None  # last limit the sweep asked for
+        self.yielded = 0  # messages the sweep actually read
         self._next_id = 1000
 
     async def send(self, content, **kwargs):
@@ -244,10 +315,26 @@ class _FakeChannel(discord.TextChannel):
             raise discord.HTTPException(_FakeResponse(400), "too long")
         self._next_id += 1
         self.sent.append(content)
+        self.live.add(self._next_id)
         return SimpleNamespace(id=self._next_id)
 
     def get_partial_message(self, mid):
         return _FakePartial(self, mid)
+
+    def history(self, *, limit=None, after=None, oldest_first=False):
+        self.history_limit = limit
+        floor = after.id if after is not None else 0
+        ids = sorted(i for i in self.live if i > floor)[:limit]
+        fails = self.history_fails
+
+        async def _gen():
+            if fails:
+                raise discord.HTTPException(_FakeResponse(500), "boom")
+            for i in ids:
+                self.yielded += 1
+                yield SimpleNamespace(id=i)
+
+        return _gen()
 
 
 class _Ctx:
@@ -289,13 +376,13 @@ async def test_failed_edit_keeps_old_hash_so_it_retries(db_path):
         (mid, _), = ref.stored_messages(conn, GUILD)
 
     _setup(db_path, [{"kind": "text", "title": "", "body": "reworded"}])
-    failing = _FakeChannel(edit_fails=[mid])
+    failing = _FakeChannel(edit_fails=[mid], live=[mid])
     result = await ref.sync_channel(ctx, _guild(failing))
     assert result["incomplete"] is True
     assert failing.edits == []  # the edit really failed
 
     # Next save (Discord healthy) must still see work to do.
-    ok = _FakeChannel()
+    ok = _FakeChannel(live=[mid])
     result = await ref.sync_channel(ctx, _guild(ok))
     assert ok.edits == [(mid, "reworded")]
     assert result["edited"] == 1 and result["incomplete"] is False
@@ -315,7 +402,8 @@ async def test_failed_post_keeps_earlier_messages_tracked(db_path):
     # Insert a question at the top: ops become edit,edit,edit,post — and
     # the trailing post (the 4th message) fails.
     _setup(db_path, [{"kind": "questions", "title": "", "body": "Q0?\nQ1?\nQ2?\nQ3?"}])
-    failing = _FakeChannel(send_fails_at=0)
+    live = [m for m, _ in before]
+    failing = _FakeChannel(send_fails_at=0, live=live)
     result = await ref.sync_channel(ctx, _guild(failing))
     assert result["incomplete"] is True
     with open_db(db_path) as conn:
@@ -324,12 +412,174 @@ async def test_failed_post_keeps_earlier_messages_tracked(db_path):
     # orphaned, and the missing 4th position is retried on the next save.
     assert [m for m, _ in after] == [m for m, _ in before]
 
-    ok = _FakeChannel()
+    ok = _FakeChannel(live=live)
     result = await ref.sync_channel(ctx, _guild(ok))
     assert ok.sent == ["Q3?"]  # only the missing tail is posted
     assert result["incomplete"] is False
     with open_db(db_path) as conn:
         assert len(ref.stored_messages(conn, GUILD)) == 4
+
+
+# ── sync: hand-deleted messages come back ─────────────────────────────
+
+
+async def _sync_ids(ctx, db_path, channel):
+    await ref.sync_channel(ctx, _guild(channel))
+    with open_db(db_path) as conn:
+        return [m for m, _ in ref.stored_messages(conn, GUILD)]
+
+
+async def test_sync_reposts_a_message_deleted_by_hand(db_path):
+    # The reported bug: with the blocks config untouched every position
+    # hashed "keep", sync made no Discord calls at all, and a message
+    # someone deleted stayed gone however often you pressed save.
+    _setup(db_path, [{"kind": "questions", "title": "SFW", "body": "Q1?\nQ2?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    ids = await _sync_ids(ctx, db_path, channel)
+    assert channel.sent == ["**SFW**", "Q1?", "Q2?"]
+
+    channel.live.remove(ids[1])  # someone deletes "Q1?" in Discord
+    channel.sent.clear()
+
+    result = await ref.sync_channel(ctx, _guild(channel))  # save, config same
+    # The gap and everything after it are re-sent, so the procedure still
+    # reads in order; the untouched prefix keeps its id.
+    assert channel.sent == ["Q1?", "Q2?"]
+    assert channel.deletes == [ids[2]]  # the now-stale copy of the tail
+    assert result["repaired"] == 1 and result["incomplete"] is False
+    with open_db(db_path) as conn:
+        after = [m for m, _ in ref.stored_messages(conn, GUILD)]
+    assert after[0] == ids[0]
+    assert not set(after[1:]) & set(ids)  # rebuilt tail is all new ids
+
+
+async def test_sync_leaves_an_intact_channel_alone(db_path):
+    # The fast path must stay fast: nothing missing means no writes.
+    _setup(db_path, [{"kind": "questions", "title": "SFW", "body": "Q1?\nQ2?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    await _sync_ids(ctx, db_path, channel)
+    channel.sent.clear()
+
+    result = await ref.sync_channel(ctx, _guild(channel))
+    assert channel.sent == [] and channel.edits == [] and channel.deletes == []
+    assert result["repaired"] == 0 and result["posted"] == 0
+
+
+async def test_sync_skips_repair_when_it_cannot_read_history(db_path):
+    # No information is not evidence of deletion — a failed sweep must never
+    # trigger the destructive rebuild.
+    _setup(db_path, [{"kind": "questions", "title": "SFW", "body": "Q1?\nQ2?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    ids = await _sync_ids(ctx, db_path, channel)
+    channel.sent.clear()
+    channel.history_fails = True
+
+    result = await ref.sync_channel(ctx, _guild(channel))
+    assert channel.sent == [] and channel.deletes == []
+    assert result["incomplete"] is True  # dashboard shouldn't claim clean
+    with open_db(db_path) as conn:
+        assert [m for m, _ in ref.stored_messages(conn, GUILD)] == ids
+
+
+async def test_sync_fills_a_freshly_repointed_channel(db_path):
+    # Same root cause, different symptom: point the setting at another
+    # channel and every position still hashed "keep", so the new channel
+    # stayed empty. None of the tracked ids live there, so it rebuilds.
+    _setup(db_path, [{"kind": "questions", "title": "SFW", "body": "Q1?\nQ2?"}])
+    ctx = _Ctx(db_path)
+    await _sync_ids(ctx, db_path, _FakeChannel())
+
+    fresh = _FakeChannel()  # different channel, holds none of them
+    result = await ref.sync_channel(ctx, _guild(fresh))
+    assert fresh.sent == ["**SFW**", "Q1?", "Q2?"]
+    assert fresh.deletes == []  # nothing of ours to clean up there
+    assert result["repaired"] == 3
+
+
+async def test_sync_heals_a_rebuild_that_died_mid_send(db_path):
+    # A rebuild that fails partway keeps the old ids tracked for the
+    # positions it never reached AND deletes those messages. That pairing
+    # is what makes the next save finish the job: skipping the delete left
+    # stale copies whose hashes still matched, so the next sync saw nothing
+    # to do and the channel read out of order forever.
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?\nQ3?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    ids = await _sync_ids(ctx, db_path, channel)
+
+    channel.sent.clear()  # the fake counts sends off this list
+    channel.live.remove(ids[0])  # gap at the very top → full rebuild
+    channel.send_fails_at = 1  # the second re-send dies
+
+    result = await ref.sync_channel(ctx, _guild(channel))
+    assert result["incomplete"] is True
+    assert result["repaired"] == 1  # the gap itself did get re-sent
+
+    # The follow-up save must actually have work to do, and must leave the
+    # channel reading in order.
+    channel.send_fails_at = None
+    channel.sent.clear()
+    result = await ref.sync_channel(ctx, _guild(channel))
+    assert result["incomplete"] is False
+    assert channel.sent == ["Q2?", "Q3?"]
+    with open_db(db_path) as conn:
+        final = [m for m, _ in ref.stored_messages(conn, GUILD)]
+    assert final == sorted(final)  # ids ascend ⇒ channel is in reading order
+    assert set(final) <= channel.live and len(channel.live) == 3
+
+
+async def test_sync_does_not_claim_a_restore_it_never_made(db_path):
+    # The gap lands past the rendered range: the message is surplus the
+    # delete pass removes anyway, so nothing is restored and the panel must
+    # not print "1 restored".
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?\nQ3?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    ids = await _sync_ids(ctx, db_path, channel)
+
+    channel.sent.clear()
+    channel.live.remove(ids[2])  # deleted in Discord...
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?"}])  # ...and cut
+
+    result = await ref.sync_channel(ctx, _guild(channel))
+    assert result["repaired"] == 0
+    assert channel.sent == [] and channel.deletes == []
+
+
+async def test_sync_flags_a_sweep_that_ran_out_of_history(monkeypatch, db_path):
+    # Past the cap the sweep assumes the unread ids are present (right), but
+    # it must not report a clean sync — a deletion in the unread tail goes
+    # unnoticed until someone looks.
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?\nQ3?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    ids = await _sync_ids(ctx, db_path, channel)
+
+    channel.sent.clear()
+    channel.live.remove(ids[0])  # forces the sweep to read the whole window
+    monkeypatch.setattr(ref, "_SWEEP_LIMIT", 1)
+
+    result = await ref.sync_channel(ctx, _guild(channel))
+    assert result["incomplete"] is True
+    assert channel.history_limit == 1
+
+
+async def test_sweep_stops_once_every_tracked_message_is_found(db_path):
+    # The fast path shouldn't read the whole channel: with nothing missing
+    # the sweep bails at the last tracked message rather than trawling
+    # whatever humans posted afterwards.
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    ids = await _sync_ids(ctx, db_path, channel)
+    channel.live.update({max(ids) + 1, max(ids) + 2})  # human chatter after
+
+    swept = await ref._sweep_existing(channel, [(m, "") for m in ids])
+    assert swept == (set(ids), None)  # conclusive: nothing missing
+    assert channel.yielded == len(ids)  # the chatter was never read
 
 
 def test_blocks_from_messages_drafts_text_blocks():
