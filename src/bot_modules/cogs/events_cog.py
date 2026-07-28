@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 import discord
@@ -24,6 +25,7 @@ from bot_modules.services.birthday_service import (
     announced_birthday_ids,
     is_birthday_wish,
 )
+from bot_modules.services import nsfw_classifier_service
 from bot_modules.services.discord_scan import collect_messageable_channels
 from bot_modules.services.greeting_watch_service import (
     is_greeting,
@@ -328,6 +330,30 @@ class EventsCog(commands.Cog):
 
     async def cog_load(self) -> None:
         self.bot.tree.error(_on_tree_error)
+
+    def _spoiler_classifier(
+        self, message: discord.Message
+    ) -> Callable[[discord.Attachment], Awaitable[bool | None]]:
+        """Bind the shared classifier to this message for spoiler enforcement.
+
+        Glue only — the verdict logic and the fallback on an unreadable image
+        live in nsfw_classifier_service and post_monitoring respectively.
+        """
+
+        async def classify(attachment: discord.Attachment) -> bool | None:
+            result = await nsfw_classifier_service.classify_for(
+                self.ctx.db_path,
+                attachment,
+                guild_id=message.guild.id if message.guild else 0,
+                channel_id=message.channel.id,
+                message_id=message.id,
+                channel_is_nsfw=nsfw_classifier_service.is_age_gated_channel(
+                    message.channel
+                ),
+            )
+            return result.verdict
+
+        return classify
 
     def _log_background_task_result(self, task: asyncio.Task[None]) -> None:
         try:
@@ -661,6 +687,7 @@ class EventsCog(commands.Cog):
             spoiler_required_channels=cfg.spoiler_required_channels,
             bypass_role_ids=cfg.bypass_role_ids,
             log=log,
+            classify=self._spoiler_classifier(message),
         )
 
         mention_ids = _message_mention_ids(cfg.recorded_bot_user_ids, message)

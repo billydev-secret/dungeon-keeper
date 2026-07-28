@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
 import discord
 
@@ -26,7 +27,21 @@ async def enforce_spoiler_requirement(
     spoiler_required_channels: frozenset[int] | set[int],
     bypass_role_ids: frozenset[int] | set[int],
     log: logging.Logger,
+    classify: Callable[[discord.Attachment], Awaitable[bool | None]] | None = None,
 ) -> bool:
+    """Delete unspoilered images in spoiler-required channels.
+
+    With *classify* supplied, only images that classify as **explicit** are
+    deleted — a meme, a screenshot or a cat photo posted unspoilered is left
+    alone, which is the false-positive class this gate historically produced.
+    An image the classifier could not read (``None``) is deleted anyway:
+    unreadable is treated as maybe-explicit, so a CDN failure falls back to
+    the pre-classifier behavior rather than opening a hole in the rule.
+
+    Without *classify* the original behavior applies unchanged — every
+    unspoilered image goes. That is the correct fallback when no classifier is
+    configured, and it keeps this function usable on its own.
+    """
     if message.channel.id not in spoiler_required_channels:
         return False
 
@@ -44,6 +59,12 @@ async def enforce_spoiler_requirement(
         if not filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
             continue
         if attachment.is_spoiler():
+            continue
+
+        if classify is not None and await classify(attachment) is False:
+            # Read it, and it isn't explicit — this is the deletion the
+            # classifier exists to prevent. Keep checking the other
+            # attachments; one innocent image doesn't clear the message.
             continue
 
         try:

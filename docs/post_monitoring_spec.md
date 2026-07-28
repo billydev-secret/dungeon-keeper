@@ -14,9 +14,27 @@ In a channel designated as "images must be spoilered":
 
 1. A member with a bypass role posts an image — nothing happens. Bypass roles are configured per-guild.
 2. A member without a bypass role posts an image that's already marked spoiler — nothing happens.
-3. A member without a bypass role posts a non-spoilered image — the bot deletes the message and posts an inline reminder ("Beep Boop - friendly bot helper: Images in this channel must be marked as spoiler.") that self-destructs after 5 seconds.
+3. A member without a bypass role posts a non-spoilered image — the bot classifies it and deletes the message only if it is **explicit**, posting an inline reminder ("Beep Boop - friendly bot helper: Images in this channel must be marked as spoiler.") that self-destructs after 5 seconds.
 
 The check only fires on image attachments (`.png/.jpg/.jpeg/.gif/.webp`). Non-image attachments and text-only messages are ignored.
+
+### Content-awareness
+
+Enforcement used to delete *every* unspoilered image, so a meme, a screenshot or a cat photo was removed exactly like explicit content. It now consults the shared classifier ([[nsfw-classifier-spec]]) and deletes only what actually qualifies:
+
+| classifier says | outcome |
+|---|---|
+| explicit | deleted, as before |
+| not explicit | **left alone** — the false positive this narrowing exists to fix |
+| could not read it | deleted — unreadable is treated as maybe-explicit, so a CDN failure falls back to the old rule rather than opening a hole |
+
+A spoilered image is never classified at all — it already satisfies the rule, so there is nothing to decide and no reason to fetch it.
+
+On a message carrying several images, one innocent attachment does not clear the message: each unspoilered image is judged on its own, and any explicit one triggers deletion.
+
+If no classifier is wired up, the original behavior applies unchanged — every unspoilered image goes. That is the deliberate fallback, not a degraded mode.
+
+Note the timing this adds: a download plus inference sits between the image appearing and the bot acting, so an offending image is visible ~1–2s longer than before. This does not make Discord's push-notification preview any worse — deletion has always happened after the message posts, so that preview has always escaped — but it does not fix it either.
 
 Webhooks, bots, and any author the bot can't resolve as a guild member skip enforcement entirely.
 
@@ -36,7 +54,7 @@ When a message is deleted by spoiler enforcement, the rest of the `on_message` p
 
 ## Non-goals
 
-- **No NSFW image classification.** Spoiler enforcement checks Discord's user-set spoiler flag, not pixel content.
+- **No embed / linked-image classification.** Only uploaded attachments are fetched and classified; images that live on external hosts are out of scope for the reasons given in [[nsfw-classifier-spec]].
 - **No link / URL scanning (v1).** Wellness Guardian has a separate keyword pipeline — see [[wellness-guardian-spec]].
 - **No edit handling.** A non-spoilered image edited after posting isn't re-evaluated.
 - **No file scanning of non-image attachments.** PDFs, archives, executables pass through untouched.

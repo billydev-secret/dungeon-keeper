@@ -208,6 +208,23 @@ def evaluate(
     return True, best.label, best.score
 
 
+def is_age_gated_channel(channel: object) -> bool:
+    """Whether Discord itself age-gates this channel.
+
+    Threads delegate to their parent, and channel types without the concept
+    (DMs, group DMs) are False. Defaults to False on anything unexpected,
+    which is the safe direction for both callers: no dataset is recorded and
+    no tip is offered when we can't establish the age gate.
+    """
+    checker = getattr(channel, "is_nsfw", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker())
+    except Exception:  # noqa: BLE001 - a partial channel object must not raise here
+        return False
+
+
 def should_record(channel_is_nsfw: bool) -> bool:
     """Whether a verdict for this channel is persisted.
 
@@ -370,6 +387,51 @@ async def _classify_uncached(
         threshold=threshold,
         label_set=label_set,
     )
+
+
+async def classify_for(
+    db_path: Path,
+    attachment: SupportsAttachment,
+    *,
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    channel_is_nsfw: bool,
+    strict: bool = False,
+) -> Classification:
+    """Classify one attachment for a consumer, recording it when in scope.
+
+    The single entry point every consumer uses, so settings loading, the
+    recording scope rule and the cache all behave identically for each of
+    them. Pass ``strict=True`` for consumers that destroy content (SFW nudity
+    prevention) — it applies the higher threshold and, because the cache is
+    keyed on identity alone, bypasses any permissive verdict already cached
+    for this attachment.
+    """
+    threshold, sfw_threshold, label_set = load_settings(db_path, guild_id)
+    effective = sfw_threshold if strict else threshold
+
+    result = await classify_attachment(
+        attachment, threshold=effective, label_set=label_set
+    )
+
+    if result.is_unknown or not should_record(channel_is_nsfw):
+        return result
+
+    try:
+        with open_db(db_path) as conn:
+            record_classification(
+                conn,
+                result,
+                guild_id=guild_id,
+                channel_id=channel_id,
+                message_id=message_id,
+            )
+    except sqlite3.Error as exc:
+        # Metrics are a side effect; failing to record must never change what
+        # a consumer does about the image.
+        log.warning("nsfw: failed to record classification: %s", exc)
+    return result
 
 
 def _detect(raw: bytes) -> list[Detection]:
