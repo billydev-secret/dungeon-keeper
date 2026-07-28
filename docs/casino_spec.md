@@ -303,7 +303,7 @@ cards, hit/stand/dealer flow) live in `resolve_blackjack_action` /
 the double's second stake is derived from the hand row, never
 caller-supplied.
 
-## Pools — the parimutuel prediction market (migration 139)
+## Pools — the parimutuel prediction market (migration 140)
 
 Not a table: **player-versus-player with the house as bookkeeper only.** One
 round per guild-local day, opened and settled by the bot with no admin
