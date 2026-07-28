@@ -165,42 +165,28 @@ def test_a_single_winner_takes_the_pool_less_takeout():
     assert s.takeout == 28
 
 
-# ── candles ────────────────────────────────────────────────────────────
+# ── the day metric ─────────────────────────────────────────────────────
 
 
-def test_candles_are_continuous():
-    """Each open is the prior close. A gap would mean Petals appeared or
-    vanished between days, which cannot happen."""
-    rows = [
-        ("2026-07-01", 0, 100, 90, 5),
-        ("2026-07-02", 80, 220, 200, 9),
-        ("2026-07-03", 150, 260, 160, 4),
-    ]
-    candles = L.build_candles(rows)
-    assert [c.open for c in candles] == [0, 90, 200]
-    assert [c.close for c in candles] == [90, 200, 160]
-    assert [c.body for c in candles] == [90, 110, -40]
-    assert [c.up for c in candles] == [True, True, False]
+def _day(open_: int, close: int) -> L.DayMetric:
+    lo, hi = min(open_, close), max(open_, close)
+    return L.DayMetric(
+        day="2026-07-20", mint=0, burn=0, hold=0, net=close - open_,
+        open=open_, high=hi, low=lo, close=close, volume=1,
+    )
 
 
-def test_candle_wicks_cover_the_open():
-    """A day that only ever fell still has its open as the high — the
-    level was genuinely there at the start of the day."""
-    candles = L.build_candles([
-        ("2026-07-01", 0, 100, 100, 3),
-        ("2026-07-02", 60, 90, 70, 3),
-    ])
-    assert candles[1].high == 100
-    assert candles[1].low == 60
-
-
-def test_first_candle_opens_at_its_own_low():
-    candles = L.build_candles([("2026-07-01", 5, 50, 40, 2)])
-    assert candles[0].open == 5
-
-
-def test_empty_series_is_not_an_error():
-    assert L.build_candles([]) == []
+@pytest.mark.parametrize(
+    ("open_", "close", "body", "up"),
+    [(0, 90, 90, True), (200, 160, -40, False), (100, 100, 0, True)],
+)
+def test_body_is_the_metric_and_direction_follows_it(open_, close, body, up):
+    """A candle body IS the day's net change — the quantity being bet on —
+    so the chart and the settlement cannot describe a day differently."""
+    d = _day(open_, close)
+    assert d.body == body
+    assert d.up is up
+    assert d.body == d.close - d.open
 
 
 # ── chart overlay ──────────────────────────────────────────────────────

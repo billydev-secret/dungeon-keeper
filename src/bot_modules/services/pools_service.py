@@ -37,10 +37,13 @@ moves the metric your way.
 
 from __future__ import annotations
 
+import itertools
 import json
+import operator
 import sqlite3
 from typing import NamedTuple
 
+from bot_modules.economy.logic import local_day_bounds, local_day_for
 from bot_modules.services import pools_logic
 from bot_modules.services.casino_service import (
     ALL_ROUND_TABLES,
@@ -66,28 +69,10 @@ CASINO_KINDS = ("casino_stake", "casino_payout", "casino_refund")
 POOLS_GAME = POOLS_TABLES.game
 
 
-class DayMetric(NamedTuple):
-    """One guild-local day of the economy, with its candle.
-
-    ``net`` is the settlement value AND ``close - open`` — the same sum
-    twice, so the market and the chart cannot disagree.
-    """
-
-    day: str
-    mint: int
-    burn: int
-    hold: int
-    net: int
-    open: int
-    high: int
-    low: int
-    close: int
-    volume: int
+DayMetric = pools_logic.DayMetric
 
 
 def _local_day(ts: float, tz_offset_hours: float) -> str:
-    from bot_modules.economy.logic import local_day_for  # noqa: PLC0415
-
     return local_day_for(ts, tz_offset_hours)
 
 
@@ -123,28 +108,25 @@ def _session_days(
     return out
 
 
-def _row_day(
-    meta_raw: str | None,
-    created_at: float,
-    sessions: dict[tuple[str, int], str],
-    tz_offset_hours: float,
-) -> tuple[str, str | None]:
-    """The day a ledger row counts against, plus its game (if any).
+def _row_meta(
+    meta_raw: str | None, sessions: dict[tuple[str, int], str]
+) -> tuple[str | None, str | None]:
+    """``(session day, game)`` for a casino ledger row, or ``(None, None)``.
 
-    Falls back to the row's own timestamp whenever there is no session to
-    attribute it to — an unlinked historical row, or any non-casino kind.
+    Only ever called for casino kinds. Everything else — the ~half of the
+    ledger that is faucets and shop spend — carries no session to attribute
+    to and no game to exclude on, so parsing its JSON would be pure waste on
+    a scan measured in thousands of rows.
     """
-    fallback = _local_day(created_at, tz_offset_hours)
     if not meta_raw:
-        return fallback, None
+        return None, None
     try:
         meta = json.loads(meta_raw)
     except (ValueError, TypeError):
-        return fallback, None
+        return None, None
     if not isinstance(meta, dict):
-        return fallback, None
+        return None, None
     game = meta.get("game")
-    game = str(game) if game is not None else None
     for key, tag in (("round_id", "round"), ("hand_id", "hand")):
         raw = meta.get(key)
         if raw is None:
@@ -154,8 +136,8 @@ def _row_day(
         except (ValueError, TypeError):
             continue
         if day is not None:
-            return day, game
-    return fallback, game
+            return day, (str(game) if game is not None else None)
+    return None, (str(game) if game is not None else None)
 
 
 def daily_series(
@@ -173,6 +155,11 @@ def daily_series(
     needs one day — and computing them separately is how the three drift
     apart. ``limit_days`` trims the *returned* tail; the level is always
     accumulated from the beginning, because a partial sum is not a level.
+
+    This is a full scan, so it is deliberately NOT on any hot path:
+    ``plan_tick`` answers the common minute-by-minute case from two indexed
+    lookups and only reaches here when a round actually has to open or
+    settle.
     """
     sessions = _session_days(conn, guild_id, tz_offset_hours)
     rows: list[tuple[str, float, int, int, str]] = []
@@ -182,11 +169,16 @@ def daily_series(
         (guild_id,),
     ):
         kind = str(kind)
-        day, game = _row_day(meta, float(created_at), sessions, tz_offset_hours)
-        # Pools' own money is invisible to the metric it settles against.
-        if game == POOLS_GAME and kind in CASINO_KINDS:
-            continue
-        rows.append((day, float(created_at), int(row_id), int(amount), kind))
+        day = game = None
+        if kind in CASINO_KINDS:
+            day, game = _row_meta(meta, sessions)
+            # Pools' own money is invisible to the metric it settles against.
+            if game == POOLS_GAME:
+                continue
+        rows.append((
+            day or _local_day(float(created_at), tz_offset_hours),
+            float(created_at), int(row_id), int(amount), kind,
+        ))
 
     # Accumulate in ATTRIBUTED-day order, not timestamp order. A payout
     # pulled back across midnight has to land inside its own day's run of
@@ -195,13 +187,10 @@ def daily_series(
     rows.sort()
     out: list[DayMetric] = []
     level = 0
-    i = 0
-    while i < len(rows):
-        day = rows[i][0]
+    for day, group in itertools.groupby(rows, key=operator.itemgetter(0)):
         opened = high = low = level
         mint = burn = hold = volume = 0
-        while i < len(rows) and rows[i][0] == day:
-            _, _, _, amount, kind = rows[i]
+        for _, _, _, amount, kind in group:
             level += amount
             volume += 1
             high = max(high, level)
@@ -214,7 +203,6 @@ def daily_series(
                 hold += -amount
             elif kind == "casino_payout":
                 hold -= amount
-            i += 1
         out.append(DayMetric(
             day=day, mint=mint, burn=burn, hold=hold, net=level - opened,
             open=opened, high=high, low=low, close=level, volume=volume,
@@ -222,33 +210,6 @@ def daily_series(
     if limit_days is not None:
         out = out[-limit_days:]
     return out
-
-
-def net_change_for(
-    conn: sqlite3.Connection, guild_id: int, day: str, *, tz_offset_hours: float
-) -> int | None:
-    """The settled metric for one day. None = that day has no rows at all."""
-    for m in daily_series(conn, guild_id, tz_offset_hours=tz_offset_hours):
-        if m.day == day:
-            return m.net
-    return None
-
-
-def line_for(
-    conn: sqlite3.Connection, guild_id: int, day: str, *, tz_offset_hours: float
-) -> float | None:
-    """The line for ``day``: median of the trailing completed days, +0.5.
-
-    Only days strictly before ``day`` count — opening a round on a line
-    that included its own partial day would let the first hours of trading
-    set the target they are trading against.
-    """
-    history = [
-        m.net
-        for m in daily_series(conn, guild_id, tz_offset_hours=tz_offset_hours)
-        if m.day < day
-    ]
-    return pools_logic.derive_line(history)
 
 
 class SettleJob(NamedTuple):
@@ -271,10 +232,20 @@ class Tick(NamedTuple):
     Today's line is a median of the completed days before it, so opening
     first would compute it against a day that has not finished — and in the
     worst case against its own partial self.
+
+    ``series`` is the day series the decision was made from, or None when
+    the tick short-circuited without needing it. Settlement wants the same
+    rows for its chart, and recomputing them would be a second full scan of
+    the ledger for an answer already in hand.
     """
 
     settle: list[SettleJob]
     open: OpenJob | None
+    series: list[DayMetric] | None = None
+
+    @property
+    def idle(self) -> bool:
+        return not self.settle and self.open is None
 
 
 def plan_tick(
@@ -292,57 +263,51 @@ def plan_tick(
     same answer it would have at midnight. Opens today's round if there is
     not one, there is enough history for a line, and betting has not
     already passed its close hour.
+
+    **The two lookups come first, deliberately.** This runs from the cog's
+    minute maintenance loop, and on all but one tick a day the answer is
+    "nothing to do". Both queries below hit ``idx_casino_pools_guild_day``
+    on a table that grows by one row a day, so the idle case costs
+    microseconds; only a tick with actual work pays for ``daily_series``,
+    which is a full scan of the ledger and grows with it forever. Computing
+    the series first made every idle minute pay that price.
     """
-    from bot_modules.economy.logic import local_day_bounds  # noqa: PLC0415
-
     today = _local_day(now, tz_offset_hours)
-    series = {
-        m.day: m
-        for m in daily_series(conn, guild_id, tz_offset_hours=tz_offset_hours)
-    }
-
-    settle: list[SettleJob] = []
-    for rnd in conn.execute(
+    overdue = conn.execute(
         "SELECT id, local_day, line FROM casino_pools_rounds "
-        "WHERE guild_id = ? AND status = 'open'",
-        (guild_id,),
-    ):
-        day = str(rnd["local_day"])
-        if day >= today:
-            continue  # still being measured
-        metric = series.get(day)
-        # A day with no ledger rows at all had a net change of exactly zero.
-        settle.append(SettleJob(
-            int(rnd["id"]), day, metric.net if metric else 0, float(rnd["line"])
-        ))
-
-    opening: OpenJob | None = None
-    if conn.execute(
+        "WHERE guild_id = ? AND status = 'open' AND local_day < ?",
+        (guild_id, today),
+    ).fetchall()
+    has_today = conn.execute(
         "SELECT 1 FROM casino_pools_rounds WHERE guild_id = ? AND local_day = ?",
         (guild_id, today),
-    ).fetchone() is None:
-        line = pools_logic.derive_line(
-            [m.net for day, m in sorted(series.items()) if day < today]
+    ).fetchone() is not None
+    closes_at = local_day_bounds(today, tz_offset_hours)[0] + close_hour * 3600
+    # Nothing to settle, today already has a market (or is past its close
+    # and never will) — the overwhelmingly common case.
+    if not overdue and (has_today or now >= closes_at):
+        return Tick([], None)
+
+    series = daily_series(conn, guild_id, tz_offset_hours=tz_offset_hours)
+    by_day = {m.day: m for m in series}
+
+    settle = [
+        SettleJob(
+            int(r["id"]), str(r["local_day"]),
+            # A day with no ledger rows at all had a net change of zero.
+            by_day[str(r["local_day"])].net
+            if str(r["local_day"]) in by_day else 0,
+            float(r["line"]),
         )
-        closes_at = local_day_bounds(today, tz_offset_hours)[0] + close_hour * 3600
-        if line is not None and now < closes_at:
+        for r in overdue
+    ]
+
+    opening: OpenJob | None = None
+    if not has_today:
+        line = pools_logic.derive_line(
+            [m.net for m in series if m.day < today]
+        )
+        if line is not None:
             opening = OpenJob(today, line, closes_at)
 
-    return Tick(settle, opening)
-
-
-def candles(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    *,
-    tz_offset_hours: float,
-    days: int = 14,
-) -> list[DayMetric]:
-    """The last ``days`` of the series, for the instrument chart.
-
-    Same rows the settlement reads, so a candle body is the metric by
-    construction rather than by coincidence.
-    """
-    return daily_series(
-        conn, guild_id, tz_offset_hours=tz_offset_hours, limit_days=days
-    )
+    return Tick(settle, opening, series)

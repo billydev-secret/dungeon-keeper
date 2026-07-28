@@ -39,6 +39,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 # The kind sets and the day-attribution rule are imported, not restated:
 # Pools settles against this same number, and a second copy here is how the
 # offline report and the live line would quietly diverge.
+from bot_modules.services.pools_logic import derive_line  # noqa: E402
 from bot_modules.services.pools_service import (  # noqa: E402
     BURN_KINDS_EXCLUDED,
     NON_FAUCET_KINDS,
@@ -325,9 +326,11 @@ def print_report(stats: dict, baseline: dict | None) -> None:
                 f"  {d['day']:<12}{d['net']:>+9,}{d['mint']:>9,}"
                 f"{d['burn']:>8,}{d['hold']:>8,}{d['close']:>9,}"
             )
-        nets = [d["net"] for d in days]
-        median = sorted(nets)[len(nets) // 2]
-        print(f"  {'median':<12}{median:>+9,}   <- roughly where a line would sit")
+        line = derive_line([d["net"] for d in days])
+        if line is not None:
+            print(
+                f"  {'line':<12}{line:>+9,.1f}   <- what Pools would open at"
+            )
     print("\nDemurrage what-if (weekly burn at rate % of excess over floor)")
     print(f"  {'floor':>6} {'hit':>4} {'excess':>8} " + " ".join(
         f"@{r}%".rjust(7) for r in DEMURRAGE_RATES

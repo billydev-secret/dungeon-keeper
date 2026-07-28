@@ -45,7 +45,7 @@ from matplotlib.patches import Rectangle  # noqa: E402
 from matplotlib.ticker import FuncFormatter  # noqa: E402
 
 from bot_modules.services import pools_logic  # noqa: E402
-from bot_modules.services.pools_service import DayMetric  # noqa: E402
+from bot_modules.services.pools_logic import DayMetric  # noqa: E402
 
 # Discord dark theme palette, matching activity_graphs.py.
 _BG = "#2f3136"
@@ -58,6 +58,16 @@ _UP = "#3ba55c"
 _DOWN = "#ed4245"
 
 _DEFAULT_ACCENT = "#e6a52c"
+
+
+def accent_hex(color: object | None) -> str:
+    """A discord.Color (or None) as the ``#rrggbb`` the renderers take.
+
+    Lives here so the fallback sits with the palette that defines it, and
+    callers stop reaching for a private name to spell the default.
+    """
+    value = getattr(color, "value", None)
+    return _DEFAULT_ACCENT if value is None else f"#{int(value):06x}"
 
 INSTRUMENT_FILENAME = "pools_instrument.png"
 MARKET_FILENAME = "pools_market.png"
@@ -110,13 +120,13 @@ def render_instrument_chart(
     )
     fig.patch.set_facecolor(_BG)
     x = range(len(days))
-    bodies = [d.net for d in days]
+    bodies = [d.body for d in days]
     med, sig = pools_logic.median_band(bodies)
     # A flat day would otherwise draw a zero-height rectangle and vanish.
     min_body = max(1, _span(days) // 200)
 
     for i, d in enumerate(days):
-        colour = _UP if d.close >= d.open else _DOWN
+        colour = _UP if d.up else _DOWN
         a1.vlines(i, d.low, d.high, color=colour, lw=1.4, zorder=3)
         a1.add_patch(Rectangle(
             (i - 0.28, min(d.open, d.close)), 0.56,

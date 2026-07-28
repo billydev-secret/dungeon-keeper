@@ -67,7 +67,10 @@ class Settlement(NamedTuple):
     payouts: list[int]
     takeout: int
     winning_side: str | None  # None = void (nothing to settle)
-    void: bool
+
+    @property
+    def void(self) -> bool:
+        return self.winning_side is None
 
 
 def pool_split(bets: list[dict]) -> PoolSplit:
@@ -120,7 +123,7 @@ def settle(
     """
     split = pool_split(bets)
     if is_void(split):
-        return Settlement([0] * len(bets), 0, None, True)
+        return Settlement([0] * len(bets), 0, None)
 
     side = winning_side(result, line)
     win_pool = split.pool_for(side)
@@ -135,7 +138,7 @@ def settle(
         # rounding is the single floor at the end.
         payouts.append(int(bet["amount"]) * split.total * kept // (win_pool * 100))
 
-    return Settlement(payouts, split.total - sum(payouts), side, False)
+    return Settlement(payouts, split.total - sum(payouts), side)
 
 
 def _clamp_pct(pct: int) -> int:
@@ -158,16 +161,26 @@ def derive_line(history: list[int]) -> float | None:
     return statistics.median(history[-HISTORY_DAYS:]) + 0.5
 
 
-class Candle(NamedTuple):
-    """One day of the circulation series, in OHLC form.
+class DayMetric(NamedTuple):
+    """One guild-local day of the economy, in candlestick form.
 
-    Honest OHLC, not decoration: the cumulative sum of the ledger IS total
-    circulation, so ``close - open`` is exactly the day's net change — the
-    quantity being bet on. Wicks are real intraday extremes of the running
-    level.
+    Honest OHLC, not decoration: the cumulative ledger IS total circulation,
+    so ``close - open`` is exactly the day's net change — the quantity being
+    bet on — and the wicks are real intraday extremes of the running level.
+    ``mint``/``burn``/``hold`` decompose that same number rather than
+    measuring it a second way, which is why the settlement value and the
+    chart's candle body cannot drift apart.
+
+    Lives here rather than in the service so the renderer depends only on
+    pure code: ``pools_charts`` would otherwise have to import a DB-facing
+    module to name its own input.
     """
 
     day: str
+    mint: int
+    burn: int
+    hold: int
+    net: int
     open: int
     high: int
     low: int
@@ -181,25 +194,6 @@ class Candle(NamedTuple):
     @property
     def up(self) -> bool:
         return self.close >= self.open
-
-
-def build_candles(rows: list[tuple[str, int, int, int, int]]) -> list[Candle]:
-    """Assemble candles from ``(day, low, high, close, volume)`` rows.
-
-    Each day's open is the previous day's close, so the series is
-    continuous — a gap would imply Petals appeared or vanished between
-    days, which cannot happen. The first day opens at its own low, since
-    there is no prior close to carry.
-    """
-    candles: list[Candle] = []
-    prev_close: int | None = None
-    for day, low, high, close, volume in rows:
-        opened = low if prev_close is None else prev_close
-        candles.append(
-            Candle(day, opened, max(high, opened), min(low, opened), close, volume)
-        )
-        prev_close = close
-    return candles
 
 
 def median_band(

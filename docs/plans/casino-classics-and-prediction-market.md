@@ -273,16 +273,23 @@ payout to depend on all the other bets. `_settle_round` **already reads the
 whole round's bets into a list** (`casino_service.py:1306`) before paying, so
 the data is in hand:
 
-1. Add an optional `round_ctx_fn(bets, result)`, called once after the bets are
-   read, whose return value is passed as a third argument to `payout_fn`. For
-   Pools it computes the pool totals and κ. `_settle_round` calls
-   `payout_fn(bet, result)` unconditionally today (`casino_service.py:1310`), so
-   **branch at the call site** on `round_ctx_fn is None` rather than growing a
-   third parameter on all five existing games' payout functions.
-2. Suppress the per-bet `feed_jackpot` (`casino_service.py:1319`) for Pools —
-   in a pool, losing stakes pay the winners rather than skimming to the pot, and
-   the residual takeout is burned by simply never being paid out. Pools touches
-   the jackpot not at all.
+1. Change `payout_fn` to a whole-round `payouts_fn(bets, result) -> list[int]`,
+   index-aligned with the bets. Pools computes the split in one call; the five
+   paytable games map their existing per-bet function over the list through a
+   one-line `_per_bet` adapter. **One hook with one arity** — an earlier draft
+   threaded an optional per-round context as a third argument to `payout_fn`,
+   which made the callable's contract depend on whether a *different*
+   parameter had been passed.
+2. Move `feeds_jackpot` onto `RoundTables` rather than passing it per settle
+   call. It is a per-game trait and belongs beside `game`/`result_col`, where
+   every other "how does this game differ" fact already lives — a call-site
+   kwarg is a second, parallel mechanism a new game's author would not know
+   to look for. False for Pools: the losing stakes ARE the winners' payout,
+   so skimming them would pay the pot out of money already owed.
+
+`_void_round` also gained a `None`-on-lost-claim return, so a caller can tell
+"we voided it, nothing was staked" from "someone else claimed it first"
+without reading the row back.
 
 Reused as-is: exactly-once settle via the `status = 'open'` claim, `take_stake` /
 `pay_out` / `record_play`, and daily-net stats under game key `pools`.

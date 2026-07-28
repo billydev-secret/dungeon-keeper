@@ -79,7 +79,7 @@ class PoolsMixin:
                 interaction, "❌ There's no market open right now."
             )
             return
-        rnd, econ, settings = state
+        rnd, settings = state
         if float(rnd["closes_at"]) <= time.time():
             await safe_ephemeral(
                 interaction,
@@ -101,17 +101,18 @@ class PoolsMixin:
 
         user_id = interaction.user.id
 
-        def _place() -> tuple[str | None, int | None]:
+        def _place() -> str | None:
             with self.ctx.open_db() as conn:
                 rnd = svc.live_pools_round(
                     conn, svc.pools_channel(svc.load_casino_settings(conn, guild.id))
                 )
                 if rnd is None:
-                    return "There's no market open right now.", None
-                rid = int(rnd["id"])
-                return svc.place_pools_bet(conn, rid, user_id, side, amount), rid
+                    return "There's no market open right now."
+                return svc.place_pools_bet(
+                    conn, int(rnd["id"]), user_id, side, amount
+                )
 
-        err, round_id = await asyncio.to_thread(_place)
+        err = await asyncio.to_thread(_place)
         if err is not None:
             await safe_ephemeral(interaction, f"❌ {err}")
             return
@@ -121,8 +122,7 @@ class PoolsMixin:
             "Your return depends on how the pool ends up split — the panel "
             "shows the live odds.",
         )
-        if round_id is not None:
-            self._schedule_pools_repaint(guild)
+        self._schedule_pools_repaint(guild)
 
     # ── panel ──────────────────────────────────────────────────────────
 
@@ -134,7 +134,7 @@ class PoolsMixin:
             rnd = svc.live_pools_round(conn, svc.pools_channel(settings))
             if rnd is None:
                 return None
-            return rnd, load_econ_settings(conn, guild_id), settings
+            return rnd, settings
 
     def _schedule_pools_repaint(self, guild: discord.Guild) -> None:
         """Coalescing debounce — a pending repaint absorbs later stakes."""
@@ -172,26 +172,33 @@ class PoolsMixin:
         png = await asyncio.to_thread(
             pools_charts.render_market_chart, points, line,
             pool_total=split.total,
-            accent=f"#{accent.value:06x}" if accent else pools_charts._DEFAULT_ACCENT,
+            accent=pools_charts.accent_hex(accent),
         )
         embed = E.build_pools_panel_embed(
             econ, line, split, float(rnd["closes_at"]), str(rnd["local_day"]),
             accent, closed=float(rnd["closes_at"]) <= time.time(),
         )
         self._pools_last_paint[guild.id] = time.time()
-        file = discord.File(io.BytesIO(png), filename=pools_charts.MARKET_FILENAME)
+
+        def chart() -> discord.File:
+            # A File's stream is consumed by the send that uses it, so an
+            # edit that fails and falls through to a fresh post needs a
+            # fresh one rather than a rewound copy.
+            return discord.File(
+                io.BytesIO(png), filename=pools_charts.MARKET_FILENAME
+            )
+
         message_id = int(rnd["message_id"])
         if message_id:
             with contextlib.suppress(discord.HTTPException):
                 msg = await channel.fetch_message(message_id)
-                await msg.edit(embed=embed, attachments=[file], view=PoolsPanelView())
+                await msg.edit(
+                    embed=embed, attachments=[chart()], view=PoolsPanelView()
+                )
                 return
-            file = discord.File(
-                io.BytesIO(png), filename=pools_charts.MARKET_FILENAME
-            )
         try:
             sent = await channel.send(
-                embed=embed, file=file, view=PoolsPanelView()
+                embed=embed, file=chart(), view=PoolsPanelView()
             )
         except discord.HTTPException:
             log.exception("pools panel post failed for guild %s", guild.id)
@@ -240,8 +247,11 @@ class PoolsMixin:
         if plan is None:
             return
         tick, channel_id = plan
+        # plan_tick already built the series to decide this; handing the
+        # chart slice along saves settlement a second full ledger scan.
+        chart_days = (tick.series or [])[-_CHART_DAYS:]
         for job in tick.settle:
-            await self._settle_pools(guild, channel_id, job)
+            await self._settle_pools(guild, channel_id, job, chart_days)
         if tick.open is not None:
             opened = await asyncio.to_thread(
                 self._open_pools, guild.id, channel_id, tick.open
@@ -270,19 +280,17 @@ class PoolsMixin:
             ) is not None
 
     async def _settle_pools(
-        self, guild: discord.Guild, channel_id: int, job
+        self, guild: discord.Guild, channel_id: int, job,
+        days: list[pools_logic.DayMetric],
     ) -> None:
         def _run():
             with self.ctx.open_db() as conn:
-                res = svc.settle_pools_round(conn, job.round_id, job.result)
-                econ = load_econ_settings(conn, guild.id)
-                tz = get_tz_offset_hours(conn, guild.id)
-                days = pools_service.candles(
-                    conn, guild.id, tz_offset_hours=tz, days=_CHART_DAYS
+                return (
+                    svc.settle_pools_round(conn, job.round_id, job.result),
+                    load_econ_settings(conn, guild.id),
                 )
-                return res, econ, days
 
-        res, econ, days = await asyncio.to_thread(_run)
+        res, econ = await asyncio.to_thread(_run)
         channel = guild.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
             return
@@ -308,21 +316,31 @@ class PoolsMixin:
             key=lambda r: -r[2],
         )
         winners = [uid for uid, _, payout in payouts if payout]
-        png = await asyncio.to_thread(
-            pools_charts.render_instrument_chart, days, float(job.line),
-            accent=f"#{accent.value:06x}" if accent else pools_charts._DEFAULT_ACCENT,
-            currency=econ.currency_plural,
+        # plan_tick always carries its series when it hands back settle work,
+        # so this is belt-and-braces — but a missing chart must never cost
+        # members their result card.
+        png = (
+            await asyncio.to_thread(
+                pools_charts.render_instrument_chart, days, float(job.line),
+                accent=pools_charts.accent_hex(accent),
+                currency=econ.currency_plural,
+            )
+            if days else None
         )
         embed = E.build_pools_result_embed(
             econ, job.day, job.result, float(job.line),
             pools_logic.winning_side(job.result, float(job.line)),
-            payouts, res.takeout, accent,
+            payouts, res.takeout, accent, chart=png is not None,
         )
         with contextlib.suppress(discord.HTTPException):
             await channel.send(
                 embed=embed,
-                file=discord.File(
-                    io.BytesIO(png), filename=pools_charts.INSTRUMENT_FILENAME
+                file=(
+                    discord.File(
+                        io.BytesIO(png),
+                        filename=pools_charts.INSTRUMENT_FILENAME,
+                    )
+                    if png else discord.utils.MISSING
                 ),
                 # Winners are pinged; nobody else is. Allow-listed to the
                 # exact ids so an @everyone can never ride in on a payout

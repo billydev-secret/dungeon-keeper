@@ -29,7 +29,7 @@ from dataclasses import dataclass, fields
 from typing import NamedTuple
 
 from bot_modules.economy.logic import local_day_bounds, local_day_for
-from bot_modules.services import casino_logic
+from bot_modules.services import casino_logic, pools_logic
 from bot_modules.services.economy_service import (
     apply_credit,
     apply_debit,
@@ -1182,6 +1182,12 @@ class RoundTables(NamedTuple):
     # change what every remaining bettor is owed. When True, the sweep
     # stops at the betting close and the stake settles normally.
     leavers_until_close: bool = False
+    # Whether a fully-lost stake skims into the progressive jackpot. True for
+    # every paytable game; false for Pools, where the losing stakes ARE the
+    # winners' payout, so skimming them would pay the pot out of money
+    # already owed to somebody — and Pools burns its takeout rather than
+    # feeding a pot that re-mints what it holds.
+    feeds_jackpot: bool = True
 
 
 ROULETTE_TABLES = RoundTables(
@@ -1207,7 +1213,7 @@ KENO_TABLES = RoundTables(
 POOLS_TABLES = RoundTables(
     "pools", "casino_pools_rounds", "casino_pools_bets",
     "result", "Betting on today's market has closed.",
-    leavers_until_close=True,
+    leavers_until_close=True, feeds_jackpot=False,
 )
 # Every windowed game, for cross-game sweeps (leaver refunds). A new game
 # added here is automatically covered — never enumerate the tables by hand
@@ -1325,15 +1331,24 @@ def _round_bets(
     ).fetchall()
 
 
+def _per_bet(payout_fn):
+    """Lift a per-bet paytable function to ``_settle_round``'s contract.
+
+    The five paytable games compute each payout from that bet alone, so
+    they read better written per-bet; only Pools genuinely needs the whole
+    round. This keeps one settle hook with one arity rather than making the
+    callable's shape depend on which other argument was passed.
+    """
+    return lambda bets, result: [payout_fn(bet, result) for bet in bets]
+
+
 def _settle_round(
     conn: sqlite3.Connection,
     t: RoundTables,
     round_id: int,
     result: int | str,  # a number (roulette/derby) or JSON (baccarat's coup)
-    payout_fn,
+    payouts_fn,
     *,
-    round_ctx_fn=None,
-    feeds_jackpot: bool = True,
     now: float | None = None,
 ) -> list[dict] | None:
     """Resolution: claim the round, pay every winning bet.
@@ -1344,18 +1359,14 @@ def _settle_round(
     recap — the rows are read once, settings once (not per losing bet),
     and the winner updates land as one executemany.
 
-    Two hooks exist for Pools, the parimutuel market, whose payouts cannot
-    be computed per-bet from a paytable (see the plan doc, Stage 2):
-
-    ``round_ctx_fn(bets, result)`` runs once after the bets are read and its
-    return value is passed to ``payout_fn`` as a third argument. Pools uses
-    it to split the pool; every other game leaves it None and keeps the
-    two-argument ``payout_fn`` untouched.
-
-    ``feeds_jackpot=False`` suppresses the per-bet skim. In a pool the
-    losing stakes ARE the winners' payout, so skimming them would pay the
-    pot out of money already owed, and Pools burns its takeout instead of
-    feeding a pot that re-mints what it holds.
+    ``payouts_fn(bets, result) -> list[int]`` returns one payout per bet,
+    index-aligned with ``bets``. It takes the WHOLE round rather than one
+    bet at a time because a parimutuel pool's payouts each depend on every
+    other stake in the round — Pools computes the split in one call, while
+    the five paytable games just map their per-bet function over the list.
+    Whether the round's losing stakes feed the jackpot is a per-game trait
+    and lives on ``RoundTables.feeds_jackpot``, beside every other "how does
+    this game differ" fact.
     """
     claimed = conn.execute(
         f"UPDATE {t.rounds} "
@@ -1367,15 +1378,11 @@ def _settle_round(
         return None
     settings = load_casino_settings(conn, int(claimed["guild_id"]))
     bets = [dict(b) for b in _round_bets(conn, t, round_id)]
-    ctx = None if round_ctx_fn is None else round_ctx_fn(bets, result)
+    payouts = payouts_fn(bets, result)
     winner_updates: list[tuple[int, int]] = []
-    for bet in bets:
+    for bet, payout in zip(bets, payouts, strict=True):
         amount = int(bet["amount"])
-        payout = int(
-            payout_fn(bet, result)
-            if round_ctx_fn is None
-            else payout_fn(bet, result, ctx)
-        )
+        payout = int(payout)
         bet["payout"] = payout
         if payout:
             winner_updates.append((payout, int(bet["id"])))
@@ -1383,7 +1390,7 @@ def _settle_round(
                 conn, int(bet["guild_id"]), int(bet["user_id"]), payout,
                 t.game, meta={"round_id": round_id, t.result_col: result},
             )
-        elif feeds_jackpot:
+        elif t.feeds_jackpot:
             feed_jackpot(
                 conn, int(bet["guild_id"]), amount, now=now, settings=settings
             )
@@ -1401,11 +1408,14 @@ def _settle_round(
 def _void_round(
     conn: sqlite3.Connection, t: RoundTables, round_id: int,
     *, now: float | None = None,
-) -> dict[int, int]:
+) -> dict[int, int] | None:
     """Refund every bet on a dead round (channel gone, casino closed).
 
     Exactly-once via the same status='open' claim. Returns {user_id: total
-    refunded}.
+    refunded}, or **None when the claim was lost** — someone else settled or
+    voided it first. An empty dict means we did void it and there was simply
+    nothing staked; without that distinction a caller has to read the row
+    back to find out which happened.
     """
     ts = time.time() if now is None else now
     claimed = conn.execute(
@@ -1414,7 +1424,7 @@ def _void_round(
         (ts, round_id),
     ).fetchone()
     if claimed is None:
-        return {}
+        return None
     guild_id = int(claimed["guild_id"])
     totals: dict[int, int] = {}
     for bet in _round_bets(conn, t, round_id):
@@ -1503,14 +1513,15 @@ def settle_roulette_round(
     now: float | None = None,
 ) -> list[dict] | None:
     return _settle_round(
-        conn, ROULETTE_TABLES, round_id, result, _roulette_payout_for, now=now
+        conn, ROULETTE_TABLES, round_id, result,
+        _per_bet(_roulette_payout_for), now=now
     )
 
 
 def void_roulette_round(
     conn: sqlite3.Connection, round_id: int, *, now: float | None = None
 ) -> dict[int, int]:
-    return _void_round(conn, ROULETTE_TABLES, round_id, now=now)
+    return _void_round(conn, ROULETTE_TABLES, round_id, now=now) or {}
 
 
 def open_roulette_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1584,14 +1595,15 @@ def settle_race_round(
     now: float | None = None,
 ) -> list[dict] | None:
     return _settle_round(
-        conn, DERBY_TABLES, round_id, winner, _derby_payout_for, now=now
+        conn, DERBY_TABLES, round_id, winner,
+        _per_bet(_derby_payout_for), now=now
     )
 
 
 def void_race_round(
     conn: sqlite3.Connection, round_id: int, *, now: float | None = None
 ) -> dict[int, int]:
-    return _void_round(conn, DERBY_TABLES, round_id, now=now)
+    return _void_round(conn, DERBY_TABLES, round_id, now=now) or {}
 
 
 def open_race_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1672,14 +1684,14 @@ def settle_baccarat_round(
         )
 
     return _settle_round(
-        conn, BACCARAT_TABLES, round_id, result, payout_for, now=now
+        conn, BACCARAT_TABLES, round_id, result, _per_bet(payout_for), now=now
     )
 
 
 def void_baccarat_round(
     conn: sqlite3.Connection, round_id: int, *, now: float | None = None
 ) -> dict[int, int]:
-    return _void_round(conn, BACCARAT_TABLES, round_id, now=now)
+    return _void_round(conn, BACCARAT_TABLES, round_id, now=now) or {}
 
 
 def open_baccarat_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1756,14 +1768,14 @@ def settle_dice_round(
         )
 
     return _settle_round(
-        conn, DICE_TABLES, round_id, result, payout_for, now=now
+        conn, DICE_TABLES, round_id, result, _per_bet(payout_for), now=now
     )
 
 
 def void_dice_round(
     conn: sqlite3.Connection, round_id: int, *, now: float | None = None
 ) -> dict[int, int]:
-    return _void_round(conn, DICE_TABLES, round_id, now=now)
+    return _void_round(conn, DICE_TABLES, round_id, now=now) or {}
 
 
 def open_dice_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1844,14 +1856,14 @@ def settle_keno_round(
         )
 
     return _settle_round(
-        conn, KENO_TABLES, round_id, result, payout_for, now=now
+        conn, KENO_TABLES, round_id, result, _per_bet(payout_for), now=now
     )
 
 
 def void_keno_round(
     conn: sqlite3.Connection, round_id: int, *, now: float | None = None
 ) -> dict[int, int]:
-    return _void_round(conn, KENO_TABLES, round_id, now=now)
+    return _void_round(conn, KENO_TABLES, round_id, now=now) or {}
 
 
 def open_keno_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1876,15 +1888,6 @@ def live_pools_round(
 
 def get_pools_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
     return _get_round(conn, POOLS_TABLES, round_id)
-
-
-def pools_round_for_day(
-    conn: sqlite3.Connection, guild_id: int, day: str
-) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM casino_pools_rounds WHERE guild_id = ? AND local_day = ?",
-        (guild_id, day),
-    ).fetchone()
 
 
 def open_pools_round(
@@ -1934,8 +1937,6 @@ def place_pools_bet(
     now: float | None = None,
 ) -> str | None:
     """Stake on a side. The member-facing error, or None on success."""
-    from bot_modules.services import pools_logic  # noqa: PLC0415
-
     if side not in pools_logic.SIDES:
         raise ValueError(f"unknown pools side: {side!r}")
     return _place_bet(
@@ -1951,14 +1952,20 @@ def pools_bets(conn: sqlite3.Connection, round_id: int) -> list[sqlite3.Row]:
 class PoolsResult(NamedTuple):
     """What settlement did.
 
-    ``bets`` is None when there was nothing to do — someone else already
-    claimed the round, or it was voided. ``voided`` distinguishes the two.
+    Exactly one of the three outcomes is live at a time: ``bets`` is set
+    when the round settled, ``voided`` is True when a one-sided pool was
+    refunded (``refunds`` says to whom), and all three are empty when
+    another caller had already claimed the round.
     """
 
-    bets: list[dict] | None
-    takeout: int
-    voided: bool
-    refunds: dict[int, int]
+    bets: list[dict] | None = None
+    takeout: int = 0
+    voided: bool = False
+    refunds: dict[int, int] | None = None
+
+
+# Somebody else claimed the round first — nothing settled, nothing refunded.
+_POOLS_ALREADY_CLAIMED = PoolsResult()
 
 
 def settle_pools_round(
@@ -1976,71 +1983,40 @@ def settle_pools_round(
     turned up. At this server's size those rounds are routine, not
     exceptional.
     """
-    from bot_modules.services import pools_logic  # noqa: PLC0415
-
     rnd = get_pools_round(conn, round_id)
     if rnd is None:
-        return PoolsResult(None, 0, False, {})
+        return _POOLS_ALREADY_CLAIMED
     line = float(rnd["line"])
     if pools_logic.is_void(
         pools_logic.pool_split([dict(b) for b in pools_bets(conn, round_id)])
     ):
         refunds = _void_round(conn, POOLS_TABLES, round_id, now=now)
-        # An empty refund map is ambiguous on its own — it means either "we
-        # lost the claim" or "there was nothing staked" — so read the state
-        # back rather than inferring it.
-        after = get_pools_round(conn, round_id)
-        voided = after is not None and str(after["status"]) == "void"
-        return PoolsResult(None, 0, voided, refunds)
+        if refunds is None:
+            return _POOLS_ALREADY_CLAIMED
+        return PoolsResult(voided=True, refunds=refunds)
 
     settings = load_casino_settings(conn, int(rnd["guild_id"]))
-    taken = {"takeout": 0}
+    settlement: list[pools_logic.Settlement] = []
 
-    def ctx(round_bets: list[dict], _result: str) -> dict[int, int]:
-        # Keyed by bet id, not position: _settle_round reads its own rows,
-        # so a positional mapping would be aligned against a different list.
+    def payouts_for(bets: list[dict], _result: str) -> list[int]:
         s = pools_logic.settle(
-            round_bets, result, line, settings.pools_takeout_pct
+            bets, result, line, settings.pools_takeout_pct
         )
-        taken["takeout"] = s.takeout
-        return {
-            int(b["id"]): p for b, p in zip(round_bets, s.payouts, strict=True)
-        }
-
-    def payout_for(bet: dict, _result: str, by_id: dict[int, int]) -> int:
-        return by_id.get(int(bet["id"]), 0)
+        settlement.append(s)
+        return s.payouts
 
     settled = _settle_round(
-        conn, POOLS_TABLES, round_id, str(result), payout_for,
-        round_ctx_fn=ctx, feeds_jackpot=False, now=now,
+        conn, POOLS_TABLES, round_id, str(result), payouts_for, now=now
     )
     if settled is None:
-        return PoolsResult(None, 0, False, {})
-    return PoolsResult(settled, taken["takeout"], False, {})
+        return _POOLS_ALREADY_CLAIMED
+    return PoolsResult(bets=settled, takeout=settlement[0].takeout)
 
 
 def void_pools_round(
     conn: sqlite3.Connection, round_id: int, *, now: float | None = None
 ) -> dict[int, int]:
-    return _void_round(conn, POOLS_TABLES, round_id, now=now)
-
-
-def open_pools_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return _open_rounds(conn, POOLS_TABLES)
-
-
-def due_pools_rounds(
-    conn: sqlite3.Connection, *, now: float | None = None
-) -> list[sqlite3.Row]:
-    """Open rounds whose betting has shut and whose day has rolled over.
-
-    Settlement is gated on the day being *finished*, not on betting
-    closing — the metric is not final until the day is. A round found here
-    after hours of downtime settles to the same value it would have then,
-    because the ledger is what decides it.
-    """
-    ts = time.time() if now is None else now
-    return [r for r in open_pools_rounds(conn) if float(r["closes_at"]) <= ts]
+    return _void_round(conn, POOLS_TABLES, round_id, now=now) or {}
 
 
 # ── casino war (casino-classics Stage 1c — blackjack's live-hand shape) ─

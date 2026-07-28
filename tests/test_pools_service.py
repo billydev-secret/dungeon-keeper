@@ -226,16 +226,16 @@ def test_line_excludes_the_day_being_measured(db):
             _ledger(conn, 100, "quest", NOON + i * 86_400)
         # A huge partial-day row on the day we are about to open.
         _ledger(conn, 99_999, "quest", NOON + 7 * 86_400)
-        day8 = ps.daily_series(conn, GUILD, tz_offset_hours=TZ)[7].day
-        line = ps.line_for(conn, GUILD, day8, tz_offset_hours=TZ)
-    assert line == 100.5
+        tick = _tick(conn, NOON + 7 * 86_400)
+    assert tick.open is not None
+    assert tick.open.line == 100.5
 
 
 def test_no_line_before_a_week_of_history(db):
     with open_db(db) as conn:
         for i in range(3):
             _ledger(conn, 100, "quest", NOON + i * 86_400)
-        assert ps.line_for(conn, GUILD, NEXT_DAY, tz_offset_hours=TZ) is None
+        assert _tick(conn, NOON + 3 * 86_400).open is None
 
 
 # ── round lifecycle ────────────────────────────────────────────────────
@@ -423,6 +423,39 @@ def test_tick_will_not_open_after_the_close_hour(db):
         day_start = _local_midnight(ps._local_day(NOON + 8 * 86_400, TZ))
         assert _tick(conn, day_start + 19 * 3600).open is None
         assert _tick(conn, day_start + 17 * 3600).open is not None
+
+
+def test_idle_tick_never_touches_the_ledger(db):
+    """The maintenance loop calls this every 60s per guild, and on all but
+    one tick a day the answer is "nothing to do". Answering that from two
+    indexed lookups is what keeps a full ledger scan off the minute tick —
+    it was ~1s against prod and grows with the ledger forever."""
+    with open_db(db) as conn:
+        _seed_history(conn)
+        now = NOON + 8 * 86_400
+        day = ps._local_day(now, TZ)
+        svc.open_pools_round(conn, GUILD, CHAN, day, 100.5, now + 3600, now=now)
+
+        calls = []
+        real = ps.daily_series
+        ps.daily_series = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+        try:
+            tick = _tick(conn, now + 60)
+        finally:
+            ps.daily_series = real
+    assert tick.idle
+    assert tick.series is None
+    assert calls == [], "an idle tick must not scan the ledger"
+
+
+def test_working_tick_carries_its_series(db):
+    """Settlement wants the same rows for its chart; recomputing them would
+    be a second full scan for an answer already in hand."""
+    with open_db(db) as conn:
+        _seed_history(conn)
+        tick = _tick(conn, NOON + 8 * 86_400)
+    assert tick.open is not None
+    assert tick.series is not None
 
 
 def test_tick_does_not_reopen_an_existing_round(db):

@@ -330,6 +330,10 @@ authoring and no admin resolution.
   later.
 - **A one-sided pool voids and refunds in full.** No counterparty means
   nothing to pay winners out of. At 13–18 bettors a day these are routine.
+- **The day-roll sweep answers the idle case from two indexed lookups.** It
+  runs on the cog's 60-second maintenance tick, and on all but one tick a
+  day there is nothing to do; only a tick with real work computes the day
+  series, which is a full ledger scan.
 - **The leaver sweep stops at the betting close** for Pools
   (`RoundTables.leavers_until_close`): the round stays `status='open'` for
   hours after betting shuts, and pulling a departing member's stake from a

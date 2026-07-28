@@ -20,6 +20,7 @@ import sqlite3
 
 import discord
 
+from bot_modules.economy.leaderboard import bar_fill
 from bot_modules.services import casino_logic as logic
 from bot_modules.services import pools_charts, pools_logic
 from bot_modules.services.casino_service import CasinoSettings
@@ -1212,14 +1213,15 @@ def build_my_stats_embed(
 
 
 def _pool_bar(prob: float | None, width: int = 20) -> str:
-    """Implied odds as a monospace bar. None = nobody has staked yet."""
+    """Implied odds as a bar. None = nobody has staked yet.
+
+    Uses the shared ``▰▱`` fill rather than a bare percentage, and takes it
+    from ``bar_fill`` so the glyph vocabulary stays the one the style guide
+    mandates for new bars.
+    """
     if prob is None:
-        return "`" + "·" * width + "`  no bets yet"
-    filled = max(0, min(width, round(prob * width)))
-    return (
-        "`" + "█" * filled + "░" * (width - filled) + "`"
-        f"  **{prob * 100:.0f}%** over"
-    )
+        return f"{bar_fill(0, 1, width)}  no bets yet"
+    return f"{bar_fill(round(prob * 1000), 1000, width)}  **{prob * 100:.0f}%** over"
 
 
 def build_pools_panel_embed(
@@ -1289,6 +1291,8 @@ def build_pools_result_embed(
     payouts: list[tuple[int, int, int]],
     takeout: int,
     accent: discord.Color | None,
+    *,
+    chart: bool = True,
 ) -> discord.Embed:
     """``payouts`` = (user_id, stake, payout), biggest return first."""
     embed = discord.Embed(
@@ -1301,13 +1305,21 @@ def build_pools_result_embed(
         color=_accent(accent),
     )
     if payouts:
-        rows = []
-        for user_id, stake, payout in payouts[:12]:
-            if payout:
-                rows.append(f"<@{user_id}> +{payout - stake:,} (staked {stake:,})")
-            else:
-                rows.append(f"<@{user_id}> −{stake:,}")
-        embed.add_field(name="Positions", value="\n".join(rows), inline=False)
+        rows = [
+            f"<@{user_id}> +{payout - stake:,} (staked {stake:,})"
+            if payout else f"<@{user_id}> −{stake:,}"
+            for user_id, stake, payout in payouts
+        ]
+        embed.add_field(
+            name="Positions",
+            # A busy day can outrun Discord's 1024-char field limit, which
+            # would 400 the result post; cap_lines trims with an "…and N
+            # more" marker instead of silently dropping the tail.
+            value="\n".join(
+                logic.cap_lines(rows, limit=1022, more_label="more positions")
+            ),
+            inline=False,
+        )
     if takeout:
         embed.add_field(
             name="Takeout",
@@ -1317,7 +1329,8 @@ def build_pools_result_embed(
             ),
             inline=False,
         )
-    embed.set_image(url=f"attachment://{pools_charts.INSTRUMENT_FILENAME}")
+    if chart:
+        embed.set_image(url=f"attachment://{pools_charts.INSTRUMENT_FILENAME}")
     embed.set_footer(text=_FOOTER)
     return embed
 
