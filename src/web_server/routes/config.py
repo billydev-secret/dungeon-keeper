@@ -736,6 +736,7 @@ def _auto_react_section(conn, guild_id: int) -> list:
             "channel_id": str(r["channel_id"]),
             "emojis": parse_emojis(r["emojis"]),
             "enabled": bool(r["enabled"]),
+            "tips_enabled": bool(r["tips_enabled"]),
         }
         for r in list_auto_react_rules_for_guild_with_conn(conn, guild_id)
     ]
@@ -3310,6 +3311,10 @@ async def remove_auto_delete(
 class AutoReactRuleUpdate(BaseModel):
     emojis: list[str]
     enabled: bool = True
+    # Per-rule, so Auto React stays usable as plain decoration on channels
+    # nobody wants monetised. Defaults off — turning a channel into a tipping
+    # channel is always an explicit act.
+    tips_enabled: bool = False
 
 
 @router.put("/config/auto-react/{channel_id}")
@@ -3329,6 +3334,7 @@ async def update_auto_react(
             int(channel_id),
             body.emojis,
             body.enabled,
+            tips_enabled=body.tips_enabled,
         )
         return {"ok": True}
 

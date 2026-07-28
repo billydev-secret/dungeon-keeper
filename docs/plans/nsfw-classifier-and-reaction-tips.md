@@ -168,7 +168,11 @@ Recording `threshold` and `label_set` per row is what makes the data survive a
 retune — without them, old rows become uninterpretable and the retrospective
 "what would 0.4 have changed?" question can't be answered.
 
-`142_reaction_tips.sql`
+Split across two migrations as built, so each stage's commit stands alone:
+`142_auto_react_tips.sql` (stage 4 — the rule flag and placement receipts) and
+`143_reaction_tips.sql` (stage 5 — rungs and awards). `auto_react_placements`
+also carries `channel_id` and `author_id`, so a tip never has to re-fetch the
+message to learn who it pays.
 
 ```sql
 ALTER TABLE auto_react_config ADD COLUMN tips_enabled INTEGER NOT NULL DEFAULT 0;
