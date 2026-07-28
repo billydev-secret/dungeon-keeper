@@ -1,15 +1,19 @@
 """Responsive-layout gate: no dashboard panel may hide content off-screen.
 
 Drives the real dashboard in headless Chromium (via Playwright) at phone,
-tablet and desktop widths and asserts two things about every panel:
+tablet and desktop widths and asserts three things about every panel:
 
   * nothing extends past the viewport's right edge unless it sits in a genuinely
     scrollable box (a wide data table is fine — the user can scroll to it);
   * no ``overflow-x: hidden`` container is clipping content wider than itself
     (that content is simply gone — this is the announcement-button bug that
-    prompted the whole check).
+    prompted the whole check);
+  * no text is broken mid-word repeatedly, i.e. its column has collapsed towards
+    one character wide. The first two rules only catch content that is too
+    *wide*; this catches the opposite failure, where the layout implodes instead
+    (the mod-engagement bug — see the note on KNOWN_OVERFLOW).
 
-Both signals, and the in-page audit script, are shared with
+All three signals, and the in-page audit script, are shared with
 ``scripts/mobile_layout_scan.py`` so the gate and the diagnostic tool can never
 disagree. The scanner is the tool for *measuring* noise across all panels; this
 file is the tool for *failing the build* when it regresses.
@@ -149,41 +153,69 @@ def _panel_ids(browser, base: str) -> list[str]:
 
 
 def _describe(items: list[dict]) -> str:
-    return "; ".join(
-        f"{it['sel']} (+{it.get('by', it.get('hides'))}px)" for it in items[:6]
-    )
+    def _one(it: dict) -> str:
+        if "lines" in it:  # collapsed — px is not the useful number here
+            return f"{it['sel']} ({it['words']} words over {it['lines']} lines, {it['width']}px)"
+        return f"{it['sel']} (+{it.get('by', it.get('hides'))}px)"
+
+    return "; ".join(_one(it) for it in items[:6])
 
 
-# Panels that already overflow on mobile, predating this gate — an **allowlist**,
-# not a strict ratchet. The gate hard-fails only when a panel *outside* this set
-# overflows; a listed panel is permitted to fail and permitted to render clean.
-# That distinction matters: three of these (config-ai, qa-tracker, wellness-caps)
-# overflow only marginally — a few pixels, or a grid sized at a transient width —
-# so they flap between clean and dirty across runs. A rule that *required* them
-# to stay dirty would itself flake; a plain allowlist stays green while still
-# catching any genuinely new overflow on a seventh panel. Across four full sweeps
-# the dirty set was always a subset of these six, never a new panel.
+def _faults(res: dict) -> list[str]:
+    """The three audit signals rendered as human-readable fault strings."""
+    out = []
+    if res["viewport"]:
+        out.append(f"off-screen — {_describe(res['viewport'])}")
+    if res["clipped"]:
+        out.append(f"clipped — {_describe(res['clipped'])}")
+    if res.get("collapsed"):
+        out.append(f"collapsed — {_describe(res['collapsed'])}")
+    return out
+
+
+# Pre-existing mobile debt, allowed to fail while it was being worked off — an
+# **allowlist**, not a ratchet, so a listed panel could render clean without
+# failing. It is now EMPTY: every panel is enforced, and any overflow or
+# collapse fails the build.
 #
-# Each is a real bug worth fixing (then delete it here — see the diagnostic tool
-# in docs/mobile_layout_testing.md to confirm it's gone):
-#   help-overview          a ~1195px quick-reference table with no horizontal
-#                          scroll — cut off past the panel edge on a phone.
-#   health-mod-engagement  a wide data table / card grid overflows its panel.
-#   help-setup             a long inline link overflows on a phone.
-#   config-ai              a primary button sits a few px off the right edge.
-#   qa-tracker             the filter-button row doesn't wrap — same class of
-#                          bug as the announcement editor this gate was born from.
-#   wellness-caps          the histogram-slider grid is sized to the full width
-#                          before the vertical scrollbar appears; its panel can
-#                          clip ~197px.
-KNOWN_OVERFLOW = {
-    "help-overview",
-    "health-mod-engagement",
-    "help-setup",
-    "config-ai",
-    "qa-tracker",
-    "wellness-caps",
-}
+# The six entries were cleared on 2026-07-28. What they turned out to be is
+# worth keeping, because most of the notes were wrong:
+#
+#   health-mod-engagement  Annotated "a wide data table / card grid overflows its
+#                          panel". Not an overflow, and no run had ever seen it:
+#                          the sweep serves an empty DB, so the panel only ever
+#                          rendered "No moderator messages in this window" — no
+#                          tiles, no chart, no table. With data it laid the whole
+#                          report out inside a leftover `.panel-loading` (a
+#                          centering flex box), collapsing every heading to one
+#                          character per line. Fixed in the panel; now covered
+#                          with data by test_mod_engagement_populated_fits_on_
+#                          phone and by the `collapsed` signal it prompted.
+#   help-setup             Annotated "a long inline link overflows". It
+#                          *collapsed*: `display: flex` on the step row made each
+#                          inline link its own flex item, squeezed to 13px.
+#   help-overview          Already fixed before this pass — the ~1195px table
+#                          sits in an `overflow-x: auto` container. The note had
+#                          outlived the bug.
+#   config-ai              No longer reproduces at any width.
+#   qa-tracker             No longer reproduces at any width.
+#   wellness-caps          No longer reproduces at any width. Its "sized to the
+#                          full width before the scrollbar appears" flap is what
+#                          `_settle()` in mobile_layout_scan.py was written to
+#                          cure, so the fix was in the measurement, not the CSS.
+#
+# Three of those six descriptions named the wrong mechanism and one named a bug
+# the tool structurally could not observe. Treat any future entry as a
+# hypothesis, not a measurement — re-measure before trusting it.
+#
+# qa-tracker and wellness-caps were the two historically borderline ones. They
+# were clean at all three widths across five consecutive full sweeps before
+# being removed, and wellness-caps' flap is attributable to a fixed cause
+# (`_settle`), so this is not an expected-to-flake gate. Recorded only so that
+# if one of them ever fails on a commit that did not touch it, that history is
+# the first thing to check — confirm with the diagnostic tool and re-add the
+# entry rather than chasing phantom CSS.
+KNOWN_OVERFLOW: set[str] = set()
 
 
 # ── the sweep ──────────────────────────────────────────────────────────────────
@@ -205,11 +237,7 @@ def test_no_panel_overflows(dashboard, browser):
             # Fresh context per panel — shared-context state bleed made borderline
             # panels flap clean/dirty between runs (see audit_on_fresh_context).
             res = audit_on_fresh_context(browser, dashboard.base, pid, VIEWPORTS[vp])
-            faults = []
-            if res["viewport"]:
-                faults.append(f"off-screen — {_describe(res['viewport'])}")
-            if res["clipped"]:
-                faults.append(f"clipped — {_describe(res['clipped'])}")
+            faults = _faults(res)
             if faults:
                 dirty.add(pid)
                 if pid not in KNOWN_OVERFLOW:
@@ -232,12 +260,9 @@ def test_no_panel_overflows(dashboard, browser):
 
 def _assert_fits(res, label: str) -> None:
     """Fail with the same fault description the panel sweep uses."""
-    faults = []
-    if res["viewport"]:
-        faults.append("off-screen — " + _describe(res["viewport"]))
-    if res["clipped"]:
-        faults.append("clipped — " + _describe(res["clipped"]))
-    assert not faults, f"{label} overflows on phone:\n" + "\n".join(faults)
+    faults = _faults(res)
+    assert not faults, f"{label} does not lay out on phone:\n" + "\n".join(faults)
+
 
 def test_announcement_button_editor_fits_on_phone(dashboard, browser):
     """Open the announcement editor and add role-button rows — the exact flow
@@ -338,3 +363,99 @@ def test_inactive_sweep_preview_fits_on_phone(dashboard, browser):
     finally:
         context.close()
     _assert_fits(res, "Inactive sweep preview")
+
+
+# Shape taken from prod (guild 1469491362444480666, read-only) and anonymised:
+# display names there run 1–37 chars (p50 8, p90 15) and the busiest author
+# posted ~11.9k messages in 30 days, so these names/volumes sit at or above the
+# real worst case. No real member data is reproduced here.
+_MOD_ENGAGEMENT_NAMES = [
+    "Cordwainer Bibbleworth-Fanshawe III",   # 35 — near prod's 37-char longest
+    "a-fairly-long-hyphenated-modname-xyz",  # 36 — unbroken, no spaces to wrap on
+    "Fun Bag Fancier", "moth", "Quillon", "sparrowhawk", "Vex",
+    "Marigold Thistlewaite", "nn", "Brackenreed",
+]
+_MOD_ENGAGEMENT_STUB = {
+    "mods": [
+        {
+            "user_id": str(1469491362444480666 + i),
+            "user_name": name,
+            "public_messages": msgs,
+            "initiations": int(msgs * 0.37),
+            "channel_breadth": 24 - i,
+            "unique_reach": reach,
+            "reactions_received": msgs // 3,
+            "replies_received": msgs // 5,
+            "engagement_rate": round(0.53 - i * 0.04, 2),
+            "newcomer_touchpoints": touch,
+        }
+        for i, (name, msgs, reach, touch) in enumerate(
+            zip(
+                _MOD_ENGAGEMENT_NAMES,
+                [11886, 9672, 5129, 2887, 2410, 1204, 903, 610, 244, 97],
+                [806, 731, 588, 402, 355, 210, 168, 96, 41, 12],
+                [143, 118, 96, 62, 51, 33, 20, 11, 4, 1],
+                strict=True,
+            )
+        )
+    ],
+    "days": 30,
+    "total_public_messages": 35042,
+    "avg_unique_reach": 340.9,
+    "total_newcomer_touchpoints": 539,
+    "engagement_gini": 0.412,
+}
+
+
+def test_mod_engagement_populated_fits_on_phone(dashboard, browser):
+    """The mod-engagement report, *with data*, on a phone.
+
+    This panel sat in KNOWN_OVERFLOW for a bug nobody had ever actually
+    observed: the sweep serves a freshly-migrated (empty) DB, so the panel only
+    ever rendered "No moderator messages in this window" — no stat tiles, no
+    chart, no table. Everything that broke lived behind having rows, so the
+    plain sweep scored it clean while the live dashboard rendered every heading
+    one character per line inside a leftover ``.panel-loading`` flex box.
+
+    The API is stubbed because the mod roster comes from the gateway, which the
+    test dashboard has no connection to.
+    """
+    import json
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        page.route(
+            "**/api/health/mod-engagement*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(_MOD_ENGAGEMENT_STUB),
+            ),
+        )
+        _goto_panel(page, f"{dashboard.base}/#/health-mod-engagement")
+        # Wait for the real report, not the loading state.
+        page.wait_for_selector(".data-table", timeout=15_000)
+        _settle(page)
+        res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+        # The regression signature, asserted directly: the body must not still be
+        # the centering spinner box, and the stat tiles must get real width.
+        body_is_loader = page.evaluate(
+            "() => document.querySelector('[data-body]').classList.contains('panel-loading')"
+        )
+        label_widths = page.evaluate(
+            "() => [...document.querySelectorAll('.home-card-label')]"
+            ".map(el => Math.round(el.getBoundingClientRect().width))"
+        )
+    finally:
+        context.close()
+
+    assert not body_is_loader, (
+        "[data-body] still carries .panel-loading — that class is a centering "
+        "flex box, so the whole report lays out as shrink-to-min-content items"
+    )
+    assert label_widths, "no stat tiles rendered — did the stub shape drift?"
+    assert min(label_widths) > 200, (
+        f"stat-tile headings collapsed: widths {label_widths} on a 390px phone"
+    )
+    _assert_fits(res, "Mod engagement report (populated)")

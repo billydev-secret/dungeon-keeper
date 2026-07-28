@@ -13,7 +13,12 @@ export function mount(container, initialParams = {}) {
       <div class="controls">
         <label data-slot="range"></label>
       </div>
-      <div class="panel-loading" data-body>Loading…</div>
+      <!-- The loading spinner is a *child* of the body, never the body itself:
+           .panel-loading is a centering flex box, so leaving the class on the
+           container laid the whole report out as centred flex items that shrank
+           to min-content — stat-tile headings collapsed to one character per
+           line and the cards overlapped. -->
+      <div data-body><div class="panel-loading">Loading…</div></div>
     </div>
   `;
 

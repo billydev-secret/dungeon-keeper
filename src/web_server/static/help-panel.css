@@ -197,15 +197,23 @@
 .dk-help li { margin-bottom: 4px; }
 
 .dk-help .steps { list-style: none; padding: 0; counter-reset: steps; }
+/* The badge is positioned, not a flex sibling. A step's body is prose with
+   inline links in it, and under `display: flex` each inline child becomes its
+   own flex item competing for the row's width — with min-width:0 on the
+   children, a link like "Guess Who" was squeezed to 13px and rendered as a
+   vertical stack of letters. Indenting past an absolutely-positioned badge
+   keeps the body as one normal inline flow, so links wrap like text. */
 .dk-help .steps li {
   counter-increment: steps;
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
+  position: relative;
+  padding-left: 32px;   /* 20px badge + the 12px gap it used to get from flex */
   margin-bottom: 10px;
 }
 .dk-help .steps li::before {
   content: counter(steps);
+  position: absolute;
+  left: 0;
+  top: 1px;
   background: var(--blurple);
   color: #fff;
   font-size: 11px;
@@ -216,8 +224,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  margin-top: 1px;
 }
 
 /* ── Quick-Reference table-section dividers ─────────────────── */
@@ -297,13 +303,9 @@
   100%    { background: transparent; }
 }
 
-/* Numbered step rows are flex containers whose text sits in an anonymous flex
-   item, so it keeps its min-content width and pushes the row past the panel
-   (the phone sweep caught 15px on the Getting Started checklist). Let the text
-   break, and keep the number badge from being squeezed. */
-.dk-help .steps li {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.dk-help .steps li::before { flex: 0 0 auto; }
-.dk-help .steps li > * { min-width: 0; }
+/* Long tokens in a step (a command name, a URL) break rather than push the row
+   past the panel — the phone sweep caught 15px on the Getting Started
+   checklist. The flex-specific props that used to live here (min-width:0 on the
+   li and its children, flex-shrink on the badge) are gone with the flex layout
+   above; it was min-width:0 on the children that let a link shrink to 13px. */
+.dk-help .steps li { overflow-wrap: break-word; }
