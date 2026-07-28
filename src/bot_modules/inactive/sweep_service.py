@@ -16,6 +16,7 @@ Everything here is impure (config reads, a SQLite query, guild member state).
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -27,6 +28,8 @@ from bot_modules.inactive.store import active_inactive_user_ids, sweep_exempt_us
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext
+
+log = logging.getLogger("dungeonkeeper.inactive")
 
 DEFAULT_THRESHOLD_DAYS = 30
 DEFAULT_CAP = 25
@@ -170,3 +173,122 @@ async def compute_candidates(
         saved_cap=saved_cap,
         tracked_user_ids=set(msg_last_seen),
     )
+
+
+async def setup_inactive_channel(ctx, guild, channel) -> tuple[bool, str]:
+    """Point the inactive system at ``channel`` and publish its info panel.
+
+    Returns ``(ok, note)`` — ``note`` carries a warning worth showing even on
+    success (a stale channel whose overwrite couldn't be cleared), or the reason
+    on failure.
+
+    Four things have to happen together, which is why this isn't just a config
+    write: persist the choice, make sure the ``@Inactive`` role exists, give it
+    access to the new channel, and *revoke* it from the old one on a re-point —
+    otherwise the previous channel stays visible to inactive members forever.
+    The info panel with its ticket button goes in last.
+
+    Lifted out of ``/inactive panel`` on 2026-07-28. The dashboard's own
+    Inactive Sweep page used to tell admins to go run that command; now it does
+    this itself.
+    """
+    import asyncio
+
+    import discord
+
+    from bot_modules.core.branding import resolve_accent_color
+    from bot_modules.core.db_utils import get_config_value, set_config_value
+    from bot_modules.commands.jail_commands import TicketPanelButton
+    from bot_modules.inactive.apply import ensure_inactive_role
+    from bot_modules.inactive.logic import stale_inactive_channel_id
+    from bot_modules.services.embeds import MOD_INFO
+
+    if not isinstance(channel, discord.TextChannel):
+        return False, "Pick a regular text channel."
+
+    guild_id = guild.id
+
+    def _read_previous() -> str:
+        with ctx.open_db() as conn:
+            return get_config_value(conn, "inactive_channel_id", "0", guild_id) or "0"
+
+    previous_raw = await asyncio.to_thread(_read_previous)
+    stale_channel_id = stale_inactive_channel_id(previous_raw, channel.id)
+
+    def _persist() -> None:
+        with ctx.open_db() as conn:
+            set_config_value(conn, "inactive_channel_id", str(channel.id), guild_id)
+
+    await asyncio.to_thread(_persist)
+
+    role = await ensure_inactive_role(ctx, guild)
+    if role is None:
+        return False, "Missing **Manage Roles** — can't create the Inactive role."
+
+    try:
+        await channel.set_permissions(
+            role, view_channel=True, send_messages=True, read_message_history=True
+        )
+    except discord.Forbidden:
+        return False, (
+            f"Couldn't grant the Inactive role access to #{channel.name} — "
+            "check my channel permissions."
+        )
+
+    note = ""
+    if stale_channel_id:
+        old_channel = guild.get_channel(stale_channel_id)
+        if old_channel is not None:
+            try:
+                await old_channel.set_permissions(role, overwrite=None)
+            except discord.HTTPException:
+                log.warning(
+                    "Could not revoke @Inactive from old inactive channel %s",
+                    stale_channel_id, exc_info=True,
+                )
+                note = (
+                    f"Couldn't remove the Inactive role's access to "
+                    f"<#{stale_channel_id}> — clear it by hand."
+                )
+
+    accent = await resolve_accent_color(ctx.db_path, guild)
+    embed = discord.Embed(
+        title="💤 You're in the Inactive Channel",
+        description=(
+            "You've been moved here because you've been inactive for a while.\n\n"
+            "**Your roles are safe** — nothing has been deleted. When you're "
+            "ready to come back, just open a ticket below and a moderator will "
+            "restore your access.\n\nWelcome back whenever you like!"
+        ),
+        color=accent or MOD_INFO,
+    )
+    view = discord.ui.View(timeout=None)
+    view.add_item(TicketPanelButton())
+    try:
+        await channel.send(embed=embed, view=view)
+    except discord.HTTPException:
+        return False, f"Couldn't post the info panel in #{channel.name}."
+    return True, note
+
+
+async def run_inactive_sweep(ctx, guild, actor) -> tuple[int, int, int]:
+    """Move every eligible member to the inactive channel.
+
+    Returns ``(moved, considered, overflow)``. Selection runs through the same
+    ``compute_candidates`` the dry-run preview and the auto-sweep use, so what
+    this moves can't drift from what the preview showed.
+    """
+    from bot_modules.inactive.apply import apply_inactive
+
+    selection = await compute_candidates(ctx, guild)
+    moved = 0
+    for c in selection.candidates:
+        target = guild.get_member(c.user_id)
+        if target is None:
+            continue
+        result = await apply_inactive(
+            ctx, guild, target, actor, reason="Inactivity sweep", source="dashboard"
+        )
+        if result.ok:
+            moved += 1
+    return moved, len(selection.candidates), selection.overflow

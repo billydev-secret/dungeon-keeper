@@ -22,8 +22,8 @@ For testers with **Administrator** (or bot-owner access for the handful of owner
 
 ### Inactive Sweep
 
-- [ ] **`/inactive panel`** — Confirm the `@Inactive` role is created/wired and the info + ticket panel posts.
-- [ ] **`/inactive sweep`** — Dry-run first (confirm it lists candidates without acting), then `apply:true` (confirm eligible idle members are actually marked).
+- [ ] **Config → Inactive Sweep → Inactive Channel** — Set a channel; confirm the `@Inactive` role is created/wired and the info + ticket panel posts. Re-point it to a second channel and confirm the first loses `@Inactive` access.
+- [ ] **Config → Inactive Sweep** — **Check Now** first (confirm it lists candidates without acting), then **Move Them Now** (confirm the same members are actually moved, and the count reports how many the per-run cap held back).
 - [ ] **`/inactive config`** — Set threshold/auto/cap; confirm values save and echo back.
 - [ ] **Automatic inactive-sweep loop** — With `auto:true` and a channel configured, confirm the 6-hourly loop marks idle members automatically.
 

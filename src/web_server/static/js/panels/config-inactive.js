@@ -1,9 +1,9 @@
 import {
-  loadConfig, loadMembers, apiPut, showStatus, clearStatus, guardForm, mountPicker,
-  mountExemptionList,
+  loadConfig, loadMembers, loadChannels, apiPut, showStatus, clearStatus, guardForm,
+  mountPicker, mountChannelPicker, mountExemptionList,
 } from "../config-helpers.js";
 import { esc, apiPost } from "../api.js";
-import { toast } from "../ui.js";
+import { toast, confirmDialog } from "../ui.js";
 
 function fmtDay(ts) {
   if (!ts) return "Never";
@@ -15,7 +15,9 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
   (async () => {
-    const [config, members] = await Promise.all([loadConfig(), loadMembers()]);
+    const [config, members, channels] = await Promise.all([
+      loadConfig(), loadMembers(), loadChannels(),
+    ]);
     const cfg = config.inactive;
 
     const memberOpts = members
@@ -65,9 +67,8 @@ export function mount(container) {
               </label>
               <div class="field-hint">When checked, the sweep runs by itself every six
                 hours and moves eligible members without anyone pressing a button. It
-                does nothing until an inactive channel has been set from the
-                <code>/inactive</code> panel in Discord. Unchecked, sweeps only happen
-                when a moderator starts one.</div>
+                does nothing until an inactive channel has been set below.
+                Unchecked, sweeps only happen when someone starts one.</div>
             </div>
             <div class="field">
               <label for="ci-cap">Members Moved Per Run</label>
@@ -100,6 +101,20 @@ export function mount(container) {
           <div data-exempt-list></div>
         </div>
 
+        <div class="section-label">Inactive Channel</div>
+        <div class="card">
+          <div class="field-hint" style="margin-bottom:10px;">Where swept members are
+            moved. Setting it also creates the <strong>@Inactive</strong> role if needed,
+            gives it access here, takes that access away from any previous channel, and
+            posts the info panel with its "open a ticket" button. Re-point it any time.</div>
+          <div class="field">
+            <label>Channel</label>
+            <div data-inactive-channel></div>
+          </div>
+          <button type="button" class="btn btn-primary" data-setup-channel>Set Up Channel</button>
+          <span data-setup-status class="field-hint"></span>
+        </div>
+
         <div class="section-label">
           <span>Who Would Be Swept Right Now</span>
           <button type="button" class="btn btn-sm" data-preview-btn>Check Now</button>
@@ -112,6 +127,10 @@ export function mount(container) {
             try a number before committing to it.
           </div>
           <div data-preview></div>
+          <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+            <button type="button" class="btn btn-danger" data-run-sweep>Move Them Now</button>
+            <span data-sweep-status class="field-hint"></span>
+          </div>
         </div>
       </div>
     `;
@@ -122,6 +141,56 @@ export function mount(container) {
     const previewBtn = container.querySelector("[data-preview-btn]");
     const previewStatusEl = container.querySelector("[data-preview-status]");
     const previewEl = container.querySelector("[data-preview]");
+
+    // Inactive-channel setup. Replaced /inactive panel (2026-07-28) — the one
+    // place this page used to send admins back to Discord.
+    const channelPicker = mountChannelPicker(
+      container.querySelector("[data-inactive-channel]"), channels,
+      String(cfg.inactive_channel_id || "0"),
+    );
+    container.querySelector("[data-setup-channel]").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      const el = container.querySelector("[data-setup-status]");
+      const channelId = channelPicker.getValue();
+      if (!channelId || channelId === "0") return toast("Pick a channel first.", "error");
+      btn.disabled = true;
+      el.textContent = "Setting up…";
+      try {
+        const res = await apiPost("/api/config/inactive/channel", { channel_id: channelId });
+        el.textContent = res.note || "Channel set up and panel posted.";
+      } catch (err) {
+        el.textContent = "";
+        toast(err.message, "error");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // Run the sweep for real. The dry run above already lived here; this is the
+    // half that was still /inactive sweep apply:true.
+    container.querySelector("[data-run-sweep]").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      const el = container.querySelector("[data-sweep-status]");
+      const ok = await confirmDialog(
+        "Everyone listed above is moved to the inactive channel and has their roles "
+        + "stripped and saved. They can open a ticket to come back.",
+        { title: "Move inactive members?", confirmLabel: "Move Them", danger: true },
+      );
+      if (!ok) return;
+      btn.disabled = true;
+      el.textContent = "Sweeping…";
+      try {
+        const res = await apiPost("/api/config/inactive/sweep", {});
+        el.textContent = `Moved ${res.moved} of ${res.considered}.`
+          + (res.overflow ? ` ${res.overflow} more were held back by the per-run cap.` : "");
+        await runPreview();
+      } catch (err) {
+        el.textContent = "";
+        toast(err.message, "error");
+      } finally {
+        btn.disabled = false;
+      }
+    });
 
     const exemptPicker = mountPicker(
       container.querySelector('[data-picker="exempt_member"]'), memberOpts, "0",
@@ -262,7 +331,7 @@ export function mount(container) {
       if (!data.inactive_channel_configured) {
         notes.push(`<div class="error" style="margin-bottom:10px;">No inactive channel is set up yet,
           so the automatic sweep does nothing even when it is switched on — nobody below would
-          actually move. Run <code>/inactive panel</code> in Discord first.</div>`);
+          actually move. Set one under <strong>Inactive Channel</strong> above first.</div>`);
       }
       if (data.eligible_count) {
         // first_run_reach is computed server-side: the cap applies to the whole

@@ -94,7 +94,7 @@ filename. Renaming that cog is a loose end.
 
 ---
 
-## Gap 1 — admin config with no dashboard route (was 15; 12 done, 2 staying, 1 open)
+## Gap 1 — admin config with no dashboard route — DONE 2026-07-28
 
 These were admin config by CLAUDE.md's definition, and every one failed its
 parity check: the dashboard had no route to do the same thing. **Do not delete
@@ -118,8 +118,8 @@ remain.
 | `/risky reset_state` | **Staying in Discord.** Clears stuck in-memory state in the channel you're standing in — in-the-moment recovery, admin-gated for safety rather than because it's configuration |
 | `/games config game-status` | **Staying in Discord.** "What game is running in *this* channel" — building a dashboard view to answer a question about the channel you're already looking at would be worse than the command |
 | ~~`/games config game-end`~~ | **Done** — absorbed into `/games end force:true` in the Gap 3 pass (`912f4613`) |
-| `/inactive panel` | **Load-bearing.** `config-inactive.js:68` and `:265` tell admins to "Run `/inactive panel` in Discord first" — the dashboard depends on it |
-| `/inactive sweep` | Half-covered: the dry-run preview exists (`config.py:2187`) and `auto_sweep` runs 6-hourly, but there is no manual "run now" on the web |
+| ~~`/inactive panel`~~ | **Done** — Config → Inactive Sweep → Inactive Channel. This was the load-bearing one: the dashboard page itself told admins to go run the command. More than a config write — it also creates the `@Inactive` role, grants it access, and revokes it from the previous channel, so the whole four-step flow moved to `sweep_service.setup_inactive_channel` |
+| ~~`/inactive sweep`~~ | **Done** — the dry run already lived on the page; only "and do it" was still a command. Both halves run through the same `compute_candidates`, so the preview can't show one set and the run move another |
 | ~~`/setup`~~ | **Done — deleted.** All six settings it walked through (`mod_role_ids`, `admin_role_ids`, `jail_category_id`, `ticket_category_id`, `log_channel_id`, `transcript_channel_id`) were already on Config → Moderation, and it created nothing in the server: `@Jailed` is created lazily on the first jail (`jail/apply.py:194`), not by the wizard. So it configured nothing exclusive — the "only path for an admin who hasn't found the dashboard" argument doesn't survive the check, since they'd have to find `/setup` too. `setup_cog.py`, the wizard views, its step table, and its two embeds all went with it |
 | ~~`/grant_audit`~~ | **Done** — Config → Channel Panels. I first filed this as a half-covered *report*; it isn't. Its own docstring described the economy-leaderboard pattern (post, edit in place, move, kept fresh by an hourly loop), so it was a panel-poster with two options all along. Those options are why `PanelSpec` grew a declared `options` schema — the registry now describes what a panel needs, instead of a panel with settings growing its own endpoint |
 
