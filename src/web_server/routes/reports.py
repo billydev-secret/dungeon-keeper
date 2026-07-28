@@ -1095,21 +1095,22 @@ def _registered_command_names(ctx) -> set[str]:
 async def usage_report(
     request: Request,
     days: int = 30,
-    panels: str = "",
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     """Slash-command and dashboard-panel usage.
 
-    ``panels`` is a comma-separated list of the panel ids the *client* knows
-    about — the dashboard nav is defined in ``app.js``, so the browser is the
-    only source of truth for "every panel that exists". Omitting it just yields
-    an empty never-opened list.
+    Never-opened panels are *not* computed here. The dashboard nav lives in
+    ``app.js``, so the browser is the only source of truth for "every panel
+    that exists" — and that list is ~139 ids / 2.4 KB and grows with every
+    panel added, which is more than belongs in a query string behind a proxy.
+    Instead this returns ``seen_panels`` (the distinct names actually
+    recorded, a much smaller set) and the client subtracts it from its own
+    list. Commands are different: the bot's own command tree is server-side,
+    so ``unused_commands`` is computed here.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     days = max(1, min(int(days), 365))
-
-    known_panels = {p.strip() for p in panels.split(",") if p.strip()}
 
     def _q():
         with ctx.open_db() as conn:
@@ -1195,9 +1196,8 @@ async def usage_report(
         "unused_commands": usage_telemetry.unused_names(
             _registered_command_names(ctx), data["seen_commands"]
         ),
-        "unused_panels": usage_telemetry.unused_names(
-            known_panels, data["seen_panels"]
-        ),
+        # The client subtracts this from its own nav list — see the docstring.
+        "seen_panels": sorted(data["seen_panels"]),
         "top_users": top_users,
         "dashboard_users": dashboard_users,
         "daily_commands": [

@@ -850,6 +850,10 @@ function renderUnavailable(id) {
 // One row per mount — see web_server/routes/telemetry.py for why this isn't
 // middleware over every request.
 function recordPanelView(pageId) {
+  // Ingest is moderator-gated so an unprivileged writer can't invalidate the
+  // never-opened list. Skip the request for members who'd only get a 403 —
+  // regular members do reach the dashboard for the Wellness section.
+  if (!userPerms.has("moderator") && !userPerms.has("admin")) return;
   try {
     apiPost("/api/telemetry/panel", { panel: pageId }).catch(() => {});
   } catch (_) { /* ignore */ }

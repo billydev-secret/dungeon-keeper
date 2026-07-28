@@ -32,12 +32,7 @@ log = logging.getLogger("dungeonkeeper.usage_telemetry")
 
 class PanelViewIn(BaseModel):
     # Panel ids are the dashboard's own kebab-case route ids. Constraining the
-    # shape keeps junk out of the `name` column — it does NOT make the value
-    # trustworthy: any guild member can authenticate (the Wellness section is
-    # member-accessible), so a member could still post a well-formed id for a
-    # panel they can't see. That would make a genuinely-never-opened panel look
-    # used, which is the one number on this report that has to be right. Worth
-    # revisiting if the never-opened list is ever acted on destructively.
+    # shape keeps junk out of the `name` column.
     panel: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$")
 
 
@@ -45,9 +40,23 @@ class PanelViewIn(BaseModel):
 async def record_panel_view(
     request: Request,
     body: PanelViewIn,
-    user: AuthenticatedUser = Depends(require_perms(set())),
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
-    """Record one dashboard panel open. Any authenticated user."""
+    """Record one dashboard panel open. Moderators and above only.
+
+    Gated on ``moderator`` rather than "any authenticated user" because the
+    never-opened list is the whole point of this report, and an unprivileged
+    writer can silently invalidate it: any guild member can authenticate (the
+    Wellness section is member-accessible), so a member could post a
+    well-formed id for a panel they cannot see and make a genuinely
+    never-opened panel look used.
+
+    The cost is that members' own Wellness panel views are no longer recorded.
+    That is accepted — dashboard usage was always the mod/admin question, and a
+    trustworthy deletion list is worth more than member wellness traffic. The
+    client skips the ping entirely for non-mods (``app.js``), so this returns
+    403 only to a caller bypassing the dashboard.
+    """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 

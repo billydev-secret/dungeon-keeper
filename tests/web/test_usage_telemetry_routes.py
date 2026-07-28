@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,50 @@ def test_panel_view_rejects_non_panel_id_shapes(authed_client, panel):
     ).status_code == 422
 
 
+def _client_with_perms(fake_ctx, permission_bits: int, user_id: int):
+    from fastapi.testclient import TestClient
+
+    from web_server.auth import DiscordOAuthAuth, SESSION_COOKIE
+    from web_server.server import create_app
+
+    auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
+    client = TestClient(create_app(fake_ctx, auth=auth))
+    client.cookies.set(
+        SESSION_COOKIE,
+        auth.create_session_cookie(
+            user_id=user_id,
+            username="u",
+            access_token="token",
+            permission_bits=permission_bits,
+            guild_id=fake_ctx.guild_id,
+            guilds=[{"id": fake_ctx.guild_id, "name": "Test Guild", "icon": None}],
+        ),
+    )
+    return client
+
+
+def test_panel_view_rejects_plain_members(fake_ctx, web_db):
+    """A member with no mod perms must not be able to write panel views — they
+    could otherwise make a never-opened panel look used, which is the one
+    number on this report that has to be right."""
+    client = _client_with_perms(fake_ctx, 0, user_id=4242)
+    r = client.post("/api/telemetry/panel", json={"panel": "quality-score"})
+    assert r.status_code == 403
+    with open_db(web_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 0
+    client.close()
+
+
+def test_panel_view_accepts_moderators(fake_ctx, web_db):
+    client = _client_with_perms(fake_ctx, 0x2000, user_id=4243)  # manage_messages
+    assert client.post(
+        "/api/telemetry/panel", json={"panel": "mod-tickets"}
+    ).status_code == 200
+    with open_db(web_db) as conn:
+        assert conn.execute("SELECT name FROM usage_events").fetchone()[0] == "mod-tickets"
+    client.close()
+
+
 # ── report ───────────────────────────────────────────────────────────────
 
 
@@ -94,19 +139,26 @@ def test_usage_report_stringifies_snowflakes(authed_client, web_db):
     assert isinstance(body["top_users"][0]["user_id"], str)
 
 
-def test_unused_panels_uses_client_supplied_list(authed_client, web_db):
+def test_seen_panels_returned_for_client_side_diff(authed_client, web_db):
+    """The full nav list is too big for a query param, so the server returns
+    what it has seen and the client subtracts."""
     _seed(web_db, kind=svc.KIND_PANEL, name="home", user_id=1001)
+    _seed(web_db, kind=svc.KIND_PANEL, name="home", user_id=1002)
+    _seed(web_db, kind=svc.KIND_PANEL, name="economy-stats", user_id=1001)
 
-    body = authed_client.get(
-        "/api/reports/usage", params={"panels": "home,economy-stats,quality-score"}
-    ).json()
-    assert body["unused_panels"] == ["economy-stats", "quality-score"]
-
-
-def test_unused_panels_empty_without_client_list(authed_client, web_db):
-    _seed(web_db, kind=svc.KIND_PANEL, name="home", user_id=1001)
     body = authed_client.get("/api/reports/usage").json()
-    assert body["unused_panels"] == []
+    assert body["seen_panels"] == ["economy-stats", "home"]
+
+
+def test_seen_panels_spans_all_history_not_the_window(authed_client, web_db):
+    """A panel opened once a year ago is not 'never opened'."""
+    with open_db(web_db) as conn:
+        svc.record_event(
+            conn, GUILD, svc.KIND_PANEL, "home", 1001,
+            ts=time.time() - 400 * 86400,
+        )
+    body = authed_client.get("/api/reports/usage", params={"days": 7}).json()
+    assert body["seen_panels"] == ["home"]
 
 
 def test_unused_commands_empty_in_standalone_mode(authed_client, web_db):

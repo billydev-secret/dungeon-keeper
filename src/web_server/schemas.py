@@ -865,7 +865,9 @@ class UsageReportResponse(BaseModel):
     commands: list[UsageNameRow]
     panels: list[UsageNameRow]
     unused_commands: list[str]
-    unused_panels: list[str]
+    # Panel names actually recorded. The never-opened list is the client's own
+    # nav list minus this — the full panel list is too large for a query param.
+    seen_panels: list[str]
     top_users: list[UsageUserRow]
     dashboard_users: list[UsageUserRow]
     daily_commands: list[UsageDayPoint]

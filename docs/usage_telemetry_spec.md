@@ -52,7 +52,18 @@ their error rates ever become a question worth answering.
 
 **Panel views** — `POST /api/telemetry/panel`, pinged fire-and-forget by
 `app.js` after each successful panel mount. The user id comes from the session
-cookie, never from the request body.
+cookie, never from the request body, and the panel id must match
+`^[a-z0-9][a-z0-9-]*$`.
+
+Ingest is gated on **`moderator`**, not "any authenticated user". Any guild
+member can authenticate — the Wellness nav section is `perms: []` — so an
+unprivileged writer could post a well-formed id for a panel they cannot see and
+make a genuinely never-opened panel look used, silently invalidating the one
+number this report exists to produce. The cost is that members' own Wellness
+panel views are not recorded; dashboard usage was always the mod/admin
+question, and a trustworthy deletion list is worth more than member wellness
+traffic. `app.js` skips the ping for non-mods, so the 403 only reaches a caller
+bypassing the dashboard.
 
 Deliberately **not** a request-logging middleware: `home.js`, `mod-tickets.js`,
 `mod-jails.js`, `economy-stats.js`, `config-ai.js` and `config-bump-tracker.js`
@@ -63,7 +74,7 @@ instead of people. One row per panel open is ~50–200 rows/day against
 
 ## Report
 
-`GET /api/reports/usage?days=<1-365>&panels=<csv>` (admin only), rendered by
+`GET /api/reports/usage?days=<1-365>` (admin only), rendered by
 `static/js/panels/usage-telemetry.js` under **Reports → Bot Usage**.
 
 The headline is the never-used pair, because it is the only output that tells
@@ -72,10 +83,12 @@ you to *delete* something:
 * **Commands never run** — the live `bot.tree` walk minus everything ever
   recorded. Empty in standalone mode (no bot attached), so an unavailable tree
   reads as "nothing is unused" rather than "everything is".
-* **Panels never opened** — the `panels` query param minus everything ever
-  recorded. The nav is defined in `app.js`, so the browser is the only source
-  of truth for the full panel list; it passes its ids in via
-  `static/js/nav-registry.js`. Omitting the param yields an empty list.
+* **Panels never opened** — computed **client-side**. The nav is defined in
+  `app.js`, so the browser is the only source of truth for the full panel list
+  (~139 ids / 2.4 KB, growing with every panel — too much for a query string
+  behind a proxy). The endpoint returns `seen_panels`, the much smaller set of
+  names actually recorded, and the panel subtracts it from its own list, read
+  via `static/js/nav-registry.js`.
 
 Both are judged against **all** recorded history, not the selected range — a
 command last run 90 days ago is unpopular, not unused. Everything else on the

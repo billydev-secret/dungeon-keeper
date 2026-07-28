@@ -128,13 +128,14 @@ export function mount(container, initialParams) {
     syncHash("usage-telemetry", { days });
     const panel = container.querySelector(".panel");
     try {
+      const data = await withLoading(panel, api("/api/reports/usage", { days }));
+
       // The nav lives in app.js, so the browser is the only place that knows
-      // every panel id that exists — the server can't compute "never opened"
-      // without being told the full list.
-      const data = await withLoading(panel, api("/api/reports/usage", {
-        days,
-        panels: allPageIds().join(","),
-      }));
+      // every panel id that exists. Rather than shipping all ~139 ids up as a
+      // query param, the server returns just the names it has seen and we
+      // subtract here. Judged against all recorded history, not `days`.
+      const seen = new Set(data.seen_panels || []);
+      const unusedPanels = allPageIds().filter((id) => !seen.has(id)).sort();
 
       const t = data.totals || {};
       container.querySelector("[data-stats]").innerHTML = `
@@ -147,8 +148,8 @@ export function mount(container, initialParams) {
       container.querySelector("[data-unused]").innerHTML = `
         <h4>Slash commands never run <span class="chip chip-neutral">${data.unused_commands.length}</span></h4>
         ${unusedList(data.unused_commands, "Every registered command has been run at least once.")}
-        <h4>Dashboard panels never opened <span class="chip chip-neutral">${data.unused_panels.length}</span></h4>
-        ${unusedList(data.unused_panels, "Every panel has been opened at least once.")}
+        <h4>Dashboard panels never opened <span class="chip chip-neutral">${unusedPanels.length}</span></h4>
+        ${unusedList(unusedPanels, "Every panel has been opened at least once.")}
       `;
 
       container.querySelector("[data-commands]").innerHTML =
