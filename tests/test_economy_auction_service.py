@@ -12,21 +12,27 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_auction_service import (
+    attach_card,
+    attach_card_to_latest,
     bid_count,
     cancel_auction,
+    card_ids,
     end_auction_now,
     get_auction,
     get_open_auction,
+    latest_auction,
     min_next_bid,
     open_auction,
     place_bid,
     place_bid_now,
     settle_due_auctions,
+    sticky_panel_channels,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
     get_balance,
+    save_econ_settings,
 )
 from tests.db_template import migrated_db
 
@@ -429,3 +435,134 @@ def test_cancel_lets_a_new_auction_open(db):
         cancel_auction(conn, GUILD, aid, resolver_id=MOD, now=NOW + 1)
         # single-live rule no longer blocks a fresh one
         assert _open(conn, now=NOW + 2) != aid
+
+
+# ── sticky card ids (the lifecycle the StickyPanel contract encodes) ─────────
+#
+# Every other sticky panel in the bot is permanent; an auction ends. These are
+# the functions that make "stop sticking at close, never resurrect" true, so
+# each state gets a row rather than a happy-path test.
+
+
+@pytest.mark.parametrize(
+    ("finish", "expected_live"),
+    [
+        pytest.param(None, True, id="open-sticks"),
+        pytest.param("end", False, id="closed-goes-dormant"),
+        pytest.param("cancel", False, id="cancelled-goes-dormant"),
+        pytest.param("settle", False, id="timed-close-goes-dormant"),
+    ],
+)
+def test_card_ids_only_while_open(db, finish, expected_live):
+    with open_db(db) as conn:
+        aid = _open(conn, duration_hours=48.0)
+        attach_card(conn, aid, CH, 4242)
+        if finish == "end":
+            end_auction_now(conn, GUILD, aid, now=NOW + 60)
+        elif finish == "cancel":
+            cancel_auction(conn, GUILD, aid, resolver_id=MOD, now=NOW + 60)
+        elif finish == "settle":
+            settle_due_auctions(conn, GUILD, now=NOW + 100 * HOUR)
+
+        assert card_ids(conn, GUILD) == ((CH, 4242) if expected_live else (0, 0))
+        # The card message itself is never forgotten — it is still repainted
+        # and still deleted by the freeze repost. Only the *sticking* stops.
+        row = get_auction(conn, aid)
+        assert (int(row["channel_id"]), int(row["message_id"])) == (CH, 4242)
+
+
+def test_card_ids_is_zero_with_no_auction_at_all(db):
+    with open_db(db) as conn:
+        assert card_ids(conn, GUILD) == (0, 0)
+        assert latest_auction(conn, GUILD) is None
+
+
+def test_card_ids_follows_the_newest_auction_not_an_old_one(db):
+    """A finished auction must never pull the panel back to its dead card."""
+    with open_db(db) as conn:
+        old = _open(conn, duration_hours=48.0)
+        attach_card(conn, old, CH, 1111)
+        end_auction_now(conn, GUILD, old, now=NOW + 60)
+        assert card_ids(conn, GUILD) == (0, 0)
+
+        new = _open(conn, now=NOW + 120)
+        attach_card(conn, new, 777, 2222)
+        assert card_ids(conn, GUILD) == (777, 2222)
+
+
+def test_attach_card_to_latest_still_lands_after_the_auction_closed(db):
+    """The regression that would re-create the casino hub storm.
+
+    ``StickyPanel.save_ids`` only gets a guild id, so resolving "the open
+    auction" loses the write when a placement returns after the settle loop
+    has closed the auction: old card deleted, new card recorded nowhere, the
+    stored id frozen on a dead message. Writing to the newest row regardless
+    of state is correct under either ordering.
+    """
+    with open_db(db) as conn:
+        aid = _open(conn, duration_hours=48.0)
+        attach_card(conn, aid, CH, 1111)
+        # The auction closes while a repost is mid-flight...
+        end_auction_now(conn, GUILD, aid, now=NOW + 60)
+        assert get_open_auction(conn, GUILD) is None
+        # ...and the placement's save lands afterwards. It must not be dropped.
+        attach_card_to_latest(conn, GUILD, CH, 9999)
+
+        row = get_auction(conn, aid)
+        assert int(row["message_id"]) == 9999
+        # Still dormant, though — a recorded id is not a reason to re-stick.
+        assert card_ids(conn, GUILD) == (0, 0)
+
+
+def test_attach_card_to_latest_writes_only_the_newest_row(db):
+    with open_db(db) as conn:
+        old = _open(conn, duration_hours=48.0)
+        attach_card(conn, old, CH, 1111)
+        end_auction_now(conn, GUILD, old, now=NOW + 60)
+        new = _open(conn, now=NOW + 120)
+
+        attach_card_to_latest(conn, GUILD, 777, 2222)
+        assert int(get_auction(conn, new)["message_id"]) == 2222
+        assert int(get_auction(conn, old)["message_id"]) == 1111  # untouched
+
+
+def test_attach_card_to_latest_is_a_no_op_without_an_auction(db):
+    with open_db(db) as conn:
+        attach_card_to_latest(conn, GUILD, CH, 9999)  # must not raise
+        assert card_ids(conn, GUILD) == (0, 0)
+
+
+# ── the panel-collision warning ─────────────────────────────────────────────
+
+
+def test_sticky_panel_channels_lists_configured_panels(db):
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {
+            "guide_channel_id": 11,
+            "leaderboard_channel_id": 22,
+            "shop_channel_id": 33,
+        })
+        found = sticky_panel_channels(conn, GUILD)
+    assert found == {
+        11: "the economy guide panel",
+        22: "the leaderboard panel",
+        33: "the shop panel",
+    }
+
+
+def test_sticky_panel_channels_includes_the_casino_hub(db):
+    """The verified real collision: auction #1 in prod ran in the casino hub's
+    channel, and the hub re-sticks under bot messages where the card does not."""
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (GUILD, "casino_panel_channel_id", "1530328883449040967"),
+        )
+        found = sticky_panel_channels(conn, GUILD)
+    assert found[1530328883449040967] == "the casino hub panel"
+
+
+def test_sticky_panel_channels_is_empty_when_nothing_is_configured(db):
+    """An unconfigured guild must not warn about channel 0."""
+    with open_db(db) as conn:
+        assert sticky_panel_channels(conn, GUILD) == {}

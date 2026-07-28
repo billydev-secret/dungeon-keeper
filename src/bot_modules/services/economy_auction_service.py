@@ -220,6 +220,119 @@ def attach_card(
     )
 
 
+# ── sticky card ids (the StickyPanel contract) ────────────────────────────
+#
+# The card rides core.sticky.StickyPanel, which is otherwise only used by
+# permanent one-per-guild panels. An auction ends, so the pair below is what
+# encodes the lifecycle — and it does so entirely in the callbacks, leaving
+# core/sticky.py untouched:
+#
+#   open      -> card_ids returns the live ids, the panel re-sticks normally
+#   closed    -> card_ids returns (0, 0); _delayed_restick bails on a falsy
+#                message id ("only ever maintains an existing panel"), so the
+#                panel goes dormant on its own and can never resurrect a
+#                finished auction
+#
+# Both read the guild's NEWEST auction row rather than "the open one", which
+# is what makes them safe against the close landing mid-placement — see
+# attach_card_to_latest.
+
+
+def latest_auction(
+    conn: sqlite3.Connection, guild_id: int
+) -> sqlite3.Row | None:
+    """The guild's most recent auction whatever its state, or None.
+
+    One live auction per guild (v1) means the newest row is always the one
+    whose card is on screen — open, closed or cancelled.
+    """
+    return conn.execute(
+        "SELECT * FROM econ_auctions WHERE guild_id = ? ORDER BY id DESC LIMIT 1",
+        (guild_id,),
+    ).fetchone()
+
+
+def card_ids(conn: sqlite3.Connection, guild_id: int) -> tuple[int, int]:
+    """``(channel_id, message_id)`` of the card the sticky panel should keep
+    at the bottom — ``(0, 0)`` when there is nothing to keep there.
+
+    Only an **open** auction gets ids. The moment settlement flips the state
+    the panel reads (0, 0) and stops re-sticking, which is the whole
+    stop-at-close mechanism. Note the card message itself still exists and is
+    still repainted by ``_refresh_card``; it simply stops being moved.
+    """
+    row = latest_auction(conn, guild_id)
+    if row is None or str(row["state"]) != "open":
+        return 0, 0
+    return int(row["channel_id"] or 0), int(row["message_id"] or 0)
+
+
+def attach_card_to_latest(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int, message_id: int
+) -> None:
+    """Record a re-sticked card's new ids against the guild's newest auction.
+
+    Deliberately state-blind, and that is the point. ``StickyPanel.save_ids``
+    is handed only a guild id, so the obvious implementation resolves "the
+    open auction" — but a placement that posts while the auction is open can
+    return *after* the settle loop has closed it, and then there is no open
+    auction to write to. The ids would be dropped: the old card already
+    deleted, the new one recorded nowhere, the stored id frozen on a dead
+    message. That is exactly the shape of the casino hub storm (prod
+    2026-07-26, fixed in 6fb53e73) — a panel whose stored id never advances.
+
+    Writing to the newest row instead is correct under either ordering, and a
+    (0, 0) unpost clears that row rather than silently going nowhere.
+    """
+    conn.execute(
+        """
+        UPDATE econ_auctions SET channel_id = ?, message_id = ?
+        WHERE id = (SELECT id FROM econ_auctions WHERE guild_id = ?
+                    ORDER BY id DESC LIMIT 1)
+        """,
+        (channel_id, message_id, guild_id),
+    )
+
+
+def sticky_panel_channels(
+    conn: sqlite3.Connection, guild_id: int
+) -> dict[int, str]:
+    """Channels that already host a sticky panel → that panel's name.
+
+    Discord has one bottom slot per channel. Two sticky panels in one channel
+    therefore take turns being second, and the auction card loses that fight
+    reliably in the casino hub's channel, because the hub re-sticks under bot
+    messages (``restick_on_bot``) and the card does not. It settles rather
+    than storming — but the card ends up buried, so the feature quietly does
+    not do what it says.
+
+    Rather than couple the cogs at runtime, ``start_auction`` calls this and
+    warns the mod, who is already choosing a channel.
+
+    Covers the four panels reachable from a config read: the three economy
+    panels and the casino hub. The other four sticky panels (pen pals, DM
+    perms, Voice Master, the todo board) keep their ids in their own tables
+    and are not worth four cross-cog imports here — missing one costs a
+    warning, never a working auction.
+    """
+    from bot_modules.services.casino_service import (  # noqa: PLC0415
+        load_casino_settings,
+    )
+    from bot_modules.services.economy_service import (  # noqa: PLC0415
+        load_econ_settings,
+    )
+
+    econ = load_econ_settings(conn, guild_id)
+    casino = load_casino_settings(conn, guild_id)
+    named = (
+        (int(econ.guide_channel_id or 0), "the economy guide panel"),
+        (int(econ.leaderboard_channel_id or 0), "the leaderboard panel"),
+        (int(econ.shop_channel_id or 0), "the shop panel"),
+        (int(casino.panel_channel_id or 0), "the casino hub panel"),
+    )
+    return {cid: name for cid, name in named if cid}
+
+
 # ── bid (the atomic heart) ──────────────────────────────────────────────────
 
 

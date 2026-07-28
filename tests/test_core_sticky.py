@@ -617,3 +617,41 @@ async def test_a_queued_restick_sees_the_placement_it_waited_on():
         panel.place(guild, channel, only_if_buried=True),
     )
     assert channel.send.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_panel_posted_outside_place_is_invisible_until_forget():
+    """The trap for any caller that posts its panel without going through
+    ``place``.
+
+    ``on_message`` reads ids through the TTL cache, and it caches "no panel"
+    just as readily as a real id — for ``cache_ttl`` seconds, populated by
+    *any* member message anywhere in the guild. So a feature that posts its
+    first panel with a bare ``channel.send`` (rather than ``place`` /
+    ``place_or_refresh``, which call ``_remember``) stays un-sticky until that
+    entry lapses: up to five minutes of the panel simply not working.
+
+    ``forget`` is the escape hatch, and a caller in that shape must use it.
+    Regression for the economy auction card, which posts its own card at
+    ``/bank auction start`` (2026-07-28).
+    """
+    store = _Store()  # nothing posted yet
+    panel = _panel(_bot(), store)
+
+    # Ordinary chat while no panel exists caches (0, 0).
+    with patch.object(panel, "schedule_restick") as sched:
+        await panel.on_message(_message())
+    sched.assert_not_called()
+
+    # The feature now posts its panel itself and records the ids.
+    store.ids = (CHANNEL, MESSAGE)
+
+    # The cache still says "no panel", so the restick never arms.
+    with patch.object(panel, "schedule_restick") as sched:
+        await panel.on_message(_message())
+    sched.assert_not_called()
+
+    panel.forget(GUILD)
+    with patch.object(panel, "schedule_restick") as sched:
+        await panel.on_message(_message())
+    sched.assert_called_once_with(GUILD)

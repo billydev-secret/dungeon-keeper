@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, cast
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.sticky import PanelContent
 from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.economy.view_helpers import coins as _coins
 from bot_modules.economy.view_helpers import safe_ephemeral as _safe_ephemeral
@@ -35,10 +36,12 @@ from bot_modules.services.economy_auction_service import (
     end_auction_now,
     get_auction,
     get_open_auction,
+    latest_auction,
     min_next_bid,
     open_auction,
     place_bid_now,
     settle_due_auctions,
+    sticky_panel_channels,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -54,6 +57,7 @@ log = logging.getLogger("dungeonkeeper.economy")
 __all__ = [
     "AuctionBidButton",
     "AuctionBidView",
+    "build_auction_panel",
     "render_auction_card",
     "start_auction",
     "cancel_open_auction",
@@ -258,6 +262,68 @@ async def _render(
     return embed, view, str(row["title"])
 
 
+def _release_panel(bot: Bot, guild_id: int) -> None:
+    """Drop the auction panel's cached ids for a guild.
+
+    ``StickyPanel.on_message`` reads ids through a 300s TTL cache that is
+    populated by *any* member message in the guild — and it caches "no panel"
+    exactly as readily as a real id. Only ``place`` refreshes it (via
+    ``_remember``), and this feature posts its card itself at both ends of the
+    lifecycle, so both ends have to invalidate by hand:
+
+    * **at start** — chat before the auction existed has almost certainly
+      cached ``(0, 0)``. Without this the brand-new card does not re-stick
+      until the entry lapses: the feature silently not working for up to five
+      minutes.
+    * **at close** — the cache still holds the pre-close message, so a restick
+      would wake up, find it buried and try to place. ``build_auction_panel``
+      refuses a finished auction so nothing would be posted, but clearing the
+      entry means the wake-up (and its error log) never happens.
+    """
+    panel = getattr(bot.get_cog("EconomyCog"), "auction_panel", None)
+    if panel is not None:
+        panel.forget(guild_id)
+
+
+async def build_auction_panel(
+    bot: Bot, guild: discord.Guild
+) -> PanelContent | None:
+    """The guild's **open** auction as sticky-panel content, or None.
+
+    ``StickyPanel.build`` for the auction card. It renders through the same
+    ``_render`` the card itself uses, so a re-sticked card and a repainted one
+    can never disagree.
+
+    Returning None for anything but an open auction is the resurrection
+    guard, and it is load-bearing rather than defensive. ``card_ids`` going to
+    (0, 0) at close stops the restick *arming*, but a restick armed in the
+    seconds before settlement can still be in flight, and ``_place_locked``
+    treats a (0, 0) stored id as "not at the bottom" and would happily post a
+    fresh card for the finished auction. Refusing to build is what makes that
+    interleaving a no-op: ``build`` runs before ``send``, so the placement
+    aborts having posted nothing.
+
+    No signature is supplied: the card shows ``<t:…:R>`` countdowns and a
+    live high bid, so "unchanged" is never true for long enough to be worth
+    the comparison.
+    """
+    def _open_id() -> int:
+        with bot.ctx.open_db() as conn:
+            row = latest_auction(conn, guild.id)
+            if row is None or str(row["state"]) != "open":
+                return 0
+            return int(row["id"])
+
+    auction_id = await asyncio.to_thread(_open_id)
+    if not auction_id:
+        return None
+    rendered = await _render(bot, guild, auction_id)
+    if rendered is None:
+        return None
+    embed, view, _title = rendered
+    return PanelContent(embed=embed, view=view or discord.utils.MISSING)
+
+
 async def _refresh_card(
     bot: Bot,
     card: discord.Message | None,
@@ -367,6 +433,46 @@ async def _handle_bid(
 # ── command-backed flows (start / cancel / end) ──────────────────────────────
 
 
+async def _sticky_warning(
+    bot: Bot, guild: discord.Guild, channel: discord.abc.Messageable
+) -> str | None:
+    """Why this channel won't give the card the behaviour the manual promises.
+
+    Two ways to lose it, both worth saying out loud rather than letting the
+    mod discover the card sinking:
+
+    * **a thread** — `StickyPanel._channel` resolves ids with
+      ``guild.get_channel``, which never returns a thread, and ``_freeze_card``
+      wants a ``TextChannel`` too. The card posts and works; it just never
+      moves. (Auctions in threads predate stickiness, so this warns rather
+      than blocks — the capability isn't ours to take away.)
+    * **a channel that already hosts a sticky panel** — one bottom slot, two
+      claimants. The auction loses reliably: the resident panels re-stick
+      under bot messages and the card does not.
+    """
+    if not isinstance(channel, discord.TextChannel):
+        return (
+            "The card can't stay at the bottom here — sticky panels only work "
+            "in ordinary text channels, not threads or forum posts. The "
+            "auction runs fine, but the card will stay where it was posted "
+            "and won't move down as people chat."
+        )
+
+    def _resident() -> str | None:
+        with bot.ctx.open_db() as conn:
+            return sticky_panel_channels(conn, guild.id).get(channel.id)
+
+    resident = await asyncio.to_thread(_resident)
+    if resident:
+        return (
+            f"This channel already has {resident} stuck to the bottom. Both "
+            "can't be last, so the auction card will keep getting pushed "
+            "above it. Run the auction somewhere else if you want the card to "
+            "stay in view."
+        )
+    return None
+
+
 async def start_auction(
     interaction: discord.Interaction,
     *,
@@ -443,6 +549,23 @@ async def start_auction(
             attach_card(conn, auction_id, channel.id, message.id)
 
     await asyncio.to_thread(_attach)
+    # The card was posted here rather than through place(), so nothing has
+    # told the panel it exists — see _release_panel. Without this the auction
+    # does not stick at all for up to 300s.
+    _release_panel(bot, guild.id)
+
+    warning = await _sticky_warning(bot, guild, channel)
+    if warning:
+        # The card is posted and the auction is live either way — this only
+        # tells the mod, who is standing right here choosing a channel, that
+        # the card will not behave the way the manual promises.
+        await _safe_ephemeral(
+            interaction,
+            f"🔨 Auction started — the card is live.\n\n⚠️ {warning} "
+            "`/bank auction cancel` refunds and clears this one if you'd "
+            "rather move it.",
+        )
+        return
     await _safe_ephemeral(interaction, "🔨 Auction started — the card is live.")
 
 
@@ -474,8 +597,14 @@ async def cancel_open_auction(interaction: discord.Interaction) -> None:
         await _safe_ephemeral(interaction, "❌ There's no live auction to cancel.")
         return
     auction_id, cancelled = result
+    _release_panel(bot, guild.id)  # closed in the DB already — see _announce_settlement
     card = await _card_message(bot, cancelled) if cancelled is not None else None
     await _refresh_card(bot, card, guild, auction_id)
+    if cancelled is not None:
+        # Cancelling ends the auction too, so the card freezes here the same
+        # way it does at close — anyone who had bid should see the refund
+        # notice at the bottom of the channel, not wherever chat left it.
+        await _freeze_card(bot, guild, auction_id, int(cancelled["channel_id"] or 0))
     refunded = cancelled["high_bidder_id"] if cancelled is not None else None
     if refunded is not None:
         try:
@@ -520,13 +649,88 @@ async def end_open_auction(interaction: discord.Interaction) -> None:
 # ── settle → announce (background loop + /bank auction end) ───────────────────
 
 
+async def _freeze_card(
+    bot: Bot, guild: discord.Guild, auction_id: int, channel_id: int
+) -> None:
+    """Move the finished card to the bottom one last time, then stop forever.
+
+    The card stops being re-sticked the moment the state leaves ``open``
+    (``card_ids`` goes to (0, 0)), so whatever has buried it stays on top of
+    it — and on the settle path that includes our own "Sold!" ping, which
+    would leave the result buried under the very announcement of it. One
+    repost puts the outcome where everyone is looking, and then it never moves
+    again.
+
+    Deliberately NOT routed through ``StickyPanel.place``: that path builds
+    via ``build_auction_panel``, which refuses a finished auction precisely so
+    a late restick can't resurrect one. Post-before-delete is kept by hand for
+    the same reason it exists in ``core.sticky`` — a failed send must leave
+    the working card alone.
+
+    Runs exactly once per auction: every caller reaches it through the state
+    claim in ``settle_due_auctions`` / ``end_auction_now`` / ``cancel_auction``,
+    which only one caller can win.
+    """
+    channel = bot.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    # Re-read the card id rather than trusting the caller's snapshot, which
+    # was taken when the state claim won. A restick that placed between that
+    # claim and now has already deleted the snapshotted message and recorded
+    # a NEW one; deleting the stale id would then leave the re-sticked card —
+    # rendered while the auction was still open, Bid button and all — sitting
+    # above the frozen result forever.
+    def _current() -> int:
+        with bot.ctx.open_db() as conn:
+            row = get_auction(conn, auction_id)
+            return int(row["message_id"] or 0) if row is not None else 0
+
+    message_id = await asyncio.to_thread(_current)
+    if not message_id:
+        return  # the auction never got a card (rolled back at start)
+
+    rendered = await _render(bot, guild, auction_id)
+    if rendered is None:
+        return
+    embed, view, _title = rendered
+    try:
+        fresh = await channel.send(embed=embed, view=view or discord.utils.MISSING)
+    except discord.HTTPException:
+        log.debug("econ auction: failed to repost the finished card", exc_info=True)
+        return
+
+    # attach_card, not attach_card_to_latest: we know the concrete auction.
+    # The state-blind variant is only right on the save_ids path, where a
+    # guild id is all there is — here it would write to whatever row is
+    # newest, and a mod who starts the next auction while this send is in
+    # flight would get their fresh card's ids overwritten by this dead one.
+    def _attach() -> None:
+        with bot.ctx.open_db() as conn:
+            attach_card(conn, auction_id, channel.id, fresh.id)
+
+    await asyncio.to_thread(_attach)
+    try:
+        await channel.get_partial_message(message_id).delete()
+    except discord.HTTPException:
+        pass
+
+
 async def _announce_settlement(
     bot: Bot, guild: discord.Guild, settled: SettledAuction
 ) -> None:
-    """Repaint the card as closed and post/ping the result."""
+    """Repaint the card as closed, post/ping the result, then freeze the card."""
+    # First thing, before any awaiting on Discord: the auction is already
+    # closed in the DB, so drop the panel's cached ids. A restick firing from
+    # here on then reads a fresh (0, 0) and returns early instead of reaching
+    # build_auction_panel's refusal — which is a correct stop, but core logs
+    # it as an ERROR with a traceback, and an expected close is not an error.
+    _release_panel(bot, guild.id)
     card = await _card_message(bot, {
         "channel_id": settled.channel_id, "message_id": settled.message_id
     })
+    # Repaint in place first: if the freeze repost below can't post, the card
+    # that stays on screen still reads "closed" rather than "bidding open".
     await _refresh_card(bot, card, guild, settled.auction_id)
 
     channel = bot.get_channel(settled.channel_id)
@@ -547,6 +751,7 @@ async def _announce_settlement(
         await channel.send(text, allowed_mentions=allowed)
     except discord.HTTPException:
         log.debug("econ auction: failed to post settlement", exc_info=True)
+    await _freeze_card(bot, guild, settled.auction_id, settled.channel_id)
     if settled.winner_id is not None:
         try:
             await notify_member(
