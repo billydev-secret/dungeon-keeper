@@ -251,6 +251,86 @@ def line_for(
     return pools_logic.derive_line(history)
 
 
+class SettleJob(NamedTuple):
+    round_id: int
+    day: str
+    result: int
+    line: float
+
+
+class OpenJob(NamedTuple):
+    day: str
+    line: float
+    closes_at: float
+
+
+class Tick(NamedTuple):
+    """What the day-roll sweep should do, decided without touching Discord.
+
+    Ordering is not incidental: **settle yesterday before opening today**.
+    Today's line is a median of the completed days before it, so opening
+    first would compute it against a day that has not finished — and in the
+    worst case against its own partial self.
+    """
+
+    settle: list[SettleJob]
+    open: OpenJob | None
+
+
+def plan_tick(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    tz_offset_hours: float,
+    close_hour: int,
+    now: float,
+) -> Tick:
+    """Decide the day roll's work.
+
+    Settles every open round whose measured day is over — recomputed from
+    the ledger, so a round missed by hours or a whole restart lands on the
+    same answer it would have at midnight. Opens today's round if there is
+    not one, there is enough history for a line, and betting has not
+    already passed its close hour.
+    """
+    from bot_modules.economy.logic import local_day_bounds  # noqa: PLC0415
+
+    today = _local_day(now, tz_offset_hours)
+    series = {
+        m.day: m
+        for m in daily_series(conn, guild_id, tz_offset_hours=tz_offset_hours)
+    }
+
+    settle: list[SettleJob] = []
+    for rnd in conn.execute(
+        "SELECT id, local_day, line FROM casino_pools_rounds "
+        "WHERE guild_id = ? AND status = 'open'",
+        (guild_id,),
+    ):
+        day = str(rnd["local_day"])
+        if day >= today:
+            continue  # still being measured
+        metric = series.get(day)
+        # A day with no ledger rows at all had a net change of exactly zero.
+        settle.append(SettleJob(
+            int(rnd["id"]), day, metric.net if metric else 0, float(rnd["line"])
+        ))
+
+    opening: OpenJob | None = None
+    if conn.execute(
+        "SELECT 1 FROM casino_pools_rounds WHERE guild_id = ? AND local_day = ?",
+        (guild_id, today),
+    ).fetchone() is None:
+        line = pools_logic.derive_line(
+            [m.net for day, m in sorted(series.items()) if day < today]
+        )
+        closes_at = local_day_bounds(today, tz_offset_hours)[0] + close_hour * 3600
+        if line is not None and now < closes_at:
+            opening = OpenJob(today, line, closes_at)
+
+    return Tick(settle, opening)
+
+
 def candles(
     conn: sqlite3.Connection,
     guild_id: int,

@@ -21,6 +21,7 @@ import sqlite3
 import discord
 
 from bot_modules.services import casino_logic as logic
+from bot_modules.services import pools_charts, pools_logic
 from bot_modules.services.casino_service import CasinoSettings
 from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.branding_service import DEFAULT_CASINO_NAME
@@ -1205,3 +1206,133 @@ def build_my_stats_embed(
         )
     embed.set_footer(text=_FOOTER)
     return embed
+
+
+# ── pools (casino-classics Stage 2 — the parimutuel market) ────────────
+
+
+def _pool_bar(prob: float | None, width: int = 20) -> str:
+    """Implied odds as a monospace bar. None = nobody has staked yet."""
+    if prob is None:
+        return "`" + "·" * width + "`  no bets yet"
+    filled = max(0, min(width, round(prob * width)))
+    return (
+        "`" + "█" * filled + "░" * (width - filled) + "`"
+        f"  **{prob * 100:.0f}%** over"
+    )
+
+
+def build_pools_panel_embed(
+    econ: EconSettings,
+    line: float,
+    split: pools_logic.PoolSplit,
+    closes_at: float,
+    day: str,
+    accent: discord.Color | None,
+    *,
+    closed: bool = False,
+) -> discord.Embed:
+    """The standing market panel, repainted as stakes land.
+
+    Deliberately states what the number means and where it comes from: this
+    is the only game in the casino whose outcome is not something members
+    watch happen, so "the bot counts the ledger at midnight" has to be on
+    the card rather than in the manual.
+    """
+    prob = pools_logic.implied_probability(split)
+    when = (
+        "Betting is **closed** — settles when the day rolls over."
+        if closed
+        else f"Betting closes <t:{int(closes_at)}:R>."
+    )
+    embed = discord.Embed(
+        title="📈 Pools — today's market",
+        description=(
+            f"Will the economy grow by more than "
+            f"**{pools_logic.format_line(line)}** {econ.currency_plural} "
+            f"today ({day})?\n"
+            f"{when}\n​"
+        ),
+        color=_accent(accent),
+    )
+    embed.add_field(name="Implied odds", value=_pool_bar(prob), inline=False)
+    embed.add_field(
+        name="Over", value=_coins(econ, split.over), inline=True
+    )
+    embed.add_field(
+        name="Under", value=_coins(econ, split.under), inline=True
+    )
+    embed.add_field(
+        name="Pool", value=_coins(econ, split.total), inline=True
+    )
+    embed.add_field(
+        name="How it settles",
+        value=(
+            "Winners split the whole pool pro-rata — you're betting against "
+            "the other side, not the house. The bot totals every coin minted "
+            "and burned today and compares it to the line; there is nothing "
+            "to dispute.\n​"
+        ),
+        inline=False,
+    )
+    embed.set_image(url=f"attachment://{pools_charts.MARKET_FILENAME}")
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_pools_result_embed(
+    econ: EconSettings,
+    day: str,
+    result: int,
+    line: float,
+    winning_side: str,
+    payouts: list[tuple[int, int, int]],
+    takeout: int,
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """``payouts`` = (user_id, stake, payout), biggest return first."""
+    embed = discord.Embed(
+        title="📈 Pools — the day is in",
+        description=(
+            f"**{day}** closed at **{result:+,}** against a line of "
+            f"**{pools_logic.format_line(line)}** — "
+            f"**{pools_logic.describe_side(winning_side)}** takes it.\n​"
+        ),
+        color=_accent(accent),
+    )
+    if payouts:
+        rows = []
+        for user_id, stake, payout in payouts[:12]:
+            if payout:
+                rows.append(f"<@{user_id}> +{payout - stake:,} (staked {stake:,})")
+            else:
+                rows.append(f"<@{user_id}> −{stake:,}")
+        embed.add_field(name="Positions", value="\n".join(rows), inline=False)
+    if takeout:
+        embed.add_field(
+            name="Takeout",
+            value=(
+                f"{_coins(econ, takeout)} burned — taken out of circulation, "
+                "not paid to the house."
+            ),
+            inline=False,
+        )
+    embed.set_image(url=f"attachment://{pools_charts.INSTRUMENT_FILENAME}")
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_pools_void_embed(
+    day: str, refunded: int, accent: discord.Color | None
+) -> discord.Embed:
+    """One-sided pools have no counterparty, so everyone gets their coins
+    back rather than the house taking a cut of the only side that showed."""
+    return discord.Embed(
+        title="📈 Pools — no market today",
+        description=(
+            f"Everyone who staked on **{day}** backed the same side, so "
+            f"there was nothing to play against. All **{refunded:,}** "
+            "staked has been refunded in full.\n​"
+        ),
+        color=_accent(accent),
+    ).set_footer(text=_FOOTER)

@@ -34,6 +34,7 @@ import discord
 from discord.ext import commands, tasks
 
 from bot_modules.cogs.casino import embeds as casino_embeds
+from bot_modules.cogs.casino.pools_panel import PoolsMixin
 from bot_modules.cogs.casino.views import (
     BaccaratBetButton,
     BaccaratBetModal,
@@ -51,6 +52,7 @@ from bot_modules.cogs.casino.views import (
     KenoTicketModal,
     KenoTierButton,
     PlayAgainButton,
+    PoolsPanelView,
     RouletteBetButton,
     RouletteBetModal,
     RouletteNextView,
@@ -391,7 +393,7 @@ _KENO_UI = _WindowUI(
 _WINDOW_UIS = (_ROULETTE_UI, _DERBY_UI, _BACCARAT_UI, _DICE_UI, _KENO_UI)
 
 
-class CasinoCog(commands.Cog, name="CasinoCog"):
+class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.ctx = bot.ctx
@@ -405,6 +407,10 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         self._window_repaints: dict[tuple[str, int], asyncio.Task] = {}
         # guild → monotonic time a communal round was last seen open.
         self._last_round_seen: dict[int, float] = {}
+        # Pools repaints are coalesced per guild: a stake moves the
+        # implied odds, and each repaint re-renders and re-uploads a PNG.
+        self._pools_repaints: dict[int, asyncio.Task] = {}
+        self._pools_last_paint: dict[int, float] = {}
         self.hub_panel = StickyPanel(
             "casino hub",
             bot,
@@ -449,6 +455,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         self.bot.add_view(BaccaratNextView())
         self.bot.add_view(DiceNextView())
         self.bot.add_view(KenoNextView())
+        self.bot.add_view(PoolsPanelView())
         self.bot.add_dynamic_items(
             BlackjackActionButton, RouletteBetButton, DerbyBetButton,
             BaccaratBetButton, DiceBetButton, KenoTierButton,
@@ -464,6 +471,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         self.hub_panel.cancel_all()
         for task_map in (
             self._window_timers, self._window_repaints, self._hub_repaints,
+            self._pools_repaints,
         ):
             for task in task_map.values():
                 task.cancel()
@@ -608,6 +616,10 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                         "casino overdue %s resolve failed for %s",
                         ui.key, round_id,
                     )
+        # Pools rides this same minute tick rather than owning a timer: its
+        # round is a day long, so a minute of lateness at the roll is
+        # invisible, and the outcome is recomputed from the ledger anyway.
+        await self.pools_tick()
 
     @maintenance.before_loop
     async def _wait_ready(self) -> None:

@@ -67,6 +67,10 @@ class CasinoSettings:
     war_enabled: bool = True
     keno_enabled: bool = True
     pools_enabled: bool = False
+    # Pools runs its own daily market and gets its own channel — a round is
+    # a day long, so its panel would otherwise sit pinned above the casino
+    # hub all day. 0 = fall back to the casino channel.
+    pools_channel_id: int = 0
     # Guild-local hour betting shuts on the day being measured. Late enough
     # that most of the day's mint is visible, early enough that the night's
     # casino play — where the variance lives — is still unwritten.
@@ -181,6 +185,11 @@ def save_casino_settings(
 
 def game_enabled(settings: CasinoSettings, game: str) -> bool:
     return bool(getattr(settings, f"{game}_enabled"))
+
+
+def pools_channel(settings: CasinoSettings) -> int:
+    """Where the daily market lives. Falls back to the casino channel."""
+    return settings.pools_channel_id or settings.channel_id
 
 
 # ── the money choke point ──────────────────────────────────────────────

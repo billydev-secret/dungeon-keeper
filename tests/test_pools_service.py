@@ -32,16 +32,20 @@ CHAN = 9200
 A, B, C = 4001, 4002, 4003
 TZ = -7.0
 
-# 2026-07-20 12:00 guild-local (tz -7) → the middle of a known day.
 DAY = "2026-07-20"
 NEXT_DAY = "2026-07-21"
-NOON = 1_784_600_000.0
 
 
 def _local_midnight(day: str) -> float:
     from bot_modules.economy.logic import local_day_bounds
 
     return local_day_bounds(day, TZ)[0]
+
+
+# Derived, not hardcoded: an epoch literal picked by eye lands at whatever
+# local hour the offset happens to give (the first draft of this file was
+# 19:13, which silently put every tick past the 18:00 close).
+NOON = _local_midnight(DAY) + 12 * 3600
 
 
 @pytest.fixture
@@ -379,6 +383,97 @@ def test_leaver_refund_stops_at_the_betting_close(db):
         res = svc.settle_pools_round(conn, rid, 5000, now=NOON + 7200)
         paid = {int(b["user_id"]): int(b["payout"]) for b in res.bets or []}
         assert paid[A] == 190
+
+
+# ── the day-roll sweep ─────────────────────────────────────────────────
+
+
+def _seed_history(conn, days=8, per_day=100):
+    """A week and a bit of quiet days, so a line can be derived."""
+    for i in range(days):
+        _ledger(conn, per_day, "quest", NOON + i * 86_400)
+
+
+def _tick(conn, now, close_hour=18):
+    return ps.plan_tick(
+        conn, GUILD, tz_offset_hours=TZ, close_hour=close_hour, now=now
+    )
+
+
+def test_tick_opens_todays_round_once_there_is_history(db):
+    with open_db(db) as conn:
+        _seed_history(conn)
+        t = _tick(conn, NOON + 8 * 86_400)
+    assert t.open is not None
+    assert t.open.line == 100.5
+    assert t.settle == []
+
+
+def test_tick_will_not_open_without_a_week_of_history(db):
+    with open_db(db) as conn:
+        _seed_history(conn, days=3)
+        assert _tick(conn, NOON + 3 * 86_400).open is None
+
+
+def test_tick_will_not_open_after_the_close_hour(db):
+    """A round opened at 20:00 would sell six hours of a day everyone can
+    already see most of."""
+    with open_db(db) as conn:
+        _seed_history(conn)
+        day_start = _local_midnight(ps._local_day(NOON + 8 * 86_400, TZ))
+        assert _tick(conn, day_start + 19 * 3600).open is None
+        assert _tick(conn, day_start + 17 * 3600).open is not None
+
+
+def test_tick_does_not_reopen_an_existing_round(db):
+    with open_db(db) as conn:
+        _seed_history(conn)
+        now = NOON + 8 * 86_400
+        day = ps._local_day(now, TZ)
+        svc.open_pools_round(conn, GUILD, CHAN, day, 100.5, now + 3600, now=now)
+        assert _tick(conn, now).open is None
+
+
+def test_tick_settles_yesterday_before_opening_today(db):
+    """Today's line is a median of completed days, so opening first would
+    compute it against a day that has not finished."""
+    with open_db(db) as conn:
+        _seed_history(conn)
+        yesterday = ps._local_day(NOON + 7 * 86_400, TZ)
+        svc.open_pools_round(
+            conn, GUILD, CHAN, yesterday, 50.5,
+            NOON + 7 * 86_400 + 3600, now=NOON + 7 * 86_400,
+        )
+        t = _tick(conn, NOON + 8 * 86_400)
+    assert [j.day for j in t.settle] == [yesterday]
+    assert t.settle[0].result == 100          # that day's actual net change
+    assert t.settle[0].line == 50.5           # the line members bet into
+    assert t.open is not None
+
+
+def test_tick_leaves_a_round_alone_while_its_day_is_running(db):
+    with open_db(db) as conn:
+        _seed_history(conn)
+        now = NOON + 8 * 86_400
+        day = ps._local_day(now, TZ)
+        svc.open_pools_round(conn, GUILD, CHAN, day, 100.5, now + 3600, now=now)
+        # Betting has closed, but the day is not over — nothing to settle.
+        assert _tick(conn, now + 7200).settle == []
+
+
+def test_tick_settles_a_round_missed_for_days(db):
+    """Downtime is survivable because the outcome is recomputed from the
+    ledger, not captured at the close."""
+    with open_db(db) as conn:
+        _seed_history(conn)
+        stale = ps._local_day(NOON + 7 * 86_400, TZ)
+        svc.open_pools_round(
+            conn, GUILD, CHAN, stale, 50.5,
+            NOON + 7 * 86_400 + 3600, now=NOON + 7 * 86_400,
+        )
+        late = _tick(conn, NOON + 12 * 86_400)
+    assert [j.day for j in late.settle] == [stale]
+    assert late.settle[0].result == 100
 
 
 def test_leaver_refund_still_works_for_short_windowed_games(db):

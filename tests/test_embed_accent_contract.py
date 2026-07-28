@@ -39,6 +39,7 @@ from bot_modules.games_ttl import embeds as ttl_embeds
 from bot_modules.games_wyr import embeds as wyr_embeds
 from bot_modules.services import economy_service
 from bot_modules.services import embeds as services_embeds
+from bot_modules.services import pools_logic
 from bot_modules.services import welcome_service
 from bot_modules.services.risky_roll import formatters as risky_formatters
 from bot_modules.services.risky_roll import models as risky_models
@@ -488,6 +489,29 @@ CASES = [
         "casino.keno_tumble",
         lambda **kw: casino_embeds.build_keno_tumble_embed(
             _econ_settings(), kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        "casino.pools_panel",
+        lambda **kw: casino_embeds.build_pools_panel_embed(
+            _econ_settings(), 3904.5, pools_logic.PoolSplit(0, 0), 0.0,
+            "2026-07-20", kw.get("color"),
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        "casino.pools_result",
+        lambda **kw: casino_embeds.build_pools_result_embed(
+            _econ_settings(), "2026-07-20", 5000, 3904.5, pools_logic.OVER,
+            [], 19, kw.get("color"),
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        "casino.pools_void",
+        lambda **kw: casino_embeds.build_pools_void_embed(
+            "2026-07-20", 250, kw.get("color")
         ),
         discord.Color(services_embeds.COLOR_GOLD),
     ),
