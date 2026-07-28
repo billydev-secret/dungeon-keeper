@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from bot_modules.core.db_utils import get_config_value, open_db
+from bot_modules.core.db_utils import get_config_id_set, get_config_value, open_db
 from bot_modules.services.guess_models import Detection
 
 log = logging.getLogger("dungeonkeeper.nsfw")
@@ -62,6 +62,19 @@ DEFAULT_SFW_THRESHOLD = 0.75
 CONFIG_KEY_THRESHOLD = "nsfw_classifier_threshold"
 CONFIG_KEY_SFW_THRESHOLD = "nsfw_classifier_sfw_threshold"
 CONFIG_KEY_LABEL_SET = "nsfw_classifier_labels"
+CONFIG_KEY_SFW_MODE = "nsfw_sfw_prevention_mode"
+CONFIG_KEY_SFW_LOG_CHANNEL = "nsfw_sfw_prevention_log_channel_id"
+CONFIG_BUCKET_SFW_EXEMPT = "nsfw_prevention_exempt_channels"
+
+#: SFW nudity prevention is the only thing here that destroys a member's
+#: upload, so it ships **off** and is turned on from the dashboard. ``log``
+#: is the shakedown mode: it reports what it *would* have deleted, so real
+#: accuracy can be measured against real traffic before anything is lost.
+SFW_MODE_OFF = "off"
+SFW_MODE_LOG = "log"
+SFW_MODE_ENFORCE = "enforce"
+SFW_MODES = (SFW_MODE_OFF, SFW_MODE_LOG, SFW_MODE_ENFORCE)
+DEFAULT_SFW_MODE = SFW_MODE_OFF
 
 #: Images larger than this are not downloaded. Guards against a member pinning
 #: the bot's bandwidth with a huge upload; Discord's own limit is well under
@@ -168,6 +181,51 @@ def load_settings_with_conn(
         get_config_value(conn, CONFIG_KEY_LABEL_SET, "", guild_id) or None
     )
     return threshold, sfw_threshold, labels
+
+
+@dataclass(frozen=True)
+class SfwPolicy:
+    """Settings for SFW nudity prevention."""
+
+    mode: str = DEFAULT_SFW_MODE
+    log_channel_id: int = 0
+    exempt_channel_ids: frozenset[int] = frozenset()
+
+    @property
+    def is_active(self) -> bool:
+        return self.mode in (SFW_MODE_LOG, SFW_MODE_ENFORCE)
+
+    @property
+    def deletes(self) -> bool:
+        return self.mode == SFW_MODE_ENFORCE
+
+
+def load_sfw_policy(db_path: Path, guild_id: int) -> SfwPolicy:
+    """Read SFW-prevention settings, defaulting to fully off.
+
+    An unrecognised mode is treated as ``off`` rather than guessed at — the
+    failure mode of guessing wrong here is deleting members' photos.
+    """
+    with open_db(db_path) as conn:
+        raw_mode = get_config_value(
+            conn, CONFIG_KEY_SFW_MODE, DEFAULT_SFW_MODE, guild_id
+        ).strip().lower()
+        if raw_mode not in SFW_MODES:
+            if raw_mode:
+                log.warning("unknown %s (%r) — staying off", CONFIG_KEY_SFW_MODE, raw_mode)
+            raw_mode = SFW_MODE_OFF
+        try:
+            log_channel_id = int(
+                get_config_value(conn, CONFIG_KEY_SFW_LOG_CHANNEL, "0", guild_id)
+            )
+        except (TypeError, ValueError):
+            log_channel_id = 0
+        exempt = frozenset(
+            get_config_id_set(conn, CONFIG_BUCKET_SFW_EXEMPT, guild_id)
+        )
+    return SfwPolicy(
+        mode=raw_mode, log_channel_id=log_channel_id, exempt_channel_ids=exempt
+    )
 
 
 def _float_config(

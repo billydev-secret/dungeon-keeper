@@ -12,12 +12,13 @@ import sqlite3
 
 import pytest
 
-from bot_modules.core.db_utils import open_db, set_config_value
+from bot_modules.core.db_utils import add_config_id, open_db, set_config_value
 from bot_modules.services.guess_models import BoundingBox, Detection
 from bot_modules.services.nsfw_classifier_service import (
     DEFAULT_LABEL_SET,
     DEFAULT_SFW_THRESHOLD,
     DEFAULT_THRESHOLD,
+    SFW_MODE_OFF,
     UNKNOWN,
     Classification,
     classify_attachment,
@@ -27,6 +28,7 @@ from bot_modules.services.nsfw_classifier_service import (
     is_age_gated_channel,
     is_classifiable,
     load_settings,
+    load_sfw_policy,
     parse_label_set,
     record_classification,
     serialize_label_set,
@@ -247,6 +249,60 @@ def test_load_settings_rejects_out_of_range_threshold(sync_db_path, bad):
 
     threshold, _, _ = load_settings(sync_db_path, GUILD)
     assert threshold == DEFAULT_THRESHOLD
+
+
+def test_sfw_policy_defaults_to_off(sync_db_path):
+    # The only content-destroying consumer ships inert; enabling it is a
+    # dashboard choice, not a side effect of deploying.
+    policy = load_sfw_policy(sync_db_path, GUILD)
+    assert policy.mode == SFW_MODE_OFF
+    assert policy.is_active is False
+    assert policy.deletes is False
+
+
+@pytest.mark.parametrize(
+    ("mode", "active", "deletes"),
+    [
+        pytest.param("off", False, False, id="off"),
+        pytest.param("log", True, False, id="log-reports-only"),
+        pytest.param("enforce", True, True, id="enforce-deletes"),
+        pytest.param("ENFORCE", True, True, id="case-insensitive"),
+        pytest.param("  log  ", True, False, id="whitespace-tolerated"),
+        pytest.param("delete-everything", False, False, id="unknown-falls-back-to-off"),
+        pytest.param("", False, False, id="empty-falls-back-to-off"),
+    ],
+)
+def test_sfw_policy_modes(sync_db_path, mode, active, deletes):
+    # An unrecognised mode must never be guessed at — guessing wrong here
+    # deletes members' photos.
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, "nsfw_sfw_prevention_mode", mode, GUILD)
+
+    policy = load_sfw_policy(sync_db_path, GUILD)
+    assert policy.is_active is active
+    assert policy.deletes is deletes
+
+
+def test_sfw_policy_reads_log_channel_and_exemptions(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, "nsfw_sfw_prevention_mode", "enforce", GUILD)
+        set_config_value(conn, "nsfw_sfw_prevention_log_channel_id", "777", GUILD)
+        add_config_id(conn, "nsfw_prevention_exempt_channels", 111, GUILD)
+        add_config_id(conn, "nsfw_prevention_exempt_channels", 222, GUILD)
+
+    policy = load_sfw_policy(sync_db_path, GUILD)
+    assert policy.log_channel_id == 777
+    assert policy.exempt_channel_ids == frozenset({111, 222})
+
+
+def test_sfw_policy_survives_a_junk_log_channel(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, "nsfw_sfw_prevention_mode", "enforce", GUILD)
+        set_config_value(conn, "nsfw_sfw_prevention_log_channel_id", "not-an-id", GUILD)
+
+    policy = load_sfw_policy(sync_db_path, GUILD)
+    assert policy.log_channel_id == 0
+    assert policy.deletes is True  # a bad log target doesn't disable the rule
 
 
 # --------------------------------------------------------------------------

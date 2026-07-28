@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
@@ -14,7 +15,12 @@ from discord.ext import commands
 
 from bot_modules.commands.jail_commands import check_jail_rejoin
 from bot_modules.economy import quests as quest_rules
-from bot_modules.core.post_monitoring import enforce_spoiler_requirement
+from bot_modules.core.post_monitoring import (
+    SfwViolation,
+    enforce_sfw_image_policy,
+    enforce_spoiler_requirement,
+    message_has_qualifying_image,
+)
 from bot_modules.services.auto_delete_service import (
     remove_tracked_auto_delete_message,
     remove_tracked_auto_delete_messages,
@@ -65,7 +71,11 @@ from bot_modules.services.wellness_enforcement import wellness_on_message
 from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
-from bot_modules.core.utils import format_guild_for_log, get_guild_channel_or_thread
+from bot_modules.core.utils import (
+    format_guild_for_log,
+    format_user_for_log,
+    get_guild_channel_or_thread,
+)
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
 from bot_modules.economy import quest_digest
 from bot_modules.economy.logic import (
@@ -354,6 +364,75 @@ class EventsCog(commands.Cog):
             return result.verdict
 
         return classify
+
+    async def _enforce_sfw_images(self, message: discord.Message, cfg) -> bool:
+        """Run SFW nudity prevention. Glue — the rules live in post_monitoring.
+
+        Ships inert: the policy defaults to ``off`` and is turned on from the
+        dashboard, so restarting the bot with this code in place changes
+        nothing until someone chooses it.
+        """
+        # Checked before anything touches the DB: the overwhelming majority of
+        # messages carry no image, and this runs on every one of them.
+        if not message_has_qualifying_image(message):
+            return False
+
+        guild_id = message.guild.id if message.guild else 0
+        try:
+            policy = await asyncio.to_thread(
+                nsfw_classifier_service.load_sfw_policy, self.ctx.db_path, guild_id
+            )
+        except sqlite3.Error:
+            log.exception("nsfw: could not load SFW policy — skipping enforcement")
+            return False
+        if not policy.is_active:
+            return False
+
+        async def classify(attachment: discord.Attachment):
+            return await nsfw_classifier_service.classify_for(
+                self.ctx.db_path,
+                attachment,
+                guild_id=guild_id,
+                channel_id=message.channel.id,
+                message_id=message.id,
+                channel_is_nsfw=False,  # this path only runs outside age-gated channels
+                strict=True,
+            )
+
+        return await enforce_sfw_image_policy(
+            message,
+            policy=policy,
+            bypass_role_ids=cfg.bypass_role_ids,
+            log=log,
+            classify=classify,
+            report=self._sfw_reporter(policy),
+        )
+
+    def _sfw_reporter(
+        self, policy: nsfw_classifier_service.SfwPolicy
+    ) -> Callable[[SfwViolation], Awaitable[None]] | None:
+        """Post the audit record a mod reviews false positives from."""
+        if not policy.log_channel_id:
+            return None
+
+        async def report(violation: SfwViolation) -> None:
+            channel = self.bot.get_channel(policy.log_channel_id)
+            if not isinstance(channel, discord.abc.Messageable):
+                return
+            verb = "Removed" if violation.deleted else "Would remove (log mode)"
+            where = getattr(violation.message.channel, "mention", None) or getattr(
+                violation.message.channel, "name", violation.message.channel.id
+            )
+            await channel.send(
+                f"{verb} an explicit image from "
+                f"{format_user_for_log(violation.message.author)} in "
+                f"{where} — "
+                f"`{violation.label}` at {violation.score or 0:.2f} "
+                f"(`{violation.attachment.filename}`)",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        return report
 
     def _log_background_task_result(self, task: asyncio.Task[None]) -> None:
         try:
@@ -693,6 +772,9 @@ class EventsCog(commands.Cog):
         mention_ids = _message_mention_ids(cfg.recorded_bot_user_ids, message)
 
         if spoiler_deleted:
+            return
+
+        if await self._enforce_sfw_images(message, cfg):
             return
 
         if await wellness_on_message(self.ctx, message):

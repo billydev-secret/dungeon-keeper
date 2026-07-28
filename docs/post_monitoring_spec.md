@@ -1,6 +1,6 @@
 # Post Monitoring — Feature Spec
 
-A side-effect layer that runs message-content checks as part of the normal `on_message` pipeline. v1 ships **spoiler enforcement only** — admins designate channels where every image attachment must be marked as a spoiler, and the bot deletes any non-spoilered image with a brief inline reminder. The module is structured to grow as more realtime content checks come online; sections that will expand are marked **v1**.
+A side-effect layer that runs message-content checks as part of the normal `on_message` pipeline. Two checks live here, both backed by the shared image classifier ([[nsfw-classifier-spec]]): **spoiler enforcement**, which removes explicit images posted without a spoiler tag in designated channels, and **SFW nudity prevention**, which removes explicit images from channels Discord doesn't age-gate. Sections still carrying v1 scope are marked **v1**.
 
 ## Commands
 
@@ -40,16 +40,44 @@ Webhooks, bots, and any author the bot can't resolve as a guild member skip enfo
 
 When a message is deleted by spoiler enforcement, the rest of the `on_message` pipeline short-circuits — no XP, no interaction tracking, no wellness checks fire on the deleted message.
 
+### SFW nudity prevention
+
+Removes explicit images posted in channels Discord does **not** age-gate. Where spoiler enforcement asks "was this tagged?", this asks "does this belong here at all?".
+
+It ships **off**. The mode is a dashboard setting with three states, and deploying the code changes nothing until someone picks one:
+
+| mode | what happens |
+|---|---|
+| `off` (default) | nothing — no download, no inference, no cost |
+| `log` | reports what it *would* have removed to the mod-log channel, deletes nothing |
+| `enforce` | removes the image, DMs it back to the poster, posts a brief public notice, and records the call to the mod-log channel |
+
+`log` is the shakedown mode: it measures real accuracy against real traffic before anything is lost. Running it for a few days before switching to `enforce` is recommended.
+
+**This check fails open.** An image the classifier could not read is left alone — the exact opposite of spoiler enforcement, and deliberately so. There, a failed read risks explicit content staying up in a channel that expects spoilers; here, acting on a failed read would delete an innocent member's photo. It also runs at the stricter SFW threshold ([[nsfw-classifier-spec]]), because it is the only check in this module that destroys content.
+
+Exempt from it entirely:
+
+- **Bots and webhooks.** The Guess game uploads explicit images itself (`SPOILER_guess_full.jpg` and friends); without this exemption the bot would delete its own game content in any Guess channel not marked NSFW.
+- **Age-gated channels** — explicit content belongs there, and spoiler-required channels have their own rule.
+- **Channels on the exemption list**, configured per guild.
+- **Members holding a bypass role** — the same list spoiler enforcement uses.
+
+On removal the image is read back and DM'd to the poster *before* the delete, while the attachment is still guaranteed fetchable: a wrong call should cost a member their post, not their file. Closed DMs are common and don't block removal. A mod-log failure is caught and logged — the audit trail failing must never change the outcome for the member or abort the rest of the `on_message` pipeline.
+
+Messages with no image attachment never reach the policy load, so the DB isn't touched on the overwhelming majority of traffic.
+
 ## Permissions
 
 - **User-side**: none. Enforcement is automatic.
-- **Bot-side (v1)**: **Manage Messages** and **Send Messages** in every channel designated as spoiler-required. Without either, the offending image survives and the failure is logged silently.
+- **Bot-side (v1)**: **Manage Messages** and **Send Messages** in every channel designated as spoiler-required. Without either, the offending image survives and the failure is logged silently. SFW nudity prevention needs the same two permissions in every channel it covers, plus the ability to DM the poster (optional — a closed DM only means the image isn't returned).
 
 ## User-visible errors
 
 | When | The user sees |
 |---|---|
 | Non-spoilered image is deleted | Inline reply (auto-deletes after 5s): "Beep Boop - friendly bot helper: Images in this channel must be marked as spoiler." |
+| Explicit image removed from a SFW channel | Inline reply (auto-deletes after 8s) explaining the removal and that a copy was DM'd back, plus the DM itself carrying the image |
 | Bot lacks Manage Messages | No user-facing message — the image survives, the failure is logged operator-side |
 
 ## Non-goals
