@@ -225,6 +225,36 @@ def median_band(
     return med, sig
 
 
+def probability_series(
+    bets: list[dict], opened_at: float, closes_at: float
+) -> list[tuple[float, float]]:
+    """The implied-probability path across the betting window.
+
+    Returns ``(x, p)`` points where x is 0..1 across the window and p is the
+    pool-implied probability of OVER *after* each bet landed. This is the
+    market chart's whole content: a parimutuel pool share moving as money
+    arrives is the same object as a price on a prediction market.
+
+    Bets are replayed in placement order, so the path is reconstructed from
+    the stored rows rather than needing a separate time series — there is
+    nothing to keep in sync and nothing to lose on a restart.
+    """
+    span = max(1.0, closes_at - opened_at)
+    over = under = 0
+    out: list[tuple[float, float]] = []
+    for bet in sorted(bets, key=lambda b: (float(b["created_at"]), int(b["id"]))):
+        if str(bet["side"]) == OVER:
+            over += int(bet["amount"])
+        else:
+            under += int(bet["amount"])
+        total = over + under
+        if total <= 0:
+            continue
+        x = min(1.0, max(0.0, (float(bet["created_at"]) - opened_at) / span))
+        out.append((x, over / total))
+    return out
+
+
 def describe_side(side: str) -> str:
     return "Over" if side == OVER else "Under"
 
