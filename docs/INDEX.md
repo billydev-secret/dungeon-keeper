@@ -106,7 +106,7 @@ feature and also appear in the Design table above.
 
 | Plan | What it covers | Status |
 |---|---|---|
-| [plans/command-surface-audit.md](plans/command-surface-audit.md) | Slash-command audit against CLAUDE.md's "config lives on the web" rule: what was deleted, what was kept and why, and the two remaining gap lists | 9 commands removed 2026-07-28 (190 → 181); 15 panel-poster commands + 13 no-dashboard-surface commands still open |
+| [plans/command-surface-audit.md](plans/command-surface-audit.md) | Slash-command audit against CLAUDE.md's "config lives on the web" rule: what was deleted, what was kept and why, and three gap lists (no-route / no-surface / redundant) | 13 commands removed 2026-07-28 (190 → 177). Open: 15 admin-config commands with no web route — 6 of them panel-posters, all confirmed movable — plus 13 with no dashboard surface and ~10 redundant |
 | [plans/casino-classics-and-prediction-market.md](plans/casino-classics-and-prediction-market.md) | New casino games (Baccarat, Sic Bo, War, Keno) + a parimutuel prediction market ("Pools": one self-running daily over/under on the economy's own net change) | Stage 1 complete (Baccarat, Dice, War, Keno) 2026-07-25; Stage 2 prediction market ("Pools") built 2026-07-28, ships disabled |
 | [plans/ai-advisor.md](plans/ai-advisor.md) | AI advisor (per-guild name, default "Billy-bot"): grounded "how do I use X" assistant (Discord + dashboard) | Stages 1–2 shipped |
 | [plans/help_bot_knowledge.md](plans/help_bot_knowledge.md) | Billy-bot as a setup guide: model tiering, settings registry, gap detection, proactive suggestions | Stages 1–6 built (latest 2026-07-25: per-feature KV fetch + intake registry entry) |

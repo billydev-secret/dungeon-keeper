@@ -9,7 +9,8 @@ each deletion candidate was traced to a concrete dashboard route *and* panel
 before being recommended. Two candidates failed that trace and were kept — see
 "Kept after verification".
 
-**Count:** 190 commands before, 181 after.
+**Count:** 190 commands before, **177** after — 9 removed as dashboard
+duplicates, then 4 more when the `/dm_*` set folded into a panel (`f24bcf87`).
 
 **Naming caveat.** Several groups are attached to a parent at *runtime*
 (`games.add_command(...)` in each cog's `setup()`, over the shared groups in
@@ -24,7 +25,9 @@ the moment** (keep) / **admin config** (delete, panel should exist) /
 
 ---
 
-## Done — 9 commands removed
+## Done — 13 commands removed
+
+### Round 1 — dashboard duplicates (9)
 
 Each verified against a live route + panel first.
 
@@ -42,6 +45,26 @@ Each verified against a live route + panel first.
 
 `docs_cog.py` was deleted whole. `rules_watch_cog.py` was **not** — it still owns
 the "Report Rule Violation" message context menu.
+
+### Round 2 — the `/dm_*` sprawl (4)
+
+`/dm_help`, `/dm_set_mode`, `/dm_status`, `/dm_revoke` → one ephemeral
+`DmSettingsView` behind a **My DM Settings** button on the existing request panel
+(`f24bcf87`). Four top-level commands for one feature is the case CLAUDE.md's
+"prefer one ephemeral panel over a sprawl of subcommands" rule names directly.
+
+This is the reference implementation for the Gap 1 work below — route posts the
+panel, cog auto-posts it on boot, no command. Two things it taught:
+
+- **A panel that becomes the only route to something needs the boot-time
+  autopost.** Otherwise a guild whose admin never pressed "post panel" has no
+  surface at all. `place_or_refresh` edits in place, so restarts refresh rather
+  than stack duplicates.
+- **Deleting a command means auditing every surface that names it.** Five still
+  advertised the old commands after the fold — the panel embed, its footer, the
+  acceptance DM, the request DM, and `/help` — four of them member-facing, and
+  the request DM is read outside the server where there is no panel in sight.
+  Caught by review, in `4d2e208f`.
 
 ### Answering the question that started this
 
@@ -95,12 +118,45 @@ Almost all of them are the same shape: *post a sticky panel into a channel*.
 | `/setup` | A DM/button config wizard — a textbook violation, but also the only in-Discord path for a fresh server admin who hasn't found the dashboard. Needs a decision, not a reflex |
 | `/grant_audit` | Half-covered: `GET /api/reports/grant-audit` serves the panel, but nothing posts the auto-updating Discord card |
 
-**Recommended next step.** One reusable dashboard control — "post this panel to
-`#channel`" — collapses eight of these at once. The pattern already exists:
-`config.py:2884` (booster roles) and `config.py:3779` (DM perms) both post a
-panel by calling into the cog, and `core/sticky.py:351` `place_or_refresh` is the
-shared primitive. This is the single highest-value item in this document: the
-command surface is not cluttered with reports, it is cluttered with panel-posters.
+**Recommended next step — and yes, all of them can move.** Checked 2026-07-28.
+
+Correcting an earlier overstatement in this document: **six** of the commands
+above post a panel, not eight. `/quote-role` creates a mentionable role,
+`/risky reset_state` clears in-channel state, and `/games config
+game-status|game-end` inspect or force-close a game — those are in-the-moment
+actions that happen to be admin-gated, not panel-posters, and each needs its own
+decision.
+
+Two proven web→bot bridges already exist and either works here:
+
+- **Call a cog method** — `bot.get_cog("DmPermsCog").post_panel(...)`
+  (`config.py:3779`). Needs the cog to expose one.
+- **Call a module-level function** — `post_or_update_booster_panel(db_path,
+  guild, channel)` (`config.py:2884`). Cleaner; no cog lookup.
+
+Both reach Discord through `ctx.bot`, and both already do the channel-exists /
+is-a-text-channel / bot-can-post-here checks a route needs. Per command:
+
+| Command | Where the posting lives | Effort |
+|---|---|---|
+| `/bank post-guide` | `EconomyCog.guide_panel` — a `StickyPanel` (`economy_cog.py:1618`) | Trivial |
+| `/bank post-leaderboard` | `EconomyCog.leaderboard_panel` (`:1624`) | Trivial |
+| `/bank post-shop` | `EconomyCog.shop_panel` (`:1632`) | Trivial |
+| `/voice-admin post-panel` | `VoiceMasterCog.panel` — a `StickyPanel` (`voice_master_cog.py:149`) | Trivial |
+| `/guess prompt` | `_repost_prompt(bot, channel, guild_id)` — already module-level (`guess_cog.py:1323`) | Trivial |
+| `/ticket panel` | Inline in the command: build embed → `channel.send` → record the id | Small extraction first |
+
+Four of the six are `StickyPanel` instances hanging off a cog, and
+`place_or_refresh` takes exactly `(guild, channel)` — everything a route already
+has. That makes a **single generic route** viable rather than six near-identical
+ones: `POST /api/panels/{panel_key}/post {channel_id}`, backed by a registry
+mapping `panel_key` → `(cog name, attribute)`. `/guess prompt` needs a one-line
+adapter; `/ticket panel` needs its send lifted out of the command body first.
+
+The DM panel (`f24bcf87`) is the worked example of the whole shape: route posts
+it, cog auto-posts it on boot, no command. Note the lesson from that one — if a
+panel becomes the only route to something, it needs the boot-time autopost too,
+or a guild whose admin never pressed the button has no surface at all.
 
 ---
 
@@ -120,6 +176,51 @@ leave them in place for now.
 arguably self-service for mods rather than config.
 
 ---
+
+## Gap 3 — redundant commands (~10, no dashboard work needed)
+
+A different axis from the rest of this document. Everything above is about
+commands being in the *wrong place*; these are commands that shouldn't exist as
+separate commands at all. None of them needs a panel built first, which makes
+this the cheapest list here. Verified by reading the implementations 2026-07-28.
+
+**Verified duplicates**
+
+| Commands | Finding |
+|---|---|
+| `/support` · `/games support` | Same description verbatim, both post the support-server link. `support_cog.py:26` sends plain text, `games_help_cog.py:26` sends an embed. Drop one |
+| `/games end` · `/games config game-end` | Both call `_teardown_active_game` on the channel's active game and send `build_force_end_embed`. `/games end` additionally allows the host and asks for confirmation; the config one is mod-only and skips it. That is an *option* on one command, not two commands |
+
+**"Collapse controls" violations** — CLAUDE.md: *"One dial with a few states
+beats several overlapping toggles."* In each pair the two callbacks are
+byte-identical except for one boolean handed to a shared helper:
+
+| Commands | Differ only by |
+|---|---|
+| `/risky start` · `/risky start_no_ping` | `ping=True/False` + `skip_min_game_time` into `_start_game`; identical signatures |
+| `/ffa` · `/ffa_banner` | `banner=False/True` into `start_ffa`; identical signatures (`kind`, `tags`, `prompt`) |
+| `/away on` · `/away off` | A two-state toggle split across two commands |
+
+Three commands recoverable from six, no capability lost. Note `/risky start` had
+7 uses in the usage window — the pair is live, so a resignature is visible to
+members.
+
+**Sprawl worth collapsing into a panel**
+
+- `/dm_help`, `/dm_set_mode`, `/dm_status`, `/dm_revoke` — **done** in `f24bcf87`;
+  see that commit for the shape.
+- `/trusted add|remove|list` + `/blocked add|remove|list` — six commands for two
+  lists, alongside Voice Control's existing panel.
+
+**Judgment calls, not recommendations**
+
+- **Dev tooling is live in production.** `/fill` adds fake players to a lobby and
+  `/answer` submits fake answers for them, both gated only on `manage_guild` — so
+  any admin can inject fake players into a real game. `/reload_cog` and
+  `/spotify_authorize` are also registered.
+- **`/invite`** posts a bot-invite link with a full permission set. Correct for a
+  public bot; dead weight for a private community one. Depends on intent for the
+  bot, which this audit doesn't presume.
 
 ## Usage data — and why it can't drive deletions
 
