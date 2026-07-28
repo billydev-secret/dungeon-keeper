@@ -1,6 +1,7 @@
 """Cog-level tests for /bank — wallet view, mod grant matrix, and /bank quests."""
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -35,6 +36,7 @@ from bot_modules.services.economy_service import (
     save_econ_settings,
 )
 from bot_modules.services.quote_renderer import THEMES
+from bot_modules.services.voice_master_service import add_name_blocklist
 from tests.db_template import migrated_db
 from tests.fakes import FakeGuild, fake_interaction
 
@@ -590,10 +592,6 @@ async def test_bank_mute_toggles_pref(ctx, db):
 
 # ── Stage 3: transfers / shop / role studio / gift / rentals ─────────────────
 
-import contextlib  # noqa: E402
-
-from bot_modules.services.voice_master_service import add_name_blocklist  # noqa: E402
-
 
 def _credit(db, user_id, amount) -> None:
     with open_db(db) as conn:
@@ -625,6 +623,14 @@ def _add_rental(
                 catalog_icon_id, now,
             ),
         )
+
+
+def _personal_role(db, user_id=500):
+    """The member's personal-role row — what every role-studio setter writes."""
+    with open_db(db) as conn:
+        return conn.execute(
+            "SELECT * FROM econ_personal_roles WHERE user_id = ?", (user_id,)
+        ).fetchone()
 
 
 def _live_rentals(db) -> list:
@@ -675,60 +681,41 @@ async def _pay(cog, interaction, member, amount) -> None:
     await cog.bank_pay.callback(cog, interaction, member, amount)
 
 
+# The confirm gate triggers *over* 100 (spec §5) — 100 itself sends straight
+# through. One test for the threshold, one row per side of it.
+@pytest.mark.parametrize(
+    ("amount", "needs_confirm"),
+    [
+        pytest.param(50, False, id="under"),
+        pytest.param(100, False, id="exactly-the-threshold"),
+        pytest.param(200, True, id="over"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_pay_immediate_under_threshold(ctx, db):
-    _enable(db)
-    _credit(db, 500, 200)
-    cog = _make_cog(ctx)
-    sender = _member(member_id=500, name="Alice")
-    recipient = _member(member_id=900, name="Bob")
-    interaction = _interaction(sender)
-
-    with _patch_projection() as (_apply, _revoke, notify):
-        await _pay(cog, interaction, recipient, 50)
-
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 150
-        assert get_balance(conn, GUILD_ID, 900) == 50
-    notify.assert_awaited_once()
-    assert notify.await_args is not None
-    assert "50" in notify.await_args.kwargs["content"]
-
-
-@pytest.mark.asyncio
-async def test_pay_over_threshold_requires_confirm(ctx, db):
-    _enable(db)
-    _credit(db, 500, 500)
-    cog = _make_cog(ctx)
-    sender = _member(member_id=500)
-    recipient = _member(member_id=900)
-    interaction = _interaction(sender)
-
-    with _patch_projection():
-        await _pay(cog, interaction, recipient, 200)
-
-    kwargs = interaction.response.send_message.await_args.kwargs
+async def test_pay_confirm_gate_follows_the_threshold(ctx, db, amount, needs_confirm):
     from bot_modules.cogs.economy_cog import _PayConfirmView
 
-    assert isinstance(kwargs["view"], _PayConfirmView)
-    # No transfer happened yet — the gate holds.
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 500
-        assert get_balance(conn, GUILD_ID, 900) == 0
-
-
-@pytest.mark.asyncio
-async def test_pay_exactly_100_transfers_without_confirm(ctx, db):
-    """Spec: confirm triggers *over* 100 — 100 itself sends straight through."""
     _enable(db)
     _credit(db, 500, 500)
     cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-    with _patch_projection():
-        await _pay(cog, interaction, _member(member_id=900), 100)
-    assert "view" not in interaction.response.send_message.await_args.kwargs
+    interaction = _interaction(_member(member_id=500, name="Alice"))
+
+    with _patch_projection() as (_apply, _revoke, notify):
+        await _pay(cog, interaction, _member(member_id=900, name="Bob"), amount)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
     with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 900) == 100
+        received = get_balance(conn, GUILD_ID, 900)
+
+    if needs_confirm:
+        assert isinstance(kwargs["view"], _PayConfirmView)
+        assert received == 0  # the gate holds; nothing moved yet
+        notify.assert_not_awaited()
+    else:
+        assert "view" not in kwargs
+        assert received == amount
+        notify.assert_awaited_once()
+        assert str(amount) in notify.await_args.kwargs["content"]
 
 
 @pytest.mark.asyncio
@@ -789,6 +776,18 @@ async def test_pay_transfers_disabled(ctx, db):
 
 
 # ── /bank shop ───────────────────────────────────────────────────────────────
+
+
+async def _open_shop(cog, interaction) -> None:
+    """Open the shop with every feature gate open — the default for these tests.
+
+    Gate-closed behaviour has its own tests that patch the gate explicitly.
+    """
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await _shop(cog, interaction)
 
 
 async def _shop(cog, interaction) -> None:
@@ -897,8 +896,7 @@ async def test_shop_shows_customise_for_rented_perks(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
-        await _shop(cog, interaction)
+    await _open_shop(cog, interaction)
 
     kwargs = interaction.response.send_message.await_args.kwargs
     buttons = [b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)]
@@ -920,8 +918,7 @@ async def test_shop_rented_holographic_shows_active_not_customise(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
-        await _shop(cog, interaction)
+    await _open_shop(cog, interaction)
 
     kwargs = interaction.response.send_message.await_args.kwargs
     buttons = [b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)]
@@ -940,8 +937,7 @@ async def test_shop_customise_button_opens_modal(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
-        await _shop(cog, interaction)
+    await _open_shop(cog, interaction)
 
     view = interaction.response.send_message.await_args.kwargs["view"]
     button = next(
@@ -965,8 +961,7 @@ async def test_shop_gift_recipient_gets_color_customise(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
-        await _shop(cog, interaction)
+    await _open_shop(cog, interaction)
 
     view = interaction.response.send_message.await_args.kwargs["view"]
     ids = {str(b.custom_id) for b in view.children if isinstance(b, discord.ui.Button)}
@@ -1007,10 +1002,7 @@ async def test_name_modal_submit_sets_role_name(ctx, db):
     with _patch_projection() as (apply_mock, _r, _n):
         await modal.on_submit(interaction)
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT name FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     assert row["name"] == "Stardust"
 
 
@@ -1338,10 +1330,7 @@ async def test_role_name_success(ctx, db):
     with _patch_projection() as (apply_mock, _r, _n):
         await _role_name(cog, interaction, "Stardust")
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT name FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     assert row["name"] == "Stardust"
 
 
@@ -1383,10 +1372,7 @@ async def test_role_color_gift_entitlement_allows(ctx, db):
     with _patch_projection() as (apply_mock, _r, _n):
         await _role_color(cog, interaction, "#00FF00")
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT color FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     assert row["color"] == 0x00FF00
 
 
@@ -1422,10 +1408,7 @@ async def test_role_icon_custom_emoji_success(ctx, db, raw):
     ):
         await _role_icon_emoji(cog, interaction, raw)
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT icon_path FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     # The emoji's image is downloaded into the managed icon store.
     assert Path(row["icon_path"]).read_bytes() == b"emoji-bytes"
 
@@ -1611,10 +1594,7 @@ async def test_role_icon_image_upload_success(ctx, db):
     ):
         await _role_icon_image(cog, interaction, image)
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT icon_path FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     assert Path(row["icon_path"]).read_bytes() == b"png-bytes"
 
 
