@@ -8,7 +8,6 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
@@ -17,10 +16,9 @@ from bot_modules.dm_perms.embeds import (
     build_acceptance_embed,
     build_denial_embed_for_requester,
     build_denial_embed_for_view,
-    build_dm_help_embed,
+    build_dm_settings_embed,
     build_expired_embed,
     build_guild_unavailable_embed,
-    build_mode_updated_embed,
     build_request_dm_embed,
     build_request_sent_embed,
     build_revoked_embed,
@@ -34,6 +32,7 @@ from bot_modules.dm_perms.logic import (
     audit_line_revoked,
     clamp_reason,
     classify_dm_request,
+    discard_consent_pair,
     display_name_for,
     dm_status_text,
     pick_dm_roles_to_remove,
@@ -71,6 +70,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 DM_REQUEST_PANEL_CUSTOM_ID = "dm_request:open_modal"
+DM_SETTINGS_PANEL_CUSTOM_ID = "dm_request:open_settings"
 DM_CONSENT_ACCEPT_CUSTOM_ID = "dm_consent:accept"
 DM_CONSENT_DENY_CUSTOM_ID = "dm_consent:deny"
 DM_CONSENT_DENY_REPLY_CUSTOM_ID = "dm_consent:deny_reply"
@@ -531,6 +531,160 @@ class DmDenyReplyModal(discord.ui.Modal, title="Decline With a Reply"):
         )
 
 
+class DmSettingsView(discord.ui.View):
+    """Ephemeral, per-member DM settings panel.
+
+    Replaced ``/dm_help``, ``/dm_set_mode``, ``/dm_status`` and ``/dm_revoke``
+    (2026-07-28): four top-level commands for one feature, which CLAUDE.md's
+    "prefer one ephemeral panel over a sprawl of subcommands" rule calls out
+    directly. Reached from the "My DM Settings" button on the public request
+    panel.
+
+    Ephemeral and short-lived, so unlike ``DmRequestPanelView`` this holds
+    per-member state in memory rather than recovering it from a custom_id.
+    """
+
+    _MODE_BUTTON_PREFIX = "dm_settings_mode:"
+
+    def __init__(self, cog: DmPermsCog, member: discord.Member) -> None:
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.member = member
+        self._selected: Optional[discord.Member | discord.User] = None
+        self._revoke_button: Optional[discord.ui.Button] = None
+        self._sync_mode_styles()
+
+    # ── Rendering ────────────────────────────────────────────────────────
+
+    def _current_mode(self) -> str:
+        return resolve_mode(self.member, self.cog._mode_roles_for(self.member.guild.id))
+
+    def _sync_mode_styles(self) -> None:
+        """Mark the active mode. Same idiom as DmRequestLookupView's type buttons."""
+        current = self._current_mode()
+        for child in self.children:
+            if not isinstance(child, discord.ui.Button):
+                continue
+            cid = getattr(child, "custom_id", "") or ""
+            if not cid.startswith(self._MODE_BUTTON_PREFIX):
+                continue
+            this_mode = cid[len(self._MODE_BUTTON_PREFIX):]
+            child.style = (
+                discord.ButtonStyle.primary
+                if this_mode == current
+                else discord.ButtonStyle.secondary
+            )
+
+    async def _embed(self) -> discord.Embed:
+        guild = self.member.guild
+        accent = await resolve_accent_color(self.cog.ctx.db_path, guild)
+        return build_dm_settings_embed(
+            self._current_mode(),
+            guild.icon.url if guild.icon else None,
+            color=accent,
+        )
+
+    def _set_revoke_visible(self, visible: bool, target_name: str = "") -> None:
+        """Show the revoke button only when the selected user is actually
+        connected — a disabled-but-present button invites a pointless click."""
+        if visible and self._revoke_button is None:
+            button = discord.ui.Button(
+                label=f"Remove connection with {target_name}"[:80],
+                style=discord.ButtonStyle.danger,
+                row=2,
+            )
+            button.callback = self._on_revoke  # type: ignore[method-assign]
+            self._revoke_button = button
+            self.add_item(button)
+        elif not visible and self._revoke_button is not None:
+            self.remove_item(self._revoke_button)
+            self._revoke_button = None
+
+    async def _rerender(self, interaction: discord.Interaction, note: str = "") -> None:
+        self._sync_mode_styles()
+        await interaction.response.edit_message(
+            content=note or None, embed=await self._embed(), view=self
+        )
+
+    # ── Mode buttons ─────────────────────────────────────────────────────
+
+    async def _set_mode(self, interaction: discord.Interaction, mode: str) -> None:
+        try:
+            await set_member_dm_mode(
+                self.member, mode, self.cog._mode_roles_for(self.member.guild.id)
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ I don't have permission to manage roles here.", ephemeral=True
+            )
+            return
+        await self._rerender(interaction, f"✅ Your DM mode is now **{mode.upper()}**.")
+
+    @discord.ui.button(
+        label="Open", style=discord.ButtonStyle.secondary, row=0,
+        custom_id="dm_settings_mode:open",
+    )
+    async def mode_open(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._set_mode(interaction, "open")
+
+    @discord.ui.button(
+        label="Ask", style=discord.ButtonStyle.secondary, row=0,
+        custom_id="dm_settings_mode:ask",
+    )
+    async def mode_ask(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._set_mode(interaction, "ask")
+
+    @discord.ui.button(
+        label="Closed", style=discord.ButtonStyle.secondary, row=0,
+        custom_id="dm_settings_mode:closed",
+    )
+    async def mode_closed(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._set_mode(interaction, "closed")
+
+    # ── Connection lookup / revoke ───────────────────────────────────────
+
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="Check or remove a connection…",
+        min_values=1,
+        max_values=1,
+        row=1,
+    )
+    async def user_select(
+        self, interaction: discord.Interaction, select: discord.ui.UserSelect
+    ) -> None:
+        target = select.values[0]
+        self._selected = target
+        if target.id == self.member.id:
+            self._set_revoke_visible(False)
+            await self._rerender(interaction, "You can't connect with yourself.")
+            return
+        mutual = self.cog._is_mutual(self.member.guild.id, self.member.id, target.id)
+        self._set_revoke_visible(mutual, target.display_name)
+        await self._rerender(
+            interaction,
+            f"**You & {target.display_name}** — {dm_status_text(mutual)}",
+        )
+
+    async def _on_revoke(self, interaction: discord.Interaction) -> None:
+        target = self._selected
+        if target is None:
+            await interaction.response.send_message(
+                "Pick someone first.", ephemeral=True
+            )
+            return
+        removed = await self.cog.revoke_connection(
+            self.member.guild, self.member, target
+        )
+        self._set_revoke_visible(False)
+        note = (
+            f"Done — your connection with {target.display_name} has been removed."
+            if removed
+            else f"❌ You don't have a connection with {target.display_name}."
+        )
+        await self._rerender(interaction, note)
+
+
 class DmRequestPanelView(discord.ui.View):
     """Persistent panel button registered on startup."""
 
@@ -548,6 +702,23 @@ class DmRequestPanelView(discord.ui.View):
             "Select who you'd like to contact and what type of request to send:",
             view=DmRequestLookupView(self.cog),
             ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="My DM Settings",
+        style=discord.ButtonStyle.secondary,
+        custom_id=DM_SETTINGS_PANEL_CUSTOM_ID,
+    )
+    async def open_settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            await interaction.response.send_message(
+                "❌ Use this in the server.", ephemeral=True
+            )
+            return
+        view = DmSettingsView(self.cog, member)
+        await interaction.response.send_message(
+            embed=await view._embed(), view=view, ephemeral=True
         )
 
 
@@ -585,6 +756,7 @@ class DmPermsCog(commands.Cog):
             build=self._build_panel,
         )
         self._expiry_task: Optional[asyncio.Task[None]] = None
+        self._autopost_task: Optional[asyncio.Task[None]] = None
         super().__init__()
 
     async def cog_load(self) -> None:
@@ -615,11 +787,50 @@ class DmPermsCog(commands.Cog):
         # iteration runs once the bot is ready, which handles any requests
         # that aged out while the bot was offline.
         self._expiry_task = asyncio.create_task(self._expiry_loop())
+        self._autopost_task = asyncio.create_task(self._autopost_panels())
+
+    async def _autopost_panels(self) -> None:
+        """Make sure every configured guild's request panel exists on boot.
+
+        The panel is the *only* route to DM settings now that the /dm_* commands
+        are gone, so it can't depend on an admin remembering to press "post
+        panel" on the dashboard. ``place_or_refresh`` edits in place when the
+        panel is already the configured channel's, so this re-runs safely on
+        every restart instead of stacking duplicates.
+
+        A guild with no configured panel channel is skipped — there is nowhere
+        to put it, and inventing a channel is not this method's call.
+        """
+        await self.bot.wait_until_ready()
+        for guild_id, settings in list(self.panel_settings.items()):
+            channel_id = (settings or {}).get("panel_channel_id")
+            if not channel_id:
+                continue
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                continue
+            channel = guild.get_channel(int(channel_id))
+            if not isinstance(channel, discord.TextChannel):
+                log.warning(
+                    "dm_perms: panel channel %s for guild %s is missing or not "
+                    "a text channel — skipping autopost",
+                    channel_id, guild_id,
+                )
+                continue
+            try:
+                await self.panel.place_or_refresh(guild, channel)
+            except discord.HTTPException:
+                log.exception(
+                    "dm_perms: failed to autopost the panel in guild %s", guild_id
+                )
 
     async def cog_unload(self) -> None:
         if self._expiry_task is not None:
             self._expiry_task.cancel()
             self._expiry_task = None
+        if self._autopost_task is not None:
+            self._autopost_task.cancel()
+            self._autopost_task = None
         self.panel.cancel_all()
 
     # ── Background tasks ─────────────────────────────────────────────────────
@@ -919,79 +1130,47 @@ class DmPermsCog(commands.Cog):
                 after.id, after.guild.id, exc,
             )
 
-    # ── User commands ────────────────────────────────────────────────────────
+    # ── Member self-service ──────────────────────────────────────────────────
+    #
+    # There are no /dm_* slash commands. /dm_help, /dm_set_mode, /dm_status and
+    # /dm_revoke collapsed into the ephemeral DmSettingsView on 2026-07-28,
+    # reached from the request panel's "My DM Settings" button. This method is
+    # the shared teardown the panel's revoke button calls.
 
-    @app_commands.command(name="dm_help", description="Show an overview of the DM request system.")
-    @app_commands.guild_only()
-    async def dm_help(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild
-        icon_url = interaction.guild.icon.url if interaction.guild.icon else None
-        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
-        embed = build_dm_help_embed(icon_url, color=accent)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+    async def revoke_connection(
+        self,
+        guild: discord.Guild,
+        actor: discord.Member,
+        target: discord.Member | discord.User,
+    ) -> bool:
+        """Tear down the consent pair between ``actor`` and ``target``.
 
-    @app_commands.command(name="dm_set_mode", description="Set your DM request mode.")
-    @app_commands.guild_only()
-    @app_commands.choices(mode=[
-        app_commands.Choice(name="open", value="open"),
-        app_commands.Choice(name="ask", value="ask"),
-        app_commands.Choice(name="closed", value="closed"),
-    ])
-    @app_commands.describe(mode="Choose your DM mode")
-    async def dm_set_mode(self, interaction: discord.Interaction, mode: app_commands.Choice[str]) -> None:
-        assert isinstance(interaction.user, discord.Member)
-        await interaction.response.defer(ephemeral=True)
-        try:
-            await set_member_dm_mode(
-                interaction.user,
-                mode.value,
-                self._mode_roles_for(interaction.user.guild.id),
-            )
-        except discord.Forbidden:
-            await interaction.followup.send("❌ I don't have permission to manage roles here.", ephemeral=True)
-            return
-        accent = await resolve_accent_color(self.ctx.db_path, interaction.user.guild)
-        await interaction.followup.send(
-            embed=build_mode_updated_embed(mode.value, color=accent), ephemeral=True
-        )
-
-    @app_commands.command(name="dm_revoke", description="Remove DM permission relationship with another user.")
-    @app_commands.guild_only()
-    @app_commands.describe(user="User to revoke permission with")
-    async def dm_revoke(self, interaction: discord.Interaction, user: discord.Member) -> None:
-        assert interaction.guild and interaction.user
-        guild_id = interaction.guild.id
+        Returns False when there was nothing to remove, so the caller can say
+        "you have no connection with them" rather than claiming success. On a
+        real removal this also retires the original request message, DMs both
+        parties, and writes both the DB audit row and the mod-feed line.
+        """
+        guild_id = guild.id
         pair_set = self.consent_pairs.get(guild_id, set())
-        meta = get_consent_pair_meta(
-            self.ctx.db_path, guild_id, interaction.user.id, user.id
-        )
+        meta = get_consent_pair_meta(self.ctx.db_path, guild_id, actor.id, target.id)
         db_removed = remove_consent_pair(
-            self.ctx.db_path, guild_id, interaction.user.id, user.id
+            self.ctx.db_path, guild_id, actor.id, target.id
         )
-        in_memory_removed = False
-        if (interaction.user.id, user.id) in pair_set:
-            pair_set.discard((interaction.user.id, user.id))
-            in_memory_removed = True
-        if (user.id, interaction.user.id) in pair_set:
-            pair_set.discard((user.id, interaction.user.id))
-            in_memory_removed = True
+        in_memory_removed = discard_consent_pair(pair_set, actor.id, target.id)
 
         if not (db_removed or in_memory_removed):
-            await interaction.response.send_message(
-                f"❌ You don't have a connection with {user.display_name}.", ephemeral=True
-            )
-            return
+            return False
 
         type_label = request_type_label(meta.get("type") if meta else None)
         revoked_embed = build_revoked_embed(
-            requester_display_name=interaction.user.display_name,
-            target_display_name=user.display_name,
+            requester_display_name=actor.display_name,
+            target_display_name=target.display_name,
             type_label=type_label,
             reason=meta.get("reason") if meta else None,
         )
 
         if meta and meta.get("source_msg_id") and meta.get("source_channel_id"):
-            channel = interaction.guild.get_channel(meta["source_channel_id"])
+            channel = guild.get_channel(meta["source_channel_id"])
             if isinstance(channel, discord.TextChannel):
                 try:
                     msg = await channel.fetch_message(meta["source_msg_id"])
@@ -999,36 +1178,20 @@ class DmPermsCog(commands.Cog):
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     pass
 
-        await _safe_dm(interaction.user, embed=revoked_embed)
-        await _safe_dm(user, embed=revoked_embed)
+        await _safe_dm(actor, embed=revoked_embed)
+        await _safe_dm(target, embed=revoked_embed)
 
         write_audit_log(
             self.ctx.db_path, guild_id, "relationship_revoked",
-            actor_id=interaction.user.id, user_a_id=interaction.user.id, user_b_id=user.id,
+            actor_id=actor.id, user_a_id=actor.id, user_b_id=target.id,
         )
         await self._post_audit(
-            interaction.guild,
+            guild,
             audit_line_revoked(
-                interaction.user.display_name,
-                user.display_name,
-                interaction.user.display_name,
+                actor.display_name, target.display_name, actor.display_name
             ),
         )
-        await interaction.response.send_message(
-            f"Done — your connection with {user.mention} has been removed.",
-            ephemeral=True,
-        )
-
-    @app_commands.command(name="dm_status", description="Check whether mutual DM permission exists with a user.")
-    @app_commands.guild_only()
-    @app_commands.describe(user="User to check permission status with")
-    async def dm_status(self, interaction: discord.Interaction, user: discord.Member) -> None:
-        assert interaction.guild and interaction.user
-        mutual = self._is_mutual(interaction.guild.id, interaction.user.id, user.id)
-        await interaction.response.send_message(
-            f"**DM status — you & {user.display_name}**\n\n{dm_status_text(mutual)}",
-            ephemeral=True,
-        )
+        return True
 
 
 async def setup(bot: Bot) -> None:

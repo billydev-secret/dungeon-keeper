@@ -1128,36 +1128,30 @@
     <h2 id="dm-perms" class="section-break"><span class="section-num">14</span> DM Permissions</h2>
     <p>Members declare a DM "mode" via Discord roles (<em>Open</em>, <em>Ask</em>, or <em>Closed</em>). The bot enforces requests through a button panel and modal, automatically deduping conflicting role assignments.</p>
 
-    <h3 id="dm-perms-cmds">DM Commands</h3>
+    <h3 id="dm-perms-cmds">The DM panel</h3>
+
+    <p class="note">DM Permissions has <strong>no slash commands</strong>. Everything lives on the
+      DM panel the bot keeps at the bottom of its configured channel — the bot posts it there
+      automatically, so it is always available. The panel carries two buttons.</p>
 
     <div class="cmd-block">
-      <span class="cmd-name">/dm_help</span>
+      <span class="cmd-name">Open DM Request Form</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Show an overview embed explaining the three DM modes, what each means, and the commands available.</span>
+      <span class="cmd-desc">Pick who you'd like to contact and whether it's a direct message or a friend request, then add an optional reason. They get a DM with Accept and Deny buttons.</span>
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/dm_set_mode mode:[open|ask|closed]</span>
+      <span class="cmd-name">My DM Settings</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Set your own DM mode.</span>
+      <span class="cmd-desc">Opens a private panel only you can see. Your current mode is marked, and everything below is done from here.</span>
       <div class="cmd-params">
-        <strong>mode</strong>:<br>
-        &nbsp;&nbsp;<code>open</code> — anyone in the server may DM you.<br>
-        &nbsp;&nbsp;<code>ask</code> — others must send a request you approve first (default).<br>
-        &nbsp;&nbsp;<code>closed</code> — no DM requests are accepted.
+        <strong>Mode buttons</strong> — set your own DM mode:<br>
+        &nbsp;&nbsp;<code>Open</code> — anyone in the server may DM you.<br>
+        &nbsp;&nbsp;<code>Ask</code> — others must send a request you approve first (default).<br>
+        &nbsp;&nbsp;<code>Closed</code> — no DM requests are accepted.<br>
+        <strong>The user picker</strong> — shows whether you and that member are currently connected.<br>
+        <strong>Remove connection</strong> — appears only when a connection exists. Removes it; both parties are DM'd a notice and the action is logged to the audit channel.
       </div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/dm_revoke user:@member</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Remove an existing mutual DM connection. Both parties are DM'd a notice and the action is logged to the audit channel.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/dm_status user:@member</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Check whether mutual DM permission currently exists between you and another member.</span>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════

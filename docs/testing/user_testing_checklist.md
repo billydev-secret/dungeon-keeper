@@ -39,10 +39,11 @@ Check items off as you go. If something behaves differently than described, note
 
 ### DM Permissions
 
-- [ ] **`/dm_help`** — Run it; confirm it explains the three DM modes (open/ask/closed) and the request flow.
-- [ ] **`/dm_set_mode`** — Set your mode to Ask, then Closed; confirm only the current mode's role is held.
-- [ ] **`/dm_revoke user:<member>`** — Revoke an existing DM connection; confirm both sides get a revoke DM. Try with no existing connection and confirm the "no connection" message.
-- [ ] **`/dm_status user:<member>`** — Check status against a connected member (✅) and an unconnected one (❌).
+- [ ] **Panel auto-post** — After a restart, confirm the DM panel is present in its configured channel and was *edited in place*, not duplicated.
+- [ ] **My DM Settings** — Click it; confirm the panel is private to you and marks your current mode.
+- [ ] **Mode buttons** — Set Ask, then Closed; confirm only the current mode's role is held and the panel re-marks the active one.
+- [ ] **User picker** — Pick a connected member (✅) and an unconnected one (❌). Pick yourself and confirm it refuses.
+- [ ] **Remove connection** — Confirm the button only appears for a connected member, removes the pair, and DMs both sides.
 - [ ] **Open DM Request Form (panel button)** — Pick a recipient in Ask mode, submit an optional reason, confirm the target gets a DM with Accept/Deny. Send 6 in a row and confirm the "max 5 pending" message.
 - [ ] **Accept / Deny DM request buttons** — As the target, click Accept (confirm both sides get a confirmation DM) and separately Deny (confirm the denial DM). Have a non-target click and confirm "This request isn't for you."
 

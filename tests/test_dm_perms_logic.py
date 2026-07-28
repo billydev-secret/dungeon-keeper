@@ -19,10 +19,9 @@ from bot_modules.dm_perms.embeds import (
     build_acceptance_embed,
     build_denial_embed_for_requester,
     build_denial_embed_for_view,
-    build_dm_help_embed,
+    build_dm_settings_embed,
     build_expired_embed,
     build_guild_unavailable_embed,
-    build_mode_updated_embed,
     build_request_dm_embed,
     build_request_sent_embed,
     build_revoked_embed,
@@ -36,6 +35,7 @@ from bot_modules.dm_perms.logic import (
     audit_line_revoked,
     clamp_reason,
     classify_dm_request,
+    discard_consent_pair,
     display_name_for,
     dm_status_text,
     pick_dm_roles_to_remove,
@@ -500,34 +500,84 @@ def test_build_revoked_embed_handles_missing_reason():
     assert by_name["Reason"] == "—"
 
 
-# ── build_dm_help_embed ──────────────────────────────────────────────
-
-
-def test_build_dm_help_embed_includes_three_sections():
-    embed = build_dm_help_embed(None)
-    field_names = {f.name for f in embed.fields}
-    assert "Your DM Modes" in field_names
-    assert "Your Commands" in field_names
-    assert "Moderator Tools" in field_names
-
-
-def test_build_dm_help_embed_sets_thumbnail_when_icon_provided():
-    embed = build_dm_help_embed("https://cdn.example/icon.png")
-    assert embed.thumbnail.url == "https://cdn.example/icon.png"
-
-
-def test_build_dm_help_embed_skips_thumbnail_for_iconless_guild():
-    embed = build_dm_help_embed(None)
-    assert embed.thumbnail.url is None
-
-
-# ── build_mode_updated_embed ─────────────────────────────────────────
+# ── build_dm_settings_embed ──────────────────────────────────────────
 
 
 @pytest.mark.parametrize("mode", ["open", "ask", "closed"])
-def test_build_mode_updated_embed_uppercases_mode(mode):
-    embed = build_mode_updated_embed(mode)
-    desc = embed.description or ""
-    title = embed.title or ""
-    assert mode.upper() in desc
-    assert "updated" in title.lower()
+def test_build_dm_settings_embed_marks_the_current_mode(mode):
+    """The panel states the active mode, so nobody needs a status command."""
+    embed = build_dm_settings_embed(mode, None)
+    modes_field = next(f for f in embed.fields if f.name == "Your DM Modes")
+    value = modes_field.value or ""
+    marked = [ln for ln in value.splitlines() if "← current" in ln]
+    assert len(marked) == 1
+    assert mode.upper() in marked[0]
+
+
+def test_build_dm_settings_embed_marks_nothing_for_unknown_mode():
+    """A mode we don't recognise must not silently mark the wrong row."""
+    embed = build_dm_settings_embed("bogus", None)
+    modes_field = next(f for f in embed.fields if f.name == "Your DM Modes")
+    assert "← current" not in (modes_field.value or "")
+
+
+def test_build_dm_settings_embed_has_modes_and_connections_sections():
+    embed = build_dm_settings_embed("ask", None)
+    field_names = {f.name for f in embed.fields}
+    assert field_names == {"Your DM Modes", "Connections"}
+
+
+def test_build_dm_settings_embed_sets_thumbnail_when_icon_provided():
+    embed = build_dm_settings_embed("ask", "https://cdn.example/icon.png")
+    assert embed.thumbnail.url == "https://cdn.example/icon.png"
+
+
+def test_build_dm_settings_embed_skips_thumbnail_for_iconless_guild():
+    embed = build_dm_settings_embed("ask", None)
+    assert embed.thumbnail.url is None
+
+
+
+# ── discard_consent_pair ─────────────────────────────────────────────
+#
+# A connection is cached under whichever ordering created it, so revoke has to
+# try both. Before this was extracted, the cog open-coded the two discards and
+# the boolean; the panel's revoke button and any future caller now share it.
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param((1, 2), id="stored-as-requester-target"),
+        pytest.param((2, 1), id="stored-as-target-requester"),
+    ],
+)
+def test_discard_consent_pair_removes_either_ordering(stored):
+    pairs = {stored}
+    assert discard_consent_pair(pairs, 1, 2) is True
+    assert pairs == set()
+
+
+def test_discard_consent_pair_removes_both_orderings_when_duplicated():
+    """A pair written under both orderings must not survive a revoke."""
+    pairs = {(1, 2), (2, 1)}
+    assert discard_consent_pair(pairs, 1, 2) is True
+    assert pairs == set()
+
+
+def test_discard_consent_pair_reports_absent_pair():
+    """False is what makes the caller say "no connection" instead of "done"."""
+    pairs = {(3, 4)}
+    assert discard_consent_pair(pairs, 1, 2) is False
+    assert pairs == {(3, 4)}
+
+
+def test_discard_consent_pair_leaves_other_pairs_alone():
+    pairs = {(1, 2), (3, 4), (5, 6)}
+    assert discard_consent_pair(pairs, 3, 4) is True
+    assert pairs == {(1, 2), (5, 6)}
+
+
+def test_discard_consent_pair_handles_empty_cache():
+    pairs: set[tuple[int, int]] = set()
+    assert discard_consent_pair(pairs, 1, 2) is False

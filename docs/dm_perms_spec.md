@@ -4,15 +4,15 @@ A consent gate for Discord DMs **within this community**. Every member carries o
 
 This is **not** a Discord-friend system — it lives entirely inside the bot. The only Discord-side artifacts are role assignments and the DM messages carrying the buttons.
 
-## Commands
+## Surface
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/dm_help` | Slash | Everyone (guild only) | Overview of the three modes and the request flow |
-| `/dm_set_mode mode:<open\|ask\|closed>` | Slash | Everyone | Assign yourself one of the `DMs: Open / Ask / Closed` roles |
-| `/dm_revoke user:<member>` | Slash | Everyone | Remove an existing consent pair with another member |
-| `/dm_status user:<member>` | Slash | Everyone | "✅ connected" / "❌ no connection yet" check |
 | **Open DM Request Form** button | Persistent panel | Everyone | Opens the recipient picker + request modal |
+| **My DM Settings** button | Persistent panel | Everyone | Opens the ephemeral settings panel below |
+| Mode buttons (Open / Ask / Closed) | Ephemeral settings panel | Everyone | Assign yourself one of the `DMs: Open / Ask / Closed` roles; the active one is marked |
+| User picker | Ephemeral settings panel | Everyone | "✅ connected" / "❌ no connection yet" check against the picked member |
+| **Remove connection** button | Ephemeral settings panel | Everyone | Remove an existing consent pair; only shown when one exists |
 | **Accept** / **Deny** buttons | Persistent in-DM | Target only | Routes via the message id back to the pending request |
 | DM config | Web (dashboard) | Admin | Set the request channel and the audit channel |
 | Post panel | Web (dashboard) | Admin | Force-(re)post the panel into a chosen channel |
@@ -25,10 +25,10 @@ This is **not** a Discord-friend system — it lives entirely inside the bot. Th
 - **Ask** — a request is required; the target chooses to accept or deny.
 - **Closed** — no requests possible; the system refuses up front.
 
-`/dm_set_mode` removes the other two role assignments and grants the chosen one. If a member somehow ends up with multiple DM-mode roles (race, manual edit), the highest-position role is kept and the rest are stripped.
+Picking a mode removes the other two role assignments and grants the chosen one. If a member somehow ends up with multiple DM-mode roles (race, manual edit), the highest-position role is kept and the rest are stripped.
 
 ### Sending a request
-Either the persistent panel's **Open DM Request Form** button or the slash flow opens an ephemeral picker (user-select + DM-or-friend-request type buttons + Continue, 5-minute timeout). Continue opens a modal with one optional reason field, capped at **250 characters**.
+The persistent panel's **Open DM Request Form** button opens an ephemeral picker (user-select + DM-or-friend-request type buttons + Continue, 5-minute timeout). Continue opens a modal with one optional reason field, capped at **250 characters**.
 
 On submit the system pre-checks:
 - Target is in the guild.
@@ -53,11 +53,13 @@ If the bot has been removed from the guild between the request being sent and th
 
 The panel auto-bumps to the bottom of its channel on any new message there, debounced to one bump per **2 seconds** per guild to avoid thrashing during busy periods.
 
+The panel is also **posted automatically on boot** into each guild's configured panel channel. Since the 2026-07-28 command-surface audit it is the only route to a member's own DM settings, so it can't depend on an admin remembering to press "post panel" on the dashboard. The bootstrap uses `place_or_refresh`, which edits in place when the panel is already the configured channel's — restarts refresh it rather than stacking duplicates. A guild with no configured panel channel is skipped (there is nowhere to put it); a configured channel that has been deleted or is no longer a text channel logs a warning and is skipped. The dashboard's **Post panel** action still exists for moving the panel to a different channel.
+
 ### Revoke
-Either party can `/dm_revoke` the other. The consent pair is removed; if the original request DM is still on file, it gets edited in place with a revoke embed (buttons cleared). Both sides receive a revoke DM; the invoker's slash-command confirmation is ephemeral, so nothing about the revoke is visible in the channel. The audit log records `relationship_revoked` with the actor's name.
+Either party can remove the connection from the settings panel (pick the member, then **Remove connection**). The consent pair is removed; if the original request DM is still on file, it gets edited in place with a revoke embed (buttons cleared). Both sides receive a revoke DM; the panel is ephemeral, so nothing about the revoke is visible in the channel. The audit log records `relationship_revoked` with the actor's name.
 
 ### Status check
-`/dm_status` is a one-line "connected" or "no connection yet" lookup against the in-memory consent map — it does not surface the original reason, who initiated, or when.
+The settings panel's status line is a one-line "connected" or "no connection yet" lookup against the in-memory consent map — it does not surface the original reason, who initiated, or when.
 
 ### Mod audit
 The dashboard's audit log lists every state transition: requested, accepted, denied, expired, revoked. Optional filters: action name and request type (DM vs friend-request label). The audit channel — if configured — also receives a one-line embed for each event in real time.
@@ -65,7 +67,7 @@ The dashboard's audit log lists every state transition: requested, accepted, den
 ## Permissions
 
 - The bot needs **Manage Roles** to create and assign the three DM-mode roles, with its top role above them; **Send Messages** + **Embed Links** in the panel channel and the audit channel; **Read Message History** in the panel channel for the bump-to-bottom guard.
-- `/dm_help`, `/dm_set_mode`, `/dm_revoke`, `/dm_status` are guild-only; no Discord-side gate.
+- The settings panel is guild-only (it reads mode roles) and refuses to open from a DM; no other Discord-side gate.
 - The panel button is open to everyone; Accept / Deny hard-check that the clicker is the target.
 - Dashboard endpoints require the **admin** role.
 - DM delivery to the target is best-effort — Discord-side, not bot-grantable. A target with closed DMs can't be reached at all.
@@ -86,10 +88,10 @@ The dashboard's audit log lists every state transition: requested, accepted, den
 | Accept/Deny click on an already-resolved request | (DM edits to "this request has already been resolved or expired") |
 | Bot removed from the guild between request and click | (DM edits to "this guild is no longer available to the bot") |
 | Accept when one member has left | "Couldn't find one or both users in this server." |
-| `/dm_set_mode` fails on role permission | "I don't have permission to manage roles here." |
-| `/dm_revoke` with no existing pair | "You don't have a connection with X." |
+| Mode change fails on role permission | "I don't have permission to manage roles here." |
+| Remove connection with no existing pair | "You don't have a connection with X." |
 | Panel refresh fails | "Couldn't refresh the panel — I may not have permission to post in that channel." |
-| `/dm_status` no connection | "❌ no connection yet" |
+| Status check, no connection | "❌ no connection yet" |
 
 ## Non-goals
 

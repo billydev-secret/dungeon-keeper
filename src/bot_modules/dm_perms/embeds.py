@@ -241,43 +241,50 @@ def build_revoked_embed(
     return embed
 
 
-def build_dm_help_embed(
+def build_dm_settings_embed(
+    current_mode: str,
     guild_icon_url: Optional[str],
     color: "discord.Color | None" = None,
 ) -> discord.Embed:
-    """Embed shown by ``/dm_help`` — a static overview of the DM-perm system."""
+    """Embed for the ephemeral "My DM Settings" panel.
+
+    Replaced the static ``/dm_help`` embed when the four ``/dm_*`` commands
+    collapsed into this panel (2026-07-28). The mode list is rendered with the
+    member's active mode marked, so the panel states the current setting rather
+    than making them run a separate status command to find it.
+
+    ``current_mode`` is one of "open" / "ask" / "closed"; anything else simply
+    marks nothing, which is the right failure mode for a display-only hint.
+    """
     if color is None:
         color = discord.Color(DM_PRIMARY)
     embed = discord.Embed(
-        title="📬 DM Request System",
-        description="Control how users may request DM access with you.",
+        title="📬 Your DM Settings",
+        description="Control how people may request DM access with you.",
         color=color,
     )
     if guild_icon_url:
         embed.set_thumbnail(url=guild_icon_url)
+
+    rows = [
+        ("open", "**OPEN** — Anyone may DM."),
+        ("ask", "**ASK** — You must approve requests."),
+        ("closed", "**CLOSED** — DM requests are blocked."),
+    ]
     embed.add_field(
         name="Your DM Modes",
-        value=(
-            "**OPEN** — Anyone may DM.\n"
-            "**ASK** — You must approve requests.\n"
-            "**CLOSED** — DM requests are blocked."
+        value="\n".join(
+            f"{'▸ ' if mode == current_mode else '　'}{text}"
+            + ("  ← current" if mode == current_mode else "")
+            for mode, text in rows
         ),
         inline=False,
     )
     embed.add_field(
-        name="Your Commands",
+        name="Connections",
         value=(
-            "`/dm_set_mode` — Set your DM preference\n"
-            "`/dm_revoke @user` — Revoke relationship\n"
-            "`/dm_status @user` — Check relationship status\n"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Moderator Tools",
-        value=(
-            "Request panels are set up and reposted via `/setup` and the web "
-            "dashboard."
+            "Pick someone below to see whether you're connected, and to remove "
+            "the connection if you'd rather not be."
         ),
         inline=False,
     )
@@ -285,20 +292,3 @@ def build_dm_help_embed(
     return embed
 
 
-def build_mode_updated_embed(
-    mode: str,
-    color: "discord.Color | None" = None,
-) -> discord.Embed:
-    """Embed confirming a member's DM mode change.
-
-    ``mode`` is expected to be one of "open", "ask", "closed". Upper-
-    casing it keeps the visual consistent with the role names without
-    requiring a separate label table.
-    """
-    if color is None:
-        color = discord.Color(DM_PRIMARY)
-    return discord.Embed(
-        title="DM Preference Updated",
-        description=f"You're now set to **{mode.upper()}**.",
-        color=color,
-    )
