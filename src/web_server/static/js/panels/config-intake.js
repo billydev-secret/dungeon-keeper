@@ -253,7 +253,10 @@ export function mount(container) {
           })),
         });
         const s = res.sync || {};
-        const counts = `${s.posted || 0} posted, ${s.edited || 0} edited, ${s.deleted || 0} deleted`;
+        let counts = `${s.posted || 0} posted, ${s.edited || 0} edited, ${s.deleted || 0} deleted`;
+        // Messages someone deleted in Discord: worth calling out, since the
+        // repair re-sends the rest of the channel to keep it in order.
+        if (s.repaired) counts += `, ${s.repaired} restored`;
         if (!s.synced) {
           showStatus(refStatus, true, `Saved — channel not synced (${s.reason || "unknown"})`);
         } else if (s.incomplete) {

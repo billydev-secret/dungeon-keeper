@@ -110,11 +110,27 @@ block is a bare section heading). Sync
 (`intake_reference_service.sync_channel`, run inline on dashboard save) is
 a position-wise diff against `intake_reference_messages` (migration 116):
 unchanged kept, changed edited in place (ids/links stable), tail posted,
-surplus deleted, hand-deleted tracked messages reposted. Only tracked
-messages are ever touched. A Discord failure mid-plan keeps the affected
+surplus deleted. Only tracked messages are ever touched.
+
+**Hand-deleted messages.** Each sync first sweeps the channel history once
+(`after` the oldest tracked message, so it costs ~1 request per 100
+messages rather than a fetch per position) to learn which tracked ids still
+exist. Without that check an unchanged config hashes `keep` at every
+position and the sync makes **no Discord calls at all** — which is how a
+deleted message used to stay gone however often you saved. Discord can't
+insert into the middle of a channel, so the diff rebuilds from the *first*
+gap onward (re-send + delete the stale copies) to preserve reading order;
+positions above the gap keep their ids. A sweep that Discord refuses, or
+that hits the 500-message cap, assumes the unseen ids are **present** —
+guessing would delete and re-send a stretch of live messages. The count is
+returned as `repaired`.
+
+A Discord failure mid-plan keeps the affected
 message tracked under its **old** hash (so the next save retries it rather
 than believing it already synced) and returns `incomplete: true`, which the
-panel reports instead of a clean "synced". One-time import
+panel reports instead of a clean "synced"; a failed history sweep sets it
+too. The delete pass skips any id still in the mapping, so a rebuild that
+dies mid-send can't orphan the messages it never reached. One-time import
 (`POST /config/intake/reference/import`) drafts text blocks from a
 channel's history, oldest first; refuses a non-empty editor.
 

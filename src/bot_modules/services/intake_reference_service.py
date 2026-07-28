@@ -56,6 +56,10 @@ KINDS = (KIND_TEXT, KIND_QUESTIONS)
 #: Discord's message cap is 2000; leave headroom for markdown we add.
 _CHUNK_LIMIT = 1900
 _IMPORT_HISTORY_LIMIT = 200
+#: Cap on the per-sync existence sweep (~1 request per 100 messages). Ample
+#: for a reference channel — the block editor caps out at 100 blocks — while
+#: bounding the cost when humans have chattered past the tracked range.
+_SWEEP_LIMIT = 500
 
 
 @dataclass(frozen=True)
@@ -215,8 +219,27 @@ def content_hash(content: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def missing_message_ids(
+    stored: list[tuple[int, str]], seen: set[int], horizon: int | None
+) -> set[int]:
+    """Tracked ids the existence sweep *proved* are gone.
+
+    ``horizon`` is the highest id the sweep actually reached, or ``None``
+    when it read the whole window. Ids past a truncated sweep are treated
+    as present: calling one missing on incomplete evidence would delete and
+    re-send a stretch of real messages, so the fail-safe is to do nothing.
+    """
+    return {
+        mid
+        for mid, _ in stored
+        if mid not in seen and (horizon is None or mid <= horizon)
+    }
+
+
 def diff_messages(
-    rendered: list[str], stored: list[tuple[int, str]]
+    rendered: list[str],
+    stored: list[tuple[int, str]],
+    missing: set[int] | frozenset[int] = frozenset(),
 ) -> tuple[list[tuple[str, int, str]], list[int]]:
     """Position-wise sync plan.
 
@@ -226,10 +249,21 @@ def diff_messages(
     content)`` for new tail positions; ``deletes`` are surplus message ids.
     Unchanged positions are kept untouched, so ids stay stable across
     wording edits and appends.
+
+    ``missing`` are tracked ids someone deleted by hand. Discord can't
+    insert a message into the middle of a channel, so restoring reading
+    order means re-sending from the **first** gap onward and deleting the
+    stale copies — positions above it still keep their ids. A gap that
+    lands past the rendered range is ignored: those messages are surplus
+    the delete pass removes anyway.
     """
+    gap = next((i for i, (mid, _) in enumerate(stored) if mid in missing), None)
+    if gap is not None and gap >= len(rendered):
+        gap = None
+    reusable = len(stored) if gap is None else gap
     ops: list[tuple[str, int, str]] = []
     for i, content in enumerate(rendered):
-        if i < len(stored):
+        if i < reusable:
             mid, stored_hash = stored[i]
             if stored_hash == content_hash(content):
                 ops.append(("keep", mid, content))
@@ -237,7 +271,8 @@ def diff_messages(
                 ops.append(("edit", mid, content))
         else:
             ops.append(("post", 0, content))
-    deletes = [mid for mid, _ in stored[len(rendered):]]
+    cut = len(rendered) if gap is None else gap
+    deletes = [mid for mid, _ in stored[cut:] if mid not in missing]
     return ops, deletes
 
 
@@ -288,12 +323,48 @@ def blocks_from_messages(contents: list[str]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+async def _sweep_existing(
+    channel: discord.TextChannel | discord.Thread, stored: list[tuple[int, str]]
+) -> tuple[set[int], int | None] | None:
+    """Which tracked messages the channel still holds, in one history pass.
+
+    Snowflakes sort by time, so reading ``after`` the oldest tracked message
+    bounds the window to exactly the range the bot cares about — one request
+    per 100 messages rather than a fetch per tracked position. Returns
+    ``(seen_ids, horizon)`` where ``horizon`` is ``None`` for a complete
+    sweep and the last id reached for a capped one, or ``None`` overall when
+    Discord wouldn't tell us (the caller must then assume nothing is
+    missing).
+    """
+    oldest = min(mid for mid, _ in stored)
+    seen: set[int] = set()
+    last = 0
+    try:
+        async for msg in channel.history(
+            limit=_SWEEP_LIMIT,
+            after=discord.Object(id=oldest - 1),
+            oldest_first=True,
+        ):
+            seen.add(msg.id)
+            last = msg.id
+    except discord.HTTPException:
+        log.warning("intake reference: history sweep failed")
+        return None
+    return seen, (last if len(seen) >= _SWEEP_LIMIT else None)
+
+
 async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
     """Reconcile the reference channel with the configured blocks.
 
-    Returns counts for the dashboard's save feedback. A tracked message
-    someone hand-deleted is reposted (the 404 edit falls back to a send);
-    only tracked messages are ever edited or deleted.
+    Returns counts for the dashboard's save feedback. Only tracked messages
+    are ever edited or deleted.
+
+    A tracked message someone deleted by hand is reposted: one history
+    sweep per sync says which tracked ids still exist, and the diff rebuilds
+    from the first gap so the procedure keeps its reading order. Without the
+    sweep an unchanged config hashes "keep" at every position and the sync
+    makes no Discord calls at all, which is exactly how a hand-deleted
+    message used to stay gone forever.
     """
 
     def _load():
@@ -311,10 +382,20 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
     if not isinstance(channel, (discord.TextChannel, discord.Thread)):
         return {"synced": False, "reason": "channel not found"}
 
-    ops, deletes = diff_messages(render_blocks(blocks), stored)
+    incomplete = False
+    missing: set[int] = set()
+    if stored:
+        swept = await _sweep_existing(channel, stored)
+        if swept is None:
+            # Couldn't read the channel — report it rather than treating
+            # "no information" as "everything was deleted".
+            incomplete = True
+        else:
+            missing = missing_message_ids(stored, *swept)
+
+    ops, deletes = diff_messages(render_blocks(blocks), stored, missing)
     mapping: list[tuple[int, str]] = []
     edited = posted = deleted = 0
-    incomplete = False
     for index, (op, mid, content) in enumerate(ops):
         h = content_hash(content)
         if op == "keep":
@@ -353,7 +434,14 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
             break
         mapping.append((sent.id, h))
         posted += 1
+    # Never delete a message we still track. A rebuild that dies mid-send
+    # keeps the old ids for the positions it never reached (see the send
+    # failure branch above); deleting them anyway would orphan real messages
+    # the bot then refuses to touch.
+    still_tracked = {mid for mid, _ in mapping}
     for mid in deletes:
+        if mid in still_tracked:
+            continue
         try:
             await channel.get_partial_message(mid).delete()
             deleted += 1
@@ -370,9 +458,12 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
         "edited": edited,
         "posted": posted,
         "deleted": deleted,
-        # Discord rejected at least one edit/send: the channel is only
-        # partially reconciled and the next save retries the rest. Surfaced
-        # so the dashboard doesn't report a clean sync.
+        # Tracked messages found deleted from the channel and restored.
+        "repaired": len(missing),
+        # Discord rejected an edit/send, or wouldn't hand over the history
+        # the existence check needs: the channel is only partially
+        # reconciled and the next save retries the rest. Surfaced so the
+        # dashboard doesn't report a clean sync.
         "incomplete": incomplete,
     }
 
