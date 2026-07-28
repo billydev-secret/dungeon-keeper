@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import shlex
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
@@ -355,3 +355,59 @@ def test_orphan_scratch_dirs_only_lists_dead_sessions(tmp_path):
     (claude / "-home-ben-unrelated").mkdir(parents=True)
     found = dk_session.orphan_scratch_dirs(sessions, tmp_root=tmp_path)
     assert found == [claude / f"{pre}dead"]
+
+
+# ── platform independence ────────────────────────────────────────────────
+#
+# The suite dispatches to a Windows remote runner, which has twice caught a
+# POSIX assumption in this module — first a tmux -c literal, then the scratch
+# mangling. Both failed only on the remote, minutes after passing locally.
+# Feeding both flavours here makes the next one fail on this machine instead.
+
+@pytest.mark.parametrize("flavour", [PurePosixPath, PureWindowsPath])
+def test_agent_tmp_name_is_platform_independent(flavour):
+    assert dk_session.agent_tmp_name(
+        flavour("/home/ben/discord-bots/dk-sessions/casino-derby")
+    ) == "-home-ben-discord-bots-dk-sessions-casino-derby"
+
+
+@pytest.mark.parametrize("flavour", [PurePosixPath, PureWindowsPath])
+def test_claude_command_is_platform_independent(flavour):
+    """new_window_args embeds a path; it must read the same on either host."""
+    args = dk_session.new_window_args("x", flavour("/tmp/wt"), "opus")
+    assert args[args.index("-c") + 1] == str(flavour("/tmp/wt"))
+
+
+# ── recovering pre-commit's stash ────────────────────────────────────────
+
+def test_newest_precommit_patch_picks_the_latest(tmp_path):
+    old, new = tmp_path / "patch100", tmp_path / "patch200"
+    old.write_text("a")
+    new.write_text("b")
+    os.utime(old, (1, 1))
+    os.utime(new, (2, 2))
+    assert dk_session.newest_precommit_patch(tmp_path) == new
+
+
+def test_newest_precommit_patch_handles_no_cache(tmp_path):
+    assert dk_session.newest_precommit_patch(tmp_path / "nope") is None
+    assert dk_session.newest_precommit_patch(tmp_path) is None
+
+
+def test_patch_files_lists_what_would_be_restored():
+    patch = (
+        "diff --git a/scripts/gate.py b/scripts/gate.py\n"
+        "index 1..2 100644\n"
+        "--- a/scripts/gate.py\n"
+        "+++ b/scripts/gate.py\n"
+        "@@ -1 +1 @@\n"
+        "-x\n+y\n"
+        "diff --git a/tests/test_gate_scope.py b/tests/test_gate_scope.py\n"
+    )
+    assert dk_session.patch_files(patch) == [
+        "scripts/gate.py", "tests/test_gate_scope.py",
+    ]
+
+
+def test_patch_files_on_an_empty_patch():
+    assert dk_session.patch_files("") == []

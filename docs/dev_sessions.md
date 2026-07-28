@@ -211,6 +211,22 @@ The sweep only ever considers directories whose name was mangled from
 dk-sessions/ **and** whose worktree no longer exists, so a live session's
 scratch is never a candidate.
 
+## When a commit is interrupted
+
+pre-commit stashes **unstaged** changes while hooks run and restores them after.
+Kill the hook first — a commit whose gate outruns a command timeout is the usual
+way — and the restore never happens: that work vanishes from the working tree with
+no stash entry and nothing in `git status` to hint at it.
+
+It is not lost. pre-commit wrote it to `~/.cache/pre-commit/patch*` first:
+
+    python scripts/dk_session.py recover           # shows the newest patch + its files
+    python scripts/dk_session.py recover --apply    # restores them
+
+Two habits avoid needing it: stage everything before a commit that will run the
+full suite (nothing unstaged means nothing to stash), and run long commits in the
+background rather than under a timeout.
+
 ## Cleaning up by hand
 
     python scripts/dk_session.py teardown <name>

@@ -29,7 +29,7 @@ import shutil
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 
 SESSIONS_DIRNAME = "dk-sessions"
 
@@ -260,15 +260,72 @@ def die(msg: str) -> None:
     raise SystemExit(1)
 
 
-def agent_tmp_name(worktree: Path) -> str:
+PRECOMMIT_CACHE = Path.home() / ".cache" / "pre-commit"
+
+
+def newest_precommit_patch(cache_dir: Path = PRECOMMIT_CACHE) -> Path | None:
+    """The most recent patch pre-commit stashed, or None.
+
+    pre-commit stashes *unstaged* changes while hooks run and restores them
+    afterwards. If the hook is killed first — a commit that outruns a command
+    timeout is the usual way — the restore never happens and that work is gone
+    from the worktree. It is not lost, though: the stash is written here as a
+    patch file, newest last by mtime.
+    """
+    if not cache_dir.is_dir():
+        return None
+    patches = [p for p in cache_dir.glob("patch*") if p.is_file()]
+    if not patches:
+        return None
+    return max(patches, key=lambda p: p.stat().st_mtime)
+
+
+def patch_files(text: str) -> list[str]:
+    """Repo-relative paths a git patch touches, for showing before applying."""
+    out: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("diff --git a/"):
+            path = line.split(" b/", 1)[-1].strip()
+            if path and path not in out:
+                out.append(path)
+    return out
+
+
+def cmd_recover(args: argparse.Namespace) -> int:
+    patch = newest_precommit_patch()
+    if patch is None:
+        print("no pre-commit stash found")
+        return 0
+    text = patch.read_text(encoding="utf-8", errors="replace")
+    files = patch_files(text)
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(patch.stat().st_mtime))
+    print(f"{patch}  ({stamp})")
+    for f in files:
+        print(f"  {f}")
+    if not args.apply:
+        print("\ndry run — pass --apply to restore these into the working tree")
+        return 0
+    res = run(["git", "apply", str(patch)], check=False)
+    if res.returncode != 0:
+        print(res.stderr.strip() or "git apply failed", file=sys.stderr)
+        print("the patch may already be applied, or the tree has moved on",
+              file=sys.stderr)
+        return 1
+    print(f"\nrestored {len(files)} file(s)")
+    return 0
+
+
+def agent_tmp_name(worktree: PurePath) -> str:
     """The scratch-dir name a Claude Code session uses for *worktree*.
 
     The agent mangles a session's cwd into a single directory name by turning
     every ``/`` into ``-``, so /home/ben/x becomes ``-home-ben-x``.
 
-    Reads the path through ``as_posix()`` rather than ``str()``: the suite also
-    runs on the Windows remote runner, where ``str(Path("/home/x"))`` is
+    Reads the path through ``as_posix()`` rather than ``str()``, and takes a
+    ``PurePath`` so the property is stated in the signature: the suite also runs
+    on the Windows remote runner, where ``str(Path("/home/x"))`` is
     ``\\home\\x`` and the mangling would silently produce a different name.
+    A test feeds both path flavours and asserts one answer.
     """
     return worktree.as_posix().replace("/", "-")
 
@@ -541,6 +598,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_sweep.add_argument("--apply", action="store_true", help="actually delete (default: dry run)")
     p_sweep.set_defaults(func=cmd_sweep)
+
+    p_rec = sub.add_parser(
+        "recover", help="restore work pre-commit stashed and never gave back",
+    )
+    p_rec.add_argument("--apply", action="store_true", help="actually restore (default: dry run)")
+    p_rec.set_defaults(func=cmd_recover)
 
     p_down = sub.add_parser("teardown", help="remove worktree, drop branch, kill window")
     p_down.add_argument("name")
