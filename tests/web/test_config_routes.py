@@ -1702,6 +1702,72 @@ def test_bump_tracker_site_add_update_and_delete(authed_client, fake_ctx):
     assert not [s for s in sites if s["site_name"] == "disboard"]
 
 
+def test_bump_tracker_site_save_preserves_patterns_it_omits(authed_client, fake_ctx):
+    """An omitted pattern must survive the save.
+
+    A dashboard tab left open across a restart still runs the pre-137 JS, which
+    sends no failure_pattern at all. Clearing it on save would turn the listing
+    bot's "already bumped recently" refusal back into a recorded bump.
+    """
+    authed_client.put("/api/config/bump-tracker/sites/discadia", json={
+        "cooldown_hours": 24,
+        "detector_bot_id": "1222548162741538938",
+        "detector_pattern": "bump done",
+        "failure_pattern": "already bumped recently",
+    })
+
+    # The old panel's payload shape: cooldown and bot id only.
+    resp = authed_client.put("/api/config/bump-tracker/sites/discadia", json={
+        "cooldown_hours": 12, "detector_bot_id": "1222548162741538938",
+    })
+    assert resp.status_code == 200
+
+    sites = authed_client.get("/api/config").json()["bump_tracker"]["sites"]
+    site = next(s for s in sites if s["site_name"] == "discadia")
+    assert site["cooldown_seconds"] == 43200
+    assert site["detector_pattern"] == "bump done"
+    assert site["failure_pattern"] == "already bumped recently"
+
+
+def test_bump_tracker_site_save_can_still_clear_a_pattern(authed_client, fake_ctx):
+    """Omitted means keep, but an explicit empty string still clears."""
+    authed_client.put("/api/config/bump-tracker/sites/discadia", json={
+        "cooldown_hours": 24, "failure_pattern": "already bumped recently",
+    })
+    authed_client.put("/api/config/bump-tracker/sites/discadia", json={
+        "cooldown_hours": 24, "failure_pattern": "",
+    })
+
+    sites = authed_client.get("/api/config").json()["bump_tracker"]["sites"]
+    site = next(s for s in sites if s["site_name"] == "discadia")
+    assert site["failure_pattern"] == ""
+
+
+def test_bump_tracker_detector_route_preserves_the_failure_veto(authed_client, fake_ctx):
+    """The detector route predates failure_pattern; no caller sends one."""
+    authed_client.put("/api/config/bump-tracker/sites/discadia", json={
+        "cooldown_hours": 24, "failure_pattern": "already bumped recently",
+    })
+
+    resp = authed_client.put("/api/config/bump-tracker/sites/discadia/detector", json={
+        "detector_bot_id": "1222548162741538938",
+    })
+    assert resp.status_code == 200
+
+    sites = authed_client.get("/api/config").json()["bump_tracker"]["sites"]
+    site = next(s for s in sites if s["site_name"] == "discadia")
+    assert site["detector_bot_id"] == "1222548162741538938"
+    assert site["failure_pattern"] == "already bumped recently"
+
+
+def test_bump_tracker_rejects_an_overlong_pattern(authed_client, fake_ctx):
+    """Patterns are substring-matched against every bot message; bound them."""
+    resp = authed_client.put("/api/config/bump-tracker/sites/discadia", json={
+        "cooldown_hours": 24, "failure_pattern": "x" * 201,
+    })
+    assert resp.status_code == 422
+
+
 def test_bump_tracker_log_starts_the_cooldown(authed_client, fake_ctx):
     authed_client.put("/api/config/bump-tracker/sites/discadia", json={"cooldown_hours": 24})
 

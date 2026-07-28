@@ -1830,6 +1830,15 @@
 
     <p>The reminder channel, ping role, tracked sites, and auto-detection rules are configured on the <strong>Bump Tracker</strong> panel in the <a href="/">web dashboard</a>.</p>
 
+    <p>Each site's <strong>Detection</strong> settings decide how a bump is spotted automatically:</p>
+    <ul>
+      <li><strong>Bot ID</strong> — the listing bot's user ID. Set it and bumps are recorded without anyone running <code>/bump log</code>.</li>
+      <li><strong>Text when bumped</strong> — only count messages containing this phrase (e.g. <code>Bump done!</code>). Leave blank to count any message from that bot.</li>
+      <li><strong>Text when refused</strong> — a phrase that marks a <em>rejected</em> bump, such as <code>already bumped recently</code>. Messages matching it are ignored rather than resetting the timer.</li>
+    </ul>
+
+    <p>Set <strong>Text when refused</strong> whenever a listing bot replies publicly when you bump too early. Without it — especially with <strong>Text when bumped</strong> left blank — that "you already bumped" reply looks exactly like a successful bump, and the countdown restarts even though nothing was bumped. Bots that answer privately instead (DISBOARD sends its refusal only to you) need nothing here; the bot never sees those messages, so the timer is already left alone.</p>
+
     <div class="cmd-block">
       <span class="cmd-name">/bump log &nbsp;&nbsp; /bump status</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>

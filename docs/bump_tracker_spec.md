@@ -31,7 +31,23 @@ Validates the site name against the guild's configured sites, upserts the bump t
 Renders the same widget embed ephemerally to the invoker. No writes.
 
 ### Auto-detection
-Sites may carry a detector: a listing bot's user ID plus an optional text pattern. When any bot posts in the configured channel, the message is matched against each detector site — author must equal `detector_bot_id`, and if a pattern is set it must appear (case-insensitive) in the message content or any embed description. First match wins: the bump is logged automatically and the widget is force-resent to the bottom of the channel.
+Sites may carry a detector: a listing bot's user ID, an optional success pattern (`detector_pattern`) and an optional failure pattern (`failure_pattern`). When any bot posts in the configured channel, the message is matched against each detector site — author must equal `detector_bot_id`, then the message text is classified (`bump_tracker/detector_logic.py`):
+
+1. If `failure_pattern` is set and appears in the text, the message is a **refused** bump. It is logged server-side and otherwise ignored — no bump recorded, no widget refresh, cooldown keeps running off the last real bump.
+2. Otherwise, if `detector_pattern` is empty **or** appears in the text, it is a **successful** bump: logged automatically and the widget force-resent to the bottom of the channel.
+3. Otherwise the site does not claim the message, and the next detector site is tried.
+
+The failure check runs first because refusals routinely echo the success wording ("you can bump again…"), and because every guild configured before this existed uses an empty `detector_pattern`, which matches anything the bot posts.
+
+Matching is case-insensitive and substring-based, against everything readable on the message:
+
+- plain `content`
+- every embed's title, description, footer, author name, and field names/values
+- **Components V2** text — nested `text_display` components, walked depth-first through `container` / `section` children and section accessories
+
+Components V2 matters because several listing bots deliver an empty `content`, zero embeds, and all their visible text in components — DH Bump for both outcomes, and Discadia for its successes. Before this was read, no pattern could match those messages at all.
+
+**Ephemeral replies are never seen.** DISBOARD answers a rejected bump with an ephemeral interaction response, which Discord does not deliver to other bots. There is nothing to detect and no failure pattern to configure; a refused DISBOARD bump simply leaves the timer untouched, which is already correct.
 
 ## User-visible errors
 
@@ -59,14 +75,28 @@ shows each site's live status and counts down to the next one becoming ready.
 - **Channel** — where pings and the widget are posted; the feature is inactive until set.
 - **Role** — pinged when a site becomes ready (optional).
 - **Enabled** — master toggle (default on).
-- **Per site**: name, cooldown in seconds, optional detector bot ID and detector pattern.
+- **Per site**: name, cooldown in seconds, and a **Detection** cell holding the optional detector bot ID, "Text when bumped" (`detector_pattern`) and "Text when refused" (`failure_pattern`).
+
+Until 2026-07-28 the panel sent `detector_pattern: ""` on every site save, so it
+could neither show nor set a pattern, and editing a site's cooldown or bot ID
+silently wiped one that had been set by hand. Both patterns are now editable and
+round-trip through the panel.
 
 The `/bump` command group defaults to requiring **Manage Server**.
 
 ## Stored data
 
-SQLite, migrations `044_bump_tracker.sql` and `047_bump_tracker_detector.sql`:
+SQLite, migrations `044_bump_tracker.sql`, `047_bump_tracker_detector.sql` and
+`137_bump_tracker_failure.sql`:
 
 - `bump_tracker_config` — per guild: `channel_id`, `role_id`, `widget_message_id`, `enabled`.
-- `bump_tracker_sites` — per (guild, site): `cooldown_seconds`, `detector_bot_id`, `detector_pattern`.
+- `bump_tracker_sites` — per (guild, site): `cooldown_seconds`, `detector_bot_id`, `detector_pattern`, `failure_pattern`.
+
 - `bump_tracker_log` — per (guild, site): last `bumped_at` (unix timestamp) and `notified` flag. Only the latest bump per site is kept — no history. Removing a site also deletes its log row.
+
+Migration 137 also back-fills `failure_pattern` for every existing row whose
+`detector_bot_id` is Discadia, Discodus or DH Bump — all three announce refusals
+publicly, and every such row was configured with an empty `detector_pattern`
+(match anything), so their refusals were being recorded as bumps. Only the veto
+is seeded, never `detector_pattern`: a wrong veto degrades to the old behavior,
+whereas a wrong success pattern would stop detection outright.
