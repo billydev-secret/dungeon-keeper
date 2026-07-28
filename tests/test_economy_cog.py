@@ -2860,12 +2860,10 @@ async def test_refund_picker_previews_prorated_amount(ctx, db):
     _add_rental(db, "role_color", user_id=500)
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
-    refundable, _shields_held, shield_price = cog._refundables(
-        GUILD_ID, 500, _settings(db)
-    )
+    shop = cog._shop_context(GUILD_ID, 500)
 
     await cog.open_refund_picker(
-        interaction, _settings(db), _guild_roles(), refundable, shield_price
+        interaction, _settings(db), _guild_roles(), shop.refundable, shop.shield_price
     )
     view = interaction.response.send_message.await_args.kwargs["view"]
     select = next(c for c in view.children if isinstance(c, discord.ui.Select))
@@ -3070,7 +3068,7 @@ async def test_set_role_name_also_sets_nickname(ctx, db):
         patch.object(
             cog,
             "_load_role_ctx",
-            return_value=(EconSettings(enabled=True), {"role_name": True}, 0),
+            return_value=(EconSettings(enabled=True), {"role_name": True}),
         ),
         patch.object(cog, "_name_blocklist", return_value=[]),
         patch.object(cog, "_upsert_role"),
@@ -3103,7 +3101,7 @@ async def test_set_role_name_nick_forbidden_still_renames_role(ctx, db):
         patch.object(
             cog,
             "_load_role_ctx",
-            return_value=(EconSettings(enabled=True), {"role_name": True}, 0),
+            return_value=(EconSettings(enabled=True), {"role_name": True}),
         ),
         patch.object(cog, "_name_blocklist", return_value=[]),
         patch.object(cog, "_upsert_role", upsert),

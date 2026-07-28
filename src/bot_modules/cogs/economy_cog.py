@@ -16,7 +16,7 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import discord
 from discord import app_commands
@@ -204,6 +204,11 @@ _MAX_MEMO_LEN = 100
 _WALLET_MEMO_LEN = 40
 _EMBED_FIELD_LIMIT = 1024
 _MAX_ICON_BYTES = 256 * 1024
+# Emoji upload types Discord accepts, mapped to whether they're animated.
+_EMOJI_CONTENT_TYPES = {
+    "image/png": False, "image/jpeg": False,
+    "image/webp": False, "image/gif": True,
+}
 
 # Human labels for the rentable perks (shop rows, wallet field, DMs).
 _PERK_LABELS = {
@@ -481,6 +486,18 @@ def _quest_section_lines(
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
 # next message after at most this many seconds.
 _TRIGGER_CACHE_TTL = 60.0
+
+
+class _ShopContext(NamedTuple):
+    """Everything /bank shop renders from, read on a single connection."""
+
+    settings: EconSettings
+    owned: set[str]
+    balance: int
+    icon_range: tuple[int, int, int] | None
+    refundable: list[dict]
+    shields_held: int
+    shield_price: int
 
 
 @dataclass(frozen=True)
@@ -2057,32 +2074,28 @@ class EconomyCog(commands.Cog):
         guild = interaction.guild
         user_id = interaction.user.id
 
-        settings, owned, balance = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
+        shop = await asyncio.to_thread(self._shop_context, guild.id, user_id)
+        settings = shop.settings
         if await self._refuse_disabled(interaction, settings):
             return
 
         gated = await self._gated_perks(guild.id)
 
-        icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
-        has_catalog = icon_range is not None
-        refundable, shields, shield_price = await asyncio.to_thread(
-            self._refundables, guild.id, user_id, settings
-        )
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = _build_shop_embed(
             settings,
             gated,
             accent,
-            owned=owned,
-            icon_catalog=icon_range,
-            balance=balance,
-            shields_held=shields,
+            owned=shop.owned,
+            icon_catalog=shop.icon_range,
+            balance=shop.balance,
+            shields_held=shop.shields_held,
         )
         view = _ShopView(
-            self, settings, guild, user_id, gated, owned, has_catalog,
-            shields_held=shields, refundable=refundable, shield_price=shield_price,
+            self, settings, guild, user_id, gated, shop.owned,
+            shop.icon_range is not None,
+            shields_held=shop.shields_held, refundable=shop.refundable,
+            shield_price=shop.shield_price,
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -2561,12 +2574,8 @@ class EconomyCog(commands.Cog):
             await self._emoji_status(interaction, settings, guild, member)
             return
 
-        content_types = {
-            "image/png": False, "image/jpeg": False,
-            "image/webp": False, "image/gif": True,
-        }
         ctype = (image.content_type or "").split(";")[0].strip()
-        if ctype not in content_types:
+        if ctype not in _EMOJI_CONTENT_TYPES:
             await interaction.response.send_message(
                 "❌ Emoji images are PNG, JPEG, WEBP, or GIF.", ephemeral=True
             )
@@ -2577,7 +2586,7 @@ class EconomyCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        animated = content_types[ctype]
+        animated = _EMOJI_CONTENT_TYPES[ctype]
 
         await interaction.response.defer(ephemeral=True)
         data = await image.read()
@@ -2590,13 +2599,17 @@ class EconomyCog(commands.Cog):
 
         ext = "gif" if animated else "png"
         directory = self.ctx.db_path.parent / "econ_emoji" / str(guild.id)
-        directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{int(time.time())}_{member.id}.{ext}"
-        path.write_bytes(data)
 
         taken = {e.name for e in guild.emojis}
 
         def _submit():
+            # The mkdir and the up-to-256KB write ride the worker thread with
+            # the DB work rather than stalling the event loop — same order as
+            # before (image on disk before the row that points at it), so the
+            # unlink below still undoes a rejected submission.
+            directory.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
             with self.ctx.open_db() as conn:
                 for row in emoji_svc.list_submissions(conn, guild.id):
                     if row["state"] in ("pending", "approved", "live"):
@@ -3321,7 +3334,7 @@ class EconomyCog(commands.Cog):
         setter opened with the same pair, differing only in the perk name and
         its refusal line.
         """
-        settings, ent, _bal = await asyncio.to_thread(
+        settings, ent = await asyncio.to_thread(
             self._load_role_ctx, guild_id, interaction.user.id
         )
         if await self._refuse_disabled(interaction, settings):
@@ -3359,9 +3372,9 @@ class EconomyCog(commands.Cog):
         `/bank role icon` upload — which differ only in where ``data`` and its
         size refusal come from.
         """
-        path = _icon_store_path(self.ctx.db_path, guild_id, user_id)
-
         def _write() -> None:
+            # _icon_store_path mkdirs, so it belongs on the worker thread too.
+            path = _icon_store_path(self.ctx.db_path, guild_id, user_id)
             path.write_bytes(data)
             self._upsert_role(guild_id, user_id, {"icon_path": str(path)})
 
@@ -3422,37 +3435,41 @@ class EconomyCog(commands.Cog):
             f"but only have {bal:,}."
         )
 
-    def _refundables(
-        self, guild_id: int, user_id: int, settings: EconSettings
-    ) -> tuple[list[dict], int, int]:
-        """The member's refundable rentals, held-shield count, and its price.
+    def _shop_context(self, guild_id: int, user_id: int) -> _ShopContext:
+        """Read the whole shop in one go.
 
-        One connection for the rental list AND the streak-shield status
-        (previously a separate ``_shields`` call plus its own query) — shop's
-        cancel/refund flow. ``list_refundable_rentals`` already excludes
+        The header (settings, entitlements, balance), the catalog row's price
+        span, and the refund/shield controls' state were three separate thread
+        hops, each opening — and PRAGMA-ing — its own connection for a page
+        that renders once. ``list_refundable_rentals`` already excludes
         sponsored-emoji rentals (a different self-service surface, ``/bank
         emoji``) and admin-force-cancelled ones.
-        """
-        with self.ctx.open_db() as conn:
-            rentals = [dict(r) for r in list_refundable_rentals(conn, guild_id, user_id)]
-            shields_held, shield_price = get_streak_shield_status(
-                conn, guild_id, user_id, settings
-            )
-        return rentals, shields_held, shield_price
-
-    def _load_role_ctx(
-        self, guild_id: int, user_id: int
-    ) -> tuple[EconSettings, set[str], int]:
-        """Settings, the member's entitlements, and their balance in one trip.
-
-        The shop header shows the balance next to the prices, so it rides
-        along on the connection the perk rows already need.
         """
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             ent = entitlements(conn, guild_id, user_id)
             balance = get_balance(conn, guild_id, user_id)
-        return settings, ent, balance
+            icon_range = catalog_price_range(conn, guild_id)
+            rentals = [dict(r) for r in list_refundable_rentals(conn, guild_id, user_id)]
+            shields_held, shield_price = get_streak_shield_status(
+                conn, guild_id, user_id, settings
+            )
+        return _ShopContext(
+            settings, ent, balance, icon_range, rentals, shields_held, shield_price
+        )
+
+    def _load_role_ctx(
+        self, guild_id: int, user_id: int
+    ) -> tuple[EconSettings, set[str]]:
+        """Settings and the member's entitlements, for the role-studio gates.
+
+        No balance: the shop header is the only surface that shows one, and it
+        reads the whole page through ``_shop_context``.
+        """
+        with self.ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild_id)
+            ent = entitlements(conn, guild_id, user_id)
+        return settings, ent
 
     def _name_blocklist(self, guild_id: int) -> list[str]:
         with self.ctx.open_db() as conn:
@@ -4099,8 +4116,6 @@ class EconomyCog(commands.Cog):
             sponsor_id = int(queued["user_id"])
             question = str(queued["question"])
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
-
         # Prefer the rendered quote card; fall back to a plain branded embed if
         # there's no usable background image or the renderer raises.
         card_file: discord.File | None = None
@@ -4130,6 +4145,16 @@ class EconomyCog(commands.Cog):
                 )
             except Exception:
                 log.exception("qotd: failed to render card in guild %s", guild_id)
+
+        # Only the fallback embed is accented — the rendered card carries its
+        # own palette — so the card path skips the lookup entirely. Resolved
+        # before the try, as it was, so a failure here still can't be mistaken
+        # for a failed send and release the claimed sponsored question.
+        accent = (
+            None
+            if card_file is not None
+            else await resolve_accent_color(self.ctx.db_path, guild)
+        )
 
         content: str | None = None
         mentions = discord.AllowedMentions.none()
@@ -4282,18 +4307,21 @@ class EconomyCog(commands.Cog):
         )
 
     async def _build_leaderboard_panel(self, guild: discord.Guild) -> PanelContent:
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
         now_ts = time.time()
 
         def _collect():
+            # Settings ride the connection the board data already needs; this
+            # runs on every sticky repost, so a second connect+PRAGMA for one
+            # settings row was the most-repeated waste in the cog.
             with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild.id)
                 data = collect_leaderboard_data(conn, guild.id, now_ts)
                 known = get_known_users_bulk(
                     conn, guild.id, [uid for uid, _ in data.top_earners]
                 )
-            return data, known
+            return settings, data, known
 
-        data, known = await asyncio.to_thread(_collect)
+        settings, data, known = await asyncio.to_thread(_collect)
 
         def _name(uid: int) -> str:
             member = guild.get_member(uid)
