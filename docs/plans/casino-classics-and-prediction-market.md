@@ -373,14 +373,25 @@ conventions exactly — they are load-bearing, not stylistic:
   takes a fixed contrast tone. Green/red stay semantic, used only for candle
   direction.
 
-**Chart 1 — the market chart (live panel).** Implied probability of Over across
-the window, 0–100%, filled area under the line, with the current pool split and
-time-to-close. This is the parimutuel pool share plotted over time; it is the
-Polymarket/Kalshi idiom and needs no new data.
+A Discord embed carries exactly one image, so each surface gets one figure.
 
-**Chart 2 — the instrument chart (result post, and a thumbnail on the panel).**
-Daily candlesticks of **total Petals in circulation**, last 14–21 days, with a
-volume bar beneath.
+**Chart 1 — the live chart (the open panel).** Three stacked panels:
+candlesticks of circulation with today's target line, the daily net change with
+its rolling median and ±1σ band, and the implied-odds path across the betting
+window. Instrument above, market price below — the way a prediction-market page
+stacks it. **The candles belong here, not on the result card:** the instrument
+matters while you are deciding whether to bet, and by settlement the answer is
+already known. Volume is dropped from this figure in favour of the odds path;
+while betting is open, how the pool is moving is the live information and
+ledger-row counts are not.
+
+The odds panel must **not** share an x-axis with the two above it. The candles
+are indexed by day and the path by fraction-of-window, and letting them share
+rescales two weeks of history into a smear (observed, not theorised).
+
+**Chart 2 — the instrument chart (result post).** The same candles and net
+change, with volume back in place of the odds path, and today's candle now
+closed — the payoff shot that answers "how close was it?".
 
 This is honest OHLC, not decoration. The cumulative sum of `econ_ledger.amount`
 *is* circulation — verified against prod on 2026-07-28: `SUM(amount)`,

@@ -70,7 +70,7 @@ def accent_hex(color: object | None) -> str:
     return _DEFAULT_ACCENT if value is None else f"#{int(value):06x}"
 
 INSTRUMENT_FILENAME = "pools_instrument.png"
-MARKET_FILENAME = "pools_market.png"
+LIVE_FILENAME = "pools_live.png"
 
 
 def _kfmt() -> FuncFormatter:
@@ -79,15 +79,19 @@ def _kfmt() -> FuncFormatter:
     )
 
 
-def _style(ax, *, bottom: bool = False) -> None:
+def _style(ax, *, ylabel: str | None = None, numeric: bool = True) -> None:
+    """The panel chrome every chart in this module shares."""
     ax.set_facecolor(_BG)
     ax.grid(True, color=_GRID, lw=0.6, alpha=0.55, zorder=0)
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.tick_params(colors=_MUTED, labelsize=8, length=0)
-    if not bottom:
-        ax.set_xticklabels([])
+    ax.set_xticklabels([])
+    if numeric:
+        ax.yaxis.set_major_formatter(_kfmt())
+    if ylabel:
+        ax.set_ylabel(ylabel, color=_MUTED, fontsize=9)
 
 
 def _save(fig) -> bytes:
@@ -98,6 +102,177 @@ def _save(fig) -> bytes:
     return buf.read()
 
 
+def _marker(ax, y: float, label: str, accent: str) -> None:
+    """The dashed threshold both instrument panels carry."""
+    ax.axhline(y, color=accent, ls="--", lw=1.4, zorder=5)
+    ax.annotate(
+        label, (0.2, y), color=accent, fontsize=8.5, fontweight="bold",
+        va="bottom",
+    )
+
+
+def _draw_candles(ax, days, line, accent, currency) -> None:
+    """Circulation as OHLC, with the level today's close must beat."""
+    span = max(1, max(d.high for d in days) - min(d.low for d in days))
+    # A flat day would otherwise draw a zero-height rectangle and vanish.
+    min_body = max(1, span // 200)
+    for i, d in enumerate(days):
+        colour = _UP if d.up else _DOWN
+        ax.vlines(i, d.low, d.high, color=colour, lw=1.4, zorder=3)
+        ax.add_patch(Rectangle(
+            (i - 0.28, min(d.open, d.close)), 0.56,
+            max(abs(d.body), min_body), color=colour, zorder=4,
+        ))
+    top = max(d.high for d in days)
+    if line is not None:
+        target = days[-1].open + line
+        _marker(ax, target, f"TARGET {target:,.0f}", accent)
+        top = max(top, target)
+    floor = min(d.low for d in days)
+    pad = max(1, (top - floor) // 12)
+    ax.set_ylim(floor - pad, top + pad * 2)
+    _style(ax, ylabel=f"{currency} in circulation")
+
+
+def _draw_net_change(ax, days, line, accent) -> None:
+    """The metric itself, with the rolling median and band."""
+    bodies = [d.body for d in days]
+    med, sig = pools_logic.median_band(bodies)
+    # The overlay is drawn only where it is defined. During the warmup week
+    # there is no median and no line — the same window the spec refuses to
+    # open a round on — so an average drawn there would imply a signal that
+    # does not exist yet.
+    overlay = [i for i, m in enumerate(med) if m is not None]
+    if overlay:
+        ax.fill_between(
+            overlay,
+            [med[i] - sig[i] for i in overlay],  # type: ignore[operator]
+            [med[i] + sig[i] for i in overlay],  # type: ignore[operator]
+            color=_BAND, alpha=0.20, zorder=1, label="±1σ",
+        )
+        ax.plot(
+            overlay, [med[i] for i in overlay], color=accent, lw=1.7,
+            zorder=3, label="7d median",
+        )
+    ax.bar(
+        range(len(days)), bodies, width=0.56, zorder=2,
+        color=[_UP if b >= 0 else _DOWN for b in bodies],
+    )
+    if line is not None:
+        _marker(ax, line, f"LINE {pools_logic.format_line(line)}", accent)
+    ax.axhline(0, color=_MUTED, lw=0.8, zorder=2)
+    _style(ax, ylabel="Net change")
+    if overlay:
+        legend = ax.legend(loc="upper right", fontsize=7.5, frameon=False, ncol=2)
+        for text in legend.get_texts():
+            text.set_color(_MUTED)
+
+
+def _draw_volume(ax, days) -> None:
+    ax.bar(
+        range(len(days)), [d.volume for d in days],
+        color=_MUTED, alpha=0.55, width=0.56,
+    )
+    _style(ax, ylabel="Volume")
+
+
+def _draw_probability(ax, points, accent) -> None:
+    """The implied-odds path across the betting window.
+
+    Starts at the 50% prior rather than the first bet's implied value: one
+    bet makes the pool 100%/0% by construction, so anchoring to it would
+    open every market pinned to an edge.
+    """
+    if points:
+        xs = [0.0] + [p[0] for p in points]
+        ys = [50.0] + [p[1] * 100 for p in points]
+        ax.fill_between(xs, 0, ys, color=accent, alpha=0.18, zorder=2)
+        ax.plot(xs, ys, color=accent, lw=2.1, zorder=3)
+        ax.scatter([xs[-1]], [ys[-1]], s=36, color=accent, zorder=4)
+        # Offset upward: at a near-even market the callout would otherwise
+        # sit straight on the 50% reference line.
+        ax.annotate(
+            f"{ys[-1]:.0f}% over", (xs[-1], ys[-1]),
+            xytext=(8, 9), textcoords="offset points",
+            color=accent, fontsize=10, fontweight="bold", va="center",
+        )
+    else:
+        ax.annotate(
+            "no bets yet", (0.5, 50), color=_MUTED, fontsize=10,
+            ha="center", va="center",
+        )
+    ax.axhline(50, color=_MUTED, ls=":", lw=1.0, zorder=1)
+    ax.set_ylim(0, 100)
+    ax.set_xlim(0, 1.18)
+    _style(ax, ylabel="Implied odds", numeric=False)
+    ax.set_yticks([0, 50, 100])
+    ax.set_yticklabels(["0%", "50%", "100%"])
+
+
+def _day_ticks(ax, days) -> None:
+    step = 1 if len(days) <= 8 else 2
+    ticks = list(range(len(days)))[::step]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([days[i].day[5:] for i in ticks], fontsize=8)
+
+
+def _stack(ratios: list[float], height: float, *, shared: int | None = None):
+    """A vertical panel stack. ``shared`` is how many leading panels share
+    the x-axis; the rest get their own.
+
+    That distinction is load-bearing on the live chart: the candles are
+    indexed by day and the odds path by fraction-of-window, so letting them
+    share an axis rescales the candles to the odds panel's 0..1 and squashes
+    two weeks of history into a smear.
+    """
+    fig = plt.figure(figsize=(10, height))
+    grid = fig.add_gridspec(len(ratios), 1, height_ratios=ratios, hspace=0.08)
+    fig.patch.set_facecolor(_BG)
+    span = len(ratios) if shared is None else shared
+    axes = [fig.add_subplot(grid[0])]
+    for i in range(1, len(ratios)):
+        axes.append(
+            fig.add_subplot(grid[i], sharex=axes[0] if i < span else None)
+        )
+    return fig, axes
+
+
+def render_live_chart(
+    days: list[DayMetric],
+    line: float | None,
+    points: list[tuple[float, float]],
+    *,
+    accent: str = _DEFAULT_ACCENT,
+    currency: str = "Petals",
+) -> bytes:
+    """The open market's chart: the instrument, then the market's opinion.
+
+    Instrument on top, price below — the way a prediction-market page
+    stacks it. Volume is dropped here in favour of the odds path: while
+    betting is open, how the pool is moving is the live information, and
+    ledger-row counts are not. The result card keeps volume.
+    """
+    if not days:
+        raise ValueError("render_live_chart needs at least one day")
+    # Only the two day-indexed panels share x; the odds path does not.
+    fig, (a1, a2, a3) = _stack([3, 1.25, 1.35], 6.8, shared=2)
+    _draw_candles(a1, days, line, accent, currency)
+    a1.set_title(
+        "POOLS  ·  today's market  ·  each body is one day's net change",
+        color=_TEXT, fontsize=12, fontweight="bold", loc="left", pad=12,
+    )
+    _draw_net_change(a2, days, line, accent)
+    _day_ticks(a2, days)
+    # a1 shares a2's axis, so a2's labels would otherwise print under both.
+    a1.tick_params(labelbottom=False)
+    a2.tick_params(labelbottom=True)
+    _draw_probability(a3, points, accent)
+    a3.set_xticks([0, 1.0])
+    a3.set_xticklabels(["open", "close"], fontsize=8)
+    a3.tick_params(labelbottom=True)
+    return _save(fig)
+
+
 def render_instrument_chart(
     days: list[DayMetric],
     line: float | None,
@@ -105,159 +280,27 @@ def render_instrument_chart(
     accent: str = _DEFAULT_ACCENT,
     currency: str = "Petals",
 ) -> bytes:
-    """Candles of circulation, net change with its band, and volume.
+    """The settled day's chart: candles, net change and volume.
 
     ``line`` draws two markers when present: the net-change threshold on the
-    middle panel, and the circulation level today's close must beat on the
+    middle panel, and the circulation level the close had to beat on the
     candles. None (during the 7-day warmup) simply omits them.
     """
     if not days:
         raise ValueError("render_instrument_chart needs at least one day")
-
-    fig, (a1, a2, a3) = plt.subplots(
-        3, 1, figsize=(10, 6.4), sharex=True,
-        gridspec_kw={"height_ratios": [3, 1.35, 0.9], "hspace": 0.08},
-    )
-    fig.patch.set_facecolor(_BG)
-    x = range(len(days))
-    bodies = [d.body for d in days]
-    med, sig = pools_logic.median_band(bodies)
-    # A flat day would otherwise draw a zero-height rectangle and vanish.
-    min_body = max(1, _span(days) // 200)
-
-    for i, d in enumerate(days):
-        colour = _UP if d.up else _DOWN
-        a1.vlines(i, d.low, d.high, color=colour, lw=1.4, zorder=3)
-        a1.add_patch(Rectangle(
-            (i - 0.28, min(d.open, d.close)), 0.56,
-            max(abs(d.close - d.open), min_body), color=colour, zorder=4,
-        ))
-
-    top = max(d.high for d in days)
-    if line is not None:
-        target = days[-1].open + line
-        a1.axhline(target, color=accent, ls="--", lw=1.4, zorder=5)
-        a1.annotate(
-            f"TARGET {target:,.0f}", (0.2, target), color=accent,
-            fontsize=8.5, fontweight="bold", va="bottom",
-        )
-        top = max(top, target)
-    floor = min(d.low for d in days)
-    pad = max(1, (top - floor) // 12)
-    a1.set_ylim(floor - pad, top + pad * 2)
-    _style(a1)
-    a1.yaxis.set_major_formatter(_kfmt())
-    a1.set_ylabel(f"{currency} in circulation", color=_MUTED, fontsize=9)
+    fig, (a1, a2, a3) = _stack([3, 1.35, 0.9], 6.4)
+    _draw_candles(a1, days, line, accent, currency)
     a1.set_title(
-        "POOLS  ·  each body is one day's net change",
+        "POOLS  ·  the day is in  ·  each body is one day's net change",
         color=_TEXT, fontsize=12, fontweight="bold", loc="left", pad=12,
     )
-
-    # The overlay is drawn only where it is defined. During the warmup week
-    # there is no median and no line — the same window the spec refuses to
-    # open a round on — so an average drawn there would imply a signal that
-    # does not exist yet.
-    overlay = [i for i, m in enumerate(med) if m is not None]
-    if overlay:
-        a2.fill_between(
-            overlay,
-            [med[i] - sig[i] for i in overlay],  # type: ignore[operator]
-            [med[i] + sig[i] for i in overlay],  # type: ignore[operator]
-            color=_BAND, alpha=0.20, zorder=1, label="±1σ",
-        )
-        a2.plot(
-            overlay, [med[i] for i in overlay], color=accent, lw=1.7,
-            zorder=3, label="7d median",
-        )
-    a2.bar(
-        x, bodies, width=0.56, zorder=2,
-        color=[_UP if b >= 0 else _DOWN for b in bodies],
-    )
-    if line is not None:
-        a2.axhline(line, color=accent, ls="--", lw=1.3, zorder=4)
-        a2.annotate(
-            f"LINE {pools_logic.format_line(line)}", (0.2, line), color=accent,
-            fontsize=8.5, fontweight="bold", va="bottom",
-        )
-    a2.axhline(0, color=_MUTED, lw=0.8, zorder=2)
-    _style(a2)
-    a2.yaxis.set_major_formatter(_kfmt())
-    a2.set_ylabel("Net change", color=_MUTED, fontsize=9)
-    if overlay:
-        legend = a2.legend(loc="upper right", fontsize=7.5, frameon=False, ncol=2)
-        for text in legend.get_texts():
-            text.set_color(_MUTED)
-
-    a3.bar(x, [d.volume for d in days], color=_MUTED, alpha=0.55, width=0.56)
-    _style(a3, bottom=True)
-    a3.yaxis.set_major_formatter(_kfmt())
-    a3.set_ylabel("Volume", color=_MUTED, fontsize=9)
-    step = 1 if len(days) <= 8 else 2
-    ticks = list(x)[::step]
-    a3.set_xticks(ticks)
-    a3.set_xticklabels([days[i].day[5:] for i in ticks], fontsize=8)
-
-    # No tight_layout here: the shared-x stack already has its spacing from
+    _draw_net_change(a2, days, line, accent)
+    _draw_volume(a3, days)
+    _day_ticks(a3, days)
+    a1.tick_params(labelbottom=False)
+    a2.tick_params(labelbottom=False)
+    a3.tick_params(labelbottom=True)
+    # No tight_layout: the shared-x stack already has its spacing from
     # gridspec, and savefig's bbox_inches="tight" does the trimming. Calling
     # it warns that these Axes aren't compatible and can shift the panels.
-    return _save(fig)
-
-
-def _span(days: list[DayMetric]) -> int:
-    return max(1, max(d.high for d in days) - min(d.low for d in days))
-
-
-def render_market_chart(
-    points: list[tuple[float, float]],
-    line: float,
-    *,
-    pool_total: int,
-    accent: str = _DEFAULT_ACCENT,
-    subtitle: str = "",
-) -> bytes:
-    """Implied probability of OVER across the betting window.
-
-    An empty market renders an honest flat 50% with a "no bets yet" note
-    rather than a line implying an opinion nobody has expressed.
-    """
-    fig, ax = plt.subplots(figsize=(10, 3.6))
-    fig.patch.set_facecolor(_BG)
-
-    if points:
-        # The path starts at the 50% prior, not at the first bet's implied
-        # value. One bet makes the pool 100%/0% by construction, so anchoring
-        # to it would open every market pinned to an edge and make the first
-        # stake look like a confident forecast rather than the only one in.
-        xs = [0.0] + [p[0] for p in points]
-        ys = [50.0] + [p[1] * 100 for p in points]
-        ax.fill_between(xs, 0, ys, color=accent, alpha=0.18, zorder=2)
-        ax.plot(xs, ys, color=accent, lw=2.1, zorder=3)
-        ax.scatter([xs[-1]], [ys[-1]], s=42, color=accent, zorder=4)
-        ax.annotate(
-            f"  OVER  {ys[-1]:.0f}%", (xs[-1], ys[-1]), color=accent,
-            fontsize=11, fontweight="bold", va="center",
-        )
-    else:
-        ax.annotate(
-            "no bets yet", (0.5, 50), color=_MUTED, fontsize=11,
-            ha="center", va="center",
-        )
-
-    ax.axhline(50, color=_MUTED, ls=":", lw=1.0, zorder=1)
-    ax.set_ylim(0, 100)
-    ax.set_xlim(0, 1.22)
-    _style(ax, bottom=True)
-    ax.set_yticks([0, 25, 50, 75, 100])
-    ax.set_yticklabels(["0%", "25%", "50%", "75%", "100%"])
-    ax.set_xticks([0, 0.33, 0.66, 1.0])
-    ax.set_xticklabels(["open", "", "", "close"], fontsize=8)
-    head = f"Implied probability  ·  OVER {pools_logic.format_line(line)}"
-    if pool_total:
-        head += f"  ·  pool {pool_total:,}"
-    if subtitle:
-        head += f"  ·  {subtitle}"
-    ax.set_title(
-        head, color=_TEXT, fontsize=11, fontweight="bold", loc="left", pad=10
-    )
-    fig.tight_layout(pad=1.0)
     return _save(fig)

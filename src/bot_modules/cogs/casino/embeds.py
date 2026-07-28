@@ -1277,7 +1277,7 @@ def build_pools_panel_embed(
         ),
         inline=False,
     )
-    embed.set_image(url=f"attachment://{pools_charts.MARKET_FILENAME}")
+    embed.set_image(url=f"attachment://{pools_charts.LIVE_FILENAME}")
     embed.set_footer(text=_FOOTER)
     return embed
 

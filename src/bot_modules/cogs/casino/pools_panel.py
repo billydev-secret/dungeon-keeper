@@ -163,16 +163,16 @@ class PoolsMixin:
         state = await asyncio.to_thread(self._read_pools_panel, guild.id)
         if state is None:
             return
-        rnd, econ, split, points = state
+        rnd, econ, split, points, days = state
         channel = guild.get_channel(int(rnd["channel_id"]))
         if not isinstance(channel, discord.TextChannel):
             return
         accent = await self._accent(guild)
         line = float(rnd["line"])
         png = await asyncio.to_thread(
-            pools_charts.render_market_chart, points, line,
-            pool_total=split.total,
+            pools_charts.render_live_chart, days, line, points,
             accent=pools_charts.accent_hex(accent),
+            currency=econ.currency_plural,
         )
         embed = E.build_pools_panel_embed(
             econ, line, split, float(rnd["closes_at"]), str(rnd["local_day"]),
@@ -185,7 +185,7 @@ class PoolsMixin:
             # edit that fails and falls through to a fresh post needs a
             # fresh one rather than a rewound copy.
             return discord.File(
-                io.BytesIO(png), filename=pools_charts.MARKET_FILENAME
+                io.BytesIO(png), filename=pools_charts.LIVE_FILENAME
             )
 
         message_id = int(rnd["message_id"])
@@ -214,12 +214,20 @@ class PoolsMixin:
             if rnd is None:
                 return None
             bets = [dict(b) for b in svc.pools_bets(conn, int(rnd["id"]))]
+            # The day series is a full ledger scan, but the panel repaints
+            # at most once per 20s and only when a stake lands — ~16 times
+            # a day at this server's volume, so it does not want a cache.
             return (
                 rnd,
                 load_econ_settings(conn, guild_id),
                 pools_logic.pool_split(bets),
                 pools_logic.probability_series(
                     bets, float(rnd["opened_at"]), float(rnd["closes_at"])
+                ),
+                pools_service.daily_series(
+                    conn, guild_id,
+                    tz_offset_hours=get_tz_offset_hours(conn, guild_id),
+                    limit_days=_CHART_DAYS,
                 ),
             )
 

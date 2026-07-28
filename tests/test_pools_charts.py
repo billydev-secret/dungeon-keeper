@@ -67,22 +67,38 @@ def test_instrument_chart_needs_at_least_one_day():
         pc.render_instrument_chart([], 100.5)
 
 
-def test_market_chart_renders_a_png():
+def _points():
     bets = [
         {"id": 1, "side": L.OVER, "amount": 50, "created_at": 100.0},
         {"id": 2, "side": L.UNDER, "amount": 80, "created_at": 300.0},
         {"id": 3, "side": L.OVER, "amount": 120, "created_at": 700.0},
     ]
-    points = L.probability_series(bets, 0.0, 1000.0)
-    png = pc.render_market_chart(points, 380.5, pool_total=250)
+    return L.probability_series(bets, 0.0, 1000.0)
+
+
+def test_live_chart_renders_a_png():
+    """The open market's chart stacks the instrument over the odds path."""
+    png = pc.render_live_chart(_week(), 380.5, _points())
     assert png.startswith(PNG_MAGIC)
+    assert len(png) > 1000
 
 
-def test_market_chart_with_no_bets():
+def test_live_chart_with_no_bets():
     """An empty market renders a flat prior and says so, rather than a line
-    implying an opinion nobody has expressed."""
-    png = pc.render_market_chart([], 380.5, pool_total=0)
+    implying an opinion nobody has expressed — this is what the panel looks
+    like for most of the morning."""
+    png = pc.render_live_chart(_week(), 380.5, [])
     assert png.startswith(PNG_MAGIC)
+
+
+def test_live_chart_without_a_line():
+    png = pc.render_live_chart(_week()[:4], None, _points())
+    assert png.startswith(PNG_MAGIC)
+
+
+def test_live_chart_needs_at_least_one_day():
+    with pytest.raises(ValueError):
+        pc.render_live_chart([], 380.5, _points())
 
 
 def test_renderers_close_their_figures():
@@ -90,7 +106,7 @@ def test_renderers_close_their_figures():
     redraws all day."""
     plt.close("all")
     pc.render_instrument_chart(_week(), 380.5)
-    pc.render_market_chart([(0.5, 0.6)], 380.5, pool_total=10)
+    pc.render_live_chart(_week(), 380.5, [(0.5, 0.6)])
     assert plt.get_fignums() == []
 
 
