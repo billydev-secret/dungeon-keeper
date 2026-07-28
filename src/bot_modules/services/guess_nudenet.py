@@ -36,8 +36,21 @@ def detect(image_path: str | Path) -> list[Detection]:
     Box conversion: NudeNet returns ``[x, y, width, height]``; we convert to
     ``BoundingBox(x1=x, y1=y, x2=x+w, y2=y+h)``.
     """
-    raw_results = _get_detector().detect(str(image_path))
+    return _to_detections(_get_detector().detect(str(image_path)))
 
+
+def detect_bytes(image_bytes: bytes) -> list[Detection]:
+    """Run NudeNet detection on raw image bytes.
+
+    NudeDetector.detect() decodes bytes directly (cv2.imdecode), so callers
+    holding a downloaded image never need to round-trip it through a temp
+    file. Shares the module-level detector with :func:`detect`, so the model
+    loads once per process regardless of which entry point is used.
+    """
+    return _to_detections(_get_detector().detect(image_bytes))
+
+
+def _to_detections(raw_results: list[dict]) -> list[Detection]:
     detections: list[Detection] = []
     for item in raw_results:
         x, y, w, h = item["box"]
