@@ -92,8 +92,9 @@ PERK_REFUSAL = {
     "role_gradient": "❌ Rent the **Gradient Role** perk first (/bank shop).",
     "role_icon": "❌ Rent the **Role Icon** perk first (/bank shop).",
 }
-# SELF_PERKS has six members and PERK_REFUSAL four: a setter added for one of
-# the other two must degrade to a polite refusal, not a KeyError.
+# PERK_REFUSAL covers four of the five SELF_PERKS — role_holographic has no
+# setter to refuse from, and voice_style isn't a self-perk at all. A setter
+# added for either must degrade to a polite refusal, not a KeyError.
 PERK_REFUSAL_FALLBACK = "❌ Rent that perk first (/bank shop)."
 
 # Short button labels for the customise flows (the perk label is on the row).

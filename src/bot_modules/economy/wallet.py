@@ -7,8 +7,8 @@ gift attribution a rental line carries, how many rows survive the embed field
 cap, when the casino block calls a streak hot or cold — are testable without a
 Discord mock.
 
-The ``fit_lines`` guard this leans on (in ``view_helpers``, shared with the
-quest board) is load-bearing rather than cosmetic: memos make each activity
+The ``fit_lines`` guard this leans on (in ``services/embeds.py``, shared with
+the quest board) is load-bearing rather than cosmetic: memos make each activity
 row variable-length, and ten long ones overrun Discord's 1024-char field cap,
 which rejects the *whole* embed. Dropping the oldest rows keeps the wallet
 rendering instead of 400-ing.

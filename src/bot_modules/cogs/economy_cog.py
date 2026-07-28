@@ -273,17 +273,6 @@ async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:
 _TRIGGER_CACHE_TTL = 60.0
 
 
-class _Unread:
-    """Sentinel for an optional read the caller may already have done.
-
-    Distinct from ``None``, which is a real answer (this guild has no icon
-    catalog) rather than "you didn't tell me".
-    """
-
-
-_UNREAD = _Unread()
-
-
 class _ShopContext(NamedTuple):
     """Everything /bank shop renders from, read on a single connection."""
 
@@ -2883,9 +2872,9 @@ class EconomyCog(commands.Cog):
         if await self._refuse_disabled(interaction, settings):
             return False
         if perk not in ent:
-            # .get, not [perk]: SELF_PERKS has six members and the table has
-            # four. A setter added for one of the other two must degrade to a
-            # polite refusal, not a KeyError and "This interaction failed."
+            # .get, not [perk]: the table covers four of the five SELF_PERKS,
+            # so a setter added for the fifth must degrade to a polite refusal,
+            # not a KeyError and "This interaction failed."
             await interaction.response.send_message(
                 _PERK_REFUSAL.get(perk, _PERK_REFUSAL_FALLBACK), ephemeral=True
             )
@@ -3720,19 +3709,17 @@ class EconomyCog(commands.Cog):
         self,
         guild: discord.Guild,
         settings: EconSettings,
-        icon_range: tuple[int, int, int] | None | _Unread = _UNREAD,
+        icon_range: tuple[int, int, int] | None,
     ) -> discord.Embed:
         """The channel shop panel's embed with current gating, icon prices and
-        accent — shared by ``/bank post-shop`` and the sticky repost so the two
-        can't render different panels.
+        accent. Every route to the panel — ``/bank post-shop`` and the sticky
+        repost alike — arrives through ``_build_shop_panel``, so the two can't
+        render different panels.
 
-        ``icon_range`` lets a caller that already had a connection open pass
-        the price span in rather than paying for a second one; the sentinel
-        distinguishes that from a guild with no catalog, which is ``None``.
+        ``icon_range`` is read by the caller on the connection it already
+        holds; ``None`` means this guild has no icon catalog.
         """
         gated = await self._gated_perks(guild.id)
-        if isinstance(icon_range, _Unread):
-            icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         return build_shop_embed(
             settings, gated, accent, panel=True, icon_catalog=icon_range
