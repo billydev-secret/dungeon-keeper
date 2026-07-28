@@ -17,5 +17,6 @@ export function setPageIds(ids) {
 
 /** Every panel id the nav defines, before per-user permission filtering. */
 export function allPageIds() {
-  return [...pageIds];
+  // setPageIds already copied; callers filter/map rather than mutate.
+  return pageIds;
 }

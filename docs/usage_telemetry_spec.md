@@ -21,8 +21,24 @@ One table, `usage_events` (migration `139_usage_telemetry.sql`):
 | `extra` | JSON, currently unused — a hook for future per-event detail |
 | `ts` | unix seconds |
 
-Indexed on `(guild_id, ts)`, `(guild_id, kind, name, ts)`, and
-`(guild_id, user_id, ts)`.
+Two indexes: `(guild_id, ts)` — for `totals`, the only query with no `kind`
+predicate — and `(guild_id, kind, ts, name, user_id, ok)` for everything else.
+
+`ts` sits **before** `name`/`user_id` on purpose. Put a high-cardinality column
+ahead of it and `ts >= ?` stops being a range seek and degrades to a
+post-filter, so a 7-day report reads every row ever recorded for that kind.
+Since rows are kept forever, that turns report cost into a function of total
+history rather than of the window. Measured at 90k rows: per-name rollup
+70.5ms → 4.5ms, per-user 15.8ms → 3.9ms.
+
+A third `(guild_id, kind, name)` index was tried and **removed**. It makes the
+never-used lists' distinct-name lookups ~100x faster in isolation, but the
+planner then prefers it for the per-name rollup as well (it avoids a sort),
+which puts that query back to a 70ms full-history scan. Across a whole report
+render that was ~188ms versus ~83ms. The never-used lists have to read all
+history by definition, so they absorb a scan rather than making every other
+query pay one. Adding indexes here is not free in the other direction either —
+each one is write cost on the hot path of every slash command.
 
 ### Why not `audit_log`
 
@@ -35,10 +51,23 @@ moderation history.
 
 ## Capture
 
-**Commands** — `bot_modules/cogs/usage_telemetry_cog.py`:
+**Commands** — `bot_modules/cogs/usage_telemetry_cog.py`, two plain listeners:
 
 * `on_app_command_completion` → `ok=1`
-* `bot.tree.on_error`, *chained* rather than replaced → `ok=0`
+* `on_app_command_error` → `ok=0`
+
+`on_app_command_error` is **not** a discord.py built-in. `CommandTree.error` is
+a single-slot hook (registering a second handler replaces the first), and
+`events_cog._on_tree_error` already owns it. Rather than wrapping that slot —
+which would have made telemetry silently depend on `events_cog` loading first in
+`__main__.extension_names` — `events_cog` re-broadcasts the error as a normal
+bot event that any cog can listen for. `tests/cogs/test_usage_telemetry_cog.py`
+asserts that cross-cog contract directly, since breaking it would zero the error
+count with no other symptom.
+
+Writes go through `asyncio.to_thread`. `open_db` sets `busy_timeout=30000`, so a
+write landing behind another writer would otherwise stall the whole bot —
+heartbeat included — for up to 30s, on the hot path of every slash command.
 
 Guards: DM invocations (no `guild_id`) and bot actors are dropped, and every
 write is wrapped so a telemetry failure can never break the command it measures.

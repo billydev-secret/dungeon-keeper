@@ -35,15 +35,32 @@ CREATE TABLE IF NOT EXISTS usage_events (
     ts         REAL    NOT NULL
 );
 
--- "What happened in the last N days" — every report starts with this window.
+-- Two indexes, deliberately. Every extra index is also a write cost on the
+-- hot path of every slash command, and — measured, not assumed — a narrower
+-- index here actively *hurts*, because SQLite prefers it and then loses the
+-- time bound (see below).
+
+-- `totals` is the only query with no `kind` predicate.
 CREATE INDEX IF NOT EXISTS idx_usage_events_ts
     ON usage_events (guild_id, ts);
 
--- "Per command/panel, how often and when" — the leaderboard and the
--- never-used-command list both group on (kind, name).
-CREATE INDEX IF NOT EXISTS idx_usage_events_name
-    ON usage_events (guild_id, kind, name, ts);
-
--- "What did this member use" — also the lookup purge_user_data does.
-CREATE INDEX IF NOT EXISTS idx_usage_events_user
-    ON usage_events (guild_id, user_id, ts);
+-- Everything else. `ts` sits BEFORE name/user_id on purpose: put a
+-- high-cardinality column ahead of it and `ts >= ?` stops being a range seek
+-- and degrades to a post-filter, so a 7-day report reads every row ever
+-- recorded for that kind. Rows are kept forever (no retention policy — see
+-- docs/usage_telemetry_spec.md), so that turns report cost into a function of
+-- total history rather than of the window. The trailing columns make it
+-- covering for the per-name and per-user rollups.
+--
+-- Measured at 90k rows: per-name rollup 70.5ms -> 4.5ms, per-user 15.8ms ->
+-- 3.9ms, and both now scale with the window instead of with all history.
+--
+-- A `(guild_id, kind, name)` index was tried and REMOVED: it makes the
+-- distinct-name lookups for the never-used lists ~100x faster in isolation,
+-- but the planner then prefers it for the per-name rollup too (it avoids a
+-- sort) and that query goes back to 70ms of full-history scan. Net across a
+-- whole report render it was ~188ms vs ~83ms. The never-used lists genuinely
+-- have to read all history — that is their definition — so they pay a scan
+-- here rather than making every other query pay one.
+CREATE INDEX IF NOT EXISTS idx_usage_events_window
+    ON usage_events (guild_id, kind, ts, name, user_id, ok);

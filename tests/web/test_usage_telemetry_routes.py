@@ -205,23 +205,6 @@ def test_days_is_clamped(authed_client, requested, expected):
 
 def test_report_requires_admin(fake_ctx):
     """Moderator-level sessions must not see per-member usage."""
-    from fastapi.testclient import TestClient
-
-    from web_server.auth import DiscordOAuthAuth, SESSION_COOKIE
-    from web_server.server import create_app
-
-    auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
-    app = create_app(fake_ctx, auth=auth)
-    client = TestClient(app)
-    # No admin bit — manage_messages only.
-    cookie = auth.create_session_cookie(
-        user_id=2,
-        username="mod",
-        access_token="token",
-        permission_bits=0x2000,
-        guild_id=fake_ctx.guild_id,
-        guilds=[{"id": fake_ctx.guild_id, "name": "Test Guild", "icon": None}],
-    )
-    client.cookies.set(SESSION_COOKIE, cookie)
+    client = _client_with_perms(fake_ctx, 0x2000, user_id=2)  # manage_messages
     assert client.get("/api/reports/usage").status_code == 403
     client.close()

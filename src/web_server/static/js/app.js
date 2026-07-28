@@ -854,9 +854,8 @@ function recordPanelView(pageId) {
   // never-opened list. Skip the request for members who'd only get a 403 —
   // regular members do reach the dashboard for the Wellness section.
   if (!userPerms.has("moderator") && !userPerms.has("admin")) return;
-  try {
-    apiPost("/api/telemetry/panel", { panel: pageId }).catch(() => {});
-  } catch (_) { /* ignore */ }
+  // apiPost is async, so it can only reject — .catch() is the whole guard.
+  apiPost("/api/telemetry/panel", { panel: pageId }).catch(() => {});
 }
 
 async function mountPanel(evt) {

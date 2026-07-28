@@ -5,67 +5,46 @@
 // to *delete* something. Everything under them is supporting context.
 import { api, esc, fmtTs } from "../api.js";
 import { withLoading, rangePicker, syncHash } from "../report-helpers.js";
+import { renderSortableTable } from "../table.js";
+import { renderEmpty, renderError } from "../states.js";
 import { makeLineChart, makeBarChart } from "../charts.js";
 import { allPageIds } from "../nav-registry.js";
 
 const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`);
 
-function nameTable(rows, { nameHeader, showErrors }) {
-  if (!rows.length) {
-    return '<div class="empty">Nothing recorded in this range yet.</div>';
-  }
-  return `
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>${esc(nameHeader)}</th>
-          <th class="num">Uses</th>
-          <th class="num">People</th>
-          ${showErrors ? '<th class="num">Errors</th>' : ""}
-          <th>Last used</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map((r) => `
-          <tr>
-            <td><code>${esc(r.name)}</code></td>
-            <td class="num">${r.uses}</td>
-            <td class="num">${r.users}</td>
-            ${showErrors ? `<td class="num ${r.errors ? "num-err" : "num-dim"}">${r.errors}</td>` : ""}
-            <td>${esc(fmtTs(r.last_ts))}</td>
-          </tr>`).join("")}
-      </tbody>
-    </table>`;
-}
+const CODE = (v) => `<code>${esc(v)}</code>`;
+const TS = (v) => esc(fmtTs(v));
 
-function userTable(rows, unitHeader) {
-  if (!rows.length) {
-    return '<div class="empty">Nobody recorded in this range yet.</div>';
-  }
-  return `
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Member</th>
-          <th class="num">Total</th>
-          <th class="num">${esc(unitHeader)}</th>
-          <th>Last seen</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map((r) => `
-          <tr>
-            <td>${esc(r.name || `User ${r.user_id}`)}</td>
-            <td class="num">${r.uses}</td>
-            <td class="num">${r.distinct_names}</td>
-            <td>${esc(fmtTs(r.last_ts))}</td>
-          </tr>`).join("")}
-      </tbody>
-    </table>`;
-}
+// Shared by the command and panel tables; the command one appends Errors.
+const nameColumns = (label) => [
+  { key: "name", label, format: CODE },
+  { key: "uses", label: "Uses", cls: "num" },
+  { key: "users", label: "People", cls: "num" },
+];
+
+const COMMAND_COLUMNS = [
+  ...nameColumns("Command"),
+  {
+    key: "errors", label: "Errors", cls: "num",
+    format: (v) => `<span class="${v ? "num-err" : "num-dim"}">${v}</span>`,
+  },
+  { key: "last_ts", label: "Last used", format: TS },
+];
+
+const PANEL_COLUMNS = [
+  ...nameColumns("Panel"),
+  { key: "last_ts", label: "Last used", format: TS },
+];
+
+const userColumns = (unitLabel) => [
+  { key: "name", label: "Member", format: (v, row) => esc(v || `User ${row.user_id}`) },
+  { key: "uses", label: "Total", cls: "num" },
+  { key: "distinct_names", label: unitLabel, cls: "num" },
+  { key: "last_ts", label: "Last seen", format: TS },
+];
 
 function unusedList(names, emptyMsg) {
-  if (!names.length) return `<div class="empty">${esc(emptyMsg)}</div>`;
+  if (!names.length) return renderEmpty(emptyMsg);
   return `<div class="chip-row">${names
     .map((n) => `<span class="chip chip-warning"><code>${esc(n)}</code></span>`)
     .join(" ")}</div>`;
@@ -115,6 +94,14 @@ export function mount(container, initialParams) {
   controlsEl.appendChild(picker);
   const daysEl = picker.querySelector("select");
 
+  // Markup is static after mount, so resolve the slots once rather than on
+  // every range change.
+  const el = Object.fromEntries(
+    ["stats", "unused", "commands", "panels", "top-users", "dash-users", "daily", "hours"]
+      .map((k) => [k, container.querySelector(`[data-${k}]`)]),
+  );
+  const panelEl = container.querySelector(".panel");
+
   let dailyChart = null;
   let hoursChart = null;
 
@@ -126,9 +113,8 @@ export function mount(container, initialParams) {
   async function refresh() {
     const days = daysEl.value || "30";
     syncHash("usage-telemetry", { days });
-    const panel = container.querySelector(".panel");
     try {
-      const data = await withLoading(panel, api("/api/reports/usage", { days }));
+      const data = await withLoading(panelEl, api("/api/reports/usage", { days }));
 
       // The nav lives in app.js, so the browser is the only place that knows
       // every panel id that exists. Rather than shipping all ~139 ids up as a
@@ -138,31 +124,36 @@ export function mount(container, initialParams) {
       const unusedPanels = allPageIds().filter((id) => !seen.has(id)).sort();
 
       const t = data.totals || {};
-      container.querySelector("[data-stats]").innerHTML = `
+      el.stats.innerHTML = `
         <div class="stat"><div class="stat-value">${t.commands || 0}</div><div class="stat-label">Commands run</div></div>
         <div class="stat"><div class="stat-value">${t.panel_views || 0}</div><div class="stat-label">Panel opens</div></div>
         <div class="stat stat-info"><div class="stat-value">${t.distinct_users || 0}</div><div class="stat-label">People</div></div>
         <div class="stat ${t.command_errors ? "stat-warning" : ""}"><div class="stat-value">${t.command_errors || 0}</div><div class="stat-label">Command errors</div></div>
       `;
 
-      container.querySelector("[data-unused]").innerHTML = `
+      el.unused.innerHTML = `
         <h4>Slash commands never run <span class="chip chip-neutral">${data.unused_commands.length}</span></h4>
         ${unusedList(data.unused_commands, "Every registered command has been run at least once.")}
         <h4>Dashboard panels never opened <span class="chip chip-neutral">${unusedPanels.length}</span></h4>
         ${unusedList(unusedPanels, "Every panel has been opened at least once.")}
       `;
 
-      container.querySelector("[data-commands]").innerHTML =
-        nameTable(data.commands, { nameHeader: "Command", showErrors: true });
-      container.querySelector("[data-panels]").innerHTML =
-        nameTable(data.panels, { nameHeader: "Panel", showErrors: false });
-      container.querySelector("[data-top-users]").innerHTML =
-        userTable(data.top_users, "Distinct commands");
-      container.querySelector("[data-dash-users]").innerHTML =
-        userTable(data.dashboard_users, "Distinct panels");
+      // Sortable, like every other report table — "which command errors most"
+      // is one click rather than a code change.
+      const table = (slot, columns, rows, defaultSort, emptyMsg) =>
+        renderSortableTable(slot, { columns, data: rows, defaultSort, emptyMsg });
+
+      table(el.commands, COMMAND_COLUMNS, data.commands, "uses",
+        "Nothing recorded in this range yet.");
+      table(el.panels, PANEL_COLUMNS, data.panels, "uses",
+        "Nothing recorded in this range yet.");
+      table(el["top-users"], userColumns("Distinct commands"), data.top_users, "uses",
+        "Nobody recorded in this range yet.");
+      table(el["dash-users"], userColumns("Distinct panels"), data.dashboard_users, "uses",
+        "Nobody recorded in this range yet.");
 
       destroyCharts();
-      dailyChart = makeLineChart(container.querySelector("[data-daily]"), {
+      dailyChart = makeLineChart(el.daily, {
         labels: data.daily_commands.map((p) => p.day),
         // makeLineChart reads `counts`, not `data`.
         series: [
@@ -171,15 +162,14 @@ export function mount(container, initialParams) {
         ],
         title: "Daily usage",
       });
-      hoursChart = makeBarChart(container.querySelector("[data-hours]"), {
+      hoursChart = makeBarChart(el.hours, {
         labels: HOUR_LABELS,
         data: data.hours,
         title: "Commands by hour of day",
         yLabel: "Commands",
       });
     } catch (err) {
-      container.querySelector("[data-stats]").innerHTML =
-        `<div class="error">Couldn’t load usage — try again. (${esc(err.message)})</div>`;
+      el.stats.innerHTML = renderError(err);
     }
   }
 

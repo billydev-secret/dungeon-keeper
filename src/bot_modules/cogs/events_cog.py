@@ -281,6 +281,15 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
 async def _on_tree_error(
     interaction: discord.Interaction, error: app_commands.AppCommandError
 ) -> None:
+    # `CommandTree.error` is a single-slot hook — registering a second handler
+    # replaces the first — so this function is the process's only app-command
+    # error path. Re-broadcast as a normal bot event so other cogs (usage
+    # telemetry) can observe failures via the ordinary listener mechanism
+    # instead of wrapping `tree.on_error` and depending on extension load
+    # order. `on_app_command_error` is not a discord.py built-in, so the name
+    # is ours; the bot-level `on_app_command_completion` is its success twin.
+    interaction.client.dispatch("app_command_error", interaction, error)
+
     if isinstance(error, app_commands.CommandNotFound):
         missing_name = getattr(error, "name", "unknown")
         log.warning(

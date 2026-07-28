@@ -9,7 +9,6 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services import usage_telemetry_service as svc
-from tests.db_template import migrated_db
 
 GUILD = 123
 OTHER_GUILD = 456
@@ -19,10 +18,10 @@ BOT_USER = 9001
 
 
 @pytest.fixture
-def db(tmp_path):
-    db_path = tmp_path / "test.db"
-    migrated_db(db_path)
-    return db_path
+def db(sync_db_path):
+    """Alias for the shared `sync_db_path` fixture (conftest.py) — kept only so
+    the many `db` parameters below stay readable."""
+    return sync_db_path
 
 
 def _mark_bot(conn, user_id, guild_id=GUILD):

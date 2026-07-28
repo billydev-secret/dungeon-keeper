@@ -22,6 +22,8 @@ import sqlite3
 import time
 from typing import NamedTuple
 
+from discord import app_commands
+
 from bot_modules.core.bot_exclusion import bot_filter_clause
 
 KIND_COMMAND = "command"
@@ -110,6 +112,31 @@ def _window(days: int) -> float:
     return 0.0 if days <= 0 else time.time() - days * 86400
 
 
+def _scope(
+    guild_id: int,
+    kind: str | None,
+    days: int,
+    include_bots: bool = False,
+) -> tuple[str, tuple]:
+    """The ``WHERE`` clause and params every windowed report query shares.
+
+    Exists because ``bot_filter_clause`` returns a fragment that lands *inside*
+    the WHERE, so its params have to be spliced at the matching position — get
+    the order wrong and the placeholders silently mis-bind rather than error.
+    Building the clause and its params together in one place is the only way
+    that stays correct; five hand-rolled copies were five chances to get it
+    wrong.
+    """
+    bot_sql, bot_params = bot_filter_clause(
+        guild_id, column="user_id", include_bots=include_bots
+    )
+    kind_sql, kind_params = (" AND kind = ?", (kind,)) if kind else ("", ())
+    return (
+        f"WHERE guild_id = ? AND ts >= ?{kind_sql}{bot_sql}",
+        (guild_id, _window(days), *kind_params, *bot_params),
+    )
+
+
 def name_usage(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -120,9 +147,7 @@ def name_usage(
     limit: int = 200,
 ) -> list[NameUsage]:
     """Per-name totals for one event kind, busiest first."""
-    bot_sql, bot_params = bot_filter_clause(
-        guild_id, column="user_id", include_bots=include_bots
-    )
+    where, params = _scope(guild_id, kind, days, include_bots)
     rows = conn.execute(
         f"""
         SELECT name,
@@ -131,12 +156,12 @@ def name_usage(
                SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS errors,
                MAX(ts)                       AS last_ts
         FROM usage_events
-        WHERE guild_id = ? AND kind = ? AND ts >= ?{bot_sql}
+        {where}
         GROUP BY name
         ORDER BY uses DESC, name ASC
         LIMIT ?
         """,
-        (guild_id, kind, _window(days), *bot_params, limit),
+        (*params, limit),
     ).fetchall()
     return [
         NameUsage(
@@ -150,20 +175,45 @@ def name_usage(
     ]
 
 
-def used_names(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    kind: str,
-    *,
-    days: int = 0,
-) -> set[str]:
-    """The distinct names seen in the window. ``days=0`` = all of history."""
+def used_names(conn: sqlite3.Connection, guild_id: int, kind: str) -> set[str]:
+    """Every name ever recorded for this kind.
+
+    Deliberately unwindowed: this feeds the never-used lists, and a command
+    last run 90 days ago is unpopular, not unused. Bots are not excluded
+    either — a command a bot somehow ran still *was* run.
+    """
     rows = conn.execute(
-        "SELECT DISTINCT name FROM usage_events "
-        "WHERE guild_id = ? AND kind = ? AND ts >= ?",
-        (guild_id, kind, _window(days)),
+        "SELECT DISTINCT name FROM usage_events WHERE guild_id = ? AND kind = ?",
+        (guild_id, kind),
     ).fetchall()
     return {str(r[0]) for r in rows}
+
+
+def registered_command_names(tree) -> set[str]:
+    """Every *invocable* slash command on a discord.py ``CommandTree``.
+
+    Walks the tree so subcommands come back space-joined as ``"quest board"``,
+    matching what the cog records.
+
+    ``walk_commands()`` yields Groups as well as Commands, and a Group
+    (``/quest`` on its own) can never be invoked — including them would park
+    every command group permanently in the never-run list, which is exactly the
+    list that has to stay trustworthy. So Groups are filtered out.
+
+    Returns an empty set for ``tree is None`` (standalone dashboard, no bot
+    attached), which makes the never-used list empty rather than claiming every
+    command is unused.
+    """
+    if tree is None:
+        return set()
+    try:
+        return {
+            c.qualified_name
+            for c in tree.walk_commands()
+            if isinstance(c, app_commands.Command)
+        }
+    except Exception:
+        return set()
 
 
 def unused_names(registered: set[str], seen: set[str]) -> list[str]:
@@ -190,11 +240,7 @@ def user_usage(
     limit: int = 100,
 ) -> list[UserUsage]:
     """Per-person totals, busiest first. ``kind=None`` counts both kinds."""
-    bot_sql, bot_params = bot_filter_clause(
-        guild_id, column="user_id", include_bots=include_bots
-    )
-    kind_sql = " AND kind = ?" if kind else ""
-    kind_params: tuple = (kind,) if kind else ()
+    where, params = _scope(guild_id, kind, days, include_bots)
     rows = conn.execute(
         f"""
         SELECT user_id,
@@ -202,12 +248,12 @@ def user_usage(
                COUNT(DISTINCT name)    AS distinct_names,
                MAX(ts)                 AS last_ts
         FROM usage_events
-        WHERE guild_id = ? AND ts >= ?{kind_sql}{bot_sql}
+        {where}
         GROUP BY user_id
         ORDER BY uses DESC, user_id ASC
         LIMIT ?
         """,
-        (guild_id, _window(days), *kind_params, *bot_params, limit),
+        (*params, limit),
     ).fetchall()
     return [
         UserUsage(
@@ -235,21 +281,17 @@ def daily_series(
     matches the server's local day, the same convention the other time-bucketed
     reports use.
     """
-    bot_sql, bot_params = bot_filter_clause(
-        guild_id, column="user_id", include_bots=include_bots
-    )
-    kind_sql = " AND kind = ?" if kind else ""
-    kind_params: tuple = (kind,) if kind else ()
+    where, params = _scope(guild_id, kind, days, include_bots)
     shift = tz_offset_hours * 3600
     rows = conn.execute(
         f"""
         SELECT date(ts + ?, 'unixepoch') AS day, COUNT(*)
         FROM usage_events
-        WHERE guild_id = ? AND ts >= ?{kind_sql}{bot_sql}
+        {where}
         GROUP BY day
         ORDER BY day ASC
         """,
-        (shift, guild_id, _window(days), *kind_params, *bot_params),
+        (shift, *params),
     ).fetchall()
     counts = {str(r[0]): int(r[1]) for r in rows}
 
@@ -276,20 +318,16 @@ def hour_histogram(
     include_bots: bool = False,
 ) -> list[int]:
     """24 counts, index = local hour of day."""
-    bot_sql, bot_params = bot_filter_clause(
-        guild_id, column="user_id", include_bots=include_bots
-    )
-    kind_sql = " AND kind = ?" if kind else ""
-    kind_params: tuple = (kind,) if kind else ()
+    where, params = _scope(guild_id, kind, days, include_bots)
     rows = conn.execute(
         f"""
         SELECT CAST(strftime('%H', ts + ?, 'unixepoch') AS INTEGER) AS hr,
                COUNT(*)
         FROM usage_events
-        WHERE guild_id = ? AND ts >= ?{kind_sql}{bot_sql}
+        {where}
         GROUP BY hr
         """,
-        (tz_offset_hours * 3600, guild_id, _window(days), *kind_params, *bot_params),
+        (tz_offset_hours * 3600, *params),
     ).fetchall()
     out = [0] * 24
     for r in rows:
@@ -307,9 +345,7 @@ def totals(
     include_bots: bool = False,
 ) -> dict[str, int]:
     """Headline counters for the report's stat tiles."""
-    bot_sql, bot_params = bot_filter_clause(
-        guild_id, column="user_id", include_bots=include_bots
-    )
+    where, params = _scope(guild_id, None, days, include_bots)
     row = conn.execute(
         f"""
         SELECT
@@ -318,16 +354,9 @@ def totals(
           SUM(CASE WHEN kind = ? AND ok = 0 THEN 1 ELSE 0 END),
           COUNT(DISTINCT user_id)
         FROM usage_events
-        WHERE guild_id = ? AND ts >= ?{bot_sql}
+        {where}
         """,
-        (
-            KIND_COMMAND,
-            KIND_PANEL,
-            KIND_COMMAND,
-            guild_id,
-            _window(days),
-            *bot_params,
-        ),
+        (KIND_COMMAND, KIND_PANEL, KIND_COMMAND, *params),
     ).fetchone()
     return {
         "commands": int(row[0] or 0),
