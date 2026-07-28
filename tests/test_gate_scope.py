@@ -73,3 +73,43 @@ def test_service_file_maps_to_both_bare_and_suffixed_names():
 
 def test_generic_only_path_maps_to_nothing():
     assert gate._tokens_for("src/bot_modules/utils.py") == set()
+
+
+# ── migrations: new vs modified ──────────────────────────────────────────
+
+def test_editing_an_existing_migration_forces_a_full_run():
+    """An edited migration can reshape tables under the whole db-backed suite."""
+    assert gate.forces_full_run("src/migrations/134_todo_board.sql", is_new=False) is True
+
+
+def test_adding_a_new_migration_does_not_force_a_full_run():
+    """A new file can't alter an existing table; it was 8 of 13 recent fallbacks."""
+    assert gate.forces_full_run("src/migrations/199_new_thing.sql", is_new=True) is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/bot_modules/core/sticky.py",
+        "src/bot_modules/models/thing.py",
+        "src/dungeonkeeper/bot.py",
+        "pyproject.toml",
+        "tests/conftest.py",
+        "tests/web/conftest.py",
+    ],
+)
+def test_these_fan_out_even_when_newly_added(path):
+    """Newness only ever excuses a migration — everything else still fans out."""
+    assert gate.forces_full_run(path, is_new=True) is True
+
+
+def test_select_tests_honours_a_new_migration():
+    targets, _, run_full = gate.select_tests(
+        ["src/migrations/199_new_thing.sql"], new={"src/migrations/199_new_thing.sql"}
+    )
+    assert run_full is False
+
+
+def test_select_tests_still_fans_out_on_an_edited_migration():
+    _, _, run_full = gate.select_tests(["src/migrations/134_todo_board.sql"], new=set())
+    assert run_full is True

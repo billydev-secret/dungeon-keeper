@@ -25,6 +25,7 @@ import argparse
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -259,6 +260,40 @@ def die(msg: str) -> None:
     raise SystemExit(1)
 
 
+def agent_tmp_name(worktree: Path) -> str:
+    """The scratch-dir name a Claude Code session uses for *worktree*.
+
+    The agent mangles a session's cwd into a single directory name by turning
+    every ``/`` into ``-``, so /home/ben/x becomes ``-home-ben-x``.
+
+    Reads the path through ``as_posix()`` rather than ``str()``: the suite also
+    runs on the Windows remote runner, where ``str(Path("/home/x"))`` is
+    ``\\home\\x`` and the mangling would silently produce a different name.
+    """
+    return worktree.as_posix().replace("/", "-")
+
+
+def agent_tmp_dirs(worktree: Path, tmp_root: Path = Path("/tmp")) -> list[Path]:
+    """Existing agent scratch dirs belonging to *worktree*.
+
+    Teardown removed the worktree, the branch and the window but left these,
+    so every session ever run leaked its scratch space — five dead sessions had
+    accumulated 3.7 GB before this was noticed, on a 5.8 GB tmpfs.
+
+    Deliberately narrow: only ``/tmp/claude-*/<mangled>`` is ever considered,
+    and only when the mangled name actually contains the worktree's own
+    directory name. This runs `rm -rf` under /tmp, so it refuses to work from a
+    name it did not derive from a real worktree path.
+    """
+    name = agent_tmp_name(worktree)
+    if not worktree.name or len(worktree.name) < 2 or worktree.name not in name:
+        return []
+    return [
+        d for parent in sorted(tmp_root.glob("claude-*"))
+        if (d := parent / name).is_dir()
+    ]
+
+
 def tmux_windows() -> dict[str, str]:
     """window name → window id, empty when tmux isn't running."""
     res = run(["tmux", "list-windows", "-a", "-F", "#{window_name}\t#{window_id}"],
@@ -387,6 +422,50 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def orphan_scratch_dirs(sessions_root: Path,
+                        tmp_root: Path = Path("/tmp")) -> list[Path]:
+    """Agent scratch dirs under /tmp whose session worktree no longer exists.
+
+    Teardown now cleans up after itself, but every session torn down before
+    that fix left its scratch behind. Matches only names mangled from
+    *sessions_root*, so nothing outside dk-sessions/ is ever a candidate.
+    """
+    prefix = sessions_root.as_posix().replace("/", "-") + "-"
+    out: list[Path] = []
+    for parent in sorted(tmp_root.glob("claude-*")):
+        if not parent.is_dir():
+            continue
+        for d in sorted(parent.iterdir()):
+            if not d.is_dir() or not d.name.startswith(prefix):
+                continue
+            session = d.name[len(prefix):]
+            if session and not (sessions_root / session).exists():
+                out.append(d)
+    return out
+
+
+def cmd_sweep(args: argparse.Namespace) -> int:
+    main_repo = find_main_repo()
+    orphans = orphan_scratch_dirs(sessions_dir(main_repo))
+    if not orphans:
+        print("no orphaned scratch dirs")
+        return 0
+    total = 0
+    for d in orphans:
+        raw = run(["du", "-sb", str(d)], check=False).stdout.split("\t")[0]
+        total += int(raw) if raw.isdigit() else 0
+        human = run(["du", "-sh", str(d)], check=False).stdout.split("\t")[0]
+        print(f"  {human:>6}  {d.name}")
+        if args.apply:
+            shutil.rmtree(d, ignore_errors=True)
+    print()
+    verb = "removed" if args.apply else "would remove"
+    print(f"{verb} {len(orphans)} dir(s), {total / 1e9:.2f} GB")
+    if not args.apply:
+        print("dry run — pass --apply to delete")
+    return 0
+
+
 def cmd_teardown(args: argparse.Namespace) -> int:
     main_repo = find_main_repo()
     name = normalize_name([args.name])
@@ -407,6 +486,14 @@ def cmd_teardown(args: argparse.Namespace) -> int:
             return 1
         print(f"removed worktree {path}")
     run(["git", "-C", str(main_repo), "worktree", "prune"], check=False)
+
+    # The agent's scratch dir outlives the worktree unless we remove it, and
+    # it is the single biggest consumer of a small tmpfs — see agent_tmp_dirs.
+    for scratch in agent_tmp_dirs(path):
+        size = run(["du", "-sh", str(scratch)], check=False).stdout.split("\t")[0]
+        shutil.rmtree(scratch, ignore_errors=True)
+        if not scratch.exists():
+            print(f"removed scratch {scratch} ({size or '?'})")
 
     # Only after the worktree is gone: git refuses to delete a checked-out branch.
     res = run(["git", "-C", str(main_repo), "branch", "-d", name], check=False)
@@ -448,6 +535,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_list = sub.add_parser("list", help="every session worktree and its window")
     p_list.set_defaults(func=cmd_list)
+
+    p_sweep = sub.add_parser(
+        "sweep", help="remove agent scratch dirs left by already-gone sessions",
+    )
+    p_sweep.add_argument("--apply", action="store_true", help="actually delete (default: dry run)")
+    p_sweep.set_defaults(func=cmd_sweep)
 
     p_down = sub.add_parser("teardown", help="remove worktree, drop branch, kill window")
     p_down.add_argument("name")
