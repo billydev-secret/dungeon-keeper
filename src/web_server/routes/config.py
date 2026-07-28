@@ -1454,6 +1454,16 @@ def _canonical_intake_steps(steps: list[IntakeStepIn]) -> str:
     return json.dumps(out)
 
 
+def _code_clash_message(clash: tuple[tuple[str, str], tuple[str, str]]) -> str:
+    """Both codes are quoted: step labels aren't unique, so naming them alone
+    can read as a step conflicting with itself."""
+    (outer_label, outer_code), (inner_label, inner_code) = clash
+    return (
+        f"Code '{outer_code}' for '{outer_label}' contains '{inner_code}' for "
+        f"'{inner_label}' — posting it would fire both. Make them distinct."
+    )
+
+
 @router.put("/config/intake")
 async def update_intake(
     request: Request,
@@ -1472,26 +1482,25 @@ async def update_intake(
     def _q():
         with ctx.open_db() as conn:
             # Codes match by containment, so one sitting inside another fires
-            # both. Check before any write: a partial save would leave the
-            # editor disagreeing with what's stored. The completion code is
-            # whichever value this request lands on — the incoming one, or
-            # what's already stored when the body doesn't carry it.
-            if steps_json is not None:
-                effective_code = (
-                    body.completion_code.strip()
-                    if body.completion_code is not None
-                    else intake_svc.completion_code(conn, guild_id)
+            # both. Checked whenever this request touches EITHER side: the
+            # step codes and the completion code are writable independently,
+            # so guarding only the steps path lets a completion-code-only
+            # save walk a clash in. Whichever side the body doesn't carry is
+            # read from storage. Before any write, so a rejected save leaves
+            # nothing half-stored for the editor to disagree with.
+            if steps_json is not None or body.completion_code is not None:
+                clash = intake_svc.config_code_conflict(
+                    conn,
+                    guild_id,
+                    completion=body.completion_code,
+                    steps=(
+                        intake_svc.parse_steps(steps_json)
+                        if steps_json is not None
+                        else None
+                    ),
                 )
-                pairs = [(s["label"], s["code"]) for s in json.loads(steps_json)]
-                pairs.append(("the completion code", effective_code))
-                clash = intake_svc.code_conflict(pairs)
                 if clash is not None:
-                    raise HTTPException(
-                        422,
-                        f"Code for '{clash[0]}' contains the code for "
-                        f"'{clash[1]}' — posting it would tick both. "
-                        "Make them distinct.",
-                    )
+                    raise HTTPException(422, _code_clash_message(clash))
             if body.enabled is not None:
                 set_config_value(
                     conn, "intake_enabled", "1" if body.enabled else "0", guild_id

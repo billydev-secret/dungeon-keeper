@@ -27,6 +27,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from bot_modules.core.db_utils import open_db, set_config_value
+from bot_modules.services import intake_service
 from bot_modules.services.settings_registry import (
     Setting,
     coerce_value,
@@ -177,6 +178,21 @@ def validate_config_change(
     else:
         value = coerce_value(setting, raw)
         shown = ("on" if value == "1" else "off") if setting.kind == "bool" else value
+
+    # Cross-key rule the shape checks above can't see: intake matches codes by
+    # containment, so a completion code containing a step's code would close
+    # the card (stamping the rest skipped) the moment a greeter pastes that
+    # step's canned message. The dashboard rejects this on save; enforce it
+    # here too, since this path writes the key directly.
+    if key == intake_service.CODE_KEY:
+        clash = intake_service.config_code_conflict(conn, guild.id, completion=value)
+        if clash is not None:
+            (outer_label, outer_code), (inner_label, inner_code) = clash
+            raise ValueError(
+                f"'{outer_code}' ({outer_label}) contains '{inner_code}' "
+                f"({inner_label}) — posting one would fire both. Pick a "
+                "completion code that doesn't overlap a step code."
+            )
 
     if not allow_noop and _current_value(conn, guild.id, key) == value:
         raise ValueError(f"{label} is already set to {shown} — no change needed.")

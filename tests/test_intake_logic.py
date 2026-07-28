@@ -147,12 +147,17 @@ def test_parse_steps_code_is_optional_and_stripped():
     ("codes", "expected"),
     [
         pytest.param([("a", "DK-SFW"), ("b", "DK-NSFW")], None, id="distinct"),
-        # Matching is containment, so a code inside another fires both.
+        # Matching is containment, so a code inside another fires both. The
+        # codes ride along in the result because labels aren't unique.
         pytest.param(
-            [("a", "DK-SFW"), ("b", "DK-SFW-DONE")], ("b", "a"), id="substring"
+            [("a", "DK-SFW"), ("b", "DK-SFW-DONE")],
+            (("b", "DK-SFW-DONE"), ("a", "DK-SFW")),
+            id="substring",
         ),
         pytest.param(
-            [("a", "dk-sfw"), ("b", "DK-SFW")], ("b", "a"), id="case-insensitive-dupe"
+            [("a", "dk-sfw"), ("b", "DK-SFW")],
+            (("b", "DK-SFW"), ("a", "dk-sfw")),
+            id="case-insensitive-dupe",
         ),
         # Empty codes are "off" and never collide, not even with each other.
         pytest.param([("a", ""), ("b", ""), ("c", "DK")], None, id="empties-ignored"),
@@ -160,6 +165,43 @@ def test_parse_steps_code_is_optional_and_stripped():
 )
 def test_code_conflict(codes, expected):
     assert svc.code_conflict(codes) == expected
+
+
+def test_config_code_conflict_reads_the_side_that_is_not_overridden(db_path):
+    # The two sides are writable independently, so a save touching only one
+    # of them still has to be checked against what's stored for the other.
+    with open_db(db_path) as conn:
+        _use_coded_steps(conn)  # DK-SFW / DK-NSFW
+        set_config_value(conn, svc.CODE_KEY, "DK-DONE", GUILD)
+        assert svc.config_code_conflict(conn, GUILD) is None
+        # A completion code the stored step code contains: any message
+        # carrying "DK-SFW" carries "DK" too, so completion fires.
+        assert svc.config_code_conflict(conn, GUILD, completion="DK") == (
+            ("SFW questions", "DK-SFW"),
+            (svc.COMPLETION_CODE_LABEL, "DK"),
+        )
+        # …and the mirror: a step code that swallows the stored completion.
+        clash = svc.config_code_conflict(
+            conn, GUILD, steps=[svc.StepDef("s", "Wrap", code="say DK-DONE now")]
+        )
+        assert clash == (
+            ("Wrap", "say DK-DONE now"),
+            (svc.COMPLETION_CODE_LABEL, "DK-DONE"),
+        )
+
+
+def test_completion_code_containing_a_step_code_closes_the_card(db_path):
+    # Why the guard exists, stated as behavior: with the clash in place, the
+    # SFW canned message doesn't tick the SFW step — it completes the card and
+    # stamps every remaining step skipped.
+    with open_db(db_path) as conn:
+        _enable(conn)
+        _use_coded_steps(conn)
+        set_config_value(conn, svc.CODE_KEY, "DK", GUILD)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert _eval(conn, content="all done DK-SFW", channel_id=999) == [
+            (svc.ACTION_COMPLETE, NEWCOMER, "")
+        ]
 
 
 @pytest.mark.parametrize(

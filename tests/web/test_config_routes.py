@@ -1639,6 +1639,27 @@ def test_update_intake_rejects_codes_that_contain_each_other(authed_client, fake
     }).status_code == 422
 
 
+def test_update_intake_guards_a_completion_code_only_save(authed_client, fake_ctx):
+    # Regression: the clash check used to run only when the body carried
+    # steps, so setting just the completion code walked a clash straight in —
+    # and a completion code containing a step's code is the worst kind, since
+    # pasting that step's message closes the card and skips everything else.
+    assert authed_client.put("/api/config/intake", json={
+        "steps": [{"key": "", "label": "SFW questions", "code": "DK-SFW"}],
+    }).status_code == 200
+    resp = authed_client.put("/api/config/intake", json={"completion_code": "DK"})
+    assert resp.status_code == 422
+    assert "DK-SFW" in resp.json()["detail"]
+
+    from bot_modules.services import intake_service as svc
+    with open_db(fake_ctx.db_path) as conn:
+        assert svc.completion_code(conn, fake_ctx.guild_id) == ""
+    # A non-overlapping completion code still saves fine.
+    assert authed_client.put(
+        "/api/config/intake", json={"completion_code": "ALL-WELCOMED"}
+    ).status_code == 200
+
+
 def test_update_intake_dedupes_generated_keys(authed_client):
     resp = authed_client.put("/api/config/intake", json={
         "steps": [

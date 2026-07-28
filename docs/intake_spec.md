@@ -47,9 +47,16 @@ slash commands:
   config rather than the card's snapshot (a code is a lookup phrase, not
   per-card state, so fixing a typo doesn't strand in-flight cards) — a
   code whose step isn't on this card simply ticks nothing. Matching is
-  case-insensitive containment, so the dashboard rejects a save where one
-  code contains another (or the completion code): it would silently fire
-  both.
+  case-insensitive containment, so a save where one code contains another
+  (or contains the completion code) is rejected: it would silently fire
+  both, and a completion code swallowed by a step code is worse than a
+  double-tick — pasting that step's message would close the card and stamp
+  the rest skipped. Step codes and the completion code are writable
+  independently, so `intake_service.config_code_conflict` (which reads
+  whichever side the caller isn't overriding) is enforced at **both**
+  writers: the dashboard route, and `advisor_actions.validate_config_change`
+  for the advisor, which writes the key straight through
+  `set_config_value`.
 - **Completion:** a greeter/mod message in **any channel** containing
   `intake_completion_code` and addressed to the newcomer. Wins over step
   codes (the card is closing anyway). Unticked steps are stamped

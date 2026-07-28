@@ -217,23 +217,56 @@ def reply_target_id(message: object) -> int:
     return int(author_id) if author_id is not None else 0
 
 
-def code_conflict(codes: list[tuple[str, str]]) -> tuple[str, str] | None:
+#: How the guild-wide completion code names itself in a clash message.
+COMPLETION_CODE_LABEL = "the completion code"
+
+Coded = tuple[str, str]  # (owner_label, code)
+
+
+def code_conflict(codes: list[Coded]) -> tuple[Coded, Coded] | None:
     """First pair of codes where one contains the other, case-insensitively.
 
     Matching is containment, so a code that sits inside another one always
     fires alongside it — posting "DK-SFW-DONE" would tick both it and a
-    "DK-SFW" step, silently. Codes are ``(owner_label, code)`` pairs and the
-    returned pair is ``(container_label, contained_label)`` for the error
-    message. Empty codes are ignored (they never match anything).
+    "DK-SFW" step, silently. Worse when the container is the *completion*
+    code: pasting one step's canned message would close the card and stamp
+    every remaining step skipped.
+
+    Takes and returns ``(owner_label, code)`` pairs, ordered
+    ``(container, contained)``. The codes ride along because step labels
+    aren't unique — two steps sharing a label would otherwise produce a
+    self-referential message. Empty codes never match anything.
     """
-    live = [(label, code) for label, code in codes if code]
-    for i, (a_label, a_code) in enumerate(live):
-        for b_label, b_code in live[i + 1:]:
-            if a_code.lower() in b_code.lower():
-                return b_label, a_label
-            if b_code.lower() in a_code.lower():
-                return a_label, b_label
+    live = [pair for pair in codes if pair[1]]
+    for i, a in enumerate(live):
+        for b in live[i + 1:]:
+            if a[1].lower() in b[1].lower():
+                return b, a
+            if b[1].lower() in a[1].lower():
+                return a, b
     return None
+
+
+def config_code_conflict(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    completion: str | None = None,
+    steps: list[StepDef] | None = None,
+) -> tuple[Coded, Coded] | None:
+    """:func:`code_conflict` across a guild's step codes + completion code.
+
+    Either side may be overridden with the value a pending save is about to
+    write; whatever isn't overridden is read from storage. That matters
+    because the two are writable independently — a completion-code-only save
+    still has to be checked against the *stored* step codes, or the clash
+    walks in through the side door.
+    """
+    code = completion if completion is not None else completion_code(conn, guild_id)
+    defs = steps if steps is not None else step_config(conn, guild_id)
+    pairs: list[Coded] = [(s.label, s.code) for s in defs]
+    pairs.append((COMPLETION_CODE_LABEL, code.strip()))
+    return code_conflict(pairs)
 
 
 # ---------------------------------------------------------------------------
