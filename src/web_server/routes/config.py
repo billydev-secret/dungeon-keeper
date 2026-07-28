@@ -4720,3 +4720,48 @@ async def remove_needle_channel(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+# ── Configured-channel health ──────────────────────────────────────────
+
+
+@router.get("/config/channel-health")
+async def config_channel_health(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Every configured channel that is set up but doesn't actually work.
+
+    The complement of ``/help/suggestions``: that answers "what isn't set up?",
+    this answers "what is set up and silently broken?". Discord offers no
+    signal for the latter — deleting a role takes its channel permission
+    overwrites with it, so a members-only channel can go dark with no config
+    change, no error, and nothing in the audit log naming the channel.
+    """
+    from bot_modules.services.channel_health import snapshot_configured_channels
+    from bot_modules.services.channel_health_logic import (
+        diagnose_all,
+        group_by_channel,
+        grouped_issue_to_dict,
+    )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        # Bot down or guild uncached — an unknown state is not a fault.
+        return {"available": False, "issues": []}
+
+    def _snapshot():
+        with ctx.open_db() as conn:
+            return snapshot_configured_channels(conn, guild)
+
+    snaps = await run_query(_snapshot)
+    groups = group_by_channel(diagnose_all(snaps))
+    return {
+        "available": True,
+        "checked": len(snaps),
+        "issues": [grouped_issue_to_dict(g) for g in groups],
+    }

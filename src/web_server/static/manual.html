@@ -1191,6 +1191,7 @@
       <div class="callout-body">
         <strong>Configure via the <a href="/#/config-bios">web dashboard</a></strong>
         <p>The Bios panel is where admins define the whole experience: the profile field set (labels, types, required/optional, order, hints, which field is the headline), the icebreaker question pool, wiring (bios channel, wizard category, questions per bio, embed color, timeouts), and the trigger button's title and message copy — re-post the button after editing the copy to refresh the live message.</p>
+        <p>The panel also checks the two channels it depends on against Discord itself and shows a red banner if either is broken — the channel was deleted, the bot can't post in it, the wizard category isn't a category, or <strong>no member can actually see the bios channel</strong>. That last one is easy to cause by accident: if <code>@everyone</code> is denied View Channel and a single role grants it back, deleting that role silently takes the permission with it. Nothing in the config changes, the bot can still post, and members simply stop being able to see the channel, the start button, or anyone's bio. Posting the start button into a channel in that state reports a warning instead of a success.</p>
       </div>
     </div>
 
@@ -1769,6 +1770,10 @@
     <h3 id="setup-suggestions">Not sure what's left?</h3>
     <p>Admins get a <strong>Suggested Setup</strong> card on the dashboard home page. It reviews which features this server hasn't set up — or has set up but left switched off — and lists the best few to tackle next, cheapest first: something already wired up that just needs its switch flipped beats something half-built, which beats something untouched. Each suggestion says what the feature would give the server, which settings are still empty, and which panel to open.</p>
     <p>It's an ordinary home-page card, so you can move, resize, or remove it like any other. You can also just ask <a href="#ask-guide">Billy-bot</a> <em>"what am I missing?"</em> for the same review in conversation — and then ask it to set one up for you.</p>
+
+    <h3 id="config-problems">Something set up but not working?</h3>
+    <p>Alongside it, admins get a <strong>Configuration Problems</strong> card — the opposite question. Suggested Setup finds what you haven't configured; this finds what you <em>have</em> configured that silently doesn't work. It checks every channel any feature points at and reports four faults: the channel was deleted, it's the wrong kind of channel for what it's wired to, the bot can't post in it, or <strong>not one member can see it</strong>.</p>
+    <p>That last one is the reason the card exists. If <code>@everyone</code> is denied View Channel and one role grants it back, deleting that role takes the permission with it — no setting changes, no error, nothing in the audit log naming the channel, and the bot (which usually has its own permissions) keeps posting there quite happily. A channel locked down on purpose still has its staff, so it shows a small number of viewers; only a genuinely broken one reaches zero, which is why that's the line the card draws. When several settings share one broken channel they're listed together, because one permission fix clears them all.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          22. CLEANUP & TAGGING

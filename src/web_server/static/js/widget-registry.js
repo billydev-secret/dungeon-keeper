@@ -36,6 +36,7 @@ const WIDGETS = [
 
   // ── Setup help ───────────────────────────────────────────────────
   { id: "setup-suggestions",     label: "Suggested Setup",     category: "Home", perms: ["admin"], source: "suggestions", wide: true, nav: "config-advisor", maxRows: 3 },
+  { id: "config-problems",       label: "Configuration Problems", category: "Home", perms: ["admin"], source: "channelHealth", wide: true, nav: "config-bios", maxRows: 3 },
 ];
 
 // Keyed lookup
@@ -61,6 +62,7 @@ export const DEFAULT_MOD = [
 
 // Admin default: health score + full mod tiles
 export const DEFAULT_ADMIN = [
+  "config-problems",
   "setup-suggestions",
   "health-composite",
   "home-messages", "home-nsfw", "home-presence", "home-xp",
@@ -98,6 +100,7 @@ const TILE_LOADERS = {
   "health-sentiment-feed": () => import("./tiles/sentiment-feed.js"),
   "economy-metrics":        () => import("./tiles/economy-metrics.js"),
   "setup-suggestions":      () => import("./tiles/setup-suggestions.js"),
+  "config-problems":        () => import("./tiles/config-problems.js"),
 };
 
 // Cache resolved modules so we import each tile at most once

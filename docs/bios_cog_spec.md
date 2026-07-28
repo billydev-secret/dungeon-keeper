@@ -252,6 +252,38 @@ Slots into the existing self-hosted DK dashboard (Discord OAuth, admin-gated). T
 ### 10.3 Config editor
 - `bios_channel_id`, `wizard_category_id`, `questions_per_bio`, `embed_color`, `wizard_timeout`, `archive_grace`.
 
+### 10.4 Channel health warnings
+`GET /api/bios/config` returns a `channel_issues` list alongside the settings,
+computed from live Discord state (empty when the bot client is down — an
+unknown state is not reported as a fault). The panel renders it as an error
+banner above the form, and `POST /api/bios/post-trigger-button` returns the
+same messages in a `warnings` list so posting the button into a channel nobody
+can open reports as a failure rather than a clean success.
+
+Checked for `bios_channel_id` (`diagnose_channel`): the channel is missing,
+isn't a channel that takes messages, the bot can't post (View / Send / Embed
+Links), or **no non-bot member can see it**. Checked for `wizard_category_id`
+(`diagnose_category`): missing, not a category, or the bot lacks Manage
+Channels. Categories deliberately use different rules — being message-less and
+member-invisible is correct for the wizard category and a fault for the bios
+channel.
+
+The "nobody can see it" rule exists because of a live outage: on 2026-07-19 a
+role holding the only overwrite granting `view_channel` was deleted, which
+silently removes its channel overwrite. `bios_channel_id` still pointed at a
+real text channel, the bot held Administrator and could post fine, and no
+config value changed — but for nine days no member could see the channel, the
+trigger button, or any posted bio. Zero is the threshold rather than a small
+share: a channel restricted on purpose still has its staff, so it lands on a
+small number, never none. Measured against the live server, a share threshold
+would have flagged eleven channels to catch the one real fault.
+
+The same rules run across every channel setting in `settings_registry` for the
+dashboard Home panel's **Configuration Problems** card
+(`GET /api/config/channel-health`), so a feature that registers a channel
+setting is covered automatically. Settings sharing one channel group into a
+single row — one channel, one fault, one fix.
+
 ---
 
 ## 11. Implementation defaults (as built)
