@@ -66,6 +66,10 @@ export function mount(container) {
             <option value="false">No Reactions</option>
           </select>
         </label>
+        <label style="flex-direction:row;align-items:center;gap:6px;">
+          <input type="checkbox" data-field="include_bots" />
+          Show Bots
+        </label>
         <label>Min Length
           <input type="number" data-field="min_length" min="0" placeholder="chars" style="width:70px" />
         </label>
@@ -107,6 +111,7 @@ export function mount(container) {
   const sentMaxInput = container.querySelector('[data-field="sentiment_max"]');
   const attachSel = container.querySelector('[data-field="has_attachments"]');
   const reactionsSel = container.querySelector('[data-field="has_reactions"]');
+  const includeBotsEl = container.querySelector('[data-field="include_bots"]');
   const minLenInput = container.querySelector('[data-field="min_length"]');
   const maxLenInput = container.querySelector('[data-field="max_length"]');
   const afterDtInput = container.querySelector('[data-field="after_dt"]');
@@ -190,6 +195,9 @@ export function mount(container) {
       params.set("before", String(Math.floor(new Date(beforeDtInput.value).getTime() / 1000)));
     }
     params.set("sort", sortSel.value);
+    // Bots are hidden by default. Searching for a specific author overrides
+    // this server-side, so a bot can still be looked up by id.
+    if (includeBotsEl.checked) params.set("include_bots", "true");
     return params;
   }
 

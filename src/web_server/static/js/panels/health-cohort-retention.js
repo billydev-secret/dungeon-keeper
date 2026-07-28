@@ -1,14 +1,16 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
+import { botToggleHtml, wireBotToggle } from "../report-helpers.js";
 import { makeLineChart, ROLE_COLORS } from "../charts.js";
 
 
 export function mount(container) {
+  let includeBots = false;
   container.innerHTML = '<div class="panel"><div class="panel-loading">Loading retention data…</div></div>';
   const charts = [];
 
   async function load() {
-    const d = await api("/api/health/cohort-retention");
+    const d = await api("/api/health/cohort-retention", includeBots ? { include_bots: "true" } : undefined);
     const panel = container.querySelector(".panel");
 
 
@@ -101,7 +103,24 @@ export function mount(container) {
     }
   }
 
-  load().catch(err => {
+  // Bots are excluded from every metric by default; this is the per-report
+  // opt-in. Re-injected after each render because load() rewrites the panel.
+  function decorate() {
+    const panel = container.querySelector(".panel");
+    const hdr = panel && panel.querySelector("header");
+    if (!hdr || hdr.querySelector(".bot-toggle")) return;
+    hdr.insertAdjacentHTML("beforeend", botToggleHtml(includeBots));
+    wireBotToggle(hdr, (v) => {
+      includeBots = v;
+      reload();
+    });
+  }
+
+  function reload() {
+    return load().then(decorate);
+  }
+
+  reload().catch(err => {
     container.querySelector(".panel").innerHTML = renderError(
       `Couldn't load retention — ${err.message}. Reload the page to try again.`
     );

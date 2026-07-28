@@ -7,10 +7,12 @@ Each ``GET /api/health/{tile}`` endpoint returns full deep-dive data.
 from __future__ import annotations
 
 import time
+from functools import partial
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services.health_metrics import (
     compute_channel_health,
@@ -25,7 +27,7 @@ from bot_modules.services.health_metrics import (
     compute_sentiment,
     compute_social_graph,
 )
-from bot_modules.services.health_service import get_cached, set_cached
+from bot_modules.services.health_service import cache_key, get_cached, set_cached
 from bot_modules.services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
@@ -122,10 +124,17 @@ def _resolve_channel_names(
 async def health_tiles(
     request: Request,
     tiles_filter: Optional[str] = Query(None, alias="tiles"),
+    include_bots: bool = Query(False),
     user: AuthenticatedUser = Depends(require_perms(set())),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
+    # Sentiment queries read message_sentiment joined to an aliased messages.
+    msg_bot_clause, msg_bot_params = bot_filter_clause(
+        guild_id, column="m.author_id", include_bots=include_bots
+    )
+    ck = partial(cache_key, include_bots=include_bots)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
@@ -146,12 +155,14 @@ async def health_tiles(
             # Status bar data
             status_bar = {
                 "active_users_1h": conn.execute(
-                    "SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id=? AND ts>=?",
-                    (guild_id, int(time.time() - 3600)),
+                    f"SELECT COUNT(DISTINCT author_id) FROM messages "
+                    f"WHERE guild_id=? AND ts>=?{bot_clause}",
+                    (guild_id, int(time.time() - 3600), *bot_params),
                 ).fetchone()[0],
                 "active_channels_1h": conn.execute(
-                    "SELECT COUNT(DISTINCT channel_id) FROM messages WHERE guild_id=? AND ts>=?",
-                    (guild_id, int(time.time() - 3600)),
+                    f"SELECT COUNT(DISTINCT channel_id) FROM messages "
+                    f"WHERE guild_id=? AND ts>=?{bot_clause}",
+                    (guild_id, int(time.time() - 3600), *bot_params),
                 ).fetchone()[0],
                 "voice_active": extras["voice_active"],
                 "recent_joins_today": sum(
@@ -165,15 +176,16 @@ async def health_tiles(
             # --- Tiles visible to all authenticated users (admin + mod) ---
             if is_admin or is_mod:
                 if _want("dau_mau"):
-                    cached = get_cached(conn, guild_id, "dau_mau")
+                    cached = get_cached(conn, guild_id, ck("dau_mau"))
                     if cached is None:
                         cached = compute_dau_mau(
                             conn,
                             guild_id,
                             member_count=extras["member_count"],
                             voice_active_count=extras["voice_active"],
+                            include_bots=include_bots,
                         )
-                        set_cached(conn, guild_id, "dau_mau", cached)
+                        set_cached(conn, guild_id, ck("dau_mau"), cached)
                     tiles["dau_mau"] = {
                         "dau_mau": cached["dau_mau"],
                         "wau_mau": cached["wau_mau"],
@@ -184,10 +196,12 @@ async def health_tiles(
                     }
 
                 if _want("heatmap"):
-                    cached = get_cached(conn, guild_id, "heatmap")
+                    cached = get_cached(conn, guild_id, ck("heatmap"))
                     if cached is None:
-                        cached = compute_heatmap(conn, guild_id)
-                        set_cached(conn, guild_id, "heatmap", cached)
+                        cached = compute_heatmap(
+                            conn, guild_id, include_bots=include_bots
+                        )
+                        set_cached(conn, guild_id, ck("heatmap"), cached)
                     tiles["heatmap"] = {
                         "grid": cached["grid"],
                         "peak_slot": cached["peak_slot"],
@@ -197,14 +211,15 @@ async def health_tiles(
                     }
 
                 if _want("channel_health"):
-                    cached = get_cached(conn, guild_id, "channel_health")
+                    cached = get_cached(conn, guild_id, ck("channel_health"))
                     if cached is None:
                         cached = compute_channel_health(
                             conn,
                             guild_id,
                             nsfw_channel_ids=extras["nsfw_ids"],
+                            include_bots=include_bots,
                         )
-                        set_cached(conn, guild_id, "channel_health", cached)
+                        set_cached(conn, guild_id, ck("channel_health"), cached)
                     tiles["channel_health"] = {
                         "active_count": cached["active_count"],
                         "flagged_count": cached["flagged_count"],
@@ -213,14 +228,14 @@ async def health_tiles(
                     }
 
                 if _want("mod_workload"):
-                    cached = get_cached(conn, guild_id, "mod_workload")
+                    cached = get_cached(conn, guild_id, ck("mod_workload"))
                     if cached is None:
                         cached = compute_mod_workload(
                             conn,
                             guild_id,
                             mod_ids=extras["mod_ids"],
                         )
-                        set_cached(conn, guild_id, "mod_workload", cached)
+                        set_cached(conn, guild_id, ck("mod_workload"), cached)
                     if is_admin:
                         tiles["mod_workload"] = {
                             "median_response_time": cached["median_response_time"],
@@ -244,27 +259,30 @@ async def health_tiles(
 
                 if _want("sentiment_feed"):
                     feed_rows = conn.execute(
-                        """SELECT ms.message_id, ms.channel_id, m.author_id,
+                        f"""SELECT ms.message_id, ms.channel_id, m.author_id,
                                   substr(m.content, 1, 120) AS content,
                                   ms.sentiment, ms.emotion, m.ts
                            FROM message_sentiment ms
                            JOIN messages m ON ms.message_id = m.message_id
                            WHERE ms.guild_id = ?
                              AND (ms.sentiment >= 0.5 OR ms.sentiment <= -0.5)
+                             {msg_bot_clause}
                            ORDER BY m.ts DESC LIMIT 8""",
-                        (guild_id,),
+                        (guild_id, *msg_bot_params),
                     ).fetchall()
                     pos_count = conn.execute(
-                        "SELECT COUNT(*) FROM message_sentiment ms "
-                        "JOIN messages m ON ms.message_id = m.message_id "
-                        "WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 AND m.ts >= ?",
-                        (guild_id, time.time() - 86400),
+                        f"SELECT COUNT(*) FROM message_sentiment ms "
+                        f"JOIN messages m ON ms.message_id = m.message_id "
+                        f"WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 "
+                        f"AND m.ts >= ?{msg_bot_clause}",
+                        (guild_id, time.time() - 86400, *msg_bot_params),
                     ).fetchone()[0]
                     neg_count = conn.execute(
-                        "SELECT COUNT(*) FROM message_sentiment ms "
-                        "JOIN messages m ON ms.message_id = m.message_id "
-                        "WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 AND m.ts >= ?",
-                        (guild_id, time.time() - 86400),
+                        f"SELECT COUNT(*) FROM message_sentiment ms "
+                        f"JOIN messages m ON ms.message_id = m.message_id "
+                        f"WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 "
+                        f"AND m.ts >= ?{msg_bot_clause}",
+                        (guild_id, time.time() - 86400, *msg_bot_params),
                     ).fetchone()[0]
                     tiles["sentiment_feed"] = {
                         "messages": [
@@ -286,10 +304,12 @@ async def health_tiles(
             # --- Admin-only tiles ---
             if is_admin:
                 if _want("gini"):
-                    cached = get_cached(conn, guild_id, "gini")
+                    cached = get_cached(conn, guild_id, ck("gini"))
                     if cached is None:
-                        cached = compute_gini(conn, guild_id)
-                        set_cached(conn, guild_id, "gini", cached)
+                        cached = compute_gini(
+                            conn, guild_id, include_bots=include_bots
+                        )
+                        set_cached(conn, guild_id, ck("gini"), cached)
                     tiles["gini"] = {
                         "gini": cached["gini"],
                         "badge": cached["badge"],
@@ -298,14 +318,14 @@ async def health_tiles(
                     }
 
                 if _want("social_graph"):
-                    cached = get_cached(conn, guild_id, "social_graph")
+                    cached = get_cached(conn, guild_id, ck("social_graph"))
                     if cached is None:
                         cached = compute_social_graph(
                             conn,
                             guild_id,
                             nsfw_channel_ids=extras["nsfw_ids"],
                         )
-                        set_cached(conn, guild_id, "social_graph", cached)
+                        set_cached(conn, guild_id, ck("social_graph"), cached)
                     tiles["social_graph"] = {
                         "clustering_coefficient": cached["clustering_coefficient"],
                         "badge": cached["badge"],
@@ -316,42 +336,44 @@ async def health_tiles(
                     }
 
                 if _want("sentiment"):
-                    cached = get_cached(conn, guild_id, "sentiment")
+                    cached = get_cached(conn, guild_id, ck("sentiment"))
                     if cached is None:
-                        cached = compute_sentiment(conn, guild_id)
-                        set_cached(conn, guild_id, "sentiment", cached)
+                        cached = compute_sentiment(
+                            conn, guild_id, include_bots=include_bots
+                        )
+                        set_cached(conn, guild_id, ck("sentiment"), cached)
 
                     # Outlier messages: 1 sigma above / below the mean
                     _avg = cached["avg_sentiment"]
                     _std_row = conn.execute(
-                        "SELECT COALESCE(SQRT(AVG((ms.sentiment - ?) * (ms.sentiment - ?))), 0.3) AS sd "
-                        "FROM message_sentiment ms "
-                        "JOIN messages m ON ms.message_id = m.message_id "
-                        "WHERE ms.guild_id = ? AND m.ts >= ?",
-                        (_avg, _avg, guild_id, time.time() - 86400 * 30),
+                        f"SELECT COALESCE(SQRT(AVG((ms.sentiment - ?) * (ms.sentiment - ?))), 0.3) AS sd "
+                        f"FROM message_sentiment ms "
+                        f"JOIN messages m ON ms.message_id = m.message_id "
+                        f"WHERE ms.guild_id = ? AND m.ts >= ?{msg_bot_clause}",
+                        (_avg, _avg, guild_id, time.time() - 86400 * 30, *msg_bot_params),
                     ).fetchone()
                     _sd = max(_std_row["sd"], 0.1)
                     _hi = _avg + _sd
                     _lo = _avg - _sd
                     _top2 = conn.execute(
-                        """SELECT ms.message_id, ms.channel_id, m.author_id,
+                        f"""SELECT ms.message_id, ms.channel_id, m.author_id,
                                   substr(m.content, 1, 100) AS content,
                                   ms.sentiment, ms.emotion, m.ts
                            FROM message_sentiment ms
                            JOIN messages m ON ms.message_id = m.message_id
-                           WHERE ms.guild_id = ? AND ms.sentiment >= ?
+                           WHERE ms.guild_id = ? AND ms.sentiment >= ?{msg_bot_clause}
                            ORDER BY ms.sentiment DESC, m.ts DESC LIMIT 2""",
-                        (guild_id, _hi),
+                        (guild_id, _hi, *msg_bot_params),
                     ).fetchall()
                     _bot2 = conn.execute(
-                        """SELECT ms.message_id, ms.channel_id, m.author_id,
+                        f"""SELECT ms.message_id, ms.channel_id, m.author_id,
                                   substr(m.content, 1, 100) AS content,
                                   ms.sentiment, ms.emotion, m.ts
                            FROM message_sentiment ms
                            JOIN messages m ON ms.message_id = m.message_id
-                           WHERE ms.guild_id = ? AND ms.sentiment <= ?
+                           WHERE ms.guild_id = ? AND ms.sentiment <= ?{msg_bot_clause}
                            ORDER BY ms.sentiment ASC, m.ts DESC LIMIT 2""",
-                        (guild_id, _lo),
+                        (guild_id, _lo, *msg_bot_params),
                     ).fetchall()
 
                     def _outlier_row(r):
@@ -382,14 +404,15 @@ async def health_tiles(
                     }
 
                 if _want("newcomer_funnel"):
-                    cached = get_cached(conn, guild_id, "newcomer_funnel")
+                    cached = get_cached(conn, guild_id, ck("newcomer_funnel"))
                     if cached is None:
                         cached = compute_newcomer_funnel(
                             conn,
                             guild_id,
                             recent_join_ids=extras["recent_joins"],
+                            include_bots=include_bots,
                         )
-                        set_cached(conn, guild_id, "newcomer_funnel", cached)
+                        set_cached(conn, guild_id, ck("newcomer_funnel"), cached)
                     tiles["newcomer_funnel"] = {
                         "activation_rate": cached["activation_rate"],
                         "badge": cached["badge"],
@@ -403,14 +426,15 @@ async def health_tiles(
                     }
 
                 if _want("cohort_retention"):
-                    cached = get_cached(conn, guild_id, "cohort_retention")
+                    cached = get_cached(conn, guild_id, ck("cohort_retention"))
                     if cached is None:
                         cached = compute_cohort_retention(
                             conn,
                             guild_id,
                             join_times=extras["recent_joins"],
+                            include_bots=include_bots,
                         )
-                        set_cached(conn, guild_id, "cohort_retention", cached)
+                        set_cached(conn, guild_id, ck("cohort_retention"), cached)
                     tiles["cohort_retention"] = {
                         "d7": cached["d7"],
                         "d30": cached["d30"],
@@ -429,38 +453,46 @@ async def health_tiles(
                             {
                                 "member_count": extras["member_count"],
                                 "voice_active_count": extras["voice_active"],
+                                "include_bots": include_bots,
                             },
                         ),
-                        ("gini", compute_gini, {}),
+                        ("gini", compute_gini, {"include_bots": include_bots}),
                         (
                             "social_graph",
                             compute_social_graph,
                             {"nsfw_channel_ids": extras["nsfw_ids"]},
                         ),
-                        ("sentiment", compute_sentiment, {}),
+                        (
+                            "sentiment",
+                            compute_sentiment,
+                            {"include_bots": include_bots},
+                        ),
                         (
                             "cohort_retention",
                             compute_cohort_retention,
-                            {"join_times": extras["recent_joins"]},
+                            {
+                                "join_times": extras["recent_joins"],
+                                "include_bots": include_bots,
+                            },
                         ),
-                        ("heatmap", compute_heatmap, {}),
+                        ("heatmap", compute_heatmap, {"include_bots": include_bots}),
                     ]
                     for dep_key, dep_fn, dep_kw in composite_deps:
-                        if get_cached(conn, guild_id, dep_key) is None:
+                        if get_cached(conn, guild_id, ck(dep_key)) is None:
                             dep_result = dep_fn(conn, guild_id, **dep_kw)
-                            set_cached(conn, guild_id, dep_key, dep_result)
+                            set_cached(conn, guild_id, ck(dep_key), dep_result)
 
                     composite = compute_composite_health(
                         conn,
                         guild_id,
-                        dau_mau_data=get_cached(conn, guild_id, "dau_mau"),
-                        gini_data=get_cached(conn, guild_id, "gini"),
-                        social_data=get_cached(conn, guild_id, "social_graph"),
-                        sentiment_data=get_cached(conn, guild_id, "sentiment"),
+                        dau_mau_data=get_cached(conn, guild_id, ck("dau_mau")),
+                        gini_data=get_cached(conn, guild_id, ck("gini")),
+                        social_data=get_cached(conn, guild_id, ck("social_graph")),
+                        sentiment_data=get_cached(conn, guild_id, ck("sentiment")),
                         retention_data=get_cached(
-                            conn, guild_id, "cohort_retention"
+                            conn, guild_id, ck("cohort_retention")
                         ),
-                        heatmap_data=get_cached(conn, guild_id, "heatmap"),
+                        heatmap_data=get_cached(conn, guild_id, ck("heatmap")),
                     )
                     tiles["composite"] = {
                         "score": composite["score"],
@@ -525,6 +557,7 @@ async def health_tiles(
 @router.get("/health/dau-mau")
 async def health_dau_mau(
     request: Request,
+    include_bots: bool = Query(False),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -540,6 +573,7 @@ async def health_dau_mau(
                 guild_id,
                 member_count=extras["member_count"],
                 voice_active_count=extras["voice_active"],
+                include_bots=include_bots,
             )
 
     return await run_query(_q)
@@ -548,6 +582,7 @@ async def health_dau_mau(
 @router.get("/health/heatmap")
 async def health_heatmap(
     request: Request,
+    include_bots: bool = Query(False),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -556,7 +591,9 @@ async def health_heatmap(
     def _q():
         with ctx.open_db() as conn:
             tz = get_tz_offset_hours(conn, guild_id)
-            data = compute_heatmap(conn, guild_id, utc_offset_hours=tz)
+            data = compute_heatmap(
+                conn, guild_id, utc_offset_hours=tz, include_bots=include_bots
+            )
             # Resolve channel names
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
             bot = getattr(ctx, "bot", None)
@@ -572,6 +609,7 @@ async def health_heatmap(
 @router.get("/health/channel-health")
 async def health_channel_health(
     request: Request,
+    include_bots: bool = Query(False),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -584,7 +622,12 @@ async def health_channel_health(
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_channel_health(conn, guild_id, nsfw_channel_ids=nsfw_ids)
+            data = compute_channel_health(
+                conn,
+                guild_id,
+                nsfw_channel_ids=nsfw_ids,
+                include_bots=include_bots,
+            )
             ch_ids = {int(ch["channel_id"]) for ch in data["channels"]}
             ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["channels"]:
@@ -597,6 +640,7 @@ async def health_channel_health(
 @router.get("/health/gini")
 async def health_gini(
     request: Request,
+    include_bots: bool = Query(False),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -606,7 +650,7 @@ async def health_gini(
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_gini(conn, guild_id)
+            data = compute_gini(conn, guild_id, include_bots=include_bots)
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
             ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["per_channel"]:
@@ -651,6 +695,7 @@ async def health_social_graph(
 @router.get("/health/sentiment")
 async def health_sentiment(
     request: Request,
+    include_bots: bool = Query(False),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -660,7 +705,7 @@ async def health_sentiment(
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_sentiment(conn, guild_id)
+            data = compute_sentiment(conn, guild_id, include_bots=include_bots)
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
             ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["per_channel"]:
@@ -673,36 +718,43 @@ async def health_sentiment(
 @router.get("/health/sentiment-feed")
 async def health_sentiment_feed(
     request: Request,
+    include_bots: bool = Query(False),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
+    msg_bot_clause, msg_bot_params = bot_filter_clause(
+        guild_id, column="m.author_id", include_bots=include_bots
+    )
 
     def _q():
         with ctx.open_db() as conn:
             rows = conn.execute(
-                """SELECT ms.message_id, ms.channel_id, m.author_id,
+                f"""SELECT ms.message_id, ms.channel_id, m.author_id,
                           m.content, ms.sentiment, ms.emotion, m.ts
                    FROM message_sentiment ms
                    JOIN messages m ON ms.message_id = m.message_id
                    WHERE ms.guild_id = ?
                      AND (ms.sentiment >= 0.5 OR ms.sentiment <= -0.5)
+                     {msg_bot_clause}
                    ORDER BY m.ts DESC LIMIT 50""",
-                (guild_id,),
+                (guild_id, *msg_bot_params),
             ).fetchall()
             pos_count = conn.execute(
-                "SELECT COUNT(*) FROM message_sentiment ms "
-                "JOIN messages m ON ms.message_id = m.message_id "
-                "WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 AND m.ts >= ?",
-                (guild_id, time.time() - 86400),
+                f"SELECT COUNT(*) FROM message_sentiment ms "
+                f"JOIN messages m ON ms.message_id = m.message_id "
+                f"WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 "
+                f"AND m.ts >= ?{msg_bot_clause}",
+                (guild_id, time.time() - 86400, *msg_bot_params),
             ).fetchone()[0]
             neg_count = conn.execute(
-                "SELECT COUNT(*) FROM message_sentiment ms "
-                "JOIN messages m ON ms.message_id = m.message_id "
-                "WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 AND m.ts >= ?",
-                (guild_id, time.time() - 86400),
+                f"SELECT COUNT(*) FROM message_sentiment ms "
+                f"JOIN messages m ON ms.message_id = m.message_id "
+                f"WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 "
+                f"AND m.ts >= ?{msg_bot_clause}",
+                (guild_id, time.time() - 86400, *msg_bot_params),
             ).fetchone()[0]
             messages = [
                 {
@@ -743,6 +795,7 @@ async def health_sentiment_feed(
 @router.get("/health/newcomer-funnel")
 async def health_newcomer_funnel(
     request: Request,
+    include_bots: bool = Query(False),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -757,6 +810,7 @@ async def health_newcomer_funnel(
                 conn,
                 guild_id,
                 recent_join_ids=extras["recent_joins"],
+                include_bots=include_bots,
             )
 
     return await run_query(_q)
@@ -765,6 +819,7 @@ async def health_newcomer_funnel(
 @router.get("/health/cohort-retention")
 async def health_cohort_retention(
     request: Request,
+    include_bots: bool = Query(False),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -779,6 +834,7 @@ async def health_cohort_retention(
                 conn,
                 guild_id,
                 join_times=extras["recent_joins"],
+                include_bots=include_bots,
             )
 
     return await run_query(_q)
@@ -840,6 +896,7 @@ async def health_mod_engagement(
 @router.get("/health/composite-score")
 async def health_composite_score(
     request: Request,
+    include_bots: bool = Query(False),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -847,37 +904,40 @@ async def health_composite_score(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
+    ck = partial(cache_key, include_bots=include_bots)
 
     def _q():
         with ctx.open_db() as conn:
-            dau_data = get_cached(conn, guild_id, "dau_mau") or compute_dau_mau(
+            dau_data = get_cached(conn, guild_id, ck("dau_mau")) or compute_dau_mau(
                 conn,
                 guild_id,
                 member_count=extras["member_count"],
                 voice_active_count=extras["voice_active"],
+                include_bots=include_bots,
             )
-            gini_data = get_cached(conn, guild_id, "gini") or compute_gini(
-                conn, guild_id
+            gini_data = get_cached(conn, guild_id, ck("gini")) or compute_gini(
+                conn, guild_id, include_bots=include_bots
             )
             social_data = get_cached(
-                conn, guild_id, "social_graph"
+                conn, guild_id, ck("social_graph")
             ) or compute_social_graph(
                 conn,
                 guild_id,
                 nsfw_channel_ids=extras["nsfw_ids"],
             )
             sentiment_data = get_cached(
-                conn, guild_id, "sentiment"
-            ) or compute_sentiment(conn, guild_id)
+                conn, guild_id, ck("sentiment")
+            ) or compute_sentiment(conn, guild_id, include_bots=include_bots)
             retention_data = get_cached(
-                conn, guild_id, "cohort_retention"
+                conn, guild_id, ck("cohort_retention")
             ) or compute_cohort_retention(
                 conn,
                 guild_id,
                 join_times=extras["recent_joins"],
+                include_bots=include_bots,
             )
-            heatmap_data = get_cached(conn, guild_id, "heatmap") or compute_heatmap(
-                conn, guild_id
+            heatmap_data = get_cached(conn, guild_id, ck("heatmap")) or compute_heatmap(
+                conn, guild_id, include_bots=include_bots
             )
             return compute_composite_health(
                 conn,

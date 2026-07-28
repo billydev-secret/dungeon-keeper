@@ -6,6 +6,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services import reports_data
 from bot_modules.services.member_quality_score import (
@@ -149,6 +150,7 @@ async def nsfw_gender(
     resolution: Literal["day", "week", "month"] = "week",
     media_only: bool = False,
     channel_id: str | None = None,
+    include_bots: bool = False,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -200,12 +202,18 @@ async def nsfw_gender(
                 target_ids,
                 tz,
                 media_only,
+                include_bots=include_bots,
             )
 
     return await cached_run_query(
         "nsfw-gender",
         guild_id,
-        {"resolution": resolution, "media_only": media_only, "channel_id": channel_id},
+        {
+            "resolution": resolution,
+            "media_only": media_only,
+            "channel_id": channel_id,
+            "include_bots": include_bots,
+        },
         _q,
     )
 
@@ -263,6 +271,7 @@ async def intake_report(
 async def greeter_response(
     request: Request,
     days: int | None = None,
+    include_bots: bool = False,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -319,13 +328,16 @@ async def greeter_response(
             # Broader fallback: frequent greeters in the configured greeter channel.
             # (at least 5 messages — filters out one-time joiners posting intros)
             if not greeter_ids and greeter_channel_id:
+                g_bot_clause, g_bot_params = bot_filter_clause(
+                    guild_id, include_bots=include_bots
+                )
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT author_id, COUNT(*) AS cnt FROM messages
-                    WHERE guild_id = ? AND channel_id = ? AND ts >= ?
+                    WHERE guild_id = ? AND channel_id = ? AND ts >= ?{g_bot_clause}
                     GROUP BY author_id HAVING cnt >= 5
                     """,
-                    (guild_id, greeter_channel_id, cutoff_ts),
+                    (guild_id, greeter_channel_id, cutoff_ts, *g_bot_params),
                 ).fetchall()
                 greeter_ids = {int(r[0]) for r in rows}
 
@@ -346,6 +358,7 @@ async def greeter_response(
                 greeter_channel_id,
                 greeter_ids,
                 sessions,
+                include_bots=include_bots,
             )
 
         if days is not None:
@@ -355,7 +368,7 @@ async def greeter_response(
     result = await cached_run_query(
         "greeter-response",
         guild_id,
-        {"days": days},
+        {"days": days, "include_bots": include_bots},
         _q,
     )
     if result is None or result["total_joins"] == 0:
@@ -387,7 +400,7 @@ async def activity(
     user_id: str | None = None,
     channel_id: str | None = None,
     exclude_channel_ids: str | None = None,
-    exclude_bots: bool = False,
+    include_bots: bool = False,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -405,17 +418,20 @@ async def activity(
                 except ValueError:
                     continue
 
-    excluded_users: set[int] = set()
-    if exclude_bots:
-        bot = getattr(ctx, "bot", None)
-        guild = bot.get_guild(guild_id) if bot is not None else None
-        if guild is not None:
-            excluded_users.update(m.id for m in guild.members if m.bot)
-        excluded_users.update(ctx.guild_config(guild_id).recorded_bot_user_ids)
-
     def _q():
         with ctx.open_db() as conn:
             tz = get_tz_offset_hours(conn, guild_id)
+            # Bots are excluded by default. This used to scan live
+            # ``guild.members`` for ``.bot`` plus a guild_config allowlist, which
+            # missed bots that had left the server; known_users retains them, so
+            # it is now the only source consulted. Resolved inside the worker
+            # thread so the route never opens a DB connection on the event loop.
+            excluded_users: set[int] = set()
+            if not include_bots:
+                excluded_users = {
+                    r[0]
+                    for r in conn.execute(bot_ids_subquery(), (guild_id,)).fetchall()
+                }
             return reports_data.get_activity_data(
                 conn,
                 guild_id,
@@ -437,7 +453,7 @@ async def activity(
             "user_id": user_id,
             "channel_id": channel_id,
             "exclude_channel_ids": ",".join(str(c) for c in sorted(excluded_channels)),
-            "exclude_user_ids": ",".join(str(u) for u in sorted(excluded_users)),
+            "include_bots": include_bots,
         },
         _q,
     )
@@ -588,6 +604,7 @@ async def retention(
     request: Request,
     period_days: int = 3,
     min_previous: int = 5,
+    include_bots: bool = False,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -602,12 +619,17 @@ async def retention(
                 guild_id,
                 period_days=period_days,
                 min_previous=min_previous,
+                include_bots=include_bots,
             )
 
     result = await cached_run_query(
         "retention",
         guild_id,
-        {"period_days": period_days, "min_previous": min_previous},
+        {
+            "period_days": period_days,
+            "min_previous": min_previous,
+            "include_bots": include_bots,
+        },
         _q,
     )
     await _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
@@ -683,6 +705,7 @@ async def xp_leaderboard(
 async def channel_comparison(
     request: Request,
     days: int = 1,
+    include_bots: bool = False,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -696,12 +719,13 @@ async def channel_comparison(
                 conn,
                 guild_id,
                 days=max(1, min(365, days)),
+                include_bots=include_bots,
             )
 
     result = await cached_run_query(
         "channel-comparison",
         guild_id,
-        {"days": days},
+        {"days": days, "include_bots": include_bots},
         _q,
     )
     # Resolve channel names: guild cache first, then known_channels DB
@@ -736,6 +760,7 @@ async def quality_score(
     request: Request,
     days: int | None = None,
     min_active_days: int | None = None,
+    include_bots: bool = False,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -752,13 +777,16 @@ async def quality_score(
                 members = guild.members
             else:
                 # Offline: build stand-in members from DB message authors
+                q_bot_clause, q_bot_params = bot_filter_clause(
+                    guild_id, include_bots=include_bots
+                )
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT DISTINCT author_id, MIN(ts) AS first_seen
-                    FROM messages WHERE guild_id = ?
+                    FROM messages WHERE guild_id = ?{q_bot_clause}
                     GROUP BY author_id
                     """,
-                    (guild_id,),
+                    (guild_id, *q_bot_params),
                 ).fetchall()
                 members = [
                     MemberStandIn(
@@ -773,12 +801,17 @@ async def quality_score(
                 members,  # type: ignore[arg-type]
                 window_days=days,
                 min_active_days=min_active_days,
+                include_bots=include_bots,
             )
 
     result = await cached_run_query(
         "quality-score",
         guild_id,
-        {"days": days, "min_active_days": min_active_days},
+        {
+            "days": days,
+            "min_active_days": min_active_days,
+            "include_bots": include_bots,
+        },
         _q,
         ttl=300,
     )

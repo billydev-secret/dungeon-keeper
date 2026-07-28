@@ -600,3 +600,148 @@ def test_compute_social_graph_excludes_bot_interactions(db_conn):
     # Only humans 1 and 2 form the graph; the bot's edges are dropped.
     assert out["node_count"] == 2
     assert out["edge_count"] == 1
+
+
+# ── Bot exclusion (default) across the metric tiles ──────────────────
+#
+# Bots are ~21% of stored message volume in prod, so every message-volume
+# tile counted them until now. Each test seeds one human and one bot in the
+# same window and asserts the bot is invisible by default but returns under
+# ``include_bots=True``.
+
+
+@pytest.fixture
+def bot_and_human(db_conn):
+    """One human (id 1) and one bot (id 99), each with messages in-window."""
+    now = 1_700_000_000.0
+    recent = int(now) - 3600
+    _seed_known_user(db_conn, 1)
+    _seed_known_user(db_conn, 99, is_bot=1)
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=recent)
+    # The bot out-posts the human 3:1, the shape of the #register problem.
+    for i, mid in enumerate((2, 3, 4)):
+        _seed_message(db_conn, mid=mid, cid=100, aid=99, ts=recent - i)
+    return db_conn, now
+
+
+def test_dau_mau_excludes_bots_by_default(bot_and_human):
+    conn, now = bot_and_human
+    assert hm.compute_dau_mau(conn, GUILD, now=now)["dau"] == 1
+
+
+def test_dau_mau_counts_bots_when_opted_in(bot_and_human):
+    conn, now = bot_and_human
+    out = hm.compute_dau_mau(conn, GUILD, now=now, include_bots=True)
+    assert out["dau"] == 2
+
+
+def test_channel_health_excludes_bots_by_default(bot_and_human):
+    """The #register case: a channel that is 75% bot must report only humans."""
+    conn, now = bot_and_human
+    out = hm.compute_channel_health(conn, GUILD, now=now)
+    ch = {c["channel_id"]: c for c in out["channels"]}
+    assert ch["100"]["unique_weekly_users"] == 1
+
+
+def test_channel_health_counts_bots_when_opted_in(bot_and_human):
+    conn, now = bot_and_human
+    out = hm.compute_channel_health(conn, GUILD, now=now, include_bots=True)
+    ch = {c["channel_id"]: c for c in out["channels"]}
+    assert ch["100"]["unique_weekly_users"] == 2
+    # The bot's 3 messages triple the channel's throughput.
+    quiet = hm.compute_channel_health(conn, GUILD, now=now)
+    quiet_ch = {c["channel_id"]: c for c in quiet["channels"]}
+    assert ch["100"]["msgs_per_day"] > quiet_ch["100"]["msgs_per_day"]
+
+
+def test_gini_ignores_bot_volume(bot_and_human):
+    """A lone high-volume bot must not read as participation inequality.
+
+    With the bot counted there are two very unequal authors (3 vs 1); with it
+    excluded there is a single human, which is perfect equality (gini 0).
+    """
+    conn, now = bot_and_human
+    assert hm.compute_gini(conn, GUILD, now=now)["gini"] == 0.0
+    assert hm.compute_gini(conn, GUILD, now=now, include_bots=True)["gini"] > 0.0
+
+
+def test_heatmap_excludes_bots_by_default(bot_and_human):
+    conn, now = bot_and_human
+    quiet = hm.compute_heatmap(conn, GUILD, now=now)
+    busy = hm.compute_heatmap(conn, GUILD, now=now, include_bots=True)
+    assert sum(map(sum, busy["grid"])) > sum(map(sum, quiet["grid"]))
+
+
+def test_cohort_retention_drops_bot_cohorts(bot_and_human):
+    """A bot's first message must not seed a retention cohort."""
+    conn, now = bot_and_human
+    out = hm.compute_cohort_retention(conn, GUILD, now=now)
+    with_bots = hm.compute_cohort_retention(conn, GUILD, now=now, include_bots=True)
+    assert out["latest_cohort_size"] == 1
+    assert with_bots["latest_cohort_size"] == 2
+
+
+def test_sentiment_excludes_bot_authored_scores(db_conn):
+    """Bot output is VADER-scored like any text; it must not move the average."""
+    now = 1_700_000_000.0
+    recent = int(now) - 3600
+    _seed_known_user(db_conn, 1)
+    _seed_known_user(db_conn, 99, is_bot=1)
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=recent)
+    _seed_message(db_conn, mid=2, cid=100, aid=99, ts=recent)
+    for mid, score in ((1, 1.0), (2, -1.0)):
+        db_conn.execute(
+            "INSERT INTO message_sentiment "
+            "(message_id, guild_id, channel_id, sentiment, emotion, computed_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (mid, GUILD, 100, score, "joy", recent),
+        )
+
+    # Human-only: the single +1.0 message. With the bot: +1.0 and -1.0 average 0.
+    assert hm.compute_sentiment(db_conn, GUILD, now=now)["avg_sentiment"] == 1.0
+    assert (
+        hm.compute_sentiment(db_conn, GUILD, now=now, include_bots=True)[
+            "avg_sentiment"
+        ]
+        == 0.0
+    )
+
+
+def test_newcomer_funnel_ignores_bot_replies(db_conn):
+    """A welcome bot auto-replying is not the community responding."""
+    now = 1_700_000_000.0
+    joined = int(now) - 7200
+    _seed_known_user(db_conn, 1)
+    _seed_known_user(db_conn, 99, is_bot=1)
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=joined + 60)
+    # Only a bot replies to the newcomer's first message.
+    _seed_message(db_conn, mid=2, cid=100, aid=99, ts=joined + 120, reply_to=1)
+
+    out = hm.compute_newcomer_funnel(
+        db_conn, GUILD, now=now, recent_join_ids={1: float(joined)}
+    )
+    assert out["funnel"]["first_message"] == 1
+    assert out["funnel"]["first_reply"] == 0
+
+    with_bots = hm.compute_newcomer_funnel(
+        db_conn,
+        GUILD,
+        now=now,
+        recent_join_ids={1: float(joined)},
+        include_bots=True,
+    )
+    assert with_bots["funnel"]["first_reply"] == 1
+
+
+def test_newcomer_funnel_does_not_treat_a_bot_as_a_newcomer(db_conn):
+    """A bot that joined in the window is not a newcomer to activate."""
+    now = 1_700_000_000.0
+    joined = int(now) - 7200
+    _seed_known_user(db_conn, 99, is_bot=1)
+    _seed_message(db_conn, mid=1, cid=100, aid=99, ts=joined + 60)
+
+    out = hm.compute_newcomer_funnel(
+        db_conn, GUILD, now=now, recent_join_ids={99: float(joined)}
+    )
+    assert out["badge"] == "no_data"
+    assert out["funnel"]["joined"] == 0

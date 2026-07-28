@@ -58,6 +58,7 @@ export const HELP_GROUPS = [
     { page: "help-tickets",     anchor: "tickets",     label: "Tickets, Policies & Warnings" },
     { page: "help-policies",    anchor: "policies",    label: "Policy Voting" },
     { page: "help-analytics",   anchor: "analytics",   label: "Analytics & Watch List" },
+    { page: "help-bots-metrics", anchor: "bots-in-metrics", label: "Bots and Metrics" },
     { page: "help-ai",          anchor: "ai-tools",    label: "AI Moderation Tools" },
     { page: "help-rules-watch", anchor: "rules-watch", label: "Rules Watch" },
     { page: "help-todo",        anchor: "todo",        label: "Todo List & Board" },

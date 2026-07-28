@@ -103,3 +103,35 @@ export function syncHash(panelId, params = {}) {
   const q = qs.toString();
   history.replaceState(null, "", `#/${panelId}${q ? "?" + q : ""}`);
 }
+
+
+/**
+ * Markup for the shared "Show Bots" opt-in checkbox.
+ *
+ * Bots are ~21% of stored message volume, so every metric excludes them by
+ * default. This is the per-report opt-in for the cases where seeing bot
+ * traffic is the point (a mod chasing a spammy bot).
+ *
+ * Pair with {@link wireBotToggle}, which finds the input and re-runs the
+ * panel's loader on change.
+ *
+ * @param {boolean} checked  current state, so the box survives a re-render
+ */
+export function botToggleHtml(checked = false) {
+  return `<label class="bot-toggle" style="flex-direction:row;align-items:center;gap:6px;font-weight:normal;">
+      <input type="checkbox" data-control="include-bots"${checked ? " checked" : ""} />
+      Show Bots
+    </label>`;
+}
+
+/**
+ * Wire the checkbox rendered by {@link botToggleHtml}.
+ *
+ * @param {HTMLElement} root    element containing the checkbox
+ * @param {(v:boolean)=>void} onChange  called with the new state
+ */
+export function wireBotToggle(root, onChange) {
+  const el = root.querySelector('[data-control="include-bots"]');
+  if (el) el.addEventListener("change", () => onChange(el.checked));
+  return el;
+}
