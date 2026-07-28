@@ -519,7 +519,8 @@ parity with the Games Studio is a parking-lot item).
   details select if one lands in a claimable state. Within a section a bold
   cadence sub-label (Daily/Weekly, or Monthly/Weekly) separates the groups
   when more than one is present; a single-cadence section is unlabelled
-  (`_QUEST_SECTIONS` / `_quest_section_lines`). Title and status share one
+  (`_QUEST_SECTIONS` / `_quest_section_lines`, in `economy/quest_views.py`
+  beside `build_quest_board_embed`). Title and status share one
   monospace code cell padded to the section's widest status (`_status_disp_width`
   counts emoji as 2 columns), so the reward — which stays outside the backticks
   — lines up on every row. Descriptions and

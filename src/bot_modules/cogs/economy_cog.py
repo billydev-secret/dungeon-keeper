@@ -194,6 +194,7 @@ _PERK_REFUSAL = {
     "role_gradient": "❌ Rent the **Gradient Role** perk first (/bank shop).",
     "role_icon": "❌ Rent the **Role Icon** perk first (/bank shop).",
 }
+_PERK_REFUSAL_FALLBACK = "❌ Rent that perk first (/bank shop)."
 _NO_ROLE_ICONS_MSG = "❌ This server doesn't support role icons right now."
 
 # Transfers above this need an explicit confirm step (spec §5, "over 100").
@@ -2889,8 +2890,11 @@ class EconomyCog(commands.Cog):
         if await self._refuse_disabled(interaction, settings):
             return False
         if perk not in ent:
+            # .get, not [perk]: SELF_PERKS has six members and the table has
+            # four. A setter added for one of the other two must degrade to a
+            # polite refusal, not a KeyError and "This interaction failed."
             await interaction.response.send_message(
-                _PERK_REFUSAL[perk], ephemeral=True
+                _PERK_REFUSAL.get(perk, _PERK_REFUSAL_FALLBACK), ephemeral=True
             )
             return False
         return True
@@ -2993,9 +2997,15 @@ class EconomyCog(commands.Cog):
         that renders once. ``list_refundable_rentals`` already excludes
         sponsored-emoji rentals (a different self-service surface, ``/bank
         emoji``) and admin-force-cancelled ones.
+
+        A disabled economy stops after the settings row: the caller refuses
+        before rendering anything, so reading the rest would be paying five
+        queries to say "the economy is off".
         """
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
+            if not settings.enabled:
+                return _ShopContext(settings, set(), 0, None, [], 0, 0)
             ent = entitlements(conn, guild_id, user_id)
             balance = get_balance(conn, guild_id, user_id)
             icon_range = catalog_price_range(conn, guild_id)

@@ -59,12 +59,18 @@ irrelevant — the post itself earns.
    scoped to the photo channel, deduped on `econ_quest_claims`. Quest cadence
    applies: a weekly `photo_post` quest pays once/week, not once/day.
 
+The payout itself lives in `services/economy_photo_service.py`
+(`read_photo_channel` / `payout_possible` / `award_photo_post`); the cog holds
+only the listener and the reaction.
+
 Guards run cheapest-first: guild/bot → image → TTL-cached channel id
-(`_photo_channel`, 60s TTL over `games_game_config`) → `_photo_eligible`
-pre-check (economy enabled, `photo_post` income source on, and something to
-pay: positive flat award or ≥1 active `photo_post` quest). The **`photo_post`
-income-source toggle gates both payouts**; the mechanic is **dormant until a
-channel is configured** (`channel_id` unset ⇒ listener no-ops).
+(`EconomyCog._photo_channel`, 60s TTL over `read_photo_channel`, which reads
+`games_game_config` and falls back to an active `games_scheduled` row) →
+`payout_possible` pre-check (economy enabled, `photo_post` income source on,
+and something to pay: positive flat award or ≥1 active `photo_post` quest).
+The **`photo_post` income-source toggle gates both payouts**; the mechanic is
+**dormant until a channel is configured** (`channel_id` unset ⇒ listener
+no-ops).
 
 Feedback is a reaction on the member's photo: the quest outcome carries ✅
 (paid) / 📝 (sign-off card filed, `_announce_quest_claim`); the flat award

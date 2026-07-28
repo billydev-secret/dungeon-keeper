@@ -1257,6 +1257,44 @@ def _fake_emoji(name="party", eid=999, animated=False, data=b"emoji-bytes"):
     return e
 
 
+@pytest.mark.asyncio
+async def test_require_perk_falls_back_for_an_unmapped_perk(ctx, db):
+    """A setter for a perk with no _PERK_REFUSAL row still refuses politely.
+
+    SELF_PERKS has six members and the refusal table four, so a future setter
+    for role_holographic or voice_style would otherwise raise KeyError and
+    show the member "This interaction failed."
+    """
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+
+    assert await cog._require_perk(interaction, GUILD_ID, "role_holographic") is False
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "Rent that perk first" in msg
+
+
+def test_disabled_shop_stops_after_the_settings_row(ctx, db):
+    """The economy-off gate stays cheap — no catalog/rental reads to say 'off'.
+
+    The returned values would be empty either way; what this pins is that the
+    four post-gate queries aren't issued for a page that will only ever say
+    the economy is disabled.
+    """
+    cog = _make_cog(ctx)  # economy left disabled
+    with (
+        patch("bot_modules.cogs.economy_cog.catalog_price_range") as catalog,
+        patch("bot_modules.cogs.economy_cog.list_refundable_rentals") as rentals,
+    ):
+        shop = cog._shop_context(GUILD_ID, 500)
+
+    assert shop.settings.enabled is False
+    catalog.assert_not_called()
+    rentals.assert_not_called()
+    assert (shop.owned, shop.balance, shop.icon_range) == (set(), 0, None)
+    assert (shop.refundable, shop.shields_held, shop.shield_price) == ([], 0, 0)
+
+
 @pytest.mark.parametrize(
     ("perk", "rented", "refusal"),
     [
