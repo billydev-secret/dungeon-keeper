@@ -170,6 +170,20 @@ If usage should actually inform future rounds, the fix is a counter table
 hook — a small change that would make the next audit evidence-driven instead of
 inference-driven.
 
+## Known regression from round 1
+
+Deleting `/rules-watch label` lost the ability to record a **corrected rule
+number**. The parity check confirmed the panel labels events — it did not check
+that it labels them *with the same fields*. `POST
+/api/rules-watch/events/{id}/label` and `service.upsert_label` both accept
+`corrected_rule`; `rules-watch.js:431` sends only `is_violation`. The column now
+fills only from the **Report Rule Violation** context menu.
+
+Fix is a rule-number input beside the label buttons. Logged here rather than
+quietly dropped because "the dashboard has it" was the stated reason for the
+deletion, and it was true only in part — the same failure mode as the
+`/policy list` near-miss, caught by review instead of by the check.
+
 ## Coordination note
 
 The sibling `reports-panel-review` session ran a four-commit reports cleanup on

@@ -427,7 +427,11 @@ def test_build_request_dm_embed_sets_author_and_footer():
     assert embed.author.name == "Alice"
     assert embed.author.icon_url == "https://cdn.example/a.png"
     assert "24 hours" in desc
-    assert "/dm_revoke" in footer_text
+    # Points at the panel, not the retired /dm_revoke command. This DM is read
+    # outside the server, where there is no panel button in front of the reader,
+    # so the footer has to name where to find it.
+    assert "My DM Settings" in footer_text
+    assert "/dm_" not in footer_text
 
 
 # ── build_request_sent_embed ─────────────────────────────────────────

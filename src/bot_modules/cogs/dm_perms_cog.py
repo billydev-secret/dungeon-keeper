@@ -552,11 +552,24 @@ class DmSettingsView(discord.ui.View):
         self.member = member
         self._selected: Optional[discord.Member | discord.User] = None
         self._revoke_button: Optional[discord.ui.Button] = None
+        self._pending_mode: Optional[str] = None
         self._sync_mode_styles()
 
     # ── Rendering ────────────────────────────────────────────────────────
 
     def _current_mode(self) -> str:
+        """The mode to render.
+
+        ``_pending_mode`` shadows the role lookup for the rest of this panel's
+        life once the member has set a mode here. ``set_member_dm_mode`` goes
+        out over REST; discord.py does not write the result back into the
+        cached member, so ``resolve_mode`` keeps returning the *old* mode until
+        a MEMBER_UPDATE arrives over the gateway. Without the shadow the panel
+        re-renders immediately after a change and contradicts its own "your DM
+        mode is now X" confirmation.
+        """
+        if self._pending_mode is not None:
+            return self._pending_mode
         return resolve_mode(self.member, self.cog._mode_roles_for(self.member.guild.id))
 
     def _sync_mode_styles(self) -> None:
@@ -586,24 +599,47 @@ class DmSettingsView(discord.ui.View):
 
     def _set_revoke_visible(self, visible: bool, target_name: str = "") -> None:
         """Show the revoke button only when the selected user is actually
-        connected — a disabled-but-present button invites a pointless click."""
-        if visible and self._revoke_button is None:
-            button = discord.ui.Button(
-                label=f"Remove connection with {target_name}"[:80],
-                style=discord.ButtonStyle.danger,
-                row=2,
-            )
-            button.callback = self._on_revoke  # type: ignore[method-assign]
-            self._revoke_button = button
-            self.add_item(button)
-        elif not visible and self._revoke_button is not None:
-            self.remove_item(self._revoke_button)
-            self._revoke_button = None
+        connected — a disabled-but-present button invites a pointless click.
+
+        The relabel on the already-visible path is load-bearing: picking a
+        second connected member reuses the existing button, and a stale label
+        would name the *previous* member on a button that revokes the current
+        one. The button is destructive and names a person, so the label has to
+        track ``_selected`` exactly.
+        """
+        if not visible:
+            if self._revoke_button is not None:
+                self.remove_item(self._revoke_button)
+                self._revoke_button = None
+            return
+
+        label = f"Remove connection with {target_name}"[:80]
+        if self._revoke_button is not None:
+            self._revoke_button.label = label
+            return
+
+        button = discord.ui.Button(
+            label=label,
+            style=discord.ButtonStyle.danger,
+            row=2,
+        )
+        button.callback = self._on_revoke  # type: ignore[method-assign]
+        self._revoke_button = button
+        self.add_item(button)
 
     async def _rerender(self, interaction: discord.Interaction, note: str = "") -> None:
+        """Redraw the panel. Falls back to editing the original response when
+        the interaction has already been deferred or answered — ``_on_revoke``
+        defers first, and ``edit_message`` is only valid on a fresh one."""
         self._sync_mode_styles()
+        embed = await self._embed()
+        if interaction.response.is_done():
+            await interaction.edit_original_response(
+                content=note or None, embed=embed, view=self
+            )
+            return
         await interaction.response.edit_message(
-            content=note or None, embed=await self._embed(), view=self
+            content=note or None, embed=embed, view=self
         )
 
     # ── Mode buttons ─────────────────────────────────────────────────────
@@ -618,6 +654,7 @@ class DmSettingsView(discord.ui.View):
                 "❌ I don't have permission to manage roles here.", ephemeral=True
             )
             return
+        self._pending_mode = mode
         await self._rerender(interaction, f"✅ Your DM mode is now **{mode.upper()}**.")
 
     @discord.ui.button(
@@ -673,6 +710,13 @@ class DmSettingsView(discord.ui.View):
                 "Pick someone first.", ephemeral=True
             )
             return
+        # Defer first: revoke_connection does several DB reads plus a
+        # fetch_message, a message edit, and two DM sends before we could
+        # otherwise answer. That runs well past Discord's 3s initial-response
+        # window, and a late edit_message raises NotFound — the revoke would
+        # succeed while the member saw "This interaction failed" next to a
+        # panel still offering the button.
+        await interaction.response.defer()
         removed = await self.cog.revoke_connection(
             self.member.guild, self.member, target
         )
@@ -819,7 +863,13 @@ class DmPermsCog(commands.Cog):
                 continue
             try:
                 await self.panel.place_or_refresh(guild, channel)
-            except discord.HTTPException:
+            except Exception:
+                # Deliberately broad, and per-guild: the loop body also reaches
+                # sqlite (accent lookup, panel-id save), so a DB hiccup on one
+                # guild must not abort the bootstrap for every guild after it.
+                # This runs in a bare task nobody awaits, so an escaping
+                # exception would only ever surface as "exception was never
+                # retrieved" — and the panel is the only route to DM settings.
                 log.exception(
                     "dm_perms: failed to autopost the panel in guild %s", guild_id
                 )

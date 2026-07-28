@@ -79,7 +79,8 @@ def build_acceptance_embed(
     embed.description = (
         f"**{requester_display_name}** ↔ **{target_display_name}**\n\n"
         f"{requester_mention} and {target_mention} can now DM each other.\n\n"
-        "Either of you can undo this at any time with `/dm_revoke`."
+        "Either of you can undo this at any time from **My DM Settings** on the "
+        "server's DM panel."
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
@@ -163,7 +164,7 @@ def build_request_dm_embed(
     )
     embed.set_author(name=requester_display_name, icon_url=requester_avatar_url)
     embed.set_footer(
-        text="You can revoke this permission at any time with /dm_revoke"
+        text="You can revoke this permission at any time from My DM Settings on the server's DM panel"
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)

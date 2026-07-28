@@ -50,6 +50,10 @@ def _interaction() -> MagicMock:
     interaction = MagicMock()
     interaction.response.edit_message = AsyncMock()
     interaction.response.send_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    # Fresh interaction: _rerender picks edit_message over edit_original_response.
+    interaction.response.is_done.return_value = False
+    interaction.edit_original_response = AsyncMock()
     return interaction
 
 
@@ -128,6 +132,100 @@ async def test_selecting_an_unconnected_member_offers_no_revoke():
     await DmSettingsView.user_select(view, interaction, select)
 
     assert _revoke_button(view) is None
+
+
+@pytest.mark.asyncio
+async def test_switching_between_connected_members_relabels_the_revoke_button():
+    """Regression: the button was only created when absent, so a second pick
+    kept the first member's name while _selected had moved on — the label named
+    Alice on a button that revoked Bob."""
+    view = DmSettingsView(_cog(mutual=True), _member(1))
+
+    first = MagicMock()
+    first.values = [_member(2)]
+    await DmSettingsView.user_select(view, _interaction(), first)
+    assert "User2" in _revoke_button(view).label
+
+    second = MagicMock()
+    second.values = [_member(3)]
+    await DmSettingsView.user_select(view, _interaction(), second)
+
+    assert "User3" in _revoke_button(view).label
+    assert "User2" not in _revoke_button(view).label
+    assert view._selected.id == 3
+
+
+@pytest.mark.asyncio
+async def test_revoking_after_switching_targets_the_labelled_member():
+    """The end-to-end version of the above: whoever the button names is who
+    gets torn down."""
+    cog = _cog(mutual=True)
+    view = DmSettingsView(cog, _member(1))
+
+    for uid in (2, 3):
+        select = MagicMock()
+        select.values = [_member(uid)]
+        await DmSettingsView.user_select(view, _interaction(), select)
+
+    await view._on_revoke(_interaction_capturing(view))
+
+    assert cog.revoke_connection.await_args.args[2].id == 3
+
+
+@pytest.mark.asyncio
+async def test_mode_change_rerenders_with_the_new_mode(monkeypatch):
+    """Regression: add_roles/remove_roles go out over REST and don't update the
+    cached member, so re-reading roles right after made the panel show the old
+    mode while the confirmation line claimed the new one."""
+    import bot_modules.cogs.dm_perms_cog as mod
+
+    monkeypatch.setattr(mod, "set_member_dm_mode", AsyncMock())
+    # roles stay empty ⇒ resolve_mode() keeps saying "ask", as on a live gateway lag
+    view = DmSettingsView(_cog(), _member(1))
+    assert view._current_mode() == "ask"
+
+    await view._set_mode(_interaction_capturing(view), "closed")
+
+    assert view._current_mode() == "closed"
+    active = [
+        c for c in view.children
+        if getattr(c, "custom_id", "") == "dm_settings_mode:closed"
+    ]
+    assert active[0].style is discord.ButtonStyle.primary
+
+
+@pytest.mark.asyncio
+async def test_failed_mode_change_does_not_move_the_marker(monkeypatch):
+    """A Forbidden must not leave the panel claiming a mode that was never set."""
+    import bot_modules.cogs.dm_perms_cog as mod
+
+    monkeypatch.setattr(
+        mod,
+        "set_member_dm_mode",
+        AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "nope")),
+    )
+    view = DmSettingsView(_cog(), _member(1))
+
+    await view._set_mode(_interaction(), "open")
+
+    assert view._current_mode() == "ask"
+
+
+@pytest.mark.asyncio
+async def test_revoke_defers_before_its_rest_calls():
+    """revoke_connection can take several REST round-trips; without an upfront
+    defer the 3s interaction window closes and the edit raises NotFound."""
+    view = DmSettingsView(_cog(mutual=True), _member(1))
+    view._selected = _member(2)
+    interaction = _interaction()
+    interaction.response.defer = AsyncMock()
+    interaction.response.is_done.return_value = True
+    interaction.edit_original_response = AsyncMock()
+
+    await view._on_revoke(interaction)
+
+    interaction.response.defer.assert_awaited_once()
+    interaction.edit_original_response.assert_awaited_once()
 
 
 @pytest.mark.asyncio

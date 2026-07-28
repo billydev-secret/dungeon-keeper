@@ -122,10 +122,12 @@ def _build_help_pages(
                     ("/wellness away on", "Turn on your away auto-reply."),
                     ("/wellness away off", "Turn off your away auto-reply."),
                     ("/confess", "Open the anonymous confession form."),
-                    ("/dm_help", "Overview of the DM request system."),
-                    ("/dm_set_mode", "Set your DM preference (open / ask / closed)."),
-                    ("/dm_status @user", "Check whether mutual DM permission exists."),
-                    ("/dm_revoke @user", "Revoke a DM permission relationship."),
+                    (
+                        "DM panel → My DM Settings",
+                        "Set your DM preference (open / ask / closed), check whether "
+                        "you're connected to someone, and remove a connection. On the "
+                        "server's DM panel — there are no /dm_ commands.",
+                    ),
                     ("/penpals join", "Enter the Pen Pals pool — you'll be matched into a private 2-person channel with a conversation starter."),
                     ("/penpals leave", "Leave the pool before you're matched."),
                     ("/penpals status", "Check your current Pen Pals status."),
