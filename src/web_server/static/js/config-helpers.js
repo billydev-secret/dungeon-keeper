@@ -139,6 +139,8 @@ export async function loadRoles() {
 }
 
 let _members = null;
+let _bots = null;
+
 export async function loadMembers() {
   if (_members) return _members;
   try {
@@ -149,6 +151,18 @@ export async function loadMembers() {
     return [];
   }
   return _members;
+}
+
+export async function loadBots() {
+  if (_bots) return _bots;
+  try {
+    _bots = await api("/api/meta/bots");
+    _metaFailed.delete("bots");
+  } catch (_) {
+    _metaFailed.add("bots");
+    return [];
+  }
+  return _bots;
 }
 
 // ── Searchable picker adapters ──────────────────────────────────────────
@@ -222,6 +236,10 @@ export function mountChannelMultiPicker(slotEl, channels, values, opts = {}) {
 }
 export function mountRoleMultiPicker(slotEl, roles, values, opts = {}) {
   return mountMultiPicker(slotEl, toRoleOptions(roles), values, opts);
+}
+export function mountMemberPicker(slotEl, members, value, opts = {}) {
+  return mountPicker(slotEl, toMemberOptions(members), value,
+    { emptyValue: "0", emptyLabel: "(none)", ...opts });
 }
 export function mountMemberMultiPicker(slotEl, members, values, opts = {}) {
   return mountMultiPicker(slotEl, toMemberOptions(members), values, opts);

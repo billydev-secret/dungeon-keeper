@@ -134,9 +134,9 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 ### Game Tracking
 
-- [ ] **`/games track watch <channel> <bot>`** — Watch a channel + external bot; confirm it starts banking messages there.
-- [ ] **`/games track status` / `disable` / `enable`** — Confirm status reporting and that pausing/resuming doesn't lose banked data.
-- [ ] **`/games track sample`** — Confirm it dumps recent bot messages as JSON.
+- [ ] **Games → External Tracking — add a watch** — Pick a channel + external bot + format; confirm it starts banking messages there without a restart.
+- [ ] **Games → External Tracking — Pause / Resume** — Confirm the banked count is per channel, and that pausing then resuming doesn't lose banked data.
+- [ ] **Games → External Tracking — Sample** — Confirm it dumps recent banked messages with raw content and embeds.
 
 ### Duel Game Config
 

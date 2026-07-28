@@ -652,11 +652,21 @@
       <span class="cmd-desc">Show the active game in the current channel, or force-close it if it's stuck. The games channel allowlist and the audit log channel are managed on <a href="/#/games-config">Games &rarr; Global Config</a> in the web dashboard.</span>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/games track watch / status / enable / disable / sample</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">External game-bot tracking: the bot watches a channel where another game bot (Gamebot's Cards Against Humanity, Connect 4 and Anagrams; Cat Bot; Wordle; Co-ordle) posts results and pays <a href="#economy">economy</a> rewards for wins and catches. Wordle pays out on the daily group digest — solving in fewer guesses earns more, and everyone tied for 👑 gets the win bonus. Co-ordle pays each round once it's solved or runs out of rows, splitting by the points each player earned. <strong>watch</strong> points it at a bot + channel — run it once per channel to track a bot that plays in more than one, and games running in different channels at the same time each pay out on their own. <strong>status</strong> shows every bot + channel being tracked, <strong>disable</strong>/<strong>enable</strong> pause and resume banking for a bot across all its channels (data is kept), and <strong>sample</strong> dumps the bot's recent messages so you can confirm the format parses.</span>
-    </div>
+    <p class="note"><strong>External game tracking</strong> lives on the dashboard under
+      <a href="/#/games-external">Games &rarr; External Tracking</a> — it replaced the
+      <code>/games track</code> commands. The bot watches a channel where another game bot
+      (Gamebot's Cards Against Humanity, Connect 4 and Anagrams; Cat Bot; Wordle; Co-ordle)
+      posts results, and pays <a href="#economy">economy</a> rewards for wins and catches.
+      Wordle pays out on the daily group digest — solving in fewer guesses earns more, and
+      everyone tied for 👑 gets the win bonus. Co-ordle pays each round once it's solved or
+      runs out of rows, splitting by the points each player earned.</p>
+
+    <p class="note">On the panel: add a watch by picking a channel, the game bot, and the
+      format. Add one per channel to track a bot that plays in several — games running in
+      different channels at the same time each pay out on their own. Each row shows how many
+      messages it has banked, with <strong>Pause</strong>/<strong>Resume</strong> (data is
+      kept while paused) and <strong>Sample</strong>, which dumps that bot's recent messages
+      so you can confirm the format parses before trusting the payouts.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>

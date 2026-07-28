@@ -4224,3 +4224,18 @@ fieldset.field {
   min-width: 0;
 }
 .panel-row__actions [data-status] { min-width: 0; overflow-wrap: anywhere; }
+
+/* External-tracking sample dump: raw bot output, so it must not be reflowed.
+   Each block scrolls inside its own box rather than widening the page. */
+.ge-sample { display: flex; flex-direction: column; gap: 10px; }
+.ge-sample__row { border: 1px solid var(--border, #333); border-radius: 6px; padding: 8px; }
+.ge-sample__row pre {
+  margin: 4px 0 0;
+  padding: 6px;
+  background: var(--surface2, #3a3d42);
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}

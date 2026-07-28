@@ -245,6 +245,36 @@ async def meta_roles(
     ]
 
 
+@router.get("/meta/bots", response_model=list[MemberMeta])
+async def meta_bots(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Bot accounts in the guild.
+
+    The counterpart to ``/meta/members``, which filters bots *out* — most
+    pickers want humans. External game tracking wants the opposite: the thing
+    being watched is another bot. Needs the live gateway member list, since
+    ``known_users`` only tracks humans; returns empty rather than erroring when
+    the bot is offline, so the panel can say "no bots found" instead of failing
+    to load.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        return []
+    return sorted(
+        (
+            MemberMeta(id=str(m.id), name=m.name, display_name=m.display_name)
+            for m in guild.members
+            if m.bot and m.id != (guild.me.id if guild.me else 0)
+        ),
+        key=lambda m: m.display_name.lower(),
+    )
+
+
 @router.get("/meta/members", response_model=list[MemberMeta])
 async def meta_members(
     request: Request,

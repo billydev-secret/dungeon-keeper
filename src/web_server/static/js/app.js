@@ -212,6 +212,7 @@ const SECTIONS = [
       { id: "games-scheduling",   label: "Scheduling",        module: "./panels/games-scheduling.js", help: "help-games" },
       { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
       { id: "games-config",       label: "Global Config",     module: "./panels/games-config.js", adminOnly: true, help: "help-games" },
+      { id: "games-external",     label: "External Tracking", module: "./panels/games-external.js", perms: ["moderator"], keywords: "track external bot results bank payout watch channel" },
       // Single-page games flattened to direct items named after the game
       // (subgroups below are only for games with two or more pages).
       { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },
