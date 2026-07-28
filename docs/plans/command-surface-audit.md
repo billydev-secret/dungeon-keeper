@@ -9,9 +9,36 @@ each deletion candidate was traced to a concrete dashboard route *and* panel
 before being recommended. Two candidates failed that trace and were kept — see
 "Kept after verification".
 
-**Count:** 190 commands before, **165** after — 9 dashboard duplicates, 4 more
-when the `/dm_*` set folded into a panel (`f24bcf87`), 6 in the Gap 3 redundancy
-pass (`912f4613`), and 6 panel-posters replaced by one dashboard route.
+**Count:** 190 commands before, **151** after — 39 removed across the audit. All
+three gaps are closed; what remains in Discord is there on purpose.
+
+| Round | Removed | What |
+|---|---|---|
+| 1 | 9 | Dashboard duplicates (`96f58183`) |
+| 2 | 4 | `/dm_*` → one ephemeral panel (`f24bcf87`) |
+| 3 | 6 | Gap 3 redundancy — dedupes and collapses (`912f4613`) |
+| 4 | 6 | Panel-posters → Config → Channel Panels (`541929d1`) |
+| 5 | 3 | Quality leave, deleted as a feature (`7f20c7cf`) |
+| 6 | 2 | Voice 24/7, deleted as a feature (`67469bba`) |
+| 7 | 5 | `/games track` → External Tracking panel (`e8efc71d`) |
+| 8 | 1 | `/setup` — every setting was already on Config → Moderation |
+| 9 | 1 | `/grant_audit` → Channel Panels with options (`7cf2d47e`) |
+| 10 | 2 | `/inactive panel\|sweep` → Config → Inactive Sweep (`25972e2a`) |
+
+**The shape of the finding.** Not one problem but several wearing one label.
+"Config in Discord" split four ways, and only the first is a migration:
+
+- **Move it** — it's real sit-down configuration (panel-posters, external
+  tracking, the inactive channel).
+- **Delete the feature** — it isn't earning its place (quality leave, unused;
+  voice 24/7, live but not worth keeping).
+- **Delete just the command** — the capability was already on the web and the
+  command was a bookmark (`/spotify_authorize`, `/setup`).
+- **Keep it** — in-the-moment mod work that happens to carry an admin gate
+  (`/hidden`, `/risky reset_state`, `/games config game-status`).
+
+Treating the whole list as one migration job would have built panels nobody
+needed and deleted things that had nowhere else to live.
 
 **Naming caveat.** Several groups are attached to a parent at *runtime*
 (`games.add_command(...)` in each cog's `setup()`, over the shared groups in
@@ -26,7 +53,7 @@ the moment** (keep) / **admin config** (delete, panel should exist) /
 
 ---
 
-## Done — 25 commands removed
+## Done — 39 commands removed
 
 ### Round 1 — dashboard duplicates (9)
 
