@@ -8,6 +8,9 @@ debounce, id cache, post-before-delete placer, signature gate and listener —
 covered by `tests/test_core_sticky.py`. The economy guide / shop / leaderboard
 panels and the todo board all run on it.
 
+**Nine sites as of 2026-07-28**, the newest being the first that is not
+permanent — see "Group D" below.
+
 ## The problem
 
 Discord has no reorder API, so a panel that must stay at the bottom of a
@@ -88,6 +91,37 @@ path. `guess` is blocked on widening the channel type.
   changed slightly on request: it now blocks while a round is live **and for
   60s after one settles** (previously: while live, capped at 300s), so players
   reading a result aren't chasing the panel up the channel.
+
+### Group D — the first panel with a lifecycle (2026-07-28)
+
+Every site above is a **permanent, one-per-guild** panel: it is posted once and
+never ends. The economy **auction card** is the first that does end, and it was
+added without changing `core/sticky.py` at all — worth recording, because the
+next feature with the same shape should follow it rather than reach for a
+shared change. Nine callers now share this module and its failure mode is a
+visible repost flood, so the bar for touching it is high.
+
+The whole lifecycle fits in the two id callbacks:
+
+| Need | How, without touching the shared module |
+|---|---|
+| Stop sticking at close | `card_ids` returns `(0, 0)` once the newest auction leaves `open`. `_delayed_restick` already bails on a falsy message id — it "only ever maintains an existing panel, never creates one" — so the panel goes dormant on its own. |
+| Never resurrect a finished auction | `build_auction_panel` returns None for anything but an open auction, and `build` runs *before* `send` in `_place_locked`. This is the real guard, not the one above: a restick armed just before settlement can still be in flight, and `_place_locked` treats a `(0, 0)` stored id as "not at the bottom", so it would otherwise post a fresh card for a closed auction. |
+| Don't lose the ids to a close mid-placement | `attach_card_to_latest` writes to the guild's newest auction row **regardless of state**. `save_ids` receives only a guild id, so resolving "the open auction" drops the write when the placement returns after the settle loop closed it — old card deleted, new card recorded nowhere, stored id frozen on a dead message. That is exactly the shape of the casino storm below. |
+| Leave the result visible | `_freeze_card` reposts the closed card once, after the settlement ping that would otherwise bury it, then it never moves again. Deliberately *not* via `place()`, since `build` refuses a closed auction by design. |
+
+`restick_on_bot` stays off: while an auction is open the bot posts nothing into
+the channel (bid confirmations are ephemeral, outbid notices are DMs), so there
+is nothing of ours to chase.
+
+**The one thing this shape cannot solve is channel sharing.** Two sticky panels
+in one channel contend for the single bottom slot; the auction card loses
+reliably, because the resident panels re-stick under bot messages and it does
+not. It settles rather than storming, but the card ends up buried. Rather than
+couple the cogs at runtime or let one panel yield to another (a shared-behaviour
+change), `/bank auction start` calls `sticky_panel_channels` and **warns the
+mod**. Prod precedent: the first auction ever run was in the casino hub's
+channel.
 
 ### The `hold` hook
 

@@ -62,12 +62,17 @@ from bot_modules.economy.bounty_views import (
 )
 from bot_modules.economy.auction_views import (
     AuctionBidButton,
+    build_auction_panel,
     cancel_open_auction,
     end_open_auction,
     settle_and_announce,
     start_auction,
 )
-from bot_modules.services.economy_auction_service import open_auction_guild_ids
+from bot_modules.services.economy_auction_service import (
+    attach_card_to_latest,
+    card_ids,
+    open_auction_guild_ids,
+)
 from bot_modules.economy.pin_views import (
     PinApproveButton,
     PinDenyButton,
@@ -1635,6 +1640,24 @@ class EconomyCog(commands.Cog):
             save_ids=lambda gid, cid, mid: self._save_panel_ids(gid, "shop", cid, mid),
             build=self._build_shop_panel,
         )
+        # The fourth panel is the odd one out: every other StickyPanel in the
+        # bot is permanent and one-per-guild, but an auction ENDS. The
+        # lifecycle lives entirely in these callbacks (see card_ids /
+        # attach_card_to_latest) — card_ids goes (0, 0) at close and the
+        # restick, which never creates a panel it didn't already find, simply
+        # stops. No change to core.sticky was needed for that.
+        #
+        # restick_on_bot stays off (the default) and must stay off: while an
+        # auction is open the bot posts NOTHING into the channel — bid
+        # confirmations are ephemeral and outbid notices are DMs — so there is
+        # no bot noise to chase, and chasing our own repost is what turned the
+        # casino hub into a 275-message flood.
+        self.auction_panel = StickyPanel(
+            "econ auction", bot,
+            load_ids=self._auction_card_ids,
+            save_ids=self._save_auction_card_ids,
+            build=self._build_auction_panel,
+        )
         # Photo Challenge channel id, TTL-cached so the on_message listener
         # costs a dict lookup, not a DB read, for every message in the guild:
         # guild_id → (monotonic expiry, channel_id).
@@ -1643,7 +1666,12 @@ class EconomyCog(commands.Cog):
 
     async def cog_unload(self) -> None:
         self._auction_settle_loop.cancel()
-        for panel in (self.guide_panel, self.leaderboard_panel, self.shop_panel):
+        for panel in (
+            self.guide_panel,
+            self.leaderboard_panel,
+            self.shop_panel,
+            self.auction_panel,
+        ):
             panel.cancel_all()
 
     @tasks.loop(seconds=30)
@@ -4339,14 +4367,51 @@ class EconomyCog(commands.Cog):
             view=ShopPanelView(),
         )
 
+    # ── the auction card's sticky callbacks ──────────────────────────────
+    #
+    # Unlike the three panels above, these ids live on the auction row rather
+    # than in econ settings — the card belongs to one auction, not to the
+    # guild — so they go through the service instead of _PANEL_FIELDS.
+
+    def _auction_card_ids(self, guild_id: int) -> tuple[int, int]:
+        with self.ctx.open_db() as conn:
+            if not load_econ_settings(conn, guild_id).enabled:
+                return 0, 0
+            return card_ids(conn, guild_id)
+
+    def _save_auction_card_ids(
+        self, guild_id: int, channel_id: int, message_id: int
+    ) -> None:
+        with self.ctx.open_db() as conn:
+            attach_card_to_latest(conn, guild_id, channel_id, message_id)
+
+    async def _build_auction_panel(self, guild: discord.Guild) -> PanelContent:
+        content = await build_auction_panel(self.bot, guild)
+        if content is None:
+            # Only reachable if the auction vanished between the restick's id
+            # read and the placement. Raising keeps place() from posting a
+            # card for an auction that isn't there; the panel is already
+            # dormant by then, so nothing retries into a loop.
+            raise RuntimeError(f"no auction card to build for guild {guild.id}")
+        return content
+
     @commands.Cog.listener("on_message")
     async def _restick_panels(self, message: discord.Message) -> None:
-        """Keep all three panels at the bottom of their channels.
+        """Keep all four panels at the bottom of their channels.
 
-        One listener for three panels: each ignores activity outside its own
-        channel, so a message can arm at most one repost.
+        One listener for four panels: each ignores activity outside its own
+        channel, so a message usually arms at most one repost. The auction
+        card is the exception — it can share a channel with one of the other
+        three, in which case both re-stick and one ends up second. That is
+        why ``/bank auction start`` warns the mod before it happens (see
+        ``sticky_panel_channels``); it is a bad configuration, not a bug.
         """
-        for panel in (self.guide_panel, self.leaderboard_panel, self.shop_panel):
+        for panel in (
+            self.guide_panel,
+            self.leaderboard_panel,
+            self.shop_panel,
+            self.auction_panel,
+        ):
             await panel.on_message(message)
 
 

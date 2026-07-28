@@ -270,6 +270,48 @@ to currency.
   exists until a mod opens one; `auction_*` knobs aren't on the dashboard yet
   (Stage 3). Card renderer in `economy/auction_views.py`, money in
   `economy_auction_service.py`.
+  - **The card is genuinely sticky** (2026-07-28): it rides
+    `core.sticky.StickyPanel` like the guide/leaderboard/shop panels, so member
+    chat can't bury a live auction. It is the **only** sticky site in the bot
+    that *ends*, and the whole lifecycle lives in the two id callbacks — no
+    change to `core/sticky.py` was needed, which matters because that module is
+    shared by nine panels and its failure mode is a visible repost flood (the
+    casino hub storm, prod 2026-07-26).
+    - `card_ids(conn, guild)` returns the live ids only while the newest
+      auction is `open`, else `(0, 0)`. `_delayed_restick` bails on a falsy
+      message id ("only ever maintains an existing panel, never creates one"),
+      so **settlement makes the panel dormant by itself**.
+    - `build_auction_panel` refuses anything but an open auction. This is the
+      resurrection guard: a restick armed just *before* settlement can still be
+      in flight, and `_place_locked` reads a `(0, 0)` stored id as "not at the
+      bottom", so it would post a fresh card for a finished auction. `build`
+      runs before `send`, so refusing aborts the placement having posted
+      nothing.
+    - `attach_card_to_latest` writes to the guild's newest auction row
+      **regardless of state**. `save_ids` only receives a guild id, so
+      resolving "the open auction" would silently drop the write when a
+      placement returns after the settle loop closed the auction — old card
+      deleted, new card recorded nowhere, stored id frozen on a dead message.
+      That is precisely the storm's shape.
+    - `restick_on_bot` stays **off** and must: while an auction is open the bot
+      posts nothing into the channel (bid confirmations are ephemeral, outbid
+      notices are DMs), so there is no bot noise to chase.
+  - **Freeze on close.** `_freeze_card` reposts the closed card once, *after*
+    the "Sold!" ping (which would otherwise bury the result it announces), then
+    the card never moves again. Post-before-delete by hand, so a failed send
+    leaves the working card alone; the in-place repaint runs first so the card
+    reads "closed" either way. Exactly-once by riding the settle/end state
+    claim.
+  - **Panel collision.** Discord has one bottom slot per channel, so an auction
+    started in a channel that already hosts a sticky panel loses that contest
+    reliably — the resident panels re-stick under bot messages, the card does
+    not. It settles rather than storming, but the card ends up buried.
+    `sticky_panel_channels` detects the four panels reachable from a config
+    read (guide, leaderboard, shop, casino hub) and `/bank auction start`
+    **warns the mod** instead of coupling the cogs at runtime. The other four
+    sticky panels (pen pals, DM perms, Voice Master, todo board) keep their ids
+    in their own tables and are not covered — a missed warning costs nothing
+    but the warning. Prod precedent: auction #1 ran in the casino hub's channel.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and — since the
   stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state
