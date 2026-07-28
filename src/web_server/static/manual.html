@@ -475,7 +475,7 @@
         <tr><td><strong><a href="#community">Community &amp; XP</a></strong></td><td>Earn XP by posting / replying / image-reacts / voice. Manual XP grants. Role grants (denizen, NSFW, etc). Leave-of-absence system. Starboard.</td></tr>
         <tr><td><strong><a href="#economy">Economy &amp; Perk Shop</a></strong></td><td>Per-server currency earned from activity — daily logins, quests, games, QOTD — spent on weekly-renewing role perks (color, name, icon, gradient, holographic) and gifts.</td></tr>
         <tr><td><strong><a href="#voice">Voice Control</a></strong></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
-        <tr><td><strong><a href="#music">Music</a></strong></td><td>YouTube/Spotify playback in voice channels. 24/7 mode with autoplay.</td></tr>
+        <tr><td><strong><a href="#music">Music</a></strong></td><td>YouTube/Spotify playback in voice channels.</td></tr>
         <tr><td><strong><a href="#wellness">Wellness</a></strong></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides on the dashboard.</td></tr>
         <tr><td><strong><a href="#dm-perms">DM Permissions</a></strong></td><td>Per-member DM-mode system (Open / Ask / Closed) with anonymous request flow.</td></tr>
         <tr><td><strong><a href="#self-service">Member Self-Service</a></strong></td><td>Help dropdown, support link, bot invite, birthday registration, data self-erasure.</td></tr>
@@ -1029,27 +1029,21 @@
       <tbody>
         <tr><td><code>/skip</code></td><td><span class="perm perm-all">In VC</span></td><td>Skip the current track</td></tr>
         <tr><td><code>/pause</code> / <code>/resume</code></td><td><span class="perm perm-all">In VC</span></td><td>Pause or resume playback</td></tr>
-        <tr><td><code>/stop</code></td><td><span class="perm perm-all">In VC</span></td><td>Clear the queue. Disconnects unless 24/7 is on.</td></tr>
+        <tr><td><code>/stop</code></td><td><span class="perm perm-all">In VC</span></td><td>Clear the queue and disconnect.</td></tr>
         <tr><td><code>/shuffle</code></td><td><span class="perm perm-all">In VC</span></td><td>Shuffle the queue (current track unaffected)</td></tr>
         <tr><td><code>/loop mode:[off|track|queue]</code></td><td><span class="perm perm-all">In VC</span></td><td>Set loop mode</td></tr>
         <tr><td><code>/queue page:1</code></td><td><span class="perm perm-all">Everyone</span></td><td>View the queue (10 tracks per page)</td></tr>
         <tr><td><code>/nowplaying</code></td><td><span class="perm perm-all">Everyone</span></td><td>Repost the now-playing embed with control buttons</td></tr>
-        <tr><td><code>/disconnect</code></td><td><span class="perm perm-all">In VC</span></td><td>Force-disconnect; also disables 24/7 for the channel</td></tr>
+        <tr><td><code>/disconnect</code></td><td><span class="perm perm-all">In VC</span></td><td>Force-disconnect</td></tr>
       </tbody>
     </table>
 
-    <h3 id="music-247">24/7 Mode</h3>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/247 enabled:true autoplay_playlist:&lt;spotify-url&gt;</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Channels</span></span>
-      <span class="cmd-desc">Keep the bot in your current voice channel even when no one else is around, with optional Spotify autoplay. Only one channel per server can have 24/7 enabled at a time.</span>
-      <div class="cmd-params">
-        <strong>enabled</strong> — <code>true</code> to turn on, <code>false</code> to turn off.<br>
-        <strong>autoplay_playlist</strong> — optional Spotify playlist URL; the bot shuffles it when the queue empties. Requires a prior <strong>Connect Spotify</strong> from Config → Global → Integrations.<br>
-        Pair with <code>/247_status</code> (<span class="perm perm-all">Everyone</span>) to list every 24/7 channel and its autoplay URL.
-      </div>
-    </div>
+    <p class="note">The bot no longer has a <strong>24/7 mode</strong>. It used to be
+      pinned into one voice channel per server, exempt from the idle disconnect and
+      optionally shuffling a Spotify playlist when the queue ran dry. That was removed
+      along with <code>/247</code> and <code>/247_status</code> — the bot now leaves a
+      voice channel once it has been alone for a minute, or once the queue empties,
+      in every channel.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          13. WELLNESS
@@ -2057,7 +2051,7 @@
 
     <p class="note">Spotify authorization lives on the dashboard under
       <strong>Config → Global → Integrations</strong> — press <strong>Connect Spotify</strong>.
-      It allows private playlists in <code>/play</code> and <code>/247 autoplay_playlist</code>.
+      It allows private playlists in <code>/play</code>.
       One authorization covers the whole bot. The old <code>/spotify_authorize</code> command
       only handed you that link and was removed.</p>
 

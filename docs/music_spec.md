@@ -1,6 +1,6 @@
 # Music — Feature Spec
 
-A music playback cog for shared listening in voice channels. Supports YouTube tracks and Spotify URLs (tracks, playlists, albums — resolved to YouTube). Slash commands plus a persistent now-playing card with button controls. Optional 24/7 mode keeps the bot in a voice channel and auto-queues from a Spotify playlist when idle.
+A music playback cog for shared listening in voice channels. Supports YouTube tracks and Spotify URLs (tracks, playlists, albums — resolved to YouTube). Slash commands plus a persistent now-playing card with button controls. A 24/7 mode (always-on channel plus Spotify autoplay-on-idle) existed until 2026-07-28 and was removed entirely — see below.
 
 ## Commands
 
@@ -12,11 +12,9 @@ A music playback cog for shared listening in voice channels. Supports YouTube tr
 | `/shuffle` | Slash | Same-voice-channel | Shuffle the upcoming queue (does not interrupt the current track) |
 | `/loop mode:<off\|track\|queue>` | Slash | Same-voice-channel | Set the loop mode |
 | `/pause` / `/resume` | Slash | Same-voice-channel | Pause or resume playback |
-| `/stop` | Slash | Same-voice-channel | Clear the queue; disconnect unless 24/7 is on |
+| `/stop` | Slash | Same-voice-channel | Clear the queue and disconnect |
 | `/nowplaying` | Slash | Everyone | Repost the now-playing card |
 | `/disconnect` | Slash | Same-voice-channel | Force-disconnect from voice |
-| `/247 enabled:<bool> [autoplay_playlist:<spotify_url>]` | Slash | Mod | Toggle 24/7 mode for the invoker's current voice channel, with optional Spotify autoplay |
-| `/247_status` | Slash | Mod | Show channels with 24/7 enabled in this guild |
 
 The now-playing card is a persistent message with five buttons: **Pause/Resume**, **Skip**, **Stop**, **Shuffle**, and **Loop** (cycles off → track → queue). Buttons require the clicker to be in the same voice channel as the bot.
 
@@ -37,16 +35,22 @@ If the queue is empty, playback starts immediately; otherwise the new tracks are
 
 On track start, the bot posts a card to the text channel where `/play` was invoked: title (linked), artist, requester, duration, position in queue, current loop mode, artwork thumbnail. Subsequent track starts edit the same card rather than spamming new posts. The card's buttons stay live across bot restarts.
 
-### 24/7 mode
+### 24/7 mode (removed 2026-07-28)
 
-Per voice channel (one channel per guild can be designated). When enabled, the bot:
+The bot could be pinned into one voice channel per guild, exempt from the idle
+disconnect, optionally re-shuffling 50 tracks from a Spotify playlist whenever
+the queue emptied. It was removed whole in the command-surface audit: the two
+commands (`/247`, `/247_status`), the always-on rejoin on startup, the
+idle-disconnect exemption, the autoplay refill, and the per-channel settings
+table.
 
-- Stays connected to that voice channel when the queue empties or when alone — does **not** auto-disconnect.
-- If an **autoplay playlist** is configured for that channel, re-resolves and re-shuffles 50 tracks from it whenever the queue empties; continues indefinitely.
-- Rejoins on bot restart (joins within ~60 s of cog load).
-- If the autoplay playlist becomes private or deleted, autoplay pauses with a notice in the last-used text channel but the bot stays in voice.
+Autoplay went with it because it was never independent — it only ever ran for a
+channel that was already always-on, so there was nothing left to trigger it.
 
-Without 24/7, the bot disconnects after 60 s alone in the channel and after the queue empties.
+One production channel was pinned at the time, with an autoplay playlist set.
+Removing this means the bot leaves that channel on the normal idle sweep like
+any other; the empty `music_channel_settings` table is left in place rather than
+dropped by migration.
 
 ### Spotify URL handling
 
@@ -55,7 +59,7 @@ Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are 
 ## Permissions
 
 - **Bot:** Connect and Speak in the target voice channels; Send Messages and Embed Links in the text channels where the now-playing card posts.
-- **User:** Must be in a voice channel for `/play`. For playback-control commands (skip, shuffle, loop, pause, resume, stop, disconnect) and now-playing buttons, must be in the same voice channel as the bot. `/247` and `/247_status` require Mod.
+- **User:** Must be in a voice channel for `/play`. For playback-control commands (skip, shuffle, loop, pause, resume, stop, disconnect) and now-playing buttons, must be in the same voice channel as the bot.
 
 ## User-visible errors
 
@@ -77,18 +81,11 @@ Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are 
 - Lyrics, audio filters, EQ.
 - Vote-skip, per-user request limits.
 - Persistent queue across restarts (queue is in-memory only).
-- Multiple 24/7 channels per guild simultaneously (one per guild).
 
 ## Configuration
 
-24/7 mode is per voice channel, set by mods through `/247`. Each entry stores:
-
-- The voice channel it applies to.
-- Whether 24/7 is on.
-- An optional Spotify playlist URL for autoplay-on-idle.
-
-No per-guild config beyond that — all other behavior (cooldowns, queue caps, the now-playing card's appearance) is fixed by code.
+The music cog has no per-guild configuration of its own.
 
 ## Stored data
 
-One per-channel table for 24/7 settings (voice channel id, always-on flag, optional autoplay playlist URL, updater id, last-updated timestamp). All queue state, playback position, and now-playing message ids are in-memory only and don't survive a restart.
+No persistent tables. The per-channel 24/7 settings table (`music_channel_settings`) is no longer read or written; it survives as an empty orphan. All queue state, playback position, and now-playing message ids are in-memory only and don't survive a restart.

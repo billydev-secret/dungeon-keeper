@@ -9,22 +9,17 @@ wavelink, or Lavalink.
 
 from __future__ import annotations
 
-import random
 from types import SimpleNamespace
 
-import discord
 import pytest
 
-from bot_modules.music.embeds import build_247_status_embed, build_queue_embed
+from bot_modules.music.embeds import build_queue_embed
 from bot_modules.music.logic import (
-    format_247_status_line,
-    format_247_toggle_message,
     format_spotify_summary,
     format_track_summary,
     is_search_url,
     paginate_queue,
     should_idle_disconnect,
-    shuffled_autoplay_pool,
     track_summary_from_object,
 )
 
@@ -98,23 +93,20 @@ def _idle_kwargs(**overrides):
         playing=True,
         paused=False,
         has_current=True,
-        always_on=False,
     )
     base.update(overrides)
     return base
 
 
-def test_should_idle_disconnect_never_drops_247_channel():
-    """24/7 trumps every other condition."""
-    assert should_idle_disconnect(**_idle_kwargs(always_on=True)) is False
-    # Even alone + nothing playing -- still no disconnect.
+def test_should_idle_disconnect_drops_an_idle_empty_channel():
+    """No channel is exempt any more. Until 2026-07-28 an always_on flag made
+    24/7 channels trump every other condition; the feature is gone, so an empty
+    channel with nothing playing always disconnects."""
     assert (
         should_idle_disconnect(
-            **_idle_kwargs(
-                always_on=True, humans_present=False, playing=False, has_current=False
-            )
+            **_idle_kwargs(humans_present=False, playing=False, has_current=False)
         )
-        is False
+        is True
     )
 
 
@@ -299,119 +291,6 @@ def test_format_spotify_summary_singular_when_added_is_one():
     assert "**1** tracks from" not in out
 
 
-# ── format_247_toggle_message ────────────────────────────────────────
-
-
-def test_format_247_toggle_message_disable_path_ignores_extras():
-    out = format_247_toggle_message(
-        enabled=False,
-        channel_mention="<#5>",
-        cleared_mentions=["<#1>"],   # ignored when disabling
-        autoplay_saved=True,
-        join_error="boom",
-    )
-    assert out == "24/7 disabled for <#5>."
-
-
-def test_format_247_toggle_message_enable_minimal():
-    out = format_247_toggle_message(enabled=True, channel_mention="<#5>")
-    assert out == "24/7 enabled for <#5>."
-
-
-def test_format_247_toggle_message_enable_with_cleared_channels():
-    out = format_247_toggle_message(
-        enabled=True,
-        channel_mention="<#5>",
-        cleared_mentions=["<#1>", "<#2>"],
-    )
-    assert "Disabled previous 24/7 channel(s): <#1>, <#2>." in out
-
-
-def test_format_247_toggle_message_enable_with_autoplay():
-    out = format_247_toggle_message(
-        enabled=True, channel_mention="<#5>", autoplay_saved=True
-    )
-    assert "Autoplay playlist saved." in out
-
-
-def test_format_247_toggle_message_enable_with_join_error():
-    out = format_247_toggle_message(
-        enabled=True, channel_mention="<#5>", join_error="no perms"
-    )
-    assert "(Couldn't join right now: no perms)" in out
-
-
-def test_format_247_toggle_message_enable_all_branches_combined():
-    out = format_247_toggle_message(
-        enabled=True,
-        channel_mention="<#5>",
-        cleared_mentions=["<#1>"],
-        autoplay_saved=True,
-        join_error="boom",
-    )
-    lines = out.split("\n")
-    assert lines[0] == "24/7 enabled for <#5>."
-    assert "Disabled previous 24/7 channel(s): <#1>." in lines[1]
-    assert lines[2] == "Autoplay playlist saved."
-    assert lines[3] == "(Couldn't join right now: boom)"
-
-
-# ── format_247_status_line ───────────────────────────────────────────
-
-
-def test_format_247_status_line_plain():
-    assert format_247_status_line("<#5>", False) == "• <#5>"
-
-
-def test_format_247_status_line_with_autoplay():
-    assert format_247_status_line("<#5>", True) == "• <#5> (autoplay)"
-
-
-# ── shuffled_autoplay_pool ───────────────────────────────────────────
-
-
-def test_shuffled_autoplay_pool_seeded_rng_is_deterministic():
-    items = list(range(10))
-    rng_a = random.Random(42)
-    rng_b = random.Random(42)
-    assert shuffled_autoplay_pool(items, cap=5, rng=rng_a) == shuffled_autoplay_pool(
-        items, cap=5, rng=rng_b
-    )
-
-
-def test_shuffled_autoplay_pool_trims_to_cap():
-    out = shuffled_autoplay_pool(range(100), cap=5, rng=random.Random(0))
-    assert len(out) == 5
-
-
-def test_shuffled_autoplay_pool_no_cap_returns_full_shuffle():
-    """The cog's autoplay loop relies on this: full pool returned so it
-    can stop at N successful adds (search misses don't count)."""
-    out = shuffled_autoplay_pool([1, 2, 3, 4, 5], rng=random.Random(0))
-    assert sorted(out) == [1, 2, 3, 4, 5]
-
-
-def test_shuffled_autoplay_pool_cap_exceeds_pool_returns_full_pool():
-    out = shuffled_autoplay_pool([1, 2, 3], cap=50, rng=random.Random(0))
-    assert sorted(out) == [1, 2, 3]
-
-
-def test_shuffled_autoplay_pool_handles_empty():
-    assert shuffled_autoplay_pool([], cap=5, rng=random.Random(0)) == []
-
-
-def test_shuffled_autoplay_pool_negative_cap_returns_empty():
-    assert shuffled_autoplay_pool([1, 2, 3], cap=-1, rng=random.Random(0)) == []
-
-
-def test_shuffled_autoplay_pool_uses_module_random_when_no_rng_supplied():
-    """No rng => uses global random; ensure it doesn't raise and returns right size."""
-    out = shuffled_autoplay_pool(range(20), cap=5)
-    assert len(out) == 5
-    # All values came from the input pool
-    assert set(out).issubset(set(range(20)))
-
-
 # ── build_queue_embed ────────────────────────────────────────────────
 
 
@@ -493,17 +372,3 @@ def test_build_queue_embed_footer_reflects_loop_mode():
     assert embed.footer.text == "Page 2/3 · loop: track"
 
 
-# ── build_247_status_embed ───────────────────────────────────────────
-
-
-def test_build_247_status_embed_basic():
-    embed = build_247_status_embed(["• <#1>", "• <#2> (autoplay)"])
-    assert isinstance(embed, discord.Embed)
-    assert embed.title == "📻 24/7 channels"
-    assert "<#1>" in (embed.description or "")
-    assert "(autoplay)" in (embed.description or "")
-
-
-def test_build_247_status_embed_empty_falls_back_to_placeholder():
-    embed = build_247_status_embed([])
-    assert embed.description == "(none)"

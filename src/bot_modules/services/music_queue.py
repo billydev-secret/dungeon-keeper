@@ -30,7 +30,6 @@ class GuildQueue:
     history: Deque[Any] = field(default_factory=lambda: deque(maxlen=50))
     now_playing_message_id: int | None = None
     requesters: dict[str, int] = field(default_factory=dict)
-    autoplay_playlist_url: str | None = None
 
     def add(self, track: Any, requester_id: int | None = None) -> None:
         self.tracks.append(track)

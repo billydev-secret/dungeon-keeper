@@ -664,7 +664,6 @@ KNOWN_UNCOVERED = {
     "bot_modules.jail.embeds.build_warning_audit_embed",
     "bot_modules.jail.embeds.build_warning_revoke_audit_embed",
     "bot_modules.jail.embeds.build_warning_threshold_embed",
-    "bot_modules.music.embeds.build_247_status_embed",
     "bot_modules.music.embeds.build_queue_embed",
     "bot_modules.services.risky_roll.formatters.build_how_to_play_content",
     "bot_modules.services.risky_roll.formatters.build_pending_prompt_content",

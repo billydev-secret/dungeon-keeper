@@ -180,20 +180,27 @@ Three things worth carrying to any similar job:
   presses Post. `tests/test_panel_registry.py` is the compile-time check the
   dynamic lookup doesn't get.
 
-## Gap 2 — features with no dashboard surface at all (was 13; 3 done, 10 open)
+## Gap 2 — features with no dashboard surface at all (was 13; 5 resolved, 5 open, 3 staying)
 
 Not just missing a route — missing a panel. Each needs a panel *built*, which is
 feature work rather than cleanup, so these are scoped individually.
 
-Quality leave resolved a different way: the honest answer for an unused feature
-is to delete it, not to build it a dashboard.
+Three ways this list resolves, and only one of them is "build a panel":
+
+- **Delete it** when the feature isn't earning its place. Quality leave had zero
+  prod rows; voice 24/7 had one live channel and was dropped anyway, knowingly.
+  For an unused feature the honest answer is removal, not a dashboard.
+- **Keep it in Discord** when it is genuinely in-the-moment mod work. Hiding a
+  channel happens while you are looking at the channel.
+- **Build the panel** when it is real configuration someone has to sit down and
+  do — external game tracking, where you pick a channel and a bot to watch.
 
 | Feature | Commands | Notes |
 |---|---|---|
 | ~~Quality leave~~ | ~~`/quality_leave add\|remove\|list`~~ | **Done — feature deleted, not migrated.** No panel was built: prod had zero rows in `quality_score_leaves` and the dashboard never surfaced the status, so the whole leave-of-absence concept went with the commands (CRUD, `STATUS_LEAVE`, the scoring exemption). Deleting only the commands would have left a read path with no writer and any future row unremovable. The empty table stays — it was created lazily, has no migration, and dropping it for zero rows isn't worth a destructive migration. This also finally removed `reports_cog.py`, the misleadingly-named file that started this audit |
-| External game tracking | `/games track watch\|status\|disable\|enable\|sample` | `economy-income-sources.js:23` only sets the *payout amount*; nothing configures which channel/bot to watch |
-| Hidden channels | `/hidden hide\|restore\|list` | No panel, no route. Also carries an open S3 finding (`docs/reviews/2026-07-22-deep-review.md`): the hide/restore state machine is inline in the cog with zero coverage — a web migration would fix both at once |
-| Voice 24/7 | `/247`, `/247_status` | No panel, no route |
+| External game tracking | `/games track watch\|status\|disable\|enable\|sample` | **Web panel approved 2026-07-28** — to be built, then the commands go. `economy-income-sources.js:23` only sets the *payout amount*; nothing configures which channel/bot to watch |
+| Hidden channels | `/hidden hide\|restore\|list` | **Staying in Discord** (owner's call, 2026-07-28) — hiding a channel is an in-the-moment mod action taken while looking at the channel, not configuration. The open S3 finding stands on its own (`docs/reviews/2026-07-22-deep-review.md`): the hide/restore state machine is inline in the cog with zero coverage, and is worth extracting to `hidden_channels/logic.py` regardless of where the surface lives |
+| ~~Voice 24/7~~ | ~~`/247`, `/247_status`~~ | **Done — feature deleted.** Unlike quality leave this one was *live*: one prod channel was pinned always-on with a Spotify autoplay playlist. Removed knowingly. Autoplay went with it, never having been independent — it only ran for an always-on channel. Also gone: the startup rejoin, the idle-disconnect exemption, `music_settings.py`, and the 24/7 embed/format helpers. The empty `music_channel_settings` table stays |
 
 `/watch add|remove|list` (personal mod watchlist) also has no panel, but it is
 arguably self-service for mods rather than config.

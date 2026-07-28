@@ -250,8 +250,6 @@ def _build_help_pages(
                     ("/queue page:1", "View the current queue (10 tracks per page)."),
                     ("/nowplaying", "Repost the now-playing embed with control buttons."),
                     ("/disconnect", "Force-disconnect the bot from voice."),
-                    ("/247 enabled:... [autoplay_playlist:...]", "(Mod) Keep the bot in your voice channel 24/7, with optional Spotify autoplay."),
-                    ("/247_status", "List all 24/7-enabled channels in this server."),
                 ]
             ),
         )

@@ -7,8 +7,6 @@ values -- no Discord, no wavelink, no I/O. The cog assembles its state
 
 from __future__ import annotations
 
-import random
-from collections.abc import Iterable, Sequence
 from typing import Any, TypeVar
 
 T = TypeVar("T")
@@ -57,18 +55,18 @@ def should_idle_disconnect(
     playing: bool,
     paused: bool,
     has_current: bool,
-    always_on: bool,
 ) -> bool:
     """Decide whether the idle watcher should drop the voice connection.
 
     The cog used to inline this across two helpers (``_can_idle_disconnect``
     and the gate inside ``_idle_disconnect``). Hoisting it keeps the
-    matrix testable: 24/7 channels never disconnect; if humans are still
-    listening to something that's playing or paused, we wait; otherwise
-    (empty channel, or nothing playing) we drop.
+    matrix testable: if humans are still listening to something that's
+    playing or paused, we wait; otherwise (empty channel, or nothing
+    playing) we drop.
+
+    Had an ``always_on`` escape hatch until 2026-07-28, when the 24/7
+    feature was removed — no channel is exempt now.
     """
-    if always_on:
-        return False
     if humans_present and (playing or paused) and has_current:
         return False
     return True
@@ -141,78 +139,6 @@ def format_spotify_summary(
         f"Queued **{added}** track{plural} from {kind_label} **{label}**."
         f"{warn}"
     )
-
-
-# ── /247 toggle message ──────────────────────────────────────────────
-
-
-def format_247_toggle_message(
-    *,
-    enabled: bool,
-    channel_mention: str,
-    cleared_mentions: Sequence[str] = (),
-    autoplay_saved: bool = False,
-    join_error: str | None = None,
-) -> str:
-    """Assemble the response for ``/247``.
-
-    Pulled from ``MusicCog.cmd_247`` so each branch (enabled vs disabled,
-    with vs without prior 24/7 channels cleared, autoplay flag, join
-    failure tail) gets its own row in the test matrix instead of one
-    monster integration test.
-    """
-    if not enabled:
-        return f"24/7 disabled for {channel_mention}."
-
-    parts = [f"24/7 enabled for {channel_mention}."]
-    if cleared_mentions:
-        parts.append(
-            "Disabled previous 24/7 channel(s): " + ", ".join(cleared_mentions) + "."
-        )
-    if autoplay_saved:
-        parts.append("Autoplay playlist saved.")
-    if join_error:
-        parts.append(f"(Couldn't join right now: {join_error})")
-    return "\n".join(parts)
-
-
-def format_247_status_line(channel_mention: str, has_autoplay: bool) -> str:
-    """One bullet for ``/247_status`` -- ``• <#id> (autoplay)`` style."""
-    suffix = " (autoplay)" if has_autoplay else ""
-    return f"• {channel_mention}{suffix}"
-
-
-# ── Autoplay selection ───────────────────────────────────────────────
-
-
-def shuffled_autoplay_pool(
-    candidates: Iterable[T],
-    *,
-    cap: int | None = None,
-    rng: random.Random | None = None,
-) -> list[T]:
-    """Shuffle the candidate pool for autoplay refill.
-
-    Used by ``_autoplay_refill`` -- the per-track search loop has to stay
-    in the cog (it's async / wavelink-bound) but the random pick is pure.
-    Tests pass ``rng=random.Random(seed)`` for deterministic output.
-
-    ``cap`` optionally trims the returned pool; left as ``None`` the
-    full shuffled candidate list comes back so the caller can stop
-    after N successful searches (some Spotify entries fail to mirror to
-    YouTube). A negative ``cap`` returns an empty list.
-    """
-    items = list(candidates)
-    use = rng if rng is not None else random
-    use.shuffle(items)
-    if cap is None:
-        return items
-    if cap < 0:
-        return []
-    return items[:cap]
-
-
-# ── Helpers callers use to feed format_track_summary ─────────────────
 
 
 def track_summary_from_object(track: Any, fallback_author: str | None = None) -> str:
