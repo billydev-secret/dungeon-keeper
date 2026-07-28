@@ -24,6 +24,7 @@ const FAUCET_FIELDS = [
   ["host_bounty_per_joiner", "Hosting a game, per attendee (0 = off)", 1000000],
   ["host_bounty_cap", "Host bounty attendee cap (0 = off)", 1000],
   ["reward_photo_post", "Entering the photo challenge", 1000000],
+  ["reward_intake_step", "Ticking a step on a newcomer's intake card", 1000000],
   ["xp_per_coin", "XP needed to earn one coin", 100000],
   ["conversion_daily_cap", "Most one member's XP can earn per day (0 = no limit)", 1000000],
 ];

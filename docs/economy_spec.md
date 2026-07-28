@@ -672,6 +672,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `voice_partner` | member earns voice XP with another undeafened human in the channel (anti-idle rules gate the member's side) | `voice_xp_service` tick beside `voice_session` | `voice_partner:<partner_id>` — counted = "share voice with N different people" |
 | `thread_deep` | member posts in a thread at ≥ `THREAD_DEEP_MIN` (20) messages (`Thread.message_count` at ingest — no storage) | `events_cog._econ_work` | `thread_deep:<thread_id>` — once per thread; everyone posting after the crossing gets credit |
 | `welcome` | member replies to someone who joined within `WELCOME_WINDOW_SECONDS` (7 days) | `events_cog._econ_work` | `welcome:<newcomer_id>` — counted = "welcome N new faces"; the retention quest |
+| `intake_step` | a greeter ticks a step on a newcomer's intake card — the manual step buttons, the `greeted` auto-tick (which carries the greeting author's id), and a posted **step code** (pasting the step's canned message ticks it). Role-change auto-ticks (`verified`, `role_gained`) record `AUTO_ACTOR` (0) and pay nobody; skipped steps pay nobody | `intake_rewards.pay_intake_steps` via `intake_views.handle_intake_message` (greet + step-code branches) / `_toggle_step` | `intake_step:<card_id>:<step_key>` — once per card step, anchored so re-ticking a toggled step or re-pasting a code never re-pays. Distinct from `welcome`, which fires on replying to any recent joiner |
 | `conversation_starter` | member's message draws replies from `CONVERSATION_STARTER_REPLIERS` (3) distinct humans — distinct-replier rows accrue in `econ_msg_replies` (migration 085, ingest-derived since content is never stored; pruned to 14 days on the day roll) and the fire happens exactly on the crossing | `events_cog._econ_work` reply path, fired for the target author | `conversation_starter:<message_id>` |
 | `greeting_answered` | member replies to / @mentions someone whose greeting is still pending in Greeting Watch, same channel (pending ≈ inside the window — the loop resolves rows right after it closes). Self-gates on the feature: no watched channels, no fires | `events_cog._econ_work` via `greeting_watch_service.pending_greetings_for` | `greeting_answered:<greeting_message_id>` — one hello credits an answerer once |
 | `birthday_wish` | member wishes a happy birthday on a day a birthday was **announced** (`birthday_announcements` row — quiet/unset birthdays never become quest bait; pre-09:00 wishes miss, documented soft edge): a reply/mention of the birthday member, or a wish phrase (`birthday_service.is_birthday_wish`) anywhere when no target resolved. One fire per message; the wisher can't be the birthday member | `events_cog._econ_work` | `birthday_wish:<target_id>:<local_day>` (phrase fallback: `birthday_wish:day:<local_day>`) |
@@ -1049,6 +1050,42 @@ rate is edited on the **Income Sources** page alongside the other faucets. *(The
 old reaction-gated model and its `react_threshold`/`auto_react` knobs are retired;
 migration 099 renames existing `photo_react` quests and income-source rows to
 `photo_post`; migration 101 adds `econ_photo_rewards`.)*
+
+**Intake plumbing:** greeters earn for working a newcomer's intake card (the
+welcome-procedure checklist — see `docs/plans/intake-cards.md`). Payment is
+**per step ticked**, not per completed card: `intake_service.complete_card`
+records whoever posts the completion code as the welcomer of record and stamps
+every unticked step as *skipped*, so a per-card award would hand the whole
+payout to the code-poster even when someone else did the work, and would pay
+nothing for a shared or half-finished intake.
+
+`intake_rewards.pay_intake_steps` runs inside the tick's own transaction and
+pays two stacking amounts, like the photo faucet:
+
+1. a **flat award** (`EconSettings.reward_intake_step`, default 5, ledger kind
+   `intake_step`) to the greeter who ticked the step; and
+2. the **`intake_step` quest** bonus on top, if one is active (occurrence
+   `<card_id>:<step_key>`, dedup on `econ_quest_claims`).
+
+Guards, in order: non-empty step list → `actor_id > 0` → actor is not the
+newcomer → economy on → `intake_step` source on. The dedup anchor is
+`INSERT OR IGNORE INTO econ_intake_rewards (guild_id, card_id, step_key)`
+(migration 138). **The anchor cannot be the step's own `done_at`/`done_by`:**
+the manual step button in `intake_views._toggle_step` is a *toggle*, so
+unticking clears both and re-ticking would mint the award again, unbounded. The
+anchor's primary key also excludes `user_id`, so a second greeter re-ticking a
+claimed step earns nothing either. Each step's payout is wrapped in its own
+`SAVEPOINT` — an economy failure logs and rolls back only that award, never the
+intake tick itself.
+
+Three tick paths pay, all through the same anchor: the manual step button, the
+`greeted` auto-tick, and a posted **step code** (`ACTION_STEP` — pasting the
+canned message for a stage ticks that step, so the greeter is paid for the
+paste that does the work). `verified` and the `role_gained` steps auto-tick
+from a role change with `AUTO_ACTOR` (0) and pay nobody, which is why the
+faucet stays bounded by real newcomers. A 0 rate skips the anchor
+entirely so the quest can still fire and raising the rate later still pays. The
+rate is edited on the **Income Sources** page alongside the other faucets.
 
 ## 5. Transfers
 
