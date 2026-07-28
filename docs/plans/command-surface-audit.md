@@ -180,14 +180,17 @@ Three things worth carrying to any similar job:
   presses Post. `tests/test_panel_registry.py` is the compile-time check the
   dynamic lookup doesn't get.
 
-## Gap 2 — features with no dashboard surface at all (13 commands)
+## Gap 2 — features with no dashboard surface at all (was 13; 3 done, 10 open)
 
-Not just missing a route — missing a panel. Reported per the owner's decision to
-leave them in place for now.
+Not just missing a route — missing a panel. Each needs a panel *built*, which is
+feature work rather than cleanup, so these are scoped individually.
+
+Quality leave resolved a different way: the honest answer for an unused feature
+is to delete it, not to build it a dashboard.
 
 | Feature | Commands | Notes |
 |---|---|---|
-| Quality leave | `/quality_leave add\|remove\|list` | `add_leave`/`remove_leave` are called **only** from `reports_cog.py`. The dashboard *reads* leaves (`member_quality_score.py:268`, feeding Quality Score) but has no write path |
+| ~~Quality leave~~ | ~~`/quality_leave add\|remove\|list`~~ | **Done — feature deleted, not migrated.** No panel was built: prod had zero rows in `quality_score_leaves` and the dashboard never surfaced the status, so the whole leave-of-absence concept went with the commands (CRUD, `STATUS_LEAVE`, the scoring exemption). Deleting only the commands would have left a read path with no writer and any future row unremovable. The empty table stays — it was created lazily, has no migration, and dropping it for zero rows isn't worth a destructive migration. This also finally removed `reports_cog.py`, the misleadingly-named file that started this audit |
 | External game tracking | `/games track watch\|status\|disable\|enable\|sample` | `economy-income-sources.js:23` only sets the *payout amount*; nothing configures which channel/bot to watch |
 | Hidden channels | `/hidden hide\|restore\|list` | No panel, no route. Also carries an open S3 finding (`docs/reviews/2026-07-22-deep-review.md`): the hide/restore state machine is inline in the cog with zero coverage — a web migration would fix both at once |
 | Voice 24/7 | `/247`, `/247_status` | No panel, no route |

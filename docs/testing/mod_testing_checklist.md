@@ -182,7 +182,6 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 ### Quality Leave
 
-- [ ] **`/quality_leave add/remove/list`** — Mark a member on leave, clear it, and list the active roster; confirm scoring reflects leave status.
 
 ### Message Review
 

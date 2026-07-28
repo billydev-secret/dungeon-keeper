@@ -3588,14 +3588,25 @@ class EconomyCog(commands.Cog):
 
     # ── how-to guide panel ───────────────────────────────────────────────
 
+    async def _economy_enabled(self, guild_id: int) -> bool:
+        settings = await asyncio.to_thread(self._load_settings, guild_id)
+        return bool(settings.enabled)
+
     async def post_guide_panel(self, guild, channel):
         """Place the how-to panel. Entry point for the dashboard's panel poster
         (``panel_registry``); replaced /bank post-guide on 2026-07-28.
 
         Edits in place when the panel is already this channel's, so a re-brand
-        refresh doesn't hop it to the bottom. Returns None when Discord refused
-        the post, which the route turns into an error the admin can act on.
+        refresh doesn't hop it to the bottom. Returns None when the economy is
+        off or Discord refused the post — the route turns that into an error the
+        admin can act on.
+
+        The disabled-economy check lives here rather than in the route because
+        it is a domain rule, not an access rule: posting a currency guide for a
+        currency that doesn't exist would be wrong however you got here.
         """
+        if not await self._economy_enabled(guild.id):
+            return None
         return await self.guide_panel.place_or_refresh(guild, channel)
 
     # ── channel-bottom panels ────────────────────────────────────────────
@@ -3759,12 +3770,16 @@ class EconomyCog(commands.Cog):
 
     async def post_leaderboard_panel(self, guild, channel):
         """Place the auto-updating leaderboard panel. See post_guide_panel."""
+        if not await self._economy_enabled(guild.id):
+            return None
         return await self.leaderboard_panel.place_or_refresh(guild, channel)
 
     # ── persistent shop panel ────────────────────────────────────────────
 
     async def post_shop_panel(self, guild, channel):
         """Place the perk-shop panel. See post_guide_panel."""
+        if not await self._economy_enabled(guild.id):
+            return None
         return await self.shop_panel.place_or_refresh(guild, channel)
 
     async def cog_load(self) -> None:

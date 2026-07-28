@@ -1,14 +1,11 @@
 # Reporting — Feature Spec
 
-Reporting is the analytics backbone of the dashboard. A handful of small services — interaction tracking, voice-follow capture, incident detection, invite attribution, and the member quality score — produce the data; the dashboard renders it as charts and tables. The Discord surface is nearly empty: one mod slash group for leave-of-absence management, plus an unrelated `/invite` command that returns the bot's install URL.
+Reporting is the analytics backbone of the dashboard. A handful of small services — interaction tracking, voice-follow capture, incident detection, invite attribution, and the member quality score — produce the data; the dashboard renders it as charts and tables. The Discord surface is empty apart from an unrelated `/invite` command that returns the bot's install URL — the `/quality_leave` group, and the leave-of-absence concept it managed, were removed 2026-07-28.
 
 ## Commands
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/quality_leave add member:<m> days:<30|60|90>` | Slash | Mod | Mark a member on leave; quality reports treat them as `Leave of Absence` until the term ends |
-| `/quality_leave remove member:<m>` | Slash | Mod | Clear an active leave row |
-| `/quality_leave list` | Slash | Mod (ephemeral) | Show the active leave roster with remaining days |
 | `/invite` | Slash | Everyone | Returns the bot's OAuth install URL. Unrelated to invite attribution |
 | Dashboard report tiles | Web | Admin | Read-only analytics surfaces — see Behavior |
 | Message Review panel | Web | Mod | Filter and inspect past messages by author, channel, content, sentiment, and reply chain — see Behavior |
@@ -78,7 +75,7 @@ A whole-server score in `[0, 1]` computed over a rolling 90-day window from four
 3. **Content Resonance (20%)** — mean reactions + replies received per "post" (an attachment or a non-reply conversation starter). Non-posters get the neutral percentile 0.5.
 4. **Posting Activity (15%)** — daily-capped attachments + conversation starters per active day. Non-posters get a percentile floor of 0.25.
 
-Status precedence: `Leave of Absence` (active leave row) → `Onboarding` (under 7 days tenure) → `Insufficient Data` (under 7 active days) → `Active`. Onboarding / insufficient / leave rows are scored 0 and sort to the bottom.
+Status precedence: `Onboarding` (under 7 days tenure) → `Insufficient Data` (under 7 active days) → `Active`. Onboarding and insufficient rows are scored 0 and sort to the bottom. A `Leave of Absence` status existed until 2026-07-28; it was removed along with `/quality_leave`, its only writer, having never been used in production.
 
 Tenure buffer adds 30 days at 6 months and 60 days at 12 months to the inactivity threshold, surfaced on each row so reviewers can see why a long-tenured quiet member isn't flagged.
 
@@ -104,7 +101,6 @@ Reactions and voice-follows are **live-forward only** (no historical backfill), 
 
 ## Permissions
 
-- `/quality_leave *` — Mod role, re-checked inside each handler. The Discord default-perms flag (Manage Server) is a UI hint, not the gate.
 - `/invite` — open to everyone.
 - All dashboard report routes — admin tier, **except** the One-Sided Attention report, which is mod-tier (`require_perms({"moderator"})`) to match its investigative purpose.
 - Message Review panel + its export — mod tier. Mods who have Discord's Manage Messages permission qualify automatically.
@@ -114,8 +110,6 @@ Reactions and voice-follows are **live-forward only** (no historical backfill), 
 
 | When | The user sees |
 |---|---|
-| `/quality_leave *` invoked by non-mod | "You don't have permission to use this command." |
-| `/quality_leave list` in DM | "This command only works in a server." |
 | Generalised time-to-level requested with level outside 2–100 | HTTP 400 |
 | Greeter-response asked for a period with no resolvable greeters | HTTP 404 "No greeter response data found for the selected period." |
 | Role-listing or guild-wide inactivity tile while bot is offline | HTTP 503 "Guild not available." |
@@ -130,7 +124,6 @@ Reactions and voice-follows are **live-forward only** (no historical backfill), 
 - **No precise invite tracking.** Concurrent joins race the cache diff and may mis-attribute or fail to attribute.
 - **No historical baseline retention.** The 30-day rolling baseline overwrites older numbers; there is no audit of how baselines drifted.
 - **No incident review UI.** Velocity spikes and raid attempts are stored but only surfaced through health tiles — there is no dedicated dashboard list or slash command.
-- **No automatic expiry of leave-of-absence rows.** They are re-classified as `Active` on the next score run; nothing deletes them.
 - **No verdict from the One-Sided Attention report.** It surfaces evidence for a human to judge — it never emits a single black-box score, ranks pairs behind a hidden number, infers gender, or triggers any automated action.
 
 ## Configuration
@@ -142,8 +135,8 @@ Reporting reads guild config but owns very little of its own. The dashboard read
 - Greeter role, greeter chat channel, welcome / leave / join-leave log channels — for the greeter-response tile.
 - The NSFW role — for the oldest-SFW-members tile.
 
-The only configuration owned by reporting itself is the leave-of-absence roster managed via `/quality_leave`.
+Reporting owns no configuration of its own.
 
 ## Stored data
 
-Per-guild and per-user: a directed interaction tally between every (from, to) pair plus an append-only interaction log (with the source message id) so day-windowed graphs can be reconstructed; directed voice-follow capture (an aggregate weight per ordered pair plus a timestamped log, migration 117) feeding the one-sided-attention report; per-join invite-attribution rows (one per invitee, never overwritten); an append-only incident log for velocity spikes and raid attempts; a per-hour-of-day × day-of-week baseline of message velocity, refreshed in the background; and the leave-of-absence roster. No filesystem cache — chart payloads are JSON returned through the per-route memory cache. The velocity tracker and invite cache are per-process in-memory state and rebuild from the database on restart.
+Per-guild and per-user: a directed interaction tally between every (from, to) pair plus an append-only interaction log (with the source message id) so day-windowed graphs can be reconstructed; directed voice-follow capture (an aggregate weight per ordered pair plus a timestamped log, migration 117) feeding the one-sided-attention report; per-join invite-attribution rows (one per invitee, never overwritten); an append-only incident log for velocity spikes and raid attempts; a per-hour-of-day × day-of-week baseline of message velocity, refreshed in the background. No filesystem cache — chart payloads are JSON returned through the per-route memory cache. The velocity tracker and invite cache are per-process in-memory state and rebuild from the database on restart.

@@ -87,3 +87,32 @@ def test_registry_covers_the_commands_it_replaced():
         "guess-prompt",       # /guess prompt
         "ticket-panel",       # /ticket panel
     }
+
+
+# ── domain gates that live on the cog, not the route ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_economy_panels_refuse_while_the_economy_is_disabled(monkeypatch):
+    """The three economy panels check `enabled` themselves.
+
+    That check used to sit in the /bank post-* command bodies and was briefly
+    lost when they became cog methods — posting a currency guide for a currency
+    that doesn't exist. It belongs on the cog rather than the route because it
+    is a domain rule, not an access rule: it holds however the call arrives.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from bot_modules.cogs.economy_cog import EconomyCog
+
+    cog = EconomyCog.__new__(EconomyCog)
+    cog._economy_enabled = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    for panel in ("guide_panel", "leaderboard_panel", "shop_panel"):
+        setattr(cog, panel, MagicMock(place_or_refresh=AsyncMock()))
+
+    guild = MagicMock(id=1)
+    for method in ("post_guide_panel", "post_leaderboard_panel", "post_shop_panel"):
+        assert await getattr(cog, method)(guild, MagicMock()) is None
+
+    for panel in ("guide_panel", "leaderboard_panel", "shop_panel"):
+        getattr(cog, panel).place_or_refresh.assert_not_awaited()

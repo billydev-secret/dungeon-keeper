@@ -67,7 +67,6 @@ INITIATIVE_TIERS = [
 STATUS_ACTIVE = "Active"
 STATUS_ONBOARDING = "Onboarding"
 STATUS_INSUFFICIENT = "Insufficient Data"
-STATUS_LEAVE = "Leave of Absence"
 
 
 # ---------------------------------------------------------------------------
@@ -101,61 +100,6 @@ class QualityScore:
     tenure_buffer_days: int
     active_days: int
     active_weeks: int
-
-
-# ---------------------------------------------------------------------------
-# Leave of absence tables
-# ---------------------------------------------------------------------------
-
-
-def init_quality_score_tables(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS quality_score_leaves (
-            guild_id    INTEGER NOT NULL,
-            user_id     INTEGER NOT NULL,
-            start_ts    REAL NOT NULL,
-            end_ts      REAL NOT NULL,
-            PRIMARY KEY (guild_id, user_id)
-        )
-        """
-    )
-
-
-def add_leave(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    user_id: int,
-    start_ts: float,
-    end_ts: float,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO quality_score_leaves (guild_id, user_id, start_ts, end_ts)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(guild_id, user_id) DO UPDATE SET start_ts=excluded.start_ts, end_ts=excluded.end_ts
-        """,
-        (guild_id, user_id, start_ts, end_ts),
-    )
-
-
-def remove_leave(conn: sqlite3.Connection, guild_id: int, user_id: int) -> bool:
-    cur = conn.execute(
-        "DELETE FROM quality_score_leaves WHERE guild_id = ? AND user_id = ?",
-        (guild_id, user_id),
-    )
-    return (cur.rowcount or 0) > 0
-
-
-def get_leaves(
-    conn: sqlite3.Connection, guild_id: int
-) -> dict[int, tuple[float, float]]:
-    """Return {user_id: (start_ts, end_ts)} for all active leaves."""
-    rows = conn.execute(
-        "SELECT user_id, start_ts, end_ts FROM quality_score_leaves WHERE guild_id = ?",
-        (guild_id,),
-    ).fetchall()
-    return {int(r["user_id"]): (float(r["start_ts"]), float(r["end_ts"])) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +199,7 @@ def compute_quality_scores(
     """Compute quality scores for all provided members.
 
     Returns a list sorted by final_score descending, with non-scored members
-    (onboarding, leave, insufficient data) at the end.
+    (onboarding, insufficient data) at the end.
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -266,9 +210,6 @@ def compute_quality_scores(
     )
     window_start = now_ts - (_window_days * 86400)
 
-    # Fetch leaves
-    leaves = get_leaves(conn, guild_id)
-
     # Classify members upfront
     member_map: dict[int, discord.Member] = {}
     scored_ids: list[int] = []
@@ -278,27 +219,6 @@ def compute_quality_scores(
         if m.bot:
             continue
         member_map[m.id] = m
-
-        # Leave of absence
-        if m.id in leaves:
-            _start, end = leaves[m.id]
-            if end >= now_ts:
-                results.append(
-                    QualityScore(
-                        user_id=m.id,
-                        final_score=0,
-                        engagement_given=0,
-                        consistency_recency=0,
-                        content_resonance=0,
-                        posting_activity=0,
-                        last_active_ts=0,
-                        status=STATUS_LEAVE,
-                        tenure_buffer_days=0,
-                        active_days=0,
-                        active_weeks=0,
-                    )
-                )
-                continue
 
         # Onboarding
         if m.joined_at and (now - m.joined_at).days < ONBOARDING_DAYS:
@@ -693,7 +613,7 @@ def compute_quality_scores(
     # Sort scored by final_score descending
     scored_results.sort(key=lambda s: s.final_score, reverse=True)
 
-    # Combine: scored first, then onboarding/leave/insufficient
+    # Combine: scored first, then onboarding/insufficient
     return scored_results + results
 
 
