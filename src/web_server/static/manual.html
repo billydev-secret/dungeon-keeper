@@ -1200,7 +1200,7 @@
     <div class="cmd-block">
       <span class="cmd-name">/delete_me</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Permanently delete your <strong>Discord messages</strong> in this server. After confirmation, the bot scans every readable channel and deletes your messages (forum-OP messages are re-posted under the bot to keep threads alive). This removes messages only — the bot's server-side records (XP, activity, profile, wellness) are retained; full erasure of those is a manual admin process, so open a ticket if you need it.</span>
+      <span class="cmd-desc">Permanently delete your <strong>Discord messages</strong> in this server. After confirmation, the bot scans every readable channel and deletes your messages (forum-OP messages are re-posted under the bot to keep threads alive). This removes messages only — the bot's server-side records (XP, activity, profile, wellness, and <a href="#usage-telemetry">command usage</a>) are retained; full erasure of those is a manual admin process, so open a ticket if you need it.</span>
       <div class="cmd-params">
         <strong>mode</strong> — what to delete: <em>All my messages</em> (default), <em>Images &amp; files only</em>, or <em>Text messages only</em>.
       </div>
@@ -1528,6 +1528,22 @@
     <p>The <strong>Message Search</strong> panel hides bot messages by default too, with the same checkbox. Searching for a specific bot by author is an exception: if you name the author, you get their messages whether or not the box is ticked. The AI question box follows the same rule, so asking "who posts the most here?" is answered from member activity rather than bot chatter.</p>
 
     <p style="font-size:0.9rem;color:var(--muted)">"Bot" means any account Discord marks as a bot, including ones that have since left the server. XP was already human-only, so XP totals and leaderboards are unchanged.</p>
+
+    <h3 id="usage-telemetry">Command &amp; Panel Usage <span class="perm perm-admin">Admin</span></h3>
+    <p>A dashboard panel (<strong>Reports → Bot Usage → Command &amp; Panel Usage</strong>) showing which slash commands members actually run and which dashboard panels get opened — with counts, how many distinct people used each, error counts, busiest hours, and a daily trend.</p>
+
+    <p>The part worth checking first is <strong>Never used</strong>, at the top: every registered slash command nobody has ever run, and every dashboard panel nobody has ever opened. That list is judged against all recorded history rather than the date range you've picked — a command last run three months ago is unpopular, not unused — which makes it a straight list of things you could retire.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>What gets recorded</strong>
+        <p>For commands: the command name, who ran it, which channel, when, and whether it errored — <em>not</em> the options or text anyone typed into it. For the dashboard: one entry each time a panel is opened, not every background refresh, so the numbers reflect people rather than how long a tab was left open.</p>
+        <p>Recording begins when this feature is installed; there's no backfill, so the report is empty until members start using the bot. Commands run in DMs aren't recorded, and neither are commands whose own error handler catches the failure — so the error count is a floor, not a total.</p>
+      </div>
+    </div>
+
+    <p>Command usage is recorded for <strong>every member</strong>; dashboard panel usage only applies to mods and admins, since logging in is required. Entries are kept indefinitely and are only ever cleared by a full data-erasure run — see <a href="#privacy">Data Erasure</a>. The panel itself is admin-only.</p>
 
     <h3 id="one-sided-attention">One-Sided Attention <span class="perm perm-mod">Mod</span></h3>
     <p>A moderator-review report (dashboard sidebar → <strong>Reports → People → One-Sided Attention</strong>) that surfaces member <em>pairs</em> where one person keeps directing attention at another who isn't returning it. It's built to help you notice fixation or unwanted pursuit early — the shape of "A keeps showing up around B; B never seeks A out" — that's easy to miss message-by-message.</p>

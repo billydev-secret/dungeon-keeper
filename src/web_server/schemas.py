@@ -832,3 +832,42 @@ class QuoteAuditEntry(BaseModel):
 class QuoteAuditLogResponse(BaseModel):
     total: int
     entries: list[QuoteAuditEntry]
+
+
+# ── Usage telemetry ────────────────────────────────────────────────────
+
+
+class UsageNameRow(BaseModel):
+    name: str
+    uses: int
+    users: int
+    errors: int
+    last_ts: float
+
+
+class UsageUserRow(BaseModel):
+    # Snowflake — string, never a bare JSON number (JS loses precision > 2^53).
+    user_id: str
+    name: str = ""
+    uses: int
+    distinct_names: int
+    last_ts: float
+
+
+class UsageDayPoint(BaseModel):
+    day: str
+    count: int
+
+
+class UsageReportResponse(BaseModel):
+    days: int
+    totals: dict[str, int]
+    commands: list[UsageNameRow]
+    panels: list[UsageNameRow]
+    unused_commands: list[str]
+    unused_panels: list[str]
+    top_users: list[UsageUserRow]
+    dashboard_users: list[UsageUserRow]
+    daily_commands: list[UsageDayPoint]
+    daily_panels: list[UsageDayPoint]
+    hours: list[int]

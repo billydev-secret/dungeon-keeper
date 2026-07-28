@@ -61,6 +61,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [setup_spec.md](setup_spec.md) | `/setup` onboarding wizard — distinct from DUNGEON_KEEPER_TEST_ENV_SPEC.md |
 | [starboard_spec.md](starboard_spec.md) | Starboard (threshold, self-star block, NSFW guard) |
 | [todo_spec.md](todo_spec.md) | Server todo: `/todo`, the sticky Discord board (Add/Complete buttons, auto-updating, bottom-stuck) and dashboard-configured recurring reminder tasks. Corrected 2026-07-26 — the "Add to Todo" context menu it used to document does not exist in the code |
+| [usage_telemetry_spec.md](usage_telemetry_spec.md) | Usage telemetry: per-user slash-command and dashboard-panel usage in `usage_events`, surfaced as the admin **Reports → Bot Usage** panel. Headline output is the never-run/never-opened lists; retained indefinitely and cleared only by `purge_user_data` |
 | [watch_spec.md](watch_spec.md) | Watch list: `/watch add\|remove\|list` relays a watched member's posts to the mod's DMs, AI-filtered to flagged posts when the local model is up (fail-open on AI error) |
 | [voice_master_spec.md](voice_master_spec.md) | Voice Control (hubs, profiles, trust/block) |
 | [voice_transcription_spec.md](voice_transcription_spec.md) | Voice-clip transcription listener (faster_whisper) — distinct from whisper_spec.md |

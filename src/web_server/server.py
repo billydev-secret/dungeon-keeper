@@ -240,7 +240,9 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     from web_server.routes import moderation as moderation_routes
     from web_server.routes import reports as reports_routes
     from web_server.routes import rules_watch as rules_watch_routes
+    from web_server.routes import telemetry as telemetry_routes
 
+    app.include_router(telemetry_routes.router, prefix="/api", tags=["telemetry"])
     app.include_router(home_routes.router, prefix="/api", tags=["home"])
     app.include_router(meta_routes.router, prefix="/api", tags=["meta"])
     app.include_router(reports_routes.router, prefix="/api/reports", tags=["reports"])

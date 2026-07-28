@@ -1,7 +1,8 @@
 // Dashboard boot + hash-based panel router.
-import { api, esc } from "./api.js";
+import { api, apiPost, esc } from "./api.js";
 import { toast } from "./ui.js";
 import { HELP_GROUPS, HELP_EXTRA_PAGES } from "./panels/help-sections.js?v=25";
+import { setPageIds } from "./nav-registry.js";
 
 
 // The Help nav is generated from help-sections.js (single source shared with
@@ -74,6 +75,9 @@ const SECTIONS = [
         { id: "time-to-level5",       label: "Time to Level 5",      module: "./panels/time-to-level5.js" },
         { id: "invite-effectiveness", label: "Invite Effectiveness", module: "./panels/invite-effectiveness.js" },
         { id: "join-times",           label: "Join Times",           module: "./panels/join-times.js" },
+      ]},
+      { heading: "Bot Usage", items: [
+        { id: "usage-telemetry",      label: "Command & Panel Usage", module: "./panels/usage-telemetry.js", adminOnly: true, help: "help-usage-telemetry", keywords: "telemetry slash commands dashboard panels unused dead never used analytics" },
       ]},
       { heading: "Member Lists", items: [
         { id: "inactive-report",      label: "Inactive Report",      module: "./panels/inactive-report.js", keywords: "inactive members role list oldest sfw report", related: ["config-inactive", "config-prune"] },
@@ -293,6 +297,10 @@ function allPages(section) {
 // Every page id that exists at all (before permission filtering) — used to
 // tell "known but not available to you" apart from "no such page" (W-N4).
 const FULL_PAGE_INDEX = new Map(SECTIONS.flatMap(allPages).map((p) => [p.id, p]));
+// Publish the unfiltered id list for the usage report's never-opened list.
+// Unfiltered on purpose: ALL_PAGES is narrowed to what the current viewer may
+// see, which would make every admin-only panel look "never opened".
+setPageIds(FULL_PAGE_INDEX.keys());
 // Routable help pages that live outside the nav (deep links only).
 const EXTRA_ROUTES = HELP_EXTRA_PAGES
   .filter(({ page }) => !FULL_PAGE_INDEX.has(page))
@@ -837,6 +845,16 @@ function renderUnavailable(id) {
   rootEl.focus();
 }
 
+// Fire-and-forget panel-view ping. Deliberately not awaited and errors are
+// swallowed: telemetry must never delay a panel or surface an error toast.
+// One row per mount — see web_server/routes/telemetry.py for why this isn't
+// middleware over every request.
+function recordPanelView(pageId) {
+  try {
+    apiPost("/api/telemetry/panel", { panel: pageId }).catch(() => {});
+  } catch (_) { /* ignore */ }
+}
+
 async function mountPanel(evt) {
   // Unsaved-changes guard: cancel keeps the current panel and restores the
   // pre-navigation hash (hashchange can't be prevented, only undone).
@@ -878,6 +896,7 @@ async function mountPanel(evt) {
     currentPanel = mod.mount(rootEl, params) || null;
     renderPanelMeta(page);
     setDocTitle(page.label);
+    recordPanelView(page.id);
     // Move focus to the fresh panel so keyboard/screen-reader users don't
     // have to re-traverse the sidebar after every navigation (W-A1).
     rootEl.focus();

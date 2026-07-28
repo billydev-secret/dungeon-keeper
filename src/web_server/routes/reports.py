@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from typing import Literal
 
+from discord import app_commands
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services import reports_data
+from bot_modules.services import usage_telemetry_service as usage_telemetry
 from bot_modules.services.member_quality_score import (
     MemberStandIn,
     build_quality_report,
@@ -40,6 +42,7 @@ from web_server.schemas import (
     QualityScoreResponse,
     RetentionResponse,
     TimeToLevel5Response,
+    UsageReportResponse,
     VoiceActivityResponse,
     XpLeaderboardResponse,
 )
@@ -1055,3 +1058,153 @@ async def grant_audit(
     }
 
 
+
+
+# ── Usage telemetry ──────────────────────────────────────────────────────
+
+
+def _registered_command_names(ctx) -> set[str]:
+    """Every *invocable* slash command the running bot has registered.
+
+    Walks the tree so subcommands come back space-joined as ``"quest board"``,
+    matching what the cog records.
+
+    ``walk_commands()`` yields Groups as well as Commands, and a Group (``/quest``
+    on its own) can never be invoked — including them would park every command
+    group permanently in the never-run list, which is exactly the list that has
+    to stay trustworthy. So Groups are filtered out.
+
+    Returns an empty set in standalone mode (no bot attached), which makes the
+    never-used list empty rather than claiming every command is unused.
+    """
+    bot = getattr(ctx, "bot", None)
+    tree = getattr(bot, "tree", None) if bot is not None else None
+    if tree is None:
+        return set()
+    try:
+        return {
+            c.qualified_name
+            for c in tree.walk_commands()
+            if isinstance(c, app_commands.Command)
+        }
+    except Exception:
+        return set()
+
+
+@router.get("/usage", response_model=UsageReportResponse)
+async def usage_report(
+    request: Request,
+    days: int = 30,
+    panels: str = "",
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Slash-command and dashboard-panel usage.
+
+    ``panels`` is a comma-separated list of the panel ids the *client* knows
+    about — the dashboard nav is defined in ``app.js``, so the browser is the
+    only source of truth for "every panel that exists". Omitting it just yields
+    an empty never-opened list.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    days = max(1, min(int(days), 365))
+
+    known_panels = {p.strip() for p in panels.split(",") if p.strip()}
+
+    def _q():
+        with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
+            return {
+                "tz": tz,
+                "totals": usage_telemetry.totals(conn, guild_id, days=days),
+                "commands": usage_telemetry.name_usage(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND, days=days
+                ),
+                "panels": usage_telemetry.name_usage(
+                    conn, guild_id, usage_telemetry.KIND_PANEL, days=days
+                ),
+                # Never-used is judged against ALL history, not the window —
+                # a command last run 90 days ago is "unpopular", not "unused",
+                # and calling it deletable would be wrong.
+                "seen_commands": usage_telemetry.used_names(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND, days=0
+                ),
+                "seen_panels": usage_telemetry.used_names(
+                    conn, guild_id, usage_telemetry.KIND_PANEL, days=0
+                ),
+                "top_users": usage_telemetry.user_usage(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND, days=days, limit=25
+                ),
+                "dashboard_users": usage_telemetry.user_usage(
+                    conn, guild_id, usage_telemetry.KIND_PANEL, days=days, limit=25
+                ),
+                "daily_commands": usage_telemetry.daily_series(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND, days=days,
+                    tz_offset_hours=tz,
+                ),
+                "daily_panels": usage_telemetry.daily_series(
+                    conn, guild_id, usage_telemetry.KIND_PANEL, days=days,
+                    tz_offset_hours=tz,
+                ),
+                "hours": usage_telemetry.hour_histogram(
+                    conn, guild_id, usage_telemetry.KIND_COMMAND, days=days,
+                    tz_offset_hours=tz,
+                ),
+            }
+
+    data = await run_query(_q)
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+
+    def _names(rows):
+        return [
+            {
+                "name": r.name,
+                "uses": r.uses,
+                "users": r.users,
+                "errors": r.errors,
+                "last_ts": r.last_ts,
+            }
+            for r in rows
+        ]
+
+    def _users(rows):
+        return [
+            {
+                # str() — snowflakes must not cross the wire as JSON numbers.
+                "user_id": str(r.user_id),
+                "name": "",
+                "uses": r.uses,
+                "distinct_names": r.distinct_names,
+                "last_ts": r.last_ts,
+            }
+            for r in rows
+        ]
+
+    top_users = _users(data["top_users"])
+    dashboard_users = _users(data["dashboard_users"])
+    await _resolve_names(ctx, guild, top_users, ("user_id", "name"))
+    await _resolve_names(ctx, guild, dashboard_users, ("user_id", "name"))
+
+    return {
+        "days": days,
+        "totals": data["totals"],
+        "commands": _names(data["commands"]),
+        "panels": _names(data["panels"]),
+        "unused_commands": usage_telemetry.unused_names(
+            _registered_command_names(ctx), data["seen_commands"]
+        ),
+        "unused_panels": usage_telemetry.unused_names(
+            known_panels, data["seen_panels"]
+        ),
+        "top_users": top_users,
+        "dashboard_users": dashboard_users,
+        "daily_commands": [
+            {"day": d.day, "count": d.total} for d in data["daily_commands"]
+        ],
+        "daily_panels": [
+            {"day": d.day, "count": d.total} for d in data["daily_panels"]
+        ],
+        "hours": data["hours"],
+    }
