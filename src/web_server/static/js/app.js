@@ -59,7 +59,7 @@ const SECTIONS = [
         { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
         { id: "retention",            label: "Activity Drops",        module: "./panels/retention.js", keywords: "retention churn drop-off" },
         { id: "voice-activity",       label: "Voice Activity",        module: "./panels/voice-activity.js" },
-        { id: "xp-leaderboard",       label: "XP Leaderboard",       module: "./panels/xp-leaderboard.js", keywords: "levels rank experience", related: ["config-xp"], help: "help-community" },
+        { id: "xp-leaderboard",       label: "XP & Leveling",        module: "./panels/xp.js", keywords: "levels rank experience xp settings curve", help: "help-community" },
         { id: "quality-score",        label: "Quality Score",        module: "./panels/quality-score.js" },
         { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
       ]},
@@ -130,7 +130,6 @@ const SECTIONS = [
       { heading: "Members", items: [
         { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true, keywords: "greeting join leave messages" },
         { id: "config-intake",     label: "Intake Cards",     module: "./panels/config-intake.js", adminOnly: true },
-        { id: "config-xp",            label: "XP & Leveling",      module: "./panels/config-xp.js", adminOnly: true, keywords: "xp levels leaderboard", related: ["xp-leaderboard"], help: "help-community" },
         { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
         { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true, related: ["birthday-calendar"] },
         { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
