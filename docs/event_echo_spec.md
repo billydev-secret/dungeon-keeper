@@ -18,12 +18,14 @@ It is a signpost, not a notification system. It never pings.
    the events this watches are frequent, and a role ping on each would turn
    the busiest channel in the server into something people mute. If a ping is
    ever wanted it has to be designed as opt-in, not exposed as a flag.
-2. **Only the start, only if joinable.** An echo pointing at a finished game
-   is a dead link and worse than nothing. Results are never echoed.
+2. **Only things you can still act on.** An echo pointing at a finished game
+   is a dead link and worse than nothing. Results are never echoed — a source
+   either just opened, or is about to close.
 3. **Skipping beats queueing.** A game that arrives inside a cooldown is
    dropped, not held. Announcing it later means announcing something stale.
 4. **Rate limits are the design, not a setting.** The whole feature is
-   cooldown arithmetic wrapped around three event sources.
+   cooldown arithmetic wrapped around seven event sources — except for the
+   deadline ones, where the right rate limit turned out to be none at all.
 
 ## Configuration
 
@@ -59,9 +61,20 @@ not cosmetic; see Rate limiting.
 the source name for everything else — those fire a handful of times a year,
 so there is nothing finer to bucket by.
 
-**Auctions, pools and bounties** carry their own `guild_id`, so unlike games
-the guild comes straight off the row rather than being reverse-resolved from
-a channel. All three are swept on one shared read connection per tick.
+**The four economy sources** are swept together by `econ_candidates`, on one
+shared read connection per tick, and each yields an `EchoCandidate` — so the
+sweep is one loop rather than a branch per source. Their queries live in the
+services that own those tables (`economy_auction_service.closing_auctions`,
+`pools_service.closing_rounds`, `economy_bounty_service.recent_bounties`):
+Event Echo consumes rows it doesn't shape, so a column rename stays the owning
+feature's problem. Those queries also alias their columns to one shared shape
+(`id`, `channel_id`, `message_id`, `deadline`), which is what keeps column
+names from being threaded through Event Echo as strings.
+
+Auctions, pools and bounties carry their own `guild_id`, so unlike games the
+guild comes straight off the row. The raffle has no row, so it is asked per
+guild — every gate it checks (enabled, timezone, shop panel) is guild-scoped
+config.
 
 Two schema facts the sweeps depend on:
 
@@ -72,8 +85,10 @@ Two schema facts the sweeps depend on:
 * The **raffle is the odd one out**: there is no raffle row at all. Tickets are
   week-scoped and `economy_loop` draws the closed week's winner at the ISO-week
   roll, so both halves of the echo are derived rather than read. *When* comes
-  from `next_week_roll_epoch` — guild-local Monday 00:00, from the guild's
-  fixed `tz_offset_hours`. *What to link to* is the **economy shop panel**
+  from `economy.logic.next_week_roll_epoch` — guild-local Monday 00:00, from
+  the guild's fixed `tz_offset_hours`. It lives in the economy's own logic
+  module, next to `local_day_for`/`local_day_bounds`, so there is one
+  expression of the week boundary rather than two that can drift. *What to link to* is the **economy shop panel**
   (`econ_shop_channel_id` / `econ_shop_message_id`), because that is where the
   buy-tickets button lives — which makes it the best jump target of any source:
   the reader lands on the button, not on a description of something elsewhere.
@@ -81,7 +96,7 @@ Two schema facts the sweeps depend on:
   nowhere to act is just an alarm. It is deliberately *not* gated on there
   being entrants already — zero tickets sold is when the nudge is worth most.
   It is also the only source that can't be discovered from a row, so it is
-  asked about for the home guild (`ctx.guild_id`) rather than swept.
+  asked once per guild rather than swept.
 * An auction's `ends_at` **moves**: a late bid inside the soft-close window
   pushes it out, which is exactly what this echo is trying to cause. The
   per-auction claim means the echo fires once, at the first tick the auction
@@ -225,7 +240,7 @@ else there renders as a mention Discord can't resolve.
   can fire until those features are switched on. Auctions are live — 2 in the
   server's history.
 - **New auctions listed.** Only the closing echo was wanted; an "auction
-  opened" echo is a `SOURCE_STYLE` row plus a sweep away if that changes.
+  opened" echo is a `SOURCE_SPECS` row plus a query away if that changes.
 
 ### Surveyed and deliberately not added (2026-07-28)
 

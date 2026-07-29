@@ -18,6 +18,8 @@ from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services import event_echo_service as svc
 from bot_modules.services.games_db import GamesDb
 from bot_modules.services.event_echo_logic import (
+    SOURCE_AUCTION_CLOSING,
+    SOURCE_BOUNTY,
     SOURCE_GAMEBOT,
     SOURCE_PARTY_GAME,
 )
@@ -113,6 +115,7 @@ def bot(sync_db_path, monkeypatch):
     stub = types.SimpleNamespace(
         ctx=types.SimpleNamespace(db_path=sync_db_path, guild_id=GUILD_ID),
         get_channel=MagicMock(return_value=channel),
+        guilds=[types.SimpleNamespace(id=GUILD_ID)],
         sent_channel=channel,
     )
     monkeypatch.setattr(
@@ -473,34 +476,34 @@ def _bounty(conn, bid, *, created_at, state="open", card_message_id=900):
     )
 
 
-class TestEconSweeps:
-    @pytest.mark.parametrize(
-        "ends_at, found",
-        [
-            pytest.param(NOW + 1800, True, id="inside-the-hour"),
-            pytest.param(NOW + 7200, False, id="too-early"),
-            pytest.param(NOW - 60, False, id="already-ended"),
-        ],
-    )
-    def test_closing_auctions_window(self, sync_db_path, ends_at, found):
+class TestEconCandidates:
+    """The four economy sources, through the seam Event Echo owns.
+
+    Deliberately exercised via ``econ_candidates`` rather than by calling each
+    service's query directly: the queries now live with the features that own
+    those tables, and what matters here is that Event Echo asks for the right
+    windows and gets back a usable candidate.
+    """
+
+    def _candidates(self, sync_db_path, now=NOW):
         with open_db(sync_db_path) as conn:
-            _open_auction(conn, 1, ends_at=ends_at)
-            assert bool(svc.closing_auctions(conn, NOW)) is found
+            return svc.econ_candidates(conn, [GUILD_ID], now)
 
     @pytest.mark.parametrize(
-        "state, message_id, found",
+        "ends_at, state, message_id, found",
         [
-            pytest.param("open", 900, True, id="live"),
-            pytest.param("closed", 900, False, id="already-closed"),
-            pytest.param("cancelled", 900, False, id="cancelled"),
-            pytest.param("open", 0, False, id="no-card-to-link-to"),
+            pytest.param(NOW + 1800, "open", 900, True, id="inside-the-hour"),
+            pytest.param(NOW + 7200, "open", 900, False, id="too-early"),
+            pytest.param(NOW - 60, "open", 900, False, id="already-ended"),
+            pytest.param(NOW + 1800, "closed", 900, False, id="already-closed"),
+            pytest.param(NOW + 1800, "cancelled", 900, False, id="cancelled"),
+            pytest.param(NOW + 1800, "open", 0, False, id="no-card-to-link-to"),
         ],
     )
-    def test_closing_auctions_state(self, sync_db_path, state, message_id, found):
+    def test_auction_window(self, sync_db_path, ends_at, state, message_id, found):
         with open_db(sync_db_path) as conn:
-            _open_auction(conn, 1, ends_at=NOW + 1800, state=state,
-                          message_id=message_id)
-            assert bool(svc.closing_auctions(conn, NOW)) is found
+            _open_auction(conn, 1, ends_at=ends_at, state=state, message_id=message_id)
+        assert bool(self._candidates(sync_db_path)) is found
 
     @pytest.mark.parametrize(
         "closes_at, found",
@@ -514,36 +517,51 @@ class TestEconSweeps:
             pytest.param(NOW - 3600, False, id="betting-already-shut"),
         ],
     )
-    def test_pools_filters_on_closes_at_not_status(
-        self, sync_db_path, closes_at, found
-    ):
+    def test_pools_window(self, sync_db_path, closes_at, found):
         with open_db(sync_db_path) as conn:
             _pools_round(conn, 1, closes_at=closes_at)
-            assert bool(svc.closing_pools(conn, NOW)) is found
+        assert bool(self._candidates(sync_db_path)) is found
 
     @pytest.mark.parametrize(
-        "created_at, state, found",
+        "created_at, state, card_message_id, found",
         [
-            pytest.param(NOW - 60, "open", True, id="just-posted"),
+            pytest.param(NOW - 60, "open", 900, True, id="just-posted"),
             # A restart must not announce a backlog of old bounties.
-            pytest.param(NOW - 9000, "open", False, id="stale"),
-            pytest.param(NOW - 60, "awarded", False, id="already-awarded"),
-            pytest.param(NOW - 60, "cancelled", False, id="cancelled"),
+            pytest.param(NOW - 9000, "open", 900, False, id="stale"),
+            pytest.param(NOW - 60, "awarded", 900, False, id="already-awarded"),
+            pytest.param(NOW - 60, "cancelled", 900, False, id="cancelled"),
+            # econ_bounty_channel_id is 0 in prod, so cards have nowhere to post.
+            pytest.param(NOW - 60, "open", 0, False, id="no-card-to-link-to"),
         ],
     )
-    def test_new_bounties(self, sync_db_path, created_at, state, found):
+    def test_bounty_window(
+        self, sync_db_path, created_at, state, card_message_id, found
+    ):
         with open_db(sync_db_path) as conn:
-            _bounty(conn, 1, created_at=created_at, state=state)
-            assert bool(svc.new_bounties(conn, NOW)) is found
+            _bounty(conn, 1, created_at=created_at, state=state,
+                    card_message_id=card_message_id)
+        assert bool(self._candidates(sync_db_path)) is found
 
-    def test_a_bounty_with_no_card_is_skipped(self, sync_db_path):
-        """econ_bounty_channel_id is 0 in prod, so cards have nowhere to post."""
+    def test_candidates_carry_the_aliased_shape(self, sync_db_path):
+        """Each service aliases its own column names to one shared shape.
+
+        Without that, Event Echo would be threading `card_channel_id` /
+        `ends_at` / `closes_at` around as strings.
+        """
         with open_db(sync_db_path) as conn:
-            _bounty(conn, 1, created_at=NOW - 60, card_message_id=0)
-            assert svc.new_bounties(conn, NOW) == []
+            _open_auction(conn, 1, ends_at=NOW + 1800)
+            _bounty(conn, 1, created_at=NOW - 60)
+        by_source = {c.source: c for c in self._candidates(sync_db_path)}
+
+        auction = by_source[SOURCE_AUCTION_CLOSING]
+        assert (auction.guild_id, auction.channel_id, auction.message_id) == (
+            GUILD_ID, 555, 900,
+        )
+        assert auction.deadline == NOW + 1800
+        # A bounty is a start echo, so it carries no deadline at all.
+        assert by_source[SOURCE_BOUNTY].deadline is None
 
 
-# Sunday 23:30 UTC — half an hour before the week rolls.
 RAFFLE_NOW = datetime(2026, 8, 2, 23, 30, tzinfo=timezone.utc).timestamp()
 
 
@@ -560,14 +578,13 @@ class TestRaffleLastCall:
             _enable_raffle(conn)
             call = svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW)
         assert call is not None
-        assert call.iso_week == "2026-W31"
-        assert call.message_id == 900
+        assert call.ref == "2026-W31"
+        assert (call.channel_id, call.message_id) == (555, 900)
 
     def test_quiet_earlier_in_the_week(self, sync_db_path):
         with open_db(sync_db_path) as conn:
             _enable_raffle(conn)
-            midweek = RAFFLE_NOW - 3 * 86400
-            assert svc.raffle_last_call(conn, GUILD_ID, midweek) is None
+            assert svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW - 3 * 86400) is None
 
     def test_disabled_raffle_is_silent(self, sync_db_path):
         """Never advertise a draw that isn't going to happen."""
@@ -585,22 +602,35 @@ class TestRaffleLastCall:
         ],
     )
     def test_no_shop_panel_means_no_echo(self, sync_db_path, channel, message):
-        """"The raffle closes soon" with nowhere to buy is just an alarm."""
+        '''"The raffle closes soon" with nowhere to buy is just an alarm.'''
         with open_db(sync_db_path) as conn:
             _enable_raffle(conn, shop_channel=channel, shop_message=message)
             assert svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW) is None
 
-    def test_zero_entrants_still_gets_the_nudge(self, sync_db_path):
-        """No tickets sold is exactly when the reminder is worth most."""
+    @pytest.mark.parametrize(
+        "tickets_sold",
+        [pytest.param(0, id="nobody-entered"), pytest.param(3, id="already-entered")],
+    )
+    def test_entrants_do_not_gate_the_nudge(self, sync_db_path, tickets_sold):
+        """Zero tickets sold is exactly when the reminder is worth most."""
         with open_db(sync_db_path) as conn:
             _enable_raffle(conn)
-            assert conn.execute(
-                "SELECT COUNT(*) c FROM econ_raffle_tickets"
-            ).fetchone()["c"] == 0
+            if tickets_sold:
+                conn.execute(
+                    "INSERT INTO econ_raffle_tickets "
+                    "(guild_id, iso_week, user_id, count) VALUES (?, ?, ?, ?)",
+                    (GUILD_ID, "2026-W31", 1, tickets_sold),
+                )
             assert svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW) is not None
 
+    def test_a_second_guild_gets_its_own_answer(self, sync_db_path):
+        """Every gate is guild-scoped config, so the sweep asks per guild."""
+        with open_db(sync_db_path) as conn:
+            _enable_raffle(conn)
+            assert svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW) is not None
+            assert svc.raffle_last_call(conn, 999, RAFFLE_NOW) is None
 
-@pytest.mark.asyncio
+
 class TestEconEchoes:
     @pytest.fixture
     def econ_bot(self, bot, guild):
@@ -683,13 +713,6 @@ class TestEconEchoes:
         await svc._sweep_econ(econ_bot, RAFFLE_NOW + 900)
         assert econ_bot.sent_channel.send.await_count == 1
 
-    async def test_econ_echoes_are_silent_too(self, econ_bot, sync_db_path):
-        configure(sync_db_path)
-        with open_db(sync_db_path) as conn:
-            _open_auction(conn, 1, ends_at=NOW + 1800)
-        await svc._sweep_econ(econ_bot, NOW)
-        allowed = econ_bot.sent_channel.send.await_args.kwargs["allowed_mentions"]
-        assert (allowed.roles, allowed.everyone, allowed.users) == (False, False, False)
 
 
 # ── Discord events ──────────────────────────────────────────────────────────

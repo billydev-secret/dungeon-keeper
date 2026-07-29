@@ -1,6 +1,6 @@
 """Event Echo — the I/O half: cooldown store, the sender, and the poll loop.
 
-Six sources feed one sender, in two shapes.
+Seven sources feed one sender, in two shapes.
 
 **"This just started"** — echo it because someone might want to join:
 
@@ -10,20 +10,24 @@ Six sources feed one sender, in two shapes.
     ``on_message`` listener ``games_external_cog`` already runs over Gamebot.
   * **Discord's native scheduled events** — ``echo_discord_event``, called
     from ``events_cog`` when an event goes ``scheduled → active``.
-  * **New bounties** — swept from ``econ_bounties``.
+  * **New bounties** — posted within the freshness window.
 
 **"Last chance"** — echo it because a deadline is about to pass:
 
   * **Auctions** closing within the hour.
   * **Prediction-market rounds** whose betting window shuts within the hour.
+  * **The weekly raffle**, before ticket sales shut at the ISO-week roll.
+
+The last four are swept by :func:`econ_candidates`. Their queries live in the
+services that own those tables, so Event Echo consumes rows it doesn't shape.
 
 The distinction is not cosmetic: deadline echoes bypass the cooldowns, because
 skip-don't-queue is right for a game start and wrong for a deadline (see
-``EchoStyle.deadline``).
+``SourceSpec.deadline``).
 
 Every one of them ends at :func:`echo_event`, which owns the destination, the
-cooldowns and the dedupe claim. A seventh source means writing a caller and a
-``SOURCE_STYLE`` row, not touching the rules.
+cooldowns and the dedupe claim. An eighth source means a function returning
+:class:`EchoCandidate` and a ``SOURCE_SPECS`` row, not another dispatch path.
 
 **Why a poll loop for party games.** Not because hooking would mean touching
 28 call sites — those funnel through one ``update_game_message``, and
@@ -68,6 +72,9 @@ from bot_modules.economy import logic as econ_logic
 from bot_modules.economy import quests
 from bot_modules.games.constants import GAME_NAMES
 from bot_modules.games_external import parser
+from bot_modules.services import economy_auction_service as auction_svc
+from bot_modules.services import economy_bounty_service as bounty_svc
+from bot_modules.services import pools_service as pools_svc
 from bot_modules.services.economy_raffle_service import raffle_enabled
 from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.event_echo_logic import (
@@ -86,7 +93,7 @@ from bot_modules.services.event_echo_logic import (
     closing_due,
     decide,
     is_fresh,
-    next_week_roll_epoch,
+    spec_for,
 )
 
 log = logging.getLogger(__name__)
@@ -260,7 +267,10 @@ async def echo_event(
         with open_db_immediate(db_path) as conn:
             last_same, last_any = last_echo_times(conn, guild.id, echo_key)
             verdict = decide(
-                now=now, last_same_type=last_same, last_any=last_any, source=source
+                now=now,
+                last_same_type=last_same,
+                last_any=last_any,
+                deadline=spec_for(source).deadline,
             )
             claimed = claim_echo(
                 conn,
@@ -391,72 +401,56 @@ def _opened_at(row) -> float | None:
     return parsed.timestamp()
 
 
-def closing_auctions(conn: sqlite3.Connection, now: float):
-    """Open auctions inside the last-chance window.
-
-    ``ends_at`` is a moving target — a late bid inside the soft-close window
-    pushes it out, which is precisely what this echo is trying to cause. That
-    is fine: the per-auction claim means the echo fires once, at the first
-    tick the auction is within an hour of its *then-current* end, and a later
-    extension doesn't re-trigger it.
-    """
-    return conn.execute(
-        "SELECT id, guild_id, channel_id, message_id, title, ends_at "
-        "FROM econ_auctions "
-        "WHERE state = 'open' AND message_id != 0 AND ends_at > ? AND ends_at <= ?",
-        (now, now + CLOSING_LEAD_SECONDS),
-    ).fetchall()
-
-
-def closing_pools(conn: sqlite3.Connection, now: float):
-    """Open prediction-market rounds whose betting window shuts within the hour.
-
-    Filters on ``closes_at``, not ``status``: a round sits in ``status='open'``
-    for hours after betting shuts, waiting to settle (see migration 140).
-    """
-    return conn.execute(
-        "SELECT id, guild_id, channel_id, message_id, line, closes_at "
-        "FROM casino_pools_rounds "
-        "WHERE status = 'open' AND message_id != 0 AND closes_at > ? AND closes_at <= ?",
-        (now, now + CLOSING_LEAD_SECONDS),
-    ).fetchall()
-
-
-def new_bounties(conn: sqlite3.Connection, now: float):
-    """Recently posted bounties that have a card to link to.
-
-    Bounded by ``created_at`` on the same freshness rule as a game lobby, so a
-    restart doesn't announce a backlog of bounties posted while the bot was
-    down.
-    """
-    return conn.execute(
-        "SELECT id, guild_id, card_channel_id, card_message_id, title, poster_id "
-        "FROM econ_bounties "
-        "WHERE state = 'open' AND card_message_id != 0 AND created_at >= ?",
-        (now - FRESHNESS_SECONDS,),
-    ).fetchall()
-
-
 @dataclass(frozen=True)
-class RaffleLastCall:
-    """A raffle week about to close, and where to go and buy in."""
+class EchoCandidate:
+    """One thing that might be echoed, in the shape :func:`echo_event` wants.
 
-    iso_week: str
-    deadline: float
+    Every non-game source produces these, so the sweep is one loop rather
+    than a branch per source, and adding a seventh means writing a function
+    that returns candidates — not another dispatch path.
+    """
+
+    source: str
+    guild_id: int
+    ref: str
+    name: str
     channel_id: int
     message_id: int
+    deadline: float | None = None
+
+
+def _candidate(row, *, source: str, name: str) -> EchoCandidate:
+    """A candidate from a row the owning service already aliased for us.
+
+    The three row-backed sources name their columns differently in their own
+    tables (``card_channel_id``, ``ends_at``, ``closes_at``); each service's
+    query aliases them to this shared shape, so no column names are threaded
+    through here as strings.
+    """
+    return EchoCandidate(
+        source=source,
+        guild_id=int(row["guild_id"]),
+        ref=str(row["id"]),
+        name=name,
+        channel_id=int(row["channel_id"]),
+        message_id=int(row["message_id"]),
+        deadline=(
+            float(row["deadline"]) if "deadline" in row.keys() else None
+        ),
+    )
 
 
 def raffle_last_call(
     conn: sqlite3.Connection, guild_id: int, now: float
-) -> RaffleLastCall | None:
+) -> EchoCandidate | None:
     """The weekly raffle, if ticket sales shut within the hour.
 
-    The odd one out among the sources. There is no raffle *row* to sweep —
-    tickets are week-scoped and the draw happens at the ISO-week roll — so
-    both halves of an echo have to be derived rather than read:
+    The odd one out among the sources. There is no raffle *row* — tickets are
+    week-scoped and the draw happens at the ISO-week roll — so both halves of
+    an echo have to be derived rather than read:
 
-    * **When** comes from ``next_week_roll_epoch``: guild-local Monday 00:00.
+    * **When** comes from ``econ_logic.next_week_roll_epoch``, which is where
+      the economy's own week boundary lives, so this can't drift from it.
     * **What to link to** is the economy shop panel, because that is where the
       buy-tickets button lives. That makes it the best jump target of any
       source: the reader lands on the button rather than on a description of
@@ -464,33 +458,34 @@ def raffle_last_call(
 
     Deliberately *not* gated on there being entrants already — zero tickets
     sold is exactly when the nudge is worth most.
-    """
-    settings = load_econ_settings(conn, guild_id)
-    if not raffle_enabled(settings):
-        return None
 
+    The time check runs before the settings load on purpose: the window is
+    open for one hour in 168, and ``load_econ_settings`` builds an 80-field
+    dataclass from a range scan, which is a lot to throw away 167 times over.
+    """
     offset = get_tz_offset_hours(conn, guild_id)
-    deadline = next_week_roll_epoch(now, offset)
+    deadline = econ_logic.next_week_roll_epoch(now, offset)
     if not closing_due(deadline, now):
         return None
 
-    def _cfg(key: str) -> int:
-        try:
-            return int(get_config_value(conn, key, "0", guild_id) or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    channel_id, message_id = _cfg("econ_shop_channel_id"), _cfg("econ_shop_message_id")
-    if not channel_id or not message_id:
+    settings = load_econ_settings(conn, guild_id)
+    if not raffle_enabled(settings):
+        return None
+    if not settings.shop_channel_id or not settings.shop_message_id:
         # No shop panel means no button to send anyone to, and "the raffle
         # closes soon" with nowhere to act is just an alarm.
         return None
 
-    return RaffleLastCall(
-        iso_week=quests.iso_week_for(econ_logic.local_day_for(now, offset)),
+    return EchoCandidate(
+        source=SOURCE_RAFFLE_CLOSING,
+        guild_id=guild_id,
+        # The week is the identity — one last call per raffle week, however
+        # many ticks fall inside the final hour.
+        ref=quests.iso_week_for(econ_logic.local_day_for(now, offset)),
+        name="this week's raffle",
+        channel_id=settings.shop_channel_id,
+        message_id=settings.shop_message_id,
         deadline=deadline,
-        channel_id=channel_id,
-        message_id=message_id,
     )
 
 
@@ -575,104 +570,75 @@ async def _process_game(bot, row, now: float) -> None:
     )
 
 
-# ── Sources 4–6: economy rows (auctions, pools, bounties) ───────────────────
+# ── Sources 4–7: the economy (auctions, pools, bounties, raffle) ────────────
 #
-# Unlike games, these tables carry their own guild_id, so the guild comes
-# straight off the row rather than being reverse-resolved from a channel.
+# Unlike games, all four know their own guild — three read it off the row, and
+# the raffle is asked per guild — so none of them has to reverse-resolve it
+# from a channel.
 
-async def _process_econ_row(
-    bot,
-    row,
-    now: float,
-    *,
-    source: str,
-    ref_col: str,
-    name: str,
-    channel_col: str,
-    message_col: str,
-    deadline_col: str | None = None,
-) -> None:
-    guild = bot.get_guild(int(row["guild_id"]))
-    if guild is None:
-        return
-    channel_id = int(row[channel_col])
-    await echo_event(
-        bot,
-        guild=guild,
-        source=source,
-        # One bucket per source: these fire a handful of times a year, so
-        # there is nothing finer to bucket by (and deadline sources skip the
-        # windows anyway).
-        echo_key=source,
-        ref=str(row[ref_col]),
-        name=name,
-        origin_channel_id=channel_id,
-        url=jump_url(guild.id, channel_id, int(row[message_col])),
-        deadline_epoch=float(row[deadline_col]) if deadline_col else None,
-        now=now,
-    )
+def econ_candidates(conn: sqlite3.Connection, guild_ids, now: float) -> list[EchoCandidate]:
+    """Everything the economy has to say this tick, in one shape.
+
+    The queries live in the services that own those tables — Event Echo
+    consumes rows it doesn't shape, so a column rename or a state-machine
+    change stays the owning feature's problem rather than silently breaking a
+    module its authors have no reason to grep.
+    """
+    found = [
+        _candidate(row, source=SOURCE_AUCTION_CLOSING, name=str(row["title"]))
+        for row in auction_svc.closing_auctions(conn, now, CLOSING_LEAD_SECONDS)
+    ]
+    found += [
+        # A round has no title — its line is the thing you'd bet on.
+        _candidate(
+            row,
+            source=SOURCE_POOLS_CLOSING,
+            name=f"today's over/under ({float(row['line']):g})",
+        )
+        for row in pools_svc.closing_rounds(conn, now, CLOSING_LEAD_SECONDS)
+    ]
+    found += [
+        _candidate(row, source=SOURCE_BOUNTY, name=str(row["title"]))
+        for row in bounty_svc.recent_bounties(conn, now - FRESHNESS_SECONDS)
+    ]
+    # The raffle has no row to discover, so it is asked about per guild —
+    # its enable flag, timezone and shop panel are all guild-scoped config.
+    found += [
+        cand
+        for gid in guild_ids
+        if (cand := raffle_last_call(conn, gid, now)) is not None
+    ]
+    return found
 
 
 async def _sweep_econ(bot, now: float) -> None:
-    """One read connection for all three economy sources."""
+    """One read connection for every economy source."""
     db_path: Path = bot.ctx.db_path
+    guild_ids = [g.id for g in bot.guilds]
 
     def _read():
         with open_db(db_path) as conn:
-            return (
-                closing_auctions(conn, now),
-                closing_pools(conn, now),
-                new_bounties(conn, now),
-                # The raffle has no row keyed by guild, so unlike the other
-                # three it can't be discovered — it's asked about, for the
-                # home guild whose economy config defines it.
-                raffle_last_call(conn, bot.ctx.guild_id, now),
-            )
+            return econ_candidates(conn, guild_ids, now)
 
-    auctions, pools, bounties, raffle = await asyncio.to_thread(_read)
-
-    for row in auctions:
-        await _process_econ_row(
-            bot, row, now,
-            source=SOURCE_AUCTION_CLOSING,
-            ref_col="id", name=str(row["title"]),
-            channel_col="channel_id", message_col="message_id",
-            deadline_col="ends_at",
+    for cand in await asyncio.to_thread(_read):
+        guild = bot.get_guild(cand.guild_id)
+        if guild is None:
+            continue
+        await echo_event(
+            bot,
+            guild=guild,
+            source=cand.source,
+            # One bucket per source: these fire a handful of times a year, so
+            # there is nothing finer to bucket by (and the deadline ones skip
+            # the windows anyway).
+            echo_key=cand.source,
+            ref=cand.ref,
+            name=cand.name,
+            origin_channel_id=cand.channel_id,
+            url=jump_url(guild.id, cand.channel_id, cand.message_id),
+            deadline_epoch=cand.deadline,
+            now=now,
         )
-    for row in pools:
-        await _process_econ_row(
-            bot, row, now,
-            source=SOURCE_POOLS_CLOSING,
-            # The round has no title — its line is the thing you'd bet on.
-            ref_col="id", name=f"today's over/under ({float(row['line']):g})",
-            channel_col="channel_id", message_col="message_id",
-            deadline_col="closes_at",
-        )
-    for row in bounties:
-        await _process_econ_row(
-            bot, row, now,
-            source=SOURCE_BOUNTY,
-            ref_col="id", name=str(row["title"]),
-            channel_col="card_channel_id", message_col="card_message_id",
-        )
-
-    if raffle is not None:
-        guild = bot.get_guild(bot.ctx.guild_id)
-        if guild is not None:
-            await echo_event(
-                bot,
-                guild=guild,
-                source=SOURCE_RAFFLE_CLOSING,
-                echo_key=SOURCE_RAFFLE_CLOSING,
-                # The week is the identity — one last call per raffle week,
-                # however many ticks fall inside the final hour.
-                ref=raffle.iso_week,
-                name="this week's raffle",
-                origin_channel_id=raffle.channel_id,
-                url=jump_url(guild.id, raffle.channel_id, raffle.message_id),
-                deadline_epoch=raffle.deadline,
-                now=now,
-            )
 
 
 async def event_echo_loop(bot) -> None:

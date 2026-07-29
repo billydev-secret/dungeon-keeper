@@ -23,7 +23,6 @@ purpose, not a flag to leave lying around.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 
 import discord
 
@@ -68,7 +67,7 @@ RETENTION_SECONDS = 86400
 # but threading `lead` and `icon` through as separate arguments let them
 # desync from the source they describe. A new source is one row here.
 @dataclass(frozen=True)
-class EchoStyle:
+class SourceSpec:
     headline: str  # format string over {name}
     lead: str
     icon: str
@@ -85,29 +84,29 @@ class EchoStyle:
     deadline: bool = False
 
 
-_DEFAULT_STYLE = EchoStyle(
+_DEFAULT_SPEC = SourceSpec(
     headline="{name} is starting", lead="A game is open", icon="🎲"
 )
-SOURCE_STYLE: dict[str, EchoStyle] = {
-    SOURCE_DISCORD_EVENT: EchoStyle(
+SOURCE_SPECS: dict[str, SourceSpec] = {
+    SOURCE_DISCORD_EVENT: SourceSpec(
         headline="{name} is starting", lead="It's happening", icon="📅"
     ),
-    SOURCE_BOUNTY: EchoStyle(
+    SOURCE_BOUNTY: SourceSpec(
         headline="New bounty: {name}", lead="Up for grabs", icon="🎯"
     ),
-    SOURCE_AUCTION_CLOSING: EchoStyle(
+    SOURCE_AUCTION_CLOSING: SourceSpec(
         headline="Last call: {name}",
         lead="Bidding closes soon",
         icon="🔨",
         deadline=True,
     ),
-    SOURCE_POOLS_CLOSING: EchoStyle(
+    SOURCE_POOLS_CLOSING: SourceSpec(
         headline="Last call: {name}",
         lead="Betting closes soon",
         icon="📈",
         deadline=True,
     ),
-    SOURCE_RAFFLE_CLOSING: EchoStyle(
+    SOURCE_RAFFLE_CLOSING: SourceSpec(
         headline="Last call: {name}",
         lead="Ticket sales close",
         icon="🎟️",
@@ -116,29 +115,9 @@ SOURCE_STYLE: dict[str, EchoStyle] = {
 }
 
 
-def style_for(source: str) -> EchoStyle:
+def spec_for(source: str) -> SourceSpec:
     """Copy and policy for one source; anything unknown gets game-shaped copy."""
-    return SOURCE_STYLE.get(source, _DEFAULT_STYLE)
-
-
-def next_week_roll_epoch(now: float, tz_offset_hours: float) -> float:
-    """When the guild's ISO week next rolls over — the raffle's real deadline.
-
-    Unlike every other source, the raffle has no row and no stored end time:
-    tickets are week-scoped, and ``economy_loop`` draws the closed week's
-    winner on the first day roll where the ISO week changed. So "when does the
-    raffle close" has to be *derived* — it is guild-local Monday 00:00.
-
-    The guild's fixed ``tz_offset_hours`` defines local time (no DST, matching
-    the rest of the bot). Exactly on the boundary the current week has already
-    closed, so this returns the *following* Monday.
-    """
-    offset = tz_offset_hours * 3600
-    local = datetime.fromtimestamp(now + offset, timezone.utc)
-    boundary = (local + timedelta(days=7 - local.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return boundary.timestamp() - offset
+    return SOURCE_SPECS.get(source, _DEFAULT_SPEC)
 
 
 def closing_due(deadline_epoch: float | None, now: float) -> bool:
@@ -177,7 +156,7 @@ def decide(
     now: float,
     last_same_type: float | None,
     last_any: float | None,
-    source: str = SOURCE_PARTY_GAME,
+    deadline: bool,
 ) -> EchoDecision:
     """Apply both cooldowns to a candidate echo.
 
@@ -186,11 +165,14 @@ def decide(
     migration's note on why a refusal must not push the window out).
     ``None`` means "never", which passes.
 
-    Deadline sources skip both windows — see ``EchoStyle.deadline``. The
-    per-ref claim still holds them to one echo apiece, so "exempt" means
-    "can't be crowded out", not "can repeat".
+    ``deadline`` skips both windows — see ``SourceSpec.deadline``, which the
+    caller resolves. Passed rather than looked up here so a function about
+    clocks has no opinion about headlines, and so a caller can't silently get
+    game policy by forgetting an argument. The per-ref claim still holds a
+    deadline echo to one apiece, so "exempt" means "can't be crowded out",
+    not "can repeat".
     """
-    if style_for(source).deadline:
+    if deadline:
         return EchoDecision(True)
     if last_any is not None and now - last_any < GLOBAL_COOLDOWN_SECONDS:
         return EchoDecision(False, "global")
@@ -238,12 +220,12 @@ def build_echo_embed(
     reflects the deadline as it stood when the message was sent, and Discord
     renders it in the reader's own timezone.
     """
-    style = style_for(source)
+    spec = spec_for(source)
     where = f" in <#{channel_id}>" if channel_id is not None else ""
     when = f" <t:{int(deadline_epoch)}:R>" if deadline_epoch is not None else ""
     embed = discord.Embed(
-        title=f"{style.icon} {style.headline.format(name=name)}",
-        description=f"{style.lead}{where}{when}.\n**[Jump in →]({url})**",
+        title=f"{spec.icon} {spec.headline.format(name=name)}",
+        description=f"{spec.lead}{where}{when}.\n**[Jump in →]({url})**",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
     if host_name:

@@ -377,6 +377,24 @@ def get_bounty(conn: sqlite3.Connection, bounty_id: int) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def recent_bounties(conn: sqlite3.Connection, since: float) -> list[sqlite3.Row]:
+    """Open bounties posted since ``since``, across guilds — for announcements
+    (see event_echo_service).
+
+    Bounded by ``created_at`` so a consumer restarting doesn't re-announce a
+    backlog, and by ``card_message_id`` because a bounty whose card hasn't
+    posted has nothing to link to. Columns are aliased to the shape
+    announcement callers share (``id``, ``channel_id``, ``message_id``).
+    """
+    return conn.execute(
+        "SELECT id, guild_id, title, "
+        "       card_channel_id AS channel_id, card_message_id AS message_id "
+        "FROM econ_bounties "
+        "WHERE state = 'open' AND card_message_id != 0 AND created_at >= ?",
+        (since,),
+    ).fetchall()
+
+
 def list_bounties(
     conn: sqlite3.Connection, guild_id: int, state: str | None = None, limit: int = 100
 ) -> list[sqlite3.Row]:
