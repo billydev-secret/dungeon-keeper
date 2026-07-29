@@ -25,13 +25,16 @@ function matchesSearch(t, query) {
   return terms.every((term) => hay.includes(term));
 }
 
-export function mount(container) {
+/**
+ * The ticket-list half of the Policy Tickets page. Mounted into a region by
+ * panels/policy-tickets.js, above the settings. Moderator-level information —
+ * no gating applies here.
+ */
+export function mountTickets(container) {
   container.innerHTML = `
-    <div class="panel">
-      <header>
-        <h2>Policy Tickets</h2>
-        <div class="subtitle">Policy changes members have proposed, and how the votes went</div>
-      </header>
+    <div>
+      <div class="section-label">Tickets</div>
+      <div class="field-hint" style="margin-bottom:10px;">Policy changes members have proposed, and how the votes went</div>
 
       <div class="mod-stats" data-stats>
         <div class="mod-stat open"><div class="lbl">Open</div><div class="v">—</div><div class="sub">loading\u2026</div></div>

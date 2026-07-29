@@ -92,8 +92,8 @@ const SECTIONS = [
       { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js", help: "help-jail" },
       { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js", help: "help-tickets", keywords: "post panel support ticket panel open ticket button" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js", help: "help-tickets" },
-      { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/mod-policy-tickets.js", help: "help-policies", related: ["config-policy-tickets"] },
-      { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch.js", help: "help-rules-watch", related: ["config-rules-watch"] },
+      { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/policy-tickets.js", help: "help-policies", keywords: "policy proposals votes deadline settings" },
+      { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch-page.js", help: "help-rules-watch", keywords: "rules watch alerts queue ledger settings" },
       { id: "message-search", label: "Message Search",  module: "./panels/message-search.js", keywords: "messages logs find" },
     ],
     groups: [
@@ -137,9 +137,7 @@ const SECTIONS = [
       ]},
       { heading: "Moderation & Safety", items: [
         { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true, help: "help-moderation" },
-        { id: "config-rules-watch", label: "Rules Watch",       module: "./panels/config-rules-watch.js", adminOnly: true, help: "help-rules-watch", related: ["rules-watch"] },
         { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true, help: "help-greeting-watch" },
-        { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true, help: "help-policies", related: ["mod-policy-tickets"] },
         { id: "config-spoiler",      label: "Image Guard",       module: "./panels/config-spoiler.js", adminOnly: true, keywords: "spoiler nsfw nudity explicit classifier" },
         { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true, help: "help-dms" },
       ]},

@@ -1,7 +1,12 @@
-import { loadConfig, apiPut, showStatus, guardForm } from "../config-helpers.js";
+import { loadConfig, apiPut, showStatus, guardForm, lockUnlessAdmin } from "../config-helpers.js";
 
-export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
+/**
+ * The settings half of the Policy Tickets page. Mounted into a region by
+ * panels/policy-tickets.js, below the ticket list, and locked read-only for
+ * non-admins. Not a nav page in its own right.
+ */
+export function mountSettings(container) {
+  container.innerHTML = `<div class="empty">Loading configuration…</div>`;
 
   (async () => {
     const config = await loadConfig();
@@ -9,11 +14,9 @@ export function mount(container) {
     const currentHours = Number.isInteger(p.vote_timeout_hours) ? p.vote_timeout_hours : 72;
 
     container.innerHTML = `
-      <div class="panel">
-        <header>
-          <h2>Policy Ticket Settings</h2>
-          <div class="subtitle">How long the moderator team has to vote on a policy proposal</div>
-        </header>
+      <div>
+        <div class="section-label">Settings</div>
+        <div class="field-hint" style="margin-bottom:12px;">How long the moderator team has to vote on a policy proposal</div>
         <form class="form form-cards" data-form>
           <div class="card">
             <div class="section-label">Voting</div>
@@ -58,5 +61,7 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
+
+    lockUnlessAdmin(container);
   })();
 }
