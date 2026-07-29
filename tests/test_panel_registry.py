@@ -103,8 +103,49 @@ _PANELS_DIR = (
     pathlib.Path(__file__).resolve().parents[1]
     / "src" / "web_server" / "static" / "js" / "panels"
 )
-# mountPanelPoster(<anything>, "key"  — the helper's second argument.
-_MOUNT_RE = re.compile(r"""mountPanelPoster\([^)]*?["'](?P<key>[a-z0-9-]+)["']""", re.S)
+_CALL_RE = re.compile(r"mountPanelPoster\(")
+_KEY_LITERAL_RE = re.compile(r"""\s*["'](?P<key>[a-z0-9-]+)["']\s*""")
+
+
+def _second_argument(text: str, start: int) -> str | None:
+    """The second argument of a call, given the index just past its ``(``.
+
+    Deliberately a small scanner rather than a regex. Every call site's first
+    argument is itself a call — ``slot("economy-guide")``,
+    ``container.querySelector('[data-poster="grant-audit"]')`` — and a regex
+    cheap enough to write inline stops at the first quote it meets, which is
+    *inside* that first argument. It then reads the slot selector while
+    appearing to read the key, so a call site passing the wrong key still
+    matches on the right one and the check silently proves nothing.
+
+    Returns None when the second argument isn't a plain string literal, which
+    fails the caller loudly — a computed key can't be verified from here.
+    """
+    depth = 0
+    arg_start = start
+    args: list[str] = []
+    i = start
+    while i < len(text):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                args.append(text[arg_start:i])
+                break
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append(text[arg_start:i])
+            arg_start = i + 1
+        elif c in "\"'`":
+            quote, i = c, i + 1
+            while i < len(text) and text[i] != quote:
+                i += 2 if text[i] == "\\" else 1
+        i += 1
+    if len(args) < 2:
+        return None
+    m = _KEY_LITERAL_RE.fullmatch(args[1])
+    return m.group("key") if m else None
 
 
 def _mounted_keys(page_id: str) -> set[str]:
@@ -115,7 +156,25 @@ def _mounted_keys(page_id: str) -> set[str]:
     # Explicit encoding: the panel sources carry emoji and em dashes, and the
     # Windows test runner's default is cp1252, which can't decode them.
     text = source.read_text(encoding="utf-8")
-    return {m.group("key") for m in _MOUNT_RE.finditer(text)}
+    found = (_second_argument(text, m.end()) for m in _CALL_RE.finditer(text))
+    return {key for key in found if key}
+
+
+def test_the_call_site_scanner_reads_the_key_not_the_slot():
+    """The scanner is the whole basis of the two checks below, and its first
+    version read the first argument while looking like it read the second — so
+    a mismatched key passed. This is that bug, frozen."""
+    mismatched = 'mountPanelPoster(slot("economy-guide"), "economy-shop");'
+    assert _second_argument(mismatched, mismatched.index("(") + 1) == "economy-shop"
+
+    selector_form = (
+        "mountPanelPoster(container.querySelector('[data-poster=\"a-b\"]'), \"c-d\", {})"
+    )
+    assert _second_argument(selector_form, selector_form.index("(") + 1) == "c-d"
+
+    # A computed key is unverifiable, so it must not be reported as present.
+    computed = "mountPanelPoster(slot(key), key);"
+    assert _second_argument(computed, computed.index("(") + 1) is None
 
 
 @pytest.mark.parametrize("spec", PANEL_SPECS, ids=lambda s: s.key)

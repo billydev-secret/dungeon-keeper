@@ -31,7 +31,10 @@ function loadPanelSpecs() {
   return _specsPromise;
 }
 
-// Clears the memo so a test (or a guild switch) re-reads the registry.
+// Called by app.js's applyMeData — on boot, and on every guild switch. The
+// payload isn't guild-independent: a spec's grant_role choices are resolved
+// from the active guild's config, and switchGuild re-mounts panels without
+// reloading the page, so the memo has to go with the old guild.
 export function _resetPanelSpecCache() { _specsPromise = null; }
 
 function isAdmin() {
@@ -126,7 +129,15 @@ export async function mountPanelPoster(slotEl, key, opts = {}) {
     }
     let options = {};
     if (getOptions) {
-      options = getOptions() || {};
+      // A host page refuses by throwing — its controls aren't ready or aren't
+      // filled in. Say so and stop; letting it escape an async click handler
+      // would surface as a console error and no explanation.
+      try {
+        options = getOptions() || {};
+      } catch (err) {
+        toast(err.message, "error");
+        return;
+      }
     } else {
       root.querySelectorAll("[data-opt]").forEach((el) => {
         options[el.dataset.opt] = el.value;

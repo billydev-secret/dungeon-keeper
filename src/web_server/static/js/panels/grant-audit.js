@@ -150,10 +150,18 @@ export function mount(container, initialParams) {
   mountPanelPoster(container.querySelector('[data-poster="grant-audit"]'), "grant-audit", {
     heading: "Post This Audit as a Card",
     buttonLabel: "Post Card",
-    getOptions: () => ({
-      role_key: grantEl.value,
-      min_level: String(Math.max(1, parseInt(minLevelEl.value) || 5)),
-    }),
+    getOptions: () => {
+      // The select is empty while the grant roles load, and stays empty on a
+      // guild with none configured. An empty role_key reads as "not supplied"
+      // server-side and falls back to the spec default, so posting mid-load
+      // would audit `nsfw` rather than what the page shows — and on a guild
+      // without an nsfw grant it fails naming a role nobody chose.
+      if (!grantEl.value) throw new Error("Pick a grant role first.");
+      return {
+        role_key: grantEl.value,
+        min_level: String(Math.max(1, parseInt(minLevelEl.value) || 5)),
+      };
+    },
   });
 
   grantEl.addEventListener("change", refresh);

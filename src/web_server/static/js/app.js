@@ -3,6 +3,7 @@ import { api, apiPost, esc } from "./api.js";
 import { toast } from "./ui.js";
 import { HELP_GROUPS, HELP_EXTRA_PAGES } from "./panels/help-sections.js?v=25";
 import { setPageIds } from "./nav-registry.js";
+import { _resetPanelSpecCache } from "./panel-post.js";
 
 
 // The Help nav is generated from help-sections.js (single source shared with
@@ -870,8 +871,11 @@ const MOVED_PAGES = { "channel-panels": "economy-config" };
 /** Rewrite a retired page's hash to its successor. True if it redirected. */
 function redirectMovedPage() {
   const { id } = parseHash();
+  // hasOwn, not a bare lookup: ids like "toString" or "constructor" hit
+  // Object.prototype and would "redirect" to a stringified native function
+  // instead of rendering the page-unavailable notice.
+  if (!Object.hasOwn(MOVED_PAGES, id)) return false;
   const to = MOVED_PAGES[id];
-  if (!to) return false;
   window.location.replace(`#/${to}`);
   return true;
 }
@@ -947,6 +951,11 @@ function applyMeData(me) {
     games_editor_role_id: me.games_editor_role_id || null,
     economy_manager_role_id: me.economy_manager_role_id || null,
   };
+
+  // The panel registry resolves a spec's grant-role choices from the active
+  // guild's config, and switchGuild re-mounts panels without reloading the
+  // page — so the cached /api/panels payload has to go with the old guild.
+  _resetPanelSpecCache();
 
   // Recompute visible nav (Config pages are filtered per primary/non-primary)
   rebuildIndex();
