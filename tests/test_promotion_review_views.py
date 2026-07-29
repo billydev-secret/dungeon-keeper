@@ -21,7 +21,6 @@ from bot_modules.services.promotion_review_views import (
     refresh_level_5_cards,
     refresh_spicy_field,
 )
-from tests.db_template import migrated_db
 
 GUILD_ID = 42
 MEMBER_ID = 7
@@ -84,17 +83,38 @@ def test_build_embed_sleeper_title_no_prune_field_when_empty():
     assert "Access a sweep removed" not in {f.name for f in embed.fields}
 
 
-def test_refresh_spicy_field_flips_a_stale_card_to_granted():
-    """The reported bug: card says ❌, access was granted afterwards."""
-    embed = _level_5_embed(svc.SPICY_NOT_GRANTED)
-    updated = refresh_spicy_field(embed, True)
+@pytest.mark.parametrize(
+    ("current", "has_nsfw", "expected"),
+    [
+        # The reported bug: card says ❌, access was granted afterwards.
+        pytest.param(svc.SPICY_NOT_GRANTED, True, svc.SPICY_GRANTED, id="stale-to-granted"),
+        pytest.param(svc.SPICY_GRANTED, False, svc.SPICY_NOT_GRANTED, id="revoked"),
+        pytest.param(svc.SPICY_GRANTED, True, None, id="already-granted"),
+        pytest.param(svc.SPICY_NOT_GRANTED, False, None, id="already-not-granted"),
+        # A card posted while nsfw_role_id was unset has no Spicy field at all,
+        # and ordinary level-up posts share this channel — neither is touched.
+        pytest.param(None, True, None, id="no-spicy-field"),
+    ],
+)
+def test_refresh_spicy_field_moves_only_a_stale_value(current, has_nsfw, expected):
+    embed = _level_5_embed(current)
+    updated = refresh_spicy_field(embed, has_nsfw)
+    if expected is None:
+        assert updated is None
+        return
     assert updated is not None
     spicy = next(f for f in updated.fields if f.name == svc.SPICY_FIELD_NAME)
-    assert spicy.value == svc.SPICY_GRANTED
-    # Only that field moves: the rest of the card is an at-promotion snapshot.
-    assert [f.name for f in updated.fields] == [f.name for f in embed.fields]
+    assert spicy.value == expected
+    # Only that field moves: the rest is an at-promotion snapshot, same layout.
+    assert [(f.name, f.inline) for f in updated.fields] == [
+        (f.name, f.inline) for f in embed.fields
+    ]
     assert next(f for f in updated.fields if f.name == "Total XP").value == "326.56"
     assert updated.title == embed.title
+
+
+def test_refresh_spicy_field_ignores_an_unrelated_embed():
+    assert refresh_spicy_field(discord.Embed(title="something else"), True) is None
 
 
 def test_refresh_spicy_field_does_not_mutate_the_original():
@@ -105,45 +125,15 @@ def test_refresh_spicy_field_does_not_mutate_the_original():
     assert spicy.value == svc.SPICY_NOT_GRANTED
 
 
-def test_refresh_spicy_field_flips_back_when_access_is_revoked():
-    embed = _level_5_embed(svc.SPICY_GRANTED)
-    updated = refresh_spicy_field(embed, False)
-    assert updated is not None
-    spicy = next(f for f in updated.fields if f.name == svc.SPICY_FIELD_NAME)
-    assert spicy.value == svc.SPICY_NOT_GRANTED
-
-
-def test_refresh_spicy_field_noop_when_already_correct():
-    """No edit call for a card that already reads right."""
-    assert refresh_spicy_field(_level_5_embed(svc.SPICY_GRANTED), True) is None
-    assert refresh_spicy_field(_level_5_embed(svc.SPICY_NOT_GRANTED), False) is None
-
-
-def test_refresh_spicy_field_ignores_embeds_without_the_field():
-    # A card posted while nsfw_role_id was unset has no Spicy field at all, and
-    # ordinary level-up posts share this channel — neither should be touched.
-    assert refresh_spicy_field(_level_5_embed(None), True) is None
-    assert refresh_spicy_field(discord.Embed(title="something else"), True) is None
-
-
-def test_refresh_spicy_field_preserves_field_inline_layout():
-    embed = _level_5_embed(svc.SPICY_NOT_GRANTED)
-    updated = refresh_spicy_field(embed, True)
-    assert updated is not None
-    assert [f.inline for f in updated.fields] == [f.inline for f in embed.fields]
-
-
 # ── refresh_level_5_cards: stored card → Discord edit ─────────────────
 
 
 @pytest.fixture
-def ctx(tmp_path):
+def ctx(sync_db_path):
     """An AppContext stand-in over a real migrated DB."""
-    db_path = tmp_path / "promo.db"
-    migrated_db(db_path)
     stub = MagicMock()
-    stub.db_path = db_path
-    stub.open_db = lambda: open_db(db_path)
+    stub.db_path = sync_db_path
+    stub.open_db = lambda: open_db(sync_db_path)
     return stub
 
 
@@ -202,9 +192,16 @@ async def test_refresh_edits_a_stored_stale_card(ctx):
     assert spicy.value == svc.SPICY_GRANTED
 
 
-async def test_refresh_skips_the_edit_when_already_correct(ctx):
+@pytest.mark.parametrize(
+    "embed",
+    [
+        pytest.param(svc.SPICY_GRANTED, id="already-correct"),
+        pytest.param("no-embeds", id="no-embeds"),
+    ],
+)
+async def test_refresh_skips_the_edit_but_keeps_the_row(ctx, embed):
     _record(ctx)
-    message = _message(_level_5_embed(svc.SPICY_GRANTED))
+    message = _message(None if embed == "no-embeds" else _level_5_embed(embed))
     member = _member(_guild(_channel(message)))
 
     await refresh_level_5_cards(ctx, member, True)
@@ -213,15 +210,25 @@ async def test_refresh_skips_the_edit_when_already_correct(ctx):
     assert len(_stored(ctx)) == 1  # still tracked
 
 
-async def test_refresh_forgets_a_card_whose_message_is_deleted(ctx):
+@pytest.mark.parametrize(
+    ("error", "still_stored"),
+    [
+        # A gone message is forgotten; anything else keeps the row for next time,
+        # and an unexpected error must not escape into the listener.
+        pytest.param(discord.NotFound(MagicMock(), "gone"), 0, id="deleted-forgotten"),
+        pytest.param(discord.HTTPException(MagicMock(), "boom"), 1, id="transient-kept"),
+        pytest.param(sqlite3.OperationalError("locked"), 1, id="unexpected-never-raises"),
+    ],
+)
+async def test_refresh_handles_a_failed_message_fetch(ctx, error, still_stored):
     _record(ctx)
     channel = _channel(None)
-    channel.fetch_message = AsyncMock(side_effect=discord.NotFound(MagicMock(), "gone"))
+    channel.fetch_message = AsyncMock(side_effect=error)
     member = _member(_guild(channel))
 
-    await refresh_level_5_cards(ctx, member, True)
+    await refresh_level_5_cards(ctx, member, True)  # must not raise
 
-    assert _stored(ctx) == []
+    assert len(_stored(ctx)) == still_stored
 
 
 async def test_refresh_forgets_a_card_whose_channel_is_deleted(ctx):
@@ -250,30 +257,6 @@ async def test_refresh_keeps_a_card_in_an_uncached_thread(ctx):
     message.edit.assert_awaited_once()
 
 
-async def test_refresh_survives_a_transient_http_error(ctx):
-    """A Discord hiccup keeps the row for the next role change."""
-    _record(ctx)
-    channel = _channel(None)
-    channel.fetch_message = AsyncMock(
-        side_effect=discord.HTTPException(MagicMock(), "boom")
-    )
-    member = _member(_guild(channel))
-
-    await refresh_level_5_cards(ctx, member, True)
-
-    assert len(_stored(ctx)) == 1
-
-
-async def test_refresh_never_raises_so_the_listener_continues(ctx):
-    """It runs before the welcome/greeter work — it must not abort the listener."""
-    _record(ctx)
-    channel = _channel(None)
-    channel.fetch_message = AsyncMock(side_effect=sqlite3.OperationalError("locked"))
-    member = _member(_guild(channel))
-
-    await refresh_level_5_cards(ctx, member, True)  # must not raise
-
-
 async def test_refresh_continues_past_one_broken_card(ctx):
     """A card that blows up doesn't stop the member's other cards."""
     _record(ctx, message_id=9001)
@@ -288,16 +271,6 @@ async def test_refresh_continues_past_one_broken_card(ctx):
     await refresh_level_5_cards(ctx, member, True)
 
     good.edit.assert_awaited_once()
-
-
-async def test_refresh_ignores_a_card_with_no_embeds(ctx):
-    _record(ctx)
-    message = _message(None)
-    member = _member(_guild(_channel(message)))
-
-    await refresh_level_5_cards(ctx, member, True)
-
-    message.edit.assert_not_awaited()
 
 
 async def test_refresh_is_a_noop_when_no_card_is_stored(ctx):

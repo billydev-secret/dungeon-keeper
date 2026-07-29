@@ -162,10 +162,8 @@ def resolve_card(
 # ---------------------------------------------------------------------------
 #
 # The Level 5 card (xp_service.maybe_log_level_5) predates the ledger above and
-# is keyed by member id, not a card row. Its "Spicy access" field is the one
-# live thing on an otherwise at-promotion snapshot, so we remember where each
-# card was posted and re-render that single field whenever the role changes —
-# by the card's own button, by /grant, or by a mod adding it by hand.
+# is keyed by member id, not a card row, so we track where each was posted and
+# re-render its one live field. See docs/promotion_review_spec.md.
 
 SPICY_FIELD_NAME = "Spicy access"
 SPICY_GRANTED = "✅ Granted"

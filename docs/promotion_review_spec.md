@@ -48,9 +48,14 @@ The `pruned_return` and `sleeper` cards also carry a **Dismiss** button.
   never resolves, so it would squat that table's one-open-card-per-member slot
   forever. Cards whose message *or* channel has been deleted are forgotten (a
   cache miss is confirmed with a fetch first, so a card in an archived thread is
-  kept). The refresh never raises — it runs ahead of the verified-welcome and
-  greeter ping in the same listener. Cards posted before migration 141 have no
-  stored row and stay stale — fix-forward only.
+  kept). The refresh never raises, and runs last in the listener so its two HTTP
+  round trips don't delay the verified-welcome or greeter ping.
+  **Best-effort on events only, not eventually consistent:** a role change while
+  the bot is down is never replayed, so that card stays wrong until the member's
+  next NSFW role change. Nothing reconciles it — a repair pass on
+  `promotion_review_recheck_loop` (which already owns deferred Level 5 posting)
+  is the natural home if that becomes a problem. Cards posted before migration
+  141 have no stored row and stay stale — fix-forward only.
 - **Hot path:** `on_message` filters with an O(1) in-memory watch set
   (`promotion_review_service.is_watched`), seeded at startup (`warm`) and fed by
   the prune sweep (`note_pruned`) and the inactive-hold path (`note_inactive`).

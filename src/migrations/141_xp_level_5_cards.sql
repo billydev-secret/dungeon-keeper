@@ -1,12 +1,6 @@
 -- Where each Level 5 promotion card was posted, so its live "Spicy access"
--- indicator can be re-rendered after the fact.
---
--- The Level 5 card (xp_service.maybe_log_level_5) shows whether the member has
--- the NSFW/"spicy" access role, but that field was rendered once at post time
--- and never revisited. Nothing edited a posted card — not the card's own Grant
--- button, and no member-update hook existed — so the moment access was granted
--- any other way (the server's documented `/grant` intake flow, or a mod adding
--- the role by hand) the card went stale and stayed stale.
+-- indicator can be re-rendered after the fact (it was rendered once at post
+-- time and never revisited). See docs/promotion_review_spec.md.
 --
 -- Deliberately NOT promotion_review_cards (migration 112): that table's partial
 -- unique index idx_promotion_review_open permits a single *unresolved* row per

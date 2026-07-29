@@ -222,30 +222,20 @@ def test_spicy_access_value_tracks_the_role():
     assert svc.spicy_access_value(False) == svc.SPICY_NOT_GRANTED
 
 
-def test_level_5_card_recorded_and_found_for_member(db_path):
-    with open_db(db_path) as conn:
-        svc.record_level_5_card(conn, GUILD, 7, CHANNEL, 5001, 100.0)
-        rows = svc.level_5_cards_for(conn, GUILD, 7)
-        assert [(r["channel_id"], r["message_id"]) for r in rows] == [(CHANNEL, 5001)]
-        # Scoped per member and per guild.
-        assert svc.level_5_cards_for(conn, GUILD, 8) == []
-        assert svc.level_5_cards_for(conn, 99, 7) == []
-
-
-def test_level_5_card_same_message_recorded_once(db_path):
-    """The immediate post and the deferred recheck loop can reach one send."""
-    with open_db(db_path) as conn:
-        svc.record_level_5_card(conn, GUILD, 7, CHANNEL, 5001, 100.0)
-        svc.record_level_5_card(conn, GUILD, 7, CHANNEL, 5001, 200.0)
-        assert len(svc.level_5_cards_for(conn, GUILD, 7)) == 1
-
-
-def test_level_5_cards_ordered_oldest_first(db_path):
+def test_level_5_cards_recorded_scoped_deduped_and_ordered(db_path):
     with open_db(db_path) as conn:
         svc.record_level_5_card(conn, GUILD, 7, CHANNEL, 5001, 100.0)
         svc.record_level_5_card(conn, GUILD, 7, CHANNEL, 5002, 200.0)
+        # The immediate post and the deferred recheck loop can reach one send.
+        svc.record_level_5_card(conn, GUILD, 7, CHANNEL, 5001, 300.0)
         rows = svc.level_5_cards_for(conn, GUILD, 7)
-        assert [r["message_id"] for r in rows] == [5001, 5002]
+        assert [(r["channel_id"], r["message_id"]) for r in rows] == [
+            (CHANNEL, 5001),
+            (CHANNEL, 5002),
+        ]
+        # Scoped per member and per guild.
+        assert svc.level_5_cards_for(conn, GUILD, 8) == []
+        assert svc.level_5_cards_for(conn, 99, 7) == []
 
 
 def test_forget_level_5_card_drops_only_that_row(db_path):

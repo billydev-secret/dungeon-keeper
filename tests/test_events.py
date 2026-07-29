@@ -870,24 +870,34 @@ async def test_on_member_update_verified_skips_when_unverified_role_kept():
     cog._send_welcome.assert_not_awaited()
 
 
-async def test_on_member_update_refreshes_level_5_card_on_nsfw_grant():
-    """Wiring: the nsfw role landing by any path reaches the card refresh.
+_NSFW_GRANT_ROLES = {"nsfw": {"role_id": 555}}
 
-    The bug was that /grant (the documented intake flow) never told the card,
-    so its "Spicy access" field stayed ❌ forever.
-    """
-    bot = _make_bot()
+
+@pytest.mark.parametrize(
+    ("grant_roles", "before_ids", "after_ids", "expected"),
+    [
+        # The bug was that /grant never told the card, so its "Spicy access"
+        # field stayed ❌ forever. expected is None ⇒ no refresh at all.
+        pytest.param(_NSFW_GRANT_ROLES, [900], [900, 555], True, id="granted"),
+        pytest.param(_NSFW_GRANT_ROLES, [555], [], False, id="revoked"),
+        pytest.param(_NSFW_GRANT_ROLES, [555], [555, 901], None, id="unrelated-role"),
+        pytest.param({}, [], [555], None, id="nsfw-role-unset"),
+    ],
+)
+async def test_on_member_update_level_5_card_refresh(
+    grant_roles, before_ids, after_ids, expected
+):
+    """Wiring: the nsfw role landing by any path reaches the card refresh."""
     ctx = _make_ctx()
     ctx.guild_config = MagicMock(
-        return_value=_StubGuildConfig(grant_roles={"nsfw": {"role_id": 555}}),
+        return_value=_StubGuildConfig(grant_roles=grant_roles),
     )
-    cog = EventsCog(bot, ctx)
+    cog = EventsCog(_make_bot(), ctx)
 
-    member_role = _role(900, "Member")
     before = _make_member(guild_id=7)
-    before.roles = [member_role]
+    before.roles = [_role(rid, f"R{rid}") for rid in before_ids]
     after = _make_member(guild_id=7)
-    after.roles = [member_role, _role(555, "Spicy")]
+    after.roles = [_role(rid, f"R{rid}") for rid in after_ids]
 
     refresh = AsyncMock()
     with (
@@ -898,85 +908,12 @@ async def test_on_member_update_refreshes_level_5_card_on_nsfw_grant():
     ):
         await cog.on_member_update(before, after)
 
+    if expected is None:
+        refresh.assert_not_awaited()
+        return
     refresh.assert_awaited_once()
     assert refresh.await_args.args[1] is after
-    assert refresh.await_args.args[2] is True  # has_nsfw
-
-
-async def test_on_member_update_refreshes_level_5_card_on_nsfw_revoke():
-    bot = _make_bot()
-    ctx = _make_ctx()
-    ctx.guild_config = MagicMock(
-        return_value=_StubGuildConfig(grant_roles={"nsfw": {"role_id": 555}}),
-    )
-    cog = EventsCog(bot, ctx)
-
-    before = _make_member(guild_id=7)
-    before.roles = [_role(555, "Spicy")]
-    after = _make_member(guild_id=7)
-    after.roles = []
-
-    refresh = AsyncMock()
-    with (
-        patch("bot_modules.cogs.events_cog.log_role_event"),
-        patch(
-            "bot_modules.services.promotion_review_views.refresh_level_5_cards", refresh
-        ),
-    ):
-        await cog.on_member_update(before, after)
-
-    refresh.assert_awaited_once()
-    assert refresh.await_args.args[2] is False
-
-
-async def test_on_member_update_skips_refresh_for_unrelated_roles():
-    """An unrelated role change must not fetch cards on every role edit."""
-    bot = _make_bot()
-    ctx = _make_ctx()
-    ctx.guild_config = MagicMock(
-        return_value=_StubGuildConfig(grant_roles={"nsfw": {"role_id": 555}}),
-    )
-    cog = EventsCog(bot, ctx)
-
-    spicy = _role(555, "Spicy")
-    before = _make_member(guild_id=7)
-    before.roles = [spicy]
-    after = _make_member(guild_id=7)
-    after.roles = [spicy, _role(901, "Denizen")]  # nsfw role untouched
-
-    refresh = AsyncMock()
-    with (
-        patch("bot_modules.cogs.events_cog.log_role_event"),
-        patch(
-            "bot_modules.services.promotion_review_views.refresh_level_5_cards", refresh
-        ),
-    ):
-        await cog.on_member_update(before, after)
-
-    refresh.assert_not_awaited()
-
-
-async def test_on_member_update_skips_refresh_when_nsfw_role_unset():
-    bot = _make_bot()
-    ctx = _make_ctx()
-    ctx.guild_config = MagicMock(return_value=_StubGuildConfig(grant_roles={}))
-    cog = EventsCog(bot, ctx)
-
-    before = _make_member(guild_id=7)
-    before.roles = []
-    after = _make_member(guild_id=7)
-    after.roles = [_role(555, "Spicy")]
-
-    refresh = AsyncMock()
-    with (
-        patch("bot_modules.cogs.events_cog.log_role_event"),
-        patch(
-            "bot_modules.services.promotion_review_views.refresh_level_5_cards", refresh
-        ),
-    ):
-        await cog.on_member_update(before, after)
-
-    refresh.assert_not_awaited()
+    assert refresh.await_args.args[2] is expected  # has_nsfw
 
 
 async def test_on_member_remove_uses_per_guild_leave_channel():

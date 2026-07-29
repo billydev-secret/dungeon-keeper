@@ -22,6 +22,7 @@ from bot_modules.core.xp_system import (
     is_channel_xp_eligible,
     role_grant_due,
 )
+from bot_modules.services import promotion_review_service as promo_svc
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import GuildConfig
@@ -271,8 +272,6 @@ async def maybe_log_level_5(
     if reward_role is not None:
         embed.add_field(name="Reward Role", value=reward_role.mention, inline=True)
     if nsfw_role_id > 0:
-        from bot_modules.services import promotion_review_service as promo_svc
-
         has_nsfw = any(r.id == nsfw_role_id for r in member.roles)
         embed.add_field(
             name=promo_svc.SPICY_FIELD_NAME,
@@ -302,45 +301,62 @@ async def maybe_log_level_5(
 
     try:
         posted = await channel.send(embed=embed, view=Level5PromotionView(member.id))
-        log.info(
-            "Sent level %s announcement for %s to channel %s.",
-            settings.role_grant_level,
-            format_user_for_log(member),
-            level_5_log_channel_id,
-        )
-        if db_path is not None:
-            from bot_modules.core.db_utils import open_db
-            from bot_modules.services import promotion_review_service as promo_svc
-
-            now = datetime.now(timezone.utc).timestamp()
-
-            def _record_card() -> None:
-                with open_db(db_path) as conn:
-                    promo_svc.record_level_5_card(
-                        conn, member.guild.id, member.id, channel.id, posted.id, now
-                    )
-
-            try:
-                await asyncio.to_thread(_record_card)
-            except Exception:
-                # The card is posted; losing the row only costs later refreshes.
-                log.exception(
-                    "Failed to record level %s card %s for refreshes.",
-                    settings.role_grant_level,
-                    posted.id,
-                )
     except discord.Forbidden:
         log.warning(
             "Missing permission to send level %s announcements in channel %s.",
             settings.role_grant_level,
             level_5_log_channel_id,
         )
+        return
     except discord.HTTPException:
         log.exception(
             "Discord API error while sending level %s announcement in channel %s for %s.",
             settings.role_grant_level,
             level_5_log_channel_id,
             format_user_for_log(member),
+        )
+        return
+
+    log.info(
+        "Sent level %s announcement for %s to channel %s.",
+        settings.role_grant_level,
+        format_user_for_log(member),
+        level_5_log_channel_id,
+    )
+    if db_path is None:
+        return
+    try:
+        await asyncio.to_thread(
+            _record_level_5_card,
+            db_path,
+            member.guild.id,
+            member.id,
+            channel.id,
+            posted.id,
+            datetime.now(timezone.utc).timestamp(),
+        )
+    except Exception:
+        # The card is posted; losing the row only costs later refreshes.
+        log.exception(
+            "Failed to record level %s card %s for refreshes.",
+            settings.role_grant_level,
+            posted.id,
+        )
+
+
+def _record_level_5_card(
+    db_path: Path,
+    guild_id: int,
+    user_id: int,
+    channel_id: int,
+    message_id: int,
+    created_at: float,
+) -> None:
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(db_path) as conn:
+        promo_svc.record_level_5_card(
+            conn, guild_id, user_id, channel_id, message_id, created_at
         )
 
 

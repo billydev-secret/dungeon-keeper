@@ -26,11 +26,13 @@ from typing import TYPE_CHECKING, cast
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.utils import get_guild_channel_or_thread
 from bot_modules.inactive.apply import reactivate_member
 from bot_modules.services import promotion_review_service as svc
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.utils import GuildTextLike
 
 log = logging.getLogger(__name__)
 
@@ -111,16 +113,13 @@ def refresh_spicy_field(embed: discord.Embed, has_nsfw: bool) -> discord.Embed |
     """
     want = svc.spicy_access_value(has_nsfw)
     for idx, field in enumerate(embed.fields):
-        if field.name != svc.SPICY_FIELD_NAME:
-            continue
-        if field.value == want:
-            return None
-        # deepcopy, not Embed.copy(): that is a shallow copy whose to_dict()
-        # hands back the *same* field dicts, so set_field_at would rewrite the
-        # caller's embed too.
-        updated = deepcopy(embed)
-        updated.set_field_at(idx, name=field.name, value=want, inline=bool(field.inline))
-        return updated
+        if field.name == svc.SPICY_FIELD_NAME and field.value != want:
+            # deepcopy, not Embed.copy(): that is shallow and its to_dict()
+            # hands back the *same* field dicts, so set_field_at would rewrite
+            # the caller's embed too.
+            updated = deepcopy(embed)
+            updated.set_field_at(idx, name=field.name, value=want, inline=bool(field.inline))
+            return updated
     return None
 
 
@@ -129,15 +128,9 @@ async def refresh_level_5_cards(
 ) -> None:
     """Re-render every stored Level 5 card for ``member`` to match their roles.
 
-    Driven by the ``on_member_update`` role diff, so the card tracks access
-    however it was granted — ``/grant`` or a role added by hand, neither of which
-    the card could ever see before. (Its own Grant button only refreshes the card
-    when ``promotion_review_grant_role_id`` *is* the NSFW role; the two are
-    independent settings.)
-
-    **Never raises.** The listener calls this ahead of the verified-welcome, the
-    greeter ping and the intake auto-ticks, so a failed card refresh must not
-    cost a member their welcome. One bad card doesn't stop the others either.
+    Driven by the ``on_member_update`` role diff; see
+    ``docs/promotion_review_spec.md``. **Never raises**, and one bad card doesn't
+    stop the member's others — this runs inside a listener that has other work.
     """
     guild = member.guild
     try:
@@ -185,26 +178,25 @@ async def _refresh_one_level_5_card(
 
 async def _card_channel(
     ctx: AppContext, guild: discord.Guild, channel_id: int, card_id: int
-) -> discord.abc.Messageable | None:
-    """The card's channel, forgetting the card if the channel is truly gone.
+) -> GuildTextLike | None:
+    """The card's channel, forgetting the card only if the channel is truly gone.
 
     A cache miss is ambiguous — a deleted channel and an archived (uncached)
     thread both come back ``None`` — so confirm with a fetch before dropping the
-    row. Otherwise a card in an archived thread would be forgotten while its
-    message still exists, and a card in a deleted channel would be re-fetched
-    on every future role change forever.
+    row.
     """
-    channel = guild.get_channel_or_thread(channel_id)
-    if channel is None:
-        try:
-            channel = await guild.fetch_channel(channel_id)
-        except discord.NotFound:
-            await asyncio.to_thread(_forget_level_5_card, ctx, card_id)
-            return None
-        except discord.HTTPException:
-            log.debug("promo review: can't fetch channel %s", channel_id, exc_info=True)
-            return None
-    return channel if isinstance(channel, discord.abc.Messageable) else None
+    channel = get_guild_channel_or_thread(guild, channel_id)
+    if channel is not None:
+        return channel
+    try:
+        fetched = await guild.fetch_channel(channel_id)
+    except discord.NotFound:
+        await asyncio.to_thread(_forget_level_5_card, ctx, card_id)
+        return None
+    except discord.HTTPException:
+        log.debug("promo review: can't fetch channel %s", channel_id, exc_info=True)
+        return None
+    return fetched if isinstance(fetched, discord.TextChannel | discord.Thread) else None
 
 
 def _level_5_cards(ctx: AppContext, guild_id: int, user_id: int):
