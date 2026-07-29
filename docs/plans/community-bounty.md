@@ -47,17 +47,25 @@ bounty past `bounty_expire_days` (default 14) and marks it expired.
   only entry point (added 2026-07-29, first live run). It carries a
   how-it-works blurb (including the refund promise, which the open-state card
   omits) and the open bounties with live pots, backer counts and jump links
-  (`board_entries`, capped at `HUB_LIST_LIMIT` with an "…and N more" tail).
+  (`board_entries`). The list is bounded by the embed field's **1024-char
+  budget**, not a row count — `HUB_LIST_LIMIT` is only the read cap, titles are
+  clipped, and whatever doesn't fit is named in an "…and N more" tail. A jump
+  URL costs ~96 chars, so a handful of ordinary titles overruns the field, and
+  an over-length embed is a 400 that `core.sticky` swallows — it would freeze
+  the board's only entry point on a stale render rather than fail loudly.
   Buttons: 🎯 **Post a bounty** (the modal below) and 💰 **Chip in** (a select
   of open bounties, then the amount modal — the hub isn't attached to a card).
   It repaints after a post, chip-in, award, cancel and the expiry sweep.
 - Posting is member self-service, from that panel. **`/bounty` was deleted**
   when the hub landed — CLAUDE.md's "one panel over a sprawl of subcommands",
   and the same command-surface audit that took the six posting commands.
-- The hub's channel *is* `bounty_channel_id`, so only its message id is stored
-  (`bounty_panel_message_id`) and `post_bounty_panel` refuses any other
-  channel — a hub elsewhere would be adopted by the restick as though it were
-  on the board. `restick_on_bot` is **off**: this is the one sticky panel whose
+- `post_bounty_panel` refuses any channel but the board — a hub elsewhere would
+  be adopted by the restick as though it were on the board. Where it landed is
+  stored in its own pair (`bounty_panel_channel_id`/`_message_id`) rather than
+  inferred from `bounty_channel_id`, because an admin can repoint the board and
+  that save doesn't touch the panel ids; on a mismatch the hub reads as
+  unposted and the next post deletes the orphan (whose buttons, being static
+  custom_ids, otherwise stay live). `restick_on_bot` is **off**: this is the one sticky panel whose
   own channel is where the bot posts (a card per bounty, re-rendered on every
   chip-in), so chasing bot messages would be the casino's 275-message flood.
   The cost — the hub sits above the newest card until a human speaks — is the

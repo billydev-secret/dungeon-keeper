@@ -179,10 +179,13 @@ class EconSettings:
     bounty_max_open: int = 3
     bounty_expire_days: int = 14
     bounty_rake_pct: int = 0
-    #: The hub panel's message in `bounty_channel_id` — the board's only entry
-    #: point since `/bounty` was deleted. Its *channel* is `bounty_channel_id`
-    #: itself (the hub lives on the board it fronts), so only the message id is
-    #: stored; core.sticky owns both through EconomyCog._panel_ids("bounty").
+    #: Where the hub panel — the board's only entry point since `/bounty` was
+    #: deleted — was actually posted. The channel is stored *alongside* the
+    #: message rather than inferred from `bounty_channel_id`, because an admin
+    #: can repoint the board: on a mismatch EconomyCog._bounty_panel_ids reads
+    #: the old hub as unposted, so the restick stops chasing a message that is
+    #: no longer on the board (which would otherwise leave two live hubs).
+    bounty_panel_channel_id: int = 0
     bounty_panel_message_id: int = 0
     # Live auctions (plan: docs/plans/economy-auctions.md): a mod opens a
     # freeform, mod-fulfilled auction with `/bank auction start`; members bid up

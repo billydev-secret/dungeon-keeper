@@ -562,6 +562,16 @@ def test_sticky_panel_channels_includes_the_casino_hub(db):
     assert found[1530328883449040967] == "the casino hub panel"
 
 
+def test_sticky_panel_channels_includes_the_bounty_board(db):
+    """The bounty hub is the fifth sticky panel reachable from a config read.
+    It keys off bounty_channel_id, not where the panel was last posted — the
+    board channel is where the hub lives and where its cards land."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bounty_channel_id": 44})
+        found = sticky_panel_channels(conn, GUILD)
+    assert found[44] == "the bounty board panel"
+
+
 def test_sticky_panel_channels_is_empty_when_nothing_is_configured(db):
     """An unconfigured guild must not warn about channel 0."""
     with open_db(db) as conn:

@@ -244,9 +244,17 @@ to currency.
   in from a bounty's own board card, and a mod Awards it (a `UserSelect` picks
   the winner) or Cancels it — persistent
   `BountyChipInButton`/`BountyAwardButton`/`BountyCancelButton`, plus
-  `BountyHubPostButton`/`BountyHubChipButton` on the hub. The hub's channel is
-  `bounty_channel_id` itself and only its message id is stored
-  (`bounty_panel_message_id`); `post_bounty_panel` refuses any other channel.
+  `BountyHubPostButton`/`BountyHubChipButton` on the hub. `post_bounty_panel`
+  refuses any channel but the board. Where the hub landed is stored in its own
+  pair (`bounty_panel_channel_id`/`_message_id`): an admin repointing
+  `bounty_channel_id` doesn't touch them, so on a mismatch `_bounty_panel_ids`
+  reads the hub as unposted — the restick stops chasing a message off the
+  board, which would otherwise edit-404 into a *second* live hub — and the
+  next post deletes the orphan. The list is bounded by the embed field's
+  1024-char budget, not a row count (`HUB_LIST_LIMIT` is only the read cap);
+  titles are clipped and whatever doesn't fit is named in an "…and N more"
+  tail. `sticky_panel_channels` counts the board channel, so
+  `/bank auction start` warns about the collision.
   `restick_on_bot` is **off** — the hub's own channel is where bounty cards
   post, so chasing them would be the casino's repost flood. Every stake is
   an `apply_debit` (`bounty_stake`) recorded as its own `econ_bounty_contributions`

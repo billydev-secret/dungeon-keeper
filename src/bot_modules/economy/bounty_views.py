@@ -121,6 +121,20 @@ def render_bounty_card(
 
 # ── hub panel ────────────────────────────────────────────────────────────────
 
+#: Discord's hard cap on an embed field's value. Exceeding it is a 400 on the
+#: send/edit, which ``core.sticky`` catches and logs — so an over-long list
+#: doesn't error loudly, it silently stops the panel updating.
+FIELD_VALUE_MAX = 1024
+#: Room held back for the "…and N more" tail so it always fits.
+_TAIL_RESERVE = 64
+#: Titles are clipped for the *list* only; the bounty's own card shows it in
+#: full. MAX_TITLE_LEN is 100, and eight of those exceed the field alone.
+LIST_TITLE_MAX = 60
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
 
 def _jump_url(guild_id: int, entry: BountyBoardEntry) -> str | None:
     """The card's jump link, or None when the card never posted (ids are 0)."""
@@ -175,18 +189,29 @@ def build_bounty_hub_embed(
         return embed
 
     lines: list[str] = []
+    used = 0
     for entry in entries:
         backers = (
             "no backers yet"
             if entry.contributors == 0
             else f"{entry.contributors} backer{'' if entry.contributors == 1 else 's'}"
         )
-        head = f"**{entry.title}** — {_coins(settings, entry.pot)} · {backers}"
+        title = _clip(entry.title, LIST_TITLE_MAX)
+        head = f"**{title}** — {_coins(settings, entry.pot)} · {backers}"
         url = _jump_url(guild_id, entry)
-        lines.append(f"• {head} · [jump]({url})" if url else f"• {head}")
-    # board_entries() caps the list; say so rather than silently showing a
-    # partial board (the count comes from a separate COUNT over all open rows).
-    hidden = open_total - len(entries)
+        line = f"• {head} · [jump]({url})" if url else f"• {head}"
+        # Stop on the real budget, not on a count. A jump URL is ~96 chars on
+        # its own, so even a handful of ordinary titles overruns the field —
+        # and an over-length embed is a 400 that StickyPanel swallows, which
+        # would freeze the board's ONLY entry point on a stale render.
+        if used + len(line) + 1 > FIELD_VALUE_MAX - _TAIL_RESERVE:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    # Whatever didn't fit — the read cap in board_entries or the budget above —
+    # is named rather than silently dropped, so a partial board never reads as
+    # the whole board. The count comes from a COUNT over all open rows.
+    hidden = open_total - len(lines)
     if hidden > 0:
         lines.append(f"…and **{hidden}** more further up the channel.")
     embed.add_field(name="📋 Open bounties", value="\n".join(lines), inline=False)

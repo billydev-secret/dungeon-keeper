@@ -407,9 +407,11 @@ class BountyBoardEntry:
     card_message_id: int
 
 
-#: How many open bounties the hub panel lists. An embed field caps at 1024
-#: characters and a bounty title can run to MAX_TITLE_LEN, so this is the
-#: ceiling that keeps the field inside that budget without truncating.
+#: How many open bounties the hub panel asks for. This is only the *read*
+#: bound — the renderer drops further lines when the embed field's 1024-char
+#: budget runs out (see ``build_bounty_hub_embed``), because a bounty title
+#: alone can run to MAX_TITLE_LEN and eight of those overflow the field on
+#: their own. Never treat this as "what the hub shows".
 HUB_LIST_LIMIT = 8
 
 

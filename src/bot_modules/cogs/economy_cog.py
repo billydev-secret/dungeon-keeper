@@ -3682,32 +3682,75 @@ class EconomyCog(commands.Cog):
             )
 
     def _bounty_panel_ids(self, guild_id: int) -> tuple[int, int]:
-        """The hub's (channel, message). Channel is the board itself.
+        """Where the hub is, or (0, 0) for "unposted" (the restick no-ops).
 
-        Returns (0, 0) — "unposted", so the restick is a no-op — while the
-        economy is off OR no board channel is set, which is the same condition
-        ``bounty_enabled`` gates the whole feature on.
+        (0, 0) in three cases: the economy is off; no board channel is set (the
+        same condition ``bounty_enabled`` gates the whole feature on); or the
+        hub was posted in a channel that is no longer the board.
+
+        That last one is why the channel is stored rather than assumed. An
+        admin can repoint ``bounty_channel_id`` at any time from the dashboard,
+        and that save doesn't touch the panel ids. Pairing the old message id
+        with the new channel would have the restick edit-404, post a *second*
+        hub, and fail to delete the first — leaving two live hubs, the stale
+        one listing bounties whose cards now post elsewhere.
         """
         with self.ctx.open_db() as conn:
             s = load_econ_settings(conn, guild_id)
         if not s.enabled or not bounty_enabled(s):
             return 0, 0
-        return int(s.bounty_channel_id), int(s.bounty_panel_message_id)
+        if int(s.bounty_panel_channel_id) != int(s.bounty_channel_id):
+            return 0, 0
+        return int(s.bounty_panel_channel_id), int(s.bounty_panel_message_id)
 
     def _save_bounty_panel_ids(
         self, guild_id: int, channel_id: int, message_id: int
     ) -> None:
-        """Persist only the message id — the channel is the configured board.
+        """Persist where the hub landed — its own fields, never the board's.
 
-        Deliberately narrower than ``_save_panel_ids``: writing the channel back
-        would let a mis-posted hub silently *redefine* which channel the board
-        is, moving every future bounty card with it. ``post_bounty_panel``
-        already refuses any channel but the board, so there is nothing to store.
+        Writing ``bounty_channel_id`` here would let a mis-posted hub silently
+        *redefine* which channel the board is, moving every future bounty card
+        with it; ``post_bounty_panel`` refuses any channel but the board, so
+        these two agree on every normal path and diverge only after a repoint.
         """
         with self.ctx.open_db() as conn:
             save_econ_settings(
-                conn, guild_id, {"bounty_panel_message_id": message_id}
+                conn,
+                guild_id,
+                {
+                    "bounty_panel_channel_id": channel_id,
+                    "bounty_panel_message_id": message_id,
+                },
             )
+
+    async def _drop_stale_bounty_hub(self, guild: discord.Guild) -> None:
+        """Delete a hub left behind in a channel that is no longer the board.
+
+        Its buttons are static custom_ids, so an orphaned hub keeps working —
+        Post a bounty on it would file a card into the *new* board channel.
+        Called when the panel is (re)posted, which is the moment an admin who
+        just repointed the board is here to see it cleaned up. Best-effort:
+        the ids are cleared either way so this can't be retried forever.
+        """
+        def _read() -> tuple[int, int, int]:
+            with self.ctx.open_db() as conn:
+                s = load_econ_settings(conn, guild.id)
+                return (
+                    int(s.bounty_panel_channel_id),
+                    int(s.bounty_panel_message_id),
+                    int(s.bounty_channel_id),
+                )
+
+        old_channel, old_message, board = await asyncio.to_thread(_read)
+        if not old_message or old_channel == board:
+            return
+        channel = guild.get_channel(old_channel)
+        if isinstance(channel, discord.TextChannel):
+            try:
+                await channel.get_partial_message(old_message).delete()
+            except discord.HTTPException:
+                log.debug("econ bounty: stale hub already gone", exc_info=True)
+        await asyncio.to_thread(self._save_bounty_panel_ids, guild.id, 0, 0)
 
     async def _build_bounty_panel(self, guild: discord.Guild) -> PanelContent:
         embed, view = await build_bounty_hub_panel(self.bot, guild)
@@ -3737,6 +3780,9 @@ class EconomyCog(commands.Cog):
                 f"(<#{int(settings.bounty_channel_id)}>) — that's the channel "
                 "its cards post to."
             )
+        # If the board was repointed, the hub still sitting in the old channel
+        # has live buttons. Clear it out before placing the new one.
+        await self._drop_stale_bounty_hub(guild)
         return await self.bounty_panel.place_or_refresh(guild, channel)
 
     async def refresh_bounty_hub_panel(self, guild: discord.Guild) -> None:

@@ -151,3 +151,75 @@ def test_blurb_uses_the_guild_currency_name():
         ACCENT, _settings(currency_plural="doubloons"), GUILD, [], open_total=0
     )
     assert "doubloons" in _field(embed, "How it works")
+
+
+# ── the 1024-char embed-field budget ───────────────────────────────────
+
+
+def _entries(n: int, title_len: int = 30) -> list[BountyBoardEntry]:
+    # Real snowflakes: a jump URL is ~96 chars, which is most of a line's cost.
+    return [
+        BountyBoardEntry(
+            bounty_id=i,
+            title="T" * title_len,
+            pot=123456,
+            contributors=4,
+            card_channel_id=1532059736038441200,
+            card_message_id=1532059736038441201,
+        )
+        for i in range(n)
+    ]
+
+
+@pytest.mark.parametrize("title_len", [20, 30, 60, 100])
+@pytest.mark.parametrize("count", [8, 25])
+def test_open_list_never_exceeds_the_embed_field_limit(title_len, count):
+    """An over-length field is a 400 on send/edit that core.sticky swallows —
+    it would freeze the board's only entry point on a stale render rather than
+    failing loudly. Eight full-length titles overflow 1024 on their own."""
+    embed = build_bounty_hub_embed(
+        ACCENT,
+        _settings(bounty_rake_pct=10),
+        GUILD,
+        _entries(count, title_len),
+        open_total=count,
+    )
+    assert len(_field(embed, "Open bounties")) <= 1024
+
+
+def test_whole_embed_stays_within_discord_limits():
+    embed = build_bounty_hub_embed(
+        ACCENT, _settings(bounty_rake_pct=10), GUILD, _entries(25, 100), open_total=25
+    )
+    assert len(embed) <= 6000
+    for field in embed.fields:
+        assert len(str(field.value)) <= 1024
+
+
+def test_budget_dropped_lines_are_counted_in_the_tail():
+    """Whatever the budget drops has to show up in "…and N more" — a partial
+    board that reads as the whole board is the failure mode worth guarding."""
+    entries = _entries(25, 100)
+    embed = build_bounty_hub_embed(
+        ACCENT, _settings(), GUILD, entries, open_total=25
+    )
+    listing = _field(embed, "Open bounties")
+    shown = listing.count("• ")
+    assert shown < len(entries)  # the budget really did bite
+    assert f"**{25 - shown}** more" in listing
+
+
+def test_long_titles_are_clipped_in_the_list_only():
+    embed = build_bounty_hub_embed(
+        ACCENT, _settings(), GUILD, [_entry(title="X" * 100)], open_total=1
+    )
+    listing = _field(embed, "Open bounties")
+    assert "…" in listing
+    assert "X" * 100 not in listing
+
+
+def test_short_titles_are_left_alone():
+    embed = build_bounty_hub_embed(
+        ACCENT, _settings(), GUILD, [_entry(title="Draw the mascot")], open_total=1
+    )
+    assert "Draw the mascot" in _field(embed, "Open bounties")

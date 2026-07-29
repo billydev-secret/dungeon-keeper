@@ -3001,14 +3001,15 @@ def test_bounty_panel_ids_are_dark_until_the_board_is_configured(ctx, db):
     """(0, 0) reads as "unposted", so the restick is a no-op — the same
     condition bounty_enabled() gates the whole feature on."""
     cog = _make_cog(ctx)
+    posted = {"bounty_panel_channel_id": 5555, "bounty_panel_message_id": 77}
 
-    _enable(db, bounty_channel_id=0, bounty_panel_message_id=77)
+    _enable(db, bounty_channel_id=0, **posted)
     assert cog._bounty_panel_ids(GUILD_ID) == (0, 0)
 
-    _enable(db, enabled=False, bounty_channel_id=5555, bounty_panel_message_id=77)
+    _enable(db, enabled=False, bounty_channel_id=5555, **posted)
     assert cog._bounty_panel_ids(GUILD_ID) == (0, 0)
 
-    _enable(db, enabled=True, bounty_channel_id=5555, bounty_panel_message_id=77)
+    _enable(db, enabled=True, bounty_channel_id=5555, **posted)
     assert cog._bounty_panel_ids(GUILD_ID) == (5555, 77)
 
 
@@ -3047,3 +3048,64 @@ def test_no_bounty_slash_command_survives():
 
     names = {c.name for c in EconomyCog.__cog_app_commands__}
     assert "bounty" not in names
+
+
+def test_repointing_the_bounty_board_stops_the_old_hub_being_restuck(ctx, db):
+    """Changing bounty_channel_id doesn't touch the panel ids (the dashboard
+    save is a partial update). Pairing the old message with the new channel
+    would edit-404, post a second hub, and fail to delete the first."""
+    _enable(db, bounty_channel_id=5555)
+    cog = _make_cog(ctx)
+    cog._save_bounty_panel_ids(GUILD_ID, 5555, 4242)
+    assert cog._bounty_panel_ids(GUILD_ID) == (5555, 4242)
+
+    _enable(db, bounty_channel_id=6666)  # admin repoints the board
+
+    assert cog._bounty_panel_ids(GUILD_ID) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_posting_the_bounty_panel_deletes_a_hub_orphaned_by_a_repoint(ctx, db):
+    """An orphaned hub's buttons are static custom_ids, so it stays live —
+    Post a bounty on it would file a card into the new board channel."""
+    _enable(db, bounty_channel_id=5555)
+    cog = _make_cog(ctx)
+    cog._save_bounty_panel_ids(GUILD_ID, 5555, 4242)
+    _enable(db, bounty_channel_id=6666)
+
+    old_message = MagicMock()
+    old_message.delete = AsyncMock()
+    old_channel = MagicMock(spec=discord.TextChannel)
+    old_channel.get_partial_message.return_value = old_message
+    guild = FakeGuild(id=GUILD_ID)
+    guild.get_channel = lambda cid: old_channel if cid == 5555 else None
+
+    with patch.object(
+        cog.bounty_panel, "place_or_refresh", new=AsyncMock(return_value="msg")
+    ):
+        await cog.post_bounty_panel(guild, SimpleNamespace(id=6666))
+
+    old_channel.get_partial_message.assert_called_once_with(4242)
+    old_message.delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_posting_the_bounty_panel_does_not_delete_a_hub_in_the_current_board(ctx, db):
+    """Re-posting into the same channel is a refresh, not a move — deleting
+    here would destroy the panel the sticky is about to edit in place."""
+    _enable(db, bounty_channel_id=5555)
+    cog = _make_cog(ctx)
+    cog._save_bounty_panel_ids(GUILD_ID, 5555, 4242)
+
+    channel = MagicMock(spec=discord.TextChannel)
+    guild = FakeGuild(id=GUILD_ID)
+    guild.get_channel = lambda cid: channel
+
+    with patch.object(
+        cog.bounty_panel, "place_or_refresh", new=AsyncMock(return_value="msg")
+    ):
+        await cog.post_bounty_panel(guild, SimpleNamespace(id=5555))
+
+    channel.get_partial_message.assert_not_called()
+    with open_db(db) as conn:
+        assert load_econ_settings(conn, GUILD_ID).bounty_panel_message_id == 4242
