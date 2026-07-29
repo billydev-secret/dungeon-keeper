@@ -1875,13 +1875,51 @@
     </div>
 
     <h3 id="intake">Intake Cards</h3>
-    <p>Turns your welcome procedure into a live checklist. When someone joins, the bot posts an <strong>intake card</strong> to greeter chat — pinging the greeter role instead of the old bare @here line — showing a progress bar, the member's account age, who invited them, and the procedure as ✅/⬜ steps. The card is a tracker, not a control panel: welcomers keep greeting, asking the question lists, and running <code>/grant</code> exactly as before, and the card ticks itself — a greeter or mod mentioning <em>or replying to</em> the newcomer <strong>in your greeter chat (or welcome) channel</strong> ticks <em>Greeted</em>, passing verification ticks <em>Verified</em>, and gaining a configured role (via <code>/grant</code> or a manual add) ticks the matching role step. The question phases are buttons welcomers tick by hand. Nothing anyone says is ever recorded — only that steps happened, by whom, and when.</p>
-    <p>Two of those auto-ticks depend on settings elsewhere, and the panel tells you which channel and role it is watching. <em>Greeted</em> watches the channel newcomers are actually talked to in — your <strong>greeter chat channel</strong>, or the <strong>welcome channel</strong> when that isn't set, both on Welcome &amp; Leave. It is not the card channel: the card is the bot's noticeboard, and a greeting posted there isn't the greeting the newcomer sees. <em>Verified</em> accepts either shape verification takes — your unverified role being <strong>removed</strong>, or a <strong>Verified role</strong> being <strong>granted</strong> by a verification bot such as Double Counter. If yours only grants a role, pick it in the Verified role box on the Intake panel, or that step can never tick.</p>
-    <p>Steps can also tick themselves from what you paste. Give a step a <strong>step code</strong> — any phrase you like — and drop that phrase into the canned message for that stage of the procedure. When a greeter or mod posts it while @mentioning or replying to the newcomer, from any channel, that one step ticks and the card stays open. So pasting your "we're done with the SFW portion" message ticks the SFW step by itself, with nobody touching the card. A <code>-#</code> subtext line is a tidy place to park the code. Codes are matched anywhere in the message and ignore capitalisation, so no code may contain another one, and none may contain the completion code — the dashboard refuses the save and tells you which two clash.</p>
-    <p>To finish an intake, the welcomer posts the ending welcome message containing the configured <strong>completion code</strong> and @mentioning (or replying to) the newcomer — any channel works. The card completes, the poster is recorded as the welcomer, and any unticked steps are marked <em>skipped</em> (visible in analytics, never blocking). Cards only ever close on completion, a mod's Dismiss, or the member leaving or being banned — so the open cards <em>are</em> your intake queue. A card with no progress for the configured window gets one greeter-role nudge reply, never more.</p>
-    <p>When the <a href="#economy">Economy</a> is running, greeters <strong>earn coins for the intake work itself</strong>: each checklist step pays a flat award to whoever ticks it — by the card's buttons, by the greeting that ticks <em>Greeted</em>, or by pasting a message carrying that step's code. It pays per step rather than per finished card on purpose — when two people share a welcome, each is paid for what they actually did, instead of the whole award going to whoever happened to post the completion code. A step pays <strong>once per card</strong>, so unticking a step and ticking it again is worth nothing, and a second greeter can't re-claim a step someone already ticked. Steps that tick themselves from a role change (<em>Verified</em>, the role grants) have no person behind them and pay nobody, and <em>skipped</em> steps pay nothing — only work that was actually done earns. The rate lives on <strong>Economy → Income Sources</strong> ("Ticking a step on a newcomer's intake card"), where the whole source can also be switched off; an optional <strong>intake_step</strong> quest in <strong>Economy → Quests</strong> stacks a bonus on top.</p>
-    <p>The panel also manages a <strong>procedure reference</strong> channel (your #welcome-procedure): the text sections and question lists live in a block editor on the dashboard and the bot keeps the channel in sync. Every block's heading posts as its own message and the content below it as another, so Copy Text on the content gives you exactly the text to paste with no heading to trim; question lists go a step further and post <strong>one message per question</strong>. Rewording a question edits the same message in place (links keep working); a one-time Import button seeds the editor from the channel's existing content. The bot never touches messages humans posted there.</p>
-    <p>If someone deletes one of those messages in Discord, the next <strong>Save &amp; sync channel</strong> puts it back — you don't have to change the text first. Because Discord can only add messages at the bottom, restoring one means re-sending everything below it so the procedure still reads top to bottom; the messages above it are left alone. The status line tells you how many were restored.</p>
+    <p>Turns your welcome procedure into a live checklist. When someone joins, the bot posts an <strong>intake card</strong> to greeter chat, pinging the greeter role: a progress bar, the member's account age, who invited them, and the procedure as ✅/⬜ steps.</p>
+    <p>The card is a tracker, not a control panel. Welcomers keep greeting, asking the question lists, and running <code>/grant</code> exactly as before, and the card ticks itself as they go. Nothing anyone says is ever recorded — only that steps happened, by whom, and when.</p>
+
+    <h4>What ticks each step</h4>
+    <table>
+      <thead>
+        <tr><th>Step</th><th>Ticks when</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Greeted</strong></td><td>A greeter or mod mentions <em>or replies to</em> the newcomer in your greeter chat channel.</td></tr>
+        <tr><td><strong>Verified</strong></td><td>Your unverified role is removed, or a Verified role is granted.</td></tr>
+        <tr><td><strong>Role steps</strong></td><td>The member gains the configured role, via <code>/grant</code> or a manual add.</td></tr>
+        <tr><td><strong>Question phases</strong></td><td>A welcomer presses that step's button on the card.</td></tr>
+        <tr><td><strong>Any step</strong></td><td>Someone posts that step's step code (below).</td></tr>
+      </tbody>
+    </table>
+    <p>The first two depend on settings elsewhere, and the panel shows which channel and role it is watching. <em>Greeted</em> watches where newcomers are actually talked to — your <strong>greeter chat channel</strong>, or the <strong>welcome channel</strong> when that isn't set, both on Welcome &amp; Leave. It is not the card channel: a greeting posted on the bot's noticeboard isn't the greeting the newcomer sees.</p>
+    <p><em>Verified</em> accepts either shape verification takes: your unverified role being <strong>removed</strong>, or a <strong>Verified role</strong> being <strong>granted</strong> by a bot such as Double Counter. If yours only grants a role, pick it in the Verified role box, or that step can never tick.</p>
+
+    <h4>Step codes</h4>
+    <p>Give a step a <strong>step code</strong> — any phrase you like — and drop it into the canned message for that stage. A greeter or mod who posts it while @mentioning or replying to the newcomer ticks that one step, from any channel, and the card stays open. So your "we're done with the SFW portion" message ticks the SFW step by itself; a <code>-#</code> subtext line is a tidy place to park the code.</p>
+    <p>Codes match anywhere in the message and ignore capitalisation, so no code may contain another one, and none may contain the completion code. The dashboard refuses the save and names the clashing pair.</p>
+
+    <h4>Finishing an intake</h4>
+    <p>The welcomer posts the ending welcome message containing the configured <strong>completion code</strong> and @mentioning (or replying to) the newcomer — any channel works. The card completes, the poster is recorded as the welcomer, and any unticked steps are marked <em>skipped</em>: visible in analytics, never blocking.</p>
+    <p>Cards only ever close on completion, a mod's Dismiss, or the member leaving or being banned — so the open cards <em>are</em> your intake queue. A card with no progress for the configured window gets one greeter-role nudge reply, never more.</p>
+
+    <h4>Earning coins</h4>
+    <p>When the <a href="#economy">Economy</a> is running, each step pays a flat award to whoever ticks it — by the card's buttons, by the greeting that ticks <em>Greeted</em>, or by posting that step's code. Paying per step rather than per finished card means two people sharing a welcome are each paid for what they actually did.</p>
+    <ul>
+      <li>A step pays <strong>once per card</strong> — unticking and re-ticking is worth nothing, and a second greeter can't re-claim it.</li>
+      <li>Steps that tick from a role change (<em>Verified</em>, the role grants) have no person behind them and pay nobody.</li>
+      <li><em>Skipped</em> steps pay nothing.</li>
+    </ul>
+    <p>The rate lives on <strong>Economy → Income Sources</strong> ("Ticking a step on a newcomer's intake card"), where the source can also be switched off; an optional <strong>intake_step</strong> quest in <strong>Economy → Quests</strong> stacks a bonus on top.</p>
+
+    <h4>Procedure reference channel</h4>
+    <p>The panel also manages your #welcome-procedure channel: the text sections and question lists live in a block editor on the dashboard, and the bot keeps the channel in sync.</p>
+    <ul>
+      <li>Each block's heading posts as its own message and its content as another, so Copy Text gives you the exact text to paste with no heading to trim.</li>
+      <li>Question lists post <strong>one message per question</strong>; rewording one edits that message in place, so links keep working.</li>
+      <li>A one-time <strong>Import</strong> button seeds the editor from the channel's existing content.</li>
+      <li>The bot never touches messages humans posted there.</li>
+    </ul>
+    <p>If someone deletes one of those messages, the next <strong>Save &amp; sync channel</strong> puts it back — you don't have to change the text first. Because Discord can only add messages at the bottom, restoring one means re-sending everything below it so the procedure still reads top to bottom; the messages above are left alone, and the status line tells you how many were restored.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
