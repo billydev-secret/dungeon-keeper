@@ -470,12 +470,13 @@ export function buildField(labelText, control, hint) {
 // the input (W-A7). Every panel wants that, so it lives here rather than
 // being re-derived per panel.
 //
-// Note these are not yet the only copies: config-birthday, config-bulk-cleanup,
+// Note these are not yet the only copies: birthday-settings, config-cleanup,
 // config-confessions, config-dms and config-starboard each still carry a
 // byte-identical private `field` (config-bios calls its copy `labeledField`),
-// and the same three panels duplicate a `toggleField`/`buildNumberInput` pair
-// that `checkbox`/`numInput` here subsume. Converting them is a mechanical
-// import swap and good follow-up work; prefer importing from here in new code.
+// and config-cleanup/config-confessions/config-starboard duplicate a
+// `toggleField`/`buildNumberInput` pair that `checkbox`/`numInput` here
+// subsume. Converting them is a mechanical import swap and good follow-up
+// work; prefer importing from here in new code.
 let _fieldSeq = 0;
 
 export function field(labelText, control, hint) {

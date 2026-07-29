@@ -148,16 +148,54 @@ def _second_argument(text: str, start: int) -> str | None:
     return m.group("key") if m else None
 
 
-def _mounted_keys(page_id: str) -> set[str]:
-    """Registry keys the given dashboard page mounts a poster for."""
-    source = _PANELS_DIR / f"{page_id}.js"
-    if not source.exists():
-        return set()
+_APP_JS = _PANELS_DIR.parent / "app.js"
+_NAV_MODULE_RE = re.compile(
+    r"""id:\s*["'](?P<id>[\w-]+)["'][^}]*?module:\s*["']\./panels/(?P<mod>[\w.-]+)\.js["']"""
+)
+_LOCAL_IMPORT_RE = re.compile(r"""from\s+["']\./(?P<mod>[\w.-]+)\.js["']""")
+
+
+def _read(source: pathlib.Path) -> str:
     # Explicit encoding: the panel sources carry emoji and em dashes, and the
     # Windows test runner's default is cp1252, which can't decode them.
-    text = source.read_text(encoding="utf-8")
-    found = (_second_argument(text, m.end()) for m in _CALL_RE.finditer(text))
-    return {key for key in found if key}
+    return source.read_text(encoding="utf-8")
+
+
+def _module_for_page(page_id: str) -> str:
+    """The panel module a nav page id mounts, per app.js.
+
+    Page id and filename used to be the same string, so this could be assumed.
+    Merged pages broke that: "xp-leaderboard" now mounts panels/xp.js, which
+    composes the old report and settings modules.
+    """
+    for m in _NAV_MODULE_RE.finditer(_read(_APP_JS)):
+        if m.group("id") == page_id:
+            return m.group("mod")
+    return page_id
+
+
+def _mounted_keys(page_id: str) -> set[str]:
+    """Registry keys the given dashboard page mounts a poster for.
+
+    Follows the page's local imports one level, because a merged page is a thin
+    shell that delegates to a report half and a settings half — the poster call
+    lives in whichever half owns that feature's settings, not in the shell.
+    """
+    entry = _module_for_page(page_id)
+    source = _PANELS_DIR / f"{entry}.js"
+    if not source.exists():
+        return set()
+    text = _read(source)
+    sources = [text]
+    for imp in _LOCAL_IMPORT_RE.finditer(text):
+        part = _PANELS_DIR / f"{imp.group('mod')}.js"
+        if part.exists():
+            sources.append(_read(part))
+    keys: set[str] = set()
+    for chunk in sources:
+        found = (_second_argument(chunk, m.end()) for m in _CALL_RE.finditer(chunk))
+        keys |= {key for key in found if key}
+    return keys
 
 
 def test_the_call_site_scanner_reads_the_key_not_the_slot():
@@ -185,7 +223,8 @@ def test_every_panel_is_mounted_on_the_page_it_names(spec):
     the registry without a page mounting it is postable only by hand-crafting
     the request, and the button an admin goes looking for is simply absent.
     """
-    assert (_PANELS_DIR / f"{spec.host_page}.js").exists(), (
+    module = _module_for_page(spec.host_page)
+    assert (_PANELS_DIR / f"{module}.js").exists(), (
         f"{spec.key} names host page {spec.host_page!r}, which has no panel module"
     )
     assert spec.key in _mounted_keys(spec.host_page), (
