@@ -28,7 +28,7 @@ which is the value the cooldown actually reads.
 
 Discord objects are ``MagicMock(spec=...)`` so ``isinstance`` checks in the
 cog pass without a gateway connection; the network-facing helpers
-(``_create_channel``, ``_post_intro``, ``_refresh_panel``, ``generate_text``)
+(``_create_channel``, ``_post_intro``, ``_refresh_panel``)
 are monkeypatched at the module level.
 """
 
@@ -165,7 +165,6 @@ def pair_env(sync_db_path, monkeypatch):
     monkeypatch.setattr(pp, "_create_channel", fake_create_channel)
     monkeypatch.setattr(pp, "_post_intro", AsyncMock())
     monkeypatch.setattr(pp, "resolve_accent_color", AsyncMock(return_value=None))
-    monkeypatch.setattr(pp, "generate_text", AsyncMock(return_value="AI question?"))
     return bot, channel, created
 
 
@@ -321,30 +320,26 @@ def test_draw_from_bank_is_round_robin_not_repeating_until_pool_cycles(sync_db_p
 # ── _draw_question fallback chain ─────────────────────────────────────
 
 
-async def test_draw_question_prefers_bank(sync_db_path, monkeypatch):
+async def test_draw_question_prefers_bank(sync_db_path):
     _add_bank_question(sync_db_path, "from the bank?")
-    gen = AsyncMock(return_value="from the AI?")
-    monkeypatch.setattr(pp, "generate_text", gen)
     q = await pp._draw_question(sync_db_path, "sess", False)
     assert q == "from the bank?"
-    gen.assert_not_awaited()
 
 
-async def test_draw_question_falls_back_to_ai(sync_db_path, monkeypatch):
-    monkeypatch.setattr(pp, "generate_text", AsyncMock(return_value="from the AI?\nextra line"))
-    q = await pp._draw_question(sync_db_path, "sess", False)
-    assert q == "from the AI?"
+async def test_draw_question_static_fallback_when_bank_empty(sync_db_path):
+    """An empty bank yields the static question, not an AI call.
 
-
-async def test_draw_question_static_fallback_when_ai_fails(sync_db_path, monkeypatch):
-    monkeypatch.setattr(pp, "generate_text", AsyncMock(return_value=None))
+    The AI fallback was removed with the Prompts & AI studios; the module no
+    longer imports ``generate_text`` at all, so a matched pair can never be
+    handed an empty round.
+    """
+    assert not hasattr(pp, "generate_text")
     q = await pp._draw_question(sync_db_path, "sess", False)
     assert q == pp._FALLBACK_QUESTION
 
 
-async def test_draw_question_excludes_session_history(sync_db_path, monkeypatch):
+async def test_draw_question_excludes_session_history(sync_db_path):
     _add_bank_question(sync_db_path, "q1")
-    monkeypatch.setattr(pp, "generate_text", AsyncMock(return_value=None))
     with open_db(sync_db_path) as conn:
         pp._record_question(conn, "sess", "q1")
     q = await pp._draw_question(sync_db_path, "sess", False)
@@ -665,7 +660,6 @@ async def _capture_do_pair(
     monkeypatch.setattr(pp, "_create_channel", fake_create_channel)
     monkeypatch.setattr(pp, "_post_intro", AsyncMock())
     monkeypatch.setattr(pp, "resolve_accent_color", AsyncMock(return_value=None))
-    monkeypatch.setattr(pp, "generate_text", AsyncMock(return_value="AI question?"))
     with open_db(sync_db_path) as conn:
         pp._add_to_pool(conn, GUILD_ID, 1)
         pp._add_to_pool(conn, GUILD_ID, 2)

@@ -50,7 +50,6 @@ from bot_modules.games.utils.game_manager import (
     channel_name,
 )
 from bot_modules.games.utils.question_source import get_rushmore_topic, channel_allows_nsfw
-from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games_rushmore.logic import (
     BACKFILL_SECONDS,
     DRAFT_ROUNDS,
@@ -75,25 +74,6 @@ from bot_modules.games_rushmore.embeds import (
 )
 
 log = logging.getLogger(__name__)
-
-# ── AI prompts ───────────────────────────────────────────────────────────────
-
-RUSHMORE_SYSTEM_PROMPT = (
-    "You are generating fun, debatable 'Mt. Rushmore' draft topics for an adult "
-    "party game in this Discord community. A Mt. Rushmore topic is "
-    "a category where players will draft their top 4 picks. The best topics are "
-    "ones where there are many valid options and people will disagree on the best 4."
-)
-
-RUSHMORE_USER_PROMPT = (
-    "Generate a single Mt. Rushmore topic. "
-    "Examples: 'Snacks', 'Movie Villains', 'Excuses to Leave a Party', "
-    "'Songs to Play at the End of the World', 'Fast Food Menu Items', "
-    "'Things You'd Save in a House Fire', 'Guilty Pleasure TV Shows', "
-    "'Underrated Superpowers', 'Worst First Date Ideas'. "
-    "Return only the topic — a short noun phrase, no preamble, no quotes."
-)
-
 
 # ── Modals ───────────────────────────────────────────────────────────────────
 
@@ -302,22 +282,9 @@ class RushmoreJoinView(discord.ui.View):
                     except discord.HTTPException:
                         pass
                     return
-            elif self.source == "ai":
-                await interaction.response.defer()
-                topic = await generate_text(
-                    RUSHMORE_SYSTEM_PROMPT, RUSHMORE_USER_PROMPT,
-                    model="gpt-4o-mini", max_tokens=50,
-                )
-                if not topic:
-                    _tags = (await get_game_payload(self.db, self.game_id)).get("settings", {}).get("tags") or None
-                    topic = await get_rushmore_topic(
-                        self.db, tags=_tags,
-                        allow_nsfw=channel_allows_nsfw(interaction.channel),
-                    )
-                if not topic:
-                    await interaction.followup.send("Couldn't generate a topic. Try setting one manually with `/rushmore topic:...`.", ephemeral=True)
-                    return
-            elif self.source == "bank":
+            # "ai" was retired with the Prompts & AI studios; a game persisted
+            # under it draws from the bank rather than erroring out.
+            elif self.source in ("bank", "ai"):
                 await interaction.response.defer()
                 _tags = (await get_game_payload(self.db, self.game_id)).get("settings", {}).get("tags") or None
                 topic = await get_rushmore_topic(
@@ -737,7 +704,6 @@ class RushmoreCog(commands.Cog):
     @app_commands.choices(
         source=[
             app_commands.Choice(name="Host picks topic", value="host"),
-            app_commands.Choice(name="AI generated", value="ai"),
             app_commands.Choice(name="Question bank", value="bank"),
         ],
         mode=[

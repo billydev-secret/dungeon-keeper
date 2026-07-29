@@ -31,7 +31,6 @@ const HELP_NAV_SECTION = {
 //   help       — help-page id; renders a "?" link in the panel header row.
 //   related    — page ids cross-linked in the panel header row.
 //   primaryOnly— hidden on non-primary guilds (bot-global settings).
-//   gt         — games-studio game-type query param.
 
 const SECTIONS = [
   {
@@ -227,6 +226,16 @@ const SECTIONS = [
       { id: "config-games-hotpotatogroup", label: "Hot Potato (Group)", module: "./panels/config-games-hotpotatogroup.js", adminOnly: true },
       { id: "config-games-chicken", label: "Chicken", module: "./panels/config-games-chicken.js", adminOnly: true },
       { id: "config-games-musicalchairs", label: "Musical Chairs", module: "./panels/config-games-musicalchairs.js", adminOnly: true },
+      // Question-bank games. Each was a two-page subgroup until the AI prompt
+      // studios were removed; with one page left they follow the same
+      // flattened convention as the games above.
+      { id: "games-wyr",      label: "Would You Rather",  module: "./panels/games-wyr.js" },
+      { id: "games-nhie",     label: "Never Have I Ever", module: "./panels/games-nhie.js" },
+      { id: "games-mlt",      label: "Most Likely To",    module: "./panels/games-mlt.js" },
+      { id: "games-rushmore", label: "Rushmore",          module: "./panels/games-rushmore.js" },
+      { id: "games-price",    label: "Price",             module: "./panels/games-price.js" },
+      { id: "games-clapback", label: "Clapback",          module: "./panels/games-clapback.js" },
+      { id: "games-ama",      label: "AMA",               module: "./panels/games-ama.js" },
       { id: "games-ffa", label: "FFA / Truth or Dare", module: "./panels/games-ffa.js" },
       { id: "games-traditional", label: "Traditional Truth or Dare", module: "./panels/games-traditional.js" },
       { id: "config-guess", label: "Guess Who", module: "./panels/config-guess.js", perms: ["moderator"], help: "help-guess", keywords: "post panel submit prompt" },
@@ -234,38 +243,9 @@ const SECTIONS = [
       { id: "config-confessions",  label: "Confessions",     module: "./panels/config-confessions.js", adminOnly: true, help: "help-confessions" },
     ],
     groups: [
-      { heading: "Would You Rather", items: [
-        { id: "games-wyr",        label: "Questions",  module: "./panels/games-wyr.js" },
-        { id: "games-wyr-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "wyr" },
-      ]},
-      { heading: "Never Have I Ever", items: [
-        { id: "games-nhie",        label: "Questions",  module: "./panels/games-nhie.js" },
-        { id: "games-nhie-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "nhie" },
-      ]},
-      { heading: "Most Likely To", items: [
-        { id: "games-mlt",        label: "Questions",  module: "./panels/games-mlt.js" },
-        { id: "games-mlt-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "mlt" },
-      ]},
-      { heading: "Rushmore", items: [
-        { id: "games-rushmore",        label: "Questions",  module: "./panels/games-rushmore.js" },
-        { id: "games-rushmore-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "rushmore" },
-      ]},
-      { heading: "Price", items: [
-        { id: "games-price",        label: "Questions",  module: "./panels/games-price.js" },
-        { id: "games-price-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "price" },
-      ]},
-      { heading: "Clapback", items: [
-        { id: "games-clapback",        label: "Questions",  module: "./panels/games-clapback.js" },
-        { id: "games-clapback-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "clapback" },
-      ]},
-      { heading: "AMA", items: [
-        { id: "games-ama",        label: "Questions",  module: "./panels/games-ama.js" },
-        { id: "games-ama-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "ama" },
-      ]},
       { heading: "Pen Pals", items: [
         { id: "config-pen-pals",  label: "Config",     module: "./panels/config-pen-pals.js", adminOnly: true, help: "help-pen-pals" },
         { id: "games-pen-pals",   label: "Questions",  module: "./panels/games-pen-pals.js" },
-        { id: "games-pen-pals-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "pen_pals" },
       ]},
     ],
   },
@@ -275,7 +255,6 @@ const SECTIONS = [
     id: "photo-challenge", label: "Photo Challenge", perms: ["admin"], gameHostRole: true, icon: "◉",
     items: [
       { id: "photo-challenge",        label: "Setup & Schedule", module: "./panels/photo-challenge.js", help: "help-photo" },
-      { id: "photo-challenge-studio", label: "Prompts & AI",     module: "./panels/games-studio.js", gt: "photo", help: "help-photo" },
     ],
   },
   HELP_NAV_SECTION,
@@ -682,8 +661,7 @@ function makeNavItem(item, activeId, { isSubitem = false, icon = "#" } = {}) {
   if (item.id === activeId) btn.classList.add("active");
 
   btn.addEventListener("click", () => {
-    const qs = item.gt ? `?gt=${item.gt}` : "";
-    window.location.hash = `#/${item.id}${qs}`;
+    window.location.hash = `#/${item.id}`;
   });
   return btn;
 }

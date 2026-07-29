@@ -1,72 +1,17 @@
 import json
-import os
 import random
 import logging
 from typing import Any
-from bot_modules.games.utils.ai_client import generate_text
 
 log = logging.getLogger(__name__)
 
-_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "prompt_config.json")
-
-
-# ── Config loader ──────────────────────────────────────────────────
-def _load_config() -> dict:
-    """Load prompt config from JSON file (re-reads each call so edits take effect)."""
-    with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-# ── AI generation prompts ───────────────────────────────────────────
-
-def _first_line(text: str) -> str | None:
-    for line in text.strip().splitlines():
-        line = line.strip().lstrip("-•*0123456789. ").strip('"').strip()
-        if line and not line.startswith("#"):
-            return line
-    return None
-
-
-def _parse_wyr(text: str) -> tuple[str, str] | None:
-    line = _first_line(text)
-    if not line or "|" not in line:
-        return None
-    a, b = line.split("|", 1)
-    a, b = a.strip(), b.strip()
-    return (a, b) if a and b else None
-
-
-def _system(game_descriptor: str, category: str) -> str:
-    cfg = _load_config()
-    tone = cfg["nsfw_tone"] if category == "nsfw" else cfg["sfw_tone"]
-    return (
-        f"You write {game_descriptor} for a Discord party game.\n\n"
-        f"{cfg['audience']}\n\n"
-        f"{tone}"
-    )
-
-
-def get_ai_config(game_type: str, category: str = "sfw") -> tuple[str, str, int] | None:
-    cfg = _load_config()
-    game_cfg = cfg["games"].get(game_type)
-    if not game_cfg:
-        return None
-    return _system(game_cfg["descriptor"], category), game_cfg["user_prompt"], game_cfg["max_tokens"]
-
-
-async def _ai_generate(game_type: str, category: str = "sfw") -> str | None:
-    cfg = get_ai_config(game_type, category)
-    if not cfg:
-        return None
-    system, user, max_tokens = cfg
-    text = await generate_text(system, user, max_tokens=max_tokens)
-    if not text:
-        log.warning("AI fallback failed for game_type=%s", game_type)
-        return None
-    return _first_line(text)
-
 
 # ── Public API ──────────────────────────────────────────────────────
+#
+# Every game here is bank-only. The AI generation fallback that used to back
+# wyr/nhie/mlt/rushmore/price/clapback was removed along with the dashboard's
+# "Prompts & AI" studios: an empty bank now means the game has no question to
+# serve, exactly as photo/traditional/ffa have always behaved.
 
 
 def channel_allows_nsfw(channel) -> bool:
@@ -89,88 +34,50 @@ def channel_allows_nsfw(channel) -> bool:
 async def get_wyr_question(
     db, tags: list[str] | None = None, allow_nsfw: bool = False
 ) -> tuple[str, str] | None:
-    """Returns (option_a, option_b) from the bank, or AI fallback.
+    """Returns (option_a, option_b) from the bank, or None when it has no match.
 
-    When a tag filter is supplied but nothing matches, returns None (no AI fallback).
+    Bank rows store the two options as a single ``a|b`` string; a row without
+    the separator is malformed and treated as a miss.
     """
     result = await _get_bank_question(db, "wyr", tags=tags, allow_nsfw=allow_nsfw)
     if result and "|" in result:
         a, b = result.split("|", 1)
         return a.strip(), b.strip()
-    if tags:  # filtered miss → suppress AI fallback, signal no-match
-        return None
-
-    # AI fallback (unfiltered only)
-    cfg = get_ai_config("wyr", "sfw")
-    if cfg:
-        text = await generate_text(cfg[0], cfg[1], max_tokens=cfg[2])
-        if text:
-            parsed = _parse_wyr(text)
-            if parsed:
-                return parsed
     return None
 
 
 async def get_nhie_statement(
     db, tags: list[str] | None = None, allow_nsfw: bool = False
 ) -> str | None:
-    result = await _get_bank_question(db, "nhie", tags=tags, allow_nsfw=allow_nsfw)
-    if result is not None:
-        return result
-    if tags:
-        return None
-    return await _ai_generate("nhie", "sfw")
+    return await _get_bank_question(db, "nhie", tags=tags, allow_nsfw=allow_nsfw)
 
 
 async def get_mlt_prompt(
     db, tags: list[str] | None = None, allow_nsfw: bool = False
 ) -> str | None:
-    result = await _get_bank_question(db, "mlt", tags=tags, allow_nsfw=allow_nsfw)
-    if result is not None:
-        return result
-    if tags:
-        return None
-    return await _ai_generate("mlt", "sfw")
+    return await _get_bank_question(db, "mlt", tags=tags, allow_nsfw=allow_nsfw)
 
 
 async def get_rushmore_topic(
     db, tags: list[str] | None = None, allow_nsfw: bool = False
 ) -> str | None:
-    result = await _get_bank_question(db, "rushmore", tags=tags, allow_nsfw=allow_nsfw)
-    if result is not None:
-        return result
-    if tags:
-        return None
-    return await _ai_generate("rushmore", "sfw")
+    return await _get_bank_question(db, "rushmore", tags=tags, allow_nsfw=allow_nsfw)
 
 
 async def get_price_scenario(
     db, tags: list[str] | None = None, allow_nsfw: bool = False
 ) -> str | None:
-    result = await _get_bank_question(db, "price", tags=tags, allow_nsfw=allow_nsfw)
-    if result is not None:
-        return result
-    if tags:
-        return None
-    return await _ai_generate("price", "sfw")
+    return await _get_bank_question(db, "price", tags=tags, allow_nsfw=allow_nsfw)
 
 
 async def get_clapback_prompt(
     db, exclude: list[str] | None = None, tags: list[str] | None = None,
     allow_nsfw: bool = False,
 ) -> str | None:
-    """Returns a Clapback prompt from the bank, or AI fallback if bank exhausted.
-
-    A tag-filtered miss returns None (no AI fallback).
-    """
-    result = await _get_bank_question(
+    """Returns a Clapback prompt from the bank, or None when it has no match."""
+    return await _get_bank_question(
         db, "clapback", exclude=exclude, tags=tags, allow_nsfw=allow_nsfw,
     )
-    if result is not None:
-        return result
-    if tags:
-        return None
-    return await _ai_generate("clapback", "sfw")
 
 
 async def get_photo_prompt(
@@ -178,9 +85,9 @@ async def get_photo_prompt(
 ) -> str | None:
     """Return a random Photo Challenge prompt from the bank, or None if empty.
 
-    Bank-only by design: photo prompts are curated in the web Games Studio
-    (no AI fallback at launch). The cog logs and skips the round when this
-    returns None — nothing is posted to the channel.
+    Photo prompts are curated on the dashboard's Photo Challenge page. The cog
+    logs and skips the round when this returns None — nothing is posted to the
+    channel.
     """
     return await _get_bank_question(db, "photo", tags=tags, allow_nsfw=allow_nsfw)
 
@@ -188,7 +95,7 @@ async def get_photo_prompt(
 async def has_clapback_prompts(db) -> bool:
     """Returns True if at least 1 Clapback prompt exists in the bank.
 
-    Note: AI fallback is always available, so games can still run with an empty bank.
+    Clapback is bank-only, so an empty bank means the game cannot run.
     """
     row = await db.fetchone(
         "SELECT 1 FROM games_question_bank WHERE game_type = 'clapback' LIMIT 1",

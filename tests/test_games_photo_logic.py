@@ -1,8 +1,8 @@
 """Tests for the Photo Challenge bank-pull helper.
 
 Photo Challenge prompts live in the DB question bank (``games_question_bank``,
-``game_type='photo'``) and are curated in the web Games Studio — there is no
-static prompt bank. The only standalone pure logic is
+``game_type='photo'``) and are curated on the dashboard's Photo Challenge
+page — there is no static prompt bank. The only standalone pure logic is
 ``get_photo_prompt`` (bank-only, no AI fallback), exercised here against a
 fake db. Questions carry a JSON ``tags`` array; the reserved ``nsfw`` tag is
 excluded unless the caller passes ``allow_nsfw=True`` (driven by the Discord

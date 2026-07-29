@@ -18,8 +18,7 @@ from discord.ext import commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.core.db_utils import open_db
-from bot_modules.games.utils.ai_client import generate_text
-from bot_modules.games.utils.question_source import get_ai_config, _pick_least_recently_served
+from bot_modules.games.utils.question_source import _pick_least_recently_served
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -646,17 +645,9 @@ async def _draw_question(db_path: Path, session_id: str, allow_nsfw: bool) -> st
     if question:
         return question
 
-    # Bank exhausted (or empty): AI fallback via the shared per-game prompt
-    # config. Always SFW — NSFW prompts come only from the curated bank.
-    ai_cfg = get_ai_config(_GAME_TYPE, "sfw")
-    if ai_cfg:
-        system, user, max_tokens = ai_cfg
-        ai_text = await generate_text(system, user, max_tokens=max_tokens)
-        if ai_text:
-            line = ai_text.strip().splitlines()[0].strip()
-            if line:
-                return line
-
+    # Bank exhausted (or empty). The AI fallback that used to sit here went away
+    # with the Prompts & AI studios; the static question keeps a matched pair
+    # from being handed an empty round.
     return _FALLBACK_QUESTION
 
 

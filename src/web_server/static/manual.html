@@ -520,7 +520,7 @@
     </div>
 
     <h3 id="games-modes">Party Games</h3>
-    <p>All start with <code>/games play &lt;mode&gt;</code>, <span class="perm perm-all">Everyone</span> in allowed channels. Most run in rounds: a host starts the game, players join or vote with buttons, and the host advances rounds. Prompts come from the question bank (and optionally AI) — see <a href="#games-web">For hosts &amp; admins</a>.</p>
+    <p>All start with <code>/games play &lt;mode&gt;</code>, <span class="perm perm-all">Everyone</span> in allowed channels. Most run in rounds: a host starts the game, players join or vote with buttons, and the host advances rounds. Prompts come from the question bank — see <a href="#games-web">For hosts &amp; admins</a>.</p>
     <table>
       <thead><tr><th>Command</th><th>Game &amp; flow</th></tr></thead>
       <tbody>
@@ -676,8 +676,8 @@
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
-        <strong>The Games studio on the <a href="/#/games-logs">web dashboard</a></strong>
-        <p>Game hosts and admins get a full editing suite under the dashboard's <strong>Games</strong> section: a <em>Question Bank</em> (browse, edit, bulk-import, and export prompts for every game), per-game <em>Prompts &amp; AI</em> studios (tune the AI prompt per game, test-generate samples, and add the keepers to the bank), per-game enable/disable and option panels, game <em>Scheduling</em>, and the <em>LegitLibs</em> template editor. Access is admin-only by default; grant a <strong>Game Host</strong> role on <a href="/#/games-config">Games &rarr; Global Config</a> to open it to trusted members.</p>
+        <strong>The Games pages on the <a href="/#/games-logs">web dashboard</a></strong>
+        <p>Game hosts and admins get a full editing suite under the dashboard's <strong>Games</strong> section: a <em>Question Bank</em> (browse, edit, bulk-import, and export prompts for every game), per-game enable/disable and option panels, game <em>Scheduling</em>, and the <em>LegitLibs</em> template editor. Access is admin-only by default; grant a <strong>Game Host</strong> role on <a href="/#/games-config">Games &rarr; Global Config</a> to open it to trusted members.</p>
       </div>
     </div>
 
@@ -699,7 +699,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Configure via the <a href="/#/photo-challenge">web dashboard</a></strong>
-        <p>Admins (or the game-host role) set the channel, ping role, recurring schedule, and enabled toggle on the <strong>Photo Challenge → Setup &amp; Schedule</strong> panel. The flat <strong>participation award</strong> is a faucet rate on <strong>Economy → Income Sources</strong> ("Photo Challenge post"); the optional stacking bonus is a <strong>photo_post</strong> quest in <strong>Economy → Quests</strong>. The prompt bank and AI prompt studio live under <strong>Photo Challenge → Prompts &amp; AI</strong>. The old <code>/games play photo</code> command is retired.</p>
+        <p>Admins (or the game-host role) set the channel, ping role, recurring schedule, and enabled toggle on the <strong>Photo Challenge → Setup &amp; Schedule</strong> panel. The flat <strong>participation award</strong> is a faucet rate on <strong>Economy → Income Sources</strong> ("Photo Challenge post"); the optional stacking bonus is a <strong>photo_post</strong> quest in <strong>Economy → Quests</strong>. The prompt bank lives on that same panel. The old <code>/games play photo</code> command is retired.</p>
       </div>
     </div>
 
@@ -2050,7 +2050,7 @@
         <tr><td><strong><a href="/#/economy-config">Economy → Settings</a></strong></td><td>Branding, wiring, and rates plus Quests, Claims, Operations, Income Sources, Sinks (perk prices + icon catalog), QOTD, Sponsored QOTD, and Statistics pages</td></tr>
         <tr><td><strong><a href="/#/config-casino">Casino</a></strong></td><td>The <a href="#economy-casino">Golden Meadow Casino</a>: casino channel, min/max bets, per-member daily wager cap, which tables are open, and the big-win broadcast threshold</td></tr>
         <tr><td><strong><a href="/#/config-pools">Pools</a></strong></td><td><a href="#pools">The daily prediction market</a>: whether it runs at all (it ships off), its own channel, the hour betting closes, and the takeout burned from each pool</td></tr>
-        <tr><td><strong><a href="/#/photo-challenge">Photo Challenge</a></strong></td><td>Channel, ping role, recurring schedule, enabled toggle; reward set as a photo_post quest in Economy; prompt bank under Prompts &amp; AI</td></tr>
+        <tr><td><strong><a href="/#/photo-challenge">Photo Challenge</a></strong></td><td>Channel, ping role, recurring schedule, enabled toggle; reward set as a photo_post quest in Economy; prompt bank on the same panel</td></tr>
         <tr><td><strong><a href="/#/config-greeting-watch">Greeting Watch</a></strong></td><td>Watched channels, notify members, unanswered-window minutes, extra greeting words</td></tr>
         <tr><td><strong><a href="/#/config-intake">Intake Cards</a></strong></td><td>Enable toggle, card channel, completion code, stale-nudge hours, checklist step editor with per-step codes, procedure-reference channel + block editor with import</td></tr>
         <tr><td><strong><a href="/#/chat-revive">Chat Revive</a></strong></td><td>Eligible channels, ping role, budgets and quiet hours, question bank, manual fire, scoreboard</td></tr>
