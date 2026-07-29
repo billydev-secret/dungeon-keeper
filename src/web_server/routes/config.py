@@ -3762,11 +3762,15 @@ class PenPalsConfigUpdate(BaseModel):
     match_mode: str = _PP_DEFAULT_MATCH_MODE
 
 
+# Pen Pals settings are moderator-level, unlike the rest of this module's
+# writes. The question bank they sit beside was already moderator-reachable, and
+# splitting one feature across two permission levels meant a mod who curates the
+# prompts couldn't set the channel they post in. Deliberate widening, not drift.
 @router.put("/config/pen-pals")
 async def update_pen_pals_config(
     request: Request,
     body: PenPalsConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -3818,7 +3822,7 @@ class PenPalsTimersUpdate(BaseModel):
 async def update_pen_pals_timers(
     request: Request,
     body: PenPalsTimersUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -3863,7 +3867,7 @@ class PenPalsSeparationsUpdate(BaseModel):
 async def update_pen_pals_separations(
     request: Request,
     body: PenPalsSeparationsUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

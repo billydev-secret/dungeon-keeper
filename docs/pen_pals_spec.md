@@ -19,8 +19,7 @@ Each pair gets a private two-person text channel with a conversation-starter fro
 | `/penpals end` | Slash | Everyone (active channel only) | Start a 15-second confirm to close your current pen pal early |
 | `/penpals pair <user1> <user2>` | Slash | Manage Guild | Force-pair two members who are both waiting in the pool, bypassing queue order and cooldown |
 | `/penpals round` | Slash | Manage Guild | Force a pool sweep now instead of waiting for the automatic one (the 5-minute tick in instant mode, or the once-daily 8am ET round in scheduled mode) |
-| Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, log + panel channels, session opening message; manage never-match separations |
-| Pen Pals questions | Web (dashboard) | Admin / Game Host | Question-bank manager (`game_type = 'pen_pals'`) |
+| Pen Pals | Web (dashboard) | Moderator | One page under Games. Settings: category, opt-in role, question category, log + panel channels, session opening message, never-match separations. Below them, the question-bank manager (`game_type = 'pen_pals'`) |
 
 ## Behavior
 

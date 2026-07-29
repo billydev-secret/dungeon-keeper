@@ -93,3 +93,46 @@ def test_admin_can_still_write_config(fake_ctx, path, payload):
     """The counterpart — gating a section must not break the admin path."""
     resp = _client(fake_ctx, _ADMINISTRATOR).put(path, json=payload)
     assert resp.status_code == 200
+
+
+# ── Pen Pals: a deliberate widening, not drift ──────────────────────────────
+#
+# Pen Pals is the one merged page with no in-page lock, because its settings
+# writes were lowered from admin to moderator so both halves sit at one level.
+# That is a real permission change to production, so it gets its own assertions
+# rather than riding on the generic "moderators can't write config" rule above —
+# if it ever silently reverts to admin, a moderator loses a page they now own.
+
+
+@pytest.mark.parametrize(
+    "path,payload",
+    [
+        ("/api/config/pen-pals", {"category_id": "0"}),
+        (
+            "/api/config/pen-pals/timers",
+            {
+                "session_seconds": 86400,
+                "match_cooldown_seconds": 2592000,
+                "max_question_swaps": 3,
+                "warn_seconds": 3600,
+                "question_suppress_seconds": 3600,
+            },
+        ),
+        ("/api/config/pen-pals/separations", {"separations": []}),
+    ],
+)
+def test_moderator_can_write_pen_pals_config(fake_ctx, path, payload):
+    """Pen Pals settings are moderator-level; the other config writes are not."""
+    resp = _client(fake_ctx, _MANAGE_MESSAGES).put(path, json=payload)
+    assert resp.status_code == 200, resp.text
+
+
+def test_pen_pals_widening_did_not_leak_to_its_neighbours(fake_ctx):
+    """Lowering Pen Pals must not have lowered the module's other writes.
+
+    Same file, adjacent routes — the failure mode is a copied decorator, so
+    assert a neighbour still refuses the same moderator session.
+    """
+    client = _client(fake_ctx, _MANAGE_MESSAGES)
+    assert client.put("/api/config/pen-pals", json={"category_id": "0"}).status_code == 200
+    assert client.put("/api/config/xp", json={"level_curve_factor": 99.0}).status_code == 403

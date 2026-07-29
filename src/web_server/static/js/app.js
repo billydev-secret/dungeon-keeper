@@ -238,13 +238,8 @@ const SECTIONS = [
       { id: "games-traditional", label: "Traditional Truth or Dare", module: "./panels/games-traditional.js" },
       { id: "config-guess", label: "Guess Who", module: "./panels/config-guess.js", perms: ["moderator"], help: "help-guess", keywords: "post panel submit prompt" },
       { id: "config-whisper",    label: "Whisper",     module: "./panels/config-whisper.js", perms: ["moderator"], help: "help-whisper" },
+      { id: "pen-pals",          label: "Pen Pals",    module: "./panels/pen-pals.js", perms: ["moderator"], help: "help-pen-pals", keywords: "pen pals matching questions conversation starters" },
       { id: "config-confessions",  label: "Confessions",     module: "./panels/config-confessions.js", adminOnly: true, help: "help-confessions" },
-    ],
-    groups: [
-      { heading: "Pen Pals", items: [
-        { id: "config-pen-pals",  label: "Config",     module: "./panels/config-pen-pals.js", adminOnly: true, help: "help-pen-pals" },
-        { id: "games-pen-pals",   label: "Questions",  module: "./panels/games-pen-pals.js" },
-      ]},
     ],
   },
   {
