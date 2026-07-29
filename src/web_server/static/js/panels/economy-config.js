@@ -204,11 +204,13 @@ function render(container, cfg, channels, roles, members) {
         <div class="field">
           <label>Bounty Board Channel</label>
           <span data-picker="bounty_channel_id"></span>
-          <div class="field-hint">Where <code>/bounty</code> posts a card per
-            bounty. Anyone chips coins into a bounty's pot; a mod awards it to
-            whoever completed it (minus the bounty rake, set on the Sinks page),
-            or cancels it to refund everyone. Unclaimed bounties expire and
-            refund automatically. Leave unset to turn bounties off.</div>
+          <div class="field-hint">Where the board lives — one card per bounty,
+            under a Bounty Board panel that sticks to the bottom of the channel
+            (post it from Channel Panels below). Members post and chip in from
+            that panel. A mod awards a bounty to whoever completed it (minus the
+            bounty rake, set on the Sinks page), or cancels it to refund
+            everyone. Unclaimed bounties expire and refund automatically. Leave
+            unset to turn bounties off.</div>
         </div>
         <div class="field-row">
           <div class="field">
@@ -286,10 +288,13 @@ function render(container, cfg, channels, roles, members) {
         <div class="field-hint" style="margin-bottom:10px;">Re-posting a panel into
           the channel it already occupies refreshes it in place rather than moving it
           to the bottom — so it's safe to re-post after a re-brand. Posting into a
-          different channel moves it. All three need the economy switched on above.</div>
+          different channel moves it. All of them need the economy switched on
+          above, and the Bounty Board only goes in the bounty board channel set
+          above (it's the channel its cards post to).</div>
         <div class="field" data-poster="economy-guide"></div>
         <div class="field" data-poster="economy-leaderboard"></div>
         <div class="field" data-poster="economy-shop"></div>
+        <div class="field" data-poster="economy-bounty"></div>
       </div>
     </div>`;
 
@@ -300,6 +305,7 @@ function render(container, cfg, channels, roles, members) {
   mountPanelPoster(slot("economy-guide"), "economy-guide");
   mountPanelPoster(slot("economy-leaderboard"), "economy-leaderboard");
   mountPanelPoster(slot("economy-shop"), "economy-shop");
+  mountPanelPoster(slot("economy-bounty"), "economy-bounty");
 
   const form = container.querySelector("[data-form]");
   const status = form.querySelector("[data-status]");

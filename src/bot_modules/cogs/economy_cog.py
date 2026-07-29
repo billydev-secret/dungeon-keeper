@@ -71,6 +71,9 @@ from bot_modules.economy.bounty_views import (
     BountyAwardButton,
     BountyCancelButton,
     BountyChipInButton,
+    BountyHubChipButton,
+    BountyHubPostButton,
+    build_bounty_hub_panel,
     post_bounty_card,
 )
 from bot_modules.economy.auction_views import (
@@ -1235,6 +1238,24 @@ class EconomyCog(commands.Cog):
             save_ids=self._save_auction_card_ids,
             build=self._build_auction_panel,
         )
+        # The Bounty Board hub — the board's only entry point since /bounty was
+        # deleted (2026-07-29). Unlike the three panels above it does not get
+        # to pick its channel: it belongs in `bounty_channel_id`, the board it
+        # fronts, so its ids come from there (see _bounty_panel_ids).
+        #
+        # restick_on_bot stays off, and here that matters more than anywhere
+        # else in the cog: this is the one sticky panel whose OWN channel is
+        # where the bot posts (every new bounty card, plus a re-render on every
+        # chip-in and every award). Turning it on would have the hub chase its
+        # own card posts — exactly the loop that produced the casino's
+        # 275-message flood. The cost is that the hub sits above the newest
+        # card until a human speaks, which is the right trade.
+        self.bounty_panel = StickyPanel(
+            "econ bounty hub", bot,
+            load_ids=self._bounty_panel_ids,
+            save_ids=self._save_bounty_panel_ids,
+            build=self._build_bounty_panel,
+        )
         # Photo Challenge channel id, TTL-cached so the on_message listener
         # costs a dict lookup, not a DB read, for every message in the guild:
         # guild_id → (monotonic expiry, channel_id).
@@ -1248,6 +1269,7 @@ class EconomyCog(commands.Cog):
             self.leaderboard_panel,
             self.shop_panel,
             self.auction_panel,
+            self.bounty_panel,
         ):
             panel.cancel_all()
 
@@ -2001,11 +2023,15 @@ class EconomyCog(commands.Cog):
 
     # ── community bounty ─────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="bounty",
-        description="Post a community bounty — a task others can chip coins into.",
-    )
-    async def bounty(self, interaction: discord.Interaction) -> None:
+    async def open_bounty_post_modal(self, interaction: discord.Interaction) -> None:
+        """Open the post-a-bounty modal for the hub panel's 🎯 button.
+
+        Lives on the cog rather than in ``bounty_views`` because the modal
+        submits back into :meth:`do_bounty_post`; the button just routes here.
+        Replaced the ``/bounty`` command on 2026-07-29 — the hub is now the
+        board's only entry point, per CLAUDE.md's "one panel over a sprawl of
+        subcommands".
+        """
         assert interaction.guild is not None
         guild = interaction.guild
 
@@ -2066,9 +2092,12 @@ class EconomyCog(commands.Cog):
         await post_bounty_card(
             self.bot, self.ctx, guild, settings, accent, outcome.bounty_id
         )
+        # The new bounty belongs on the hub's open list straight away.
+        await self.refresh_bounty_hub_panel(guild)
         await interaction.followup.send(
             f"🎯 Bounty posted with {outcome.stake:,} in the pot! Others can chip "
-            "in from its card, and a mod awards it when it's done.",
+            "in from its card or the board panel, and a mod awards it when it's "
+            "done.",
             ephemeral=True,
         )
 
@@ -3652,6 +3681,81 @@ class EconomyCog(commands.Cog):
                 conn, guild_id, {chan_field: channel_id, msg_field: message_id}
             )
 
+    def _bounty_panel_ids(self, guild_id: int) -> tuple[int, int]:
+        """The hub's (channel, message). Channel is the board itself.
+
+        Returns (0, 0) — "unposted", so the restick is a no-op — while the
+        economy is off OR no board channel is set, which is the same condition
+        ``bounty_enabled`` gates the whole feature on.
+        """
+        with self.ctx.open_db() as conn:
+            s = load_econ_settings(conn, guild_id)
+        if not s.enabled or not bounty_enabled(s):
+            return 0, 0
+        return int(s.bounty_channel_id), int(s.bounty_panel_message_id)
+
+    def _save_bounty_panel_ids(
+        self, guild_id: int, channel_id: int, message_id: int
+    ) -> None:
+        """Persist only the message id — the channel is the configured board.
+
+        Deliberately narrower than ``_save_panel_ids``: writing the channel back
+        would let a mis-posted hub silently *redefine* which channel the board
+        is, moving every future bounty card with it. ``post_bounty_panel``
+        already refuses any channel but the board, so there is nothing to store.
+        """
+        with self.ctx.open_db() as conn:
+            save_econ_settings(
+                conn, guild_id, {"bounty_panel_message_id": message_id}
+            )
+
+    async def _build_bounty_panel(self, guild: discord.Guild) -> PanelContent:
+        embed, view = await build_bounty_hub_panel(self.bot, guild)
+        return PanelContent(embed=embed, view=view)
+
+    async def post_bounty_panel(self, guild, channel):
+        """Place the Bounty Board hub. Entry point for the dashboard's panel
+        poster (``panel_registry``); the board's only entry point since
+        ``/bounty`` was deleted.
+
+        Refuses any channel but the configured board, because the hub's ids are
+        looked up *through* ``bounty_channel_id`` — a hub somewhere else would
+        be adopted by the restick as though it were in the board channel and
+        then edited into the wrong place. Raising sends the admin to set the
+        board channel first, which is the step that enables bounties at all.
+        """
+        await self._require_economy_enabled(guild.id)
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not bounty_enabled(settings):
+            raise ValueError(
+                "No bounty board channel is set — pick one under Economy → "
+                "Settings before posting the board panel."
+            )
+        if int(channel.id) != int(settings.bounty_channel_id):
+            raise ValueError(
+                "The Bounty Board panel has to go in the bounty board channel "
+                f"(<#{int(settings.bounty_channel_id)}>) — that's the channel "
+                "its cards post to."
+            )
+        return await self.bounty_panel.place_or_refresh(guild, channel)
+
+    async def refresh_bounty_hub_panel(self, guild: discord.Guild) -> None:
+        """Repaint the hub after a pot or the open list changed.
+
+        A no-op until the hub has actually been posted: ``place_or_refresh``
+        would otherwise *create* one, so a guild that never set the board up
+        would sprout a panel the first time somebody chipped in.
+        """
+        channel_id, message_id = await asyncio.to_thread(
+            self._bounty_panel_ids, guild.id
+        )
+        if not channel_id or not message_id:
+            return
+        channel = guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        await self.bounty_panel.place_or_refresh(guild, channel)
+
     async def _build_guide_panel(self, guild: discord.Guild) -> PanelContent:
         settings = await asyncio.to_thread(self._load_settings, guild.id)
         accent = await resolve_accent_color(self.ctx.db_path, guild)
@@ -3760,20 +3864,25 @@ class EconomyCog(commands.Cog):
 
     @commands.Cog.listener("on_message")
     async def _restick_panels(self, message: discord.Message) -> None:
-        """Keep all four panels at the bottom of their channels.
+        """Keep all five panels at the bottom of their channels.
 
-        One listener for four panels: each ignores activity outside its own
+        One listener for five panels: each ignores activity outside its own
         channel, so a message usually arms at most one repost. The auction
         card is the exception — it can share a channel with one of the other
         three, in which case both re-stick and one ends up second. That is
         why ``/bank auction start`` warns the mod before it happens (see
         ``sticky_panel_channels``); it is a bad configuration, not a bug.
+
+        The bounty hub is bot-message-blind like the rest (``restick_on_bot``
+        is off), so a burst of new bounty cards leaves it stranded up-channel
+        until a human posts. Deliberate — see the panel's declaration.
         """
         for panel in (
             self.guide_panel,
             self.leaderboard_panel,
             self.shop_panel,
             self.auction_panel,
+            self.bounty_panel,
         ):
             await panel.on_message(message)
 
@@ -3807,6 +3916,10 @@ class EconomyCog(commands.Cog):
             BountyChipInButton,
             BountyAwardButton,
             BountyCancelButton,
+            # The hub's two buttons carry no per-message state, but they are
+            # dynamic items too so the whole bounty surface registers here.
+            BountyHubPostButton,
+            BountyHubChipButton,
             AuctionBidButton,
         )
         # The guide panel's 🔔 toggle, the quest board's "Show my quests"

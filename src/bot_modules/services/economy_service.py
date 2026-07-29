@@ -179,6 +179,11 @@ class EconSettings:
     bounty_max_open: int = 3
     bounty_expire_days: int = 14
     bounty_rake_pct: int = 0
+    #: The hub panel's message in `bounty_channel_id` — the board's only entry
+    #: point since `/bounty` was deleted. Its *channel* is `bounty_channel_id`
+    #: itself (the hub lives on the board it fronts), so only the message id is
+    #: stored; core.sticky owns both through EconomyCog._panel_ids("bounty").
+    bounty_panel_message_id: int = 0
     # Live auctions (plan: docs/plans/economy-auctions.md): a mod opens a
     # freeform, mod-fulfilled auction with `/bank auction start`; members bid up
     # in the open, the outbid bidder is refunded instantly, and the winning bid

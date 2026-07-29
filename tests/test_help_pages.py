@@ -47,8 +47,15 @@ def _find(pages: dict[str, str], needle: str) -> str:
 
 def test_economy_page_present_with_core_commands():
     body = _find(_pages(), "Economy")
-    for cmd in ("/bank wallet", "/bank shop", "/bank quests", "/bounty", "/bank pay"):
+    for cmd in ("/bank wallet", "/bank shop", "/bank quests", "/bank pay"):
         assert cmd in body, f"Economy help page missing {cmd}"
+
+
+def test_economy_page_points_at_bounty_panel_not_a_command():
+    """/bounty was deleted on 2026-07-29 — the sticky hub is the only way in."""
+    body = _find(_pages(), "Economy")
+    assert "/bounty" not in body
+    assert "Bounty Board panel" in body
 
 
 def test_bank_mute_described_as_notification_toggle_not_token():

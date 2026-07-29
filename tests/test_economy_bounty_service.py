@@ -13,14 +13,17 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_bounty_service import (
     award_bounty,
+    board_entries,
     cancel_bounty,
     contribute,
     contributor_count,
     create_bounty,
     expire_bounties,
     get_bounty,
+    open_board_count,
     open_count_for,
     pot_of,
+    set_bounty_card,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -359,3 +362,119 @@ def test_award_pays_out_a_chip_in_that_lands_just_before_it(db):
         assert res.payout == 80
         assert get_balance(conn, GUILD, W) == 80
         assert int(get_bounty(conn, bid)["payout"]) == 80
+
+
+# ── the hub panel's board list ─────────────────────────────────────────
+
+
+def test_board_entries_lists_open_bounties_oldest_first_with_live_pots(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 500)
+        _fund(conn, B, 500)
+        first = create_bounty(
+            conn, SETTINGS, GUILD, A, title="First", description="",
+            stake=50, now=NOW,
+        ).bounty_id
+        second = create_bounty(
+            conn, SETTINGS, GUILD, A, title="Second", description="",
+            stake=20, now=NOW + 60,
+        ).bounty_id
+        contribute(conn, SETTINGS, GUILD, first, B, 30, now=NOW + 10)
+        set_bounty_card(conn, first, 777, 888)
+
+        entries = board_entries(conn, GUILD)
+
+        assert [e.title for e in entries] == ["First", "Second"]
+        # Pot is the summed contributions, and backers are DISTINCT users.
+        assert (entries[0].pot, entries[0].contributors) == (80, 2)
+        assert (entries[1].pot, entries[1].contributors) == (20, 1)
+        # A bounty whose card posted carries jump ids; one that never did is
+        # still listed, just with 0s the caller renders without a link.
+        assert (entries[0].card_channel_id, entries[0].card_message_id) == (777, 888)
+        assert (entries[1].card_channel_id, entries[1].card_message_id) == (0, 0)
+        assert second == entries[1].bounty_id
+
+
+@pytest.mark.parametrize(
+    "resolve",
+    [
+        pytest.param("awarded", id="awarded"),
+        pytest.param("cancelled", id="cancelled"),
+        pytest.param("expired", id="expired"),
+    ],
+)
+def test_board_entries_drops_a_resolved_bounty(db, resolve):
+    """Only open bounties belong on the hub — every exit state leaves the list."""
+    with open_db(db) as conn:
+        _fund(conn, A, 500)
+        bid = _open(conn, poster=A, stake=50)
+        assert len(board_entries(conn, GUILD)) == 1
+
+        if resolve == "awarded":
+            award_bounty(
+                conn, SETTINGS, GUILD, bid, winner_id=W, resolver_id=MOD, now=NOW,
+            )
+        elif resolve == "cancelled":
+            cancel_bounty(conn, GUILD, bid, resolver_id=MOD, now=NOW)
+        else:
+            expire_bounties(conn, SETTINGS, GUILD, now=NOW + 15 * DAY)
+
+        assert board_entries(conn, GUILD) == []
+        assert open_board_count(conn, GUILD) == 0
+
+
+def test_board_entries_ignores_refunded_contributions_in_the_pot(db):
+    """A refund must not keep inflating the pot the hub advertises.
+
+    Only reachable while the bounty is still open, so it is exercised through a
+    partial refund written directly — the states that refund all of them also
+    close the bounty.
+    """
+    with open_db(db) as conn:
+        _fund(conn, A, 500)
+        _fund(conn, B, 500)
+        bid = _open(conn, poster=A, stake=50)
+        contribute(conn, SETTINGS, GUILD, bid, B, 30, now=NOW)
+        conn.execute(
+            "UPDATE econ_bounty_contributions SET refunded_at = ? WHERE user_id = ?",
+            (NOW, B),
+        )
+
+        entry = board_entries(conn, GUILD)[0]
+        assert (entry.pot, entry.contributors) == (50, 1)
+
+
+def test_board_entries_is_scoped_to_one_guild(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 500)
+        apply_credit(conn, GUILD + 1, A, 500, "grant", actor_id=MOD)
+        _open(conn, poster=A, stake=50)
+        create_bounty(
+            conn, SETTINGS, GUILD + 1, A, title="Elsewhere", description="",
+            stake=50, now=NOW,
+        )
+
+        assert [e.title for e in board_entries(conn, GUILD)] == ["Draw the mascot"]
+        assert open_board_count(conn, GUILD) == 1
+
+
+def test_board_entries_caps_the_list_while_the_count_stays_whole(db):
+    """The hub says "…and N more" — the tail needs the true open count."""
+    with open_db(db) as conn:
+        _fund(conn, A, 5000)
+        for n in range(5):
+            create_bounty(
+                conn, _s(bounty_max_open=99), GUILD, A, title=f"Bounty {n}",
+                description="", stake=10, now=NOW + n,
+            )
+
+        entries = board_entries(conn, GUILD, limit=2)
+
+        assert [e.title for e in entries] == ["Bounty 0", "Bounty 1"]
+        assert open_board_count(conn, GUILD) == 5
+
+
+def test_board_entries_empty_board(db):
+    with open_db(db) as conn:
+        assert board_entries(conn, GUILD) == []
+        assert open_board_count(conn, GUILD) == 0

@@ -395,6 +395,73 @@ def recent_bounties(conn: sqlite3.Connection, since: float) -> list[sqlite3.Row]
     ).fetchall()
 
 
+@dataclass(frozen=True)
+class BountyBoardEntry:
+    """One open bounty as the hub panel lists it: live pot, backers, jump target."""
+
+    bounty_id: int
+    title: str
+    pot: int
+    contributors: int
+    card_channel_id: int
+    card_message_id: int
+
+
+#: How many open bounties the hub panel lists. An embed field caps at 1024
+#: characters and a bounty title can run to MAX_TITLE_LEN, so this is the
+#: ceiling that keeps the field inside that budget without truncating.
+HUB_LIST_LIMIT = 8
+
+
+def board_entries(
+    conn: sqlite3.Connection, guild_id: int, limit: int = HUB_LIST_LIMIT
+) -> list[BountyBoardEntry]:
+    """Open bounties oldest-first with their live pots — the hub panel's list.
+
+    Oldest-first so the bounty closest to expiring (and to being refunded) is
+    the one members see, and so the list doesn't reshuffle under a reader every
+    time someone posts. Pots are summed per bounty in SQL rather than by
+    calling :func:`pot_of` in a loop, because this runs on every sticky repost.
+
+    Unlike :func:`recent_bounties` this does NOT require a posted card: a
+    bounty whose card failed to send still belongs on the board, it just has no
+    jump link (ids stay 0 and the caller omits the link).
+    """
+    limit = min(max(int(limit), 1), 25)
+    rows = conn.execute(
+        "SELECT b.id, b.title, b.card_channel_id, b.card_message_id, "
+        "       COALESCE(SUM(c.amount), 0) AS pot, "
+        "       COUNT(DISTINCT c.user_id) AS contributors "
+        "FROM econ_bounties AS b "
+        "LEFT JOIN econ_bounty_contributions AS c "
+        "       ON c.bounty_id = b.id AND c.refunded_at IS NULL "
+        "WHERE b.guild_id = ? AND b.state = 'open' "
+        "GROUP BY b.id "
+        "ORDER BY b.created_at ASC, b.id ASC LIMIT ?",
+        (guild_id, limit),
+    ).fetchall()
+    return [
+        BountyBoardEntry(
+            bounty_id=int(row["id"]),
+            title=str(row["title"]),
+            pot=int(row["pot"]),
+            contributors=int(row["contributors"]),
+            card_channel_id=int(row["card_channel_id"]),
+            card_message_id=int(row["card_message_id"]),
+        )
+        for row in rows
+    ]
+
+
+def open_board_count(conn: sqlite3.Connection, guild_id: int) -> int:
+    """How many bounties are open in this guild — the hub's ``+N more`` tail."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM econ_bounties WHERE guild_id = ? AND state = 'open'",
+        (guild_id,),
+    ).fetchone()
+    return int(row["n"])
+
+
 def list_bounties(
     conn: sqlite3.Connection, guild_id: int, state: str | None = None, limit: int = 100
 ) -> list[sqlite3.Row]:

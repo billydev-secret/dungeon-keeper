@@ -25,6 +25,7 @@ import pytest
 from bot_modules.cogs.casino import embeds as casino_embeds
 from bot_modules.cogs.games_legitlibs import rendering as ll_rendering
 from bot_modules.economy import bounty_views as economy_bounty_views
+from bot_modules.services import economy_bounty_service
 from bot_modules.economy import pin_views as economy_pin_views
 from bot_modules.games import constants as games_constants
 from bot_modules.games_clapback import embeds as clapback_embeds
@@ -552,6 +553,22 @@ CASES = [
             },
             pot=1000,
             contributors=3,
+        ),
+        None,
+    ),
+    case(
+        "economy.bounty_hub_panel",
+        lambda **kw: economy_bounty_views.build_bounty_hub_embed(
+            kw["color"],
+            _econ_settings(),
+            123,
+            [
+                economy_bounty_service.BountyBoardEntry(
+                    bounty_id=1, title="Draw the mascot", pot=1000,
+                    contributors=3, card_channel_id=7, card_message_id=8,
+                )
+            ],
+            open_total=1,
         ),
         None,
     ),

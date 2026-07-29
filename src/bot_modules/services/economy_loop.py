@@ -1869,6 +1869,12 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                         log.exception(
                             "Economy loop: failed to DM bounty refund to %s.", uid
                         )
+            # Those bounties just left the hub's open list. Once per sweep,
+            # not once per bounty — the hub is a single panel and the whole
+            # sweep lands in one batch.
+            from bot_modules.economy.bounty_views import refresh_bounty_hub
+
+            await refresh_bounty_hub(bot, guild)
 
         if raffle_draw is not None and raffle_draw.winner_id is not None:
             # The draw row is already committed — the DM is best-effort and

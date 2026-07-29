@@ -9,6 +9,13 @@ the cog re-registers the classes:
 * 🏆 **Award** — mod only; opens a ``UserSelect`` and pays the winner minus rake.
 * **Cancel** — mod only; refunds every contributor.
 
+Above the cards sits one **hub panel** per guild, stuck to the bottom of the
+board channel by ``core.sticky`` (see ``EconomyCog.bounty_panel``). It explains
+the mechanic and lists the open bounties, and carries the board's only two
+entry points — 🎯 **Post a bounty** and 💰 **Chip in** (which picks a bounty from
+a select, since the hub is not attached to any one card). It replaced the
+``/bounty`` command on 2026-07-29.
+
 Every handler is fail-safe — a service error becomes an ephemeral note, never a
 dead button. Two mods resolving at once is settled in the service (the state
 guard); the loser gets the card refreshed.
@@ -28,11 +35,15 @@ from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.economy.view_helpers import coins as _coins
 from bot_modules.economy.view_helpers import safe_ephemeral as _safe_ephemeral
 from bot_modules.services.economy_bounty_service import (
+    HUB_LIST_LIMIT,
+    BountyBoardEntry,
     award_bounty,
+    board_entries,
     cancel_bounty,
     contribute,
     contributor_count,
     get_bounty,
+    open_board_count,
     pot_of,
     set_bounty_card,
 )
@@ -108,6 +119,80 @@ def render_bounty_card(
     return embed
 
 
+# ── hub panel ────────────────────────────────────────────────────────────────
+
+
+def _jump_url(guild_id: int, entry: BountyBoardEntry) -> str | None:
+    """The card's jump link, or None when the card never posted (ids are 0)."""
+    if not entry.card_channel_id or not entry.card_message_id:
+        return None
+    return (
+        f"https://discord.com/channels/{guild_id}"
+        f"/{entry.card_channel_id}/{entry.card_message_id}"
+    )
+
+
+def build_bounty_hub_embed(
+    accent: discord.Color,
+    settings: EconSettings,
+    guild_id: int,
+    entries: list[BountyBoardEntry],
+    *,
+    open_total: int,
+) -> discord.Embed:
+    """The board's sticky hub: what a bounty is, plus every open one.
+
+    Deliberately does NOT repeat the per-card "How it works" line — the blurb
+    here is the *first* thing a member reads in the channel, so it explains the
+    mechanic end to end (including the refund promise, which the open-state card
+    never mentions); the card's version is the reminder next to a live pot.
+    """
+    embed = discord.Embed(title="🎯 The Bounty Board", color=accent)
+    rake = max(0, min(100, int(settings.bounty_rake_pct)))
+    days = max(0, int(settings.bounty_expire_days))
+    unit = settings.currency_plural or "coins"
+
+    blurb = [
+        f"**Post a task** and seed it with {unit} — anyone can chip in to grow "
+        "the pot.",
+        "**A mod awards the pot** to whoever gets it done.",
+    ]
+    if rake > 0:
+        blurb.append(f"The house keeps **{rake}%** on award.")
+    if days > 0:
+        blurb.append(
+            f"Nobody awarded it within **{days} days**? Everyone who chipped in "
+            "is refunded in full."
+        )
+    embed.add_field(name="How it works", value="\n".join(blurb), inline=False)
+
+    if not entries:
+        embed.add_field(
+            name="📋 Open bounties",
+            value="Nothing on the board yet — post the first one.",
+            inline=False,
+        )
+        return embed
+
+    lines: list[str] = []
+    for entry in entries:
+        backers = (
+            "no backers yet"
+            if entry.contributors == 0
+            else f"{entry.contributors} backer{'' if entry.contributors == 1 else 's'}"
+        )
+        head = f"**{entry.title}** — {_coins(settings, entry.pot)} · {backers}"
+        url = _jump_url(guild_id, entry)
+        lines.append(f"• {head} · [jump]({url})" if url else f"• {head}")
+    # board_entries() caps the list; say so rather than silently showing a
+    # partial board (the count comes from a separate COUNT over all open rows).
+    hidden = open_total - len(entries)
+    if hidden > 0:
+        lines.append(f"…and **{hidden}** more further up the channel.")
+    embed.add_field(name="📋 Open bounties", value="\n".join(lines), inline=False)
+    return embed
+
+
 # ── modals / selects ───────────────────────────────────────────────────────
 
 
@@ -118,13 +203,28 @@ class _ChipInModal(discord.ui.Modal, title="Chip in to this bounty"):
         max_length=12,
     )
 
-    def __init__(self, bounty_id: int, card: discord.Message | None) -> None:
+    def __init__(
+        self,
+        bounty_id: int,
+        card: discord.Message | None,
+        *,
+        refresh_by_ids: bool = False,
+    ) -> None:
         super().__init__()
         self.bounty_id = bounty_id
         self.card = card
+        #: Set when the chip-in came from the hub panel, which has no card
+        #: message to hand us — refetch the card by its stored ids instead.
+        self.refresh_by_ids = refresh_by_ids
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        await _handle_chip(interaction, self.bounty_id, str(self.amount.value), self.card)
+        await _handle_chip(
+            interaction,
+            self.bounty_id,
+            str(self.amount.value),
+            self.card,
+            refresh_by_ids=self.refresh_by_ids,
+        )
 
 
 class _AwardSelect(discord.ui.UserSelect):
@@ -238,6 +338,165 @@ class BountyBoardView(discord.ui.View):
         self.add_item(BountyCancelButton(bounty_id))
 
 
+# ── persistent hub buttons ───────────────────────────────────────────────────
+#
+# The hub carries no per-bounty state, so both custom_ids are constant — but
+# they are still DynamicItems so the whole file registers through the one
+# ``add_dynamic_items`` call the cog already makes for the card buttons.
+
+#: Discord's hard cap on options in a single select.
+_SELECT_MAX = 25
+
+
+class _HubChipSelect(discord.ui.Select):
+    """Pick which open bounty to chip into, then the amount modal."""
+
+    def __init__(self, entries: list[BountyBoardEntry], settings: EconSettings) -> None:
+        super().__init__(
+            placeholder="Which bounty?",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=entry.title[:100],
+                    value=str(entry.bounty_id),
+                    description=f"Pot: {_coins(settings, entry.pot)}"[:100],
+                )
+                for entry in entries
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        # card=None: the chip-in came from the hub, not from a card, so this
+        # interaction has no card message to edit. _handle_chip escrows either
+        # way; refresh_card_by_id below repaints the real card from its ids.
+        await interaction.response.send_modal(
+            _ChipInModal(int(self.values[0]), None, refresh_by_ids=True)
+        )
+
+
+class _HubChipView(discord.ui.View):
+    """Ephemeral bounty picker shown after a member clicks Chip in on the hub."""
+
+    def __init__(self, entries: list[BountyBoardEntry], settings: EconSettings) -> None:
+        super().__init__(timeout=300)
+        self.add_item(_HubChipSelect(entries, settings))
+
+
+class BountyHubPostButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"econ_bounty:hub_post"),
+):
+    def __init__(self) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Post a bounty", emoji="🎯",
+                style=discord.ButtonStyle.primary,
+                custom_id="econ_bounty:hub_post",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls, interaction, item, match: re.Match[str]
+    ) -> BountyHubPostButton:
+        return cls()
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        # The modal lives on the cog (it calls back into do_bounty_post), and a
+        # modal must be the interaction's FIRST response — so the cog opens it
+        # rather than handing one back here.
+        cog = cast("Bot", interaction.client).get_cog("EconomyCog")
+        # getattr, not a direct call: importing EconomyCog here to type it would
+        # be circular (the cog imports this module for its buttons).
+        opener = getattr(cog, "open_bounty_post_modal", None)
+        if opener is None:  # pragma: no cover — cog is always loaded in practice
+            await _safe_ephemeral(interaction, "❌ The economy is unavailable.")
+            return
+        await opener(interaction)
+
+
+class BountyHubChipButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"econ_bounty:hub_chip"),
+):
+    def __init__(self) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Chip in", emoji="💰",
+                style=discord.ButtonStyle.success,
+                custom_id="econ_bounty:hub_chip",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls, interaction, item, match: re.Match[str]
+    ) -> BountyHubChipButton:
+        return cls()
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await _safe_ephemeral(interaction, "❌ This only works in a server.")
+            return
+        bot = cast("Bot", interaction.client)
+
+        def _read() -> tuple[EconSettings, list[BountyBoardEntry]]:
+            with bot.ctx.open_db() as conn:
+                return (
+                    load_econ_settings(conn, guild.id),
+                    board_entries(conn, guild.id, limit=_SELECT_MAX),
+                )
+
+        settings, entries = await asyncio.to_thread(_read)
+        if not entries:
+            await interaction.response.send_message(
+                "There are no open bounties to chip into yet — post one!",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "Pick the bounty you want to add to:",
+            view=_HubChipView(entries, settings),
+            ephemeral=True,
+        )
+
+
+class BountyHubView(discord.ui.View):
+    """Persistent (timeout=None) Post / Chip-in pair on the board's hub panel."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(BountyHubPostButton())
+        self.add_item(BountyHubChipButton())
+
+
+async def build_bounty_hub_panel(
+    bot: Bot, guild: discord.Guild
+) -> tuple[discord.Embed, BountyHubView]:
+    """Render the hub for ``guild`` — the cog's StickyPanel ``build`` callback."""
+    accent = await resolve_accent_color(bot.ctx.db_path, guild)
+
+    def _read() -> tuple[EconSettings, list[BountyBoardEntry], int]:
+        # One connection for settings, list and count: this runs on every
+        # sticky repost, so a connect+PRAGMA per read would be the hot waste.
+        with bot.ctx.open_db() as conn:
+            return (
+                load_econ_settings(conn, guild.id),
+                board_entries(conn, guild.id, limit=HUB_LIST_LIMIT),
+                open_board_count(conn, guild.id),
+            )
+
+    settings, entries, open_total = await asyncio.to_thread(_read)
+    return (
+        build_bounty_hub_embed(
+            accent, settings, guild.id, entries, open_total=open_total
+        ),
+        BountyHubView(),
+    )
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -302,11 +561,54 @@ async def _refresh_card(
 # ── handlers ─────────────────────────────────────────────────────────────────
 
 
+async def _refresh_card_by_stored_ids(
+    bot: Bot, guild: discord.Guild, bounty_id: int
+) -> None:
+    """Repaint a bounty's card when the caller has no message to edit.
+
+    The hub's Chip in button is one interaction removed from the card, so the
+    card's ids are the only handle on it. Best-effort like every other refresh:
+    the coins are already escrowed by the time this runs.
+    """
+
+    def _ids() -> tuple[int, int] | None:
+        with bot.ctx.open_db() as conn:
+            row = get_bounty(conn, bounty_id)
+            if row is None:
+                return None
+            return int(row["card_channel_id"]), int(row["card_message_id"])
+
+    ids = await asyncio.to_thread(_ids)
+    if ids is None:
+        return
+    await refresh_card_by_id(bot, guild, ids[0], ids[1], bounty_id)
+
+
+async def refresh_bounty_hub(bot: discord.Client, guild: discord.Guild) -> None:
+    """Nudge the board's hub panel to repaint after a pot changed.
+
+    Takes a bare ``Client`` like :func:`refresh_card_by_id` so the economy loop
+    can call it with the bot it holds. Best-effort and never raises: a stale pot
+    on the hub is cosmetic (the card is authoritative), so this must not turn a
+    successful chip-in into an error.
+    """
+    cog = cast("Bot", bot).get_cog("EconomyCog")
+    refresh = getattr(cog, "refresh_bounty_hub_panel", None)
+    if refresh is None:
+        return
+    try:
+        await refresh(guild)
+    except Exception:
+        log.debug("econ bounty: hub refresh failed", exc_info=True)
+
+
 async def _handle_chip(
     interaction: discord.Interaction,
     bounty_id: int,
     raw_amount: str,
     card: discord.Message | None,
+    *,
+    refresh_by_ids: bool = False,
 ) -> None:
     guild = interaction.guild
     member = interaction.user
@@ -341,7 +643,11 @@ async def _handle_chip(
         await _safe_ephemeral(interaction, "❌ Couldn't add that — try again.")
         return
 
-    await _refresh_card(bot, card, guild, bounty_id)
+    if refresh_by_ids:
+        await _refresh_card_by_stored_ids(bot, guild, bounty_id)
+    else:
+        await _refresh_card(bot, card, guild, bounty_id)
+    await refresh_bounty_hub(bot, guild)
     await _safe_ephemeral(
         interaction, f"💰 Chipped in {amount:,} — the pot is now {pot:,}."
     )
@@ -385,6 +691,8 @@ async def _handle_award(
         return
 
     await _refresh_card(bot, card, guild, bounty_id)
+    # The bounty just left the open list the hub renders.
+    await refresh_bounty_hub(bot, guild)
     try:
         await notify_member(
             bot, bot.ctx.db_path, guild.id, winner.id,
@@ -428,6 +736,8 @@ async def _handle_cancel(interaction: discord.Interaction, bounty_id: int) -> No
         return
 
     await _refresh_card(bot, card, guild, bounty_id)
+    # The bounty just left the open list the hub renders.
+    await refresh_bounty_hub(bot, guild)
     for uid in refunded:
         try:
             await notify_member(

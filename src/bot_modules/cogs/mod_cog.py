@@ -163,7 +163,7 @@ def _build_help_pages(
                     ("/bank emoji image:... name:...", "Sponsor a custom emoji (weekly rent, mod-reviewed)."),
                     ("/bank sponsor question:...", "Pay to put your question forward as a QOTD (mod-approved)."),
                     ("/bank pin", "Pay to pin a short message for a day (mod-approved)."),
-                    ("/bounty", "Post a community bounty others can chip coins into; a mod awards it."),
+                    ("Bounty Board panel", "Post a bounty or chip into one — in the bounty board channel."),
                     ("/bank mute", "Toggle the economy's DM notifications for yourself."),
                 ]
             ),

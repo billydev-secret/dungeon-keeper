@@ -235,10 +235,20 @@ to currency.
   by default. One submission in flight per member.
 - **Community Bounty (built, sink — migration 109, plan
   `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.
-  `/bounty` opens a modal (title, details, opening stake); anyone chips into a
-  bounty's pot from its board card in `bounty_channel_id` (💰 Chip in), and a
-  mod Awards it (a `UserSelect` picks the winner) or Cancels it — persistent
-  `BountyChipInButton`/`BountyAwardButton`/`BountyCancelButton`. Every stake is
+  A sticky **hub panel** (`EconomyCog.bounty_panel`, `build_bounty_hub_panel`)
+  sits at the bottom of `bounty_channel_id` — how-it-works blurb plus the open
+  bounties with live pots and jump links (`board_entries`) — and is the board's
+  only entry point: 🎯 Post a bounty opens the modal (title, details, opening
+  stake), 💰 Chip in picks a bounty from a select then the amount modal.
+  `/bounty` was **deleted** on 2026-07-29 in favour of it. Anyone can also chip
+  in from a bounty's own board card, and a mod Awards it (a `UserSelect` picks
+  the winner) or Cancels it — persistent
+  `BountyChipInButton`/`BountyAwardButton`/`BountyCancelButton`, plus
+  `BountyHubPostButton`/`BountyHubChipButton` on the hub. The hub's channel is
+  `bounty_channel_id` itself and only its message id is stored
+  (`bounty_panel_message_id`); `post_bounty_panel` refuses any other channel.
+  `restick_on_bot` is **off** — the hub's own channel is where bounty cards
+  post, so chasing them would be the casino's repost flood. Every stake is
   an `apply_debit` (`bounty_stake`) recorded as its own `econ_bounty_contributions`
   row; the pot is `SUM(non-refunded contributions)` (never stored). Award credits
   one `bounty_payout` of `pot − floor(pot × bounty_rake_pct / 100)` to the winner;
