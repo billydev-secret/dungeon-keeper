@@ -411,3 +411,59 @@ def test_patch_files_lists_what_would_be_restored():
 
 def test_patch_files_on_an_empty_patch():
     assert dk_session.patch_files("") == []
+
+
+# ── venv symlink into a fresh worktree ────────────────────────────────────────
+
+
+def test_link_venv_points_the_session_at_prod(tmp_path):
+    main = tmp_path / "prod"
+    (main / ".venv" / "bin").mkdir(parents=True)
+    session = tmp_path / "dk-sessions" / "feat"
+    session.mkdir(parents=True)
+
+    msg = dk_session.link_venv(main, session)
+
+    link = session / ".venv"
+    assert link.is_symlink()
+    assert link.resolve() == (main / ".venv").resolve()
+    assert msg is not None and ".venv" in msg
+
+
+def test_link_venv_is_relative_so_the_tree_can_move(tmp_path):
+    """An absolute link breaks the moment dk-sessions/ is relocated."""
+    main = tmp_path / "prod"
+    (main / ".venv").mkdir(parents=True)
+    session = tmp_path / "dk-sessions" / "feat"
+    session.mkdir(parents=True)
+
+    dk_session.link_venv(main, session)
+    target = os.readlink(session / ".venv")
+
+    assert not os.path.isabs(target)
+    moved = tmp_path / "moved"
+    (tmp_path / "dk-sessions").rename(moved)
+    assert (moved / "feat" / ".venv").resolve() == (main / ".venv").resolve()
+
+
+def test_link_venv_leaves_an_existing_venv_alone(tmp_path):
+    """A session that already has a real .venv must not have it replaced."""
+    main = tmp_path / "prod"
+    (main / ".venv").mkdir(parents=True)
+    session = tmp_path / "dk-sessions" / "feat"
+    (session / ".venv").mkdir(parents=True)
+
+    assert dk_session.link_venv(main, session) is None
+    assert not (session / ".venv").is_symlink()
+
+
+def test_link_venv_without_a_prod_venv_is_not_fatal(tmp_path):
+    main = tmp_path / "prod"
+    main.mkdir()
+    session = tmp_path / "dk-sessions" / "feat"
+    session.mkdir(parents=True)
+
+    msg = dk_session.link_venv(main, session)
+
+    assert msg is not None and "skipped" in msg
+    assert not (session / ".venv").exists()

@@ -46,6 +46,20 @@ address to remember:
 | Remote Control session | `documentation-review` |
 | attach with | `tmux select-window -t documentation-review` |
 
+## The virtualenv is linked, not rebuilt
+
+A fresh worktree has no `.venv`, and everything a session actually runs resolves its
+interpreter from one — `scripts/gate.py`, pytest, the Playwright browser suite. So
+`dk_session.py new` drops a **relative symlink** at `<worktree>/.venv` pointing at the
+prod checkout's, and prints where it went.
+
+Relative, so moving the whole `dk-sessions/` tree doesn't break every session at once.
+It never overwrites a real `.venv` you put there yourself, and a prod checkout with no
+`.venv` just prints a skip rather than failing the spawn.
+
+`.venv` is gitignored, so the link is invisible to `git status` and never follows a
+merge into main.
+
 ## Remote Control is on by default
 
 Every session launches with `claude --remote-control <name>`, so you can pick it up
