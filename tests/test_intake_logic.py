@@ -19,9 +19,12 @@ from tests.db_template import migrated_db
 GUILD = 42
 NEWCOMER = 7
 GREETER = 501
-CHANNEL = 555  # greeter chat / intake channel
+CHANNEL = 555  # where the cards themselves post
+GREET_CHANNEL = 556  # where newcomers are actually talked to
 MEMBER_ROLE = 901
 NSFW_ROLE = 902
+VERIFIED_ROLE = 903
+UNVERIFIED_ROLE = 904
 
 CUSTOM_STEPS = [
     {"key": "greeted", "label": "Greeted", "auto": "greeted"},
@@ -45,9 +48,11 @@ def _clean_watch():
     svc._reset_watch_for_tests()
 
 
-def _enable(conn, channel=CHANNEL):
+def _enable(conn, channel=CHANNEL, greet_channel=GREET_CHANNEL):
     set_config_value(conn, svc.ENABLED_KEY, "1", GUILD)
     set_config_value(conn, svc.CHANNEL_KEY, str(channel), GUILD)
+    # Cards post to `channel`; greeting happens where the members are.
+    set_config_value(conn, svc.WELCOME_CHANNEL_KEY, str(greet_channel), GUILD)
 
 
 def _use_custom_steps(conn):
@@ -76,6 +81,20 @@ def test_channel_falls_back_to_greeter_chat(db_path):
         # An explicit intake channel wins over the fallback.
         set_config_value(conn, svc.CHANNEL_KEY, str(CHANNEL), GUILD)
         assert svc.intake_channel_id(conn, GUILD) == CHANNEL
+
+
+def test_greet_channel_prefers_greeter_chat_over_welcome(db_path):
+    with open_db(db_path) as conn:
+        # Nothing configured → no channel counts as a greeting place.
+        assert svc.greet_channel_id(conn, GUILD) == 0
+        set_config_value(conn, svc.WELCOME_CHANNEL_KEY, str(GREET_CHANNEL), GUILD)
+        assert svc.greet_channel_id(conn, GUILD) == GREET_CHANNEL
+        # A greeter chat channel, when set, is the more specific answer.
+        set_config_value(conn, svc.FALLBACK_CHANNEL_KEY, "778", GUILD)
+        assert svc.greet_channel_id(conn, GUILD) == 778
+        # The card channel is not a greeting channel.
+        set_config_value(conn, svc.CHANNEL_KEY, str(CHANNEL), GUILD)
+        assert svc.greet_channel_id(conn, GUILD) == 778
 
 
 def test_stale_hours_tolerates_garbage(db_path):
@@ -374,6 +393,60 @@ def test_auto_tick_without_open_card(db_path):
         assert ticked == []
 
 
+# ── verification signal (our gate, or a third-party verifier) ─────────
+
+
+@pytest.mark.parametrize(
+    "gained,unverified_removed,expected",
+    [
+        pytest.param([VERIFIED_ROLE], False, True, id="verifier-grants-role"),
+        pytest.param([], True, True, id="our-gate-strips-unverified"),
+        pytest.param([MEMBER_ROLE], False, False, id="unrelated-role"),
+        pytest.param([], False, False, id="nothing-happened"),
+        pytest.param([VERIFIED_ROLE, MEMBER_ROLE], False, True, id="among-others"),
+    ],
+)
+def test_verification_signalled(db_path, gained, unverified_removed, expected):
+    with open_db(db_path) as conn:
+        set_config_value(conn, svc.VERIFIED_ROLE_KEY, str(VERIFIED_ROLE), GUILD)
+        assert (
+            svc.verification_signalled(conn, GUILD, gained, unverified_removed)
+            is expected
+        )
+
+
+def test_verification_signalled_needs_a_configured_role(db_path):
+    # Prod bug: unverified_role_id was 0 and verification was done by a
+    # third-party bot granting a role, so the Verified step never ticked.
+    # With neither key set, no role gain may be read as verification.
+    with open_db(db_path) as conn:
+        assert svc.verification_signalled(conn, GUILD, [VERIFIED_ROLE], False) is False
+        assert svc.verification_signalled(conn, GUILD, [0], False) is False
+        set_config_value(conn, svc.VERIFIED_ROLE_KEY, str(VERIFIED_ROLE), GUILD)
+        assert svc.verification_signalled(conn, GUILD, [VERIFIED_ROLE], False) is True
+
+
+def test_verified_step_ticks_when_the_verifier_grants_its_role(db_path):
+    # End to end at the service layer: the role lands, the step ticks once.
+    with open_db(db_path) as conn:
+        _enable(conn)
+        set_config_value(conn, svc.VERIFIED_ROLE_KEY, str(VERIFIED_ROLE), GUILD)
+        set_config_value(
+            conn,
+            svc.STEPS_KEY,
+            json.dumps([{"key": "verified", "label": "Verified", "auto": "verified"}]),
+            GUILD,
+        )
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert svc.verification_signalled(conn, GUILD, [VERIFIED_ROLE], False) is True
+        _, ticked = svc.auto_tick(conn, GUILD, NEWCOMER, svc.AUTO_VERIFIED, 200.0)
+        assert ticked == ["verified"]
+        assert svc.steps_for(conn, cid)[0]["done_at"] == 200.0
+        # Re-firing (role churn) doesn't re-tick.
+        _, again = svc.auto_tick(conn, GUILD, NEWCOMER, svc.AUTO_VERIFIED, 300.0)
+        assert again == []
+
+
 # ── completion (the code always wins) ─────────────────────────────────
 
 
@@ -423,7 +496,7 @@ def test_close_for_member_on_leave(db_path):
 
 def _eval(conn, **kw):
     defaults = dict(
-        channel_id=CHANNEL,
+        channel_id=GREET_CHANNEL,
         content="welcome!",
         mentioned_ids=[NEWCOMER],
         author_is_greeter=True,
@@ -447,11 +520,46 @@ def test_evaluate_message_greet_gating(db_path):
         _enable(conn)
         svc.create_card(conn, GUILD, NEWCOMER, 100.0)
         assert _eval(conn) == [(svc.ACTION_GREET, NEWCOMER, "")]
-        # Wrong channel → no greet; non-greeter (even a mod) → no greet.
+        # Wrong channel → no greet; a plain member saying hi → no greet.
         assert _eval(conn, channel_id=999) == []
-        assert _eval(conn, author_is_greeter=False, author_is_mod=True) == []
+        assert _eval(conn, author_is_greeter=False) == []
         # Mentioning someone without an open card → nothing.
         assert _eval(conn, mentioned_ids=[12345]) == []
+
+
+def test_evaluate_message_greets_where_the_members_are(db_path):
+    # Prod bug (card #3, 2026-07-29): the rule watched the channel the CARDS
+    # post to while the greeting happened in #welcome-chat, so `greeted` could
+    # never tick. Greeting is watched where newcomers are talked to.
+    with open_db(db_path) as conn:
+        _enable(conn)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert _eval(conn, channel_id=GREET_CHANNEL) == [
+            (svc.ACTION_GREET, NEWCOMER, "")
+        ]
+        # The card channel is the bot's noticeboard, not a greeting place.
+        assert _eval(conn, channel_id=CHANNEL) == []
+
+
+def test_evaluate_message_mods_greet_too(db_path):
+    # A mod welcoming someone is a greeting; the greeter role isn't a
+    # prerequisite for saying hello (it is for nothing else here either).
+    with open_db(db_path) as conn:
+        _enable(conn)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert _eval(conn, author_is_greeter=False, author_is_mod=True) == [
+            (svc.ACTION_GREET, NEWCOMER, "")
+        ]
+
+
+def test_evaluate_message_no_greet_channel_configured(db_path):
+    # Guild with neither greeter chat nor a welcome channel: nothing greets,
+    # and channel 0 must not match the unset config.
+    with open_db(db_path) as conn:
+        _enable(conn, greet_channel=0)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert _eval(conn, channel_id=GREET_CHANNEL) == []
+        assert _eval(conn, channel_id=0) == []
 
 
 def test_evaluate_message_completion_code(db_path):

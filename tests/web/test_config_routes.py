@@ -1631,6 +1631,9 @@ def test_intake_config_defaults_in_get(authed_client):
     intake = resp.json()["intake"]
     assert intake["enabled"] is False
     assert intake["channel_id"] == "0"
+    assert intake["verified_role_id"] == "0"
+    # Derived, read-only: nothing configured → no channel counts as greeting.
+    assert intake["greet_channel_id"] == "0"
     assert intake["stale_hours"] == 24
     # Effective (default) step list is surfaced so the editor never starts blank.
     keys = [s["key"] for s in intake["steps"]]
@@ -1646,6 +1649,7 @@ def test_update_intake_roundtrips(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/intake", json={
         "enabled": True,
         "channel_id": "5551234",
+        "verified_role_id": "903888888888888888",
         "completion_code": "  DK-7734  ",
         "stale_hours": 6,
         "steps": [
@@ -1660,6 +1664,8 @@ def test_update_intake_roundtrips(authed_client, fake_ctx):
     assert intake["enabled"] is True
     assert intake["channel_id"] == "5551234"
     assert intake["completion_code"] == "DK-7734"  # stored stripped
+    # Snowflake round-trips as a string — never through parseInt/JSON number.
+    assert intake["verified_role_id"] == "903888888888888888"
     assert intake["stale_hours"] == 6
     assert [s["key"] for s in intake["steps"]] == [
         "greeted", "member_role", "sfw_questions_asked",
@@ -1673,6 +1679,10 @@ def test_update_intake_roundtrips(authed_client, fake_ctx):
         assert [s.key for s in svc.step_config(conn, fake_ctx.guild_id)] == [
             "greeted", "member_role", "sfw_questions_asked",
         ]
+        # …and reads the saved verified role as a verification signal.
+        assert svc.verification_signalled(
+            conn, fake_ctx.guild_id, [903888888888888888], False
+        ) is True
 
 
 def test_update_intake_rejects_bad_steps(authed_client):

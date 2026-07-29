@@ -257,7 +257,14 @@ FEATURES: tuple[Feature, ...] = (
             _flag("intake_enabled", "Intake cards on", required=True),
             _ch("intake_channel_id", "Card channel", required=True,
                 help="Where cards post; the greeting watch's fallback chat "
-                     "channel (greeter_chat_channel_id) is used when unset."),
+                     "channel (greeter_chat_channel_id) is used when unset. "
+                     "Setting it here doesn't make a channel count as a "
+                     "greeting place — that's resolved separately, from "
+                     "greeter chat then the welcome channel."),
+            _role("intake_verified_role_id", "Verified role", admin_only=True,
+                  help="Role your verification bot grants on success (e.g. "
+                       "Double Counter). Gaining it ticks the Verified step; "
+                       "losing the unverified role does too."),
             _text("intake_completion_code", "Completion code",
                   help="Posting a welcome message containing this phrase and "
                        "@mentioning the newcomer completes their card."),
