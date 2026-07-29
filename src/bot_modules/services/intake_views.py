@@ -518,7 +518,9 @@ async def handle_role_changes(
                     conn, guild_id, member.id, svc.AUTO_ROLE_GAINED, now, role_id=rid
                 )
                 ticked.extend(keys)
-            if unverified_removed:
+            if svc.verification_signalled(
+                conn, guild_id, gained_role_ids, unverified_removed
+            ):
                 card, keys = svc.auto_tick(
                     conn, guild_id, member.id, svc.AUTO_VERIFIED, now
                 )

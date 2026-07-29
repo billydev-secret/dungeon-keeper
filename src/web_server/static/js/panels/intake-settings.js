@@ -4,8 +4,8 @@ import { esc, loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, ap
 // card); the rest tick themselves from bot events.
 const AUTO_KINDS = [
   ["", "Manual (button on the card)"],
-  ["greeted", "Auto: greeter mentions them"],
-  ["verified", "Auto: unverified role removed"],
+  ["greeted", "Auto: greeted in chat"],
+  ["verified", "Auto: verification passed"],
   ["role_gained", "Auto: role gained"],
 ];
 
@@ -22,6 +22,23 @@ export function mountSettings(container) {
     const c = config.intake || { enabled: false, channel_id: "0", completion_code: "", stale_hours: 24, steps: [] };
     // Working copy of the step list; rows re-render from this.
     let steps = (c.steps || []).map((s) => ({ ...s }));
+    // Greeting is watched where newcomers are talked to, not where the cards
+    // post — spell out which channel that resolves to so nobody assumes the
+    // card channel is being watched.
+    // Three states, not two: a channel we can name, a configured channel we
+    // can't name (the channel list failed to load — saying "none set" there
+    // would send an admin to fix a setting that is fine), and none set.
+    const greetChannelId = c.greet_channel_id || "0";
+    const greetChannel = channels.find((ch) => ch.id === greetChannelId);
+    const greetHow = `That's the greeter chat channel, or the welcome channel when it isn't set — both live in Welcome &amp; Leave.`;
+    let greetChannelHint;
+    if (greetChannel) {
+      greetChannelHint = `A greeter or mod @mentioning (or replying to) the newcomer in <strong>#${esc(greetChannel.name)}</strong> ticks a “greeted in chat” step. ${greetHow}`;
+    } else if (greetChannelId !== "0") {
+      greetChannelHint = `A greeter or mod @mentioning (or replying to) the newcomer in channel <strong>${esc(greetChannelId)}</strong> ticks a “greeted in chat” step. ${greetHow}`;
+    } else {
+      greetChannelHint = `<strong>No channel set</strong> — “greeted in chat” steps can never tick. Set a greeter chat channel (or a welcome channel) in Welcome &amp; Leave; the card channel above is not watched for greetings.`;
+    }
 
     container.innerHTML = `
       <div style="display:flex; flex-direction:column; gap:24px;">
@@ -37,6 +54,15 @@ export function mountSettings(container) {
             <label>Card channel</label>
             <select name="channel_id">${channelSelect(channels, c.channel_id)}</select>
             <div class="field-hint">Where cards post. Leave on (none) to use the greeter chat channel from Welcome &amp; Leave.</div>
+          </div>
+          <div class="field">
+            <label>Greeting watched in</label>
+            <div class="field-hint">${greetChannelHint}</div>
+          </div>
+          <div class="field">
+            <label>Verified role</label>
+            <select name="verified_role_id">${roleSelect(roles, c.verified_role_id || "0")}</select>
+            <div class="field-hint">The role your verification bot (e.g. Double Counter) <strong>grants</strong> when someone passes. Gaining it ticks a “verification passed” step. Removal of the unverified role from Welcome &amp; Leave still counts too, so guilds using either shape are covered — but if your verifier only grants, this must be set or that step can never tick.</div>
           </div>
           <div class="field">
             <label>Completion code</label>
@@ -286,6 +312,7 @@ export function mountSettings(container) {
         await apiPut("/api/config/intake", {
           enabled: form.querySelector('input[name="enabled"]').checked,
           channel_id: fd.get("channel_id") || "0",
+          verified_role_id: fd.get("verified_role_id") || "0",
           completion_code: fd.get("completion_code") || "",
           stale_hours: parseFloat(fd.get("stale_hours")) || 24,
           steps: steps.map((s) => ({

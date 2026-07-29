@@ -5,10 +5,12 @@ When a member joins, a card posts to greeter chat (see
 card is a passive tracker: welcomers keep greeting, asking the question lists,
 and running ``/grant`` exactly as before, and the card watches:
 
-* **auto steps** tick from event hooks — ``greeted`` (a greeter-role member
-  mentions the newcomer in the intake channel), ``verified`` (the unverified
-  role is removed), ``role_gained`` (the member gains the step's configured
-  role, whether via ``/grant`` or a manual add);
+* **auto steps** tick from event hooks — ``greeted`` (a greeter or mod
+  mentions the newcomer in the *greeting* channel, see
+  :func:`greet_channel_id` — not the channel the cards post to),
+  ``verified`` (verification signalled either way it is done here, see
+  :func:`verification_signalled`), ``role_gained`` (the member gains the
+  step's configured role, whether via ``/grant`` or a manual add);
 * **manual steps** (the SFW/NSFW question phases) are buttons on the card;
 * **step codes** tick one step from a greeter/mod message carrying that
   step's own configured phrase — any channel. Each canned message in the
@@ -33,6 +35,8 @@ the DB (same pattern as ``promotion_review_service``).
 
 Ships dark: nothing happens until ``intake_enabled`` is set and a channel
 resolves (``intake_channel_id``, falling back to ``greeter_chat_channel_id``).
+That is where cards *post*; where greeting is *watched* is a separate
+resolution — see :func:`greet_channel_id`.
 """
 
 from __future__ import annotations
@@ -47,7 +51,9 @@ from bot_modules.core.db_utils import get_config_value, open_db, parse_bool
 ENABLED_KEY = "intake_enabled"
 CHANNEL_KEY = "intake_channel_id"
 FALLBACK_CHANNEL_KEY = "greeter_chat_channel_id"
+WELCOME_CHANNEL_KEY = "welcome_channel_id"
 GREETER_ROLE_KEY = "greeter_role_id"
+VERIFIED_ROLE_KEY = "intake_verified_role_id"
 STEPS_KEY = "intake_steps"
 CODE_KEY = "intake_completion_code"
 STALE_HOURS_KEY = "intake_stale_hours"
@@ -166,6 +172,21 @@ def intake_channel_id(conn: sqlite3.Connection, guild_id: int) -> int:
     return _int_config(conn, FALLBACK_CHANNEL_KEY, guild_id)
 
 
+def greet_channel_id(conn: sqlite3.Connection, guild_id: int) -> int:
+    """Where a greeting counts — the channel newcomers are *talked to* in.
+
+    Deliberately not the card channel: cards post to a greeter-facing
+    noticeboard while the welcome itself happens where the member landed, so
+    watching the card channel meant ``greeted`` could never tick. Greeter chat
+    wins when set (a room dedicated to handling arrivals), else the welcome
+    channel; 0 means no channel qualifies and nothing greets.
+    """
+    explicit = _int_config(conn, FALLBACK_CHANNEL_KEY, guild_id)
+    if explicit > 0:
+        return explicit
+    return _int_config(conn, WELCOME_CHANNEL_KEY, guild_id)
+
+
 def is_enabled(conn: sqlite3.Connection, guild_id: int) -> bool:
     """True once intake is switched on **and** a card channel resolves."""
     if not parse_bool(get_config_value(conn, ENABLED_KEY, "0", guild_id)):
@@ -175,6 +196,30 @@ def is_enabled(conn: sqlite3.Connection, guild_id: int) -> bool:
 
 def greeter_role_id(conn: sqlite3.Connection, guild_id: int) -> int:
     return _int_config(conn, GREETER_ROLE_KEY, guild_id)
+
+
+def verified_role_id(conn: sqlite3.Connection, guild_id: int) -> int:
+    """Role a verification bot *grants* on success; 0 = not configured."""
+    return _int_config(conn, VERIFIED_ROLE_KEY, guild_id)
+
+
+def verification_signalled(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    gained_role_ids: list[int],
+    unverified_removed: bool,
+) -> bool:
+    """Did this role update mean "this member passed the gate"?
+
+    Verification wears two shapes in the wild and both must tick the step:
+    our own gate *strips* ``unverified_role_id``, while a third-party
+    verifier (Double Counter) *grants* a role instead. Watching only the
+    removal left the step dead on guilds using the second shape.
+    """
+    if unverified_removed:
+        return True
+    role_id = verified_role_id(conn, guild_id)
+    return role_id > 0 and role_id in gained_role_ids
 
 
 def completion_code(conn: sqlite3.Connection, guild_id: int) -> str:
@@ -527,10 +572,10 @@ def evaluate_message(
     * :data:`ACTION_STEP` — the message carries a step's own code, from a
       greeter or mod, any channel. One action per matching step, so a message
       may tick several. Unlike completion this doesn't close the card.
-    * :data:`ACTION_GREET` — a greeter-role member mentioned them in the
-      intake channel (the same signal the Greeter Response report measures).
-      Can co-occur with a step code: the greeting message is allowed to carry
-      one.
+    * :data:`ACTION_GREET` — a greeter or mod mentioned them in the greeting
+      channel (see :func:`greet_channel_id` — where newcomers are talked to,
+      *not* where the cards post). Can co-occur with a step code: the greeting
+      message is allowed to carry one.
 
     ``mentioned_ids`` is what the caller resolved as "this message addresses
     them" — real @mentions **plus** the author of a replied-to message, so a
@@ -553,7 +598,8 @@ def evaluate_message(
         coded_keys = [
             s.key for s in step_config(conn, guild_id) if code_matches(content, s.code)
         ]
-    greets = author_is_greeter and channel_id == intake_channel_id(conn, guild_id)
+    greet_channel = greet_channel_id(conn, guild_id)
+    greets = privileged and greet_channel > 0 and channel_id == greet_channel
     if not completes and not coded_keys and not greets:
         return []
     actions: list[tuple[str, int, str]] = []

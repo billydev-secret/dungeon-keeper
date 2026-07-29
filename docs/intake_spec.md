@@ -31,12 +31,30 @@ slash commands:
   configured, since an unconfigured `role_gained` step could never tick) —
   config edits never mutate in-flight cards. Kinds: manual (persistent
   toggle button, greeters + mods, first ticker preserved on races),
-  `greeted` (greeter-role member @mentions the newcomer in the intake
-  channel), `verified` (unverified role removed), `role_gained` (member
+  `greeted` (a greeter **or mod** @mentions/replies to the newcomer in the
+  **greeting channel** — `greeter_chat_channel_id`, else
+  `welcome_channel_id`; 0 means nothing greets), `verified` (verification
+  signalled: `unverified_role_id` removed **or**
+  `intake_verified_role_id` gained), `role_gained` (member
   gains the step's configured role — `/grant` or a manual add; `role_id 0`
   never ticks, and the dashboard refuses to store it). Step keys are
   normalized to `[\w-]` and capped at 64 chars on save so persistent-button
   custom_ids always fullmatch the dispatch template after a restart.
+- **Where greeting is watched** is deliberately *not* the card channel.
+  Cards post to a greeter-facing noticeboard; the greeting itself happens
+  where the newcomer landed. Watching `intake_channel_id` meant `greeted`
+  could never tick in practice (prod, 2026-07-29: every greeting was in
+  #welcome-chat while cards posted to the tracker channel), so
+  `greet_channel_id()` resolves `greeter_chat_channel_id` first — a room
+  dedicated to handling arrivals — then `welcome_channel_id`. Mods count
+  alongside greeters: the greeter role gates nothing else here either.
+- **Verification wears two shapes** and both signal the step
+  (`verification_signalled()`): our own gate *strips* `unverified_role_id`,
+  while a third-party verifier (Double Counter) *grants* a role instead —
+  `intake_verified_role_id`, admin-only, 0 = unset. Watching only the
+  removal left `verified` dead on guilds using the second shape, which is
+  every guild whose verification isn't ours. A verified role that is also
+  a `role_gained` step's role ticks both steps; that's intended.
 - **Step codes:** each step may carry its own free-text `code`. A
   greeter/mod message in **any channel** containing it, addressed to the
   newcomer, ticks **that step only** — the card stays open. The point is
