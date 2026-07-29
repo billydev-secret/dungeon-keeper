@@ -43,8 +43,33 @@ bounty past `bounty_expire_days` (default 14) and marks it expired.
   - 🏆 **Award** — mod only; opens a `UserSelect`, pays the winner minus rake.
   - **Cancel** — mod only; refunds every contributor (plain label, no glyph — the
   style guide's Cancel rule).
-- Posting is member self-service: `/bounty` opens a modal (title, description,
-  opening stake).
+- A **sticky hub panel** sits at the bottom of that same channel — the board's
+  only entry point (added 2026-07-29, first live run). It carries a
+  how-it-works blurb (including the refund promise, which the open-state card
+  omits) and the open bounties with live pots, backer counts and jump links
+  (`board_entries`). The list is bounded by the embed field's **1024-char
+  budget**, not a row count — `HUB_LIST_LIMIT` is only the read cap, titles are
+  clipped, and whatever doesn't fit is named in an "…and N more" tail. A jump
+  URL costs ~96 chars, so a handful of ordinary titles overruns the field, and
+  an over-length embed is a 400 that `core.sticky` swallows — it would freeze
+  the board's only entry point on a stale render rather than fail loudly.
+  Buttons: 🎯 **Post a bounty** (the modal below) and 💰 **Chip in** (a select
+  of open bounties, then the amount modal — the hub isn't attached to a card).
+  It repaints after a post, chip-in, award, cancel and the expiry sweep.
+- Posting is member self-service, from that panel. **`/bounty` was deleted**
+  when the hub landed — CLAUDE.md's "one panel over a sprawl of subcommands",
+  and the same command-surface audit that took the six posting commands.
+- `post_bounty_panel` refuses any channel but the board — a hub elsewhere would
+  be adopted by the restick as though it were on the board. Where it landed is
+  stored in its own pair (`bounty_panel_channel_id`/`_message_id`) rather than
+  inferred from `bounty_channel_id`, because an admin can repoint the board and
+  that save doesn't touch the panel ids; on a mismatch the hub reads as
+  unposted and the next post deletes the orphan (whose buttons, being static
+  custom_ids, otherwise stay live). `restick_on_bot` is **off**: this is the one sticky panel whose
+  own channel is where the bot posts (a card per bounty, re-rendered on every
+  chip-in), so chasing bot messages would be the casino's 275-message flood.
+  The cost — the hub sits above the newest card until a human speaks — is the
+  accepted trade.
 
 ## Guardrails / config (all dashboard, dark by default)
 
@@ -59,8 +84,11 @@ bounty past `bounty_expire_days` (default 14) and marks it expired.
 - `economy_bounty_service.py`: create / contribute / award / cancel / expire /
   refund — pure DB, exactly-once refunds, rake maths.
 - `economy/bounty_views.py`: board card + persistent Chip-in/Award/Cancel, the
-  award `UserSelect`, DMs.
-- Cog `/bounty` (modal) + persistent-view registration.
+  award `UserSelect`, DMs, and the hub panel (`build_bounty_hub_embed`,
+  `BountyHubPostButton`/`BountyHubChipButton`, `build_bounty_hub_panel`).
+- Cog: `bounty_panel` StickyPanel + `post_bounty_panel` (dashboard route),
+  `refresh_bounty_hub_panel`, `open_bounty_post_modal` (the modal), and
+  persistent-view registration. No slash command.
 - `economy_loop.run_bounty_expiry` on the hourly tick.
 - Settings + register kinds (`bounty_stake`/`bounty_payout`/`bounty_refund`) +
   web route + dashboard (channel picker + rake/knobs near the other sinks).

@@ -90,6 +90,7 @@ def test_registry_covers_the_commands_it_replaced():
         "economy-guide",      # /bank post-guide
         "economy-leaderboard",  # /bank post-leaderboard
         "economy-shop",       # /bank post-shop
+        "economy-bounty",     # /bounty
         "voice-control",      # /voice-admin post-panel
         "guess-prompt",       # /guess prompt
         "ticket-panel",       # /ticket panel

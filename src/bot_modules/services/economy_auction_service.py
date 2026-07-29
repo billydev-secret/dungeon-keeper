@@ -334,11 +334,11 @@ def sticky_panel_channels(
     Rather than couple the cogs at runtime, ``start_auction`` calls this and
     warns the mod, who is already choosing a channel.
 
-    Covers the four panels reachable from a config read: the three economy
-    panels and the casino hub. The other four sticky panels (pen pals, DM
-    perms, Voice Master, the todo board) keep their ids in their own tables
-    and are not worth four cross-cog imports here — missing one costs a
-    warning, never a working auction.
+    Covers the five panels reachable from a config read: the three economy
+    panels, the bounty board hub, and the casino hub. The other four sticky
+    panels (pen pals, DM perms, Voice Master, the todo board) keep their ids
+    in their own tables and are not worth four cross-cog imports here —
+    missing one costs a warning, never a working auction.
     """
     from bot_modules.services.casino_service import (  # noqa: PLC0415
         load_casino_settings,
@@ -353,6 +353,9 @@ def sticky_panel_channels(
         (int(econ.guide_channel_id or 0), "the economy guide panel"),
         (int(econ.leaderboard_channel_id or 0), "the leaderboard panel"),
         (int(econ.shop_channel_id or 0), "the shop panel"),
+        # The bounty hub sits in the board channel itself, so that is the
+        # collision — not where the panel was last recorded as posted.
+        (int(econ.bounty_channel_id or 0), "the bounty board panel"),
         (int(casino.panel_channel_id or 0), "the casino hub panel"),
     )
     return {cid: name for cid, name in named if cid}

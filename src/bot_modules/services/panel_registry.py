@@ -117,6 +117,19 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         host_page="economy-config",
     ),
     PanelSpec(
+        key="economy-bounty",
+        label="Bounty Board",
+        description=(
+            "The Bounty Board hub — explains how bounties work, lists the open "
+            "ones with their pots, and carries the Post a bounty and Chip in "
+            "buttons. Must go in the bounty board channel set above; it keeps "
+            "itself at the bottom of it."
+        ),
+        cog="EconomyCog",
+        method="post_bounty_panel",
+        host_page="economy-config",
+    ),
+    PanelSpec(
         key="voice-control",
         label="Voice Control Owner Panel",
         description=(
