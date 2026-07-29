@@ -126,7 +126,7 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         ),
         cog="VoiceMasterCog",
         method="post_control_panel",
-        host_page="config-voice-master",
+        host_page="voice-activity",
     ),
     PanelSpec(
         key="guess-prompt",

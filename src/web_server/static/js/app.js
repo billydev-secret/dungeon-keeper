@@ -58,7 +58,7 @@ const SECTIONS = [
         { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js", keywords: "daily monthly active users" },
         { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
         { id: "retention",            label: "Activity Drops",        module: "./panels/retention.js", keywords: "retention churn drop-off" },
-        { id: "voice-activity",       label: "Voice Activity",        module: "./panels/voice-activity.js" },
+        { id: "voice-activity",       label: "Voice",                 module: "./panels/voice.js", help: "help-voice", keywords: "voice activity control hub temporary channels master post panel owner control panel" },
         { id: "xp-leaderboard",       label: "XP & Leveling",        module: "./panels/xp.js", keywords: "levels rank experience xp settings curve", help: "help-community" },
         { id: "quality-score",        label: "Quality Score",        module: "./panels/quality-score.js" },
         { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
@@ -71,7 +71,7 @@ const SECTIONS = [
         { id: "health-newcomer-funnel", label: "Newcomer Funnel",    module: "./panels/health-newcomer-funnel.js" },
         { id: "health-cohort-retention",label: "Cohort Retention",   module: "./panels/health-cohort-retention.js" },
         { id: "greeter-response",     label: "Greeter Response",     module: "./panels/greeter-response.js" },
-        { id: "intake-report",        label: "Intake Queue",         module: "./panels/intake-report.js" },
+        { id: "intake-report",        label: "Intake",               module: "./panels/intake.js", keywords: "intake queue cards welcome procedure steps" },
         { id: "time-to-level5",       label: "Time to Level 5",      module: "./panels/time-to-level5.js" },
         { id: "invite-effectiveness", label: "Invite Effectiveness", module: "./panels/invite-effectiveness.js" },
         { id: "join-times",           label: "Join Times",           module: "./panels/join-times.js" },
@@ -81,7 +81,7 @@ const SECTIONS = [
       ]},
       { heading: "Member Lists", items: [
         { id: "inactive-report",      label: "Inactive Report",      module: "./panels/inactive-report.js", keywords: "inactive members role list oldest sfw report", related: ["config-inactive", "config-prune"] },
-        { id: "birthday-calendar",    label: "Birthday Calendar",    module: "./panels/birthday-calendar.js", keywords: "birthdays report", related: ["config-birthday"] },
+        { id: "birthday-calendar",    label: "Birthdays",            module: "./panels/birthday.js", keywords: "birthday calendar report announcements settings" },
       ]},
     ],
   },
@@ -129,9 +129,7 @@ const SECTIONS = [
       ]},
       { heading: "Members", items: [
         { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true, keywords: "greeting join leave messages" },
-        { id: "config-intake",     label: "Intake Cards",     module: "./panels/config-intake.js", adminOnly: true },
         { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
-        { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true, related: ["birthday-calendar"] },
         { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
         { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"], keywords: "caps limits gambling blackouts", help: "help-wellness" },
         { id: "config-prune",      label: "Auto-Remove Role (Inactive)", module: "./panels/config-prune.js", adminOnly: true, keywords: "prune inactive role removal", related: ["inactive-report"] },
@@ -156,7 +154,6 @@ const SECTIONS = [
         { id: "docs",              label: "Docs",              module: "./panels/docs.js", keywords: "channel docs documentation publish" },
       ]},
       { heading: "Voice", items: [
-        { id: "config-voice-master", label: "Voice Control",     module: "./panels/config-voice-master.js", adminOnly: true, help: "help-voice", keywords: "voice master hub temporary channels post panel owner control panel" },
         { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
       ]},
       { heading: "AI & Maintenance", items: [

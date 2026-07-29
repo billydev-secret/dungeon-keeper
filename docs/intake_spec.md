@@ -161,7 +161,7 @@ channel's history, oldest first; refuses a non-empty editor.
 
 - Config: `PUT /config/intake` (strict validation; steps ≤ 20, keys
   slugged + deduped, stable across re-saves), `PUT
-  /config/intake/reference`, import endpoint. Panel `config-intake.js`.
+  /config/intake/reference`, import endpoint. Panel `intake-settings.js`.
 - Analytics: `GET /reports/intake-report` → Reports → Greeter → **Intake
   Queue** (`intake-report.js`): open queue oldest-first with progress and
   pending steps, outcome counts + median/mean time-to-complete,
@@ -178,7 +178,7 @@ channel's history, oldest first; refuses a non-empty editor.
 | Reference blocks/render/diff/sync/import | `services/intake_reference_service.py` |
 | Hooks | `cogs/events_cog.py` (join/remove/ban/member-update/message), `dungeonkeeper/__main__.py` (warm + `add_dynamic_items` + loop) |
 | Routes | `web_server/routes/config.py`, `web_server/routes/reports.py` |
-| Panels | `static/js/panels/config-intake.js`, `intake-report.js` |
+| Panels | `static/js/panels/intake.js` (composes `intake-report.js` + `intake-settings.js`) |
 | Tests | `tests/test_intake_logic.py`, `test_intake_views.py`, `test_intake_reference_logic.py`, `tests/web/test_config_routes.py`, `test_reports_routes.py` |
 
 See also: [greeting_watch_spec.md](greeting_watch_spec.md),

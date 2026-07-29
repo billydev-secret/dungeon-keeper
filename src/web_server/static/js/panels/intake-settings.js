@@ -1,4 +1,4 @@
-import { esc, loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, apiPost, showStatus } from "../config-helpers.js";
+import { esc, loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, apiPost, showStatus, lockUnlessAdmin } from "../config-helpers.js";
 
 // Auto-kind choices for a step. "" = manual (welcomers tick a button on the
 // card); the rest tick themselves from bot events.
@@ -9,8 +9,13 @@ const AUTO_KINDS = [
   ["role_gained", "Auto: role gained"],
 ];
 
-export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
+/**
+ * The settings half of the Intake page — card behaviour and the bot-synced
+ * procedure reference. Mounted into a region by panels/intake.js, below the
+ * queue, and locked read-only for non-admins. Not a nav page in its own right.
+ */
+export function mountSettings(container) {
+  container.innerHTML = `<div class="empty">Loading config…</div>`;
 
   (async () => {
     const [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
@@ -18,16 +23,11 @@ export function mount(container) {
     // Working copy of the step list; rows re-render from this.
     let steps = (c.steps || []).map((s) => ({ ...s }));
 
-    // One wrapper child for #panel-root (a flex ROW): two sibling .panel
-    // elements would sit side-by-side at half width on every viewport —
-    // the wrapper stacks them and owns the scroll instead.
     container.innerHTML = `
-      <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:16px; overflow-y:auto;">
-      <div class="panel" style="flex:none; overflow-y:visible;">
-        <header>
-          <h2>Intake Cards</h2>
-          <div class="subtitle">Per-newcomer welcome checklist posted to greeter chat — the open cards are your intake queue</div>
-        </header>
+      <div style="display:flex; flex-direction:column; gap:24px;">
+      <div>
+        <div class="section-label">Card Settings</div>
+        <div class="field-hint" style="margin-bottom:12px;">Per-newcomer welcome checklist posted to greeter chat — the open cards are the queue above.</div>
         <form class="form" data-form>
           <div class="field">
             <label><input type="checkbox" name="enabled" ${c.enabled ? "checked" : ""} /> Enable intake cards</label>
@@ -58,11 +58,9 @@ export function mount(container) {
           <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
       </div>
-      <div class="panel" style="flex:none; overflow-y:visible;">
-        <header>
-          <h2>Procedure Reference</h2>
-          <div class="subtitle">The #welcome-procedure content, bot-synced — edit here, the channel updates itself. Questions render one message each for one-tap copy-paste.</div>
-        </header>
+      <div>
+        <div class="section-label">Procedure Reference</div>
+        <div class="field-hint" style="margin-bottom:12px;">The #welcome-procedure content, bot-synced — edit here, the channel updates itself. Questions render one message each for one-tap copy-paste.</div>
         <form class="form" data-ref-form>
           <div class="field">
             <label>Reference channel</label>
@@ -303,5 +301,9 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
+
+    // Last, so every control both forms built — including the dynamically
+    // rendered step and block rows — is covered.
+    lockUnlessAdmin(container);
   })();
 }
