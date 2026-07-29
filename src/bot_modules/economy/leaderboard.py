@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.core import meters
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.logic import local_day_bounds, local_day_for
@@ -71,20 +72,27 @@ _PACE_OK = 0.9
 def bar_fill(current: int, target: int, width: int = 10) -> str:
     """Just the ``▰▱`` meter glyphs (no numbers) for a running total.
 
-    Shared by ``progress_bar`` and the login-digest meter so both draw the
-    fill the same way; an empty/zero target reads as an all-empty bar.
+    Raw and unwrapped — the login digest and the ``/bank quests`` table both
+    compose this into a code span they build themselves. Callers rendering a
+    bare bar must wrap it (``meters.mono``) or it renders proportionally and
+    wobbles as it fills.
+    """
+    return meters.fill(current, target, width)
+
+
+def progress_bar(
+    current: int, target: int, width: int = 10, *, code: bool = True
+) -> str:
+    """A text meter for a community quest's running total.
+
+    Wrapped in a code span by default so the bar keeps one length as it
+    fills. Pass ``code=False`` when the result goes inside a code span the
+    caller is already building — backticks do not nest.
     """
     if target <= 0:
-        return "▱" * width
-    filled = max(0, min(width, round(width * current / target)))
-    return "▰" * filled + "▱" * (width - filled)
-
-
-def progress_bar(current: int, target: int, width: int = 10) -> str:
-    """A text meter for a community quest's running total."""
-    if target <= 0:
         return f"{current:,}"
-    return f"{bar_fill(current, target, width)} {current:,}/{target:,}"
+    rendered = f"{bar_fill(current, target, width)} {current:,}/{target:,}"
+    return meters.mono(rendered) if code else rendered
 
 
 def community_progress_bar(current: int, target: int, width: int = 12) -> str:
@@ -105,9 +113,12 @@ def community_progress_bar(current: int, target: int, width: int = 12) -> str:
     for start, end in zip(bounds, bounds[1:]):
         seg_len = end - start
         seg_filled = max(0, min(seg_len, filled - start))
-        segments.append("▰" * seg_filled + "▱" * (seg_len - seg_filled))
+        segments.append(
+            meters.BAR_FILLED * seg_filled
+            + meters.BAR_EMPTY * (seg_len - seg_filled)
+        )
     bar = "┃".join(segments)
-    return f"{bar} {current:,}/{target:,}"
+    return meters.mono(f"{bar} {current:,}/{target:,}")
 
 
 # Shared monospace-table helpers (docs/embed_style_guide.md names them).

@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 import discord
 
+from bot_modules.core import meters
+
 # Discord's bulk-delete API only accepts messages younger than 14 days; older
 # messages have to be deleted one at a time. The partition helper below uses
 # this to split a per-channel batch into "recent" (bulk-eligible) and "old"
@@ -138,7 +140,7 @@ def chunk_for_bulk_delete(message_ids: list[int], chunk_size: int = 100) -> list
 
 
 def render_progress_bar(done: int, total: int, *, width: int = _DEFAULT_BAR_WIDTH) -> str:
-    """Render a textual progress bar of the form ``▰▰▰▰▱▱▱▱ 12/40``.
+    """Render a textual progress bar of the form ``` `▰▰▰▰▱▱▱▱ 12/40` ```.
 
     Matches the format used in ``_run_deletion`` so the cog can call this
     directly. A ``total`` of zero renders a full bar (defensive — there's
@@ -147,15 +149,15 @@ def render_progress_bar(done: int, total: int, *, width: int = _DEFAULT_BAR_WIDT
     if width <= 0:
         raise ValueError("width must be positive")
     if total <= 0:
-        filled = width
+        # Nothing to delete, so the run is effectively complete — the shared
+        # fill reads a non-positive target as *empty*, which is the opposite
+        # of what this card wants, so it's decided here.
+        bar = meters.BAR_FILLED * width
     else:
-        filled = round(width * done / total)
-        # round() can overshoot when done > total (e.g. failed + replaced + deleted
-        # being summed double-counts a single message). Clamp to avoid negative
-        # padding lengths producing visually broken bars.
-        filled = max(0, min(width, filled))
-    bar = "▰" * filled + "▱" * (width - filled)
-    return f"{bar} {done}/{total}"
+        # fill() clamps, which matters here: done can exceed total when failed
+        # + replaced + deleted double-counts a single message.
+        bar = meters.fill(done, total, width)
+    return meters.mono(f"{bar} {done}/{total}")
 
 
 def render_scan_status(done: int, total: int, found: int) -> str:

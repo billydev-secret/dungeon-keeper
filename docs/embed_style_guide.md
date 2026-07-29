@@ -197,10 +197,20 @@ Which embed slot does which job:
 ## Progress bars
 
 - New progress bars use the **`▰▱` vocabulary** with the economy format:
-  `{bar} {current:,}/{target:,}` — it renders cleanly without code spans.
-- Existing `█░` bars (games `live_bar.py`, chicken, pressure cooker) and the
-  bracket/pipe wrappers around them are legacy; converge when touching, don't
-  add a fourth vocabulary.
+  `{bar} {current:,}/{target:,}`, drawn from `core/meters.py` — never
+  hand-rolled. `meters.fill()` returns the raw glyphs; `meters.mono()` wraps.
+- **Always render a bar inside a code span.** `▰` and `▱` do *not* share an
+  advance width in Discord's proportional font stack — the outlined glyph is
+  wider — so a bare bar gets visibly **shorter as it fills** even though its
+  character count never changes. Side by side (game vote options, goal lists)
+  that reads as a bug. A code span forces monospace and fixes it. The one
+  exception: a meter being composed into a code span the caller already
+  builds (the `/bank quests` table cell, the login digest) stays raw —
+  backticks don't nest. `progress_bar(..., code=False)` is that path.
+- Markdown does not render inside a code span, so anything that needs bold
+  (the casino's `**62%** over`) stays *outside* the backticks.
+- Existing `█░` bars and the bracket/pipe wrappers around them are legacy;
+  converge when touching, don't add a fourth vocabulary.
 - A bar with named milestone regions (community goals' 40/70/100% tiers,
   `leaderboard.community_progress_bar`) divides the same `▰▱` bar into
   segments with a `┃` divider at each threshold — no new fill characters, no

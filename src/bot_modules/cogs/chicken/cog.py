@@ -14,6 +14,7 @@ import time
 import discord
 from discord import app_commands
 
+from bot_modules.core import meters
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
@@ -31,9 +32,8 @@ _BAR_WIDTH = 16
 
 
 def _meter_bar(pct: float) -> str:
-    filled = int(round(pct / 100.0 * _BAR_WIDTH))
-    filled = max(0, min(_BAR_WIDTH, filled))
-    return "▰" * filled + "▱" * (_BAR_WIDTH - filled)
+    """The crash meter, code-spanned so it holds one length as it fills."""
+    return meters.mono(meters.fill(pct, 100, _BAR_WIDTH))
 
 
 class ChickenCog(BaseGame, name="ChickenCog"):

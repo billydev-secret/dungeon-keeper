@@ -177,8 +177,13 @@ def _quest_line_status(q: dict) -> str:
     if state == "claimable":
         return "🔶 claim below"
     if q.get("progress_target"):
+        # code=False: this cell is padded and wrapped into the row's own code
+        # span below, so it must not carry backticks of its own.
         return progress_bar(
-            int(q["progress_current"]), int(q["progress_target"]), _QUEST_BAR_WIDTH
+            int(q["progress_current"]),
+            int(q["progress_target"]),
+            _QUEST_BAR_WIDTH,
+            code=False,
         )
     return "☐ to do"
 
