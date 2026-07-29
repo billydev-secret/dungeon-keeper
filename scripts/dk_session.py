@@ -186,6 +186,31 @@ def worktree_add_args(main_repo: Path, name: str, path: Path) -> list[str]:
     ]
 
 
+def link_venv(main_repo: Path, path: Path) -> str | None:
+    """Point the session's .venv at prod's, so tooling works on first command.
+
+    A fresh worktree has no .venv, and everything a session actually runs —
+    scripts/gate.py, pytest, the Playwright browser suite — resolves its
+    interpreter from one. Without this every session starts by hitting
+    ModuleNotFoundError and hand-linking it back (see docs/dev_sessions.md).
+
+    A relative symlink, so it survives the whole dk-sessions tree being moved.
+    Returns a message for the caller to print, or None if there was nothing
+    to do. Never fatal: a missing prod .venv just means no link.
+    """
+    src = main_repo / ".venv"
+    dst = path / ".venv"
+    if dst.exists() or dst.is_symlink():
+        return None
+    if not src.is_dir():
+        return "venv:     skipped (no .venv in the prod checkout)"
+    try:
+        dst.symlink_to(os.path.relpath(src, path), target_is_directory=True)
+    except OSError as exc:
+        return f"venv:     skipped ({exc})"
+    return f"venv:     {dst} -> {os.path.relpath(src, path)}"
+
+
 def staleness_warning(behind: int) -> str | None:
     """Warn when prod's main trails origin/main, i.e. someone else pushed.
 
@@ -415,6 +440,10 @@ def cmd_new(args: argparse.Namespace) -> int:
     # from the session would target main directly.
     run(worktree_add_args(main_repo, name, path))
     print(f"worktree: {path}  (branch {name} off main)")
+
+    venv_msg = link_venv(main_repo, path)
+    if venv_msg:
+        print(venv_msg)
 
     if args.no_window:
         print("window: skipped (--no-window)")

@@ -46,6 +46,18 @@
 .dk-help > p:first-child + h3,
 .dk-help > p:first-of-type + h3 { margin-top: 0; }
 
+/* h4 → sub-topic inside a section. The section's own h3 is dropped by the
+   panel (the header already shows the title), so an h4 is the first heading a
+   reader actually sees: it reads as body-scale and bright rather than as
+   another small uppercase label competing with the header. */
+.dk-help h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-bright);
+  margin: 20px 0 8px;
+}
+.dk-help h4:first-child { margin-top: 0; }
+
 /* Body text */
 .dk-help p { margin: 0 0 10px; color: var(--ink); }
 .dk-help p:last-child { margin-bottom: 0; }
