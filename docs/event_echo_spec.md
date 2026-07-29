@@ -211,6 +211,33 @@ else there renders as a mention Discord can't resolve.
   2 in the server's history.
 - **New auctions listed.** Only the closing echo was wanted; an "auction
   opened" echo is a `SOURCE_STYLE` row plus a sweep away if that changes.
+
+### Surveyed and deliberately not added (2026-07-28)
+
+A sweep of every other feature for the echo shape (a live row, a message to
+link to, a deadline or an open state). Decision was to stop at six sources and
+watch the real rate first — two of the six can't fire yet, so the picture is
+incomplete. Recorded so it isn't re-derived:
+
+* **Musical Chairs (`mc_games`) and Hot Potato Group (`hp_group_games`)** —
+  the one true gap. Both are open-join lobby games (`host_id`, `state='LOBBY'`,
+  `roster`) that the sweep misses only because they live in their own tables
+  rather than `games_active_games`. 3 games each, ever. Same shape as what
+  already works; adding them needs no new concepts.
+* **1v1 duels** — Pressure Cooker (26 games), Hot Potato duel (21), Chicken
+  (13), Quickdraw (5): 65 games against ~133 for all party games, so a third
+  of game activity that main chat never hears about. Deliberately excluded:
+  every one is `challenger_id` → `target_id`, a directed challenge rather than
+  something you can join, so echoing them means a new "worth watching"
+  category alongside "joinable". Note Pressure Cooker is *not* a group game
+  despite its volume — an easy thing to get wrong from the name.
+* **Photo Challenge** — plausible deadline echo ("submissions close soon"),
+  15 runs, has a card message and a submission window. Not built.
+* **Raffle** — right shape, but 0 draws and 0 tickets in prod. Building a
+  third source nobody can watch fire has diminishing returns.
+* **QOTD (13), announcements, birthdays, starboard** — all already post
+  somewhere visible on their own; an echo would be double-posting.
+* **Casino, drops, Cat Bot** — excluded by decision, far too frequent.
 - **Live-updating summary message.** One "games running now" post edited in
   place, instead of one post per game. Rejected for v1: edit loops are the
   shape that caused a repost storm in a live channel on 2026-07-26.
