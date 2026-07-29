@@ -7,6 +7,8 @@ channel) has happened here before.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import discord
 import pytest
 
@@ -20,10 +22,12 @@ from bot_modules.services.event_echo_logic import (
     SOURCE_DISCORD_EVENT,
     SOURCE_PARTY_GAME,
     SOURCE_POOLS_CLOSING,
+    SOURCE_RAFFLE_CLOSING,
     build_echo_embed,
     closing_due,
     decide,
     is_fresh,
+    next_week_roll_epoch,
     style_for,
 )
 
@@ -176,6 +180,7 @@ class TestDeadlineSources:
             pytest.param(SOURCE_BOUNTY, False, id="new-bounty"),
             pytest.param(SOURCE_AUCTION_CLOSING, True, id="auction-closing"),
             pytest.param(SOURCE_POOLS_CLOSING, True, id="pools-closing"),
+            pytest.param(SOURCE_RAFFLE_CLOSING, True, id="raffle-closing"),
         ],
     )
     def test_which_sources_are_deadlines(self, source, deadline):
@@ -198,6 +203,40 @@ class TestDeadlineSources:
         )
         assert blocked.allowed is False
         assert allowed.allowed is True
+
+    @pytest.mark.parametrize(
+        "when, offset, expected",
+        [
+            # Tuesday midday — the roll is next Monday.
+            pytest.param("2026-07-28 12:00:00", 0.0, "2026-08-03 00:00:00",
+                         id="midweek"),
+            # Sunday night, half an hour to go: the last-call case.
+            pytest.param("2026-08-02 23:30:00", 0.0, "2026-08-03 00:00:00",
+                         id="sunday-night"),
+            # Exactly on the boundary the week has already closed, so the
+            # deadline is the *following* Monday — otherwise the sweep would
+            # announce a last call for a raffle that just drew.
+            pytest.param("2026-08-03 00:00:00", 0.0, "2026-08-10 00:00:00",
+                         id="exactly-on-the-roll"),
+            # A guild five hours behind UTC rolls five hours later.
+            pytest.param("2026-07-28 12:00:00", -5.0, "2026-08-03 05:00:00",
+                         id="negative-offset"),
+            pytest.param("2026-07-28 12:00:00", 5.5, "2026-08-02 18:30:00",
+                         id="half-hour-offset"),
+        ],
+    )
+    def test_next_week_roll_epoch(self, when, offset, expected):
+        """The raffle's deadline is derived, not stored — guild-local Monday."""
+        now = datetime.fromisoformat(when).replace(tzinfo=timezone.utc).timestamp()
+        want = datetime.fromisoformat(expected).replace(tzinfo=timezone.utc)
+        assert next_week_roll_epoch(now, offset) == want.timestamp()
+
+    def test_the_raffle_last_call_lands_inside_the_window(self):
+        """The two halves have to agree, or the echo never fires."""
+        now = datetime.fromisoformat("2026-08-02 23:30:00").replace(
+            tzinfo=timezone.utc
+        ).timestamp()
+        assert closing_due(next_week_roll_epoch(now, 0.0), now) is True
 
     @pytest.mark.parametrize(
         "deadline_epoch, due",

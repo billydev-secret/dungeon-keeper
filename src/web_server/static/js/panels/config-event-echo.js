@@ -109,6 +109,8 @@ export function mount(container) {
       <ul style="margin:6px 0 0 1.1rem; padding:0;">
         <li>An auction closing within the hour.</li>
         <li>A prediction-market round whose betting shuts within the hour.</li>
+        <li>The weekly raffle, an hour before ticket sales close — linking
+            straight to the shop panel's buy button.</li>
       </ul>
       <p style="margin:8px 0 0;">
         Never results — only things you can still act on, so a link is always worth
@@ -123,8 +125,10 @@ export function mount(container) {
         retry them — but still post only once each.
       </p>
       <p style="margin:6px 0 0;">
-        Bounty and prediction-market echoes only fire once those features are switched
-        on (a bounty channel under Economy, and Pools under Casino).
+        Bounty, raffle and prediction-market echoes only fire once those features are
+        switched on (a bounty channel and the raffle under Economy, Pools under
+        Casino). The raffle echo also needs the shop panel posted, since that's what
+        it links to.
       </p>
     `;
     card.appendChild(rules);

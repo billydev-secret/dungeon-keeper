@@ -53,6 +53,7 @@ not cosmetic; see Rate limiting.
 | `bounty` | start | An open `econ_bounties` row with a posted card, within the freshness window | bounty id |
 | `auction_closing` | **deadline** | An open `econ_auctions` row whose `ends_at` is within the hour | auction id |
 | `pools_closing` | **deadline** | An open `casino_pools_rounds` row whose `closes_at` is within the hour | round id |
+| `raffle_closing` | **deadline** | The guild's ISO week rolls within the hour (and the raffle is enabled) | ISO week (`2026-W31`) |
 
 `echo_key` is the game type for party games, the sub-game for Gamebot, and
 the source name for everything else — those fire a handful of times a year,
@@ -68,6 +69,19 @@ Two schema facts the sweeps depend on:
   to settle (migration 140). The sweep filters on `closes_at`, not `status` —
   filtering on status alone would post "last call" to a round that stopped
   taking bets before lunch.
+* The **raffle is the odd one out**: there is no raffle row at all. Tickets are
+  week-scoped and `economy_loop` draws the closed week's winner at the ISO-week
+  roll, so both halves of the echo are derived rather than read. *When* comes
+  from `next_week_roll_epoch` — guild-local Monday 00:00, from the guild's
+  fixed `tz_offset_hours`. *What to link to* is the **economy shop panel**
+  (`econ_shop_channel_id` / `econ_shop_message_id`), because that is where the
+  buy-tickets button lives — which makes it the best jump target of any source:
+  the reader lands on the button, not on a description of something elsewhere.
+  No shop panel configured means no echo, since "the raffle closes soon" with
+  nowhere to act is just an alarm. It is deliberately *not* gated on there
+  being entrants already — zero tickets sold is when the nudge is worth most.
+  It is also the only source that can't be discovered from a row, so it is
+  asked about for the home guild (`ctx.guild_id`) rather than swept.
 * An auction's `ends_at` **moves**: a late bid inside the soft-close window
   pushes it out, which is exactly what this echo is trying to cause. The
   per-auction claim means the echo fires once, at the first tick the auction
@@ -203,12 +217,13 @@ else there renders as a mention Discord can't resolve.
   module constants.
 - **Casino and Cat Bot.** Out of scope by decision, not by omission — both fire
   far too often to echo.
-- **Two sources are dormant in prod** (as of 2026-07-28). `pools_enabled` is
-  unset, so the prediction market never opens a round; and
-  `econ_bounty_channel_id` is `0`, so bounty cards have nowhere to post and
-  there have been zero bounties ever. Both echoes are built and tested, but
-  neither can fire until those features are switched on. Auctions are live —
-  2 in the server's history.
+- **Three sources are dormant in prod** (as of 2026-07-28). `pools_enabled` is
+  unset, so the prediction market never opens a round; `econ_bounty_channel_id`
+  is `0`, so bounty cards have nowhere to post and there have been zero
+  bounties ever; and the raffle has 0 draws and 0 tickets, with rollout planned
+  for the week of 2026-08-03. All three echoes are built and tested, but none
+  can fire until those features are switched on. Auctions are live — 2 in the
+  server's history.
 - **New auctions listed.** Only the closing echo was wanted; an "auction
   opened" echo is a `SOURCE_STYLE` row plus a sweep away if that changes.
 
@@ -233,8 +248,6 @@ incomplete. Recorded so it isn't re-derived:
   despite its volume — an easy thing to get wrong from the name.
 * **Photo Challenge** — plausible deadline echo ("submissions close soon"),
   15 runs, has a card message and a submission window. Not built.
-* **Raffle** — right shape, but 0 draws and 0 tickets in prod. Building a
-  third source nobody can watch fire has diminishing returns.
 * **QOTD (13), announcements, birthdays, starboard** — all already post
   somewhere visible on their own; an echo would be double-posting.
 * **Casino, drops, Cat Bot** — excluded by decision, far too frequent.

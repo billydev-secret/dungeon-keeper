@@ -23,6 +23,7 @@ purpose, not a flag to leave lying around.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import discord
 
@@ -38,6 +39,7 @@ SOURCE_DISCORD_EVENT = "discord_event"
 SOURCE_BOUNTY = "bounty"
 SOURCE_AUCTION_CLOSING = "auction_closing"
 SOURCE_POOLS_CLOSING = "pools_closing"
+SOURCE_RAFFLE_CLOSING = "raffle_closing"
 
 # How long before a deadline the "last chance" echo fires.
 CLOSING_LEAD_SECONDS = 3600
@@ -105,12 +107,38 @@ SOURCE_STYLE: dict[str, EchoStyle] = {
         icon="📈",
         deadline=True,
     ),
+    SOURCE_RAFFLE_CLOSING: EchoStyle(
+        headline="Last call: {name}",
+        lead="Ticket sales close",
+        icon="🎟️",
+        deadline=True,
+    ),
 }
 
 
 def style_for(source: str) -> EchoStyle:
     """Copy and policy for one source; anything unknown gets game-shaped copy."""
     return SOURCE_STYLE.get(source, _DEFAULT_STYLE)
+
+
+def next_week_roll_epoch(now: float, tz_offset_hours: float) -> float:
+    """When the guild's ISO week next rolls over — the raffle's real deadline.
+
+    Unlike every other source, the raffle has no row and no stored end time:
+    tickets are week-scoped, and ``economy_loop`` draws the closed week's
+    winner on the first day roll where the ISO week changed. So "when does the
+    raffle close" has to be *derived* — it is guild-local Monday 00:00.
+
+    The guild's fixed ``tz_offset_hours`` defines local time (no DST, matching
+    the rest of the bot). Exactly on the boundary the current week has already
+    closed, so this returns the *following* Monday.
+    """
+    offset = tz_offset_hours * 3600
+    local = datetime.fromtimestamp(now + offset, timezone.utc)
+    boundary = (local + timedelta(days=7 - local.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return boundary.timestamp() - offset
 
 
 def closing_due(deadline_epoch: float | None, now: float) -> bool:

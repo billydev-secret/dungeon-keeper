@@ -8,6 +8,7 @@ silent rather than an error.
 from __future__ import annotations
 
 import types
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -542,6 +543,63 @@ class TestEconSweeps:
             assert svc.new_bounties(conn, NOW) == []
 
 
+# Sunday 23:30 UTC — half an hour before the week rolls.
+RAFFLE_NOW = datetime(2026, 8, 2, 23, 30, tzinfo=timezone.utc).timestamp()
+
+
+def _enable_raffle(conn, *, shop_channel="555", shop_message="900"):
+    set_config_value(conn, "econ_raffle_enabled", "1", GUILD_ID)
+    set_config_value(conn, "econ_price_raffle_ticket", "10", GUILD_ID)
+    set_config_value(conn, "econ_shop_channel_id", shop_channel, GUILD_ID)
+    set_config_value(conn, "econ_shop_message_id", shop_message, GUILD_ID)
+
+
+class TestRaffleLastCall:
+    def test_fires_in_the_final_hour(self, sync_db_path):
+        with open_db(sync_db_path) as conn:
+            _enable_raffle(conn)
+            call = svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW)
+        assert call is not None
+        assert call.iso_week == "2026-W31"
+        assert call.message_id == 900
+
+    def test_quiet_earlier_in_the_week(self, sync_db_path):
+        with open_db(sync_db_path) as conn:
+            _enable_raffle(conn)
+            midweek = RAFFLE_NOW - 3 * 86400
+            assert svc.raffle_last_call(conn, GUILD_ID, midweek) is None
+
+    def test_disabled_raffle_is_silent(self, sync_db_path):
+        """Never advertise a draw that isn't going to happen."""
+        with open_db(sync_db_path) as conn:
+            _enable_raffle(conn)
+            set_config_value(conn, "econ_raffle_enabled", "0", GUILD_ID)
+            assert svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW) is None
+
+    @pytest.mark.parametrize(
+        "channel, message",
+        [
+            pytest.param("0", "900", id="no-shop-channel"),
+            pytest.param("555", "0", id="no-shop-message"),
+            pytest.param("555", "not-a-snowflake", id="garbage"),
+        ],
+    )
+    def test_no_shop_panel_means_no_echo(self, sync_db_path, channel, message):
+        """"The raffle closes soon" with nowhere to buy is just an alarm."""
+        with open_db(sync_db_path) as conn:
+            _enable_raffle(conn, shop_channel=channel, shop_message=message)
+            assert svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW) is None
+
+    def test_zero_entrants_still_gets_the_nudge(self, sync_db_path):
+        """No tickets sold is exactly when the reminder is worth most."""
+        with open_db(sync_db_path) as conn:
+            _enable_raffle(conn)
+            assert conn.execute(
+                "SELECT COUNT(*) c FROM econ_raffle_tickets"
+            ).fetchone()["c"] == 0
+            assert svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW) is not None
+
+
 @pytest.mark.asyncio
 class TestEconEchoes:
     @pytest.fixture
@@ -604,6 +662,25 @@ class TestEconEchoes:
         with open_db(sync_db_path) as conn:
             _bounty(conn, 1, created_at=NOW - 60)
         await svc._sweep_econ(econ_bot, NOW + 30)
+        assert econ_bot.sent_channel.send.await_count == 1
+
+    async def test_raffle_links_to_the_shop_panel(self, econ_bot, sync_db_path):
+        """The best jump target of any source — the buy button is right there."""
+        with open_db(sync_db_path) as conn:
+            set_config_value(conn, svc.CONFIG_CHANNEL_KEY, "55501", GUILD_ID)
+            _enable_raffle(conn)
+        await svc._sweep_econ(econ_bot, RAFFLE_NOW)
+        embed = econ_bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "Last call" in (embed.title or "")
+        assert f"/{GUILD_ID}/555/900" in (embed.description or "")
+
+    async def test_the_raffle_is_echoed_once_per_week(self, econ_bot, sync_db_path):
+        """Many ticks fall inside the final hour; the week is the identity."""
+        with open_db(sync_db_path) as conn:
+            set_config_value(conn, svc.CONFIG_CHANNEL_KEY, "55501", GUILD_ID)
+            _enable_raffle(conn)
+        await svc._sweep_econ(econ_bot, RAFFLE_NOW)
+        await svc._sweep_econ(econ_bot, RAFFLE_NOW + 900)
         assert econ_bot.sent_channel.send.await_count == 1
 
     async def test_econ_echoes_are_silent_too(self, econ_bot, sync_db_path):

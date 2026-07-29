@@ -50,16 +50,26 @@ import asyncio
 import logging
 import sqlite3
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.db_utils import get_config_value, open_db, open_db_immediate
+from bot_modules.core.db_utils import (
+    get_config_value,
+    get_tz_offset_hours,
+    open_db,
+    open_db_immediate,
+)
 from bot_modules.core.utils import jump_url, resolve_bot_channel
+from bot_modules.economy import logic as econ_logic
+from bot_modules.economy import quests
 from bot_modules.games.constants import GAME_NAMES
 from bot_modules.games_external import parser
+from bot_modules.services.economy_raffle_service import raffle_enabled
+from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.event_echo_logic import (
     CLOSING_LEAD_SECONDS,
     FRESHNESS_SECONDS,
@@ -71,9 +81,12 @@ from bot_modules.services.event_echo_logic import (
     SOURCE_GAMEBOT,
     SOURCE_PARTY_GAME,
     SOURCE_POOLS_CLOSING,
+    SOURCE_RAFFLE_CLOSING,
     build_echo_embed,
+    closing_due,
     decide,
     is_fresh,
+    next_week_roll_epoch,
 )
 
 log = logging.getLogger(__name__)
@@ -424,6 +437,63 @@ def new_bounties(conn: sqlite3.Connection, now: float):
     ).fetchall()
 
 
+@dataclass(frozen=True)
+class RaffleLastCall:
+    """A raffle week about to close, and where to go and buy in."""
+
+    iso_week: str
+    deadline: float
+    channel_id: int
+    message_id: int
+
+
+def raffle_last_call(
+    conn: sqlite3.Connection, guild_id: int, now: float
+) -> RaffleLastCall | None:
+    """The weekly raffle, if ticket sales shut within the hour.
+
+    The odd one out among the sources. There is no raffle *row* to sweep —
+    tickets are week-scoped and the draw happens at the ISO-week roll — so
+    both halves of an echo have to be derived rather than read:
+
+    * **When** comes from ``next_week_roll_epoch``: guild-local Monday 00:00.
+    * **What to link to** is the economy shop panel, because that is where the
+      buy-tickets button lives. That makes it the best jump target of any
+      source: the reader lands on the button rather than on a description of
+      something happening elsewhere.
+
+    Deliberately *not* gated on there being entrants already — zero tickets
+    sold is exactly when the nudge is worth most.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not raffle_enabled(settings):
+        return None
+
+    offset = get_tz_offset_hours(conn, guild_id)
+    deadline = next_week_roll_epoch(now, offset)
+    if not closing_due(deadline, now):
+        return None
+
+    def _cfg(key: str) -> int:
+        try:
+            return int(get_config_value(conn, key, "0", guild_id) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    channel_id, message_id = _cfg("econ_shop_channel_id"), _cfg("econ_shop_message_id")
+    if not channel_id or not message_id:
+        # No shop panel means no button to send anyone to, and "the raffle
+        # closes soon" with nowhere to act is just an alarm.
+        return None
+
+    return RaffleLastCall(
+        iso_week=quests.iso_week_for(econ_logic.local_day_for(now, offset)),
+        deadline=deadline,
+        channel_id=channel_id,
+        message_id=message_id,
+    )
+
+
 async def live_games(db, now: float):
     """Games worth considering for an echo this tick.
 
@@ -553,9 +623,13 @@ async def _sweep_econ(bot, now: float) -> None:
                 closing_auctions(conn, now),
                 closing_pools(conn, now),
                 new_bounties(conn, now),
+                # The raffle has no row keyed by guild, so unlike the other
+                # three it can't be discovered — it's asked about, for the
+                # home guild whose economy config defines it.
+                raffle_last_call(conn, bot.ctx.guild_id, now),
             )
 
-    auctions, pools, bounties = await asyncio.to_thread(_read)
+    auctions, pools, bounties, raffle = await asyncio.to_thread(_read)
 
     for row in auctions:
         await _process_econ_row(
@@ -581,6 +655,24 @@ async def _sweep_econ(bot, now: float) -> None:
             ref_col="id", name=str(row["title"]),
             channel_col="card_channel_id", message_col="card_message_id",
         )
+
+    if raffle is not None:
+        guild = bot.get_guild(bot.ctx.guild_id)
+        if guild is not None:
+            await echo_event(
+                bot,
+                guild=guild,
+                source=SOURCE_RAFFLE_CLOSING,
+                echo_key=SOURCE_RAFFLE_CLOSING,
+                # The week is the identity — one last call per raffle week,
+                # however many ticks fall inside the final hour.
+                ref=raffle.iso_week,
+                name="this week's raffle",
+                origin_channel_id=raffle.channel_id,
+                url=jump_url(guild.id, raffle.channel_id, raffle.message_id),
+                deadline_epoch=raffle.deadline,
+                now=now,
+            )
 
 
 async def event_echo_loop(bot) -> None:
