@@ -21,19 +21,18 @@ import {
   field,
   numInput,
   checkbox,
+  sectionCard,
   mountChannelPicker,
   guardForm,
   renderMetaWarning,
 } from "../config-helpers.js";
+import { renderLoading } from "../states.js";
 
 export function mount(container) {
   container.textContent = "";
   const wrap = document.createElement("div");
   wrap.className = "panel";
-  const loading = document.createElement("div");
-  loading.className = "empty";
-  loading.textContent = "Loading config…";
-  wrap.appendChild(loading);
+  wrap.innerHTML = renderLoading("Loading config…");
   container.appendChild(wrap);
 
   (async () => {
@@ -72,16 +71,7 @@ export function mount(container) {
     form.className = "form form-cards";
     panel.appendChild(form);
 
-    const card = (title) => {
-      const el = document.createElement("div");
-      el.className = "card";
-      const lbl = document.createElement("div");
-      lbl.className = "section-label";
-      lbl.textContent = title;
-      el.appendChild(lbl);
-      form.appendChild(el);
-      return el;
-    };
+    const card = (title) => sectionCard(form, title);
 
     // ── The master switch, and where the market lives ───────────────────
     const cardWiring = card("Running the Market");
@@ -162,9 +152,7 @@ export function mount(container) {
         nums[name] = v;
       }
       try {
-        // A partial save: CasinoConfigUpdate is every-field-optional and the
-        // route drops unset keys, so the nine tables and the jackpot are left
-        // exactly as the Casino page left them.
+        // Four fields only — see the header note on partial saves.
         await apiPut("/api/config/casino", {
           ...nums,
           pools_enabled: fd.has("pools_enabled"),

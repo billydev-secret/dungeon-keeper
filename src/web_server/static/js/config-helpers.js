@@ -452,8 +452,14 @@ export function buildField(labelText, control, hint) {
 // buildField renders a bare <label>; `field` additionally pairs it with its
 // control by id so screen readers announce the label and a label tap focuses
 // the input (W-A7). Every panel wants that, so it lives here rather than
-// being re-derived per panel — config-casino.js grew these three first and
-// config-pools.js was the second caller that needed them.
+// being re-derived per panel.
+//
+// Note these are not yet the only copies: config-birthday, config-bulk-cleanup,
+// config-confessions, config-dms and config-starboard each still carry a
+// byte-identical private `field` (config-bios calls its copy `labeledField`),
+// and the same three panels duplicate a `toggleField`/`buildNumberInput` pair
+// that `checkbox`/`numInput` here subsume. Converting them is a mechanical
+// import swap and good follow-up work; prefer importing from here in new code.
 let _fieldSeq = 0;
 
 export function field(labelText, control, hint) {
@@ -488,4 +494,16 @@ export function checkbox(name, checked, labelText) {
   inp.checked = !!checked;
   label.append(inp, document.createTextNode(" " + labelText));
   return label;
+}
+
+/** A titled `.card` section appended to `parent` (usually the panel's form). */
+export function sectionCard(parent, title) {
+  const el = document.createElement("div");
+  el.className = "card";
+  const lbl = document.createElement("div");
+  lbl.className = "section-label";
+  lbl.textContent = title;
+  el.appendChild(lbl);
+  parent.appendChild(el);
+  return el;
 }

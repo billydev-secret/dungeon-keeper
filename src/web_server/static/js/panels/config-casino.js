@@ -6,6 +6,7 @@ import {
   field,
   numInput,
   checkbox,
+  sectionCard,
   mountChannelPicker,
   guardForm,
   renderMetaWarning,
@@ -56,16 +57,7 @@ export function mount(container) {
     form.className = "form form-cards";
     panel.appendChild(form);
 
-    const card = (title) => {
-      const el = document.createElement("div");
-      el.className = "card";
-      const lbl = document.createElement("div");
-      lbl.className = "section-label";
-      lbl.textContent = title;
-      el.appendChild(lbl);
-      form.appendChild(el);
-      return el;
-    };
+    const card = (title) => sectionCard(form, title);
 
     // ── Where the casino lives — this channel is the master switch. ──────
     const cardWiring = card("Casino Channel");

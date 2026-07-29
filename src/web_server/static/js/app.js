@@ -183,11 +183,8 @@ const SECTIONS = [
       { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", help: "help-economy" },
       { id: "economy-sinks", label: "Sinks", module: "./panels/economy-sinks.js", adminOnly: true, keywords: "shop perks icons", help: "help-economy" },
       { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack", help: "help-casino", related: ["config-pools"] },
-      // Its own page since 2026-07-28 — a day-long parimutuel round whose
-      // takeout is burned has nothing in common with nine instant-settle
-      // tables, and it sat one card from the jackpot cut, which re-mints what
-      // it skims. Keywords lean market-specific: "pools" alone also matches
-      // confession pools and the pen-pals pool.
+      // Keywords lean market-specific: "pools" alone also matches confession
+      // pools and the pen-pals pool.
       { id: "config-pools", label: "Pools", module: "./panels/config-pools.js", adminOnly: true, keywords: "prediction market daily over under parimutuel takeout burn", help: "help-pools", related: ["config-casino"] },
       { id: "economy-qotd", label: "QOTD", module: "./panels/economy-qotd.js", adminOnly: true, keywords: "question of the day" },
       { id: "economy-qotd-submissions", label: "Sponsored QOTD", module: "./panels/economy-qotd-submissions.js" },

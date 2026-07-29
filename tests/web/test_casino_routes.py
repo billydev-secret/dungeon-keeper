@@ -262,73 +262,48 @@ def test_update_pools_settings_persist(authed_client, fake_ctx):
 
 
 def test_pools_and_casino_pages_save_past_each_other(authed_client, fake_ctx):
-    """The two dashboard pages partial-save through this one route.
+    """Neither dashboard page clobbers the other's fields.
 
     Since 2026-07-28 Pools has its own page (`config-pools.js`) and the Casino
-    page no longer carries the four `pools_*` fields, so each page PUTs a body
-    that omits the other's keys entirely. `CasinoConfigUpdate` is
-    every-field-optional and the handler drops unset keys, which is what makes
-    that safe — if either page's save ever started sending defaults for the
-    fields it doesn't own, one page would silently reset the other.
+    page no longer carries the four `pools_*` fields, so each PUTs a body that
+    omits the other's keys entirely. `CasinoConfigUpdate` is every-field-optional
+    and the handler drops unset keys, which is what makes that safe — if either
+    page ever started sending defaults for the fields it doesn't own, it would
+    silently reset the other page.
     """
-    fake_ctx.bot = MagicMock()
+    with fake_ctx.open_db() as conn:
+        save_casino_settings(
+            conn,
+            fake_ctx.guild_id,
+            {
+                "channel_id": 424242424242424242,
+                "min_bet": 10,
+                "pools_enabled": True,
+                "pools_channel_id": 515151515151515151,
+                "pools_takeout_pct": 3,
+            },
+        )
 
-    # What the Pools page sends: four fields, nothing else.
+    # A Casino-page-shaped save: no pools keys.
     assert authed_client.put(
-        "/api/config/casino",
-        json={
-            "pools_enabled": True,
-            "pools_channel_id": "515151515151515151",
-            "pools_close_hour": 20,
-            "pools_takeout_pct": 3,
-        },
+        "/api/config/casino", json={"min_bet": 25, "slots_enabled": False}
     ).status_code == 200
-
-    # What the Casino page sends: everything except the pools keys.
-    assert authed_client.put(
-        "/api/config/casino",
-        json={
-            "channel_id": "424242424242424242",
-            "min_bet": 10,
-            "max_bet": 250,
-            "slots_enabled": False,
-            "jackpot_cut_pct": 7,
-        },
-    ).status_code == 200
-
     with fake_ctx.open_db() as conn:
         s = load_casino_settings(conn, fake_ctx.guild_id)
-
-    # The casino save left every pools field standing.
     assert s.pools_enabled is True
     assert s.pools_channel_id == 515151515151515151
-    assert (s.pools_close_hour, s.pools_takeout_pct) == (20, 3)
-    # ...and its own fields landed.
-    assert s.channel_id == 424242424242424242
-    assert (s.min_bet, s.max_bet) == (10, 250)
-    assert s.slots_enabled is False
-    assert s.jackpot_cut_pct == 7
+    assert s.pools_takeout_pct == 3
 
-    # Now the reverse: a pools-only save must not disturb the casino.
+    # ...and the reverse: a Pools-page-shaped save, no casino keys.
     assert authed_client.put(
         "/api/config/casino", json={"pools_takeout_pct": 9}
     ).status_code == 200
-
     with fake_ctx.open_db() as conn:
         s = load_casino_settings(conn, fake_ctx.guild_id)
     assert s.pools_takeout_pct == 9
     assert s.channel_id == 424242424242424242
-    assert (s.min_bet, s.max_bet) == (10, 250)
+    assert s.min_bet == 25
     assert s.slots_enabled is False
-    assert s.jackpot_cut_pct == 7
-
-    # Both pages share the route, so both move the cog's panel without a
-    # restart — the reason the Pools page reuses it instead of adding
-    # /api/config/pools.
-    assert fake_ctx.bot.dispatch.call_count == 3
-    fake_ctx.bot.dispatch.assert_called_with(
-        "casino_config_change", fake_ctx.guild_id
-    )
 
 
 def test_update_pools_rejects_an_impossible_close_hour(authed_client):

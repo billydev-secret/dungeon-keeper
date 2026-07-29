@@ -428,9 +428,10 @@ trimmed to `TICKER_KEEP` rows per guild on insert).
 
 Pools adds `services/pools_logic.py` (pool split, line, candle assembly),
 `services/pools_service.py` (the economy metric and the day-roll plan),
-`services/pools_charts.py` (matplotlib renderers) and
+`services/pools_charts.py` (matplotlib renderers),
 `cogs/casino/pools_panel.py` (a mixin on `CasinoCog`, kept out of the
-84k `cog.py`).
+84k `cog.py`) and `static/js/panels/config-pools.js` (its own dashboard page —
+no route of its own; it partial-saves through `update_casino`).
 
 ## Testing
 
