@@ -20,6 +20,7 @@ import asyncio
 import logging
 import re
 import time
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, cast
 
@@ -123,6 +124,36 @@ def refresh_spicy_field(embed: discord.Embed, has_nsfw: bool) -> discord.Embed |
     return None
 
 
+# One refresh at a time per member. Two quick role toggles arrive as two
+# independent listener tasks, and unserialized they can leave the card on the
+# *older* state for good: the first task reads ❌ and starts an edit to ✅ that
+# stalls on the edit rate limit, the second reads the still-❌ card, sees its own
+# target already matches, no-ops — and the first edit then lands ✅ on a member
+# who no longer has the role. Nothing reconciles that. Serializing makes the
+# second task read the first's result and correct it.
+_refresh_locks: dict[tuple[int, int], asyncio.Lock] = {}
+_refresh_lock_users: dict[tuple[int, int], int] = {}
+
+
+@asynccontextmanager
+async def _member_refresh_lock(guild_id: int, user_id: int):
+    key = (guild_id, user_id)
+    # Safe without its own lock: every line runs on the event loop thread with
+    # no await between the lookup and the refcount bump.
+    lock = _refresh_locks.setdefault(key, asyncio.Lock())
+    _refresh_lock_users[key] = _refresh_lock_users.get(key, 0) + 1
+    try:
+        async with lock:
+            yield
+    finally:
+        remaining = _refresh_lock_users[key] - 1
+        if remaining:
+            _refresh_lock_users[key] = remaining
+        else:  # last one out drops the entry so the dicts don't grow forever
+            del _refresh_lock_users[key]
+            _refresh_locks.pop(key, None)
+
+
 async def refresh_level_5_cards(
     ctx: AppContext, member: discord.Member, has_nsfw: bool
 ) -> None:
@@ -133,19 +164,20 @@ async def refresh_level_5_cards(
     stop the member's others — this runs inside a listener that has other work.
     """
     guild = member.guild
-    try:
-        rows = await asyncio.to_thread(_level_5_cards, ctx, guild.id, member.id)
-    except Exception:
-        log.exception("promo review: failed to load level 5 cards for %s", member.id)
-        return
-
-    for row in rows:
+    async with _member_refresh_lock(guild.id, member.id):
         try:
-            await _refresh_one_level_5_card(ctx, guild, row, has_nsfw)
+            rows = await asyncio.to_thread(_level_5_cards, ctx, guild.id, member.id)
         except Exception:
-            log.exception(
-                "promo review: failed to refresh level 5 card %s", row["message_id"]
-            )
+            log.exception("promo review: failed to load level 5 cards for %s", member.id)
+            return
+
+        for row in rows:
+            try:
+                await _refresh_one_level_5_card(ctx, guild, row, has_nsfw)
+            except Exception:
+                log.exception(
+                    "promo review: failed to refresh level 5 card %s", row["message_id"]
+                )
 
 
 async def _refresh_one_level_5_card(
@@ -196,7 +228,12 @@ async def _card_channel(
     except discord.HTTPException:
         log.debug("promo review: can't fetch channel %s", channel_id, exc_info=True)
         return None
-    return fetched if isinstance(fetched, discord.TextChannel | discord.Thread) else None
+    if isinstance(fetched, discord.TextChannel | discord.Thread):
+        return fetched
+    # Exists but can't hold the card any more — as unrefreshable as a deletion,
+    # so forget it rather than re-fetching it on every future role change.
+    await asyncio.to_thread(_forget_level_5_card, ctx, card_id)
+    return None
 
 
 def _level_5_cards(ctx: AppContext, guild_id: int, user_id: int):

@@ -48,8 +48,12 @@ The `pruned_return` and `sleeper` cards also carry a **Dismiss** button.
   never resolves, so it would squat that table's one-open-card-per-member slot
   forever. Cards whose message *or* channel has been deleted are forgotten (a
   cache miss is confirmed with a fetch first, so a card in an archived thread is
-  kept). The refresh never raises, and runs last in the listener so its two HTTP
-  round trips don't delay the verified-welcome or greeter ping.
+  kept). The refresh never raises, and is spawned **detached**
+  (`asyncio.create_task`) so its two HTTP round trips neither delay the
+  verified-welcome / greeter ping nor get skipped when that later work raises.
+  Refreshes are **serialized per member** (`_member_refresh_lock`): two quick
+  toggles otherwise race, the loser no-ops against a not-yet-edited card, and the
+  winner's stalled edit lands the older state permanently.
   **Best-effort on events only, not eventually consistent:** a role change while
   the bot is down is never replayed, so that card stays wrong until the member's
   next NSFW role change. Nothing reconciles it — a repair pass on

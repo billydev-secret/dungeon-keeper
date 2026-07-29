@@ -6,6 +6,7 @@ here we only pin the pure formatting branches.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -242,6 +243,18 @@ async def test_refresh_forgets_a_card_whose_channel_is_deleted(ctx):
     assert _stored(ctx) == []
 
 
+async def test_refresh_forgets_a_card_whose_channel_cant_hold_it(ctx):
+    """Exists but isn't text-like — as unrefreshable as a deletion."""
+    _record(ctx)
+    guild = _guild(None)
+    guild.get_channel_or_thread = MagicMock(return_value=None)
+    guild.fetch_channel = AsyncMock(return_value=MagicMock(spec=discord.VoiceChannel))
+
+    await refresh_level_5_cards(ctx, _member(guild), True)
+
+    assert _stored(ctx) == []
+
+
 async def test_refresh_keeps_a_card_in_an_uncached_thread(ctx):
     """A cache miss isn't proof the channel is gone — an archived thread misses too."""
     _record(ctx)
@@ -255,6 +268,51 @@ async def test_refresh_keeps_a_card_in_an_uncached_thread(ctx):
 
     assert len(_stored(ctx)) == 1
     message.edit.assert_awaited_once()
+
+
+async def test_concurrent_refreshes_settle_on_the_latest_state(ctx):
+    """Two quick toggles must not leave the card showing the older state.
+
+    Unserialized, the grant task's slow edit lands *after* the revoke task has
+    already no-opped on the still-stale card, so the card ends up claiming access
+    the member no longer has — and nothing reconciles it.
+    """
+    _record(ctx)
+    embed = _level_5_embed(svc.SPICY_NOT_GRANTED)
+    message = MagicMock()
+    message.id = 9001
+    message.embeds = [embed]
+
+    async def _slow_edit(*, embed):
+        await asyncio.sleep(0.01)  # stand in for the edit rate limit
+        message.embeds = [embed]
+
+    message.edit = AsyncMock(side_effect=_slow_edit)
+    member = _member(_guild(_channel(message)))
+
+    # Role added, then removed a moment later.
+    await asyncio.gather(
+        refresh_level_5_cards(ctx, member, True),
+        refresh_level_5_cards(ctx, member, False),
+    )
+
+    spicy = next(f for f in message.embeds[0].fields if f.name == svc.SPICY_FIELD_NAME)
+    assert spicy.value == svc.SPICY_NOT_GRANTED
+    assert message.edit.await_count == 2  # the second task corrected the first
+
+
+async def test_refresh_lock_registry_does_not_leak(ctx):
+    """The per-member lock entry is dropped once the last refresh finishes."""
+    from bot_modules.services import promotion_review_views as views
+
+    _record(ctx)
+    message = _message(_level_5_embed(svc.SPICY_NOT_GRANTED))
+    member = _member(_guild(_channel(message)))
+
+    await refresh_level_5_cards(ctx, member, True)
+
+    assert views._refresh_locks == {}
+    assert views._refresh_lock_users == {}
 
 
 async def test_refresh_continues_past_one_broken_card(ctx):

@@ -7,6 +7,9 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncio
+import sqlite3
+
 import discord
 import pytest
 from discord import app_commands
@@ -907,6 +910,9 @@ async def test_on_member_update_level_5_card_refresh(
         ),
     ):
         await cog.on_member_update(before, after)
+        # The refresh is detached (create_task) so it can't delay or be skipped
+        # by the rest of the listener — let the loop run it.
+        await asyncio.sleep(0)
 
     if expected is None:
         refresh.assert_not_awaited()
@@ -914,6 +920,41 @@ async def test_on_member_update_level_5_card_refresh(
     refresh.assert_awaited_once()
     assert refresh.await_args.args[1] is after
     assert refresh.await_args.args[2] is expected  # has_nsfw
+
+
+async def test_on_member_update_card_refresh_survives_a_welcome_failure():
+    """Nothing replays a missed refresh, so earlier work blowing up mustn't skip it."""
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(
+            grant_roles=_NSFW_GRANT_ROLES,
+            welcome_channel_id=42,
+            welcome_trigger="verified",
+            unverified_role_id=901,
+        ),
+    )
+    cog = EventsCog(_make_bot(), ctx)
+    cog._send_welcome = AsyncMock(side_effect=sqlite3.OperationalError("locked"))
+
+    # One edit both strips the unverified role and adds the NSFW role.
+    before = _make_member(guild_id=7)
+    before.roles = [_role(901, "Unverified")]
+    after = _make_member(guild_id=7)
+    after.roles = [_role(555, "Spicy")]
+
+    refresh = AsyncMock()
+    with (
+        patch("bot_modules.cogs.events_cog.log_role_event"),
+        patch(
+            "bot_modules.services.promotion_review_views.refresh_level_5_cards", refresh
+        ),
+    ):
+        with pytest.raises(sqlite3.OperationalError):
+            await cog.on_member_update(before, after)
+        await asyncio.sleep(0)
+
+    refresh.assert_awaited_once()
+    assert refresh.await_args.args[2] is True
 
 
 async def test_on_member_remove_uses_per_guild_leave_channel():

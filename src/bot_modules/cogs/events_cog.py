@@ -324,6 +324,9 @@ class EventsCog(commands.Cog):
         self.bot = bot
         self.ctx = ctx
         self._message_backfill_task: asyncio.Task[None] | None = None
+        # Strong refs for fire-and-forget card refreshes, so they aren't GC'd
+        # mid-flight. Discarded as each finishes.
+        self._card_refresh_tasks: set[asyncio.Task[None]] = set()
         super().__init__()
 
     async def cog_load(self) -> None:
@@ -1507,6 +1510,22 @@ class EventsCog(commands.Cog):
 
         await asyncio.to_thread(_do_log_role_events)
         cfg = self.ctx.guild_config(after.guild.id)
+        # Keep the Level 5 card's "Spicy access" field honest — it is rendered
+        # once at post time (see docs/promotion_review_spec.md). Detached rather
+        # than awaited: its two HTTP round trips for a cosmetic embed edit must
+        # not delay the welcome or greeter ping, and spawning it up here means an
+        # exception from that later work can't skip it either (nothing replays a
+        # missed refresh). refresh_level_5_cards never raises on its own.
+        nsfw_role_id = nsfw_grant_role_id(cfg.grant_roles)
+        has_nsfw = nsfw_role_id in after_ids
+        if nsfw_role_id > 0 and has_nsfw != (nsfw_role_id in before_ids):
+            from bot_modules.services.promotion_review_views import (
+                refresh_level_5_cards,
+            )
+
+            task = asyncio.create_task(refresh_level_5_cards(self.ctx, after, has_nsfw))
+            self._card_refresh_tasks.add(task)
+            task.add_done_callback(self._card_refresh_tasks.discard)
         # Welcome fires the moment the unverified role is stripped (e.g. once
         # DoubleCounter finishes its alt scan and lifts the gate). No bio is
         # required — {member_bio_link} simply resolves to "" when absent.
@@ -1551,18 +1570,6 @@ class EventsCog(commands.Cog):
 
                 await handle_role_changes(self.ctx, after, gained, unverified_removed)
 
-        # Keep the Level 5 card's "Spicy access" field honest — it is rendered
-        # once at post time (see docs/promotion_review_spec.md). Last in the
-        # listener on purpose: two HTTP round trips for a cosmetic embed edit
-        # must not delay the welcome, the greeter ping or the intake ticks.
-        nsfw_role_id = nsfw_grant_role_id(cfg.grant_roles)
-        has_nsfw = nsfw_role_id in after_ids
-        if nsfw_role_id > 0 and has_nsfw != (nsfw_role_id in before_ids):
-            from bot_modules.services.promotion_review_views import (
-                refresh_level_5_cards,
-            )
-
-            await refresh_level_5_cards(self.ctx, after, has_nsfw)
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
