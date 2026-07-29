@@ -20,6 +20,7 @@ import sqlite3
 
 import discord
 
+from bot_modules.core.meters import mono
 from bot_modules.economy.leaderboard import bar_fill
 from bot_modules.services import casino_logic as logic
 from bot_modules.services import pools_charts, pools_logic
@@ -1217,11 +1218,13 @@ def _pool_bar(prob: float | None, width: int = 20) -> str:
 
     Uses the shared ``▰▱`` fill rather than a bare percentage, and takes it
     from ``bar_fill`` so the glyph vocabulary stays the one the style guide
-    mandates for new bars.
+    mandates for new bars. Only the bar is code-spanned — the bold percentage
+    has to stay outside, since markdown does not render inside a code span.
     """
     if prob is None:
-        return f"{bar_fill(0, 1, width)}  no bets yet"
-    return f"{bar_fill(round(prob * 1000), 1000, width)}  **{prob * 100:.0f}%** over"
+        return f"{mono(bar_fill(0, 1, width))}  no bets yet"
+    bar = mono(bar_fill(round(prob * 1000), 1000, width))
+    return f"{bar}  **{prob * 100:.0f}%** over"
 
 
 def build_pools_panel_embed(

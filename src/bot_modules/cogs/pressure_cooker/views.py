@@ -6,15 +6,20 @@ from typing import Awaitable, Callable
 
 import discord
 
+from bot_modules.core import meters
 from bot_modules.core.utils import disable_all_items
 
 log = logging.getLogger("dungeonkeeper.pressure")
 
 
 def gauge_bar(gauge: int, width: int = 20) -> str:
-    """Render a text progress bar. e.g. ▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ 42/100"""
-    filled = round(max(0, min(gauge, 100)) / 100 * width)
-    return f"{'▰' * filled}{'▱' * (width - filled)} {gauge}/100"
+    """Render a text progress bar. e.g. ``▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ 42/100``
+
+    Code-spanned: the gauge is repainted on every pump, and a bare ``▰▱`` run
+    changes pixel length as it fills even though the character count is fixed.
+    """
+    clamped = max(0, min(gauge, 100))
+    return meters.mono(f"{meters.fill(clamped, 100, width)} {gauge}/100")
 
 
 class GameView(discord.ui.View):

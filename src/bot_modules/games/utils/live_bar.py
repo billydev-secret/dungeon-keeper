@@ -3,23 +3,24 @@ import time
 import logging
 import discord
 
+from bot_modules.core.meters import fill, mono
+
 log = logging.getLogger(__name__)
 
 BAR_WIDTH = 14
 
 
 def build_bar(count: int, total: int, width: int = BAR_WIDTH) -> tuple[str, str]:
-    """Returns (bar_string, percentage_string). Renders clean without code spans."""
-    if total == 0:
-        return "▱" * width, "0%"
-    ratio = count / total
-    pct = f"{round(ratio * 100)}%"
+    """Returns (bar_string, percentage_string) for a live vote meter.
 
-    filled = round(ratio * width)
-    filled = max(0, min(width, filled))
-    bar = "▰" * filled + "▱" * (width - filled)
-
-    return bar, pct
+    The bar comes back already wrapped in a code span. It has to: these bars
+    sit next to each other as one field per option, and a bare ``▰▱`` run
+    renders proportionally, so a 0% bar is visibly *longer* than a 50% one
+    even though both are exactly ``width`` characters. See
+    ``bot_modules.core.meters`` for the full explanation.
+    """
+    pct = f"{round(count / total * 100)}%" if total else "0%"
+    return mono(fill(count, total, width)), pct
 
 
 class LiveBarUpdater:

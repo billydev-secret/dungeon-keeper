@@ -338,10 +338,10 @@ def test_embed_board_spills_into_a_cont_field_past_the_char_cap():
 
 def test_community_progress_bar_marks_tier_regions():
     # width=12 default: tier bounds at 5/8/12 (40/70/100% of target).
-    assert community_progress_bar(0, 10) == "▱▱▱▱▱┃▱▱▱┃▱▱▱▱ 0/10"
-    assert community_progress_bar(4, 10) == "▰▰▰▰▰┃▱▱▱┃▱▱▱▱ 4/10"  # tier 1 boundary
-    assert community_progress_bar(7, 10) == "▰▰▰▰▰┃▰▰▰┃▱▱▱▱ 7/10"  # tier 2 boundary
-    assert community_progress_bar(10, 10) == "▰▰▰▰▰┃▰▰▰┃▰▰▰▰ 10/10"
+    assert community_progress_bar(0, 10) == "`▱▱▱▱▱┃▱▱▱┃▱▱▱▱ 0/10`"
+    assert community_progress_bar(4, 10) == "`▰▰▰▰▰┃▱▱▱┃▱▱▱▱ 4/10`"  # tier 1 boundary
+    assert community_progress_bar(7, 10) == "`▰▰▰▰▰┃▰▰▰┃▱▱▱▱ 7/10`"  # tier 2 boundary
+    assert community_progress_bar(10, 10) == "`▰▰▰▰▰┃▰▰▰┃▰▰▰▰ 10/10`"
     assert community_progress_bar(5, 0) == "5"  # no target, plain count
 
 

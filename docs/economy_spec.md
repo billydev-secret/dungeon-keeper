@@ -525,7 +525,11 @@ parity with the Games Studio is a parking-lot item).
   embed is one line per quest — title cell | status glyph (✅ done, ⏳
   sign-off, 🔶 claim below, ☐ to do) or an inline `▰▱` progress bar
   (`_QUEST_BAR_WIDTH`, the same meter the details popup and login digest draw)
-  | payment. A counted daily/weekly shows `{bar} n/target` — the small personal
+  | payment. The board's title+status cell is one code span the row builds
+  itself, so the status meter is drawn **raw** here (`bar_fill`, or
+  `progress_bar(..., code=False)`) — backticks don't nest. The details popup
+  and login digest, which render a bare bar, take the code-spanned default;
+  see `core/meters.py` for why every displayed meter needs one. A counted daily/weekly shows `{bar} n/target` — the small personal
   counts are the point; the guild-wide community/monthly goals show the **bar
   fill alone** (`bar_fill`, no counts), since their shared totals run to five
   or six figures and only the details popup / login digest spell them out. Lines are split into two
