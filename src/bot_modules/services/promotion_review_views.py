@@ -20,16 +20,20 @@ import asyncio
 import logging
 import re
 import time
+from contextlib import asynccontextmanager
+from copy import deepcopy
 from typing import TYPE_CHECKING, cast
 
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.utils import get_guild_channel_or_thread
 from bot_modules.inactive.apply import reactivate_member
 from bot_modules.services import promotion_review_service as svc
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.utils import GuildTextLike
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +99,151 @@ def build_review_embed(
         }.get(resolution, "Resolved")
         embed.add_field(name="Resolved", value=f"{verb} by {resolver}", inline=False)
     return embed
+
+
+def refresh_spicy_field(embed: discord.Embed, has_nsfw: bool) -> discord.Embed | None:
+    """A copy of a Level 5 card with its "Spicy access" field brought up to date.
+
+    Returns ``None`` when there is nothing to do — the embed has no such field
+    (an ordinary level-up post shares this channel, and a card posted while
+    ``nsfw_role_id`` was unset never rendered one) or the value is already
+    right. The caller then skips the Discord edit entirely.
+
+    Only that one field is rewritten: ``Total XP`` and ``Joined`` are
+    deliberately an at-promotion snapshot and must not drift.
+    """
+    want = svc.spicy_access_value(has_nsfw)
+    for idx, field in enumerate(embed.fields):
+        if field.name == svc.SPICY_FIELD_NAME and field.value != want:
+            # deepcopy, not Embed.copy(): that is shallow and its to_dict()
+            # hands back the *same* field dicts, so set_field_at would rewrite
+            # the caller's embed too.
+            updated = deepcopy(embed)
+            updated.set_field_at(idx, name=field.name, value=want, inline=bool(field.inline))
+            return updated
+    return None
+
+
+# One refresh at a time per member. Two quick role toggles arrive as two
+# independent listener tasks, and unserialized they can leave the card on the
+# *older* state for good: the first task reads ❌ and starts an edit to ✅ that
+# stalls on the edit rate limit, the second reads the still-❌ card, sees its own
+# target already matches, no-ops — and the first edit then lands ✅ on a member
+# who no longer has the role. Nothing reconciles that. Serializing makes the
+# second task read the first's result and correct it.
+_refresh_locks: dict[tuple[int, int], asyncio.Lock] = {}
+_refresh_lock_users: dict[tuple[int, int], int] = {}
+
+
+@asynccontextmanager
+async def _member_refresh_lock(guild_id: int, user_id: int):
+    key = (guild_id, user_id)
+    # Safe without its own lock: every line runs on the event loop thread with
+    # no await between the lookup and the refcount bump.
+    lock = _refresh_locks.setdefault(key, asyncio.Lock())
+    _refresh_lock_users[key] = _refresh_lock_users.get(key, 0) + 1
+    try:
+        async with lock:
+            yield
+    finally:
+        remaining = _refresh_lock_users[key] - 1
+        if remaining:
+            _refresh_lock_users[key] = remaining
+        else:  # last one out drops the entry so the dicts don't grow forever
+            del _refresh_lock_users[key]
+            _refresh_locks.pop(key, None)
+
+
+async def refresh_level_5_cards(
+    ctx: AppContext, member: discord.Member, has_nsfw: bool
+) -> None:
+    """Re-render every stored Level 5 card for ``member`` to match their roles.
+
+    Driven by the ``on_member_update`` role diff; see
+    ``docs/promotion_review_spec.md``. **Never raises**, and one bad card doesn't
+    stop the member's others — this runs inside a listener that has other work.
+    """
+    guild = member.guild
+    async with _member_refresh_lock(guild.id, member.id):
+        try:
+            rows = await asyncio.to_thread(_level_5_cards, ctx, guild.id, member.id)
+        except Exception:
+            log.exception("promo review: failed to load level 5 cards for %s", member.id)
+            return
+
+        for row in rows:
+            try:
+                await _refresh_one_level_5_card(ctx, guild, row, has_nsfw)
+            except Exception:
+                log.exception(
+                    "promo review: failed to refresh level 5 card %s", row["message_id"]
+                )
+
+
+async def _refresh_one_level_5_card(
+    ctx: AppContext, guild: discord.Guild, row, has_nsfw: bool
+) -> None:
+    """Bring a single stored card in line, or forget it if it's gone for good."""
+    card_id = int(row["id"])
+    message_id = int(row["message_id"])
+    channel = await _card_channel(ctx, guild, int(row["channel_id"]), card_id)
+    if channel is None:
+        return
+    try:
+        message = await channel.fetch_message(message_id)
+    except discord.NotFound:
+        await asyncio.to_thread(_forget_level_5_card, ctx, card_id)
+        return
+    except discord.HTTPException:
+        log.debug("promo review: can't fetch level 5 card %s", message_id, exc_info=True)
+        return
+    if not message.embeds:
+        return
+    updated = refresh_spicy_field(message.embeds[0], has_nsfw)
+    if updated is None:
+        return
+    try:
+        await message.edit(embed=updated)
+    except discord.HTTPException:
+        log.debug("promo review: failed to refresh card %s", message_id, exc_info=True)
+
+
+async def _card_channel(
+    ctx: AppContext, guild: discord.Guild, channel_id: int, card_id: int
+) -> GuildTextLike | None:
+    """The card's channel, forgetting the card only if the channel is truly gone.
+
+    A cache miss is ambiguous — a deleted channel and an archived (uncached)
+    thread both come back ``None`` — so confirm with a fetch before dropping the
+    row.
+    """
+    channel = get_guild_channel_or_thread(guild, channel_id)
+    if channel is not None:
+        return channel
+    try:
+        fetched = await guild.fetch_channel(channel_id)
+    except discord.NotFound:
+        await asyncio.to_thread(_forget_level_5_card, ctx, card_id)
+        return None
+    except discord.HTTPException:
+        log.debug("promo review: can't fetch channel %s", channel_id, exc_info=True)
+        return None
+    if isinstance(fetched, discord.TextChannel | discord.Thread):
+        return fetched
+    # Exists but can't hold the card any more — as unrefreshable as a deletion,
+    # so forget it rather than re-fetching it on every future role change.
+    await asyncio.to_thread(_forget_level_5_card, ctx, card_id)
+    return None
+
+
+def _level_5_cards(ctx: AppContext, guild_id: int, user_id: int):
+    with ctx.open_db() as conn:
+        return svc.level_5_cards_for(conn, guild_id, user_id)
+
+
+def _forget_level_5_card(ctx: AppContext, card_id: int) -> None:
+    with ctx.open_db() as conn:
+        svc.forget_level_5_card(conn, card_id)
 
 
 # ---------------------------------------------------------------------------

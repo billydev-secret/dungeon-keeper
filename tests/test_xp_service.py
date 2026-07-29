@@ -389,6 +389,50 @@ async def test_level_5_post_shows_spicy_access_not_granted():
 
 
 @pytest.mark.asyncio
+async def test_level_5_post_records_the_card_for_later_refresh(tmp_path):
+    """Without a stored row the card can never be un-staled — the reported bug."""
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services import promotion_review_service as promo_svc
+    from bot_modules.services.xp_service import maybe_log_level_5
+    from tests.db_template import migrated_db
+
+    db_path = tmp_path / "xp.db"
+    migrated_db(db_path)
+
+    member = _FakeMember()
+    channel = AsyncMock()
+    channel.id = LOG_CHANNEL
+    channel.send.return_value = type("M", (), {"id": 9001})()
+
+    with patch(
+        "bot_modules.services.xp_service.get_guild_channel_or_thread",
+        return_value=channel,
+    ):
+        await maybe_log_level_5(
+            member, 500.0, LOG_CHANNEL, 0, nsfw_role_id=555, db_path=db_path
+        )
+
+    with open_db(db_path) as conn:
+        rows = promo_svc.level_5_cards_for(conn, GUILD_ID, MEMBER_ID)
+    assert [(r["channel_id"], r["message_id"]) for r in rows] == [(LOG_CHANNEL, 9001)]
+
+
+@pytest.mark.asyncio
+async def test_level_5_post_without_db_path_still_posts(tmp_path):
+    """Recording is additive: no db_path means no row, but the card still lands."""
+    from bot_modules.services.xp_service import maybe_log_level_5
+
+    member = _FakeMember()
+    channel = AsyncMock()
+    with patch(
+        "bot_modules.services.xp_service.get_guild_channel_or_thread",
+        return_value=channel,
+    ):
+        await maybe_log_level_5(member, 500.0, LOG_CHANNEL, 0, nsfw_role_id=555)
+    assert channel.send.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_level_5_post_uses_accent_and_glyph_title():
     """The milestone card follows the guild accent, not a hard-coded gold."""
     from bot_modules.services.xp_service import maybe_log_level_5
