@@ -97,22 +97,34 @@ export function mount(container) {
     rules.className = "field-hint";
     rules.style.cssText = "margin-top:12px; line-height:1.6;";
     rules.innerHTML = `
-      <strong>What gets echoed</strong>
+      <strong>Something just started</strong>
       <ul style="margin:6px 0 0 1.1rem; padding:0;">
         <li>A party game opening for players (<code>/games play …</code>), including
             games the scheduler launches on its own.</li>
         <li>A Cards Against Humanity game starting in the tracked Gamebot channel.</li>
         <li>A Discord server event when it goes live.</li>
+        <li>A new bounty posted.</li>
+      </ul>
+      <strong style="display:block; margin-top:8px;">Last chance</strong>
+      <ul style="margin:6px 0 0 1.1rem; padding:0;">
+        <li>An auction closing within the hour.</li>
+        <li>A prediction-market round whose betting shuts within the hour.</li>
       </ul>
       <p style="margin:8px 0 0;">
-        Only the <em>start</em> of something joinable — never results, so a link is
-        always worth clicking. Echoes are <strong>silent</strong>: no role is pinged
-        and nobody is notified.
+        Never results — only things you can still act on, so a link is always worth
+        clicking. Echoes are <strong>silent</strong>: no role is pinged and nobody is
+        notified.
       </p>
       <p style="margin:6px 0 0;">
         Rate limits: the same kind of game at most <strong>once an hour</strong>, and
-        nothing at all within <strong>10 minutes</strong> of the previous echo. A game
-        that misses its window is skipped, not queued.
+        nothing at all within <strong>10 minutes</strong> of the previous echo. Something
+        that misses its window is skipped, not queued. <em>Last-chance</em> echoes ignore
+        both limits — they happen a few times a year and there's no later moment to
+        retry them — but still post only once each.
+      </p>
+      <p style="margin:6px 0 0;">
+        Bounty and prediction-market echoes only fire once those features are switched
+        on (a bounty channel under Economy, and Pools under Casino).
       </p>
     `;
     card.appendChild(rules);

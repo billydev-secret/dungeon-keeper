@@ -1,6 +1,8 @@
 """Event Echo — the I/O half: cooldown store, the sender, and the poll loop.
 
-Three sources feed one sender:
+Six sources feed one sender, in two shapes.
+
+**"This just started"** — echo it because someone might want to join:
 
   * **Party games** (and therefore scheduled games, which launch down the same
     path) — the ``event_echo_loop`` below.
@@ -8,10 +10,20 @@ Three sources feed one sender:
     ``on_message`` listener ``games_external_cog`` already runs over Gamebot.
   * **Discord's native scheduled events** — ``echo_discord_event``, called
     from ``events_cog`` when an event goes ``scheduled → active``.
+  * **New bounties** — swept from ``econ_bounties``.
+
+**"Last chance"** — echo it because a deadline is about to pass:
+
+  * **Auctions** closing within the hour.
+  * **Prediction-market rounds** whose betting window shuts within the hour.
+
+The distinction is not cosmetic: deadline echoes bypass the cooldowns, because
+skip-don't-queue is right for a game start and wrong for a deadline (see
+``EchoStyle.deadline``).
 
 Every one of them ends at :func:`echo_event`, which owns the destination, the
-cooldowns and the dedupe claim. Adding a fourth source means writing a caller,
-not touching the rules.
+cooldowns and the dedupe claim. A seventh source means writing a caller and a
+``SOURCE_STYLE`` row, not touching the rules.
 
 **Why a poll loop for party games.** Not because hooking would mean touching
 28 call sites — those funnel through one ``update_game_message``, and
@@ -49,12 +61,16 @@ from bot_modules.core.utils import jump_url, resolve_bot_channel
 from bot_modules.games.constants import GAME_NAMES
 from bot_modules.games_external import parser
 from bot_modules.services.event_echo_logic import (
+    CLOSING_LEAD_SECONDS,
     FRESHNESS_SECONDS,
     GAMEBOT_ECHO_GAMES,
     RETENTION_SECONDS,
+    SOURCE_AUCTION_CLOSING,
+    SOURCE_BOUNTY,
     SOURCE_DISCORD_EVENT,
     SOURCE_GAMEBOT,
     SOURCE_PARTY_GAME,
+    SOURCE_POOLS_CLOSING,
     build_echo_embed,
     decide,
     is_fresh,
@@ -189,10 +205,11 @@ async def echo_event(
     source: str,
     echo_key: str,
     ref: str,
-    game_name: str,
+    name: str,
     origin_channel_id: int | None,
     url: str,
     host_name: str | None = None,
+    deadline_epoch: float | None = None,
     now: float | None = None,
 ) -> bool:
     """Post one echo, subject to config, cooldowns and dedupe.
@@ -229,7 +246,9 @@ async def echo_event(
         # optimisation; claim_echo's unique index remains the dedupe guarantee.
         with open_db_immediate(db_path) as conn:
             last_same, last_any = last_echo_times(conn, guild.id, echo_key)
-            verdict = decide(now=now, last_same_type=last_same, last_any=last_any)
+            verdict = decide(
+                now=now, last_same_type=last_same, last_any=last_any, source=source
+            )
             claimed = claim_echo(
                 conn,
                 guild_id=guild.id,
@@ -268,11 +287,12 @@ async def echo_event(
 
         color = await resolve_accent_color(db_path, guild)
         embed = build_echo_embed(
-            game_name=game_name,
+            name=name,
             channel_id=origin_channel_id,
             url=url,
             host_name=host_name,
             source=source,
+            deadline_epoch=deadline_epoch,
             color=color,
         )
         # Silent by design — see event_echo_logic's module docstring.
@@ -305,7 +325,7 @@ async def echo_gamebot_lobby(bot, message: discord.Message, sub_game: str) -> bo
         source=SOURCE_GAMEBOT,
         echo_key=sub_game,
         ref=str(message.id),
-        game_name=name,
+        name=name,
         origin_channel_id=message.channel.id,
         url=message.jump_url,
     )
@@ -327,7 +347,7 @@ async def echo_discord_event(bot, event: discord.ScheduledEvent) -> bool:
         source=SOURCE_DISCORD_EVENT,
         echo_key=SOURCE_DISCORD_EVENT,
         ref=str(event.id),
-        game_name=event.name,
+        name=event.name,
         # None for an `external` event — those carry a location string and no
         # channel. Falling back to the guild id here would render as
         # `<#guild_id>`: a mention Discord can't resolve, shown as a dead link.
@@ -356,6 +376,52 @@ def _opened_at(row) -> float | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.timestamp()
+
+
+def closing_auctions(conn: sqlite3.Connection, now: float):
+    """Open auctions inside the last-chance window.
+
+    ``ends_at`` is a moving target — a late bid inside the soft-close window
+    pushes it out, which is precisely what this echo is trying to cause. That
+    is fine: the per-auction claim means the echo fires once, at the first
+    tick the auction is within an hour of its *then-current* end, and a later
+    extension doesn't re-trigger it.
+    """
+    return conn.execute(
+        "SELECT id, guild_id, channel_id, message_id, title, ends_at "
+        "FROM econ_auctions "
+        "WHERE state = 'open' AND message_id != 0 AND ends_at > ? AND ends_at <= ?",
+        (now, now + CLOSING_LEAD_SECONDS),
+    ).fetchall()
+
+
+def closing_pools(conn: sqlite3.Connection, now: float):
+    """Open prediction-market rounds whose betting window shuts within the hour.
+
+    Filters on ``closes_at``, not ``status``: a round sits in ``status='open'``
+    for hours after betting shuts, waiting to settle (see migration 140).
+    """
+    return conn.execute(
+        "SELECT id, guild_id, channel_id, message_id, line, closes_at "
+        "FROM casino_pools_rounds "
+        "WHERE status = 'open' AND message_id != 0 AND closes_at > ? AND closes_at <= ?",
+        (now, now + CLOSING_LEAD_SECONDS),
+    ).fetchall()
+
+
+def new_bounties(conn: sqlite3.Connection, now: float):
+    """Recently posted bounties that have a card to link to.
+
+    Bounded by ``created_at`` on the same freshness rule as a game lobby, so a
+    restart doesn't announce a backlog of bounties posted while the bot was
+    down.
+    """
+    return conn.execute(
+        "SELECT id, guild_id, card_channel_id, card_message_id, title, poster_id "
+        "FROM econ_bounties "
+        "WHERE state = 'open' AND card_message_id != 0 AND created_at >= ?",
+        (now - FRESHNESS_SECONDS,),
+    ).fetchall()
 
 
 async def live_games(db, now: float):
@@ -431,7 +497,7 @@ async def _process_game(bot, row, now: float) -> None:
         # A game type missing from GAME_NAMES still gets a readable name rather
         # than being dropped — a new game should show up in main chat on the
         # day it ships, not once someone remembers the display-name table.
-        game_name=GAME_NAMES.get(game_type) or game_type.replace("_", " ").title(),
+        name=GAME_NAMES.get(game_type) or game_type.replace("_", " ").title(),
         origin_channel_id=channel_id,
         url=jump_url(guild.id, channel_id, int(message_id)),
         host_name=_host_name(guild, row["host_id"]),
@@ -439,12 +505,90 @@ async def _process_game(bot, row, now: float) -> None:
     )
 
 
-async def event_echo_loop(bot) -> None:
-    """Sweep open party games and echo the ones that clear the cooldowns.
+# ── Sources 4–6: economy rows (auctions, pools, bounties) ───────────────────
+#
+# Unlike games, these tables carry their own guild_id, so the guild comes
+# straight off the row rather than being reverse-resolved from a channel.
 
-    Registered as a bot startup task. Only live rows are visible in
-    ``games_active_games``, so a finished game drops out on its own and can
-    never be echoed late.
+async def _process_econ_row(
+    bot,
+    row,
+    now: float,
+    *,
+    source: str,
+    ref_col: str,
+    name: str,
+    channel_col: str,
+    message_col: str,
+    deadline_col: str | None = None,
+) -> None:
+    guild = bot.get_guild(int(row["guild_id"]))
+    if guild is None:
+        return
+    channel_id = int(row[channel_col])
+    await echo_event(
+        bot,
+        guild=guild,
+        source=source,
+        # One bucket per source: these fire a handful of times a year, so
+        # there is nothing finer to bucket by (and deadline sources skip the
+        # windows anyway).
+        echo_key=source,
+        ref=str(row[ref_col]),
+        name=name,
+        origin_channel_id=channel_id,
+        url=jump_url(guild.id, channel_id, int(row[message_col])),
+        deadline_epoch=float(row[deadline_col]) if deadline_col else None,
+        now=now,
+    )
+
+
+async def _sweep_econ(bot, now: float) -> None:
+    """One read connection for all three economy sources."""
+    db_path: Path = bot.ctx.db_path
+
+    def _read():
+        with open_db(db_path) as conn:
+            return (
+                closing_auctions(conn, now),
+                closing_pools(conn, now),
+                new_bounties(conn, now),
+            )
+
+    auctions, pools, bounties = await asyncio.to_thread(_read)
+
+    for row in auctions:
+        await _process_econ_row(
+            bot, row, now,
+            source=SOURCE_AUCTION_CLOSING,
+            ref_col="id", name=str(row["title"]),
+            channel_col="channel_id", message_col="message_id",
+            deadline_col="ends_at",
+        )
+    for row in pools:
+        await _process_econ_row(
+            bot, row, now,
+            source=SOURCE_POOLS_CLOSING,
+            # The round has no title — its line is the thing you'd bet on.
+            ref_col="id", name=f"today's over/under ({float(row['line']):g})",
+            channel_col="channel_id", message_col="message_id",
+            deadline_col="closes_at",
+        )
+    for row in bounties:
+        await _process_econ_row(
+            bot, row, now,
+            source=SOURCE_BOUNTY,
+            ref_col="id", name=str(row["title"]),
+            channel_col="card_channel_id", message_col="card_message_id",
+        )
+
+
+async def event_echo_loop(bot) -> None:
+    """Sweep every polled source and echo whatever clears the cooldowns.
+
+    Registered as a bot startup task. Games drop out of
+    ``games_active_games`` when they end, and the economy sweeps are bounded
+    by their own deadline/freshness windows, so nothing can be echoed late.
     """
     await bot.wait_until_ready()
     db = bot.games_db
@@ -464,6 +608,13 @@ async def event_echo_loop(bot) -> None:
                     log.exception(
                         "event echo: game %s failed to process", row["game_id"]
                     )
+
+            try:
+                await _sweep_econ(bot, now)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("event echo: economy sweep failed")
 
             # Hourly, not every tick — the table is tiny and the prune is pure
             # housekeeping.

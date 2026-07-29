@@ -135,7 +135,7 @@ def configure(db_path, channel_id="55501"):
 async def echo(bot, guild, *, ref="r1", key="mfk", now=NOW):
     return await svc.echo_event(
         bot, guild=guild, source=SOURCE_PARTY_GAME, echo_key=key, ref=ref,
-        game_name="Marry, Fornicate, Kiss", origin_channel_id=777,
+        name="Marry, Fornicate, Kiss", origin_channel_id=777,
         url="https://discord.com/channels/1/2/3", now=now,
     )
 
@@ -434,6 +434,185 @@ async def test_live_games_does_not_read_the_payload_blob(sync_db_path):
 
     rows = await svc.live_games(GamesDb(sync_db_path), SWEEP_NOW)
     assert "payload" not in rows[0].keys()
+
+
+# ── Economy sweeps: auctions, pools, bounties ───────────────────────────────
+
+def _open_auction(conn, aid, *, ends_at, state="open", message_id=900):
+    conn.execute(
+        "INSERT INTO econ_auctions "
+        "(id, guild_id, channel_id, message_id, title, created_by, state, "
+        " min_bid, min_increment, soft_close_seconds, ends_at, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (aid, GUILD_ID, 555, message_id, "A rare hat", 1, state, 10, 1, 60,
+         ends_at, ends_at - 86400),
+    )
+
+
+def _pools_round(conn, rid, *, closes_at, status="open", message_id=900):
+    # local_day varies with rid: the schema allows only one round per guild
+    # per measured day, so two rows in one test must be different days.
+    conn.execute(
+        "INSERT INTO casino_pools_rounds "
+        "(id, guild_id, channel_id, message_id, status, local_day, line, "
+        " opened_at, closes_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (rid, GUILD_ID, 555, message_id, status, f"2026-07-{rid:02d}", 12.5,
+         closes_at - 64800, closes_at),
+    )
+
+
+def _bounty(conn, bid, *, created_at, state="open", card_message_id=900):
+    conn.execute(
+        "INSERT INTO econ_bounties "
+        "(id, guild_id, poster_id, title, state, card_channel_id, "
+        " card_message_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (bid, GUILD_ID, 1, "Draw my cat", state, 555, card_message_id, created_at),
+    )
+
+
+class TestEconSweeps:
+    @pytest.mark.parametrize(
+        "ends_at, found",
+        [
+            pytest.param(NOW + 1800, True, id="inside-the-hour"),
+            pytest.param(NOW + 7200, False, id="too-early"),
+            pytest.param(NOW - 60, False, id="already-ended"),
+        ],
+    )
+    def test_closing_auctions_window(self, sync_db_path, ends_at, found):
+        with open_db(sync_db_path) as conn:
+            _open_auction(conn, 1, ends_at=ends_at)
+            assert bool(svc.closing_auctions(conn, NOW)) is found
+
+    @pytest.mark.parametrize(
+        "state, message_id, found",
+        [
+            pytest.param("open", 900, True, id="live"),
+            pytest.param("closed", 900, False, id="already-closed"),
+            pytest.param("cancelled", 900, False, id="cancelled"),
+            pytest.param("open", 0, False, id="no-card-to-link-to"),
+        ],
+    )
+    def test_closing_auctions_state(self, sync_db_path, state, message_id, found):
+        with open_db(sync_db_path) as conn:
+            _open_auction(conn, 1, ends_at=NOW + 1800, state=state,
+                          message_id=message_id)
+            assert bool(svc.closing_auctions(conn, NOW)) is found
+
+    @pytest.mark.parametrize(
+        "closes_at, found",
+        [
+            pytest.param(NOW + 600, True, id="betting-shuts-soon"),
+            pytest.param(NOW + 7200, False, id="too-early"),
+            # A round sits in status='open' for hours after betting shuts,
+            # waiting to settle (migration 140), so status alone would
+            # announce "last call" to a round that stopped taking bets before
+            # lunch. Only closes_at can tell them apart.
+            pytest.param(NOW - 3600, False, id="betting-already-shut"),
+        ],
+    )
+    def test_pools_filters_on_closes_at_not_status(
+        self, sync_db_path, closes_at, found
+    ):
+        with open_db(sync_db_path) as conn:
+            _pools_round(conn, 1, closes_at=closes_at)
+            assert bool(svc.closing_pools(conn, NOW)) is found
+
+    @pytest.mark.parametrize(
+        "created_at, state, found",
+        [
+            pytest.param(NOW - 60, "open", True, id="just-posted"),
+            # A restart must not announce a backlog of old bounties.
+            pytest.param(NOW - 9000, "open", False, id="stale"),
+            pytest.param(NOW - 60, "awarded", False, id="already-awarded"),
+            pytest.param(NOW - 60, "cancelled", False, id="cancelled"),
+        ],
+    )
+    def test_new_bounties(self, sync_db_path, created_at, state, found):
+        with open_db(sync_db_path) as conn:
+            _bounty(conn, 1, created_at=created_at, state=state)
+            assert bool(svc.new_bounties(conn, NOW)) is found
+
+    def test_a_bounty_with_no_card_is_skipped(self, sync_db_path):
+        """econ_bounty_channel_id is 0 in prod, so cards have nowhere to post."""
+        with open_db(sync_db_path) as conn:
+            _bounty(conn, 1, created_at=NOW - 60, card_message_id=0)
+            assert svc.new_bounties(conn, NOW) == []
+
+
+@pytest.mark.asyncio
+class TestEconEchoes:
+    @pytest.fixture
+    def econ_bot(self, bot, guild):
+        bot.get_guild = MagicMock(return_value=guild)
+        return bot
+
+    async def test_auction_last_call_posts(self, econ_bot, sync_db_path):
+        configure(sync_db_path)
+        with open_db(sync_db_path) as conn:
+            _open_auction(conn, 1, ends_at=NOW + 1800)
+        await svc._sweep_econ(econ_bot, NOW)
+        embed = econ_bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "Last call" in (embed.title or "")
+        assert "A rare hat" in (embed.title or "")
+        assert f"<t:{int(NOW + 1800)}:R>" in (embed.description or "")
+
+    async def test_a_deadline_echo_beats_the_global_floor(
+        self, econ_bot, guild, sync_db_path
+    ):
+        """The point of the exemption, end to end.
+
+        A game echo seconds earlier would refuse any other game — the auction
+        must still get through, because there is no later moment for it.
+        """
+        configure(sync_db_path)
+        assert await echo(econ_bot, guild, ref="a-game") is True
+        with open_db(sync_db_path) as conn:
+            _open_auction(conn, 1, ends_at=NOW + 1800)
+        await svc._sweep_econ(econ_bot, NOW + 30)
+        assert econ_bot.sent_channel.send.await_count == 2
+
+    async def test_the_same_auction_is_echoed_once(self, econ_bot, sync_db_path):
+        """Exempt from the cooldowns still means once per auction.
+
+        A late bid extends ends_at, keeping the auction inside the window for
+        many more ticks; only the claim stops it re-announcing.
+        """
+        configure(sync_db_path)
+        with open_db(sync_db_path) as conn:
+            _open_auction(conn, 1, ends_at=NOW + 1800)
+        await svc._sweep_econ(econ_bot, NOW)
+        await svc._sweep_econ(econ_bot, NOW + 15)
+        assert econ_bot.sent_channel.send.await_count == 1
+
+    async def test_pools_names_its_line(self, econ_bot, sync_db_path):
+        configure(sync_db_path)
+        with open_db(sync_db_path) as conn:
+            _pools_round(conn, 1, closes_at=NOW + 600)
+        await svc._sweep_econ(econ_bot, NOW)
+        embed = econ_bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "12.5" in (embed.title or "")
+
+    async def test_bounty_is_a_start_echo_not_a_deadline(
+        self, econ_bot, guild, sync_db_path
+    ):
+        """New bounties are ordinary echoes — the floor still applies."""
+        configure(sync_db_path)
+        assert await echo(econ_bot, guild, ref="a-game") is True
+        with open_db(sync_db_path) as conn:
+            _bounty(conn, 1, created_at=NOW - 60)
+        await svc._sweep_econ(econ_bot, NOW + 30)
+        assert econ_bot.sent_channel.send.await_count == 1
+
+    async def test_econ_echoes_are_silent_too(self, econ_bot, sync_db_path):
+        configure(sync_db_path)
+        with open_db(sync_db_path) as conn:
+            _open_auction(conn, 1, ends_at=NOW + 1800)
+        await svc._sweep_econ(econ_bot, NOW)
+        allowed = econ_bot.sent_channel.send.await_args.kwargs["allowed_mentions"]
+        assert (allowed.roles, allowed.everyone, allowed.users) == (False, False, False)
 
 
 # ── Discord events ──────────────────────────────────────────────────────────

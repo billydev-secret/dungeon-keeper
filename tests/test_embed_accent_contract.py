@@ -89,7 +89,7 @@ CASES = [
     case(
         "event_echo.game_starting",
         lambda **kw: event_echo_logic.build_echo_embed(
-            game_name="Truth or Dare", channel_id=1, url="https://x/1", **kw
+            name="Truth or Dare", channel_id=1, url="https://x/1", **kw
         ),
         discord.Color(branding_service.DEFAULT_ACCENT),
     ),

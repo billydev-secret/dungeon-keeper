@@ -41,11 +41,39 @@ There are no slash commands. Cooldown windows are constants in
 
 ## Sources
 
-| Source | Trigger | `echo_key` | Dedupe `ref` |
+Two shapes. **"This just started"** — echo it so people can join. **"Last
+chance"** — echo it because a deadline is about to pass. The distinction is
+not cosmetic; see Rate limiting.
+
+| Source | Shape | Trigger | Dedupe `ref` |
 |---|---|---|---|
-| `party_game` | Any row in `games_active_games` with a posted lobby | game type (`mfk`, `story`, …) | `game_id` |
-| `gamebot` | A Gamebot lobby embed for Cards Against Humanity | sub-game (`cah`) | message id |
-| `discord_event` | A native Discord event going `scheduled → active` | `discord_event` | event id |
+| `party_game` | start | Any row in `games_active_games` with a posted lobby | `game_id` |
+| `gamebot` | start | A Gamebot lobby embed for Cards Against Humanity | message id |
+| `discord_event` | start | A native Discord event going `scheduled → active` | event id |
+| `bounty` | start | An open `econ_bounties` row with a posted card, within the freshness window | bounty id |
+| `auction_closing` | **deadline** | An open `econ_auctions` row whose `ends_at` is within the hour | auction id |
+| `pools_closing` | **deadline** | An open `casino_pools_rounds` row whose `closes_at` is within the hour | round id |
+
+`echo_key` is the game type for party games, the sub-game for Gamebot, and
+the source name for everything else — those fire a handful of times a year,
+so there is nothing finer to bucket by.
+
+**Auctions, pools and bounties** carry their own `guild_id`, so unlike games
+the guild comes straight off the row rather than being reverse-resolved from
+a channel. All three are swept on one shared read connection per tick.
+
+Two schema facts the sweeps depend on:
+
+* A pools round stays `status='open'` for hours *after* betting shuts, waiting
+  to settle (migration 140). The sweep filters on `closes_at`, not `status` —
+  filtering on status alone would post "last call" to a round that stopped
+  taking bets before lunch.
+* An auction's `ends_at` **moves**: a late bid inside the soft-close window
+  pushes it out, which is exactly what this echo is trying to cause. The
+  per-auction claim means the echo fires once, at the first tick the auction
+  is within an hour of its then-current end; a later extension doesn't
+  re-trigger it. This is also why the copy renders Discord's `<t:…:R>` rather
+  than a baked-in "in 1 hour", which would be wrong by the time it was read.
 
 **Party games** are swept by `event_echo_loop` every 15s rather than hooked at
 each game's lobby post. Not because hooking would mean 28 call sites — those
@@ -86,11 +114,20 @@ live doesn't re-post. `Intents.default()` already carries
 
 ## Rate limiting
 
-Two windows, both of which must pass:
+Two windows, both of which must pass — for **start** sources:
 
 - **Per type** — 60 minutes. The same kind of game at most hourly.
 - **Global floor** — 10 minutes. Nothing at all within 10 minutes of the last
   echo, whatever it was.
+
+**Deadline sources skip both.** Skip-don't-queue is right for a game start —
+miss one and another comes along within the hour — and wrong for a deadline,
+because there is no useful later moment: an "auction ends in an hour" dropped
+because a party game echoed 8 minutes earlier is simply lost. The floor exists
+to stop ~20 game types bursting; auctions and pools fire a handful of times a
+year (2 auctions in the server's entire history), so exempting them costs
+nothing and only ever saves the valuable ones. Exempt means "can't be crowded
+out", not "can repeat" — the per-ref claim still holds each to one echo.
 
 The global floor is the one that matters. With ~20 party-game types, per-type
 alone permits twenty posts in a minute with every one inside its own window.
@@ -166,6 +203,14 @@ else there renders as a mention Discord can't resolve.
   module constants.
 - **Casino and Cat Bot.** Out of scope by decision, not by omission — both fire
   far too often to echo.
+- **Two sources are dormant in prod** (as of 2026-07-28). `pools_enabled` is
+  unset, so the prediction market never opens a round; and
+  `econ_bounty_channel_id` is `0`, so bounty cards have nowhere to post and
+  there have been zero bounties ever. Both echoes are built and tested, but
+  neither can fire until those features are switched on. Auctions are live —
+  2 in the server's history.
+- **New auctions listed.** Only the closing echo was wanted; an "auction
+  opened" echo is a `SOURCE_STYLE` row plus a sweep away if that changes.
 - **Live-updating summary message.** One "games running now" post edited in
   place, instead of one post per game. Rejected for v1: edit loops are the
   shape that caused a repost storm in a live channel on 2026-07-26.

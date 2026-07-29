@@ -35,6 +35,12 @@ from bot_modules.services.branding_service import DEFAULT_ACCENT
 SOURCE_PARTY_GAME = "party_game"
 SOURCE_GAMEBOT = "gamebot"
 SOURCE_DISCORD_EVENT = "discord_event"
+SOURCE_BOUNTY = "bounty"
+SOURCE_AUCTION_CLOSING = "auction_closing"
+SOURCE_POOLS_CLOSING = "pools_closing"
+
+# How long before a deadline the "last chance" echo fires.
+CLOSING_LEAD_SECONDS = 3600
 
 # Ben's numbers (2026-07-28): same game type at most hourly, and nothing at
 # all within ten minutes of the last echo whatever it was. Ceiling is ~6/hour;
@@ -55,26 +61,68 @@ FRESHNESS_SECONDS = 600
 RETENTION_SECONDS = 86400
 
 
-# Per-source copy, keyed by the source the caller already passes. "A game is
-# open" reads as a bug on an event called "Movie Night", but threading `lead`
-# and `icon` through as separate arguments let them desync from the source
-# they describe (`source=SOURCE_GAMEBOT, icon=ICON_EVENT` was a legal call).
-# A fourth source is now one row here rather than two more parameters.
+# Everything that varies per source, keyed by the source the caller already
+# passes. "A game is open" reads as a bug on an event called "Movie Night",
+# but threading `lead` and `icon` through as separate arguments let them
+# desync from the source they describe. A new source is one row here.
 @dataclass(frozen=True)
 class EchoStyle:
+    headline: str  # format string over {name}
     lead: str
     icon: str
+    #: A *deadline* echo — "last chance", not "this just started".
+    #:
+    #: These bypass the cooldowns entirely (the per-ref claim still fires them
+    #: exactly once). Skip-don't-queue is right for a game start: miss one and
+    #: another comes along in an hour. It is wrong for a deadline, because
+    #: there is no useful later moment — an "auction ends in an hour" dropped
+    #: because a party game echoed 8 minutes ago is simply lost. The floor
+    #: exists to stop ~20 game types bursting; auctions and pools fire a
+    #: handful of times a year (2 auctions in the server's whole history), so
+    #: exempting them costs nothing and only ever saves the valuable ones.
+    deadline: bool = False
 
 
-_DEFAULT_STYLE = EchoStyle(lead="A game is open", icon="🎲")
+_DEFAULT_STYLE = EchoStyle(
+    headline="{name} is starting", lead="A game is open", icon="🎲"
+)
 SOURCE_STYLE: dict[str, EchoStyle] = {
-    SOURCE_DISCORD_EVENT: EchoStyle(lead="It's happening", icon="📅"),
+    SOURCE_DISCORD_EVENT: EchoStyle(
+        headline="{name} is starting", lead="It's happening", icon="📅"
+    ),
+    SOURCE_BOUNTY: EchoStyle(
+        headline="New bounty: {name}", lead="Up for grabs", icon="🎯"
+    ),
+    SOURCE_AUCTION_CLOSING: EchoStyle(
+        headline="Last call: {name}",
+        lead="Bidding closes soon",
+        icon="🔨",
+        deadline=True,
+    ),
+    SOURCE_POOLS_CLOSING: EchoStyle(
+        headline="Last call: {name}",
+        lead="Betting closes soon",
+        icon="📈",
+        deadline=True,
+    ),
 }
 
 
 def style_for(source: str) -> EchoStyle:
-    """Copy for one source; anything game-shaped gets the default."""
+    """Copy and policy for one source; anything unknown gets game-shaped copy."""
     return SOURCE_STYLE.get(source, _DEFAULT_STYLE)
+
+
+def closing_due(deadline_epoch: float | None, now: float) -> bool:
+    """True once a deadline is near enough to be worth a last-chance echo.
+
+    Deliberately has no lower bound: a sweep that was down through the ideal
+    moment should still fire on its next tick while there is any time left to
+    act. Past the deadline there is nothing to link to, so it stops.
+    """
+    if deadline_epoch is None:
+        return False
+    return 0 < deadline_epoch - now <= CLOSING_LEAD_SECONDS
 
 
 # Which Gamebot sub-games are worth main chat — policy only. The *names* live
@@ -97,7 +145,11 @@ class EchoDecision:
 
 
 def decide(
-    *, now: float, last_same_type: float | None, last_any: float | None
+    *,
+    now: float,
+    last_same_type: float | None,
+    last_any: float | None,
+    source: str = SOURCE_PARTY_GAME,
 ) -> EchoDecision:
     """Apply both cooldowns to a candidate echo.
 
@@ -105,7 +157,13 @@ def decide(
     *posted* echo (suppressed rows are excluded by the caller — see the
     migration's note on why a refusal must not push the window out).
     ``None`` means "never", which passes.
+
+    Deadline sources skip both windows — see ``EchoStyle.deadline``. The
+    per-ref claim still holds them to one echo apiece, so "exempt" means
+    "can't be crowded out", not "can repeat".
     """
+    if style_for(source).deadline:
+        return EchoDecision(True)
     if last_any is not None and now - last_any < GLOBAL_COOLDOWN_SECONDS:
         return EchoDecision(False, "global")
     if last_same_type is not None and now - last_same_type < PER_TYPE_COOLDOWN_SECONDS:
@@ -127,14 +185,15 @@ def is_fresh(opened_at: float | None, now: float) -> bool:
 
 def build_echo_embed(
     *,
-    game_name: str,
+    name: str,
     url: str,
     channel_id: int | None = None,
     host_name: str | None = None,
     source: str = SOURCE_PARTY_GAME,
+    deadline_epoch: float | None = None,
     color: discord.Color | None = None,
 ) -> discord.Embed:
-    """The echo itself: what's starting, where, and a link to go there.
+    """The echo itself: what's happening, where, and a link to go there.
 
     Deliberately small — this lands in a conversation channel, and a tall
     embed in the middle of a chat is the thing people mute. No thumbnail, no
@@ -143,12 +202,20 @@ def build_echo_embed(
     ``channel_id`` is optional because an external Discord event carries a
     location string and no channel; interpolating anything else into ``<#…>``
     renders as a mention Discord can't resolve.
+
+    ``deadline_epoch`` renders as Discord's own relative timestamp rather than
+    a baked-in "in 1 hour". An auction's soft close *extends* ``ends_at`` when
+    a late bid lands — which this echo is trying to cause — so any fixed
+    phrasing would be wrong by the time someone read it. ``<t:…:R>`` at least
+    reflects the deadline as it stood when the message was sent, and Discord
+    renders it in the reader's own timezone.
     """
     style = style_for(source)
     where = f" in <#{channel_id}>" if channel_id is not None else ""
+    when = f" <t:{int(deadline_epoch)}:R>" if deadline_epoch is not None else ""
     embed = discord.Embed(
-        title=f"{style.icon} {game_name} is starting",
-        description=f"{style.lead}{where}.\n**[Jump in →]({url})**",
+        title=f"{style.icon} {style.headline.format(name=name)}",
+        description=f"{style.lead}{where}{when}.\n**[Jump in →]({url})**",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
     if host_name:
