@@ -14,6 +14,29 @@ import { esc } from "./api.js";
 
 let _fsSeq = 0;
 
+// Shortest all-digit filter that also searches option ids. Discord snowflakes
+// are 17-19 digits, so a pasted id always qualifies while a few typed digits
+// (searching a name like "Rule 34") stay a name-only search.
+const MIN_ID_FILTER_LEN = 5;
+
+/** Options matching `lc` (already lowercased) by label, or by id when `lc`
+ *  looks like a pasted snowflake.
+ *
+ *  Copying an id out of Discord is the natural move on mobile, where a name
+ *  like "#🪧│bounty-board" is awkward to retype — and a label-only filter
+ *  answered that paste with an empty list, which reads as "the bot can't see
+ *  any channels" rather than "wrong search". Shared by both widgets so the
+ *  single- and multi-select pickers can't drift apart.
+ */
+function matchOptions(base, lc) {
+  const byId = /^\d+$/.test(lc) && lc.length >= MIN_ID_FILTER_LEN;
+  return base.filter(
+    (o) =>
+      o.label.toLowerCase().includes(lc) ||
+      (byId && String(o.id).includes(lc)),
+  );
+}
+
 function styleInput(input, placeholder) {
   input.type = "text";
   input.placeholder = placeholder;
@@ -184,9 +207,7 @@ export function filterSelect(placeholder, options, opts = {}) {
   function render(filter) {
     const lc = filter.toLowerCase();
     const base = visible();
-    const matches = lc
-      ? base.filter((o) => o.label.toLowerCase().includes(lc))
-      : base;
+    const matches = lc ? matchOptions(base, lc) : base;
     const show = lc ? matches : matches.slice(0, 300);
     const rows = [{ id: emptyValue, label: emptyLabel, empty: true }, ...show];
     list.innerHTML = rows
@@ -364,9 +385,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
   function renderList(filter) {
     const lc = filter.toLowerCase();
     const base = visible();
-    const matches = lc
-      ? base.filter((o) => o.label.toLowerCase().includes(lc))
-      : base;
+    const matches = lc ? matchOptions(base, lc) : base;
     const show = lc ? matches : matches.slice(0, 300);
     while (list.firstChild) list.removeChild(list.firstChild);
     show.forEach((o, i) => {

@@ -100,6 +100,24 @@ def test_channel_is_required_for_a_channel_picking_panel(client_with_bot):
     assert "channel" in r.json()["detail"].lower()
 
 
+@pytest.mark.parametrize(
+    "unset",
+    [pytest.param("0", id="sentinel"), pytest.param(" 0 ", id="padded"),
+     pytest.param("", id="empty")],
+)
+def test_unpicked_channel_says_pick_one_not_wrong_channel_type(
+    client_with_bot, unset
+):
+    """"0" is the picker's unset sentinel and arrives as a *truthy* string, so
+    it used to fall through to get_channel(0) and answer "Channel must be a
+    text channel in this guild" — sending the admin hunting for a channel
+    problem when they simply never tapped a row in the filter dropdown."""
+    client, *_ = client_with_bot()
+    r = client.post("/api/panels/economy-guide/post", json={"channel_id": unset})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Pick a channel for this panel"
+
+
 def test_non_text_channel_is_refused(client_with_bot):
     client, bot, guild, _ = client_with_bot()
     guild.get_channel.return_value = MagicMock(spec=discord.VoiceChannel)
