@@ -105,6 +105,36 @@ def get_guild_channel_or_thread(
     return None
 
 
+async def resolve_bot_channel(bot, channel_id: int):
+    """A channel by id from the cache, falling back to one API fetch.
+
+    Every background loop that posts somewhere configured needs this — the
+    cache misses after a restart, or for a channel the bot has never seen —
+    and it had been copy-pasted into four of them (game_start_ping,
+    scheduled_games, announcements, event_echo) before landing here. Returns
+    None rather than raising: a loop must not die because one destination
+    went away.
+    """
+    channel = bot.get_channel(channel_id)
+    if channel is not None:
+        return channel
+    try:
+        return await bot.fetch_channel(channel_id)
+    except Exception:
+        return None
+
+
+def jump_url(guild_id: int, channel_id: int, message_id: int) -> str:
+    """A permalink to one message.
+
+    Prefer ``message.jump_url`` when you have the message object; this is for
+    callers working from stored ids, which would otherwise have to fetch a
+    message purely to read the property off it. A channel-only link loses the
+    message and lands the reader at the bottom of the channel instead.
+    """
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
+
 async def resolve_reply_target(message: discord.Message) -> discord.Message | None:
     """Resolve the target message of a reply, fetching if necessary."""
     if not message.reference:

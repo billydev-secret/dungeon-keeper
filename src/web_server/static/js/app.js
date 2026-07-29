@@ -153,6 +153,7 @@ const SECTIONS = [
         { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true, keywords: "needle thread replies" },
         { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
         { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js", keywords: "dead chat prompts", help: "help-chat-revive" },
+        { id: "config-event-echo", label: "Event Echo",        module: "./panels/config-event-echo.js", adminOnly: true, keywords: "echo announce games main chat jump link", help: "help-event-echo" },
         { id: "config-quote-border", label: "Quote Tool",     module: "./panels/config-quote-border.js", adminOnly: true, keywords: "quotes border color" },
         { id: "docs",              label: "Docs",              module: "./panels/docs.js", keywords: "channel docs documentation publish" },
       ]},

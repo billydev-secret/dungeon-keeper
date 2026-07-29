@@ -39,6 +39,7 @@ from bot_modules.announcements.buttons import (
 )
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
+from bot_modules.core.utils import resolve_bot_channel
 from bot_modules.services.branding_service import DEFAULT_ACCENT
 
 log = logging.getLogger(__name__)
@@ -288,15 +289,6 @@ def _db_call(db_path: Path, fn, *args):
         return fn(conn, *args)
 
 
-async def _resolve_channel(bot, channel_id: int):
-    channel = bot.get_channel(channel_id)
-    if channel is not None:
-        return channel
-    try:
-        return await bot.fetch_channel(channel_id)
-    except Exception:
-        return None
-
 
 async def _process_due(bot, db_path: Path, row, now: float) -> None:
     ann_id = row["id"]
@@ -309,7 +301,7 @@ async def _process_due(bot, db_path: Path, row, now: float) -> None:
         await asyncio.to_thread(_db_call, db_path, mark_error, ann_id, MISSED_ERROR, now)
         return
 
-    channel = await _resolve_channel(bot, row["channel_id"])
+    channel = await resolve_bot_channel(bot, row["channel_id"])
     if channel is None:
         log.warning("Announcement %s: channel %s unreachable", ann_id, row["channel_id"])
         await asyncio.to_thread(_db_call, db_path, mark_error, ann_id, "Channel unreachable", now)

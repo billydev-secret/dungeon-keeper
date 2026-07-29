@@ -14,6 +14,9 @@ from typing import Optional
 import discord
 
 from bot_modules.core.db_utils import open_db
+# Re-exported under the local name this module has always used; the canonical
+# definition moved to core.utils when Event Echo became the fourth copy.
+from bot_modules.core.utils import jump_url as jump_link
 
 DEFAULT_COOLDOWN_SECONDS = 120
 DEFAULT_MAX_CHARS = 2000
@@ -50,8 +53,6 @@ def thread_name_from_content(content: str, max_len: int = 100) -> str:
     return name or "Anonymous Confession"
 
 
-def jump_link(guild_id: int, channel_id: int, message_id: int) -> str:
-    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
 
 
 _ANON_ADJECTIVES = [

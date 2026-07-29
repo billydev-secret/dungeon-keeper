@@ -216,6 +216,22 @@ export function mountMultiPicker(slotEl, options, values, opts = {}) {
   return fs;
 }
 
+/** Fire `cb` when a filterSelect's value changes.
+ *
+ *  filterSelect has no change event of its own — selecting closes the popover
+ *  and focus leaves afterwards, hence focusout plus a short settle delay.
+ *  Note the listener goes on `fs.el`, not the slot element you passed to
+ *  mountPicker: that slot was replaced out of the DOM by the mount. */
+export function onPickerChange(fs, cb) {
+  let last = fs.getValue();
+  fs.el.addEventListener("focusout", () => {
+    setTimeout(() => {
+      const cur = fs.getValue();
+      if (cur !== last) { last = cur; cb(); }
+    }, 200);
+  });
+}
+
 // Typed conveniences — build the option list and the right empty sentinel.
 // Single-pickers default to emptyValue "0" (the unset id config uses) so
 // getValue() returns "0" when cleared, matching the old <select> behavior.

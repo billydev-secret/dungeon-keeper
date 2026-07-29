@@ -26,6 +26,27 @@ def local_day_for(ts: float, offset_hours: float) -> str:
     return datetime.fromtimestamp(ts, tz).strftime("%Y-%m-%d")
 
 
+def next_week_roll_epoch(ts: float, offset_hours: float) -> float:
+    """When the guild's ISO week next rolls over, as an epoch.
+
+    The economy's week boundary is guild-local Monday 00:00: ``economy_loop``
+    detects it by comparing ``iso_week_for(local_day_for(...))`` against the
+    stored mark, which tells you *that* it happened but not *when* it will.
+    Anything that has to announce or count down to the roll — the weekly
+    raffle's last call, so far — needs the instant, and needs it from here so
+    there is one expression of the boundary rather than two that can drift.
+
+    Exactly on the boundary the current week has already closed, so this
+    returns the *following* Monday.
+    """
+    offset = offset_hours * 3600
+    local = datetime.fromtimestamp(ts + offset, timezone.utc)
+    boundary = (local + timedelta(days=7 - local.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return boundary.timestamp() - offset
+
+
 def local_day_bounds(local_day: str, offset_hours: float) -> tuple[float, float]:
     """Return the [start, end) epoch bounds of a guild-local day."""
     tz = timezone(timedelta(hours=offset_hours))

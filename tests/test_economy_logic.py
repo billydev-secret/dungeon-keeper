@@ -7,6 +7,8 @@ grace window recovery). Conversion and payout amounts are covered alongside.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from bot_modules.economy.logic import (
@@ -19,6 +21,7 @@ from bot_modules.economy.logic import (
     local_day_for,
     login_amount,
     milestone_amount,
+    next_week_roll_epoch,
     qotd_marker_question,
 )
 from bot_modules.services.economy_service import EconSettings
@@ -502,3 +505,31 @@ def test_is_economy_manager_rejects_plain_member():
 def test_is_economy_manager_unconfigured_role_never_matches():
     # manager_role_id 0 must not match a member who somehow holds role 0.
     assert is_economy_manager(is_admin=False, role_ids=[0], manager_role_id=0) is False
+
+
+@pytest.mark.parametrize(
+    "when, offset, expected",
+    [
+        # Tuesday midday — the roll is next Monday.
+        pytest.param("2026-07-28 12:00:00", 0.0, "2026-08-03 00:00:00",
+                     id="midweek"),
+        # Sunday night, half an hour to go: the last-call case.
+        pytest.param("2026-08-02 23:30:00", 0.0, "2026-08-03 00:00:00",
+                     id="sunday-night"),
+        # Exactly on the boundary the week has already closed, so the
+        # deadline is the *following* Monday — otherwise the sweep would
+        # announce a last call for a raffle that just drew.
+        pytest.param("2026-08-03 00:00:00", 0.0, "2026-08-10 00:00:00",
+                     id="exactly-on-the-roll"),
+        # A guild five hours behind UTC rolls five hours later.
+        pytest.param("2026-07-28 12:00:00", -5.0, "2026-08-03 05:00:00",
+                     id="negative-offset"),
+        pytest.param("2026-07-28 12:00:00", 5.5, "2026-08-02 18:30:00",
+                     id="half-hour-offset"),
+    ],
+)
+def test_next_week_roll_epoch(when, offset, expected):
+    """The raffle's deadline is derived, not stored — guild-local Monday."""
+    now = datetime.fromisoformat(when).replace(tzinfo=timezone.utc).timestamp()
+    want = datetime.fromisoformat(expected).replace(tzinfo=timezone.utc)
+    assert next_week_roll_epoch(now, offset) == want.timestamp()

@@ -248,6 +248,29 @@ class Tick(NamedTuple):
         return not self.settle and self.open is None
 
 
+def closing_rounds(
+    conn: sqlite3.Connection, now: float, within_seconds: float
+) -> list[sqlite3.Row]:
+    """Rounds whose betting window shuts inside ``within_seconds`` — for
+    last-call announcements (see event_echo_service).
+
+    Filters on ``closes_at``, **not** on ``status`` alone: a round stays
+    ``status='open'`` for hours after betting shuts while it waits to settle
+    (migration 140), so status by itself would call "last chance" on a market
+    that stopped taking bets before lunch. Columns are aliased to the shape
+    announcement callers share (``id``, ``channel_id``, ``message_id``,
+    ``deadline``).
+    """
+    return conn.execute(
+        "SELECT id, guild_id, channel_id, message_id, line, "
+        "       closes_at AS deadline "
+        "FROM casino_pools_rounds "
+        "WHERE status = 'open' AND message_id != 0 "
+        "AND closes_at > ? AND closes_at <= ?",
+        (now, now + within_seconds),
+    ).fetchall()
+
+
 def plan_tick(
     conn: sqlite3.Connection,
     guild_id: int,

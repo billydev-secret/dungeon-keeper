@@ -116,6 +116,31 @@ def get_open_auction(
     ).fetchone()
 
 
+def closing_auctions(
+    conn: sqlite3.Connection, now: float, within_seconds: float
+) -> list[sqlite3.Row]:
+    """Live auctions whose end is inside ``within_seconds`` — for last-call
+    announcements (see event_echo_service).
+
+    ``ends_at`` is a moving target: a bid inside the soft-close window pushes
+    it out, which is exactly what a last call is trying to cause. Callers get
+    whatever it is right now and are expected to dedupe on the auction id, not
+    to assume the time they were told is final.
+
+    Rows with no ``message_id`` are excluded — there is nothing to link to
+    until the auction card has been posted. Columns are aliased to the shape
+    announcement callers share (``id``, ``channel_id``, ``message_id``,
+    ``deadline``).
+    """
+    return conn.execute(
+        "SELECT id, guild_id, channel_id, message_id, title, ends_at AS deadline "
+        "FROM econ_auctions "
+        "WHERE state = 'open' AND message_id != 0 "
+        "AND ends_at > ? AND ends_at <= ?",
+        (now, now + within_seconds),
+    ).fetchall()
+
+
 def open_auction_guild_ids(conn: sqlite3.Connection) -> set[int]:
     """Every guild id with a live auction — one indexed read for the settle loop.
 

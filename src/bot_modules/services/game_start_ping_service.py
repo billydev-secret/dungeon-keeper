@@ -41,6 +41,7 @@ import time
 
 import discord
 
+from bot_modules.core.utils import resolve_bot_channel
 from bot_modules.games.constants import GAME_NAMES, LOBBY_GAME_TYPES, LOBBY_START_BUTTON
 
 log = logging.getLogger(__name__)
@@ -191,15 +192,6 @@ async def mark_start_ping_sent(db, game_id: str) -> None:
         log.warning("start ping: could not flag game %s as nudged", game_id, exc_info=True)
 
 
-async def _resolve_channel(bot, channel_id: int):
-    channel = bot.get_channel(channel_id)
-    if channel is not None:
-        return channel
-    try:
-        return await bot.fetch_channel(channel_id)
-    except Exception:
-        return None
-
 
 async def _process_lobby(bot, db, row, now: float) -> None:
     payload = json.loads(row["payload"]) if row["payload"] else {}
@@ -207,7 +199,7 @@ async def _process_lobby(bot, db, row, now: float) -> None:
         return
 
     game_id = row["game_id"]
-    channel = await _resolve_channel(bot, int(row["channel_id"]))
+    channel = await resolve_bot_channel(bot, int(row["channel_id"]))
     if channel is None:
         # Unreachable channel is terminal for this lobby — mark it sent so we
         # don't re-attempt every tick for the life of the lobby.

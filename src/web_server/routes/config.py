@@ -107,6 +107,9 @@ from bot_modules.services.branding_service import (
     upsert_branding,
 )
 from bot_modules.core.branding import invalidate_accent_cache
+from bot_modules.services.event_echo_service import (
+    CONFIG_CHANNEL_KEY as EVENT_ECHO_CHANNEL_KEY,
+)
 from bot_modules.services.starboard_service import (
     get_starboard_config as _get_starboard_config,
     upsert_starboard_config as _upsert_starboard_config,
@@ -445,6 +448,15 @@ def _needle_section(conn, guild_id: int) -> dict:
         "emoji_locked": gcfg.emoji_locked,
         "default_reply": gcfg.default_reply,
     }
+
+
+def _event_echo_section(conn, guild_id: int) -> dict:
+    """Event Echo's one knob: where echoes land (empty string = feature off).
+
+    A string, not a number — a channel snowflake exceeds 2^53 and would lose
+    precision as a bare JSON number (docs/web_testing.md's snowflake sweep).
+    """
+    return {"channel_id": _str_val(conn, EVENT_ECHO_CHANNEL_KEY, "", guild_id)}
 
 
 def _whisper_section(conn, guild_id: int) -> dict:
@@ -1174,6 +1186,7 @@ async def get_config(
                 "guess": _guess_section(conn, guild_id),
                 "whisper": _whisper_section(conn, guild_id),
                 "needle": _needle_section(conn, guild_id),
+                "event_echo": _event_echo_section(conn, guild_id),
                 "risky": _risky_section(conn, guild_id),
                 "casino": _casino_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
@@ -4713,6 +4726,33 @@ class NeedleChannelUpdate(BaseModel):
     status_reactions:    bool = False
     archive_immediately: bool = False
     default_reactions:   str  = ""
+
+
+class EventEchoUpdate(BaseModel):
+    # "" clears the key, which is how the feature is turned off — there is no
+    # separate enable flag to drift out of step with the channel.
+    channel_id: str = ""
+
+
+@router.put("/config/event-echo")
+async def update_event_echo(
+    request: Request,
+    body: EventEchoUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    raw = (body.channel_id or "").strip()
+    if raw and not raw.isdigit():
+        raise HTTPException(400, "channel_id must be a channel id or empty")
+
+    def _q():
+        with ctx.open_db() as conn:
+            set_config_value(conn, EVENT_ECHO_CHANNEL_KEY, raw, guild_id)
+        return {"ok": True}
+
+    return await run_query(_q)
 
 
 class NeedleGlobalUpdate(BaseModel):

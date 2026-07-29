@@ -29,6 +29,7 @@ from bot_modules.economy.game_rewards import (
 )
 from bot_modules.games_config.logic import has_mod_or_admin_permissions
 from bot_modules.games_external import logic, parser
+from bot_modules.services.event_echo_service import echo_gamebot_lobby
 
 log = logging.getLogger(__name__)
 
@@ -89,8 +90,22 @@ class GamesExternalCog(commands.Cog):
         # Bank first, then pay: the Gamebot payouts read the just-banked window
         # back out; the Cat Bot payout keys off this message's content.
         if kind == "gamebot":
-            if parser.is_terminal([e.to_dict() for e in message.embeds]):
+            embeds = [e.to_dict() for e in message.embeds]
+            if parser.is_terminal(embeds):
                 await self._pay_gamebot_game(message)
+            # Two independent positive tests, not an if/else: hanging the echo
+            # off "not terminal" would hardcode "a terminal embed is never also
+            # a lobby embed" as control flow, so any later change to
+            # is_terminal (an abandoned lobby, say) would silently disable the
+            # echo with nothing in the echo feature to explain why.
+            #
+            # This runs from the edit path too: Gamebot posts "Loading…" and
+            # edits the real embed in, so the lobby is often only visible on
+            # the edit. The echo's dedupe key is the message id, identical
+            # across both, so post-then-edit yields one echo rather than two.
+            sub_game = parser.game_from_start(embeds)
+            if sub_game is not None:
+                await echo_gamebot_lobby(self.bot, message, sub_game)
         elif kind == "catbot":
             await self._pay_cat_catch(message)
         elif kind == "wordle":

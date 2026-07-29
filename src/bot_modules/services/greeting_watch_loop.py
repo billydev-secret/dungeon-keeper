@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.core.db_utils import get_config_value, open_db, parse_bool
+from bot_modules.core.utils import jump_url
 from bot_modules.services.greeting_watch_service import (
     PendingGreeting,
     guilds_with_pending,
@@ -127,7 +128,7 @@ async def _notify(
     channel_label = f"#{channel_name}" if channel_name else "the channel"
     greeter = guild.get_member(g.author_id) if guild else None
     greeter_label = greeter.display_name if greeter else f"<@{g.author_id}>"
-    jump = f"https://discord.com/channels/{guild_id}/{g.channel_id}/{g.message_id}"
+    jump = jump_url(guild_id, g.channel_id, g.message_id)
 
     text = (
         f"👋 **Someone may have been left hanging in {channel_label}**\n"

@@ -37,7 +37,9 @@ from bot_modules.games_rushmore import embeds as rushmore_embeds
 from bot_modules.games_traditional import embeds as traditional_embeds
 from bot_modules.games_ttl import embeds as ttl_embeds
 from bot_modules.games_wyr import embeds as wyr_embeds
+from bot_modules.services import branding_service
 from bot_modules.services import economy_service
+from bot_modules.services import event_echo_logic
 from bot_modules.services import embeds as services_embeds
 from bot_modules.services import pools_logic
 from bot_modules.services import welcome_service
@@ -84,6 +86,13 @@ def _welcome_member() -> MagicMock:
 
 
 CASES = [
+    case(
+        "event_echo.game_starting",
+        lambda **kw: event_echo_logic.build_echo_embed(
+            name="Truth or Dare", channel_id=1, url="https://x/1", **kw
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
     # ── risky roll (accent param is named `accent`; accent=None IS the
     #    fallback path, so one call covers both harness invocations) ─────
     case(
