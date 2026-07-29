@@ -70,6 +70,9 @@ SKIP_KINDS: tuple[str, ...] = (
     "transfer_in",
     "casino_stake",
     "casino_payout",
+    # Like transfers, a tip writes both legs; posting only the payer's side
+    # keeps one event to one feed entry.
+    "tip_in",
 )
 
 # Per-kind glyph + human label. The label is the fallback memo for kinds whose
@@ -81,6 +84,8 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "rental": ("🛒", "Perk rental"),
     "transfer_out": ("↔️", "Transfer sent"),
     "transfer_in": ("↔️", "Transfer received"),
+    "tip_out": ("💸", "Reaction tip sent"),
+    "tip_in": ("💸", "Reaction tip received"),
     "login": ("📅", "Daily login"),
     "milestone": ("🏆", "Streak milestone"),
     "conversion": ("✨", "XP conversion"),

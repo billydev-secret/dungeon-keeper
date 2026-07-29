@@ -408,6 +408,117 @@ def test_update_spoiler_channels(authed_client, fake_ctx):
     assert ids == {1001, 1002}
 
 
+# ── PUT /api/config/nsfw-classifier ──────────────────────────────────
+
+
+def test_update_nsfw_classifier(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/nsfw-classifier",
+        json={
+            "threshold": 0.4,
+            "sfw_threshold": 0.85,
+            "labels": ["SEX_ACT", "ANUS_EXPOSED"],
+            "sfw_mode": "log",
+            "sfw_log_channel_id": "777",
+            "sfw_exempt_channels": ["1001"],
+        },
+    )
+    assert resp.status_code == 200
+
+    from bot_modules.services.nsfw_classifier_service import (
+        load_settings,
+        load_sfw_policy,
+    )
+
+    threshold, sfw_threshold, labels = load_settings(fake_ctx.db_path, fake_ctx.guild_id)
+    assert (threshold, sfw_threshold) == (0.4, 0.85)
+    assert labels == frozenset({"SEX_ACT", "ANUS_EXPOSED"})
+
+    policy = load_sfw_policy(fake_ctx.db_path, fake_ctx.guild_id)
+    assert policy.mode == "log"
+    assert policy.log_channel_id == 777
+    assert policy.exempt_channel_ids == frozenset({1001})
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({"threshold": 0}, id="threshold-zero"),
+        pytest.param({"threshold": 1.5}, id="threshold-above-one"),
+        pytest.param({"sfw_threshold": -0.1}, id="sfw-threshold-negative"),
+        pytest.param({"sfw_mode": "delete-everything"}, id="unknown-mode"),
+        pytest.param({"labels": []}, id="empty-label-set"),
+        pytest.param({"labels": ["NOT_A_REAL_LABEL"]}, id="unknown-label"),
+        pytest.param(
+            {"labels": ["SEX_ACT", "TYPOED_LABEL"]}, id="one-unknown-among-valid"
+        ),
+    ],
+)
+def test_nsfw_classifier_rejects_inert_settings(authed_client, body):
+    # Each of these would silently disable a gate rather than loosen it, so
+    # they're refused at write time as well as ignored at read time.
+    assert authed_client.put("/api/config/nsfw-classifier", json=body).status_code == 400
+
+
+def test_nsfw_classifier_metrics_empty(authed_client):
+    resp = authed_client.get("/api/nsfw-classifier/metrics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["classified"] == 0
+    assert body["labels"] == []
+
+
+# ── PUT /api/config/auto-react/{channel_id} ──────────────────────────
+
+
+def test_auto_react_rule_with_tips_and_rungs(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/auto-react/4242",
+        json={
+            "emojis": ["🔥", "💎"],
+            "enabled": True,
+            "tips_enabled": True,
+            "rungs": {"🔥": 5, "💎": 25},
+        },
+    )
+    assert resp.status_code == 200
+
+    from bot_modules.services.reaction_tip_service import get_rungs
+
+    assert get_rungs(fake_ctx.db_path, fake_ctx.guild_id, 4242) == {"🔥": 5, "💎": 25}
+
+    section = authed_client.get("/api/config").json()["auto_react"]
+    rule = next(r for r in section if r["channel_id"] == "4242")
+    assert rule["tips_enabled"] is True
+    assert rule["rungs"] == {"🔥": 5, "💎": 25}
+
+
+def test_auto_react_rejects_a_one_coin_rung(authed_client):
+    # After the 1-coin minimum rake a 1-coin rung delivers the poster nothing,
+    # so it's refused rather than silently declining every tap.
+    resp = authed_client.put(
+        "/api/config/auto-react/4242",
+        json={"emojis": ["🔥"], "tips_enabled": True, "rungs": {"🔥": 1}},
+    )
+    assert resp.status_code == 400
+
+
+def test_auto_react_drops_rungs_for_removed_emoji(authed_client, fake_ctx):
+    from bot_modules.services.reaction_tip_service import get_rungs
+
+    authed_client.put(
+        "/api/config/auto-react/4242",
+        json={"emojis": ["🔥", "💎"], "tips_enabled": True, "rungs": {"🔥": 5, "💎": 25}},
+    )
+    # 💎 drops off the rule — its price must not linger and stay chargeable.
+    authed_client.put(
+        "/api/config/auto-react/4242",
+        json={"emojis": ["🔥"], "tips_enabled": True, "rungs": {"🔥": 5}},
+    )
+
+    assert get_rungs(fake_ctx.db_path, fake_ctx.guild_id, 4242) == {"🔥": 5}
+
+
 # ── PUT /api/config/booster-roles/{role_key} ─────────────────────────
 
 

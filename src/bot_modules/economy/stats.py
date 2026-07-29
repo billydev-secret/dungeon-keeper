@@ -54,7 +54,15 @@ DEFAULT_BUCKETS: tuple[int, ...] = (0, 1, 10, 50, 100, 250, 500, 1000)
 # is gross gambling turnover — a break-even slots player recycles the same
 # coins at ~93% RTP, so counting stakes would rank churn above members who
 # actually sank currency into perks (the status the board exists to reward).
-BURN_EXCLUDED_KINDS: tuple[str, ...] = ("transfer_out", "qa_void", "casino_stake")
+# ``tip_out`` is sideways for the same reason as ``transfer_out``: ~90% of it
+# lands in the poster's wallet. Only the rake actually burns, and that is not a
+# ledger row of its own — it is the amount never credited.
+BURN_EXCLUDED_KINDS: tuple[str, ...] = (
+    "transfer_out",
+    "qa_void",
+    "casino_stake",
+    "tip_out",
+)
 
 # The rentable-perk price fields, in the same set/order the pricing hints use so
 # an affordability figure lines up with its suggested-price hint on the dashboard.

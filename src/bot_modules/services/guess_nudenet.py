@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from bot_modules.services.guess_models import BoundingBox, Detection
@@ -9,11 +10,20 @@ from bot_modules.services.guess_models import BoundingBox, Detection
 log = logging.getLogger("dungeonkeeper.guess")
 
 _detector = None
+# The classifier runs inference from asyncio.to_thread workers, so several
+# threads can reach the lazy init at once. Without the lock two of them can
+# each build a NudeDetector — a second ONNX model load, and an orphaned
+# session left behind.
+_detector_lock = threading.Lock()
 
 
 def _get_detector():  # type: ignore[return]
     global _detector
-    if _detector is None:
+    if _detector is not None:
+        return _detector
+    with _detector_lock:
+        if _detector is not None:
+            return _detector
         from nudenet import NudeDetector  # type: ignore[import-untyped]  # noqa: PLC0415
         # Use the 640m model from models/ if present; fall back to the 320n bundled
         # with the nudenet package so no manual download is required.
@@ -36,8 +46,21 @@ def detect(image_path: str | Path) -> list[Detection]:
     Box conversion: NudeNet returns ``[x, y, width, height]``; we convert to
     ``BoundingBox(x1=x, y1=y, x2=x+w, y2=y+h)``.
     """
-    raw_results = _get_detector().detect(str(image_path))
+    return _to_detections(_get_detector().detect(str(image_path)))
 
+
+def detect_bytes(image_bytes: bytes) -> list[Detection]:
+    """Run NudeNet detection on raw image bytes.
+
+    NudeDetector.detect() decodes bytes directly (cv2.imdecode), so callers
+    holding a downloaded image never need to round-trip it through a temp
+    file. Shares the module-level detector with :func:`detect`, so the model
+    loads once per process regardless of which entry point is used.
+    """
+    return _to_detections(_get_detector().detect(image_bytes))
+
+
+def _to_detections(raw_results: list[dict]) -> list[Detection]:
     detections: list[Detection] = []
     for item in raw_results:
         x, y, w, h = item["box"]

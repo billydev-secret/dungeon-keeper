@@ -8,6 +8,7 @@ import json
 import os
 import re
 import socket
+import time
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlparse
 import httpx
@@ -45,6 +46,25 @@ from bot_modules.services.auto_delete_service import (
     list_auto_delete_rules_for_guild_with_conn,
     remove_auto_delete_rule,
     upsert_auto_delete_rule,
+)
+from bot_modules.services.nsfw_classifier_service import (
+    CONFIG_BUCKET_SFW_EXEMPT,
+    CONFIG_KEY_LABEL_SET,
+    CONFIG_KEY_SFW_LOG_CHANNEL,
+    CONFIG_KEY_SFW_MODE,
+    CONFIG_KEY_SFW_THRESHOLD,
+    CONFIG_KEY_THRESHOLD,
+    DEFAULT_SFW_MODE,
+    SFW_MODES,
+    is_valid_threshold,
+    known_labels,
+    load_settings_with_conn,
+    serialize_label_set,
+)
+from bot_modules.services.reaction_tip_service import (
+    get_rungs_for_guild_with_conn,
+    min_rung_amount,
+    replace_rungs,
 )
 from bot_modules.services.auto_react_service import (
     list_auto_react_rules_for_guild_with_conn,
@@ -743,14 +763,46 @@ def _duel_game_upsert(
 
 
 def _auto_react_section(conn, guild_id: int) -> list:
+    # One query for every channel's ladder rather than one per rule.
+    rungs = get_rungs_for_guild_with_conn(conn, guild_id)
     return [
         {
             "channel_id": str(r["channel_id"]),
             "emojis": parse_emojis(r["emojis"]),
             "enabled": bool(r["enabled"]),
+            "tips_enabled": bool(r["tips_enabled"]),
+            # Per-emoji prices; the emoji set doubles as the price ladder.
+            "rungs": rungs.get(int(r["channel_id"]), {}),
         }
         for r in list_auto_react_rules_for_guild_with_conn(conn, guild_id)
     ]
+
+
+# ── NSFW classifier config helper ─────────────────────────────────────
+
+
+def _nsfw_classifier_section(conn, guild_id: int) -> dict:
+    threshold, sfw_threshold, labels = load_settings_with_conn(conn, guild_id)
+    mode = get_config_value(
+        conn, CONFIG_KEY_SFW_MODE, DEFAULT_SFW_MODE, guild_id
+    ).strip().lower()
+    return {
+        "threshold": threshold,
+        "sfw_threshold": sfw_threshold,
+        "labels": sorted(labels),
+        "available_labels": sorted(known_labels()),
+        # So the panel's own guard reads the same number the service enforces.
+        "min_rung": min_rung_amount(),
+        "sfw_mode": mode if mode in SFW_MODES else DEFAULT_SFW_MODE,
+        "sfw_log_channel_id": get_config_value(
+            conn, CONFIG_KEY_SFW_LOG_CHANNEL, "0", guild_id
+        ),
+        "sfw_exempt_channels": [
+            str(i) for i in _id_set_list(conn, CONFIG_BUCKET_SFW_EXEMPT, guild_id)
+        ],
+    }
+
+
 
 
 def _pen_pals_section(conn, guild_id: int) -> dict:
@@ -1096,6 +1148,7 @@ async def get_config(
                         )
                     ],
                 },
+                "nsfw_classifier": _nsfw_classifier_section(conn, guild_id),
                 "auto_role": {
                     "auto_role_ids": [
                         str(i)
@@ -2899,6 +2952,165 @@ async def update_spoiler(
     return result
 
 
+class NsfwClassifierUpdate(BaseModel):
+    threshold: float | None = None
+    sfw_threshold: float | None = None
+    labels: list[str] | None = None
+    sfw_mode: str | None = None
+    sfw_log_channel_id: str | None = None
+    sfw_exempt_channels: list[str] | None = None
+
+
+@router.put("/config/nsfw-classifier")
+async def update_nsfw_classifier(
+    request: Request,
+    body: NsfwClassifierUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    for field, value in (
+        ("threshold", body.threshold),
+        ("sfw_threshold", body.sfw_threshold),
+    ):
+        # The service rejects an out-of-range threshold on read; reject it at
+        # write time too, using the same predicate, so the dashboard can't
+        # silently store something inert.
+        if value is not None and not is_valid_threshold(value):
+            raise HTTPException(
+                status_code=400, detail=f"{field} must be between 0 and 1"
+            )
+
+    if body.sfw_mode is not None and body.sfw_mode not in SFW_MODES:
+        raise HTTPException(
+            status_code=400, detail=f"sfw_mode must be one of {', '.join(SFW_MODES)}"
+        )
+
+    if body.labels is not None:
+        if not body.labels:
+            raise HTTPException(
+                status_code=400, detail="at least one qualifying label is required"
+            )
+        # A label outside the detector's vocabulary matches nothing, so it
+        # would quietly disable detection for that entry rather than erroring.
+        unknown = sorted(set(body.labels) - known_labels())
+        if unknown:
+            raise HTTPException(
+                status_code=400, detail=f"unknown label(s): {', '.join(unknown)}"
+            )
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.threshold is not None:
+                set_config_value(
+                    conn, CONFIG_KEY_THRESHOLD, str(body.threshold), guild_id
+                )
+            if body.sfw_threshold is not None:
+                set_config_value(
+                    conn, CONFIG_KEY_SFW_THRESHOLD, str(body.sfw_threshold), guild_id
+                )
+            if body.labels is not None:
+                set_config_value(
+                    conn,
+                    CONFIG_KEY_LABEL_SET,
+                    serialize_label_set(frozenset(body.labels)),
+                    guild_id,
+                )
+            if body.sfw_mode is not None:
+                set_config_value(conn, CONFIG_KEY_SFW_MODE, body.sfw_mode, guild_id)
+            if body.sfw_log_channel_id is not None:
+                set_config_value(
+                    conn,
+                    CONFIG_KEY_SFW_LOG_CHANNEL,
+                    str(int(body.sfw_log_channel_id or 0)),
+                    guild_id,
+                )
+            if body.sfw_exempt_channels is not None:
+                clear_config_id_bucket(conn, CONFIG_BUCKET_SFW_EXEMPT, guild_id)
+                for cid in body.sfw_exempt_channels:
+                    add_config_id(conn, CONFIG_BUCKET_SFW_EXEMPT, int(cid), guild_id)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.get("/nsfw-classifier/metrics")
+async def nsfw_classifier_metrics(
+    request: Request,
+    days: int = 30,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Volume, verdict split, latency and label distribution.
+
+    Admin-gated: these rows describe members' uploads and are never exposed
+    more widely. Only age-gated channels are recorded in the first place.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    window = max(1, min(int(days), 365))
+
+    def _q():
+        with ctx.open_db() as conn:
+            since = int(time.time()) - window * 86400
+            totals = conn.execute(
+                """
+                SELECT COUNT(*) AS classified,
+                       COALESCE(SUM(verdict), 0) AS explicit,
+                       COALESCE(AVG(inference_ms), 0) AS avg_ms,
+                       COALESCE(SUM(bytes), 0) AS total_bytes
+                FROM nsfw_classifications
+                WHERE guild_id = ? AND created_at >= ?
+                """,
+                (guild_id, since),
+            ).fetchone()
+            labels = conn.execute(
+                """
+                SELECT top_label AS label, COUNT(*) AS n
+                FROM nsfw_classifications
+                WHERE guild_id = ? AND created_at >= ? AND top_label IS NOT NULL
+                GROUP BY top_label
+                ORDER BY n DESC
+                """,
+                (guild_id, since),
+            ).fetchall()
+            daily = conn.execute(
+                """
+                SELECT date(created_at, 'unixepoch') AS day,
+                       COUNT(*) AS classified,
+                       COALESCE(SUM(verdict), 0) AS explicit
+                FROM nsfw_classifications
+                WHERE guild_id = ? AND created_at >= ?
+                GROUP BY day
+                ORDER BY day DESC
+                """,
+                (guild_id, since),
+            ).fetchall()
+        classified = int(totals["classified"])
+        explicit = int(totals["explicit"])
+        return {
+            "days": window,
+            "classified": classified,
+            "explicit": explicit,
+            "not_explicit": classified - explicit,
+            "avg_inference_ms": round(float(totals["avg_ms"]), 1),
+            "total_bytes": int(totals["total_bytes"]),
+            "labels": [
+                {"label": r["label"], "count": int(r["n"])} for r in labels
+            ],
+            "daily": [
+                {
+                    "day": r["day"],
+                    "classified": int(r["classified"]),
+                    "explicit": int(r["explicit"]),
+                }
+                for r in daily
+            ],
+        }
+
+    return await run_query(_q)
+
+
 class AutoRoleConfigUpdate(BaseModel):
     auto_role_ids: list[str] | None = None
 
@@ -3323,6 +3535,12 @@ async def remove_auto_delete(
 class AutoReactRuleUpdate(BaseModel):
     emojis: list[str]
     enabled: bool = True
+    # Per-rule, so Auto React stays usable as plain decoration on channels
+    # nobody wants monetised. Defaults off — turning a channel into a tipping
+    # channel is always an explicit act.
+    tips_enabled: bool = False
+    # emoji -> price. An emoji with no rung (or 0) is placed but free.
+    rungs: dict[str, int] | None = None
 
 
 @router.put("/config/auto-react/{channel_id}")
@@ -3335,6 +3553,23 @@ async def update_auto_react(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
+    if body.rungs:
+        # Anything below this delivers the poster nothing once the rake floor
+        # is taken, so it's refused rather than silently declining every tap.
+        # Derived from the rake constants, not restated here.
+        minimum = min_rung_amount()
+        for emoji, amount in body.rungs.items():
+            if amount < 0:
+                raise HTTPException(
+                    status_code=400, detail=f"rung for {emoji} cannot be negative"
+                )
+            if 0 < amount < minimum:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"rung for {emoji} must be at least {minimum} "
+                    "(anything less is entirely consumed by the rake)",
+                )
+
     def _q():
         upsert_auto_react_rule(
             ctx.db_path,
@@ -3342,7 +3577,17 @@ async def update_auto_react(
             int(channel_id),
             body.emojis,
             body.enabled,
+            tips_enabled=body.tips_enabled,
         )
+        if body.rungs is not None:
+            # Only emoji still on the rule get a price; everything else is
+            # cleared, so a dropped emoji can't linger as chargeable.
+            replace_rungs(
+                ctx.db_path,
+                guild_id,
+                int(channel_id),
+                {e: body.rungs.get(e, 0) for e in body.emojis},
+            )
         return {"ok": True}
 
     return await run_query(_q)

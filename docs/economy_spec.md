@@ -1176,6 +1176,70 @@ stored verbatim under a `memo` key on both ledger rows and surfaced (escaped at
 render time) in the wallet ledger, the dashboard bank-manager ledger, and the
 public register feed's consolidated `A → B` transfer entry.
 
+### 5.1 Reaction tips (migration 143)
+
+Tapping an emoji the bot placed on an image post pays the poster from the
+**reactor's own wallet**. A transfer with a rake, not a faucet: nothing is
+minted, and the rake is **burned** — credited to no one — so reactions are a
+net **sink**, pointing the same way as the 2026-07-26 retune rather than
+against it. (A house-minted version was considered and rejected: at ~1,050
+reactions/day against a 74,083-coin supply it would have inflated the money
+supply ~1.4% per day.)
+
+**Rake** is `max(1, round_half_up(10%))` of what was actually paid. The floor
+matters — a flat 10% of a 5-coin tip rounds to zero, which would make the sink
+symbolic. Rounding is explicitly half-up rather than Python's banker's
+rounding, so a 25-coin tip rakes 3 and not 2. The smallest viable rung is
+**derived** from those constants (`min_rung_amount()`) rather than restated, so
+the API validator and the dashboard can't keep accepting prices the service has
+started declining at every tap.
+
+**The ladder is the emoji set.** Rungs are per-emoji per-channel
+(`reaction_tip_rungs`), so which emoji you tap is how much you give — 5 / 25 /
+100 is the suggested ladder. This is also the closest thing the design has to a
+confirmation dialog: reacting is a one-tap, low-deliberation action and Discord
+offers no confirm step, so the emoji itself has to carry the price. A rung
+below 2 is not viable — after the 1-coin floor it would deliver the poster
+nothing.
+
+**Only bot-placed emoji charge.** A tip requires a placement receipt
+([[auto-react-spec]]) for that exact message **listing that emoji**, so a rung
+pasted by hand onto a text post, an old message, an image the classifier
+rejected, or a post where that particular emoji failed to attach is free and
+inert. Any other emoji anyone adds is always free.
+
+Ledger kinds are registered alongside the rest: `tip_in` is in the register
+feed's `SKIP_KINDS` so one tip is one feed entry (the payer's leg), and
+`tip_out` is in `BURN_EXCLUDED_KINDS` because ~90% of it lands in the poster's
+wallet — only the rake burns, and that is not a ledger row at all, it is the
+amount never credited.
+
+**One charge per `(guild, message, reactor)`, forever** — the shape
+`xp_reaction_awards` already uses. Removing the reaction refunds nothing and
+re-adding costs nothing, so the toggle can't be farmed.
+
+Edge cases:
+
+| case | behavior |
+|---|---|
+| reactor can't afford the rung | tips what they hold (partial payment) |
+| reactor holds 1 coin | declined entirely — the poster would net 0 after the floor |
+| reactor holds 0 | free no-op |
+| reactor is the poster | ignored — no debit, no credit, no row, so a self-tap can't pad the count |
+| reactor is a bot or webhook | ignored — the auto-react bot places these emoji and has no wallet |
+| balance changes mid-transaction | the guarded debit fails and nothing is written |
+
+Both sides are ledgered as `tip_out` / `tip_in` with the rake in `meta`, so
+§10.1's register feed narrates tips with no extra code — which is the **only**
+feedback a reactor gets that money moved, since nothing in this flow confirms.
+
+XP is untouched: the same tap still earns `xp_coeff_reaction_given_xp`. Coins
+therefore buy a trickle of XP, and the round trip back to coins stays bounded
+by the daily XP-mint ceiling.
+
+`economy_service.transfer_currency` is deliberately **not** used — it credits
+the recipient exactly what was debited by design and cannot express a rake.
+
 ## 6. Sinks (The Perk Shop)
 
 **Shipped (Stage 3):** the role-customization perks (solid color, name, icon,

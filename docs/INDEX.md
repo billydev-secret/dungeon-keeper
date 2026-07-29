@@ -44,6 +44,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [intake_spec.md](intake_spec.md) | Intake cards: per-newcomer welcome-procedure tracker in greeter chat (auto-ticking checklist, completion code, stale nudges, Intake Queue report) + the bot-synced procedure-reference channel (one message per question). Dashboard-configured, no commands |
 | [mod_spec.md](mod_spec.md) | Mod cog (`/help`, `/purge`) — distinct from tools_spec.md |
 | [needle_spec.md](needle_spec.md) | Needle auto-threading (`/close`, `/title`) |
+| [nsfw_classifier_spec.md](nsfw_classifier_spec.md) | Shared NudeNet image classifier: three-valued verdict (explicit / not / **unknown**, never collapsed), per-consumer failure direction and thresholds, attachments-only scope, and metrics recorded for age-gated channels only |
 | [pen_pals_spec.md](pen_pals_spec.md) | Pen Pals pooling + private channels |
 | [photo_challenge_spec.md](photo_challenge_spec.md) | Photo Challenge — standalone scheduled photo prompt (own channel/schedule, `/api/photo-challenge`, card via quote renderer) + post-gated economy payout (flat `reward_photo_post` + stacking `photo_post` quest) |
 | [pressure_cooker_spec.md](pressure_cooker_spec.md) | Pressure Cooker duel |
