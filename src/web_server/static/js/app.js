@@ -147,8 +147,7 @@ const SECTIONS = [
         { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true, help: "help-dms" },
       ]},
       { heading: "Channels & Messages", items: [
-        { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js", adminOnly: true, keywords: "purge retention delete", help: "help-cleanup" },
-        { id: "config-bulk-cleanup", label: "Bulk Cleanup",     module: "./panels/config-bulk-cleanup.js", adminOnly: true, keywords: "cleanup purge delete", help: "help-cleanup" },
+        { id: "config-cleanup",    label: "Cleanup",           module: "./panels/config-cleanup.js", adminOnly: true, keywords: "purge retention delete auto-delete bulk cleanup schedules", help: "help-cleanup" },
         { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true, keywords: "needle thread replies" },
         { id: "config-auto-react", label: "Auto React",        module: "./panels/config-auto-react.js", adminOnly: true, keywords: "reactions emoji tips tipping" },
         { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },

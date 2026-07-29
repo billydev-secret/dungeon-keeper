@@ -1755,14 +1755,14 @@
     <h2 id="server-ops" class="section-break"><span class="section-num">23</span> Server Upkeep</h2>
     <p>Ongoing housekeeping and community upkeep: scheduled cleanup, automatic threading, listing-site bump reminders, member tagging, unanswered-greeting alerts, lull-reviving questions, and channel hiding. The background schedulers run continuously; most configuration lives on the web dashboard.</p>
 
-    <h3 id="auto-delete">Auto-Delete</h3>
-    <p>Drop-in message cleanup. Schedule a channel to auto-delete posts older than a given age, on a recurring or one-shot basis. Pinned messages are never deleted.</p>
+    <h3 id="auto-delete">Cleanup</h3>
+    <p>Message cleanup at two scales, on one panel. A <strong>server-wide sweep</strong> continuously deletes everything older than a set age across every text channel and thread, apart from the channels you protect. <strong>Per-channel schedules</strong> clean one channel each on their own age and interval, independently of whether the server-wide sweep is running. Pinned messages are never deleted by either.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
-        <strong>Configure via the <a href="/">web dashboard</a></strong>
-        <p>The Auto-Delete panel lists every rule with channel, age, schedule, and last-run timestamp. Add, edit, or remove rules and trigger a one-shot sweep from the panel. The background <code>auto_delete_loop</code> service runs on its own; the retired <code>/auto_delete</code> and <code>/auto_delete_configs</code> slash commands are no longer needed.</p>
+        <strong>Configure via the <a href="/#/config-cleanup">web dashboard</a></strong>
+        <p>The Cleanup panel opens with the server-wide sweep — an on/off toggle, the age threshold, the last completed sweep, and the protected-channel list — then lists every per-channel rule with its channel, age, interval, and last-run timestamp, plus a form to add one. Turning the server-wide sweep on asks you to confirm first, because everything it deletes is unrecoverable. The background <code>auto_delete_loop</code> service runs on its own; the retired <code>/auto_delete</code> and <code>/auto_delete_configs</code> slash commands are no longer needed.</p>
       </div>
     </div>
 
@@ -2027,8 +2027,7 @@
         <tr><td><strong><a href="/#/config-rules-watch">Rules Watch</a></strong></td><td>Enable/disable passive monitoring and set the immediate-alert channel</td></tr>
         <tr><td><strong><a href="/#/config-spoiler">Image Guard</a></strong></td><td>Everything the bot does about explicit images. <strong>Spoiler-required channels</strong> — only images detected as explicit are removed there, so memes and screenshots posted without a spoiler tag are left alone (an image the bot can't read is removed anyway, so a failed check is never a way through). <strong>Nudity in SFW channels</strong> — off, log-only, or enforce; removed images are DM'd back to the poster, and age-gated channels, exempt channels, bypass roles and anything the bot itself posts are always skipped. <strong>Detection tuning</strong> — confidence thresholds (a stricter one for actually deleting), which body-part labels count, and a 30-day summary of what's been checked</td></tr>
         <tr><td><strong><a href="/#/config-auto-role">Auto-Role</a></strong></td><td>Roles applied automatically on join</td></tr>
-        <tr><td><strong><a href="/#/config-auto-delete">Auto-Delete</a></strong></td><td>Per-channel age + schedule rules</td></tr>
-        <tr><td><strong><a href="/#/config-bulk-cleanup">Bulk Cleanup</a></strong></td><td>Continuously delete messages older than a set age server-wide, with excluded channels (pinned messages are kept)</td></tr>
+        <tr><td><strong><a href="/#/config-cleanup">Cleanup</a></strong></td><td>Server-wide sweep (delete everything older than a set age, with protected channels; pinned messages are kept) plus per-channel age + schedule rules</td></tr>
         <tr><td><strong><a href="/#/config-quote-border">Quote Tool</a></strong></td><td>Custom border image for <a href="#quote-cards">quote cards</a></td></tr>
         <tr><td><strong><a href="/#/config-needle">Auto-Thread</a></strong></td><td>Channels with automatic thread creation</td></tr>
         <tr><td><strong><a href="/#/config-auto-react">Auto React</a></strong></td><td>Per-channel emoji the bot adds to image posts. Optionally turn those emoji into <strong>tip buttons</strong> with a price each — tapping one pays the poster from the tapper's own wallet, minus a cut that's destroyed. Tipping needs the channel marked NSFW in Discord, and the bot only adds emoji to images it detects as explicit</td></tr>
