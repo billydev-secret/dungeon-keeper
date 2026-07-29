@@ -1,5 +1,5 @@
 import { api, apiPost, apiDelete, esc } from "../api.js";
-import { showStatus, guardForm, mountPicker, mountRolePicker } from "../config-helpers.js";
+import { showStatus, guardForm, mountPicker, mountRolePicker, lockUnlessAdmin } from "../config-helpers.js";
 import { mountPanelPoster } from "../panel-post.js";
 import { toast } from "../ui.js";
 
@@ -12,8 +12,13 @@ const SAVEABLE_FIELDS = [
   ["blocked", "Block list"],
 ];
 
-export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading Voice Control configuration…</div></div>`;
+/**
+ * The Voice Control settings half of the Voice page. Mounted into a region by
+ * panels/voice.js, below the activity report, and locked read-only for
+ * non-admins. Not a nav page in its own right.
+ */
+export function mountSettings(container) {
+  container.innerHTML = `<div class="empty">Loading Voice Control configuration…</div>`;
 
   (async () => {
     let cfg, channels, roles;
@@ -24,7 +29,7 @@ export function mount(container) {
         api("/api/meta/roles"),
       ]);
     } catch (err) {
-      container.innerHTML = `<div class="panel"><div class="empty">Failed to load: ${esc(err.message)}</div></div>`;
+      container.innerHTML = `<div class="empty">Failed to load: ${esc(err.message)}</div>`;
       return;
     }
 
@@ -45,11 +50,9 @@ export function mount(container) {
       </div>`;
 
     container.innerHTML = `
-      <div class="panel">
-        <header>
-          <h2>Voice Control</h2>
-          <div class="subtitle">Member-owned voice channels created by joining the Hub</div>
-        </header>
+      <div>
+        <div class="section-label">Voice Control Settings</div>
+        <div class="field-hint" style="margin-bottom:12px;">Member-owned voice channels created by joining the Hub</div>
         <form class="form form-cards" data-form>
           <div class="card">
             <div class="section-label">Wiring</div>
@@ -316,5 +319,8 @@ export function mount(container) {
         toast("Add failed: " + err.message, "error");
       }
     });
+
+    // Last, so the pickers' and blocklist rows' own controls are covered too.
+    lockUnlessAdmin(container);
   })();
 }

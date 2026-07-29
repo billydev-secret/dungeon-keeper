@@ -31,7 +31,6 @@ const HELP_NAV_SECTION = {
 //   help       — help-page id; renders a "?" link in the panel header row.
 //   related    — page ids cross-linked in the panel header row.
 //   primaryOnly— hidden on non-primary guilds (bot-global settings).
-//   gt         — games-studio game-type query param.
 
 const SECTIONS = [
   {
@@ -59,8 +58,8 @@ const SECTIONS = [
         { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js", keywords: "daily monthly active users" },
         { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
         { id: "retention",            label: "Activity Drops",        module: "./panels/retention.js", keywords: "retention churn drop-off" },
-        { id: "voice-activity",       label: "Voice Activity",        module: "./panels/voice-activity.js" },
-        { id: "xp-leaderboard",       label: "XP Leaderboard",       module: "./panels/xp-leaderboard.js", keywords: "levels rank experience", related: ["config-xp"], help: "help-community" },
+        { id: "voice-activity",       label: "Voice",                 module: "./panels/voice.js", help: "help-voice", keywords: "voice activity control hub temporary channels master post panel owner control panel" },
+        { id: "xp-leaderboard",       label: "XP & Leveling",        module: "./panels/xp.js", keywords: "levels rank experience xp settings curve", help: "help-community" },
         { id: "quality-score",        label: "Quality Score",        module: "./panels/quality-score.js" },
         { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
       ]},
@@ -72,7 +71,7 @@ const SECTIONS = [
         { id: "health-newcomer-funnel", label: "Newcomer Funnel",    module: "./panels/health-newcomer-funnel.js" },
         { id: "health-cohort-retention",label: "Cohort Retention",   module: "./panels/health-cohort-retention.js" },
         { id: "greeter-response",     label: "Greeter Response",     module: "./panels/greeter-response.js" },
-        { id: "intake-report",        label: "Intake Queue",         module: "./panels/intake-report.js" },
+        { id: "intake-report",        label: "Intake",               module: "./panels/intake.js", keywords: "intake queue cards welcome procedure steps" },
         { id: "time-to-level5",       label: "Time to Level 5",      module: "./panels/time-to-level5.js" },
         { id: "invite-effectiveness", label: "Invite Effectiveness", module: "./panels/invite-effectiveness.js" },
         { id: "join-times",           label: "Join Times",           module: "./panels/join-times.js" },
@@ -82,7 +81,7 @@ const SECTIONS = [
       ]},
       { heading: "Member Lists", items: [
         { id: "inactive-report",      label: "Inactive Report",      module: "./panels/inactive-report.js", keywords: "inactive members role list oldest sfw report", related: ["config-inactive", "config-prune"] },
-        { id: "birthday-calendar",    label: "Birthday Calendar",    module: "./panels/birthday-calendar.js", keywords: "birthdays report", related: ["config-birthday"] },
+        { id: "birthday-calendar",    label: "Birthdays",            module: "./panels/birthday.js", keywords: "birthday calendar report announcements settings" },
       ]},
     ],
   },
@@ -93,8 +92,8 @@ const SECTIONS = [
       { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js", help: "help-jail" },
       { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js", help: "help-tickets", keywords: "post panel support ticket panel open ticket button" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js", help: "help-tickets" },
-      { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/mod-policy-tickets.js", help: "help-policies", related: ["config-policy-tickets"] },
-      { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch.js", help: "help-rules-watch", related: ["config-rules-watch"] },
+      { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/policy-tickets.js", help: "help-policies", keywords: "policy proposals votes deadline settings" },
+      { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch-page.js", help: "help-rules-watch", keywords: "rules watch alerts queue ledger settings" },
       { id: "message-search", label: "Message Search",  module: "./panels/message-search.js", keywords: "messages logs find" },
     ],
     groups: [
@@ -130,10 +129,7 @@ const SECTIONS = [
       ]},
       { heading: "Members", items: [
         { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true, keywords: "greeting join leave messages" },
-        { id: "config-intake",     label: "Intake Cards",     module: "./panels/config-intake.js", adminOnly: true },
-        { id: "config-xp",            label: "XP & Leveling",      module: "./panels/config-xp.js", adminOnly: true, keywords: "xp levels leaderboard", related: ["xp-leaderboard"], help: "help-community" },
         { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
-        { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true, related: ["birthday-calendar"] },
         { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
         { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"], keywords: "caps limits gambling blackouts", help: "help-wellness" },
         { id: "config-prune",      label: "Auto-Remove Role (Inactive)", module: "./panels/config-prune.js", adminOnly: true, keywords: "prune inactive role removal", related: ["inactive-report"] },
@@ -141,15 +137,12 @@ const SECTIONS = [
       ]},
       { heading: "Moderation & Safety", items: [
         { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true, help: "help-moderation" },
-        { id: "config-rules-watch", label: "Rules Watch",       module: "./panels/config-rules-watch.js", adminOnly: true, help: "help-rules-watch", related: ["rules-watch"] },
         { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true, help: "help-greeting-watch" },
-        { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true, help: "help-policies", related: ["mod-policy-tickets"] },
         { id: "config-spoiler",      label: "Image Guard",       module: "./panels/config-spoiler.js", adminOnly: true, keywords: "spoiler nsfw nudity explicit classifier" },
         { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true, help: "help-dms" },
       ]},
       { heading: "Channels & Messages", items: [
-        { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js", adminOnly: true, keywords: "purge retention delete", help: "help-cleanup" },
-        { id: "config-bulk-cleanup", label: "Bulk Cleanup",     module: "./panels/config-bulk-cleanup.js", adminOnly: true, keywords: "cleanup purge delete", help: "help-cleanup" },
+        { id: "config-cleanup",    label: "Cleanup",           module: "./panels/config-cleanup.js", adminOnly: true, keywords: "purge retention delete auto-delete bulk cleanup schedules", help: "help-cleanup" },
         { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true, keywords: "needle thread replies" },
         { id: "config-auto-react", label: "Auto React",        module: "./panels/config-auto-react.js", adminOnly: true, keywords: "reactions emoji tips tipping" },
         { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
@@ -159,7 +152,6 @@ const SECTIONS = [
         { id: "docs",              label: "Docs",              module: "./panels/docs.js", keywords: "channel docs documentation publish" },
       ]},
       { heading: "Voice", items: [
-        { id: "config-voice-master", label: "Voice Control",     module: "./panels/config-voice-master.js", adminOnly: true, help: "help-voice", keywords: "voice master hub temporary channels post panel owner control panel" },
         { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
       ]},
       { heading: "AI & Maintenance", items: [
@@ -227,46 +219,22 @@ const SECTIONS = [
       { id: "config-games-hotpotatogroup", label: "Hot Potato (Group)", module: "./panels/config-games-hotpotatogroup.js", adminOnly: true },
       { id: "config-games-chicken", label: "Chicken", module: "./panels/config-games-chicken.js", adminOnly: true },
       { id: "config-games-musicalchairs", label: "Musical Chairs", module: "./panels/config-games-musicalchairs.js", adminOnly: true },
+      // Question-bank games. Each was a two-page subgroup until the AI prompt
+      // studios were removed; with one page left they follow the same
+      // flattened convention as the games above.
+      { id: "games-wyr",      label: "Would You Rather",  module: "./panels/games-wyr.js" },
+      { id: "games-nhie",     label: "Never Have I Ever", module: "./panels/games-nhie.js" },
+      { id: "games-mlt",      label: "Most Likely To",    module: "./panels/games-mlt.js" },
+      { id: "games-rushmore", label: "Rushmore",          module: "./panels/games-rushmore.js" },
+      { id: "games-price",    label: "Price",             module: "./panels/games-price.js" },
+      { id: "games-clapback", label: "Clapback",          module: "./panels/games-clapback.js" },
+      { id: "games-ama",      label: "AMA",               module: "./panels/games-ama.js" },
       { id: "games-ffa", label: "FFA / Truth or Dare", module: "./panels/games-ffa.js" },
       { id: "games-traditional", label: "Traditional Truth or Dare", module: "./panels/games-traditional.js" },
       { id: "config-guess", label: "Guess Who", module: "./panels/config-guess.js", perms: ["moderator"], help: "help-guess", keywords: "post panel submit prompt" },
       { id: "config-whisper",    label: "Whisper",     module: "./panels/config-whisper.js", perms: ["moderator"], help: "help-whisper" },
+      { id: "pen-pals",          label: "Pen Pals",    module: "./panels/pen-pals.js", perms: ["moderator"], help: "help-pen-pals", keywords: "pen pals matching questions conversation starters" },
       { id: "config-confessions",  label: "Confessions",     module: "./panels/config-confessions.js", adminOnly: true, help: "help-confessions" },
-    ],
-    groups: [
-      { heading: "Would You Rather", items: [
-        { id: "games-wyr",        label: "Questions",  module: "./panels/games-wyr.js" },
-        { id: "games-wyr-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "wyr" },
-      ]},
-      { heading: "Never Have I Ever", items: [
-        { id: "games-nhie",        label: "Questions",  module: "./panels/games-nhie.js" },
-        { id: "games-nhie-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "nhie" },
-      ]},
-      { heading: "Most Likely To", items: [
-        { id: "games-mlt",        label: "Questions",  module: "./panels/games-mlt.js" },
-        { id: "games-mlt-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "mlt" },
-      ]},
-      { heading: "Rushmore", items: [
-        { id: "games-rushmore",        label: "Questions",  module: "./panels/games-rushmore.js" },
-        { id: "games-rushmore-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "rushmore" },
-      ]},
-      { heading: "Price", items: [
-        { id: "games-price",        label: "Questions",  module: "./panels/games-price.js" },
-        { id: "games-price-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "price" },
-      ]},
-      { heading: "Clapback", items: [
-        { id: "games-clapback",        label: "Questions",  module: "./panels/games-clapback.js" },
-        { id: "games-clapback-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "clapback" },
-      ]},
-      { heading: "AMA", items: [
-        { id: "games-ama",        label: "Questions",  module: "./panels/games-ama.js" },
-        { id: "games-ama-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "ama" },
-      ]},
-      { heading: "Pen Pals", items: [
-        { id: "config-pen-pals",  label: "Config",     module: "./panels/config-pen-pals.js", adminOnly: true, help: "help-pen-pals" },
-        { id: "games-pen-pals",   label: "Questions",  module: "./panels/games-pen-pals.js" },
-        { id: "games-pen-pals-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "pen_pals" },
-      ]},
     ],
   },
   {
@@ -275,7 +243,6 @@ const SECTIONS = [
     id: "photo-challenge", label: "Photo Challenge", perms: ["admin"], gameHostRole: true, icon: "◉",
     items: [
       { id: "photo-challenge",        label: "Setup & Schedule", module: "./panels/photo-challenge.js", help: "help-photo" },
-      { id: "photo-challenge-studio", label: "Prompts & AI",     module: "./panels/games-studio.js", gt: "photo", help: "help-photo" },
     ],
   },
   HELP_NAV_SECTION,
@@ -682,8 +649,7 @@ function makeNavItem(item, activeId, { isSubitem = false, icon = "#" } = {}) {
   if (item.id === activeId) btn.classList.add("active");
 
   btn.addEventListener("click", () => {
-    const qs = item.gt ? `?gt=${item.gt}` : "";
-    window.location.hash = `#/${item.id}${qs}`;
+    window.location.hash = `#/${item.id}`;
   });
   return btn;
 }

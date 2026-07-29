@@ -3,13 +3,15 @@ import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart, makeHorizontalBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
-export function mount(container, initialParams) {
+/**
+ * The activity half of the Voice page. Mounted into a region by panels/voice.js,
+ * above the settings. Moderator-level information — no gating applies here.
+ */
+export function mountActivity(container, initialParams) {
   container.innerHTML = `
-    <div class="panel">
-      <header>
-        <h2>Voice Activity</h2>
-        <div class="subtitle">Voice channel usage — top users and peak hours</div>
-      </header>
+    <div>
+      <div class="section-label">Activity</div>
+      <div class="field-hint" style="margin-bottom:10px;">Voice channel usage — top users and peak hours</div>
       <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div class="chart-wrap"><canvas data-chart-hour></canvas></div>

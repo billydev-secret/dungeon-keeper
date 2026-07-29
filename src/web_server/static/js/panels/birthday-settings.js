@@ -6,6 +6,7 @@ import {
   buildField,
   mountChannelPicker,
   guardForm,
+  lockUnlessAdmin,
   renderMetaWarning,
 } from "../config-helpers.js";
 
@@ -141,7 +142,12 @@ function buildChannelBlock(form, { title, chanName, msgName, pinName, chanHint }
   return { chanPicker, ta, pinBox, title };
 }
 
-export function mount(container) {
+/**
+ * The settings half of the Birthdays page. Mounted into a region by
+ * panels/birthday.js, below the calendar, and locked read-only for non-admins.
+ * Not a nav page in its own right.
+ */
+export function mountSettings(container) {
   clearChildren(container);
   appendLoading(container);
 
@@ -153,18 +159,18 @@ export function mount(container) {
 
     clearChildren(container);
     const panel = document.createElement("div");
-    panel.className = "panel";
     container.appendChild(panel);
 
-    const header = document.createElement("header");
-    const h2 = document.createElement("h2");
-    h2.textContent = "Birthdays";
-    const sub = document.createElement("div");
-    sub.className = "subtitle";
-    sub.textContent = "Daily birthday announcements — members add their own date with /birthday set";
-    header.appendChild(h2);
-    header.appendChild(sub);
+    const header = document.createElement("div");
+    header.className = "section-label";
+    header.textContent = "Settings";
     panel.appendChild(header);
+
+    const sub = document.createElement("div");
+    sub.className = "field-hint";
+    sub.style.marginBottom = "12px";
+    sub.textContent = "Daily birthday announcements — members add their own date with /birthday set";
+    panel.appendChild(sub);
 
     const warning = renderMetaWarning();
     if (warning) {
@@ -223,6 +229,10 @@ export function mount(container) {
     saveRow.appendChild(saveBtn);
     saveRow.appendChild(saveStatus);
     form.appendChild(saveRow);
+
+    // Lock after the channel pickers mount — each builds its own inputs, so
+    // locking earlier would leave those live.
+    if (lockUnlessAdmin(container)) return;
 
     guardForm(form);
 

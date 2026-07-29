@@ -1,7 +1,7 @@
 import {
   loadConfig, loadChannels, loadRoles, loadMembers,
   mountChannelPicker, mountRolePicker, mountChannelMultiPicker, mountMemberMultiPicker,
-  apiPut, showStatus, guardForm, renderMetaWarning,
+  apiPut, showStatus, guardForm, renderMetaWarning, lockUnlessAdmin,
 } from "../config-helpers.js";
 
 // Numeric fields, in save order. [name, visible label, min, max|null, integer?]
@@ -28,8 +28,13 @@ const LIST_FIELDS = [
   ["cooldown_multipliers", "Rapid-Fire Multipliers", 3],
 ];
 
-export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading XP settings…</div></div>`;
+/**
+ * The settings half of the XP page. Mounted into a region by panels/xp.js,
+ * below the leaderboard, and locked read-only for non-admins by the caller —
+ * see lockUnlessAdmin in config-helpers.js. Not a nav page in its own right.
+ */
+export function mountSettings(container) {
+  container.innerHTML = `<div class="empty">Loading XP settings…</div>`;
 
   (async () => {
     const [config, channels, roles, members] = await Promise.all([
@@ -38,11 +43,11 @@ export function mount(container) {
     const xp = config.xp;
 
     container.innerHTML = `
-      <div class="panel">
-        <header>
-          <h2>XP &amp; Leveling</h2>
-          <div class="subtitle">How members earn XP, who can grant it, and where level-ups are logged</div>
-        </header>
+      <div>
+        <div class="section-label">Settings</div>
+        <div class="field-hint" style="margin-bottom:14px;">
+          How members earn XP, who can grant it, and where level-ups are logged.
+        </div>
         ${renderMetaWarning()}
         <form class="form form-cards" data-form>
           <div class="card">
@@ -202,6 +207,12 @@ export function mount(container) {
     const levelUpLog = mountChannelPicker(form.querySelector('[data-picker="level_up_log_channel_id"]'), channels, xp.level_up_log_channel_id, { label: "Level-Up Log Channel" });
     const grantUsers = mountMemberMultiPicker(form.querySelector('[data-picker="xp_grant_allowed_user_ids"]'), members, xp.xp_grant_allowed_user_ids, { label: "Members Who Can Grant XP" });
     const excludedChannels = mountChannelMultiPicker(form.querySelector('[data-picker="xp_excluded_channel_ids"]'), channels, xp.xp_excluded_channel_ids, { label: "Channels That Earn No XP" });
+
+    // Lock *after* the pickers mount — each builds its own inputs, and locking
+    // first would leave those live. A moderator sees the real saved values
+    // (GET /api/config is moderator-gated) but cannot submit; the write itself
+    // is still refused server-side by require_perms({"admin"}).
+    if (lockUnlessAdmin(container)) return;
 
     guardForm(form);
 

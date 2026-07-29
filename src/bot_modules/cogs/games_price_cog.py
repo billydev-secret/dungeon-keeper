@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -45,7 +44,6 @@ from bot_modules.games.utils.game_manager import (
     channel_name,
 )
 from bot_modules.games.utils.question_source import get_price_scenario, channel_allows_nsfw
-from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.utils.timer import GameTimer
 from bot_modules.games_price.embeds import (
     build_recap_embed,
@@ -66,28 +64,6 @@ from bot_modules.games_price.logic import (
 )
 
 log = logging.getLogger(__name__)
-
-
-# ── AI prompts ───────────────────────────────────────────────────────────────
-
-PRICE_SYSTEM_PROMPT = (
-    "You are generating 'Name Your Price' scenarios for an adult party game "
-    "in this Discord community. Each scenario poses a situation "
-    "where players must decide how much money it would take for them to do it. "
-    "Scenarios should be funny, creative, slightly uncomfortable, or absurd. "
-    "They should be things where different people would genuinely price differently."
-)
-
-PRICE_USER_PROMPT = (
-    "Generate a single 'Name Your Price' scenario. "
-    "Start with 'How much money would it cost for you to...' or similar phrasing. "
-    "Examples:\n"
-    "- How much money would it cost for you to let a stranger pick your next haircut?\n"
-    "- How much to give up your phone for an entire month?\n"
-    "- How much to eat nothing but gas station food for a week?\n"
-    "- How much to let your ex write your dating profile?\n"
-    "Return only the scenario text, no preamble."
-)
 
 
 # ── Modals ───────────────────────────────────────────────────────────────────
@@ -630,9 +606,7 @@ class PriceCog(commands.Cog):
         source=[
             app_commands.Choice(name="Host writes", value="host"),
             app_commands.Choice(name="Players submit", value="players"),
-            app_commands.Choice(name="AI generated", value="ai"),
             app_commands.Choice(name="Question bank", value="bank"),
-            app_commands.Choice(name="AI + Bank mix", value="both"),
         ],
     )
     async def price_cmd(
@@ -748,28 +722,13 @@ class PriceCog(commands.Cog):
         if source == "players":
             return await self._player_scenario(channel, interaction_or_msg, tags=tags)
 
-        if source == "ai":
-            return await self._ai_scenario()
-
-        if source == "bank":
+        # "ai" and "both" were retired with the Prompts & AI studios; a game
+        # persisted under either value falls through to the bank rather than
+        # erroring out mid-round.
+        if source in ("bank", "ai", "both"):
             return await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
 
-        if source == "both":
-            if random.random() < 0.5:
-                result = await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
-                if result:
-                    return result
-            return await self._ai_scenario()
-
         return None
-
-    async def _ai_scenario(self) -> str | None:
-        return await generate_text(
-            PRICE_SYSTEM_PROMPT,
-            PRICE_USER_PROMPT,
-            model="gpt-4o-mini",
-            max_tokens=150,
-        )
 
     async def _host_scenario(self, host_id: int, channel, msg, tags: list[str] | None = None) -> str | None:
         """Prompt the host to write a scenario. Returns text or None on timeout."""
@@ -845,13 +804,12 @@ class PriceCog(commands.Cog):
         # ── Get scenario ──
         scenario = await self._get_scenario(settings, host_id, channel, msg)
         if not scenario:
-            # Fall back to question bank, then AI as last resort
+            # Fall back to the question bank (the only source since the AI
+            # generation path was removed).
             scenario = await get_price_scenario(
                 self.db, tags=settings.get("tags") or None,
                 allow_nsfw=channel_allows_nsfw(channel),
             )
-        if not scenario:
-            scenario = await self._ai_scenario()
         if not scenario:
             try:
                 await channel.send("❌ Couldn't generate a scenario. Skipping round.")

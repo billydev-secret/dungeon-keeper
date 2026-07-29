@@ -8,7 +8,13 @@ import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // hasStatus=false drops the Enabled/options section for features that manage
 // their own enable switch outside games_game_config (e.g. Pen Pals config).
-export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, hasStatus = true, optSchema = [], bankHint = "", bankCategories = null }) {
+/**
+ * `bare: true` renders the game's controls without the surrounding
+ * `<div class="panel">` and `<h2>` header, so a page that already has its own
+ * shell can mount this into one of its sections (see panels/pen-pals.js).
+ * Everything else behaves identically.
+ */
+export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, hasStatus = true, optSchema = [], bankHint = "", bankCategories = null, bare = false }) {
   function ctrl(name) { return container.querySelector('[data-ctrl="' + name + '"]'); }
   function region(name) { return container.querySelector('[data-region="' + name + '"]'); }
 
@@ -63,8 +69,10 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<span data-status="config" class="save-status"></span></div></section>'
     : "";
 
-  container.innerHTML = '<div class="panel"><header><h2>' + esc(gameIcon) + " " + esc(gameName) + "</h2></header>" +
-    statusHtml + bankHtml + "</div>";
+  container.innerHTML = bare
+    ? statusHtml + bankHtml
+    : '<div class="panel"><header><h2>' + esc(gameIcon) + " " + esc(gameName) + "</h2></header>" +
+      statusHtml + bankHtml + "</div>";
 
   async function loadConfig() {
     try {

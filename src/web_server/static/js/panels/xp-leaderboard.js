@@ -7,13 +7,16 @@ import { renderError } from "../states.js";
 // The table is unbounded server-side, so cap the DOM and say so (W-D14).
 const MAX_TABLE_ROWS = 200;
 
-export function mount(container, initialParams) {
+/**
+ * The leaderboard half of the XP page. Mounted into a region by panels/xp.js,
+ * above the settings. Moderator-level information — no gating applies here.
+ * Returns an object with unmount() so the caller can destroy the charts.
+ */
+export function mountLeaderboard(container, initialParams) {
   container.innerHTML = `
-    <div class="panel">
-      <header>
-        <h2>XP Leaderboard</h2>
-        <div class="subtitle">XP distribution, level spread, and top earners</div>
-      </header>
+    <div>
+      <div class="section-label">Leaderboard</div>
+      <div class="field-hint" style="margin-bottom:10px;">XP distribution, level spread, and top earners.</div>
       <div class="controls">
         <label data-slot="range"></label>
       </div>

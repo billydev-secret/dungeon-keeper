@@ -102,8 +102,11 @@ game-host role — every `/api/photo-challenge` route requires
     guards), edit, delete. Last-run status is shown per row (`launched`,
     `skipped_active`, `skipped_disabled`, `skipped_giveup`, `error`).
   - An inline **Prompt Bank** section (`mountGamePanel`, `game_type='photo'`).
-- **Prompts & AI** (`panels/games-studio.js` with `gt: "photo"`) — the full
-  bank studio for curating prompts.
+
+Photo Challenge is a single dashboard page. The separate **Prompts & AI**
+studio (`panels/games-studio.js` with `gt: "photo"`) was deleted along with
+every other AI prompt studio — prompts are curated in the Prompt Bank section
+above, and Photo Challenge was already bank-only at runtime.
 
 Economy knobs live on the economy pages, not here: the flat
 `reward_photo_post` rate on **Economy → Income Sources**

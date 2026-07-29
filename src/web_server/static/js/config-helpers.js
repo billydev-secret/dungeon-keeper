@@ -470,12 +470,13 @@ export function buildField(labelText, control, hint) {
 // the input (W-A7). Every panel wants that, so it lives here rather than
 // being re-derived per panel.
 //
-// Note these are not yet the only copies: config-birthday, config-bulk-cleanup,
+// Note these are not yet the only copies: birthday-settings, config-cleanup,
 // config-confessions, config-dms and config-starboard each still carry a
 // byte-identical private `field` (config-bios calls its copy `labeledField`),
-// and the same three panels duplicate a `toggleField`/`buildNumberInput` pair
-// that `checkbox`/`numInput` here subsume. Converting them is a mechanical
-// import swap and good follow-up work; prefer importing from here in new code.
+// and config-cleanup/config-confessions/config-starboard duplicate a
+// `toggleField`/`buildNumberInput` pair that `checkbox`/`numInput` here
+// subsume. Converting them is a mechanical import swap and good follow-up
+// work; prefer importing from here in new code.
 let _fieldSeq = 0;
 
 export function field(labelText, control, hint) {
@@ -522,4 +523,66 @@ export function sectionCard(parent, title) {
   el.appendChild(lbl);
   parent.appendChild(el);
   return el;
+}
+
+// ── In-page permission gating ─────────────────────────────────────────
+//
+// A page that shows a moderator-level report *and* its admin-level settings
+// needs both halves on one pane without leaking write access. The nav already
+// had this idea: an adminOnly page renders for moderators as a locked entry so
+// its existence isn't invisible (W-N5). These helpers are the in-page analogue.
+//
+// Enforcement stays where it always was — on the server. Every config write is
+// behind require_perms({"admin"}); this only stops a moderator from filling in
+// a form whose save could never succeed. GET /api/config is moderator-gated, so
+// the values themselves are already theirs to read and are shown, not blanked.
+
+/** True when the signed-in viewer holds the admin permission. */
+export function viewerIsAdmin() {
+  const perms = window.__dk_user?.perms;
+  return !!(perms && typeof perms.has === "function" && perms.has("admin"));
+}
+
+/**
+ * Render *root* read-only: every control inside is disabled, submits are
+ * swallowed, and a lock chip is appended to the section label naming who can
+ * change it. Idempotent — calling twice adds one chip.
+ *
+ * Pass the element wrapping the settings half of a merged page. Controls that
+ * only read (a preview button, say) are disabled too: their endpoints are
+ * admin-gated as well, so leaving them live would just produce a 403.
+ */
+export function lockSection(root, { requires = "an admin", labelEl = null } = {}) {
+  if (!root || root.dataset.locked === "1") return root;
+  root.dataset.locked = "1";
+
+  for (const el of root.querySelectorAll("input, select, textarea, button")) {
+    el.disabled = true;
+    el.setAttribute("aria-disabled", "true");
+  }
+  // Pickers mount their own inputs; block the interactions that would re-enable
+  // editing through a keyboard or a click on a custom widget.
+  root.addEventListener("submit", (e) => e.preventDefault(), true);
+  root.classList.add("section-locked");
+
+  const target = labelEl || root.querySelector(".section-label");
+  if (target && !target.querySelector("[data-lock-chip]")) {
+    const chip = document.createElement("span");
+    chip.dataset.lockChip = "1";
+    chip.className = "chip";
+    chip.style.cssText = "margin-left:8px; font-weight:400; text-transform:none; letter-spacing:0;";
+    chip.textContent = `🔒 Only ${requires} can change these`;
+    target.appendChild(chip);
+  }
+  return root;
+}
+
+/**
+ * Lock *root* unless the viewer is an admin. Returns true when it locked, so a
+ * caller can skip wiring save handlers it no longer needs.
+ */
+export function lockUnlessAdmin(root, opts = {}) {
+  if (viewerIsAdmin()) return false;
+  lockSection(root, opts);
+  return true;
 }

@@ -2,14 +2,20 @@ import {
   loadConfig,
   loadChannels,
   apiPut,
+  lockUnlessAdmin,
   showStatus,
   guardForm,
   renderMetaWarning,
   mountChannelPicker,
 } from "../config-helpers.js";
 
-export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
+/**
+ * The settings half of the Rules Watch page. Mounted into a region by
+ * panels/rules-watch.js, below the alert queue, and locked read-only for
+ * non-admins. Not a nav page in its own right.
+ */
+export function mountSettings(container) {
+  container.innerHTML = `<div class="empty">Loading configuration…</div>`;
 
   (async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
@@ -23,11 +29,9 @@ export function mount(container) {
       : "No local guard model is set up. Even with monitoring on, <strong>no messages will be flagged</strong> until you configure the model on the AI (Local LLM) page.";
 
     container.innerHTML = `
-      <div class="panel">
-        <header>
-          <h2>Rules Watch</h2>
-          <div class="subtitle">A quiet AI second pair of eyes — it flags messages into a review queue and never acts on its own</div>
-        </header>
+      <div>
+        <div class="section-label">Settings</div>
+        <div class="field-hint" style="margin-bottom:12px;">A quiet AI second pair of eyes — it flags messages into a review queue and never acts on its own</div>
         ${renderMetaWarning()}
         <form class="form form-cards" data-form>
           <div class="card">
@@ -94,5 +98,8 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
+
+    // After the channel picker mounts, so its inputs are covered too.
+    lockUnlessAdmin(container);
   })();
 }

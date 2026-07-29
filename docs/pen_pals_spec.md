@@ -19,8 +19,7 @@ Each pair gets a private two-person text channel with a conversation-starter fro
 | `/penpals end` | Slash | Everyone (active channel only) | Start a 15-second confirm to close your current pen pal early |
 | `/penpals pair <user1> <user2>` | Slash | Manage Guild | Force-pair two members who are both waiting in the pool, bypassing queue order and cooldown |
 | `/penpals round` | Slash | Manage Guild | Force a pool sweep now instead of waiting for the automatic one (the 5-minute tick in instant mode, or the once-daily 8am ET round in scheduled mode) |
-| Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, log + panel channels, session opening message; manage never-match separations |
-| Pen Pals questions | Web (dashboard) | Admin / Game Host | Question-bank manager (`game_type = 'pen_pals'`) plus a Prompts & AI studio for the AI-fallback prompt |
+| Pen Pals | Web (dashboard) | Moderator | One page under Games. Settings: category, opt-in role, question category, log + panel channels, session opening message, never-match separations. Below them, the question-bank manager (`game_type = 'pen_pals'`) |
 
 ## Behavior
 
@@ -89,7 +88,7 @@ The expiry timestamp uses Discord's absolute + relative format so both users see
 
 ### Questions
 
-Questions are drawn from `games_question_bank` where `game_type = 'pen_pals'`, using the shared tags model: rows tagged `nsfw` are only served when the guild's question category is `all`. The pair's question history is tracked per session to avoid repeating within the 24-hour window; the draw itself is round-robin (least-recently-served row first, ties random) so the same small pool doesn't resurface a question across separate sessions until every row has been served once. If the bank is exhausted the bot falls back to AI generation using the same prompt path as the other bank-backed games (`prompt_config.json` → `games.pen_pals`, editable in the dashboard studio); the AI fallback always generates SFW — NSFW prompts come only from the curated bank.
+Questions are drawn from `games_question_bank` where `game_type = 'pen_pals'`, using the shared tags model: rows tagged `nsfw` are only served when the guild's question category is `all`. The pair's question history is tracked per session to avoid repeating within the 24-hour window; the draw itself is round-robin (least-recently-served row first, ties random) so the same small pool doesn't resurface a question across separate sessions until every row has been served once. If the bank is exhausted the bot serves a single static question (`_FALLBACK_QUESTION`) so a matched pair is never handed an empty round. The AI generation fallback that used to sit here (`prompt_config.json` → `games.pen_pals`) went away with the Prompts & AI studios.
 
 **Automatic cadence.** The auto-question machinery fires every 24 hours after pairing:
 

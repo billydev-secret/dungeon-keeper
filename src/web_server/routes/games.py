@@ -1,11 +1,9 @@
-"""Games admin endpoints — question bank, prompts, history, LegitLibs, config."""
+"""Games admin endpoints — question bank, history, LegitLibs, config."""
 
 from __future__ import annotations
 
 import json
 import logging
-import re
-from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -17,10 +15,6 @@ from web_server.deps import get_active_guild_id, get_ctx, require_game_host, req
 log = logging.getLogger("dungeonkeeper.games")
 
 router = APIRouter()
-
-_PROMPT_CONFIG_PATH = (
-    Path(__file__).parent.parent.parent / "bot_modules" / "games" / "prompt_config.json"
-)
 
 VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo", "ffa", "traditional", "pen_pals"}
 
@@ -72,25 +66,6 @@ class PoolImportBody(BaseModel):
     game_type: str
     question_ids: list[int]
     tags: Optional[list[str]] = None
-
-
-class PromptsGlobalBody(BaseModel):
-    audience: str
-    sfw_tone: str
-    nsfw_tone: str
-
-
-class PromptsGameBody(BaseModel):
-    descriptor: Optional[str] = None
-    user_prompt: Optional[str] = None
-    max_tokens: Optional[int] = None
-
-
-class GenerateBody(BaseModel):
-    game_type: str
-    category: str
-    count: int = 5
-    custom_prompt: Optional[str] = None
 
 
 class ChannelAddBody(BaseModel):
@@ -207,18 +182,6 @@ def _parse_tags_col(raw) -> list[str]:
         return [str(t) for t in val] if isinstance(val, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
-
-
-def _load_prompt_config() -> dict:
-    if _PROMPT_CONFIG_PATH.exists():
-        return json.loads(_PROMPT_CONFIG_PATH.read_text(encoding="utf-8"))
-    return {"audience": "", "sfw_tone": "", "nsfw_tone": "", "games": {}}
-
-
-def _save_prompt_config(cfg: dict) -> None:
-    _PROMPT_CONFIG_PATH.write_text(
-        json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
 
 
 # ── Stats ────────────────────────────────────────────────────────────────────
@@ -725,119 +688,6 @@ async def list_bank_tags(
             return {"tags": sorted(seen)}
 
     return await run_query(_q)
-
-
-# ── Prompts ──────────────────────────────────────────────────────────────────
-
-
-@router.get("/prompts")
-async def get_prompts(
-    request: Request,
-    _: AuthenticatedUser = Depends(require_game_host),
-):
-    return _load_prompt_config()
-
-
-@router.put("/prompts/global")
-async def update_global_prompts(
-    request: Request,
-    body: PromptsGlobalBody,
-    _: AuthenticatedUser = Depends(require_game_host),
-):
-    cfg = _load_prompt_config()
-    cfg["audience"] = body.audience
-    cfg["sfw_tone"] = body.sfw_tone
-    cfg["nsfw_tone"] = body.nsfw_tone
-    _save_prompt_config(cfg)
-    return {}
-
-
-@router.put("/prompts/game/{game_type}")
-async def update_game_prompt(
-    request: Request,
-    game_type: str,
-    body: PromptsGameBody,
-    _: AuthenticatedUser = Depends(require_game_host),
-):
-    if game_type not in VALID_GAME_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid game_type: {game_type}")
-
-    cfg = _load_prompt_config()
-    games = cfg.setdefault("games", {})
-    entry = games.setdefault(game_type, {})
-
-    if body.descriptor is not None:
-        entry["descriptor"] = body.descriptor
-    if body.user_prompt is not None:
-        entry["user_prompt"] = body.user_prompt
-    if body.max_tokens is not None:
-        entry["max_tokens"] = body.max_tokens
-
-    _save_prompt_config(cfg)
-    return {}
-
-
-# ── AI generation ─────────────────────────────────────────────────────────────
-
-
-@router.post("/generate")
-async def generate_questions(
-    request: Request,
-    body: GenerateBody,
-    _: AuthenticatedUser = Depends(require_game_host),
-):
-    from bot_modules.games.utils.ai_client import generate_text
-
-    if body.game_type not in VALID_GAME_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid game_type: {body.game_type}")
-    if body.category not in ("sfw", "nsfw"):
-        raise HTTPException(status_code=400, detail="category must be 'sfw' or 'nsfw'")
-
-    count = max(1, min(20, body.count))
-    cfg = _load_prompt_config()
-
-    audience = cfg.get("audience", "")
-    tone = cfg.get("nsfw_tone" if body.category == "nsfw" else "sfw_tone", "")
-    game_cfg = cfg.get("games", {}).get(body.game_type, {})
-    descriptor = game_cfg.get("descriptor", body.game_type)
-    base_user_prompt = game_cfg.get("user_prompt", f"Generate one {descriptor} question.")
-    max_tokens = game_cfg.get("max_tokens", 200)
-
-    system_prompt = f"{audience}\n\n{tone}"
-    raw_prompt = body.custom_prompt if body.custom_prompt else base_user_prompt
-    batch_mode = "{N}" in raw_prompt and not body.custom_prompt
-    user_prompt = raw_prompt.replace("{N}", str(count)) if batch_mode else raw_prompt
-
-    results = []
-    errors = 0
-    iterations = 1 if batch_mode else count
-    for _i in range(iterations):
-        text = await generate_text(system_prompt, user_prompt, max_tokens=max_tokens)
-        if text:
-            results.extend(_split_generated(text))
-        else:
-            errors += 1
-
-    response: dict = {"results": results}
-    if errors:
-        response["error"] = f"{errors} generation(s) failed; check ANTHROPIC_API_KEY"
-    return response
-
-
-def _split_generated(text: str) -> list[str]:
-    """Split a multi-line AI response into individual question strings."""
-    lines = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        # Strip leading list markers: "1.", "2)", "-", "•", "*"
-        line = line.lstrip("-•* \t")
-        line = re.sub(r"^\d+[.)]\s*", "", line)
-        line = line.strip('"').strip()
-        if line:
-            lines.append(line)
-    return lines if lines else [text.strip()]
 
 
 # ── Game history ──────────────────────────────────────────────────────────────

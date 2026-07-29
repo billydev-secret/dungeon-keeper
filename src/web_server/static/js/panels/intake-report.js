@@ -2,13 +2,15 @@ import { api, esc, fmtAge } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
 import { renderSortableTable } from "../table.js";
 
-export function mount(container, initialParams) {
+/**
+ * The queue half of the Intake page. Mounted into a region by panels/intake.js,
+ * above the settings. Moderator-level information — no gating applies here.
+ */
+export function mountQueue(container, initialParams) {
   container.innerHTML = `
-    <div class="panel">
-      <header>
-        <h2>Intake Queue</h2>
-        <div class="subtitle">Open intake cards and how the welcome procedure is actually going</div>
-      </header>
+    <div>
+      <div class="section-label">Queue</div>
+      <div class="field-hint" style="margin-bottom:10px;">Open intake cards and how the welcome procedure is actually going</div>
       <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div data-open></div>

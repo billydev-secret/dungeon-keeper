@@ -14,8 +14,14 @@ const TIMER_FIELDS = [
   ["question_suppress_minutes", "Stop New Questions When Less Than", 0, 60],
 ];
 
-export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading Pen Pals settings…</div></div>`;
+/**
+ * The settings half of the Pen Pals page. Mounted into a region by
+ * panels/pen-pals.js, above the question bank. Moderator-writable — see the
+ * note on PUT /config/pen-pals in routes/config.py. Not a nav page in its own
+ * right.
+ */
+export function mountSettings(container) {
+  container.innerHTML = `<div class="empty">Loading Pen Pals settings…</div>`;
 
   (async () => {
     const [config, channels, categories, roles, members] = await Promise.all([
@@ -24,11 +30,11 @@ export function mount(container) {
     const pp = config.pen_pals || {};
 
     container.innerHTML = `
-      <div class="panel">
-        <header>
-          <h2>Pen Pals</h2>
-          <div class="subtitle">Private one-day channels that match two members and give them something to talk about · ${pp.pool_size ?? 0} member${(pp.pool_size ?? 0) === 1 ? "" : "s"} waiting to be matched</div>
-        </header>
+      <div>
+        <div class="section-label">Settings</div>
+        <div class="field-hint" style="margin-bottom:12px;">
+          ${pp.pool_size ?? 0} member${(pp.pool_size ?? 0) === 1 ? "" : "s"} waiting to be matched.
+        </div>
         ${renderMetaWarning()}
 
         <div data-off-banner class="field-hint" role="status"

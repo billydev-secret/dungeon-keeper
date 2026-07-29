@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from bot_modules.core.db_utils import open_db
 
 BASE = "/api/games"
@@ -647,64 +649,27 @@ def test_bank_create_and_export_roundtrip_includes_pool(open_client, fake_ctx):
     assert resp.json()["imported"] == 1
 
 
-# ── Prompts ───────────────────────────────────────────────────────────────────
+# ── Prompts (removed) ─────────────────────────────────────────────────────────
 
 
-def test_prompts_get_returns_default_structure(open_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "web_server.routes.games._PROMPT_CONFIG_PATH",
-        tmp_path / "prompt_config.json",
-    )
-    resp = open_client.get(f"{BASE}/prompts")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "audience" in data
-    assert "sfw_tone" in data
-    assert "nsfw_tone" in data
-    assert "games" in data
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("get", "/prompts"),
+        ("put", "/prompts/global"),
+        ("put", "/prompts/game/wyr"),
+        ("post", "/generate"),
+    ],
+)
+def test_prompt_and_generate_routes_are_gone(open_client, method, path):
+    """The Prompts & AI studio's endpoints were deleted with the panel.
 
-
-def test_prompts_update_global(open_client, monkeypatch, tmp_path):
-    cfg_path = tmp_path / "prompt_config.json"
-    monkeypatch.setattr("web_server.routes.games._PROMPT_CONFIG_PATH", cfg_path)
-
-    resp = open_client.put(
-        f"{BASE}/prompts/global",
-        json={"audience": "adults", "sfw_tone": "playful", "nsfw_tone": "bold"},
-    )
-    assert resp.status_code == 200
-
-    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
-    assert saved["audience"] == "adults"
-    assert saved["sfw_tone"] == "playful"
-    assert saved["nsfw_tone"] == "bold"
-
-
-def test_prompts_update_game_entry(open_client, monkeypatch, tmp_path):
-    cfg_path = tmp_path / "prompt_config.json"
-    monkeypatch.setattr("web_server.routes.games._PROMPT_CONFIG_PATH", cfg_path)
-
-    resp = open_client.put(
-        f"{BASE}/prompts/game/wyr",
-        json={"descriptor": "Would You Rather", "max_tokens": 150},
-    )
-    assert resp.status_code == 200
-
-    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
-    assert saved["games"]["wyr"]["descriptor"] == "Would You Rather"
-    assert saved["games"]["wyr"]["max_tokens"] == 150
-
-
-def test_prompts_update_invalid_game_type(open_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "web_server.routes.games._PROMPT_CONFIG_PATH",
-        tmp_path / "prompt_config.json",
-    )
-    resp = open_client.put(
-        f"{BASE}/prompts/game/bogus",
-        json={"descriptor": "Bad"},
-    )
-    assert resp.status_code == 400
+    Guards against a partial revert that restores a route without its UI —
+    these must 404, not merely be unreachable from the nav.
+    """
+    kwargs = {} if method == "get" else {"json": {}}
+    resp = getattr(open_client, method)(f"{BASE}{path}", **kwargs)
+    assert resp.status_code == 404
 
 
 # ── History ───────────────────────────────────────────────────────────────────

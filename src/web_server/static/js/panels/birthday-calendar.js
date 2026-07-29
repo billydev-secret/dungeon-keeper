@@ -35,19 +35,24 @@ function el(tag, styles, text) {
   return node;
 }
 
-export function mount(container) {
+/**
+ * The calendar half of the Birthdays page. Mounted into a region by
+ * panels/birthday.js, above the settings. Moderator-level information — no
+ * gating applies here.
+ */
+export function mountCalendar(container) {
   const panel = el("div");
-  panel.className = "panel";
   container.innerHTML = "";
   container.appendChild(panel);
 
-  const header = document.createElement("header");
-  const h2 = el("h2", null, "Birthday Calendar");
-  const sub = el("div", null, "Upcoming member birthdays and their requests");
-  sub.className = "subtitle";
-  header.appendChild(h2);
-  header.appendChild(sub);
+  const header = el("div", null, "Calendar");
+  header.className = "section-label";
   panel.appendChild(header);
+
+  const sub = el("div", null, "Upcoming member birthdays and their requests");
+  sub.className = "field-hint";
+  sub.style.marginBottom = "10px";
+  panel.appendChild(sub);
 
   // Window selector
   const controls = el("div", null);

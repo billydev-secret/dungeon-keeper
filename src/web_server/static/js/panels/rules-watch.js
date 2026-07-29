@@ -173,13 +173,16 @@ function renderLedgerRepeats(rows) {
   </div>`;
 }
 
-export function mount(container, initialParams = {}) {
+/**
+ * The queue half of the Rules Watch page — alert queue and ledger tabs.
+ * Mounted into a region by panels/rules-watch-page.js, above the settings.
+ * Moderator-level information — no gating applies here.
+ */
+export function mountQueue(container, initialParams = {}) {
   container.innerHTML = `
-    <div class="panel">
-      <header>
-        <h2>Rules Watch</h2>
-        <div class="subtitle">Passive AI moderation monitor — alert queue and label capture</div>
-      </header>
+    <div>
+      <div class="section-label">Alerts</div>
+      <div class="field-hint" style="margin-bottom:10px;">Passive AI moderation monitor — alert queue and label capture</div>
 
       <div class="ctrl-group" role="group" aria-label="Views" data-tabs style="margin-bottom:16px">
         <button class="active" data-tab="queue">Alert Queue</button>

@@ -2,7 +2,7 @@
 
 Right-clicking a message and reporting it is in-the-moment mod work, so it
 stays in Discord. Everything else about Rules Watch is on the web dashboard:
-enable/disable and the alert channel in ``config-rules-watch.js``
+enable/disable and the alert channel in ``rules-watch-settings.js``
 (``PUT /api/config/rules-watch``), and the alert queue, manual labeling, and
 signal stats in ``rules-watch.js`` (``/api/rules-watch/events``,
 ``…/events/{id}/label``, ``…/stats``). The ``/rules-watch`` slash commands that
