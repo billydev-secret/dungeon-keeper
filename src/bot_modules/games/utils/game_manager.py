@@ -378,7 +378,33 @@ async def force_end_active_game(bot, db, game_id: str) -> None:
 
     Reactive games have no loop — popping the view and archiving the row is
     enough. ``end_game`` is idempotent, so callers may also await it themselves.
+
+    **This path pays.** ``/games end`` is the normal way several games are
+    closed, not only an abort, so ending one here credits the same room the
+    game's own completion site would have — the roster is rebuilt from the
+    stored payload by ``game_roster``. A game type with no joined roster (or
+    none reconstructable) yields an empty roster and pays nobody, so an abort
+    of a game that never got going still costs nothing.
     """
+    from bot_modules.games.utils.game_roster import roster_from_payload
+
+    # Read the payload before end_game deletes the row — that DELETE is the
+    # exactly-once claim, so afterwards there is nothing left to reconstruct.
+    players: list[int] = []
+    rounds = 0
+    payload: dict = {}
+    row = await db.fetchone(
+        "SELECT game_type, payload FROM games_active_games WHERE game_id = ?",
+        (game_id,),
+    )
+    if row is not None:
+        try:
+            payload = json.loads(row["payload"]) if row["payload"] else {}
+        except (TypeError, ValueError):
+            log.warning("Unreadable payload on force-ended game %s", game_id)
+            payload = {}
+        players, rounds = roster_from_payload(row["game_type"], payload)
+
     for key in (game_id, f"{game_id}_bottom"):
         view = bot.active_views.pop(key, None)
         if view is None:
@@ -411,7 +437,11 @@ async def force_end_active_game(bot, db, game_id: str) -> None:
             view.stop()
         except Exception:
             log.exception("force_end: view.stop failed")
-    await end_game(db, game_id)
+    await end_game(
+        db, game_id,
+        player_count=len(players), round_count=rounds, payload=payload,
+        bot=bot, player_ids=players,
+    )
 
 
 async def get_all_active_games(db) -> list:

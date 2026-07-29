@@ -150,10 +150,14 @@ The nudge is driven by a 15-second poll over open lobbies rather than a per-lobb
 
 Every game's Close/End path opens a confirm popup ("Are you sure you want to end this game?" → Yes/No). On confirm: the view disables, the game's final payload is copied into the history archive, and the live-game row is freed. `/games end` (host or mod) and `/games config game-end` (mod only) both run this teardown; AMA runs its extra view/message cleanup first so nothing is orphaned. A 24-hour sweep (`games/utils/expiry_service.py`) closes orphans.
 
-**Which end paths pay.** The economy faucet only fires when `end_game` is given `bot=` and `player_ids=`, which a game's own completion site passes. Two consequences worth knowing:
+**Which end paths pay — all of them.** The economy faucet fires when `end_game` is given `bot=` and `player_ids=`. A game's own completion site builds that roster from locals it has in hand; the two paths that end a game from *outside* it have no such locals, so they rebuild the roster from the stored payload via `games/utils/game_roster.py` (`roster_from_payload`, one extractor per game type, each mirroring its cog's completion site).
 
-- The 24-hour sweep **does** pay. It looks the game's roster up in its payload (`expired_game_archive`, keyed per game type) and archives with the real player count and payload rather than a bare `end_game`. Hosts routinely never press End, so before 2026-07-29 every swept game paid nobody — all 18 Truth or Dare games in the history ended this way. Game types with no joined roster (ffa banner posts, Photo Challenge) resolve to an empty roster and still pay nothing, which is correct: nobody signed in to credit. An abandoned lobby lands on the same empty roster, so leaving a game open all day earns what it played, not a bounty.
-- `/games end` and `/games config game-end` route through `force_end_active_game`, which is deliberately **payout-free** — it is the abort/force-close path, not a completion. A host who wants the room paid presses the game's own End Game button (or lets the sweep reap it).
+- The **24-hour sweep** (`expiry_service.py`) pays. Hosts routinely never press End, so before 2026-07-29 every swept game paid nobody — all 18 Truth or Dare games in the history ended this way.
+- **`/games end` and `/games config game-end`** (`force_end_active_game`) pay. This is the normal close method for several games, not only an abort, so it credits the room the same way.
+
+A game type with no joined roster — ffa banner posts, Photo Challenge — resolves to an empty roster and pays nobody, which is correct: they are posts, not games players sign into (Photo Challenge is paid by the economy's own `photo_post` trigger instead). An abandoned lobby lands on that same empty roster, which is the whole anti-farm gate: aborting a game that never got going costs nothing, and leaving one open all day earns what it played. A malformed payload costs its own game a roster, never the sweep it was found in.
+
+Because every path now routes through `end_game`, its `DELETE`-first claim is what keeps a game from paying twice when a sweep, a force-end, and a host pressing End race each other.
 
 ## Coin wagers (duel + group games)
 

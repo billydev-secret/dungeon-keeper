@@ -11,6 +11,9 @@ empty roster and still pay nobody. That is correct rather than a gap: they are
 posts, not games players sign into, so there is no set of players to credit. An
 abandoned lobby nobody joined lands on the same empty roster, which is the whole
 anti-farm guard — leaving a game open all day earns exactly what it played.
+
+The per-type roster reconstruction lives in ``game_roster``, shared with
+``force_end_active_game`` so ``/games end`` and the sweep pay the same room.
 """
 from __future__ import annotations
 
@@ -18,44 +21,9 @@ import json
 import logging
 
 from bot_modules.games.utils.game_manager import end_game
+from bot_modules.games.utils.game_roster import roster_from_payload
 
 log = logging.getLogger(__name__)
-
-# game_type -> (payload key holding the joined roster, payload key counting rounds)
-#
-# Only games a player explicitly joins belong here. Adding a type is what makes
-# the sweep pay it, so an unlisted type keeps the historical payout-free
-# behaviour by default rather than paying a roster we guessed at.
-_ROSTER_SPECS: dict[str, tuple[str, str]] = {
-    "traditional": ("participants", "asked"),
-}
-
-
-def expired_game_archive(game_type: str, payload: dict | None) -> tuple[list[int], int]:
-    """Return ``(player_ids, round_count)`` to archive an expired game with.
-
-    Ids survive a JSON round-trip as strings and a payload can carry junk, so
-    coerce and skip rather than raising — one malformed entry must not cost the
-    rest of the room its payout. Duplicates collapse so a double-join can't be
-    paid twice.
-    """
-    spec = _ROSTER_SPECS.get(game_type)
-    if spec is None:
-        return [], 0
-    roster_key, round_key = spec
-    payload = payload or {}
-
-    roster: list[int] = []
-    for raw in payload.get(roster_key) or []:
-        try:
-            uid = int(raw)
-        except (TypeError, ValueError):
-            continue
-        if uid not in roster:
-            roster.append(uid)
-
-    rounds = payload.get(round_key) or {}
-    return roster, len(rounds)
 
 
 async def sweep_expired_games(bot, db, *, max_age_hours: int = 24) -> int:
@@ -76,7 +44,7 @@ async def sweep_expired_games(bot, db, *, max_age_hours: int = 24) -> int:
                 # A corrupt payload costs this game its roster, not the sweep.
                 log.warning("Unreadable payload on expiring game %s", game_id)
                 payload = {}
-            players, rounds = expired_game_archive(row["game_type"], payload)
+            players, rounds = roster_from_payload(row["game_type"], payload)
 
             # bot= is what lets end_game both pay the roster and resolve the
             # guild for the history row; the bare call left guild_id = 0.

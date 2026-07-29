@@ -12,10 +12,7 @@ from typing import Any
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.games.utils.expiry_service import (
-    expired_game_archive,
-    sweep_expired_games,
-)
+from bot_modules.games.utils.expiry_service import sweep_expired_games
 from bot_modules.games.utils.game_manager import create_game, get_active_game_by_id
 from bot_modules.services.economy_service import get_balance, save_econ_settings
 from bot_modules.services.games_db import GamesDb
@@ -75,32 +72,7 @@ async def _age(db, game_id: str, hours: int = 30) -> None:
     )
 
 
-# ── expired_game_archive (pure) ───────────────────────────────────────────────
-
-@pytest.mark.parametrize(
-    "game_type, payload, expected",
-    [
-        # traditional carries its roster under "participants" and counts rounds
-        # by questions asked. JSON round-trips ids as strings.
-        ("traditional", {"participants": [1, 2, 3], "asked": {"1": "q"}}, ([1, 2, 3], 1)),
-        ("traditional", {"participants": ["4", "5"], "asked": {}}, ([4, 5], 0)),
-        # An abandoned lobby nobody joined pays nobody — no roster to credit.
-        ("traditional", {"participants": []}, ([], 0)),
-        ("traditional", {}, ([], 0)),
-        ("traditional", None, ([], 0)),
-        # Junk ids are skipped rather than crashing the whole sweep.
-        ("traditional", {"participants": [1, None, "x", 2]}, ([1, 2], 0)),
-        # A double-join can't pay twice.
-        ("traditional", {"participants": [7, 7]}, ([7], 0)),
-        # Prompt-style games have no joined roster: ffa banner posts and photo
-        # challenges are posts, not games players sign into. Empty, not broken.
-        ("ffa", {"prompt": "x", "seen": ["x"]}, ([], 0)),
-        ("photo", {"submissions": {"1": "url"}}, ([], 0)),
-        ("wyr", {"rounds": {"1": {"a": [1]}}}, ([], 0)),
-    ],
-)
-def test_expired_game_archive(game_type, payload, expected):
-    assert expired_game_archive(game_type, payload) == expected
+# Per-type roster reconstruction is covered in tests/test_game_roster.py.
 
 
 # ── sweep_expired_games ───────────────────────────────────────────────────────
