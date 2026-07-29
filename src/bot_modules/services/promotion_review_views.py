@@ -130,10 +130,14 @@ async def refresh_level_5_cards(
     """Re-render every stored Level 5 card for ``member`` to match their roles.
 
     Driven by the ``on_member_update`` role diff, so the card tracks access
-    however it was granted — this is what the card's own Grant button never did
-    (:func:`_grant_role_only` only replies ephemerally) and what ``/grant``
-    could never do. Best-effort: a card whose message has been deleted is
-    forgotten rather than re-fetched forever.
+    however it was granted — ``/grant`` or a role added by hand, neither of which
+    the card could ever see before. (Its own Grant button only refreshes the card
+    when ``promotion_review_grant_role_id`` *is* the NSFW role; the two are
+    independent settings.)
+
+    **Never raises.** The listener calls this ahead of the verified-welcome, the
+    greeter ping and the intake auto-ticks, so a failed card refresh must not
+    cost a member their welcome. One bad card doesn't stop the others either.
     """
     guild = member.guild
     try:
@@ -143,27 +147,64 @@ async def refresh_level_5_cards(
         return
 
     for row in rows:
-        channel = guild.get_channel_or_thread(int(row["channel_id"]))
-        if not isinstance(channel, discord.abc.Messageable):
-            continue
-        message_id = int(row["message_id"])
         try:
-            message = await channel.fetch_message(message_id)
+            await _refresh_one_level_5_card(ctx, guild, row, has_nsfw)
+        except Exception:
+            log.exception(
+                "promo review: failed to refresh level 5 card %s", row["message_id"]
+            )
+
+
+async def _refresh_one_level_5_card(
+    ctx: AppContext, guild: discord.Guild, row, has_nsfw: bool
+) -> None:
+    """Bring a single stored card in line, or forget it if it's gone for good."""
+    card_id = int(row["id"])
+    message_id = int(row["message_id"])
+    channel = await _card_channel(ctx, guild, int(row["channel_id"]), card_id)
+    if channel is None:
+        return
+    try:
+        message = await channel.fetch_message(message_id)
+    except discord.NotFound:
+        await asyncio.to_thread(_forget_level_5_card, ctx, card_id)
+        return
+    except discord.HTTPException:
+        log.debug("promo review: can't fetch level 5 card %s", message_id, exc_info=True)
+        return
+    if not message.embeds:
+        return
+    updated = refresh_spicy_field(message.embeds[0], has_nsfw)
+    if updated is None:
+        return
+    try:
+        await message.edit(embed=updated)
+    except discord.HTTPException:
+        log.debug("promo review: failed to refresh card %s", message_id, exc_info=True)
+
+
+async def _card_channel(
+    ctx: AppContext, guild: discord.Guild, channel_id: int, card_id: int
+) -> discord.abc.Messageable | None:
+    """The card's channel, forgetting the card if the channel is truly gone.
+
+    A cache miss is ambiguous — a deleted channel and an archived (uncached)
+    thread both come back ``None`` — so confirm with a fetch before dropping the
+    row. Otherwise a card in an archived thread would be forgotten while its
+    message still exists, and a card in a deleted channel would be re-fetched
+    on every future role change forever.
+    """
+    channel = guild.get_channel_or_thread(channel_id)
+    if channel is None:
+        try:
+            channel = await guild.fetch_channel(channel_id)
         except discord.NotFound:
-            await asyncio.to_thread(_forget_level_5_card, ctx, int(row["id"]))
-            continue
+            await asyncio.to_thread(_forget_level_5_card, ctx, card_id)
+            return None
         except discord.HTTPException:
-            log.debug("promo review: can't fetch level 5 card %s", message_id, exc_info=True)
-            continue
-        if not message.embeds:
-            continue
-        updated = refresh_spicy_field(message.embeds[0], has_nsfw)
-        if updated is None:
-            continue
-        try:
-            await message.edit(embed=updated)
-        except discord.HTTPException:
-            log.debug("promo review: failed to refresh card %s", message_id, exc_info=True)
+            log.debug("promo review: can't fetch channel %s", channel_id, exc_info=True)
+            return None
+    return channel if isinstance(channel, discord.abc.Messageable) else None
 
 
 def _level_5_cards(ctx: AppContext, guild_id: int, user_id: int):

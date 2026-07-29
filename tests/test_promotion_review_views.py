@@ -6,16 +6,26 @@ here we only pin the pure formatting branches.
 
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
+import pytest
 
+from bot_modules.core.db_utils import open_db
 from bot_modules.services import promotion_review_service as svc
 from bot_modules.services.promotion_review_views import (
     build_review_embed,
     format_prune_lines,
+    refresh_level_5_cards,
     refresh_spicy_field,
 )
+from tests.db_template import migrated_db
+
+GUILD_ID = 42
+MEMBER_ID = 7
+CARD_CHANNEL = 555
 
 
 def _level_5_embed(spicy_value: str | None) -> discord.Embed:
@@ -121,6 +131,182 @@ def test_refresh_spicy_field_preserves_field_inline_layout():
     updated = refresh_spicy_field(embed, True)
     assert updated is not None
     assert [f.inline for f in updated.fields] == [f.inline for f in embed.fields]
+
+
+# ── refresh_level_5_cards: stored card → Discord edit ─────────────────
+
+
+@pytest.fixture
+def ctx(tmp_path):
+    """An AppContext stand-in over a real migrated DB."""
+    db_path = tmp_path / "promo.db"
+    migrated_db(db_path)
+    stub = MagicMock()
+    stub.db_path = db_path
+    stub.open_db = lambda: open_db(db_path)
+    return stub
+
+
+def _record(ctx, *, message_id: int = 9001, channel_id: int = CARD_CHANNEL) -> None:
+    with ctx.open_db() as conn:
+        svc.record_level_5_card(
+            conn, GUILD_ID, MEMBER_ID, channel_id, message_id, 100.0
+        )
+
+
+def _stored(ctx) -> list[sqlite3.Row]:
+    with ctx.open_db() as conn:
+        return svc.level_5_cards_for(conn, GUILD_ID, MEMBER_ID)
+
+
+def _member(guild) -> MagicMock:
+    member = MagicMock()
+    member.id = MEMBER_ID
+    member.guild = guild
+    return member
+
+
+def _guild(channel) -> MagicMock:
+    guild = MagicMock()
+    guild.id = GUILD_ID
+    guild.get_channel_or_thread = MagicMock(return_value=channel)
+    guild.fetch_channel = AsyncMock(return_value=channel)
+    return guild
+
+
+def _channel(message) -> MagicMock:
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.fetch_message = AsyncMock(return_value=message)
+    return channel
+
+
+def _message(embed: discord.Embed | None) -> MagicMock:
+    message = MagicMock()
+    message.id = 9001
+    message.embeds = [embed] if embed is not None else []
+    message.edit = AsyncMock()
+    return message
+
+
+async def test_refresh_edits_a_stored_stale_card(ctx):
+    """End to end: the reported bug, from stored row to the Discord edit."""
+    _record(ctx)
+    message = _message(_level_5_embed(svc.SPICY_NOT_GRANTED))
+    member = _member(_guild(_channel(message)))
+
+    await refresh_level_5_cards(ctx, member, True)
+
+    message.edit.assert_awaited_once()
+    edited = message.edit.await_args.kwargs["embed"]
+    spicy = next(f for f in edited.fields if f.name == svc.SPICY_FIELD_NAME)
+    assert spicy.value == svc.SPICY_GRANTED
+
+
+async def test_refresh_skips_the_edit_when_already_correct(ctx):
+    _record(ctx)
+    message = _message(_level_5_embed(svc.SPICY_GRANTED))
+    member = _member(_guild(_channel(message)))
+
+    await refresh_level_5_cards(ctx, member, True)
+
+    message.edit.assert_not_awaited()
+    assert len(_stored(ctx)) == 1  # still tracked
+
+
+async def test_refresh_forgets_a_card_whose_message_is_deleted(ctx):
+    _record(ctx)
+    channel = _channel(None)
+    channel.fetch_message = AsyncMock(side_effect=discord.NotFound(MagicMock(), "gone"))
+    member = _member(_guild(channel))
+
+    await refresh_level_5_cards(ctx, member, True)
+
+    assert _stored(ctx) == []
+
+
+async def test_refresh_forgets_a_card_whose_channel_is_deleted(ctx):
+    _record(ctx)
+    guild = _guild(None)
+    guild.get_channel_or_thread = MagicMock(return_value=None)
+    guild.fetch_channel = AsyncMock(side_effect=discord.NotFound(MagicMock(), "gone"))
+
+    await refresh_level_5_cards(ctx, _member(guild), True)
+
+    assert _stored(ctx) == []
+
+
+async def test_refresh_keeps_a_card_in_an_uncached_thread(ctx):
+    """A cache miss isn't proof the channel is gone — an archived thread misses too."""
+    _record(ctx)
+    message = _message(_level_5_embed(svc.SPICY_NOT_GRANTED))
+    channel = _channel(message)
+    guild = _guild(channel)
+    guild.get_channel_or_thread = MagicMock(return_value=None)  # not cached
+    guild.fetch_channel = AsyncMock(return_value=channel)  # but it exists
+
+    await refresh_level_5_cards(ctx, _member(guild), True)
+
+    assert len(_stored(ctx)) == 1
+    message.edit.assert_awaited_once()
+
+
+async def test_refresh_survives_a_transient_http_error(ctx):
+    """A Discord hiccup keeps the row for the next role change."""
+    _record(ctx)
+    channel = _channel(None)
+    channel.fetch_message = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(), "boom")
+    )
+    member = _member(_guild(channel))
+
+    await refresh_level_5_cards(ctx, member, True)
+
+    assert len(_stored(ctx)) == 1
+
+
+async def test_refresh_never_raises_so_the_listener_continues(ctx):
+    """It runs before the welcome/greeter work — it must not abort the listener."""
+    _record(ctx)
+    channel = _channel(None)
+    channel.fetch_message = AsyncMock(side_effect=sqlite3.OperationalError("locked"))
+    member = _member(_guild(channel))
+
+    await refresh_level_5_cards(ctx, member, True)  # must not raise
+
+
+async def test_refresh_continues_past_one_broken_card(ctx):
+    """A card that blows up doesn't stop the member's other cards."""
+    _record(ctx, message_id=9001)
+    _record(ctx, message_id=9002)
+    good = _message(_level_5_embed(svc.SPICY_NOT_GRANTED))
+    channel = _channel(None)
+    channel.fetch_message = AsyncMock(
+        side_effect=[sqlite3.OperationalError("locked"), good]
+    )
+    member = _member(_guild(channel))
+
+    await refresh_level_5_cards(ctx, member, True)
+
+    good.edit.assert_awaited_once()
+
+
+async def test_refresh_ignores_a_card_with_no_embeds(ctx):
+    _record(ctx)
+    message = _message(None)
+    member = _member(_guild(_channel(message)))
+
+    await refresh_level_5_cards(ctx, member, True)
+
+    message.edit.assert_not_awaited()
+
+
+async def test_refresh_is_a_noop_when_no_card_is_stored(ctx):
+    message = _message(_level_5_embed(svc.SPICY_NOT_GRANTED))
+    member = _member(_guild(_channel(message)))
+
+    await refresh_level_5_cards(ctx, member, True)
+
+    message.edit.assert_not_awaited()
 
 
 def test_build_embed_resolved_verbs():

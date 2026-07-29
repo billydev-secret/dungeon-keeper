@@ -257,21 +257,6 @@ def test_forget_level_5_card_drops_only_that_row(db_path):
         assert [r["message_id"] for r in svc.level_5_cards_for(conn, GUILD, 7)] == [5002]
 
 
-def test_card_posted_before_a_later_grant_is_refreshable(db_path):
-    """Regression: a card rendered ❌ then granted access elsewhere.
-
-    The reported bug — card posts saying "Spicy access ❌ Not granted", a greeter
-    runs /grant ~13 min later, the card stays ❌ forever because nothing knew
-    where the card was. The stored row is what makes it reachable.
-    """
-    with open_db(db_path) as conn:
-        svc.record_level_5_card(conn, GUILD, 7, CHANNEL, 5001, 100.0)
-        # Access arrives later, by any path — the card is still locatable.
-        rows = svc.level_5_cards_for(conn, GUILD, 7)
-        assert rows, "a posted Level 5 card must be findable after the fact"
-        assert svc.spicy_access_value(True) == svc.SPICY_GRANTED
-
-
 # ── in-memory watch registry ──────────────────────────────────────────
 
 

@@ -39,11 +39,18 @@ The `pruned_return` and `sleeper` cards also carry a **Dismiss** button.
   (migration 141) stores where each card was posted, and the `on_member_update`
   role diff in `events_cog` re-renders just that field whenever the NSFW grant
   role (`grant_roles["nsfw"]`) is added or removed — so the card tracks access
-  granted by `/grant` or by hand, not only by its own button. Deliberately a
-  separate table from `promotion_review_cards`: a Level 5 card never resolves, so
-  it would squat that table's one-open-card-per-member slot forever. A card whose
-  message has been deleted is forgotten on the next attempt. Cards posted before
-  migration 141 have no stored row and stay stale — fix-forward only.
+  granted by `/grant` or by a hand-added role, neither of which it could see
+  before. **Two independent settings:** the field reports `grant_roles["nsfw"]`,
+  while the Grant button hands out `promotion_review_grant_role_id`. The button
+  therefore refreshes the card only when those are the same role; set to a
+  different role it grants successfully and the field correctly doesn't move.
+  Deliberately a separate table from `promotion_review_cards`: a Level 5 card
+  never resolves, so it would squat that table's one-open-card-per-member slot
+  forever. Cards whose message *or* channel has been deleted are forgotten (a
+  cache miss is confirmed with a fetch first, so a card in an archived thread is
+  kept). The refresh never raises — it runs ahead of the verified-welcome and
+  greeter ping in the same listener. Cards posted before migration 141 have no
+  stored row and stay stale — fix-forward only.
 - **Hot path:** `on_message` filters with an O(1) in-memory watch set
   (`promotion_review_service.is_watched`), seeded at startup (`warm`) and fed by
   the prune sweep (`note_pruned`) and the inactive-hold path (`note_inactive`).
