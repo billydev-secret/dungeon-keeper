@@ -1,8 +1,10 @@
 # Pools: its own dashboard config page
 
-**Status:** Design / blocked on sequencing. No source edits made yet — this doc
-is the whole deliverable until two sibling sessions land on main (see
-[Sequencing](#sequencing)).
+**Status:** Complete 2026-07-28. Written as a design doc while blocked on
+sequencing, then built in the same session once Ben settled the three open
+questions and chose to proceed ahead of the two sibling sessions. The
+[Sequencing](#sequencing) section is kept as-is because the merge risk it
+describes is still live and still has to be handled at rebase time.
 
 ## Goal
 
@@ -65,9 +67,17 @@ Two sibling sessions edit `static/js/app.js`'s nav array right now:
 | `config-page-organization` | 1 dirty file, +11/−33, **waiting on Ben** | Deletes the seven "Prompts & AI" studio sub-pages and the `gt` query param. Games section only — does not touch the Casino line. |
 | `panels-into-feature-pages` | 23 files dirty, staged | Moves the seven post-panel controls onto feature config pages. Edits the **Economy** section around L185-189 — adjacent to `config-casino` — and adds a `MOVED_PAGES` redirect map. |
 
-**Decision (Ben, 2026-07-28): wait for both to merge to main, then rebase and
-build.** Note that `config-page-organization` is blocked on Ben rather than on
-itself, so the wait length is Ben's to set.
+**Decision (Ben, 2026-07-28):** initially "wait for both to merge", then
+revised to build immediately once the findings below showed the change was
+smaller than expected (no backend work, no new route, light test surface).
+`config-page-organization` is blocked on Ben rather than on itself, so waiting
+had no fixed end date.
+
+**Therefore this branch must be rebased onto main after both siblings land**,
+and the `app.js` nav hunk re-checked by hand. The Pools entry is inserted
+directly after `config-casino` in the Economy section — `panels-into-feature-pages`
+edits the `economy-config` line four rows below it, which is inside the same
+diff context, so expect git to want help there.
 
 The mechanical conflict risk is small — three narrow, mostly non-overlapping
 hunks. The reason to wait is editorial, not mechanical:
@@ -257,12 +267,35 @@ open round:
       section, not the whole Economy chapter.
 - [ ] Check the open round still settles at the day roll after the config save.
 
-## Open questions for Ben
+## Questions settled (Ben, 2026-07-28)
 
-1. **Does Pools warrant a page at all**, given `config-page-organization` is
-   currently deleting stub-sized pages? (Fallback: a stronger visual section on
-   the Casino page.)
-2. **Option A or B for help** — promote Pools to an `<h3>` in the manual, or
-   reuse `help-casino`?
-3. **Lift `field()`/`numInput()`/`checkbox()` into `config-helpers.js`**, or
-   duplicate them in the new panel to keep the diff contained?
+1. **Pools gets a real page** — `#/config-pools`, admin-only, under Economy
+   directly after Casino. Not a section on the Casino page.
+2. **Help: Option A** — Pools promoted to `<h3 id="pools">` in the manual, with
+   a `help-pools` row in `help-sections.js`. One wrinkle found during the edit
+   that the design missed: three paragraphs of general *Casino* text sat
+   **after** the Pools `<h4>` (payout tables, table showmanship, play-again
+   buttons). Promoting the heading in place would have swallowed them into the
+   Pools section, so the block was **moved** below them rather than merely
+   retagged. The manual's sidebar TOC is generated from `h2[id], h3[id]`, so
+   Pools now appears there automatically — no numbering to maintain.
+3. **Helpers lifted** into `config-helpers.js` (`field`, `numInput`,
+   `checkbox`), imported by both panels. The id prefix went from `cc-field-` to
+   `dk-field-` now that it is not casino-specific; nothing referenced the old
+   prefix.
+
+## What shipped
+
+| file | change |
+|---|---|
+| `static/js/config-helpers.js` | +`field` / `numInput` / `checkbox` exports |
+| `static/js/panels/config-pools.js` | **new** — the page |
+| `static/js/panels/config-casino.js` | 348 → 265 lines: pools card, its two validation rows, its two payload keys, and the three now-shared helpers all removed |
+| `static/js/app.js` | `config-pools` nav entry; `related` cross-links both ways |
+| `static/js/panels/help-sections.js` | `help-pools` → anchor `pools` |
+| `static/manual.html` | Pools moved below the Casino tail paragraphs and promoted `<h4>` → `<h3 id="pools">` |
+| `docs/casino_spec.md` | records the split, and that there is deliberately no `/api/config/pools` |
+| `docs/INDEX.md` | this plan's row |
+| `tests/web/test_casino_routes.py` | `test_pools_and_casino_pages_save_past_each_other` |
+
+Backend unchanged, as designed.

@@ -153,6 +153,17 @@ guild's casino name, which is edited on **Config → Branding**
 `casino_config_change` so the cog re-ensures the panel without a restart
 (post/edit/move/tear down; a channel move deletes the old panel).
 
+The four `pools_*` keys are **not** on that page. Since 2026-07-28 they have
+their own admin-only **Economy → Pools** page (`config-pools.js`,
+[plans/pools-own-config-page.md](plans/pools-own-config-page.md)): a day-long
+parimutuel round whose takeout is burned had nothing in common with nine
+instant-settle tables, and `pools_takeout_pct` sat one card from
+`jackpot_cut_pct`, which re-mints what it skims. The keys keep their
+`casino_pools_*` names in the `config` table, both pages write through the same
+`PUT /api/config/casino` (its body model is every-field-optional, so the Pools
+page sends four fields and leaves the rest untouched), and both therefore
+dispatch `casino_config_change`. There is no `/api/config/pools` route.
+
 ## Games
 
 - **Coinflip** — heads/tails picker → amount modal. Win pays total

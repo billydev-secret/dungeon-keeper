@@ -447,3 +447,45 @@ export function buildField(labelText, control, hint) {
   }
   return div;
 }
+
+// ── Labelled form controls ─────────────────────────────────────────────
+// buildField renders a bare <label>; `field` additionally pairs it with its
+// control by id so screen readers announce the label and a label tap focuses
+// the input (W-A7). Every panel wants that, so it lives here rather than
+// being re-derived per panel — config-casino.js grew these three first and
+// config-pools.js was the second caller that needed them.
+let _fieldSeq = 0;
+
+export function field(labelText, control, hint) {
+  const div = buildField(labelText, control, hint);
+  if (control instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
+    const id = control.id || `dk-field-${++_fieldSeq}`;
+    control.id = id;
+    div.querySelector("label").htmlFor = id;
+  }
+  return div;
+}
+
+export function numInput(name, value, min, step = "1", max = null) {
+  const inp = document.createElement("input");
+  inp.type = "number";
+  inp.name = name;
+  inp.required = true;
+  inp.min = String(min);
+  if (max != null) inp.max = String(max);
+  inp.step = step;
+  inp.value = String(value);
+  inp.style.maxWidth = "160px";
+  return inp;
+}
+
+export function checkbox(name, checked, labelText) {
+  const label = document.createElement("label");
+  label.style.cssText = "display:flex; gap:6px; align-items:center;";
+  const inp = document.createElement("input");
+  inp.type = "checkbox";
+  inp.name = name;
+  inp.checked = !!checked;
+  label.append(inp, document.createTextNode(" " + labelText));
+  return label;
+}
