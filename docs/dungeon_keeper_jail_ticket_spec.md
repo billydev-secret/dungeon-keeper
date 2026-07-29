@@ -11,7 +11,7 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 | `/jail <user> [duration] [reason]` | Slash | Mod | Jail a member, optionally with a duration like `24h` or `7d` |
 | `/unjail <user> [reason]` | Slash | Mod | Release a jailed member |
 | `Jail User` | User context menu | Mod | Modal for duration + reason, then runs the jail flow |
-| Support Ticket Panel | Web (dashboard) | Admin | Config → Channel Panels posts the persistent "Open Ticket" button into a chosen channel. Replaced `/ticket panel` 2026-07-28 |
+| Support Ticket Panel | Web (dashboard) | Admin | Moderation → Tickets posts the persistent "Open Ticket" button into a chosen channel. Replaced `/ticket panel` 2026-07-28; moved there from the retired Channel Panels page 2026-07-28 |
 | `/ticket open [description]` | Slash | Everyone | Open a ticket directly from chat |
 | `Open Ticket About This Message` | Message context menu | Everyone | Open a ticket that links the source message |
 | `/ticket close [reason]` | Slash | Mod | Lock a ticket channel (still readable) |
@@ -74,7 +74,7 @@ the channel-side effects.
 
 ### First-run setup
 
-First-run configuration is **Config → Moderation** on the dashboard: mod roles, admin roles, jail category, ticket category, log channel, transcript channel. A six-step `/setup` wizard covered the same ground until 2026-07-28 and was removed — every setting it walked through already had a home on that page, and it created nothing in the server that the jail flow doesn't create itself. The bot auto-creates a `@Jailed` role with server-wide Deny View Channel and Deny Send Messages overrides — that role must sit below the bot's top role. Because a jailed member keeps `@everyone`, those per-channel denies are what actually hide the server; the bot keeps them current after setup too. Every channel or category created while the bot is online is stamped with the `@Jailed` view+send deny as it appears (an `on_guild_channel_create` listener), and a one-shot sweep at startup backfills any channel that leaked while the bot was offline. Without this, a channel created after the `@Jailed` role existed would carry no deny and stay visible to jailed members. Two separate categories are used (jail and ticket); both deny `@everyone` view. A persistent "Open Ticket" button is published into the ticket panel channel from Config → Channel Panels.
+First-run configuration is **Config → Moderation** on the dashboard: mod roles, admin roles, jail category, ticket category, log channel, transcript channel. A six-step `/setup` wizard covered the same ground until 2026-07-28 and was removed — every setting it walked through already had a home on that page, and it created nothing in the server that the jail flow doesn't create itself. The bot auto-creates a `@Jailed` role with server-wide Deny View Channel and Deny Send Messages overrides — that role must sit below the bot's top role. Because a jailed member keeps `@everyone`, those per-channel denies are what actually hide the server; the bot keeps them current after setup too. Every channel or category created while the bot is online is stamped with the `@Jailed` view+send deny as it appears (an `on_guild_channel_create` listener), and a one-shot sweep at startup backfills any channel that leaked while the bot was offline. Without this, a channel created after the `@Jailed` role existed would carry no deny and stay visible to jailed members. Two separate categories are used (jail and ticket); both deny `@everyone` view. A persistent "Open Ticket" button is published into the ticket panel channel from Moderation → Tickets.
 
 ### Jail flow
 
@@ -183,7 +183,7 @@ Setup wizard sets most keys; the rest live on the web dashboard.
 | `log_channel_id` | Channel for audit log embeds | unset (set by wizard) |
 | `transcript_channel_id` | Channel where transcript files are posted | unset (set by wizard) |
 | `jailed_role_id` | The `@Jailed` role | auto-created |
-| `ticket_panel_channel_id` / `ticket_panel_message_id` | Where the persistent ticket button lives | set when the panel is posted from Channel Panels |
+| `ticket_panel_channel_id` / `ticket_panel_message_id` | Where the persistent ticket button lives | set when the panel is posted from Moderation → Tickets |
 | `ticket_notify_on_create` | DM all mods on every new ticket | on |
 | `warning_threshold` | Active-warning count that triggers an admin alert | 3 |
 | `api_port` / `api_secret` | Dashboard API port and shared secret | platform defaults |

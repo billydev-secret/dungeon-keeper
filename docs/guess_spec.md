@@ -16,7 +16,7 @@ A guess-the-member image game. A consenting submitter posts an image — **SFW o
 | `/guess round <round_id>` | Slash | Mod (`manage_guild`; hidden from non-mods in the Discord UI via `default_permissions`) | Inspect a specific round (status, submitter, answer, crop, guess/unique-guesser counts, re-roll count) |
 | `/guess delete <round_id>` | Slash | Submitter or Mod (`manage_guild`; checked in code only — the command itself isn't permission-restricted client-side) | Soft-delete a round (message best-effort deleted, stats preserved) |
 | `/guess confess text:<...>` | Slash | Guess role (requires both the role and the channel to be configured) | Renders an anonymous text confession as an image card and previews it for you to post or cancel |
-| Guess Who Submit Prompt | Web (dashboard) | Admin | Config → Channel Panels immediately (re)posts the sticky Submit/Help prompt at the bottom of the configured guess channel. Replaced `/guess prompt` 2026-07-28 |
+| Guess Who Submit Prompt | Web (dashboard) | Admin | Config → Guess Who → Post Submit Prompt immediately (re)posts the sticky Submit/Help prompt at the bottom of the configured guess channel. Replaced `/guess prompt` 2026-07-28 |
 | `Guess` button (on round post) | Persistent | Everyone except the round's submitter | Opens an ephemeral member picker (see Guessing below) |
 | `🎭 Submit Guess` / `❓ Help` buttons (on the sticky prompt) | Persistent | Everyone (Guess role enforced on submit) | Submit opens a URL-paste modal that feeds the same detection pipeline as `/guess submit`; Help shows a short how-to-play blurb |
 | Web config panel | Web (dashboard) | Admin | Per-guild role, channel, cooldown, difficulty, image limits. Any channel may be chosen — age-gated or not. The API only checks the channel exists, and only when the bot can resolve the guild |
@@ -62,7 +62,7 @@ On a **correct first solve**, the bot edits the round's message: the original im
 
 `/guess round` shows a specific round to a mod: status (open / solved / deleted), submitter, answer, difficulty, guess and unique-guesser counts, re-roll count, and the crop image. For dispute resolution. `/guess delete` soft-deletes a round (message best-effort deleted, stats survive; already-deleted rounds are rejected with "Round #N is already deleted."). The web audit panel lists recent submit, delete, solve, and cap events for the guild.
 
-Config → Channel Panels lets an admin force an immediate repost of the sticky Submit/Help prompt message in the configured channel (normally it reposts itself automatically ~2s after the last message in the channel, debounced). Useful if the sticky prompt gets buried or its message is deleted.
+Config → Guess Who → Post Submit Prompt lets an admin force an immediate repost of the sticky Submit/Help prompt message in the configured channel (normally it reposts itself automatically ~2s after the last message in the channel, debounced). Useful if the sticky prompt gets buried or its message is deleted.
 
 ## Permissions
 

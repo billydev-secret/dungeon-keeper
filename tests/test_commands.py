@@ -286,8 +286,9 @@ def grant_audit_setup(tmp_path):
     ctx.db_path = db_path
     cog = RoleGrantCog(MagicMock(), ctx)
 
-    # /grant_audit was replaced by Config → Channel Panels on 2026-07-28. The
-    # card placement is the same; only its entry point moved, so these drive
+    # /grant_audit was replaced by the dashboard's Grant Audit panel on
+    # 2026-07-28. The card placement is the same; only its entry point moved,
+    # so these drive
     # post_audit_card(guild, channel) directly. Permission is the route's now.
     async def grant_audit(guild, channel, *, role_key="nsfw", min_level=5):
         return await cog.post_audit_card(

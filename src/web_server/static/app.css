@@ -4237,11 +4237,11 @@ fieldset.field {
   padding: 0;
 }
 
-/* ── Channel Panels ──────────────────────────────────────────────────
-   One row per postable panel: description on the left, channel picker and
-   Post button on the right. The row wraps rather than sitting on a fixed
-   two-column grid, so the picker drops under the description on a phone
-   instead of squeezing both (see docs/web_testing.md on wrapping flex rows). */
+/* ── Row list (external-tracking watches) ────────────────────────────
+   Description on the left, controls on the right. The row wraps rather than
+   sitting on a fixed two-column grid, so the controls drop under the
+   description on a phone instead of squeezing both (see docs/web_testing.md
+   on wrapping flex rows). */
 .panel-list { display: flex; flex-direction: column; gap: 4px; }
 .panel-row {
   display: flex;
@@ -4279,9 +4279,22 @@ fieldset.field {
   font-size: 12px;
 }
 
-/* Panel options (only the grant-audit card has any). Under the description
-   rather than in the actions row, which goes sticky on narrow viewports. */
-.panel-row__options { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+/* ── Embedded panel poster ───────────────────────────────────────────
+   One "post this panel into a channel" control, drawn by js/panel-post.js
+   inside the config page that owns the feature. Stacked rather than laid out
+   in columns: it sits among that page's fields, and the channel picker is
+   wide, so a row would overflow at phone width. */
+.panel-post { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.panel-post__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.panel-post__actions [data-status] { min-width: 0; overflow-wrap: anywhere; }
+/* Option controls, for a spec whose host page doesn't already own them. */
+.panel-post__options { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 2px; }
 .panel-opt { display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-width: 0; }
 .panel-opt select,
 .panel-opt input { padding: 4px 6px; font-size: 13px; max-width: 220px; }

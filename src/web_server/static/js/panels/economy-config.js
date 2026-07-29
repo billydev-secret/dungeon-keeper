@@ -12,9 +12,15 @@ import {
   mountChannelPicker,
   mountRolePicker,
 } from "../config-helpers.js";
+import { mountPanelPoster } from "../panel-post.js";
 
 // Faucet rates are edited on the Income Sources page and perk-shop prices on the
 // Sinks page — this page keeps the wiring and branding.
+//
+// All three economy channel panels are posted from here rather than from the
+// page that sets what each one shows: they're the same action three times over,
+// and an admin placing them does it once, in one sitting, when setting the
+// economy up.
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
@@ -274,7 +280,26 @@ function render(container, cfg, channels, roles, members) {
           <span data-status></span>
         </div>
       </form>
+
+      <div class="card" style="margin-top:16px;">
+        <div class="section-label">Post to Discord</div>
+        <div class="field-hint" style="margin-bottom:10px;">Re-posting a panel into
+          the channel it already occupies refreshes it in place rather than moving it
+          to the bottom — so it's safe to re-post after a re-brand. Posting into a
+          different channel moves it. All three need the economy switched on above.</div>
+        <div class="field" data-poster="economy-guide"></div>
+        <div class="field" data-poster="economy-leaderboard"></div>
+        <div class="field" data-poster="economy-shop"></div>
+      </div>
     </div>`;
+
+  // Spelled out rather than looped over a key list: tests/test_panel_registry.py
+  // reads these call sites to check every registered panel is actually drawn
+  // somewhere, and a computed key is invisible to it.
+  const slot = (key) => container.querySelector(`[data-poster="${key}"]`);
+  mountPanelPoster(slot("economy-guide"), "economy-guide");
+  mountPanelPoster(slot("economy-leaderboard"), "economy-leaderboard");
+  mountPanelPoster(slot("economy-shop"), "economy-shop");
 
   const form = container.querySelector("[data-form]");
   const status = form.querySelector("[data-status]");

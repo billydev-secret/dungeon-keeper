@@ -1,6 +1,7 @@
 import { api, esc } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import { loadConfig } from "../config-helpers.js";
+import { mountPanelPoster } from "../panel-post.js";
 import { renderSortableTable } from "../table.js";
 
 const DAY = 86400 * 1000;
@@ -41,6 +42,7 @@ export function mount(container, initialParams) {
         <div class="subtitle">Most recently pruned members who are still inactive — working as intended</div>
         <div data-table-wrap style="margin-top:8px; max-height:320px; overflow-y:auto;"></div>
       </section>
+      <div style="margin-top:20px;" data-poster="grant-audit"></div>
     </div>
   `;
   container.innerHTML = html;
@@ -140,6 +142,27 @@ export function mount(container, initialParams) {
       }
     }
   }
+
+  // The card is posted with whatever this page is currently showing rather than
+  // from its own pair of controls: the spec's two options ARE Grant Role and
+  // Minimum Level, and a second pair would let an admin post a card auditing
+  // something other than the tables above it.
+  mountPanelPoster(container.querySelector('[data-poster="grant-audit"]'), "grant-audit", {
+    heading: "Post This Audit as a Card",
+    buttonLabel: "Post Card",
+    getOptions: () => {
+      // The select is empty while the grant roles load, and stays empty on a
+      // guild with none configured. An empty role_key reads as "not supplied"
+      // server-side and falls back to the spec default, so posting mid-load
+      // would audit `nsfw` rather than what the page shows — and on a guild
+      // without an nsfw grant it fails naming a role nobody chose.
+      if (!grantEl.value) throw new Error("Pick a grant role first.");
+      return {
+        role_key: grantEl.value,
+        min_level: String(Math.max(1, parseInt(minLevelEl.value) || 5)),
+      };
+    },
+  });
 
   grantEl.addEventListener("change", refresh);
   minLevelEl.addEventListener("change", refresh);

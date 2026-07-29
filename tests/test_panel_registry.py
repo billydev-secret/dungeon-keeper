@@ -6,10 +6,16 @@ first sign would be a 503 in production when an admin presses Post. The
 resolution test below is the compile-time check the dynamic lookup doesn't get.
 
 Added 2026-07-28 with the route that replaced six panel-posting slash commands.
+The ``host_page`` checks below arrived the same day, when the shared Channel
+Panels page was split and each control moved onto its feature's config page:
+with no page listing every panel, nothing else notices a spec whose control was
+never drawn anywhere.
 """
 from __future__ import annotations
 
 import importlib
+import pathlib
+import re
 
 import pytest
 
@@ -89,6 +95,118 @@ def test_registry_covers_the_commands_it_replaced():
         "ticket-panel",       # /ticket panel
         "grant-audit",        # /grant_audit
     }
+
+
+# ── where each panel's control is drawn ──────────────────────────────
+
+_PANELS_DIR = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "src" / "web_server" / "static" / "js" / "panels"
+)
+_CALL_RE = re.compile(r"mountPanelPoster\(")
+_KEY_LITERAL_RE = re.compile(r"""\s*["'](?P<key>[a-z0-9-]+)["']\s*""")
+
+
+def _second_argument(text: str, start: int) -> str | None:
+    """The second argument of a call, given the index just past its ``(``.
+
+    Deliberately a small scanner rather than a regex. Every call site's first
+    argument is itself a call — ``slot("economy-guide")``,
+    ``container.querySelector('[data-poster="grant-audit"]')`` — and a regex
+    cheap enough to write inline stops at the first quote it meets, which is
+    *inside* that first argument. It then reads the slot selector while
+    appearing to read the key, so a call site passing the wrong key still
+    matches on the right one and the check silently proves nothing.
+
+    Returns None when the second argument isn't a plain string literal, which
+    fails the caller loudly — a computed key can't be verified from here.
+    """
+    depth = 0
+    arg_start = start
+    args: list[str] = []
+    i = start
+    while i < len(text):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                args.append(text[arg_start:i])
+                break
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append(text[arg_start:i])
+            arg_start = i + 1
+        elif c in "\"'`":
+            quote, i = c, i + 1
+            while i < len(text) and text[i] != quote:
+                i += 2 if text[i] == "\\" else 1
+        i += 1
+    if len(args) < 2:
+        return None
+    m = _KEY_LITERAL_RE.fullmatch(args[1])
+    return m.group("key") if m else None
+
+
+def _mounted_keys(page_id: str) -> set[str]:
+    """Registry keys the given dashboard page mounts a poster for."""
+    source = _PANELS_DIR / f"{page_id}.js"
+    if not source.exists():
+        return set()
+    # Explicit encoding: the panel sources carry emoji and em dashes, and the
+    # Windows test runner's default is cp1252, which can't decode them.
+    text = source.read_text(encoding="utf-8")
+    found = (_second_argument(text, m.end()) for m in _CALL_RE.finditer(text))
+    return {key for key in found if key}
+
+
+def test_the_call_site_scanner_reads_the_key_not_the_slot():
+    """The scanner is the whole basis of the two checks below, and its first
+    version read the first argument while looking like it read the second — so
+    a mismatched key passed. This is that bug, frozen."""
+    mismatched = 'mountPanelPoster(slot("economy-guide"), "economy-shop");'
+    assert _second_argument(mismatched, mismatched.index("(") + 1) == "economy-shop"
+
+    selector_form = (
+        "mountPanelPoster(container.querySelector('[data-poster=\"a-b\"]'), \"c-d\", {})"
+    )
+    assert _second_argument(selector_form, selector_form.index("(") + 1) == "c-d"
+
+    # A computed key is unverifiable, so it must not be reported as present.
+    computed = "mountPanelPoster(slot(key), key);"
+    assert _second_argument(computed, computed.index("(") + 1) is None
+
+
+@pytest.mark.parametrize("spec", PANEL_SPECS, ids=lambda s: s.key)
+def test_every_panel_is_mounted_on_the_page_it_names(spec):
+    """``host_page`` is a claim about where an admin finds this control.
+
+    Nothing else checks it now that no page lists every panel: a spec added to
+    the registry without a page mounting it is postable only by hand-crafting
+    the request, and the button an admin goes looking for is simply absent.
+    """
+    assert (_PANELS_DIR / f"{spec.host_page}.js").exists(), (
+        f"{spec.key} names host page {spec.host_page!r}, which has no panel module"
+    )
+    assert spec.key in _mounted_keys(spec.host_page), (
+        f"{spec.host_page}.js does not call mountPanelPoster for {spec.key!r}"
+    )
+
+
+def test_no_page_mounts_a_panel_the_registry_never_declared():
+    """The other direction: a key renamed in the registry leaves a page calling
+    for one that no longer exists, which fails only in the browser."""
+    known = {spec.key for spec in PANEL_SPECS}
+    for source in _PANELS_DIR.glob("*.js"):
+        stray = _mounted_keys(source.stem) - known
+        assert not stray, f"{source.name} mounts unregistered panel(s): {sorted(stray)}"
+
+
+def test_the_retired_channel_panels_page_is_gone():
+    """Its seven controls moved onto their features' config pages on
+    2026-07-28. A page left behind would post the same panels from a second
+    place, which is the sprawl the split was undoing."""
+    assert not (_PANELS_DIR / "channel-panels.js").exists()
 
 
 # ── domain gates that live on the cog, not the route ─────────────────

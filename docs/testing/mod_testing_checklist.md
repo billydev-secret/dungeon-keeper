@@ -18,7 +18,7 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 ### Tickets
 
-- [ ] **Channel Panels → Support Ticket Panel** — Post the persistent Open Ticket button into a channel; confirm it survives a bot restart.
+- [ ] **Moderation → Tickets → Post Support Ticket Panel** — Post the persistent Open Ticket button into a channel; confirm it survives a bot restart.
 - [ ] **`/ticket close [reason]`** — Close an open ticket; confirm the channel locks read-only for the creator and the embed shows Reopen/Delete buttons.
 - [ ] **`/ticket reopen`** — Reopen a closed ticket; confirm send permissions restore and the 24h auto-delete clock resets. Try on an already-open ticket and confirm the rejection.
 - [ ] **`/ticket delete`** — Delete a closed ticket; confirm a transcript generates and posts, DMs the creator, then the channel deletes.
@@ -104,9 +104,9 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 ### Bank
 
 - [ ] **`/bank grant @member amount reason`** — Grant currency with a reason; confirm the balance updates and the ledger is audit-tagged.
-- [ ] **Channel Panels → Economy How-To** — Post the branded guide embed; re-post to the same channel and confirm it edits in place rather than moving to the bottom.
-- [ ] **Channel Panels → Perk Shop** — Post the persistent shop panel; confirm any member can click Rent and get an ephemeral reply, and that chatting in the channel re-sticks the panel to the bottom once the room falls quiet.
-- [ ] **Channel Panels → Economy Leaderboard** — Post the leaderboard panel; confirm it auto-refreshes hourly.
+- [ ] **Economy → Settings → Economy How-To** — Post the branded guide embed; re-post to the same channel and confirm it edits in place rather than moving to the bottom.
+- [ ] **Economy → Settings → Perk Shop** — Post the persistent shop panel; confirm any member can click Rent and get an ephemeral reply, and that chatting in the channel re-sticks the panel to the bottom once the room falls quiet.
+- [ ] **Economy → Settings → Economy Leaderboard** — Post the leaderboard panel; confirm it auto-refreshes hourly.
 
 ### Income Sources
 
@@ -150,7 +150,7 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 - [ ] **Guess — `/guess round <round_id>`** — Inspect an existing round; confirm status/submitter/answer/counts show.
 - [ ] **Guess — `/guess delete` (other's round)** — Delete another member's round; confirm a non-mod/non-submitter is rejected doing the same.
-- [ ] **Channel Panels → Guess Who Submit Prompt** — Force an immediate repost of the sticky Submit/Help prompt. With no Guess channel configured, confirm the error names the settings page.
+- [ ] **Config → Guess Who → Post Submit Prompt** — Force an immediate repost of the sticky Submit/Help prompt. With no Guess channel configured, confirm the error names the settings page.
 - [ ] **Guess — dashboard audit log** — Confirm recent submit/delete/solve/guess-cap events list.
 
 ### 24/7 Mode

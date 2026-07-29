@@ -3,6 +3,7 @@ import { api, apiPost, esc } from "./api.js";
 import { toast } from "./ui.js";
 import { HELP_GROUPS, HELP_EXTRA_PAGES } from "./panels/help-sections.js?v=25";
 import { setPageIds } from "./nav-registry.js";
+import { _resetPanelSpecCache } from "./panel-post.js";
 
 
 // The Help nav is generated from help-sections.js (single source shared with
@@ -90,7 +91,7 @@ const SECTIONS = [
     items: [
       { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js", keywords: "tasks board recurring chores qotd reminders", help: "help-todo" },
       { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js", help: "help-jail" },
-      { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js", help: "help-tickets" },
+      { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js", help: "help-tickets", keywords: "post panel support ticket panel open ticket button" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js", help: "help-tickets" },
       { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/mod-policy-tickets.js", help: "help-policies", related: ["config-policy-tickets"] },
       { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch.js", help: "help-rules-watch", related: ["config-rules-watch"] },
@@ -104,7 +105,7 @@ const SECTIONS = [
         { id: "guess-audit",       label: "Guess Who Audit",  module: "./panels/guess-audit.js", adminOnly: true },
         { id: "mod-whisper-audit", label: "Whisper Audit",    module: "./panels/mod-whisper-audit.js", adminOnly: true },
         { id: "confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js", adminOnly: true },
-        { id: "grant-audit",       label: "Grant Audit",      module: "./panels/grant-audit.js", keywords: "role grants audit" },
+        { id: "grant-audit",       label: "Grant Audit",      module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card" },
       ]},
     ],
   },
@@ -154,10 +155,9 @@ const SECTIONS = [
         { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js", keywords: "dead chat prompts", help: "help-chat-revive" },
         { id: "config-quote-border", label: "Quote Tool",     module: "./panels/config-quote-border.js", adminOnly: true, keywords: "quotes border color" },
         { id: "docs",              label: "Docs",              module: "./panels/docs.js", keywords: "channel docs documentation publish" },
-        { id: "channel-panels",    label: "Channel Panels",    module: "./panels/channel-panels.js", adminOnly: true, keywords: "post panel sticky ticket shop leaderboard guide prompt voice control" },
       ]},
       { heading: "Voice", items: [
-        { id: "config-voice-master", label: "Voice Control",     module: "./panels/config-voice-master.js", adminOnly: true, help: "help-voice", keywords: "voice master hub temporary channels" },
+        { id: "config-voice-master", label: "Voice Control",     module: "./panels/config-voice-master.js", adminOnly: true, help: "help-voice", keywords: "voice master hub temporary channels post panel owner control panel" },
         { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
       ]},
       { heading: "AI & Maintenance", items: [
@@ -189,7 +189,7 @@ const SECTIONS = [
       { id: "economy-qotd", label: "QOTD", module: "./panels/economy-qotd.js", adminOnly: true, keywords: "question of the day" },
       { id: "economy-qotd-submissions", label: "Sponsored QOTD", module: "./panels/economy-qotd-submissions.js" },
       { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js", help: "help-economy" },
-      { id: "economy-config", label: "Settings", module: "./panels/economy-config.js", adminOnly: true, keywords: "economy currency settings", help: "help-economy" },
+      { id: "economy-config", label: "Settings", module: "./panels/economy-config.js", adminOnly: true, keywords: "economy currency settings post panel channel panel how-to guide leaderboard perk shop", help: "help-economy" },
     ],
   },
   {
@@ -227,7 +227,7 @@ const SECTIONS = [
       { id: "config-games-musicalchairs", label: "Musical Chairs", module: "./panels/config-games-musicalchairs.js", adminOnly: true },
       { id: "games-ffa", label: "FFA / Truth or Dare", module: "./panels/games-ffa.js" },
       { id: "games-traditional", label: "Traditional Truth or Dare", module: "./panels/games-traditional.js" },
-      { id: "config-guess", label: "Guess Who", module: "./panels/config-guess.js", perms: ["moderator"], help: "help-guess" },
+      { id: "config-guess", label: "Guess Who", module: "./panels/config-guess.js", perms: ["moderator"], help: "help-guess", keywords: "post panel submit prompt" },
       { id: "config-whisper",    label: "Whisper",     module: "./panels/config-whisper.js", perms: ["moderator"], help: "help-whisper" },
       { id: "config-confessions",  label: "Confessions",     module: "./panels/config-confessions.js", adminOnly: true, help: "help-confessions" },
     ],
@@ -863,6 +863,26 @@ function recordPanelView(pageId) {
   apiPost("/api/telemetry/panel", { panel: pageId }).catch(() => {});
 }
 
+// Pages that were split up rather than deleted. A bookmark to one would
+// otherwise land on "this page doesn't exist", which is true but unhelpful —
+// send it to the page that inherited most of what it did.
+//   channel-panels: retired 2026-07-28, its seven post controls moved onto the
+//   config page of the feature each panel belongs to. Economy took three of
+//   them, so it's the closest thing to a successor.
+const MOVED_PAGES = { "channel-panels": "economy-config" };
+
+/** Rewrite a retired page's hash to its successor. True if it redirected. */
+function redirectMovedPage() {
+  const { id } = parseHash();
+  // hasOwn, not a bare lookup: ids like "toString" or "constructor" hit
+  // Object.prototype and would "redirect" to a stringified native function
+  // instead of rendering the page-unavailable notice.
+  if (!Object.hasOwn(MOVED_PAGES, id)) return false;
+  const to = MOVED_PAGES[id];
+  window.location.replace(`#/${to}`);
+  return true;
+}
+
 async function mountPanel(evt) {
   // Unsaved-changes guard: cancel keeps the current panel and restores the
   // pre-navigation hash (hashchange can't be prevented, only undone).
@@ -875,6 +895,7 @@ async function mountPanel(evt) {
   }
 
   closeMobileSidebar();
+  if (redirectMovedPage()) return; // hashchange remounts on the new id
   const { id, params } = parseHash();
   const page =
     ALL_PAGES.find((p) => p.id === id) || EXTRA_ROUTES.find((p) => p.id === id);
@@ -933,6 +954,11 @@ function applyMeData(me) {
     games_editor_role_id: me.games_editor_role_id || null,
     economy_manager_role_id: me.economy_manager_role_id || null,
   };
+
+  // The panel registry resolves a spec's grant-role choices from the active
+  // guild's config, and switchGuild re-mounts panels without reloading the
+  // page — so the cached /api/panels payload has to go with the old guild.
+  _resetPanelSpecCache();
 
   // Recompute visible nav (Config pages are filtered per primary/non-primary)
   rebuildIndex();
