@@ -15,6 +15,7 @@ from bot_modules.economy.game_rewards import (
 from bot_modules.games.utils.game_manager import (
     create_game,
     end_game,
+    force_end_active_game,
     get_active_game_by_id,
 )
 from bot_modules.services.economy_quests_service import create_quest, set_quest_active
@@ -608,3 +609,111 @@ async def test_footer_respects_configured_amounts(db_path):
     embed = _embed()
     await append_payout_footer(bot, embed, GUILD, "rushmore")
     assert embed.footer.text == "🪙 +50 to winners"
+
+
+# ── force_end_active_game payout ──────────────────────────────────────────────
+
+class _ForceBot(_EndBot):
+    """_EndBot plus the active_views map force_end pokes and pops."""
+
+    def __init__(self, db_path, members):
+        super().__init__(db_path, members)
+        self.active_views: dict = {}
+
+
+async def test_force_end_pays_the_room(db_path):
+    """`/games end` is the normal close for several games, not just an abort, so
+    it credits the same roster the game's own completion site would have.
+    """
+    _enable(db_path)
+    db = GamesDb(db_path)
+    payload = {"players": [1, 2, 3], "round_history": [{}, {}]}
+    gid = await create_game(db, CH, 1, "clapback", payload=payload)
+    bot: Any = _ForceBot(db_path, [_member(1), _member(2), _member(3)])
+
+    await force_end_active_game(bot, db, gid)
+
+    assert _bal(db_path, 2) == 5
+    assert _bal(db_path, 3) == 5
+    assert await get_active_game_by_id(db, gid) is None
+
+
+async def test_force_end_archives_the_reconstructed_roster(db_path):
+    """The history row must reflect what was paid, not the zeros the bare
+    end_game call used to write.
+    """
+    _enable(db_path)
+    db = GamesDb(db_path)
+    payload = {"rounds": {"1": {"a": [1, 2], "b": [3]}}}
+    gid = await create_game(db, CH, 1, "wyr", payload=payload)
+    bot: Any = _ForceBot(db_path, [_member(1), _member(2), _member(3)])
+
+    await force_end_active_game(bot, db, gid)
+
+    with open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT player_count, round_count, guild_id FROM games_game_history "
+            "WHERE game_id = ?", (gid,),
+        ).fetchone()
+    assert row["player_count"] == 3
+    assert row["round_count"] == 1
+    assert row["guild_id"] == GUILD
+
+
+async def test_force_end_pays_nobody_for_a_game_that_never_got_going(db_path):
+    """Aborting an empty lobby still costs nothing — the roster is empty, which
+    is the whole gate.
+    """
+    _enable(db_path)
+    db = GamesDb(db_path)
+    gid = await create_game(db, CH, 1, "clapback", payload={"players": []})
+    bot: Any = _ForceBot(db_path, [_member(1)])
+
+    await force_end_active_game(bot, db, gid)
+
+    assert _bal(db_path, 1) == 0
+    assert await get_active_game_by_id(db, gid) is None
+
+
+async def test_force_end_pays_nobody_for_a_prompt_style_game(db_path):
+    """ffa/photo have no joined roster, so force-ending one credits nobody."""
+    _enable(db_path)
+    db = GamesDb(db_path)
+    gid = await create_game(db, CH, 1, "ffa", payload={"prompt": "x"})
+    bot: Any = _ForceBot(db_path, [_member(1)])
+
+    await force_end_active_game(bot, db, gid)
+
+    assert _bal(db_path, 1) == 0
+
+
+async def test_force_end_racing_the_games_own_close_pays_once(db_path):
+    """A host pressing End as a mod runs /games end: end_game's DELETE claim
+    means whichever lands first pays, and the loser is a no-op.
+    """
+    _enable(db_path)
+    db = GamesDb(db_path)
+    payload = {"players": [1, 2]}
+    gid = await create_game(db, CH, 1, "clapback", payload=payload)
+    bot: Any = _ForceBot(db_path, [_member(1), _member(2)])
+
+    await force_end_active_game(bot, db, gid)
+    before = _bal(db_path, 2)
+    await end_game(db, gid, payload=payload, bot=bot, player_ids=[1, 2])
+    assert _bal(db_path, 2) == before
+
+
+async def test_force_end_survives_a_corrupt_payload(db_path):
+    """An unreadable payload costs that game its roster, not the teardown."""
+    _enable(db_path)
+    db = GamesDb(db_path)
+    gid = await create_game(db, CH, 1, "clapback", payload={"players": [1, 2]})
+    await db.execute(
+        "UPDATE games_active_games SET payload = ? WHERE game_id = ?", ("{not json", gid),
+    )
+    bot: Any = _ForceBot(db_path, [_member(1), _member(2)])
+
+    await force_end_active_game(bot, db, gid)
+
+    assert await get_active_game_by_id(db, gid) is None
+    assert _bal(db_path, 2) == 0

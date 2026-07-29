@@ -424,25 +424,13 @@ def main() -> None:
     # ==============================
     async def _game_cleanup_loop() -> None:
         """Hourly sweep — end any party game older than 24 hours."""
-        from bot_modules.games.utils.game_manager import end_game  # type: ignore[import-untyped]
+        from bot_modules.games.utils.expiry_service import sweep_expired_games  # type: ignore[import-untyped]
 
         await bot.wait_until_ready()
         while not bot.is_closed():
             await asyncio.sleep(3600)
             try:
-                rows = await bot.games_db.fetchall(  # type: ignore[attr-defined]
-                    "SELECT game_id, channel_id, game_type FROM games_active_games "
-                    "WHERE created_at <= datetime('now', '-24 hours')"
-                )
-                for row in rows:
-                    game_id = row["game_id"]
-                    await end_game(bot.games_db, game_id)  # type: ignore[attr-defined]
-                    if row["game_type"] == "ama":
-                        ama_cog = bot.get_cog("AMACog")
-                        if ama_cog and hasattr(ama_cog, "cleanup_ended_game"):
-                            await ama_cog.cleanup_ended_game(row["channel_id"], game_id)  # type: ignore[attr-defined]
-                    bot.active_views.pop(game_id, None)  # type: ignore[attr-defined]
-                    log.info("Auto-expired game %s (24 h limit)", game_id)
+                await sweep_expired_games(bot, bot.games_db)  # type: ignore[attr-defined]
             except Exception:
                 log.exception("Game cleanup error")
 

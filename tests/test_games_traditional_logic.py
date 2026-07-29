@@ -10,6 +10,7 @@ up Discord.
 
 from __future__ import annotations
 
+import inspect
 import random
 
 import pytest
@@ -625,3 +626,23 @@ def test_filtered_prefs_never_serve_an_nsfw_bank_question():
     # that is not age-restricted, is served nothing rather than NSFW content.
     prefs = filter_nsfw_prefs({"1": ["nsfw_truth", "nsfw_dare"]}, False)
     assert select_bank_categories_for_all(prefs, {}) == {}
+
+
+def test_host_view_exposes_an_end_game_button_bound_to_do_close():
+    """The one wiring assertion this fix needs at the cog layer.
+
+    ``_do_close`` is the only Truth-or-Dare call site that passes ``bot=`` and
+    ``player_ids=`` to ``end_game``, i.e. the only one that pays the room. It
+    shipped with no button reaching it, so no game ever paid. Guard the wiring,
+    not the payout behaviour — that lives in test_games_expiry_service.py.
+    """
+    from bot_modules.cogs.games_traditional_cog import TraditionalHostView
+
+    button = TraditionalHostView.end_game_button
+    # A real registered button, not just a method nothing can reach.
+    assert button.__discord_ui_model_kwargs__["label"] == "End Game"
+    assert button.__discord_ui_model_kwargs__["custom_id"] == "tod_end"
+    source = inspect.getsource(button)
+    assert "_do_close" in source
+    assert "is_host_or_mod" in source  # host/mod gate, not open to the room
+    assert "ConfirmCloseView" in source  # same confirm popup every other game uses

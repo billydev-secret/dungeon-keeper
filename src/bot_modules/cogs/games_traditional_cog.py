@@ -17,6 +17,7 @@ from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
+    ConfirmCloseView,
     create_game,
     end_game,
     get_game_payload,
@@ -300,6 +301,31 @@ class TraditionalHostView(discord.ui.View):
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["traditional"], ephemeral=True)
+
+    @discord.ui.button(label="End Game", style=discord.ButtonStyle.secondary, custom_id="tod_end", row=2)
+    async def end_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Close the game, post the recap, and pay the room.
+
+        Truth or Dare shipped without this button, so ``_do_close`` — the only
+        call site that passes ``bot=``/``player_ids=`` to ``end_game`` — was
+        unreachable and no game ever paid out.
+        """
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if not self.is_host_or_mod(interaction):
+            await interaction.response.send_message("Only the host or a mod can end the game.", ephemeral=True)
+            return
+
+        channel = interaction.channel
+
+        async def _confirmed(confirm_interaction: discord.Interaction) -> None:
+            # Close through the game message, not the confirm interaction —
+            # ConfirmCloseView has already responded to that one.
+            await self._do_close(confirm_interaction, game_msg=self._message, channel=channel)
+
+        view = ConfirmCloseView(_confirmed)
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to end this game?", view=view, ephemeral=True,
+        )
 
     async def _do_close(self, interaction: discord.Interaction, game_msg=None, channel=None):
         payload = await self._get_payload()

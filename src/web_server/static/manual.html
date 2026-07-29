@@ -529,7 +529,7 @@
         <tr><td><code>/games play mlt</code></td><td><strong>Most Likely To</strong> — vote which player fits the prompt; crowns tally across rounds</td></tr>
         <tr><td><code>/games play mfk</code></td><td><strong>Marry, Fornicate, Kiss</strong> — each player sorts 3 random members from the pool (custom labels supported)</td></tr>
         <tr><td><code>/games play twotruths</code></td><td><strong>Two Truths and a Lie</strong> — submit 3 statements (the prompt shows right in the form), the room guesses the lie. Misread the prompt? Resubmit any time before your round is revealed — the form refills with what you wrote. Best Liar <em>and</em> Best Guesser both earn the win bonus</td></tr>
-        <tr><td><code>/games play traditional</code></td><td><strong>Truth or Dare</strong> — on your turn, pick a category button: SFW Truth, SFW Dare, NSFW Truth, or NSFW Dare (NSFW only appears in age-restricted channels). The optional <code>single_choice:</code> flag locks the whole game to one category picked up front</td></tr>
+        <tr><td><code>/games play traditional</code></td><td><strong>Truth or Dare</strong> — on your turn, pick a category button: SFW Truth, SFW Dare, NSFW Truth, or NSFW Dare (NSFW only appears in age-restricted channels). The optional <code>single_choice:</code> flag locks the whole game to one category picked up front. When you're done, the host presses <strong>End Game</strong> — that posts the recap and pays everyone who played. If nobody presses it, the 24-hour sweep closes the game and still pays the room</td></tr>
         <tr><td><code>/games play fantasies</code></td><td><strong>Fantasies &amp; Dealbreakers</strong> — anonymous submissions in two categories, then voting rounds</td></tr>
         <tr><td><code>/games play ama</code></td><td><strong>Anonymous AMA</strong> — others submit anonymous questions to whoever's answering. <code>mode:</code> is <em>Unfiltered</em> by default (questions post immediately); pick <em>Screened</em> to route them through an approval queue first. <code>format:</code> is <em>Hot Seat</em> by default (one player answers); <em>Open Panel</em> lets anyone answer</td></tr>
         <tr><td><code>/games play hottakes</code></td><td><strong>Hot Takes</strong> — submit spicy opinions, then the room rates each on a 5-step 🧊-to-🔥 scale (strongly disagree → strongly agree); the average heat for every take is revealed at the end</td></tr>
@@ -646,7 +646,7 @@
     <div class="cmd-block">
       <span class="cmd-name">/games end</span>
       <span class="cmd-perm"><span class="perm perm-all">Host or Mod</span></span>
-      <span class="cmd-desc">End the game running in this channel — available to the game's host or a mod.</span>
+      <span class="cmd-desc">End the game running in this channel — available to the game's host or a mod. Everyone who took part gets paid, the same as ending the game from its own buttons. A game nobody joined pays nothing.</span>
     </div>
 
     <h3 id="games-web">For Hosts &amp; Admins</h3>
