@@ -212,3 +212,75 @@ def test_dropdown_stays_anchored_to_its_input(browser, dashboard, strip_popover)
         assert not errors, f"uncaught JS: {errors}"
     finally:
         context.close()
+
+# Realistic ids: the shipped fixture above uses "1"/"2"/"3", which are shorter
+# than MIN_ID_FILTER_LEN and so can't exercise the paste-an-id path at all.
+_MOUNT_SNOWFLAKES = """
+async ({ }) => {
+  document.body.innerHTML = '';
+  const host = document.createElement('div');
+  host.id = 'host';
+  document.body.appendChild(host);
+  const mod = await import('/static/js/filter-select.js?t=sf');
+  const fs = mod.filterSelect('Type to filter…', [
+    { id: '1532059736038441200', label: '#🚧│bounty-board' },
+    { id: '1526455991514955817', label: '#shop' },
+    { id: '1530328883449040967', label: '#the-casino' },
+  ], { label: 'Channel' });
+  host.appendChild(fs.el);
+  return fs.getValue();
+}
+"""
+
+_COUNT = """
+() => document.querySelectorAll('.filter-select-item').length
+"""
+
+
+def _snowflake_page(browser, dashboard):
+    context = browser.new_context(viewport={"width": 420, "height": 780})
+    page = context.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)[:200]))
+    _goto_panel(page, f"{dashboard.base}/")
+    page.evaluate(_MOUNT_SNOWFLAKES, {})
+    page.click(".filter-select-input")
+    return context, page, errors
+
+
+def test_pasting_a_channel_id_finds_the_channel(browser, dashboard):
+    """Copying an id out of Discord is the obvious move on mobile, where the
+    name carries an emoji and a box-drawing separator. A label-only filter
+    answered that paste with an empty list, which reads as "the bot can't see
+    any channels" — and then Post failed with a channel-type error."""
+    context, page, errors = _snowflake_page(browser, dashboard)
+    try:
+        page.fill(".filter-select-input", "1532059736038441200")
+        # the "(any)" sentinel row + exactly the pasted channel
+        assert page.evaluate(_COUNT) == 2
+        assert not errors, f"uncaught JS: {errors}"
+    finally:
+        context.close()
+
+
+def test_a_short_numeric_filter_does_not_match_every_id(browser, dashboard):
+    """Guard the gate on MIN_ID_FILTER_LEN: typing a digit while searching a
+    name must not drag in every option whose id happens to contain it."""
+    context, page, errors = _snowflake_page(browser, dashboard)
+    try:
+        page.fill(".filter-select-input", "1")
+        # Only the sentinel — no label holds a "1" and the id path is off.
+        assert page.evaluate(_COUNT) == 1
+        assert not errors, f"uncaught JS: {errors}"
+    finally:
+        context.close()
+
+
+def test_filtering_by_name_still_works(browser, dashboard):
+    context, page, errors = _snowflake_page(browser, dashboard)
+    try:
+        page.fill(".filter-select-input", "casino")
+        assert page.evaluate(_COUNT) == 2
+        assert not errors, f"uncaught JS: {errors}"
+    finally:
+        context.close()

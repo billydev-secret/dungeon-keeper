@@ -81,6 +81,15 @@ applying `[popover]` UA *styles*, so it reproduces the positioning and
 lost-visibility half of the iOS bug, not an engine that ignores the attribute
 entirely.
 
+A second fixture mounts the widget with real snowflake ids to cover **matching
+by id**: pasting a channel id finds its row, a short numeric filter does not
+drag in every id containing that digit (the `MIN_ID_FILTER_LEN` gate), and name
+search is unaffected. The shipped fixture's `"1"`/`"2"`/`"3"` ids are shorter
+than that gate, so they cannot exercise the path. This came from a real
+mobile report: copying an id out of Discord — the natural move when the name
+carries an emoji and a box separator — returned an empty list, which reads as
+"the bot can't see any channels".
+
 The two panel sweeps use a **fresh browser context per panel** and wait for the
 layout to settle before measuring — shared-context state bleed and mid-render
 snapshots otherwise make results flap between runs.

@@ -160,7 +160,13 @@ async def post_panel(
 
     channel = None
     if spec.method not in _OWN_CHANNEL_METHODS:
-        if not body.channel_id:
+        # "0" is the picker's *unset* sentinel (mountChannelPicker's
+        # emptyValue), and it arrives as a truthy string — so an admin who
+        # typed into the filter without tapping a row used to fall through to
+        # get_channel(0) and be told "Channel must be a text channel in this
+        # guild", which sends them hunting for a channel problem that isn't
+        # there. Name the real one.
+        if not body.channel_id or str(body.channel_id).strip() in ("", "0"):
             raise HTTPException(400, "Pick a channel for this panel")
         try:
             channel_id = int(body.channel_id)
