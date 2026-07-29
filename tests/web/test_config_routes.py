@@ -448,6 +448,10 @@ def test_update_nsfw_classifier(authed_client, fake_ctx):
         pytest.param({"sfw_threshold": -0.1}, id="sfw-threshold-negative"),
         pytest.param({"sfw_mode": "delete-everything"}, id="unknown-mode"),
         pytest.param({"labels": []}, id="empty-label-set"),
+        pytest.param({"labels": ["NOT_A_REAL_LABEL"]}, id="unknown-label"),
+        pytest.param(
+            {"labels": ["SEX_ACT", "TYPOED_LABEL"]}, id="one-unknown-among-valid"
+        ),
     ],
 )
 def test_nsfw_classifier_rejects_inert_settings(authed_client, body):

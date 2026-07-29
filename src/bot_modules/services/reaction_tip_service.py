@@ -25,7 +25,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.auto_react_service import get_placement_with_conn
+from bot_modules.services.auto_react_service import (
+    get_placement_with_conn,
+    parse_emojis,
+)
 from bot_modules.services.economy_service import (
     apply_credit,
     apply_debit,
@@ -42,6 +45,19 @@ MIN_RAKE = 1
 
 LEDGER_KIND_OUT = "tip_out"
 LEDGER_KIND_IN = "tip_in"
+
+
+def min_rung_amount() -> int:
+    """Smallest price that actually delivers the poster something.
+
+    Derived from the rake rather than restated, so the API validator and the
+    dashboard can't keep accepting rungs that :func:`plan_tip` has started
+    declining at every tap after a change to ``RAKE_FRACTION``/``MIN_RAKE``.
+    """
+    amount = 1
+    while amount - compute_rake(amount) < 1:
+        amount += 1
+    return amount
 
 
 @dataclass(frozen=True)
@@ -116,9 +132,43 @@ def set_rung(
         )
 
 
+def replace_rungs(
+    db_path: Path, guild_id: int, channel_id: int, rungs: dict[str, int]
+) -> None:
+    """Make the channel's ladder exactly *rungs* (0-priced entries dropped).
+
+    One connection and one transaction — the dashboard save used to open one
+    per emoji, and wrote prices for emoji it then read back and cleared.
+    """
+    priced = {emoji: amount for emoji, amount in rungs.items() if amount > 0}
+    with open_db(db_path) as conn:
+        conn.execute(
+            "DELETE FROM reaction_tip_rungs WHERE guild_id=? AND channel_id=?",
+            (guild_id, channel_id),
+        )
+        conn.executemany(
+            "INSERT INTO reaction_tip_rungs (guild_id, channel_id, emoji, amount) "
+            "VALUES (?, ?, ?, ?)",
+            [(guild_id, channel_id, e, a) for e, a in priced.items()],
+        )
+
+
 def get_rungs(db_path: Path, guild_id: int, channel_id: int) -> dict[str, int]:
     with open_db(db_path) as conn:
         return get_rungs_with_conn(conn, guild_id, channel_id)
+
+
+def get_rungs_for_guild_with_conn(
+    conn: sqlite3.Connection, guild_id: int
+) -> dict[int, dict[str, int]]:
+    """All ladders for a guild, keyed by channel — one query, not one per rule."""
+    rungs: dict[int, dict[str, int]] = {}
+    for row in conn.execute(
+        "SELECT channel_id, emoji, amount FROM reaction_tip_rungs WHERE guild_id=?",
+        (guild_id,),
+    ):
+        rungs.setdefault(int(row["channel_id"]), {})[row["emoji"]] = int(row["amount"])
+    return rungs
 
 
 def get_rungs_with_conn(
@@ -162,6 +212,12 @@ def apply_tip(
             # message is tippable. Stops a hand-pasted rung on a text post or
             # an old message from becoming a payment target.
             return TipOutcome(reason="not_tippable")
+
+        if emoji not in parse_emojis(placement["emojis"]):
+            # The receipt lists what the bot actually attached. An emoji that
+            # has a price but failed to attach (or was never on this rule) is
+            # not a payment button someone can hand-place onto the post.
+            return TipOutcome(reason="not_placed")
 
         author_id = int(placement["author_id"])
         if author_id == reactor_id:
@@ -250,16 +306,3 @@ def _already_charged(
     )
 
 
-def tips_received(db_path: Path, guild_id: int, author_id: int) -> tuple[int, int]:
-    """Return ``(tip_count, coins_received)`` for a poster."""
-    with open_db(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS n,
-                   COALESCE(SUM(amount_paid - rake), 0) AS total
-            FROM reaction_tip_awards
-            WHERE guild_id = ? AND author_id = ?
-            """,
-            (guild_id, author_id),
-        ).fetchone()
-    return int(row["n"]), int(row["total"])

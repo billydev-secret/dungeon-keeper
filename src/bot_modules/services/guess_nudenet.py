@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from bot_modules.services.guess_models import BoundingBox, Detection
@@ -9,11 +10,20 @@ from bot_modules.services.guess_models import BoundingBox, Detection
 log = logging.getLogger("dungeonkeeper.guess")
 
 _detector = None
+# The classifier runs inference from asyncio.to_thread workers, so several
+# threads can reach the lazy init at once. Without the lock two of them can
+# each build a NudeDetector — a second ONNX model load, and an orphaned
+# session left behind.
+_detector_lock = threading.Lock()
 
 
 def _get_detector():  # type: ignore[return]
     global _detector
-    if _detector is None:
+    if _detector is not None:
+        return _detector
+    with _detector_lock:
+        if _detector is not None:
+            return _detector
         from nudenet import NudeDetector  # type: ignore[import-untyped]  # noqa: PLC0415
         # Use the 640m model from models/ if present; fall back to the 320n bundled
         # with the nudenet package so no manual download is required.

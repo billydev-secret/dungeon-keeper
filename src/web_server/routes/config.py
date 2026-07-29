@@ -54,13 +54,18 @@ from bot_modules.services.nsfw_classifier_service import (
     CONFIG_KEY_SFW_MODE,
     CONFIG_KEY_SFW_THRESHOLD,
     CONFIG_KEY_THRESHOLD,
-    DEFAULT_LABEL_SET,
     DEFAULT_SFW_MODE,
     SFW_MODES,
+    is_valid_threshold,
+    known_labels,
     load_settings_with_conn,
     serialize_label_set,
 )
-from bot_modules.services.reaction_tip_service import get_rungs, get_rungs_with_conn, set_rung
+from bot_modules.services.reaction_tip_service import (
+    get_rungs_for_guild_with_conn,
+    min_rung_amount,
+    replace_rungs,
+)
 from bot_modules.services.auto_react_service import (
     list_auto_react_rules_for_guild_with_conn,
     parse_emojis,
@@ -746,6 +751,8 @@ def _duel_game_upsert(
 
 
 def _auto_react_section(conn, guild_id: int) -> list:
+    # One query for every channel's ladder rather than one per rule.
+    rungs = get_rungs_for_guild_with_conn(conn, guild_id)
     return [
         {
             "channel_id": str(r["channel_id"]),
@@ -753,7 +760,7 @@ def _auto_react_section(conn, guild_id: int) -> list:
             "enabled": bool(r["enabled"]),
             "tips_enabled": bool(r["tips_enabled"]),
             # Per-emoji prices; the emoji set doubles as the price ladder.
-            "rungs": get_rungs_with_conn(conn, guild_id, int(r["channel_id"])),
+            "rungs": rungs.get(int(r["channel_id"]), {}),
         }
         for r in list_auto_react_rules_for_guild_with_conn(conn, guild_id)
     ]
@@ -771,7 +778,9 @@ def _nsfw_classifier_section(conn, guild_id: int) -> dict:
         "threshold": threshold,
         "sfw_threshold": sfw_threshold,
         "labels": sorted(labels),
-        "available_labels": sorted(DEFAULT_LABEL_SET | _OPTIONAL_LABELS),
+        "available_labels": sorted(known_labels()),
+        # So the panel's own guard reads the same number the service enforces.
+        "min_rung": min_rung_amount(),
         "sfw_mode": mode if mode in SFW_MODES else DEFAULT_SFW_MODE,
         "sfw_log_channel_id": get_config_value(
             conn, CONFIG_KEY_SFW_LOG_CHANNEL, "0", guild_id
@@ -782,16 +791,6 @@ def _nsfw_classifier_section(conn, guild_id: int) -> dict:
     }
 
 
-#: Offered in the dashboard alongside the defaults, so a guild can opt into
-#: treating covered/suggestive content as qualifying without a code change.
-_OPTIONAL_LABELS = frozenset({
-    "FEMALE_BREAST_COVERED",
-    "BUTTOCKS_COVERED",
-    "FEMALE_GENITALIA_COVERED",
-    "MALE_GENITALIA_COVERED",
-    "BELLY_EXPOSED",
-    "ARMPITS_EXPOSED",
-})
 
 
 def _pen_pals_section(conn, guild_id: int) -> dict:
@@ -2962,11 +2961,10 @@ async def update_nsfw_classifier(
         ("threshold", body.threshold),
         ("sfw_threshold", body.sfw_threshold),
     ):
-        # Outside (0, 1] a threshold answers the same way for every image,
-        # which disables the gate rather than loosening it. The service
-        # rejects such values on read; reject them at write time too so the
-        # dashboard can't silently store something inert.
-        if value is not None and not 0.0 < value <= 1.0:
+        # The service rejects an out-of-range threshold on read; reject it at
+        # write time too, using the same predicate, so the dashboard can't
+        # silently store something inert.
+        if value is not None and not is_valid_threshold(value):
             raise HTTPException(
                 status_code=400, detail=f"{field} must be between 0 and 1"
             )
@@ -2976,10 +2974,18 @@ async def update_nsfw_classifier(
             status_code=400, detail=f"sfw_mode must be one of {', '.join(SFW_MODES)}"
         )
 
-    if body.labels is not None and not body.labels:
-        raise HTTPException(
-            status_code=400, detail="at least one qualifying label is required"
-        )
+    if body.labels is not None:
+        if not body.labels:
+            raise HTTPException(
+                status_code=400, detail="at least one qualifying label is required"
+            )
+        # A label outside the detector's vocabulary matches nothing, so it
+        # would quietly disable detection for that entry rather than erroring.
+        unknown = sorted(set(body.labels) - known_labels())
+        if unknown:
+            raise HTTPException(
+                status_code=400, detail=f"unknown label(s): {', '.join(unknown)}"
+            )
 
     def _q():
         with ctx.open_db() as conn:
@@ -3535,18 +3541,20 @@ async def update_auto_react(
     guild_id = get_active_guild_id(request)
 
     if body.rungs:
+        # Anything below this delivers the poster nothing once the rake floor
+        # is taken, so it's refused rather than silently declining every tap.
+        # Derived from the rake constants, not restated here.
+        minimum = min_rung_amount()
         for emoji, amount in body.rungs.items():
-            # A rung of 1 would deliver the poster nothing after the 1-coin
-            # minimum burn, so it is rejected rather than silently declining
-            # every tap at that rung.
-            if 0 < amount < 2:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"rung for {emoji} must be at least 2 (the rake floor is 1)",
-                )
             if amount < 0:
                 raise HTTPException(
                     status_code=400, detail=f"rung for {emoji} cannot be negative"
+                )
+            if 0 < amount < minimum:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"rung for {emoji} must be at least {minimum} "
+                    "(anything less is entirely consumed by the rake)",
                 )
 
     def _q():
@@ -3559,12 +3567,14 @@ async def update_auto_react(
             tips_enabled=body.tips_enabled,
         )
         if body.rungs is not None:
-            for emoji, amount in body.rungs.items():
-                set_rung(ctx.db_path, guild_id, int(channel_id), emoji, amount)
-            # Emoji dropped from the rule can't stay priced.
-            for emoji in get_rungs(ctx.db_path, guild_id, int(channel_id)):
-                if emoji not in body.emojis:
-                    set_rung(ctx.db_path, guild_id, int(channel_id), emoji, 0)
+            # Only emoji still on the rule get a price; everything else is
+            # cleared, so a dropped emoji can't linger as chargeable.
+            replace_rungs(
+                ctx.db_path,
+                guild_id,
+                int(channel_id),
+                {e: body.rungs.get(e, 0) for e in body.emojis},
+            )
         return {"ok": True}
 
     return await run_query(_q)

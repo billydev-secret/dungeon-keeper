@@ -1189,7 +1189,10 @@ supply ~1.4% per day.)
 **Rake** is `max(1, round_half_up(10%))` of what was actually paid. The floor
 matters — a flat 10% of a 5-coin tip rounds to zero, which would make the sink
 symbolic. Rounding is explicitly half-up rather than Python's banker's
-rounding, so a 25-coin tip rakes 3 and not 2.
+rounding, so a 25-coin tip rakes 3 and not 2. The smallest viable rung is
+**derived** from those constants (`min_rung_amount()`) rather than restated, so
+the API validator and the dashboard can't keep accepting prices the service has
+started declining at every tap.
 
 **The ladder is the emoji set.** Rungs are per-emoji per-channel
 (`reaction_tip_rungs`), so which emoji you tap is how much you give — 5 / 25 /
@@ -1200,9 +1203,16 @@ below 2 is not viable — after the 1-coin floor it would deliver the poster
 nothing.
 
 **Only bot-placed emoji charge.** A tip requires a placement receipt
-([[auto-react-spec]]) for that exact message, so a rung pasted by hand onto a
-text post, an old message, or an image the classifier rejected is free and
+([[auto-react-spec]]) for that exact message **listing that emoji**, so a rung
+pasted by hand onto a text post, an old message, an image the classifier
+rejected, or a post where that particular emoji failed to attach is free and
 inert. Any other emoji anyone adds is always free.
+
+Ledger kinds are registered alongside the rest: `tip_in` is in the register
+feed's `SKIP_KINDS` so one tip is one feed entry (the payer's leg), and
+`tip_out` is in `BURN_EXCLUDED_KINDS` because ~90% of it lands in the poster's
+wallet — only the rake burns, and that is not a ledger row at all, it is the
+amount never credited.
 
 **One charge per `(guild, message, reactor)`, forever** — the shape
 `xp_reaction_awards` already uses. Removing the reaction refunds nothing and

@@ -192,19 +192,22 @@ export function mount(container) {
         return;
       }
       try {
-        await apiPut("/api/config/spoiler", {
-          spoiler_required_channels: spoilerPicker.getValues(),
-        });
-        await apiPut("/api/config/nsfw-classifier", {
-          threshold: Number(form.querySelector('[data-field="threshold"]').value),
-          sfw_threshold: Number(
-            form.querySelector('[data-field="sfw_threshold"]').value,
-          ),
-          labels,
-          sfw_mode: modeSelect.value,
-          sfw_log_channel_id: logPicker.getValue() || "0",
-          sfw_exempt_channels: exemptPicker.getValues(),
-        });
+        // Independent endpoints — no reason to pay two round trips in series.
+        await Promise.all([
+          apiPut("/api/config/spoiler", {
+            spoiler_required_channels: spoilerPicker.getValues(),
+          }),
+          apiPut("/api/config/nsfw-classifier", {
+            threshold: Number(form.querySelector('[data-field="threshold"]').value),
+            sfw_threshold: Number(
+              form.querySelector('[data-field="sfw_threshold"]').value,
+            ),
+            labels,
+            sfw_mode: modeSelect.value,
+            sfw_log_channel_id: logPicker.getValue() || "0",
+            sfw_exempt_channels: exemptPicker.getValues(),
+          }),
+        ]);
         showStatus(status, true);
       } catch (err) {
         showStatus(status, false, err.message);

@@ -135,6 +135,12 @@ def _member_isinstance(monkeypatch):
     )
 
 
+def classification(verdict_value, label="FEMALE_BREAST_EXPOSED", score=0.9):
+    return Classification(
+        attachment_id=1, verdict=verdict_value, top_label=label, top_score=score
+    )
+
+
 async def run(message, classify=None, bypass=frozenset()):
     return await enforce_spoiler_requirement(
         message,
@@ -147,7 +153,7 @@ async def run(message, classify=None, bypass=frozenset()):
 
 def verdict(value):
     async def classify(_attachment):
-        return value
+        return classification(value)
 
     return classify
 
@@ -219,7 +225,7 @@ async def test_one_innocent_attachment_does_not_clear_an_explicit_one():
     message = FakeMessage(attachments=[innocent, explicit])
 
     async def classify(attachment):
-        return attachment.filename == "nsfw.png"
+        return classification(attachment.filename == "nsfw.png")
 
     assert await run(message, classify) is True
     assert message.deleted is True
@@ -285,12 +291,6 @@ async def test_non_image_attachment_is_ignored():
 
 
 ENFORCING = SfwPolicy(mode=SFW_MODE_ENFORCE, log_channel_id=LOG_CHANNEL)
-
-
-def classification(verdict, label="FEMALE_BREAST_EXPOSED", score=0.9):
-    return Classification(
-        attachment_id=1, verdict=verdict, top_label=label, top_score=score
-    )
 
 
 def sfw_verdict(value):

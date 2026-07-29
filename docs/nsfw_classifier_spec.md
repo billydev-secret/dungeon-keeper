@@ -38,6 +38,8 @@ The reported `top_label` is the highest-scoring *qualifying* detection, so a con
 
 ## Scope
 
+**One definition of "image".** `is_image_attachment` in this module is the single predicate; `post_monitoring.attachment_is_image` delegates to it and the auto-react cog filters with `is_classifiable` (the same predicate plus the size cap). They previously disagreed — over `.tiff`, and over attachments Discord serves with no `content_type` — which meant a file could be handed to the classifier by one consumer and silently skipped by another.
+
 **Attachments only.** Embeds are never classified. The auto-react cog's `_has_image` matches `gifv`/`rich` embeds whose images live on arbitrary external hosts; fetching those would point the bot's outbound requests at member-supplied URLs — SSRF probing of the local network, IP-logging pixels, hostile payloads — so they are out of scope entirely. In a tipping-enabled channel this means embeds get no emoji at all, since a bot-placed emoji is a live tip and nothing may be tipped that wasn't classified.
 
 Attachments over 25 MB are not downloaded. Downloads time out at 10 s. Both failures land as `UNKNOWN`.
@@ -46,9 +48,17 @@ Inference runs through `asyncio.to_thread` — onnxruntime blocks in C++, and ca
 
 ## Caching
 
-Verdicts are cached in-process by attachment id (bounded LRU, 512 entries) so the consumers that fire on one message classify between them exactly once. The cache is keyed on identity alone, so a caller needing a *different* threshold gets a fresh classification rather than the cached one — this is how SFW prevention runs its stricter bar over an image another consumer already judged.
+What is cached is the **detections**, not the verdict — the model's output depends only on the image, while `evaluate()` applies the threshold and label set on top. So every consumer of an attachment shares one download and one inference no matter what bar each applies, and an admin who edits the label set can't be served a verdict computed under the old one.
 
-`UNKNOWN` results are never cached; a transient CDN failure must not pin "unreadable" for the life of the process.
+The cache (bounded LRU, 512 entries, keyed on attachment id) holds the **in-flight task** rather than its result. discord.py dispatches each cog's listener as its own task, so the consumers reach the classifier concurrently rather than in sequence; without this they would each start their own download of the same bytes.
+
+A failed task is evicted, so a transient CDN failure doesn't pin "unreadable" for the life of the process.
+
+## Binding to a message
+
+Consumers don't call the classifier directly — they get one from `classifier_for(db_path, message, strict=...)`, which returns a small `MessageClassifier` value object. It derives `channel_is_nsfw` itself (callers used to pass it, which meant asserting a precondition enforced by a guard in another module), loads settings **once per message** rather than once per attachment, and does so lazily so that building one costs nothing — spoiler enforcement constructs one for every message in a watched channel but consults it only for an unspoilered image.
+
+It is a value object rather than a closure deliberately: it copies the handful of ids it needs instead of capturing, and keeping alive, the whole `discord.Message`.
 
 ## Recording
 
@@ -81,7 +91,7 @@ Stored in the shared `config` table, per guild:
 | `nsfw_classifier_sfw_threshold` | `0.75` | stricter bar used by SFW nudity prevention |
 | `nsfw_classifier_labels` | (built-in set) | comma-separated qualifying labels |
 
-Both thresholds are validated on read: a value outside `(0, 1]` is rejected in favor of the default, because such a value answers the same way for every image and would silently disable the gate rather than loosen it. An empty label set falls back to the default for the same reason.
+Both thresholds are validated on read *and* on write, through the same `is_valid_threshold` predicate: a value outside `(0, 1]` is rejected, because such a value answers the same way for every image and would silently disable the gate rather than loosen it. An empty label set falls back to the default for the same reason, and a label outside the detector's vocabulary (`known_labels()`) is a 400 rather than a silently inert entry.
 
 ## Cost
 

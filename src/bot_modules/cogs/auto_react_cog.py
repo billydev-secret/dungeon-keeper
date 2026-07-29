@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 
 from bot_modules.services import nsfw_classifier_service
+from bot_modules.services.nsfw_classifier_service import is_classifiable
 from bot_modules.services.auto_react_service import (
     get_auto_react_rule,
     parse_emojis,
@@ -24,11 +25,10 @@ log = logging.getLogger("dungeonkeeper.auto_react")
 
 
 def _image_attachments(message: discord.Message) -> list[discord.Attachment]:
-    return [
-        att
-        for att in message.attachments
-        if att.content_type and att.content_type.startswith("image/")
-    ]
+    # The classifier's own predicate, so an attachment Discord serves without
+    # a content_type isn't silently skipped here while the other consumers
+    # classify it fine.
+    return [att for att in message.attachments if is_classifiable(att)]
 
 
 def _has_image(message: discord.Message) -> bool:
@@ -59,8 +59,9 @@ class AutoReactCog(commands.Cog):
             return
 
         emojis = parse_emojis(row["emojis"])
+        tips_on = bool(row["tips_enabled"])
 
-        if int(row["tips_enabled"]):
+        if tips_on:
             emojis = await self._tip_emojis_for(message, emojis)
             if not emojis:
                 return
@@ -73,7 +74,7 @@ class AutoReactCog(commands.Cog):
             if isinstance(result, Exception):
                 log.warning("auto_react: failed to add %r in %d: %s", emoji, message.channel.id, result)
 
-        if int(row["tips_enabled"]):
+        if tips_on:
             placed = [e for e, r in zip(emojis, results) if not isinstance(r, Exception)]
             if placed:
                 await self._record_placement(message, placed)
@@ -89,25 +90,21 @@ class AutoReactCog(commands.Cog):
         """
         age_gated = nsfw_classifier_service.is_age_gated_channel(message.channel)
         if not age_gated:
-            # Checked before classifying, not after: it skips the download
-            # entirely, and classifying here would record a row for a channel
-            # that is out of recording scope.
+            # Checked before classifying, not after: it skips the downloads
+            # entirely on a misconfigured rule.
             return []
 
-        verdicts: list[bool | None] = []
-        for attachment in _image_attachments(message):
-            result = await nsfw_classifier_service.classify_for(
-                self.ctx.db_path,
-                attachment,
-                guild_id=message.guild.id if message.guild else 0,
-                channel_id=message.channel.id,
-                message_id=message.id,
-                channel_is_nsfw=age_gated,
-            )
-            verdicts.append(result.verdict)
+        classify = nsfw_classifier_service.classifier_for(self.ctx.db_path, message)
+        # Concurrently: an album's attachments are independent, and serialising
+        # them stacks a download plus ~74ms of inference each before any emoji
+        # appears.
+        results = await asyncio.gather(
+            *(classify(att) for att in _image_attachments(message))
+        )
 
         allowed = should_place_tip_emoji(
-            channel_is_nsfw=age_gated, verdicts=verdicts
+            channel_is_nsfw=age_gated,
+            verdicts=[r.verdict for r in results],
         )
         return emojis if allowed else []
 

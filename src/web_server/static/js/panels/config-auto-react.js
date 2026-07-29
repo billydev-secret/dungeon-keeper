@@ -1,4 +1,5 @@
 import { esc } from "../api.js";
+import { confirmDialog } from "../ui.js";
 import {
   loadConfig,
   loadChannels,
@@ -11,9 +12,9 @@ import {
   channelName,
 } from "../config-helpers.js";
 
-// A rung of 1 would deliver the poster nothing once the 1-coin minimum rake
-// is taken, so the lowest usable price is 2. The API rejects 1 as well.
-const MIN_RUNG = 2;
+// Supplied by the server, derived from the rake constants — so this stays
+// right if the rake changes, instead of accepting prices the service declines.
+let MIN_RUNG = 2;
 
 function ruleCard(rule, channels, idx) {
   const uid = `ar-${idx}`;
@@ -88,6 +89,7 @@ export function mount(container) {
   (async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const rules = config.auto_react || [];
+    MIN_RUNG = config.nsfw_classifier?.min_rung ?? MIN_RUNG;
 
     const render = () => {
       const cards = [...rules, { channel_id: "", emojis: [], enabled: true, tips_enabled: false, rungs: {} }]
@@ -176,6 +178,12 @@ export function mount(container) {
         const removeBtn = form.querySelector("[data-remove]");
         if (removeBtn) {
           removeBtn.addEventListener("click", async () => {
+            const name = channelName(channels, removeBtn.dataset.remove);
+            const ok = await confirmDialog(
+              `Stop auto-reacting in ${name}? If tipping is on, the emoji stop being tip buttons immediately.`,
+              { title: "Remove Rule", danger: true, confirmLabel: "Remove" },
+            );
+            if (!ok) return;
             try {
               await apiDelete(
                 `/api/config/auto-react/${removeBtn.dataset.remove}`,

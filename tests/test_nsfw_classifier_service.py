@@ -12,6 +12,7 @@ import sqlite3
 
 import pytest
 
+from bot_modules.services import nsfw_classifier_service as nsfw_module
 from bot_modules.core.db_utils import add_config_id, open_db, set_config_value
 from bot_modules.services.guess_models import BoundingBox, Detection
 from bot_modules.services.nsfw_classifier_service import (
@@ -21,8 +22,8 @@ from bot_modules.services.nsfw_classifier_service import (
     SFW_MODE_OFF,
     UNKNOWN,
     Classification,
+    classifier_for,
     classify_attachment,
-    classify_for,
     clear_cache,
     evaluate,
     is_age_gated_channel,
@@ -32,7 +33,6 @@ from bot_modules.services.nsfw_classifier_service import (
     parse_label_set,
     record_classification,
     serialize_label_set,
-    should_record,
 )
 
 GUILD = 1234
@@ -426,9 +426,12 @@ async def test_second_consumer_reuses_the_cached_verdict(patched_detect):
 
 
 @pytest.mark.asyncio
-async def test_different_threshold_bypasses_the_cache(patched_detect):
-    # The SFW consumer runs a stricter threshold over the same image and must
-    # not be handed the permissive verdict.
+async def test_a_stricter_threshold_reuses_the_download_but_not_the_verdict(
+    patched_detect,
+):
+    # The SFW consumer runs a stricter bar over the same image. It must get
+    # its own verdict, but must not pay for a second download and inference —
+    # what's cached is the detections, which don't depend on the threshold.
     patched_detect([det("BUTTOCKS_EXPOSED", 0.6)])
     att = FakeAttachment()
 
@@ -437,6 +440,41 @@ async def test_different_threshold_bypasses_the_cache(patched_detect):
 
     assert permissive.verdict is True
     assert strict.verdict is False
+    assert att.reads == 1
+
+
+@pytest.mark.asyncio
+async def test_a_changed_label_set_is_not_served_a_stale_verdict(patched_detect):
+    # An admin editing "what counts as explicit" on the dashboard must take
+    # effect immediately, not after a restart.
+    patched_detect([det("FEMALE_BREAST_COVERED", 0.9)])
+    att = FakeAttachment()
+
+    before = await classify_attachment(att)
+    after = await classify_attachment(
+        att, label_set=frozenset({"FEMALE_BREAST_COVERED"})
+    )
+
+    assert before.verdict is False
+    assert after.verdict is True
+
+
+@pytest.mark.asyncio
+async def test_concurrent_consumers_share_one_download(patched_detect):
+    # discord.py dispatches each cog's listener as its own task, so the
+    # consumers reach the classifier concurrently rather than in sequence.
+    # Without in-flight sharing they'd each start their own download.
+    patched_detect([det("SEX_ACT", 0.9)])
+    att = FakeAttachment(delay=0.05)
+
+    results = await asyncio.gather(
+        classify_attachment(att),
+        classify_attachment(att),
+        classify_attachment(att, threshold=0.9),
+    )
+
+    assert all(r.verdict is True for r in results)
+    assert att.reads == 1
 
 
 @pytest.mark.asyncio
@@ -456,17 +494,6 @@ async def test_unknown_results_are_not_cached(patched_detect):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("channel_is_nsfw", "expected"),
-    [
-        pytest.param(True, True, id="nsfw-channel-records"),
-        pytest.param(False, False, id="sfw-channel-does-not"),
-    ],
-)
-def test_should_record_only_in_age_gated_channels(channel_is_nsfw, expected):
-    # Classification runs everywhere (SFW prevention needs it), but no dataset
-    # is built out of general chat.
-    assert should_record(channel_is_nsfw) is expected
 
 
 @pytest.mark.parametrize(
@@ -562,7 +589,7 @@ def test_record_skips_unknown_verdicts(sync_db_path):
 
 
 # --------------------------------------------------------------------------
-# classify_for — the shared consumer entry point
+# classifier_for — the shared consumer entry point
 # --------------------------------------------------------------------------
 
 
@@ -573,62 +600,64 @@ def _rows(db_path) -> int:
         ]
 
 
+class FakeMessage:
+    def __init__(self, *, nsfw: bool) -> None:
+        self.id = MESSAGE
+        self.guild = type("G", (), {"id": GUILD})()
+        self.channel = _FakeNsfwChannel(nsfw)
+        self.channel.id = CHANNEL
+
+
 @pytest.mark.asyncio
-async def test_classify_for_records_in_an_age_gated_channel(
+async def test_classifier_records_in_an_age_gated_channel(
     sync_db_path, patched_detect
 ):
     patched_detect([det("SEX_ACT", 0.9)])
+    classify = classifier_for(sync_db_path, FakeMessage(nsfw=True))
 
-    result = await classify_for(
-        sync_db_path,
-        FakeAttachment(),
-        guild_id=GUILD,
-        channel_id=CHANNEL,
-        message_id=MESSAGE,
-        channel_is_nsfw=True,
-    )
+    result = await classify(FakeAttachment())
 
     assert result.verdict is True
     assert _rows(sync_db_path) == 1
 
 
 @pytest.mark.asyncio
-async def test_classify_for_does_not_record_in_a_sfw_channel(
+async def test_classifier_does_not_record_in_a_sfw_channel(
     sync_db_path, patched_detect
 ):
     # Classification still happens — SFW prevention needs the verdict — but no
     # dataset is built out of general chat.
     patched_detect([det("SEX_ACT", 0.9)])
+    classify = classifier_for(sync_db_path, FakeMessage(nsfw=False))
 
-    result = await classify_for(
-        sync_db_path,
-        FakeAttachment(),
-        guild_id=GUILD,
-        channel_id=CHANNEL,
-        message_id=MESSAGE,
-        channel_is_nsfw=False,
-    )
+    result = await classify(FakeAttachment())
 
     assert result.verdict is True
     assert _rows(sync_db_path) == 0
 
 
 @pytest.mark.asyncio
-async def test_classify_for_strict_applies_the_higher_threshold(
+async def test_classifier_derives_the_age_gate_itself(sync_db_path, patched_detect):
+    # The recording-scope flag is derived from the channel, not supplied by
+    # the caller — a caller can no longer assert a precondition that a guard
+    # in another module is responsible for.
+    patched_detect([det("SEX_ACT", 0.9)])
+
+    assert classifier_for(sync_db_path, FakeMessage(nsfw=True)).channel_is_nsfw is True
+    assert classifier_for(sync_db_path, FakeMessage(nsfw=False)).channel_is_nsfw is False
+
+
+@pytest.mark.asyncio
+async def test_strict_classifier_applies_the_higher_threshold(
     sync_db_path, patched_detect
 ):
     # Same image, same detections: permissive says explicit, strict does not.
     patched_detect([det("BUTTOCKS_EXPOSED", 0.6)])
     att = FakeAttachment()
-    kwargs = dict(
-        guild_id=GUILD,
-        channel_id=CHANNEL,
-        message_id=MESSAGE,
-        channel_is_nsfw=False,
-    )
+    message = FakeMessage(nsfw=False)
 
-    permissive = await classify_for(sync_db_path, att, **kwargs)
-    strict = await classify_for(sync_db_path, att, strict=True, **kwargs)
+    permissive = await classifier_for(sync_db_path, message)(att)
+    strict = await classifier_for(sync_db_path, message, strict=True)(att)
 
     assert permissive.verdict is True
     assert strict.verdict is False
@@ -636,7 +665,27 @@ async def test_classify_for_strict_applies_the_higher_threshold(
 
 
 @pytest.mark.asyncio
-async def test_classify_for_returns_a_verdict_when_recording_fails(
+async def test_settings_are_read_once_per_message_not_per_attachment(
+    sync_db_path, patched_detect, monkeypatch
+):
+    patched_detect([det("SEX_ACT", 0.9)])
+    calls = []
+    real = nsfw_module.load_settings
+    monkeypatch.setattr(
+        nsfw_module,
+        "load_settings",
+        lambda *a, **k: (calls.append(1), real(*a, **k))[1],
+    )
+
+    classify = classifier_for(sync_db_path, FakeMessage(nsfw=True))
+    for i in range(3):
+        await classify(FakeAttachment(attachment_id=i))
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_classifier_returns_a_verdict_when_recording_fails(
     sync_db_path, patched_detect, monkeypatch
 ):
     # Metrics are a side effect; a write failure must not change what the
@@ -646,17 +695,10 @@ async def test_classify_for_returns_a_verdict_when_recording_fails(
     def boom(*_args, **_kwargs):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(
-        "bot_modules.services.nsfw_classifier_service.record_classification", boom
-    )
+    monkeypatch.setattr(nsfw_module, "record_classification", boom)
 
-    result = await classify_for(
-        sync_db_path,
-        FakeAttachment(),
-        guild_id=GUILD,
-        channel_id=CHANNEL,
-        message_id=MESSAGE,
-        channel_is_nsfw=True,
+    result = await classifier_for(sync_db_path, FakeMessage(nsfw=True))(
+        FakeAttachment()
     )
 
     assert result.verdict is True

@@ -31,7 +31,7 @@ Step 3 **fails open**: an image the classifier couldn't read still gets emoji. O
 
 The age gate is checked *before* classifying, so a misconfigured rule costs no downloads and records no metrics.
 
-When emoji are placed, a **placement receipt** is recorded. Only emoji the bot itself placed on that specific message can be tipped; see [[economy-spec]] for why that matters. Emoji that failed to attach are excluded from the receipt, so nothing unpayable is recorded as tippable. A receipt failure is logged loudly but never breaks the listener — the post simply isn't tippable.
+When emoji are placed, a **placement receipt** is recorded, listing exactly which emoji were attached. Only emoji named on that receipt can be tipped — the tip path checks the emoji against it, not merely that the message has a receipt — so an emoji that failed to attach can't be hand-placed by a member and charged; see [[economy-spec]]. A receipt failure is logged loudly but never breaks the listener — the post simply isn't tippable.
 
 Rules **without** `tips_enabled` are entirely unaffected by any of the above: same embeds, same channels, no classification, no receipts.
 

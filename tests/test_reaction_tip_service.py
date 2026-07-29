@@ -12,12 +12,14 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.auto_react_service import record_placement
 from bot_modules.services.economy_service import apply_credit, get_balance
 from bot_modules.services.reaction_tip_service import (
+    MIN_RAKE,
     apply_tip,
     compute_rake,
     get_rungs,
+    min_rung_amount,
     plan_tip,
+    replace_rungs,
     set_rung,
-    tips_received,
 )
 
 GUILD = 1
@@ -250,7 +252,16 @@ def test_bot_reactor_is_ignored(tippable):
     assert balance(tippable, REACTOR) == 500
 
 
-def test_emoji_that_is_not_a_rung_is_free(tippable):
+def test_placed_emoji_without_a_price_is_free(tippable):
+    # On the rule and on the post, but priced 0 — decoration, not a button.
+    record_placement(
+        tippable,
+        guild_id=GUILD,
+        channel_id=CHANNEL,
+        message_id=MESSAGE,
+        author_id=POSTER,
+        emojis=[EMOJI, "😂"],
+    )
     fund(tippable, REACTOR, 500)
 
     outcome = tip(tippable, emoji="😂")
@@ -258,6 +269,29 @@ def test_emoji_that_is_not_a_rung_is_free(tippable):
     assert outcome.charged is False
     assert outcome.reason == "not_a_rung"
     assert balance(tippable, REACTOR) == 500
+
+
+def test_emoji_the_bot_did_not_place_is_not_chargeable(sync_db_path):
+    # The rung exists and the message is tippable, but this emoji never made
+    # it onto the post (it failed to attach, or was added by hand). The
+    # receipt lists what was actually placed, and that is what counts.
+    record_placement(
+        sync_db_path,
+        guild_id=GUILD,
+        channel_id=CHANNEL,
+        message_id=MESSAGE,
+        author_id=POSTER,
+        emojis=["🔥"],
+    )
+    set_rung(sync_db_path, GUILD, CHANNEL, "🔥", 5)
+    set_rung(sync_db_path, GUILD, CHANNEL, EMOJI, RUNG)
+    fund(sync_db_path, REACTOR, 500)
+
+    outcome = tip(sync_db_path)
+
+    assert outcome.charged is False
+    assert outcome.reason == "not_placed"
+    assert balance(sync_db_path, REACTOR) == 500
 
 
 def test_message_without_a_placement_is_not_tippable(sync_db_path):
@@ -274,7 +308,16 @@ def test_message_without_a_placement_is_not_tippable(sync_db_path):
 
 
 def test_rung_from_another_channel_does_not_apply(tippable):
-    # Rungs are per-channel; the placement's channel is what counts.
+    # Rungs are per-channel; the placement's channel is what counts. 🔥 is on
+    # the post, so this reaches the rung lookup rather than stopping earlier.
+    record_placement(
+        tippable,
+        guild_id=GUILD,
+        channel_id=CHANNEL,
+        message_id=MESSAGE,
+        author_id=POSTER,
+        emojis=[EMOJI, "🔥"],
+    )
     fund(tippable, REACTOR, 500)
     set_rung(tippable, GUILD, CHANNEL + 1, "🔥", 100)
 
@@ -282,6 +325,7 @@ def test_rung_from_another_channel_does_not_apply(tippable):
 
     assert outcome.charged is False
     assert outcome.reason == "not_a_rung"
+    assert balance(tippable, REACTOR) == 500
 
 
 # --------------------------------------------------------------------------
@@ -311,17 +355,27 @@ def test_non_positive_amount_clears_the_rung(sync_db_path, amount):
     assert get_rungs(sync_db_path, GUILD, CHANNEL) == {}
 
 
-def test_tips_received_totals_what_the_poster_actually_got(tippable):
-    fund(tippable, REACTOR, 500)
-    fund(tippable, REACTOR + 1, 500)
-    tip(tippable)
-    tip(tippable, reactor_id=REACTOR + 1)
+def test_replace_rungs_sets_exactly_the_given_ladder(sync_db_path):
+    set_rung(sync_db_path, GUILD, CHANNEL, "🔥", 5)
+    set_rung(sync_db_path, GUILD, CHANNEL, "💎", 25)
 
-    count, total = tips_received(tippable, GUILD, POSTER)
+    # 💎 drops off the rule and 👑 joins it, in one pass.
+    replace_rungs(sync_db_path, GUILD, CHANNEL, {"🔥": 5, "👑": 100})
 
-    assert count == 2
-    assert total == 44  # net of the rake, matching the wallet
+    assert get_rungs(sync_db_path, GUILD, CHANNEL) == {"🔥": 5, "👑": 100}
 
 
-def test_tips_received_is_zero_for_an_untipped_poster(sync_db_path):
-    assert tips_received(sync_db_path, GUILD, POSTER) == (0, 0)
+def test_replace_rungs_drops_zero_priced_emoji(sync_db_path):
+    replace_rungs(sync_db_path, GUILD, CHANNEL, {"🔥": 5, "😂": 0})
+
+    assert get_rungs(sync_db_path, GUILD, CHANNEL) == {"🔥": 5}
+
+
+def test_min_rung_amount_is_derived_from_the_rake():
+    # Not a hardcoded 2: if the rake floor moves, so does the minimum the API
+    # and the dashboard enforce.
+    minimum = min_rung_amount()
+
+    assert plan_tip(minimum, minimum)[1] >= 1
+    assert plan_tip(minimum - 1, minimum - 1) == (0, 0)
+    assert minimum == MIN_RAKE + 1

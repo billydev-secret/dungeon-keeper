@@ -341,30 +341,6 @@ class EventsCog(commands.Cog):
     async def cog_load(self) -> None:
         self.bot.tree.error(_on_tree_error)
 
-    def _spoiler_classifier(
-        self, message: discord.Message
-    ) -> Callable[[discord.Attachment], Awaitable[bool | None]]:
-        """Bind the shared classifier to this message for spoiler enforcement.
-
-        Glue only — the verdict logic and the fallback on an unreadable image
-        live in nsfw_classifier_service and post_monitoring respectively.
-        """
-
-        async def classify(attachment: discord.Attachment) -> bool | None:
-            result = await nsfw_classifier_service.classify_for(
-                self.ctx.db_path,
-                attachment,
-                guild_id=message.guild.id if message.guild else 0,
-                channel_id=message.channel.id,
-                message_id=message.id,
-                channel_is_nsfw=nsfw_classifier_service.is_age_gated_channel(
-                    message.channel
-                ),
-            )
-            return result.verdict
-
-        return classify
-
     async def _enforce_sfw_images(self, message: discord.Message, cfg) -> bool:
         """Run SFW nudity prevention. Glue — the rules live in post_monitoring.
 
@@ -372,9 +348,12 @@ class EventsCog(commands.Cog):
         dashboard, so restarting the bot with this code in place changes
         nothing until someone chooses it.
         """
-        # Checked before anything touches the DB: the overwhelming majority of
-        # messages carry no image, and this runs on every one of them.
+        # Both checks are free and in-memory, and both run before anything
+        # touches the DB: most messages carry no image at all, and explicit
+        # content belongs in an age-gated channel anyway.
         if not message_has_qualifying_image(message):
+            return False
+        if nsfw_classifier_service.is_age_gated_channel(message.channel):
             return False
 
         guild_id = message.guild.id if message.guild else 0
@@ -388,23 +367,14 @@ class EventsCog(commands.Cog):
         if not policy.is_active:
             return False
 
-        async def classify(attachment: discord.Attachment):
-            return await nsfw_classifier_service.classify_for(
-                self.ctx.db_path,
-                attachment,
-                guild_id=guild_id,
-                channel_id=message.channel.id,
-                message_id=message.id,
-                channel_is_nsfw=False,  # this path only runs outside age-gated channels
-                strict=True,
-            )
-
         return await enforce_sfw_image_policy(
             message,
             policy=policy,
             bypass_role_ids=cfg.bypass_role_ids,
             log=log,
-            classify=classify,
+            classify=nsfw_classifier_service.classifier_for(
+                self.ctx.db_path, message, strict=True
+            ),
             report=self._sfw_reporter(policy),
         )
 
@@ -766,7 +736,9 @@ class EventsCog(commands.Cog):
             spoiler_required_channels=cfg.spoiler_required_channels,
             bypass_role_ids=cfg.bypass_role_ids,
             log=log,
-            classify=self._spoiler_classifier(message),
+            classify=nsfw_classifier_service.classifier_for(
+                self.ctx.db_path, message
+            ),
         )
 
         mention_ids = _message_mention_ids(cfg.recorded_bot_user_ids, message)

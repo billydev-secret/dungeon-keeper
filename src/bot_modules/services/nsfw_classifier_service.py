@@ -51,6 +51,20 @@ DEFAULT_LABEL_SET: frozenset[str] = frozenset({
     "SEX_ACT",
 })
 
+#: Labels a guild may opt into on top of the defaults. Together with
+#: DEFAULT_LABEL_SET this is the detector's vocabulary as far as this feature
+#: is concerned — it lives here rather than in the web route because a label
+#: outside it matches nothing and silently disables detection for that entry,
+#: which is exactly what parse_label_set's empty-set guard exists to prevent.
+OPTIONAL_LABELS: frozenset[str] = frozenset({
+    "FEMALE_BREAST_COVERED",
+    "BUTTOCKS_COVERED",
+    "FEMALE_GENITALIA_COVERED",
+    "MALE_GENITALIA_COVERED",
+    "BELLY_EXPOSED",
+    "ARMPITS_EXPOSED",
+})
+
 #: Confidence a qualifying label must reach. Consumers that destroy content
 #: use a higher one — see CONFIG_KEY_SFW_THRESHOLD.
 DEFAULT_THRESHOLD = 0.5
@@ -88,8 +102,14 @@ DOWNLOAD_TIMEOUT_SECONDS = 10.0
 #: explicit"). Callers MUST branch on this rather than treating it as False.
 UNKNOWN = None
 
+#: attachment id -> in-flight or completed (detections, inference_ms, bytes).
+#: Holds the task so concurrent consumers share one download+inference; holds
+#: detections rather than verdicts so it stays valid across thresholds and
+#: label-set edits. A completed task retains only the small detection list.
 _CACHE_MAX = 512
-_cache: OrderedDict[int, "Classification"] = OrderedDict()
+_cache: OrderedDict[int, "asyncio.Task[tuple[list[Detection], int, int]]"] = (
+    OrderedDict()
+)
 
 
 class SupportsAttachment(Protocol):
@@ -127,6 +147,21 @@ class Classification:
         return self.verdict is UNKNOWN
 
 
+#: The one definition of "this attachment is an image". Every consumer routes
+#: through it — ``post_monitoring.attachment_is_image`` delegates here and the
+#: auto-react cog filters with :func:`is_classifiable` — so the three copies
+#: that used to disagree (over ``.tiff``, and over attachments Discord serves
+#: with no ``content_type``) can no longer drift apart.
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff")
+
+
+def is_image_attachment(attachment: SupportsAttachment) -> bool:
+    """True for attachments that are images, regardless of size."""
+    if attachment.content_type and attachment.content_type.startswith("image/"):
+        return True
+    return attachment.filename.lower().endswith(IMAGE_EXTENSIONS)
+
+
 def is_classifiable(attachment: SupportsAttachment) -> bool:
     """True for attachments this service will fetch and classify.
 
@@ -136,13 +171,7 @@ def is_classifiable(attachment: SupportsAttachment) -> bool:
     requests at member-supplied URLs (SSRF probing, IP-logging pixels,
     hostile payloads), so they are out of scope entirely.
     """
-    if attachment.size > MAX_IMAGE_BYTES:
-        return False
-    if attachment.content_type and attachment.content_type.startswith("image/"):
-        return True
-    return attachment.filename.lower().endswith(
-        (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
-    )
+    return is_image_attachment(attachment) and attachment.size <= MAX_IMAGE_BYTES
 
 
 def parse_label_set(raw: str | None) -> frozenset[str]:
@@ -155,6 +184,18 @@ def parse_label_set(raw: str | None) -> frozenset[str]:
         return DEFAULT_LABEL_SET
     labels = {part.strip().upper() for part in raw.split(",") if part.strip()}
     return frozenset(labels) if labels else DEFAULT_LABEL_SET
+
+
+def known_labels() -> frozenset[str]:
+    """Every label a guild may configure as qualifying."""
+    return DEFAULT_LABEL_SET | OPTIONAL_LABELS
+
+
+def is_valid_threshold(value: float) -> bool:
+    """Thresholds outside ``(0, 1]`` answer the same way for every image, so
+    they disable the gate rather than loosening it. Shared with the route so
+    the two can't drift."""
+    return 0.0 < value <= 1.0
 
 
 def serialize_label_set(labels: frozenset[str]) -> str:
@@ -237,9 +278,7 @@ def _float_config(
     except (TypeError, ValueError):
         log.warning("bad float for %s (%r) — using %s", key, raw, default)
         return default
-    # A threshold outside (0, 1] would make the classifier answer the same way
-    # for every image; treat it as misconfiguration rather than honoring it.
-    if not 0.0 < value <= 1.0:
+    if not is_valid_threshold(value):
         log.warning("out-of-range %s (%s) — using %s", key, value, default)
         return default
     return value
@@ -281,16 +320,6 @@ def is_age_gated_channel(channel: object) -> bool:
         return bool(checker())
     except Exception:  # noqa: BLE001 - a partial channel object must not raise here
         return False
-
-
-def should_record(channel_is_nsfw: bool) -> bool:
-    """Whether a verdict for this channel is persisted.
-
-    Only age-gated channels build a dataset. Classification still runs
-    everywhere — SFW prevention needs a verdict in general chat — it just
-    leaves no trace there.
-    """
-    return channel_is_nsfw
 
 
 def record_classification(
@@ -367,43 +396,23 @@ async def classify_attachment(
     *,
     threshold: float = DEFAULT_THRESHOLD,
     label_set: frozenset[str] = DEFAULT_LABEL_SET,
-    use_cache: bool = True,
 ) -> Classification:
     """Download, classify and return a verdict for one attachment.
 
-    Cached by attachment id so the consumers that fire on the same message
-    (spoiler enforcement, then auto-react) classify once between them. The
-    cache is keyed on identity alone, so a caller needing a *different*
-    threshold than the cached one must pass ``use_cache=False`` — the SFW
-    consumer does exactly that.
+    What is cached (and shared) is the **detections**, not the verdict: the
+    model's output doesn't depend on the threshold or the label set, only
+    :func:`evaluate` does. So every consumer of an attachment shares one
+    download and one inference no matter what bar each applies, and an admin
+    editing the label set can't be served a verdict computed under the old one.
+
+    The cache holds the in-flight task rather than its result, so the three
+    consumers that fire on the same message — which discord.py dispatches as
+    concurrent tasks, not in sequence — await the same work instead of each
+    starting their own.
 
     Never raises: a download failure, a decode failure or a model failure all
     return ``verdict=UNKNOWN`` so each consumer applies its own fallback.
     """
-    if use_cache:
-        cached = _cache.get(attachment.id)
-        if cached is not None and cached.threshold == threshold:
-            _cache.move_to_end(attachment.id)
-            return cached
-
-    result = await _classify_uncached(
-        attachment, threshold=threshold, label_set=label_set
-    )
-
-    if use_cache and not result.is_unknown:
-        _cache[attachment.id] = result
-        _cache.move_to_end(attachment.id)
-        while len(_cache) > _CACHE_MAX:
-            _cache.popitem(last=False)
-    return result
-
-
-async def _classify_uncached(
-    attachment: SupportsAttachment,
-    *,
-    threshold: float,
-    label_set: frozenset[str],
-) -> Classification:
     unknown = Classification(
         attachment_id=attachment.id,
         verdict=UNKNOWN,
@@ -416,20 +425,9 @@ async def _classify_uncached(
         return unknown
 
     try:
-        raw = await asyncio.wait_for(
-            attachment.read(), timeout=DOWNLOAD_TIMEOUT_SECONDS
-        )
-    except Exception as exc:  # noqa: BLE001 - incl. TimeoutError; never fail a caller
-        log.warning("nsfw: download failed for %s: %s", attachment.id, exc)
+        detections, inference_ms, size_bytes = await _shared_detect(attachment)
+    except Exception:  # noqa: BLE001 - already logged; every failure is UNKNOWN
         return unknown
-
-    started = time.perf_counter()
-    try:
-        detections = await asyncio.to_thread(_detect, raw)
-    except Exception as exc:  # noqa: BLE001 - a bad decode must not kill on_message
-        log.warning("nsfw: inference failed for %s: %s", attachment.id, exc)
-        return unknown
-    inference_ms = int((time.perf_counter() - started) * 1000)
 
     verdict, top_label, top_score = evaluate(
         detections, threshold=threshold, label_set=label_set
@@ -441,55 +439,145 @@ async def _classify_uncached(
         top_score=top_score,
         detections=detections,
         inference_ms=inference_ms,
-        size_bytes=len(raw),
+        size_bytes=size_bytes,
         threshold=threshold,
         label_set=label_set,
     )
 
 
-async def classify_for(
-    db_path: Path,
+async def _shared_detect(
     attachment: SupportsAttachment,
-    *,
-    guild_id: int,
-    channel_id: int,
-    message_id: int,
-    channel_is_nsfw: bool,
-    strict: bool = False,
-) -> Classification:
-    """Classify one attachment for a consumer, recording it when in scope.
+) -> tuple[list[Detection], int, int]:
+    """Download and run inference once per attachment, shared across callers.
 
-    The single entry point every consumer uses, so settings loading, the
-    recording scope rule and the cache all behave identically for each of
-    them. Pass ``strict=True`` for consumers that destroy content (SFW nudity
-    prevention) — it applies the higher threshold and, because the cache is
-    keyed on identity alone, bypasses any permissive verdict already cached
-    for this attachment.
+    Returns ``(detections, inference_ms, size_bytes)``. Raises on any failure;
+    the failed task is evicted so a transient CDN error doesn't pin "unreadable"
+    for the life of the process.
     """
-    threshold, sfw_threshold, label_set = load_settings(db_path, guild_id)
-    effective = sfw_threshold if strict else threshold
-
-    result = await classify_attachment(
-        attachment, threshold=effective, label_set=label_set
-    )
-
-    if result.is_unknown or not should_record(channel_is_nsfw):
-        return result
+    task = _cache.get(attachment.id)
+    if task is not None:
+        _cache.move_to_end(attachment.id)
+    else:
+        task = asyncio.create_task(_download_and_detect(attachment))
+        _cache[attachment.id] = task
+        while len(_cache) > _CACHE_MAX:
+            _cache.popitem(last=False)
 
     try:
-        with open_db(db_path) as conn:
-            record_classification(
-                conn,
-                result,
-                guild_id=guild_id,
-                channel_id=channel_id,
-                message_id=message_id,
+        return await asyncio.shield(task)
+    except Exception:
+        _cache.pop(attachment.id, None)
+        raise
+
+
+async def _download_and_detect(
+    attachment: SupportsAttachment,
+) -> tuple[list[Detection], int, int]:
+    try:
+        raw = await asyncio.wait_for(
+            attachment.read(), timeout=DOWNLOAD_TIMEOUT_SECONDS
+        )
+    except Exception as exc:
+        log.warning("nsfw: download failed for %s: %s", attachment.id, exc)
+        raise
+
+    started = time.perf_counter()
+    try:
+        detections = await asyncio.to_thread(_detect, raw)
+    except Exception as exc:
+        log.warning("nsfw: inference failed for %s: %s", attachment.id, exc)
+        raise
+    return detections, int((time.perf_counter() - started) * 1000), len(raw)
+
+
+@dataclass
+class MessageClassifier:
+    """Classifier bound to one message, for one consumer.
+
+    Built by :func:`classifier_for`. A small value object rather than a
+    closure, so it copies the handful of ids it needs instead of capturing —
+    and keeping alive — the whole ``discord.Message`` and its guild.
+
+    ``channel_is_nsfw`` is derived here rather than supplied per call site.
+    It drives the recording-scope rule, and the callers that used to pass it
+    were asserting a precondition enforced by a guard several frames away in
+    another module — true when written, silently wrong the moment those guards
+    got reordered.
+
+    Settings load lazily on first use and are then reused for the rest of the
+    message, so constructing one is free. That matters: spoiler enforcement
+    builds a classifier for every message in a watched channel but only
+    consults it for an unspoilered image.
+    """
+
+    db_path: Path
+    guild_id: int
+    channel_id: int
+    message_id: int
+    channel_is_nsfw: bool
+    strict: bool = False
+    _settings: tuple[float, frozenset[str]] | None = None
+
+    async def _load_settings(self) -> tuple[float, frozenset[str]]:
+        if self._settings is None:
+            threshold, sfw_threshold, label_set = await asyncio.to_thread(
+                load_settings, self.db_path, self.guild_id
             )
-    except sqlite3.Error as exc:
-        # Metrics are a side effect; failing to record must never change what
-        # a consumer does about the image.
-        log.warning("nsfw: failed to record classification: %s", exc)
-    return result
+            self._settings = (
+                sfw_threshold if self.strict else threshold,
+                label_set,
+            )
+        return self._settings
+
+    async def __call__(self, attachment: SupportsAttachment) -> Classification:
+        threshold, label_set = await self._load_settings()
+        result = await classify_attachment(
+            attachment, threshold=threshold, label_set=label_set
+        )
+        if result.is_unknown or not self.channel_is_nsfw:
+            return result
+        await asyncio.to_thread(self._record, result)
+        return result
+
+    def _record(self, result: Classification) -> None:
+        try:
+            with open_db(self.db_path) as conn:
+                record_classification(
+                    conn,
+                    result,
+                    guild_id=self.guild_id,
+                    channel_id=self.channel_id,
+                    message_id=self.message_id,
+                )
+        except sqlite3.Error as exc:
+            # Metrics are a side effect; failing to record must never change
+            # what a consumer does about the image.
+            log.warning("nsfw: failed to record classification: %s", exc)
+
+
+def classifier_for(
+    db_path: Path, message: object, *, strict: bool = False
+) -> MessageClassifier:
+    """Bind a classifier to *message* for one consumer.
+
+    The single entry point every consumer uses, so settings loading, the
+    age-gate derivation and the recording-scope rule behave identically for
+    all of them, and settings are read once per message rather than once per
+    attachment.
+
+    Pass ``strict=True`` for consumers that destroy content (SFW nudity
+    prevention) — it applies the higher threshold.
+    """
+    channel = getattr(message, "channel", None)
+    guild = getattr(message, "guild", None)
+    return MessageClassifier(
+        db_path=db_path,
+        guild_id=getattr(guild, "id", 0) or 0,
+        channel_id=getattr(channel, "id", 0) or 0,
+        message_id=getattr(message, "id", 0) or 0,
+        channel_is_nsfw=is_age_gated_channel(channel),
+        strict=strict,
+    )
 
 
 def _detect(raw: bytes) -> list[Detection]:

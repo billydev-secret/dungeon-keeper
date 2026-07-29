@@ -12,16 +12,15 @@ from bot_modules.services.nsfw_classifier_service import (
     Classification,
     SfwPolicy,
     is_age_gated_channel,
+    is_image_attachment,
 )
 
 
 def attachment_is_image(attachment: discord.Attachment) -> bool:
-    if attachment.content_type and attachment.content_type.startswith("image/"):
-        return True
-    filename = attachment.filename.lower()
-    return filename.endswith(
-        (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff")
-    )
+    """Delegates so this and the classifier can't disagree about what an
+    image is — they previously differed over ``.tiff``, which made a .tiff
+    upload reach the classifier and come back permanently UNKNOWN."""
+    return is_image_attachment(attachment)
 
 
 def message_has_qualifying_image(message: discord.Message) -> bool:
@@ -34,7 +33,7 @@ async def enforce_spoiler_requirement(
     spoiler_required_channels: frozenset[int] | set[int],
     bypass_role_ids: frozenset[int] | set[int],
     log: logging.Logger,
-    classify: Callable[[discord.Attachment], Awaitable[bool | None]] | None = None,
+    classify: Callable[[discord.Attachment], Awaitable[Classification]] | None = None,
 ) -> bool:
     """Delete unspoilered images in spoiler-required channels.
 
@@ -68,7 +67,7 @@ async def enforce_spoiler_requirement(
         if attachment.is_spoiler():
             continue
 
-        if classify is not None and await classify(attachment) is False:
+        if classify is not None and (await classify(attachment)).verdict is False:
             # Read it, and it isn't explicit — this is the deletion the
             # classifier exists to prevent. Keep checking the other
             # attachments; one innocent image doesn't clear the message.
