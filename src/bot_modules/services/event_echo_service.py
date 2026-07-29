@@ -174,19 +174,35 @@ def already_claimed(
 
 
 def release_echo(
-    conn: sqlite3.Connection, *, guild_id: int, source: str, ref: str
+    conn: sqlite3.Connection, *, guild_id: int, source: str, ref: str, retry: bool
 ) -> None:
-    """Downgrade a claimed echo to suppressed after the send didn't land.
+    """Undo a claim after the send didn't land.
 
     The claim is taken before the send so a crash loses an echo rather than
     repeating one — but a send we *know* failed must not go on counting as a
     posted echo, or an unreachable destination silently burns both cooldowns
     and refuses the next real game on behalf of a message nobody ever saw.
 
-    The row stays (flagged) rather than being deleted: the ref must remain
-    claimed so the poll loop doesn't retry the same lobby every 15 seconds
-    against a channel that is still unreachable.
+    ``retry`` decides how far to undo, and the two answers are opposites for a
+    reason:
+
+    * **Start sources** (``retry=False``) keep the row, flagged. Their value
+      expires in minutes, so a failed lobby echo is not worth re-attempting —
+      and leaving the ref claimed is what stops the sweep hammering an
+      unreachable channel every 15 seconds for the life of the lobby.
+    * **Deadline sources** (``retry=True``) drop the row entirely, so the next
+      tick tries again. Not retrying would defeat the point of exempting them
+      from the cooldowns: one 429 on the first tick of the final hour would
+      lose the last call outright, with hundreds of usable ticks still inside
+      the window. The deadline bounds the retries on its own — once it passes,
+      the sweep stops offering the candidate at all.
     """
+    if retry:
+        conn.execute(
+            "DELETE FROM event_echo_log WHERE guild_id = ? AND source = ? AND ref = ?",
+            (guild_id, source, ref),
+        )
+        return
     conn.execute(
         "UPDATE event_echo_log SET suppressed = 1 "
         "WHERE guild_id = ? AND source = ? AND ref = ?",
@@ -292,7 +308,13 @@ async def echo_event(
 
     def _release() -> None:
         with open_db(db_path) as conn:
-            release_echo(conn, guild_id=guild.id, source=source, ref=ref)
+            release_echo(
+                conn,
+                guild_id=guild.id,
+                source=source,
+                ref=ref,
+                retry=spec_for(source).deadline,
+            )
 
     dest_id, go = await asyncio.to_thread(_claim)
     if dest_id is None or not go:
@@ -469,7 +491,12 @@ def raffle_last_call(
         return None
 
     settings = load_econ_settings(conn, guild_id)
-    if not raffle_enabled(settings):
+    # The master switch as well as the raffle's own flag: ``roll_day`` returns
+    # early when the economy is off, so no draw happens — but `raffle_enabled`
+    # doesn't know that, and a previously-posted shop panel outlives the
+    # switch. Without this the echo advertises a draw nobody will run, every
+    # week, bypassing the cooldowns because it is a deadline source.
+    if not settings.enabled or not raffle_enabled(settings):
         return None
     if not settings.shop_channel_id or not settings.shop_message_id:
         # No shop panel means no button to send anyone to, and "the raffle

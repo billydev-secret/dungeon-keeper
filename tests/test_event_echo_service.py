@@ -566,6 +566,7 @@ RAFFLE_NOW = datetime(2026, 8, 2, 23, 30, tzinfo=timezone.utc).timestamp()
 
 
 def _enable_raffle(conn, *, shop_channel="555", shop_message="900"):
+    set_config_value(conn, "econ_enabled", "1", GUILD_ID)
     set_config_value(conn, "econ_raffle_enabled", "1", GUILD_ID)
     set_config_value(conn, "econ_price_raffle_ticket", "10", GUILD_ID)
     set_config_value(conn, "econ_shop_channel_id", shop_channel, GUILD_ID)
@@ -586,11 +587,22 @@ class TestRaffleLastCall:
             _enable_raffle(conn)
             assert svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW - 3 * 86400) is None
 
-    def test_disabled_raffle_is_silent(self, sync_db_path):
-        """Never advertise a draw that isn't going to happen."""
+    @pytest.mark.parametrize(
+        "key",
+        [
+            pytest.param("econ_raffle_enabled", id="raffle-switch"),
+            # The master switch matters too: roll_day returns early when the
+            # economy is off, so the draw never happens — but the raffle's own
+            # flag and a previously-posted shop panel both survive. Without
+            # this gate the echo would advertise a draw nobody will run, every
+            # week, bypassing the cooldowns because it's a deadline source.
+            pytest.param("econ_enabled", id="economy-master-switch"),
+        ],
+    )
+    def test_never_advertises_a_draw_that_wont_happen(self, sync_db_path, key):
         with open_db(sync_db_path) as conn:
             _enable_raffle(conn)
-            set_config_value(conn, "econ_raffle_enabled", "0", GUILD_ID)
+            set_config_value(conn, key, "0", GUILD_ID)
             assert svc.raffle_last_call(conn, GUILD_ID, RAFFLE_NOW) is None
 
     @pytest.mark.parametrize(
@@ -661,6 +673,45 @@ class TestEconEchoes:
             _open_auction(conn, 1, ends_at=NOW + 1800)
         await svc._sweep_econ(econ_bot, NOW + 30)
         assert econ_bot.sent_channel.send.await_count == 2
+
+    async def test_a_failed_deadline_echo_retries(self, econ_bot, sync_db_path):
+        """A transient send failure must not spend the one chance there was.
+
+        Burning the ref is right for a party game — its value expires in
+        minutes. It is wrong for a deadline, which is the whole reason these
+        bypass the cooldowns: a 429 on the first tick of the final hour would
+        otherwise lose the last call outright, with 240 perfectly good ticks
+        still inside the window.
+        """
+        configure(sync_db_path)
+        with open_db(sync_db_path) as conn:
+            _open_auction(conn, 1, ends_at=NOW + 1800)
+
+        econ_bot.sent_channel.send.side_effect = discord.HTTPException(
+            MagicMock(status=429), "rate limited"
+        )
+        await svc._sweep_econ(econ_bot, NOW)
+        assert econ_bot.sent_channel.send.await_count == 1
+
+        econ_bot.sent_channel.send.side_effect = None
+        await svc._sweep_econ(econ_bot, NOW + 15)
+        assert econ_bot.sent_channel.send.await_count == 2
+
+    async def test_a_failed_start_echo_still_does_not_retry(
+        self, econ_bot, guild, sync_db_path
+    ):
+        """The retry is scoped to deadlines, not granted to everything.
+
+        A game lobby whose send failed must stay claimed, or the sweep hammers
+        an unreachable channel every 15 seconds for the life of the lobby.
+        """
+        configure(sync_db_path)
+        econ_bot.sent_channel.send.side_effect = discord.Forbidden(
+            MagicMock(), "no perms"
+        )
+        assert await echo(econ_bot, guild, ref="game-1") is False
+        econ_bot.sent_channel.send.side_effect = None
+        assert await echo(econ_bot, guild, ref="game-1", now=NOW + 15) is False
 
     async def test_the_same_auction_is_echoed_once(self, econ_bot, sync_db_path):
         """Exempt from the cooldowns still means once per auction.

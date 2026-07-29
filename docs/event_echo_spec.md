@@ -93,7 +93,10 @@ Two schema facts the sweeps depend on:
   buy-tickets button lives — which makes it the best jump target of any source:
   the reader lands on the button, not on a description of something elsewhere.
   No shop panel configured means no echo, since "the raffle closes soon" with
-  nowhere to act is just an alarm. It is deliberately *not* gated on there
+  nowhere to act is just an alarm — and the check is on the economy's **master
+  switch** as well as the raffle's own flag, because `roll_day` returns early
+  when the economy is off, so no draw happens even though the raffle flag and
+  a previously-posted shop panel both survive. It is deliberately *not* gated on there
   being entrants already — zero tickets sold is when the nudge is worth most.
   It is also the only source that can't be discovered from a row, so it is
   asked once per guild rather than swept.
@@ -183,10 +186,23 @@ the next window out, or one busy minute would cascade into a window that keeps
 receding and the feature would go quiet permanently.
 
 Claims are taken *before* the send, so a crash between the two loses an echo
-rather than repeating one — but a send we *know* failed is released back to
-`suppressed = 1`, or an unreachable destination would burn both cooldowns on
-behalf of a message nobody ever saw. The row stays (flagged) rather than being
-deleted, so the sweep doesn't retry a dead channel every 15 seconds.
+rather than repeating one — but a send we *know* failed is released, or an
+unreachable destination would burn both cooldowns on behalf of a message
+nobody ever saw.
+
+How far the release goes depends on the shape, and the two answers are
+opposites:
+
+* **Start sources** keep the row, flagged `suppressed = 1`. Their value expires
+  in minutes, so a failed lobby echo isn't worth re-attempting — and leaving
+  the ref claimed is what stops the sweep hammering an unreachable channel
+  every 15 seconds for the life of the lobby.
+* **Deadline sources** drop the row entirely, so the next tick tries again.
+  Not retrying would defeat the point of exempting them from the cooldowns:
+  one 429 on the first tick of the final hour would lose the last call
+  outright, with hundreds of usable ticks still inside the window. The
+  deadline bounds the retries by itself — once it passes, the sweep stops
+  offering the candidate.
 
 The claim runs under `open_db_immediate`, not the default deferred
 transaction: it is a read-then-write on the cooldown window and all three
