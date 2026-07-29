@@ -3,49 +3,14 @@ import {
   loadChannels,
   apiPut,
   showStatus,
-  buildField,
+  field,
+  numInput,
+  checkbox,
+  sectionCard,
   mountChannelPicker,
   guardForm,
   renderMetaWarning,
 } from "../config-helpers.js";
-
-let _fieldSeq = 0;
-
-// buildField renders a bare <label>; pair it with its control by id so screen
-// readers announce the label and a label tap focuses the input (W-A7).
-function field(labelText, control, hint) {
-  const div = buildField(labelText, control, hint);
-  if (control instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
-    const id = control.id || `cc-field-${++_fieldSeq}`;
-    control.id = id;
-    div.querySelector("label").htmlFor = id;
-  }
-  return div;
-}
-
-function numInput(name, value, min, step = "1", max = null) {
-  const inp = document.createElement("input");
-  inp.type = "number";
-  inp.name = name;
-  inp.required = true;
-  inp.min = String(min);
-  if (max != null) inp.max = String(max);
-  inp.step = step;
-  inp.value = String(value);
-  inp.style.maxWidth = "160px";
-  return inp;
-}
-
-function checkbox(name, checked, labelText) {
-  const label = document.createElement("label");
-  label.style.cssText = "display:flex; gap:6px; align-items:center;";
-  const inp = document.createElement("input");
-  inp.type = "checkbox";
-  inp.name = name;
-  inp.checked = !!checked;
-  label.append(inp, document.createTextNode(" " + labelText));
-  return label;
-}
 
 export function mount(container) {
   container.textContent = "";
@@ -92,16 +57,7 @@ export function mount(container) {
     form.className = "form form-cards";
     panel.appendChild(form);
 
-    const card = (title) => {
-      const el = document.createElement("div");
-      el.className = "card";
-      const lbl = document.createElement("div");
-      lbl.className = "section-label";
-      lbl.textContent = title;
-      el.appendChild(lbl);
-      form.appendChild(el);
-      return el;
-    };
+    const card = (title) => sectionCard(form, title);
 
     // ── Where the casino lives — this channel is the master switch. ──────
     const cardWiring = card("Casino Channel");
@@ -153,49 +109,6 @@ export function mount(container) {
     cardTables.appendChild(field(
       "Open Tables", tables,
       "Unchecked games refuse all bets and disappear from the hub panel.",
-    ));
-
-    const cardPools = card("Pools — Daily Prediction Market");
-    const poolsRow = document.createElement("div");
-    poolsRow.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
-    poolsRow.append(
-      checkbox("pools_enabled", c.pools_enabled === true, "Run a Daily Market"),
-    );
-    cardPools.appendChild(field(
-      "Pools", poolsRow,
-      "One round a day: members bet over or under a line the bot sets on " +
-        "how much the economy grows that day. Winners split the pool " +
-        "pro-rata \u2014 the house never wins or loses, it only takes the " +
-        "takeout below.",
-    ));
-    const poolsChanSlot = document.createElement("div");
-    cardPools.appendChild(field(
-      "Pools Channel", poolsChanSlot,
-      "Where the market panel sits. The round lasts all day, so it wants " +
-        "its own channel rather than sitting above the casino hub. " +
-        "\"(use the casino channel)\" puts it with the games.",
-    ));
-    const poolsChanPicker = mountChannelPicker(
-      poolsChanSlot, channels, String(c.pools_channel_id || "0"),
-      {
-        emptyValue: "0",
-        emptyLabel: "(use the casino channel)",
-        label: "Pools Channel",
-      },
-    );
-    cardPools.appendChild(field(
-      "Betting Closes At (hour)",
-      numInput("pools_close_hour", c.pools_close_hour ?? 18, 0, "1", 23),
-      "Guild-local hour betting shuts, 0\u201323. The day still settles at " +
-        "midnight. Late enough that most of the day is readable, early " +
-        "enough that the evening is still unwritten \u2014 18 is the default.",
-    ));
-    cardPools.appendChild(field(
-      "Takeout (% of the pool)",
-      numInput("pools_takeout_pct", c.pools_takeout_pct ?? 5, 0, "1", 50),
-      "Taken off the pool before winners are paid, and burned \u2014 it is " +
-        "not paid to the house and does not feed the jackpot. 5% leaves a " +
-        "95% return, the same band as the tables.",
     ));
 
     const cardJackpot = card("Progressive Jackpot");
@@ -301,8 +214,6 @@ export function mount(container) {
         ["dice_window_seconds", "Dice Betting Window", 15, 600],
         ["keno_window_seconds", "Keno Ticket Window", 15, 600],
         ["blackjack_idle_seconds", "Blackjack Idle Timeout", 30, 840],
-        ["pools_close_hour", "Pools Betting Closes At", 0, 23],
-        ["pools_takeout_pct", "Pools Takeout", 0, 50],
         ["broadcast_min_payout", "Big-Win Broadcast Threshold", 0, null],
       ]) {
         const raw = String(fd.get(name) ?? "").trim();
@@ -333,8 +244,6 @@ export function mount(container) {
           dice_enabled: fd.has("dice_enabled"),
           war_enabled: fd.has("war_enabled"),
           keno_enabled: fd.has("keno_enabled"),
-          pools_enabled: fd.has("pools_enabled"),
-          pools_channel_id: poolsChanPicker.getValue() || "0",
           jackpot_enabled: fd.has("jackpot_enabled"),
         });
         showStatus(statusEl, true);

@@ -261,6 +261,51 @@ def test_update_pools_settings_persist(authed_client, fake_ctx):
     assert casino["pools_takeout_pct"] == 3
 
 
+def test_pools_and_casino_pages_save_past_each_other(authed_client, fake_ctx):
+    """Neither dashboard page clobbers the other's fields.
+
+    Since 2026-07-28 Pools has its own page (`config-pools.js`) and the Casino
+    page no longer carries the four `pools_*` fields, so each PUTs a body that
+    omits the other's keys entirely. `CasinoConfigUpdate` is every-field-optional
+    and the handler drops unset keys, which is what makes that safe — if either
+    page ever started sending defaults for the fields it doesn't own, it would
+    silently reset the other page.
+    """
+    with fake_ctx.open_db() as conn:
+        save_casino_settings(
+            conn,
+            fake_ctx.guild_id,
+            {
+                "channel_id": 424242424242424242,
+                "min_bet": 10,
+                "pools_enabled": True,
+                "pools_channel_id": 515151515151515151,
+                "pools_takeout_pct": 3,
+            },
+        )
+
+    # A Casino-page-shaped save: no pools keys.
+    assert authed_client.put(
+        "/api/config/casino", json={"min_bet": 25, "slots_enabled": False}
+    ).status_code == 200
+    with fake_ctx.open_db() as conn:
+        s = load_casino_settings(conn, fake_ctx.guild_id)
+    assert s.pools_enabled is True
+    assert s.pools_channel_id == 515151515151515151
+    assert s.pools_takeout_pct == 3
+
+    # ...and the reverse: a Pools-page-shaped save, no casino keys.
+    assert authed_client.put(
+        "/api/config/casino", json={"pools_takeout_pct": 9}
+    ).status_code == 200
+    with fake_ctx.open_db() as conn:
+        s = load_casino_settings(conn, fake_ctx.guild_id)
+    assert s.pools_takeout_pct == 9
+    assert s.channel_id == 424242424242424242
+    assert s.min_bet == 25
+    assert s.slots_enabled is False
+
+
 def test_update_pools_rejects_an_impossible_close_hour(authed_client):
     for hour in (-1, 24, 99):
         resp = authed_client.put(

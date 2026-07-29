@@ -447,3 +447,63 @@ export function buildField(labelText, control, hint) {
   }
   return div;
 }
+
+// ── Labelled form controls ─────────────────────────────────────────────
+// buildField renders a bare <label>; `field` additionally pairs it with its
+// control by id so screen readers announce the label and a label tap focuses
+// the input (W-A7). Every panel wants that, so it lives here rather than
+// being re-derived per panel.
+//
+// Note these are not yet the only copies: config-birthday, config-bulk-cleanup,
+// config-confessions, config-dms and config-starboard each still carry a
+// byte-identical private `field` (config-bios calls its copy `labeledField`),
+// and the same three panels duplicate a `toggleField`/`buildNumberInput` pair
+// that `checkbox`/`numInput` here subsume. Converting them is a mechanical
+// import swap and good follow-up work; prefer importing from here in new code.
+let _fieldSeq = 0;
+
+export function field(labelText, control, hint) {
+  const div = buildField(labelText, control, hint);
+  if (control instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
+    const id = control.id || `dk-field-${++_fieldSeq}`;
+    control.id = id;
+    div.querySelector("label").htmlFor = id;
+  }
+  return div;
+}
+
+export function numInput(name, value, min, step = "1", max = null) {
+  const inp = document.createElement("input");
+  inp.type = "number";
+  inp.name = name;
+  inp.required = true;
+  inp.min = String(min);
+  if (max != null) inp.max = String(max);
+  inp.step = step;
+  inp.value = String(value);
+  inp.style.maxWidth = "160px";
+  return inp;
+}
+
+export function checkbox(name, checked, labelText) {
+  const label = document.createElement("label");
+  label.style.cssText = "display:flex; gap:6px; align-items:center;";
+  const inp = document.createElement("input");
+  inp.type = "checkbox";
+  inp.name = name;
+  inp.checked = !!checked;
+  label.append(inp, document.createTextNode(" " + labelText));
+  return label;
+}
+
+/** A titled `.card` section appended to `parent` (usually the panel's form). */
+export function sectionCard(parent, title) {
+  const el = document.createElement("div");
+  el.className = "card";
+  const lbl = document.createElement("div");
+  lbl.className = "section-label";
+  lbl.textContent = title;
+  el.appendChild(lbl);
+  parent.appendChild(el);
+  return el;
+}

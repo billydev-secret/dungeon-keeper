@@ -30,6 +30,7 @@ export const HELP_GROUPS = [
   // `page` ids are routed from panel headers — rename labels, never ids.
   { heading: "Games & Social", items: [
     { page: "help-casino",      anchor: "economy-casino",  label: "Casino" },
+    { page: "help-pools",       anchor: "pools",           label: "Pools" },
     { page: "help-games",       anchor: "games",           label: "Games Night" },
     { page: "help-guess",       anchor: "guess",           label: "Guess Who" },
     { page: "help-photo",       anchor: "photo-challenge", label: "Photo Challenge" },

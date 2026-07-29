@@ -182,7 +182,10 @@ const SECTIONS = [
       { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js", help: "help-economy" },
       { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", help: "help-economy" },
       { id: "economy-sinks", label: "Sinks", module: "./panels/economy-sinks.js", adminOnly: true, keywords: "shop perks icons", help: "help-economy" },
-      { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack", help: "help-casino" },
+      { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack", help: "help-casino", related: ["config-pools"] },
+      // Keywords lean market-specific: "pools" alone also matches confession
+      // pools and the pen-pals pool.
+      { id: "config-pools", label: "Pools", module: "./panels/config-pools.js", adminOnly: true, keywords: "prediction market daily over under parimutuel takeout burn", help: "help-pools", related: ["config-casino"] },
       { id: "economy-qotd", label: "QOTD", module: "./panels/economy-qotd.js", adminOnly: true, keywords: "question of the day" },
       { id: "economy-qotd-submissions", label: "Sponsored QOTD", module: "./panels/economy-qotd-submissions.js" },
       { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js", help: "help-economy" },
