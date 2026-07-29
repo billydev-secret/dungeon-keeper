@@ -71,7 +71,9 @@ Retention is indefinite (a deliberate choice — see `docs/plans/nsfw-classifier
 
 ## Configuration
 
-Dashboard only; no in-Discord configuration. Stored in the shared `config` table, per guild:
+Dashboard only; no in-Discord configuration. The **Image Guard** panel (Moderation & Safety) holds all of it — spoiler-required channels, the SFW-prevention mode/log-channel/exemptions, both thresholds, the qualifying label set, and a 30-day activity summary built from the recorded metrics. Both thresholds are rejected at write time as well as on read if they fall outside `(0, 1]`, and an empty label set is refused, so the dashboard can't store a configuration that silently disables a gate.
+
+Stored in the shared `config` table, per guild:
 
 | key | default | what it does |
 |---|---|---|

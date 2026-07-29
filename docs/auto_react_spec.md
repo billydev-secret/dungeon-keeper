@@ -45,7 +45,9 @@ Managed through the web dashboard's admin API (admin scope required); there is n
 
 Emojis are free-form strings — Unicode emoji or full custom-emoji syntax (`<:name:id>`). No validation happens at write time; a bad entry simply fails (with a log warning) when a reaction is attempted.
 
-Note: as of this writing no dashboard **panel** exists for these endpoints — the backend API is complete, but rules must be managed by calling the API directly.
+The **Auto React** panel (Channels & Messages) manages rules: channel picker, comma-separated emoji list, enabled toggle, a tipping toggle, and — when tipping is on — a price field per emoji. The price fields are hidden until tipping is switched on, since they're meaningless otherwise. A rung of 1 is rejected client- and server-side: after the 1-coin minimum rake it would deliver the poster nothing.
+
+Removing an emoji from a rule clears its price, so a dropped emoji can never linger as chargeable.
 
 ## Stored data
 
