@@ -1089,10 +1089,15 @@
     <h3 id="music-errors">When a track can't play</h3>
     <p>Some YouTube uploads can't be streamed — most often because the rights
       holder (a music label) blocks third-party playback, or the video is
-      age-restricted or removed. When that happens the bot posts one short line
-      in the music text channel naming the track and the reason, then moves on
-      to the next track. Spotify links play via YouTube matching, so the same
-      limits apply to them.</p>
+      age-restricted or removed. When that happens the bot looks for the same
+      track somewhere else: first another YouTube upload, then SoundCloud. A
+      substitute only plays if it closely matches the original (similar length
+      and title — no covers, "sped up" edits, or hour-long mixes), and the bot
+      always says what it did: <em>"Couldn't play <strong>X</strong> — it's
+      blocked by the rights holder on YouTube. Playing the closest match from
+      SoundCloud instead: <strong>Y</strong>."</em> If no good match exists,
+      you get that one-line explanation and the queue moves on. Spotify links
+      play via YouTube matching, so the same rules apply to them.</p>
 
     <p class="note">The bot no longer has a <strong>24/7 mode</strong>. It used to be
       pinned into one voice channel per server, exempt from the idle disconnect and

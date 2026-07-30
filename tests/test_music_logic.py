@@ -16,13 +16,19 @@ import pytest
 from bot_modules.music.embeds import build_queue_embed
 from bot_modules.music.logic import (
     describe_track_failure,
+    failure_reason,
     format_spotify_summary,
     format_track_summary,
     is_search_url,
     paginate_queue,
+    pick_substitute,
+    should_advance_on_track_end,
     should_idle_disconnect,
+    substitute_query,
+    substitution_note,
     track_summary_from_object,
 )
+from bot_modules.services.music_queue import GuildQueue
 
 
 # ── is_search_url ────────────────────────────────────────────────────
@@ -432,5 +438,176 @@ def test_failure_message_clips_absurd_title_and_detail():
     msg = describe_track_failure("t" * 500, message="m" * 500)
     assert len(msg) < 400
     assert "…" in msg
+
+
+def test_failure_reason_unknown_is_none():
+    assert failure_reason(message="mysterious", cause="also mysterious") is None
+
+
+# ── should_advance_on_track_end ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "reason, expected",
+    [
+        ("finished", True),
+        # 'replaced' fires on /skip and on substitute playback; advancing on
+        # it dropped the middle track of a 3-deep queue on every /skip.
+        ("replaced", False),
+        # 'loadFailed' follows every TrackExceptionEvent; the exception
+        # handler owns recovery, advancing here clobbers its substitute.
+        ("loadFailed", False),
+        ("stopped", False),
+        ("cleanup", False),
+        (None, False),
+    ],
+)
+def test_should_advance_on_track_end(reason, expected):
+    assert should_advance_on_track_end(reason) is expected
+
+
+# ── substitute_query ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "title, author, expected",
+    [
+        ("Song Title (Official Video)", "Artist", "Song Title Artist"),
+        ("Song Title [HD] (Lyrics)", "ArtistVEVO", "Song Title Artist"),
+        ("Song Title", "Artist - Topic", "Song Title Artist"),
+        # Author already inside the title: don't repeat it.
+        ("Artist - Song Title", "Artist", "Artist - Song Title"),
+        ("Song Title", None, "Song Title"),
+        (None, "Artist", "Artist"),
+    ],
+)
+def test_substitute_query(title, author, expected):
+    assert substitute_query(title, author) == expected
+
+
+# ── pick_substitute ──────────────────────────────────────────────────
+
+
+def _cand(title, author="Artist", length=222_000, identifier="cand-id"):
+    return SimpleNamespace(
+        title=title, author=author, length=length, identifier=identifier
+    )
+
+
+_ORIGINAL = dict(
+    original_title="Song Title (Official Video)",
+    original_author="Artist",
+    original_length_ms=222_000,
+)
+
+
+def test_pick_substitute_accepts_same_track_different_upload():
+    good = _cand("Song Title (Lyric Video)", length=220_000)
+    assert (
+        pick_substitute([good], **_ORIGINAL)
+        is good
+    )
+
+
+def test_pick_substitute_skips_bad_candidates_to_reach_a_good_one():
+    hour_mix = _cand("Song Title 1 hour", length=3_600_000)
+    clip = _cand("Song Title", length=44_000)
+    cover = _cand("Song Title (cover)", length=221_000)
+    good = _cand("Artist - Song Title", length=225_000)
+    picked = pick_substitute([hour_mix, clip, cover, good], **_ORIGINAL)
+    assert picked is good
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        pytest.param(_cand("Song Title (sped up)", length=180_000), id="sped-up"),
+        pytest.param(_cand("Song Title slowed + reverb", length=260_000), id="slowed"),
+        pytest.param(_cand("Song Title nightcore", length=222_000), id="nightcore"),
+        pytest.param(_cand("Song Title LIVE at Arena", length=230_000), id="live"),
+        pytest.param(_cand("Song Title instrumental", length=222_000), id="instrumental"),
+        pytest.param(_cand("Different Song Entirely", length=222_000), id="unrelated"),
+    ],
+)
+def test_pick_substitute_rejects_variants_and_mismatches(candidate):
+    assert pick_substitute([candidate], **_ORIGINAL) is None
+
+
+def test_pick_substitute_allows_variant_terms_the_original_had():
+    # The member queued a remix on purpose; a remix substitute is correct.
+    remix = _cand("Song Title (Remix)", length=222_000)
+    assert (
+        pick_substitute(
+            [remix],
+            original_title="Song Title (Remix)",
+            original_author="Artist",
+            original_length_ms=222_000,
+        )
+        is remix
+    )
+
+
+def test_pick_substitute_excludes_the_failed_upload_itself():
+    same = _cand("Song Title", identifier="failed-id")
+    assert (
+        pick_substitute([same], **_ORIGINAL, exclude_identifiers={"failed-id"})
+        is None
+    )
+
+
+def test_pick_substitute_skips_duration_check_when_lengths_unknown():
+    unknown = _cand("Song Title", length=0)
+    assert pick_substitute([unknown], **_ORIGINAL) is unknown
+
+
+def test_pick_substitute_empty_candidates_is_none():
+    assert pick_substitute([], **_ORIGINAL) is None
+
+
+# ── substitution_note ────────────────────────────────────────────────
+
+
+def test_substitution_note_soundcloud_with_reason():
+    note = substitution_note(
+        "Song Title",
+        "Song Title",
+        "Artist",
+        source="soundcloud",
+        reason="it's blocked by the rights holder on YouTube",
+    )
+    assert note == (
+        "⚠️ Couldn't play **Song Title** — it's blocked by the rights holder "
+        "on YouTube. Playing the closest match from SoundCloud instead: "
+        "**Song Title — Artist**."
+    )
+    assert len(note) < 2000
+
+
+def test_substitution_note_youtube_alternate_upload_no_reason():
+    note = substitution_note("Song Title", "Song Title (Audio)", "Artist2", source="youtube")
+    assert note == (
+        "⚠️ Couldn't play **Song Title**. Playing another upload instead: "
+        "**Song Title (Audio) — Artist2**."
+    )
+
+
+# ── GuildQueue.adopt_requester ───────────────────────────────────────
+
+
+def test_adopt_requester_carries_requester_to_substitute():
+    queue = GuildQueue(guild_id=1)
+    failed = SimpleNamespace(identifier="failed-id")
+    substitute = SimpleNamespace(identifier="sub-id")
+    queue.add(failed, requester_id=42)
+    queue.adopt_requester(failed, substitute)
+    assert queue.requester_for(substitute) == 42
+
+
+def test_adopt_requester_noop_when_original_had_no_requester():
+    queue = GuildQueue(guild_id=1)
+    failed = SimpleNamespace(identifier="failed-id")
+    substitute = SimpleNamespace(identifier="sub-id")
+    queue.adopt_requester(failed, substitute)
+    assert queue.requester_for(substitute) is None
 
 

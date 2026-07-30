@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Literal
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Literal
 
 import discord
 import wavelink
@@ -20,10 +21,15 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.music.embeds import build_queue_embed
 from bot_modules.music.logic import (
     describe_track_failure,
+    failure_reason,
     format_spotify_summary,
     is_search_url,
     paginate_queue,
+    pick_substitute,
+    should_advance_on_track_end,
     should_idle_disconnect,
+    substitute_query,
+    substitution_note,
     track_summary_from_object,
 )
 from bot_modules.services.lavalink_manager import LavalinkManager
@@ -62,6 +68,9 @@ class MusicCog(commands.Cog):
         self._startup_task: asyncio.Task[None] | None = None
         # alone-in-channel watchers: guild_id -> Task
         self._idle_tasks: dict[int, asyncio.Task[None]] = {}
+        # guild_id -> identifier of the substitute currently covering a
+        # blocked track; guards against a failed substitute re-substituting
+        self._substituted: dict[int, str] = {}
         super().__init__()
 
     # ------------------------------------------------------------------
@@ -543,6 +552,11 @@ class MusicCog(commands.Cog):
         player = payload.player
         if player is None or player.guild is None:
             return
+        # 'replaced' (/skip, substitute), 'loadFailed' (exception handler
+        # owns recovery), and 'stopped' all end tracks too -- advancing on
+        # those double-advances and drops queued tracks.
+        if not should_advance_on_track_end(payload.reason):
+            return
         queue = self._queue(player.guild.id)
         next_track = queue.next()
         if next_track is None:
@@ -567,15 +581,95 @@ class MusicCog(commands.Cog):
             exc.get("message"),
             exc.get("cause"),
         )
+        player = payload.player
+        if player is not None and player.guild is not None:
+            if await self._try_substitute(player, payload.track, exc):
+                return
         await self._notify_text(
-            payload.player,
+            player,
             describe_track_failure(
                 getattr(payload.track, "title", None),
                 message=exc.get("message"),
                 cause=exc.get("cause"),
             ),
         )
-        await self._advance_after_failure(payload.player)
+        await self._advance_after_failure(player)
+
+    async def _try_substitute(
+        self,
+        player: wavelink.Player,
+        failed: wavelink.Playable,
+        exc: Mapping[str, Any],
+    ) -> bool:
+        """Try to replace a failed track with another upload of it.
+
+        One recovery per track: search YouTube for an alternate upload,
+        then SoundCloud, guard each candidate via pick_substitute, and
+        play the first survivor with a visible one-line note. Returns
+        True when a substitute is now playing.
+        """
+        guild = player.guild
+        assert guild is not None
+        failed_key = str(
+            getattr(failed, "identifier", None) or getattr(failed, "uri", "") or ""
+        )
+        prior = self._substituted.pop(guild.id, None)
+        if prior is not None and prior == failed_key:
+            # The substitute itself failed -- give up rather than loop.
+            return False
+        query = substitute_query(
+            getattr(failed, "title", None), getattr(failed, "author", None)
+        )
+        if not query:
+            return False
+
+        for source in (wavelink.TrackSource.YouTube, wavelink.TrackSource.SoundCloud):
+            try:
+                result = await wavelink.Playable.search(query, source=source)
+            except Exception as search_exc:
+                # SoundCloud disabled server-side lands here -- degrade to
+                # the plain error message rather than blowing up recovery.
+                log.warning(
+                    "substitute search failed (%s) for %r: %s",
+                    source,
+                    query,
+                    search_exc,
+                )
+                continue
+            tracks = result.tracks if isinstance(result, wavelink.Playlist) else result
+            pick = pick_substitute(
+                tracks[:5],
+                original_title=getattr(failed, "title", None),
+                original_author=getattr(failed, "author", None),
+                original_length_ms=int(getattr(failed, "length", 0) or 0),
+                exclude_identifiers={failed_key},
+            )
+            if pick is None:
+                continue
+
+            queue = self._queue(guild.id)
+            queue.adopt_requester(failed, pick)
+            self._substituted[guild.id] = str(getattr(pick, "identifier", "") or "")
+            await self._notify_text(
+                player,
+                substitution_note(
+                    getattr(failed, "title", None),
+                    getattr(pick, "title", None),
+                    getattr(pick, "author", None),
+                    source=getattr(pick, "source", None),
+                    reason=failure_reason(
+                        message=exc.get("message"), cause=exc.get("cause")
+                    ),
+                ),
+            )
+            try:
+                await player.play(pick)
+            except Exception:
+                log.exception("failed to start substitute for %r", query)
+                self._substituted.pop(guild.id, None)
+                return False
+            return True
+        return False
 
     @commands.Cog.listener()
     async def on_wavelink_track_stuck(

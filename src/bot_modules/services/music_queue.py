@@ -83,6 +83,17 @@ class GuildQueue:
     def requester_for(self, track: Any) -> int | None:
         return self.requesters.get(_track_key(track))
 
+    def adopt_requester(self, source_track: Any, substitute: Any) -> None:
+        """Carry the requester over to a substitute track.
+
+        When a blocked track is replaced by a fallback search hit, the
+        member who queued the original should still show as requester on
+        the substitute's now-playing card.
+        """
+        requester_id = self.requester_for(source_track)
+        if requester_id is not None:
+            self.requesters[_track_key(substitute)] = requester_id
+
 
 def _track_key(track: Any) -> str:
     """Stable identifier for a track for requester lookup.

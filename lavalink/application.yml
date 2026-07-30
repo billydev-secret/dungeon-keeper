@@ -17,7 +17,7 @@ lavalink:
     # Built-in YouTube source breaks whenever YouTube changes player JS.
     # The youtube-source plugin from lavalink-devs is actively maintained
     # against those changes -- use it instead.
-    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
       repository: "https://maven.lavalink.dev/releases"
   server:
     password: ${LAVALINK_PASSWORD}
@@ -25,7 +25,9 @@ lavalink:
       # Disable built-in YouTube; youtube-source plugin handles it.
       youtube: false
       bandcamp: false
-      soundcloud: false
+      # SoundCloud is the fallback source when YouTube refuses a track
+      # (rights-holder blocks) -- the cog's scsearch recovery needs it.
+      soundcloud: true
       twitch: false
       vimeo: false
       http: false
@@ -39,7 +41,7 @@ lavalink:
     youtubePlaylistLoadLimit: 6
     playerUpdateInterval: 5
     youtubeSearchEnabled: true
-    soundcloudSearchEnabled: false
+    soundcloudSearchEnabled: true
 
 plugins:
   youtube:
