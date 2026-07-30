@@ -318,3 +318,60 @@ def test_shared_tier_is_per_game_not_global(authed_client):
     assert _section(authed_client, "games_chicken")["cooldown_hours"] == 11
     # A game never written to still reports the default.
     assert _section(authed_client, "games_quickdraw")["cooldown_hours"] == 48
+
+
+# ── field-table / model contract ──────────────────────────────────────
+#
+# The declarative tables added by the simplify pass are read with
+# getattr(body, field, None), so a table naming a field its model does not
+# have would silently write nothing and still return 200 — a saved-looking
+# no-op. These pin every table to its model so that drift fails here instead.
+
+_FIELD_TABLES = [
+    ("_GLOBAL_FIELDS", "GlobalConfigUpdate"),
+    ("_INTAKE_FIELDS", "IntakeConfigUpdate"),
+    ("_XP_ID_FIELDS", "XpConfigUpdate"),
+    ("_XP_COEFF_READERS", "XpConfigUpdate"),
+    ("_RULES_WATCH_FIELDS", "RulesWatchConfigUpdate"),
+    ("_INACTIVE_FIELDS", "InactiveConfigUpdate"),
+    ("_NSFW_FIELDS", "NsfwClassifierUpdate"),
+    ("_BIRTHDAY_FIELDS", "BirthdayConfigUpdate"),
+    ("_NEEDLE_FIELDS", "NeedleGlobalUpdate"),
+]
+
+
+@pytest.mark.parametrize(
+    ("table_name", "model_name"), _FIELD_TABLES, ids=[t for t, _ in _FIELD_TABLES]
+)
+def test_field_table_names_only_real_model_fields(table_name, model_name):
+    from web_server.routes import config as cfg
+
+    table = getattr(cfg, table_name)
+    model = getattr(cfg, model_name)
+    unknown = set(table) - set(model.model_fields)
+    assert not unknown, (
+        f"{table_name} names field(s) {sorted(unknown)} that {model_name} does "
+        f"not declare — those writes would silently no-op"
+    )
+
+
+_DUEL_MODELS = {
+    "pressure": "PressureConfigUpdate",
+    "quickdraw": "QuickdrawConfigUpdate",
+    "hot_potato": "HotPotatoConfigUpdate",
+    "hot_potato_group": "HotPotatoGroupConfigUpdate",
+    "chicken": "ChickenConfigUpdate",
+    "musical_chairs": "MusicalChairsConfigUpdate",
+}
+
+
+@pytest.mark.parametrize(("game_key", "model_name"), sorted(_DUEL_MODELS.items()))
+def test_duel_clamp_table_names_only_real_model_fields(game_key, model_name):
+    from web_server.routes import config as cfg
+
+    clamps = cfg._DUEL_GAMES[game_key]["fields"]
+    model = getattr(cfg, model_name)
+    unknown = set(clamps) - set(model.model_fields)
+    assert not unknown, f"{game_key} clamps unknown field(s) {sorted(unknown)}"
+    # and the shared tier really is shared
+    assert set(cfg._DUEL_SHARED_DEFAULTS) <= set(model.model_fields)

@@ -361,8 +361,16 @@ _XP_COEFF_READERS: dict = {
 }
 
 
-def _require_post_permissions(guild, channel) -> None:
-    """Refuse up front if the bot cannot post in ``channel``.
+_PERM_LABELS = {
+    "view_channel": "View Channel",
+    "send_messages": "Send Messages",
+    "embed_links": "Embed Links",
+    "attach_files": "Attach Files",
+}
+
+
+def _require_post_permissions(guild, channel, *required: str) -> None:
+    """Refuse up front if the bot cannot post what this panel actually posts.
 
     Worth doing *before* calling a panel-posting service rather than letting
     discord.Forbidden escape as a 500: post_or_update_booster_panel deletes the
@@ -370,16 +378,16 @@ def _require_post_permissions(guild, channel) -> None:
     unguarded, so failing partway through leaves the guild with no panel at all
     and a repost that fails the same way. A 400 naming the missing permission
     is also simply actionable — the admin can go and fix it.
+
+    The flags differ per panel and must be passed explicitly: the DM perms
+    panel sends an embed, while the booster panel sends image *attachments* and
+    no embed. Checking the wrong set is worse than not checking, because it
+    both rejects channels that would have worked and waves through the one
+    failure this exists to prevent.
     """
     perms = channel.permissions_for(guild.me)
     missing = [
-        label
-        for flag, label in (
-            (perms.view_channel, "View Channel"),
-            (perms.send_messages, "Send Messages"),
-            (perms.embed_links, "Embed Links"),
-        )
-        if not flag
+        _PERM_LABELS[name] for name in required if not getattr(perms, name)
     ]
     if missing:
         raise HTTPException(
@@ -3076,7 +3084,10 @@ async def post_booster_panel(
 
     guild = _guild_or_503(ctx, guild_id)
     channel = _text_channel_or_400(guild, body.channel_id)
-    _require_post_permissions(guild, channel)
+    # Attachments, not embeds — each role posts as an image file.
+    _require_post_permissions(
+        guild, channel, "view_channel", "send_messages", "attach_files"
+    )
 
     msgs = await post_or_update_booster_panel(ctx.db_path, guild, channel)
     if not msgs:
@@ -3146,8 +3157,9 @@ async def list_booster_swatches(
     """List uploaded swatch files in this guild's managed folder."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    # Directory walk + a config read — off the event loop, like every other
-    # DB-touching handler here.
+    # Directory walk + a config read, so off the event loop. The upload and
+    # delete handlers below still call _swatch_listing inline (and upload
+    # writes up to 8 MB per file there too) — pre-existing, not fixed here.
     return await run_query(lambda: _swatch_listing(ctx.db_path, guild_id))
 
 
@@ -4008,7 +4020,9 @@ async def post_dms_panel(
     channel = guild.get_channel(channel_id)
     if not isinstance(channel, discord.TextChannel):
         raise HTTPException(400, "Channel not found or not a text channel")
-    _require_post_permissions(guild, channel)
+    _require_post_permissions(
+        guild, channel, "view_channel", "send_messages", "embed_links"
+    )
 
     message_id = await cog.post_panel(guild, channel_id)
     if message_id is None:

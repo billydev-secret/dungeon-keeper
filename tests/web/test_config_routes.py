@@ -601,40 +601,88 @@ def _booster_panel_guild(fake_ctx, perms):
     return channel
 
 
+def _booster_panel_service(monkeypatch):
+    """Stub post_or_update_booster_panel; returns a flag list recording calls.
+
+    Whether the service ran is the assertion that matters: it bulk-deletes
+    every existing panel message before its (unguarded) sends, so reaching it
+    without the right permissions is what destroys the panel.
+    """
+    calls: list[bool] = []
+
+    async def _svc(*a, **kw):
+        calls.append(True)
+        return [MagicMock(), MagicMock()]
+
+    monkeypatch.setattr("web_server.routes.config.post_or_update_booster_panel", _svc)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("perms", "want_missing"),
+    [
+        pytest.param(
+            {"view_channel": True, "send_messages": False, "attach_files": True},
+            "Send Messages",
+            id="no-send-messages",
+        ),
+        # The booster panel posts one image FILE per role and no embeds, so
+        # this is the flag that matters — and the one a check copied from the
+        # embed-posting DM panel would have waved straight through, into the
+        # delete-then-fail path.
+        pytest.param(
+            {"view_channel": True, "send_messages": True, "attach_files": False},
+            "Attach Files",
+            id="no-attach-files",
+        ),
+        pytest.param(
+            {"view_channel": False, "send_messages": True, "attach_files": True},
+            "View Channel",
+            id="no-view-channel",
+        ),
+    ],
+)
 def test_post_booster_panel_refuses_channel_it_cannot_post_in(
-    authed_client, fake_ctx, monkeypatch
+    authed_client, fake_ctx, monkeypatch, perms, want_missing
 ):
     """A 400 *before* the service runs — not a 500 after it has already
-    deleted the old panel.
-
-    post_or_update_booster_panel deletes every existing panel message before
-    sending the new ones, and those sends are unguarded. Reaching it without
-    Send Messages destroys the panel and leaves nothing in its place, so the
-    permission check has to happen in the route.
-    """
+    deleted the old panel."""
     import discord
 
-    called = False
-
-    async def _never(*a, **kw):
-        nonlocal called
-        called = True
-        return []
-
-    monkeypatch.setattr(
-        "web_server.routes.config.post_or_update_booster_panel", _never
-    )
-    _booster_panel_guild(
-        fake_ctx,
-        discord.Permissions(view_channel=True, send_messages=False, embed_links=True),
-    )
+    calls = _booster_panel_service(monkeypatch)
+    _booster_panel_guild(fake_ctx, discord.Permissions(**perms))
 
     resp = authed_client.post(
         "/api/config/booster-roles/post-panel", json={"channel_id": "12345"}
     )
     assert resp.status_code == 400
-    assert "Send Messages" in resp.json()["detail"]
-    assert not called, "service ran despite missing permissions — panel would be lost"
+    assert want_missing in resp.json()["detail"]
+    assert not calls, "service ran despite missing permissions — panel would be lost"
+
+
+def test_post_booster_panel_does_not_require_embed_links(
+    authed_client, fake_ctx, monkeypatch
+):
+    """Embed Links is irrelevant here — the panel sends attachments, not
+    embeds. Requiring it would 400 channels that post perfectly well."""
+    import discord
+
+    calls = _booster_panel_service(monkeypatch)
+    _booster_panel_guild(
+        fake_ctx,
+        discord.Permissions(
+            view_channel=True,
+            send_messages=True,
+            attach_files=True,
+            embed_links=False,
+        ),
+    )
+
+    resp = authed_client.post(
+        "/api/config/booster-roles/post-panel", json={"channel_id": "12345"}
+    )
+    assert resp.status_code == 200
+    assert calls
 
 
 def test_post_booster_panel_posts_when_permitted(
@@ -643,15 +691,12 @@ def test_post_booster_panel_posts_when_permitted(
     """The precheck must not block the happy path."""
     import discord
 
-    async def _ok(*a, **kw):
-        return [MagicMock(), MagicMock()]
-
-    monkeypatch.setattr(
-        "web_server.routes.config.post_or_update_booster_panel", _ok
-    )
+    _booster_panel_service(monkeypatch)
     _booster_panel_guild(
         fake_ctx,
-        discord.Permissions(view_channel=True, send_messages=True, embed_links=True),
+        discord.Permissions(
+            view_channel=True, send_messages=True, attach_files=True
+        ),
     )
 
     resp = authed_client.post(
