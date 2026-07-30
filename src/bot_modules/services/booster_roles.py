@@ -455,7 +455,13 @@ def swatch_file_info(directory: Path) -> list[dict]:
     return out
 
 
-def resolve_swatch_directory(db_path: Path, guild_id: int) -> str:
+def resolve_swatch_directory(
+    db_path: Path,
+    guild_id: int,
+    *,
+    managed: Path | None = None,
+    managed_valid_count: int | None = None,
+) -> str:
     """Pick the directory that Sync will scan for this guild.
 
     The managed per-guild upload folder wins as soon as it holds at least one
@@ -463,9 +469,16 @@ def resolve_swatch_directory(db_path: Path, guild_id: int) -> str:
     ``booster_swatch_dir`` override (legacy host-path deployments). When neither
     has content, the (empty) managed folder is returned so the caller's
     zero-swatch guard can abort safely.
+
+    A caller that has already resolved the managed path or listed its contents
+    passes them in, so the dashboard's swatch panel does not walk the same
+    directory (or re-run its mkdir) a second time.
     """
-    managed = get_guild_swatch_dir(db_path, guild_id)
-    if count_valid_swatches(str(managed)) > 0:
+    if managed is None:
+        managed = get_guild_swatch_dir(db_path, guild_id)
+    if managed_valid_count is None:
+        managed_valid_count = count_valid_swatches(str(managed))
+    if managed_valid_count > 0:
         return str(managed)
     configured = get_swatch_directory(db_path)
     if configured and os.path.isdir(configured):

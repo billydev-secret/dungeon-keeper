@@ -95,7 +95,8 @@ from bot_modules.services.quote_renderer import (
 from bot_modules.services.inactivity_prune_service import (
     add_prune_exception,
     get_prune_exception_ids,
-    get_prune_rule as _get_prune_rule,
+    get_prune_exception_ids_with_conn,
+    get_prune_rule_with_conn as _get_prune_rule_with_conn,
     remove_prune_exception,
 )
 from bot_modules.services.dm_perms_service import (
@@ -1024,8 +1025,10 @@ async def get_config(
                 DEFAULT_WELCOME_MESSAGE,
             )
 
-            prune_rule = _get_prune_rule(ctx.db_path, guild_id)
-            prune_exempt_ids = get_prune_exception_ids(ctx.db_path, guild_id)
+            # Reuse the open connection — the db_path variants would each
+            # open a second one, and five PRAGMAs cost more than the query.
+            prune_rule = _get_prune_rule_with_conn(conn, guild_id)
+            prune_exempt_ids = get_prune_exception_ids_with_conn(conn, guild_id)
             grant_roles = get_grant_roles(conn, guild_id)
             booster_panel_refs = get_booster_panel_refs(conn, guild_id)
 
@@ -3214,10 +3217,18 @@ def _safe_swatch_name(filename: str | None) -> str:
 
 def _swatch_listing(db_path, guild_id: int) -> dict:
     managed = get_guild_swatch_dir(db_path, guild_id)
-    active = resolve_swatch_directory(db_path, guild_id)
+    files = swatch_file_info(managed)
+    # The valid-swatch count resolve_swatch_directory needs is already in
+    # ``files`` — handing it over saves a second walk of the same directory.
+    active = resolve_swatch_directory(
+        db_path,
+        guild_id,
+        managed=managed,
+        managed_valid_count=sum(1 for f in files if f["valid"]),
+    )
     return {
         "ok": True,
-        "files": swatch_file_info(managed),
+        "files": files,
         "managed_dir": str(managed),
         "active_dir": active,
         "using_managed": active == str(managed),
@@ -3232,7 +3243,9 @@ async def list_booster_swatches(
     """List uploaded swatch files in this guild's managed folder."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    return _swatch_listing(ctx.db_path, guild_id)
+    # Directory walk + a config read — off the event loop, like every other
+    # DB-touching handler here.
+    return await run_query(lambda: _swatch_listing(ctx.db_path, guild_id))
 
 
 @router.post("/config/booster-roles/swatches")
@@ -3319,7 +3332,7 @@ async def get_quote_border(
     """Metadata about this guild's uploaded quote-card border."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    return _quote_border_meta(ctx.db_path, guild_id)
+    return await run_query(lambda: _quote_border_meta(ctx.db_path, guild_id))
 
 
 @router.get("/config/quote-border/image")

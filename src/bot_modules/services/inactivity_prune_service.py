@@ -73,13 +73,23 @@ def remove_prune_rule(db_path: Path, guild_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def get_prune_rule_with_conn(conn, guild_id: int) -> sqlite3.Row | None:
+    """As ``get_prune_rule``, reusing a connection the caller already holds.
+
+    Opening a second connection costs five PRAGMAs; callers already inside a
+    ``with open_db(...)`` block (the dashboard's GET /config aggregate) should
+    use this.
+    """
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT guild_id, role_id, inactivity_days FROM inactivity_prune_rules WHERE guild_id = ?",
+        (guild_id,),
+    ).fetchone()
+    return row
+
+
 def get_prune_rule(db_path: Path, guild_id: int) -> sqlite3.Row | None:
     with open_db(db_path) as conn:
-        row: sqlite3.Row | None = conn.execute(
-            "SELECT guild_id, role_id, inactivity_days FROM inactivity_prune_rules WHERE guild_id = ?",
-            (guild_id,),
-        ).fetchone()
-        return row
+        return get_prune_rule_with_conn(conn, guild_id)
 
 
 def list_all_prune_rules(db_path: Path) -> list[sqlite3.Row]:
@@ -111,13 +121,18 @@ def remove_prune_exception(db_path: Path, guild_id: int, user_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def get_prune_exception_ids_with_conn(conn, guild_id: int) -> set[int]:
+    """As ``get_prune_exception_ids``, reusing the caller's connection."""
+    rows = conn.execute(
+        "SELECT user_id FROM inactivity_prune_exceptions WHERE guild_id = ?",
+        (guild_id,),
+    ).fetchall()
+    return {int(row["user_id"]) for row in rows}
+
+
 def get_prune_exception_ids(db_path: Path, guild_id: int) -> set[int]:
     with open_db(db_path) as conn:
-        rows = conn.execute(
-            "SELECT user_id FROM inactivity_prune_exceptions WHERE guild_id = ?",
-            (guild_id,),
-        ).fetchall()
-        return {int(row["user_id"]) for row in rows}
+        return get_prune_exception_ids_with_conn(conn, guild_id)
 
 
 # ---------------------------------------------------------------------------
