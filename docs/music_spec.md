@@ -52,6 +52,36 @@ Removing this means the bot leaves that channel on the normal idle sweep like
 any other; the empty `music_channel_settings` table is left in place rather than
 dropped by migration.
 
+### Track-failure fallback (added 2026-07-30)
+
+YouTube refuses some tracks outright — most commonly a rights-holder content
+claim (e.g. "blocked due to the claimed content by SME") that no client
+rotation can bypass. When the current track raises a Lavalink exception, the
+cog attempts **one** recovery before giving up:
+
+1. Search YouTube for an alternate upload (excluding the failed video id),
+   then SoundCloud (`scsearch:`, requires `soundcloud: true` in
+   `lavalink/application.yml`). Each source tries two queries: title +
+   uploader first, then the bare title — a YouTube "author" is the uploader
+   channel, which for re-uploads is unrelated to the song and poisons the
+   search (verified against the real 2026-07-30 failures).
+2. Each candidate must pass the guard in `music/logic.py::pick_substitute`:
+   duration within ±20% of the original (floor ±15s), ≥60% of the original
+   title's core words present, and no variant term (cover / remix / sped up /
+   slowed / nightcore / live / "1 hour" / etc.) the original title didn't
+   already contain.
+3. The first survivor plays, with a visible one-line note — substitution is
+   never silent: "⚠️ Couldn't play **X** — it's blocked by the rights holder
+   on YouTube. Playing the closest match from SoundCloud instead: **Y**."
+   The requester carries over to the substitute's now-playing card.
+4. If no candidate survives (or the substitute itself fails — recovery never
+   loops), the plain-language failure line posts and the queue advances.
+
+`on_wavelink_track_end` only advances the queue on reason `finished`:
+Lavalink also ends tracks with `replaced` (/skip, substitutes), `loadFailed`
+(owned by the exception handler), `stopped`, and `cleanup`, and advancing on
+those double-advanced the queue (a /skip with ≥3 queued tracks dropped one).
+
 ### Spotify URL handling
 
 Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are recognized. Playlists cap at 500 tracks per submission. Tracks that can't be matched on YouTube (no ISRC, no clear search match) are skipped with a warning, not a hard failure.
@@ -68,7 +98,7 @@ Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are 
 | User runs `/play` while not in voice | "Join a voice channel first." |
 | User runs `/play` while in a different channel from the bot | "I'm currently in #other-channel. Join me there or wait for the queue to finish." |
 | Spotify playlist exceeds 500 tracks | "Playlist is X tracks; queued the first 500." |
-| YouTube track fails to load (region block, removed, etc.) | Skipped silently, next track plays |
+| YouTube track fails to load (rights-holder block, age gate, removed, etc.) | The bot tries one substitute (alternate YouTube upload, then SoundCloud) and announces it: "⚠️ Couldn't play **X** — [reason]. Playing the closest match from SoundCloud instead: **Y**." If nothing passes the match guard, one plain line naming the track and the reason posts and the next track plays. Full Lavalink exception goes to the log only. |
 | Spotify URL is private or doesn't exist | "Playlist is private or doesn't exist." |
 | Spotify URL is malformed | "Not a valid Spotify URL." |
 | Now-playing button clicked from outside the voice channel | "You need to be in the voice channel." |
@@ -76,7 +106,9 @@ Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are 
 
 ## Non-goals
 
-- Apple Music, Deezer, Tidal, SoundCloud sources.
+- Apple Music, Deezer, Tidal sources. SoundCloud is enabled as the fallback
+  when YouTube refuses a track; a pasted SoundCloud URL therefore also plays,
+  but SoundCloud *search* stays YouTube-first and isn't a promoted feature.
 - Saved community playlists / named presets.
 - Lyrics, audio filters, EQ.
 - Vote-skip, per-user request limits.
