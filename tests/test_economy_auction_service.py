@@ -536,6 +536,8 @@ def test_attach_card_to_latest_is_a_no_op_without_an_auction(db):
 
 
 def test_sticky_panel_channels_lists_configured_panels(db):
+    """The three panels that only re-stick under human messages, so an auction
+    sharing their channel is warned about rather than refused."""
     with open_db(db) as conn:
         save_econ_settings(conn, GUILD, {
             "guide_channel_id": 11,
@@ -543,11 +545,12 @@ def test_sticky_panel_channels_lists_configured_panels(db):
             "shop_channel_id": 33,
         })
         found = sticky_panel_channels(conn, GUILD)
-    assert found == {
+    assert {cid: r.name for cid, r in found.items()} == {
         11: "the economy guide panel",
         22: "the leaderboard panel",
         33: "the shop panel",
     }
+    assert not any(r.restick_on_bot for r in found.values())
 
 
 def test_sticky_panel_channels_includes_the_casino_hub(db):
@@ -559,7 +562,8 @@ def test_sticky_panel_channels_includes_the_casino_hub(db):
             (GUILD, "casino_panel_channel_id", "1530328883449040967"),
         )
         found = sticky_panel_channels(conn, GUILD)
-    assert found[1530328883449040967] == "the casino hub panel"
+    assert found[1530328883449040967].name == "the casino hub panel"
+    assert found[1530328883449040967].restick_on_bot is True
 
 
 def test_sticky_panel_channels_includes_the_bounty_board(db):
@@ -569,7 +573,27 @@ def test_sticky_panel_channels_includes_the_bounty_board(db):
     with open_db(db) as conn:
         save_econ_settings(conn, GUILD, {"bounty_channel_id": 44})
         found = sticky_panel_channels(conn, GUILD)
-    assert found[44] == "the bounty board panel"
+    assert found[44].name == "the bounty board panel"
+
+
+@pytest.mark.parametrize(
+    ("setting", "channel_id", "blocks"),
+    [
+        # These two chase the bot's own posts, so an auction card here is
+        # buried after every render and never resurfaces → refuse.
+        pytest.param("bounty_channel_id", 44, True, id="bounty-board-blocks"),
+        pytest.param("shop_channel_id", 33, False, id="shop-only-warns"),
+    ],
+)
+def test_restick_on_bot_marks_the_residents_that_block_an_auction(
+    db, setting, channel_id, blocks
+):
+    """The flag is what splits refuse-outright from merely-warn, so it is worth
+    pinning per resident rather than trusting the tuple table by eye."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {setting: channel_id})
+        found = sticky_panel_channels(conn, GUILD)
+    assert found[channel_id].restick_on_bot is blocks
 
 
 def test_sticky_panel_channels_is_empty_when_nothing_is_configured(db):

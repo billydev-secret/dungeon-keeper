@@ -3050,6 +3050,22 @@ def test_no_bounty_slash_command_survives():
     assert "bounty" not in names
 
 
+def test_the_bounty_hub_follows_its_own_boards_cards(ctx, db):
+    """The hub is the board's only entry point, and the board's own channel is
+    where the bot posts cards — so without restick_on_bot a burst of new
+    bounties strands the hub above them until a human happens to speak
+    (2026-07-29).
+
+    The wiring assertion is the whole change: the burst behaviour it buys is
+    covered at the logic layer in test_core_sticky.py. The auction card is the
+    contrast — nothing bot-authored lands in its channel while it is live, so
+    the flag would buy it nothing.
+    """
+    cog = _make_cog(ctx)
+    assert cog.bounty_panel._restick_on_bot is True
+    assert cog.auction_panel._restick_on_bot is False
+
+
 def test_repointing_the_bounty_board_stops_the_old_hub_being_restuck(ctx, db):
     """Changing bounty_channel_id doesn't touch the panel ids (the dashboard
     save is a partial update). Pairing the old message with the new channel
