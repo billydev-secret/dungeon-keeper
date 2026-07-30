@@ -76,7 +76,6 @@ async def admin_dashboard_data(
         ],
         "config": {
             "default_enforcement": cfg.default_enforcement if cfg else "gradual",
-            "crisis_resource_url": cfg.crisis_resource_url if cfg else "",
         }
         if cfg
         else None,
@@ -97,7 +96,6 @@ async def admin_defaults_data(
     return {
         "config": {
             "default_enforcement": cfg.default_enforcement if cfg else "gradual",
-            "crisis_resource_url": cfg.crisis_resource_url if cfg else "",
         }
         if cfg
         else None,
@@ -113,13 +111,11 @@ async def admin_defaults_save(
     guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
     default_enforcement = payload.get("default_enforcement")
-    crisis_resource_url = payload.get("crisis_resource_url")
     if (
         default_enforcement is not None
         and default_enforcement not in ENFORCEMENT_LEVELS
     ):
         return _err("invalid enforcement level")
-    crisis_url = str(crisis_resource_url) if crisis_resource_url is not None else None
 
     def _write():
         with ctx.open_db() as conn:
@@ -127,7 +123,6 @@ async def admin_defaults_save(
                 conn,
                 guild_id,
                 default_enforcement=default_enforcement,
-                crisis_resource_url=crisis_url,
             )
 
     await run_query(_write)

@@ -115,8 +115,6 @@ export function mount(container) {
         </form>
         <button data-resume-btn class="btn">Resume Nudges</button>
       </div>
-
-      ${d.crisis_resource_url ? `<div class="w-crisis"><a href="${esc(d.crisis_resource_url)}" target="_blank" rel="noopener">Crisis resources</a></div>` : ""}
     `;
 
     // Settings form

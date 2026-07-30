@@ -34,7 +34,6 @@ from bot_modules.services.wellness_service import (
     find_cap_by_label,
     get_cap,
     get_partnership,
-    get_wellness_config,
     get_wellness_user,
     list_blackouts,
     list_caps,
@@ -120,13 +119,12 @@ async def wellness_me(
             caps = list_caps(conn, guild_id, user_id)
             blackouts = list_blackouts(conn, guild_id, user_id)
             partnerships = list_partnerships(conn, guild_id, user_id, accepted_only=False)
-            cfg = get_wellness_config(conn, guild_id)
-            return wuser, streak, caps, blackouts, partnerships, cfg
+            return wuser, streak, caps, blackouts, partnerships
 
     _result = await run_query(_q)
     if _result is None:
         return {"opted_in": False}
-    wuser, streak, caps, blackouts, partnerships, cfg = _result
+    wuser, streak, caps, blackouts, partnerships = _result
 
     nxt = next_milestone(streak.current_days)
     next_text = (
@@ -159,7 +157,6 @@ async def wellness_me(
         "pending_partners_count": len(
             [p for p in partnerships if p.status == "pending"]
         ),
-        "crisis_resource_url": cfg.crisis_resource_url if cfg else "",
         "enforcement_levels": ENFORCEMENT_LEVELS,
         "notification_prefs": NOTIFICATION_PREFS,
     }

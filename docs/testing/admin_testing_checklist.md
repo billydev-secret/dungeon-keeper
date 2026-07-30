@@ -198,7 +198,7 @@ For testers with **Administrator** (or bot-owner access for the handful of owner
 
 - [ ] **Seed `wellness_config` prerequisite** — Manually seed a `wellness_config` row (direct DB write) with valid `role_id`/`channel_id` for the test guild — nothing else provisions this. Confirm `/wellness setup` no longer aborts once seeded, and note this in your handoff to the user/mod testers since they're blocked on it.
 - [ ] **Admin dashboard — overview** — Confirm active-member count, exempt channels, and config summary display.
-- [ ] **Admin dashboard — defaults** — Update the server default enforcement level and crisis-resource URL; confirm they persist and apply to new opt-ins.
+- [ ] **Admin dashboard — defaults** — Update the server default enforcement level; confirm it persists and applies to new opt-ins.
 - [ ] **Admin dashboard — user pause/resume** — List opted-in members, then pause/resume one; confirm admin can override any member's tracking.
 - [ ] **Admin dashboard — exempt channels** — Add/remove a channel; confirm exempt channels are excluded from cap enforcement.
 

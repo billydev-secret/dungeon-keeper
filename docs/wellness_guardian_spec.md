@@ -12,7 +12,7 @@ At the code level, **there is no supported way to turn Wellness Guardian on for 
 
 - `/wellness setup` refuses to run unless `wellness_config.role_id` is set, and points the user at the web dashboard.
 - **`/wellness-admin setup` does not exist** — there is no `/wellness-admin` slash command group anywhere. The member-facing "not set up" error strings (`wellness_cog.py:228,249,496`) now all point at the web dashboard rather than naming a phantom command.
-- The dashboard admin router (`/api/wellness/admin`) has **no create-role / create-category / provisioning endpoint**. Its only writer of config sets `default_enforcement` and `crisis_resource_url` — never `role_id` or `channel_id`.
+- The dashboard admin router (`/api/wellness/admin`) has **no create-role / create-category / provisioning endpoint**. Its only writer of config sets `default_enforcement` — never `role_id` or `channel_id`.
 - The only other writer of the config row is the background scheduler, which sets `active_list_message_id` only.
 
 Net effect: unless a `wellness_config` row is seeded out-of-band (e.g. a manual DB edit), no member can opt in, so no enforcement, dashboard data, or loops have any subject to act on. **Provisioning is the single genuinely-missing piece** — see [Roadmap](#provisioning-admin-setup).
@@ -71,7 +71,7 @@ Full CRUD, authenticated as the logged-in member:
 | Endpoint(s) | Feature |
 |---|---|
 | `GET /dashboard` | Active-member count, exempt channels, server config summary |
-| `GET/POST /defaults` | Server default enforcement level + crisis-resource URL |
+| `GET/POST /defaults` | Server default enforcement level |
 | `GET /users`, `POST /users/{id}/pause`, `POST /users/{id}/resume` | List opted-in members; admin pause/resume a member |
 | `GET/POST /exempt`, `DELETE /exempt/{id}` | Manage the exempt-channel list |
 
@@ -79,7 +79,7 @@ The admin panel does **not** provision the wellness role/category (see activatio
 
 ### Data model (confirmed)
 
-Per-guild + per-member tables back all of the above: member settings (timezone, enforcement, notifications pref, slow-mode rate, public-commitment, daily reset hour), caps + per-window counters + overage counters, blackouts + active-marker state, the away message, streak state (current + personal-best + last-violation-date + clean-day history), partnerships, milestone-badge celebration state, weekly-report cache, per-user slow-mode state, and per-guild config (role id, channel id, active-list message id, default enforcement, crisis URL, exempt channels). Schema lives in `wellness_service.py` (`init_wellness_tables`). `opt_out_user()` exists as a function but is **not** surfaced by any command or endpoint.
+Per-guild + per-member tables back all of the above: member settings (timezone, enforcement, notifications pref, slow-mode rate, public-commitment, daily reset hour), caps + per-window counters + overage counters, blackouts + active-marker state, the away message, streak state (current + personal-best + last-violation-date + clean-day history), partnerships, milestone-badge celebration state, weekly-report cache, per-user slow-mode state, and per-guild config (role id, channel id, active-list message id, default enforcement, exempt channels). Schema lives in `wellness_service.py` (`init_wellness_tables`). `opt_out_user()` exists as a function but is **not** surfaced by any command or endpoint.
 
 ---
 
@@ -136,7 +136,7 @@ The original design placed all admin functionality in the **web Wellness panel**
 
 > *A short historical mapping from the retired `/wellness-admin X` commands to their dashboard equivalents lived here while admins migrated. It's now retained only in git history.*
 
-*Built today:* defaults (enforcement + crisis URL), per-user pause/resume, exempt-channel management, stats tile. *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
+*Built today:* defaults (enforcement), per-user pause/resume, exempt-channel management, stats tile. *(Crisis-resource URL support was removed 2026-07-30 — the setup disclaimer no longer references a crisis resource; pre-existing DBs keep an orphaned `crisis_resource_url` column.)* *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
 
 ### Onboarding (`/wellness setup`) — original 3-step design
 
@@ -286,7 +286,7 @@ A user can apply a template and customize it, or build a fully custom recurring 
 
 #### Per guild (dashboard)
 - Wellness category + channel provisioning *(not built)*
-- Server-side defaults (enforcement, caps, blackout template, crisis-resource URL) *(only enforcement + crisis URL built)*
+- Server-side defaults (enforcement, caps, blackout template, crisis-resource URL) *(only enforcement built; crisis URL removed 2026-07-30)*
 - Exempt-channel multi-select
 - Per-user overrides *(not built)*
 

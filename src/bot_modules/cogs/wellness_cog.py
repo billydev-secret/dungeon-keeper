@@ -130,8 +130,8 @@ class _SetupWizardView(discord.ui.View):
             description=(
                 "This tool helps you set healthy boundaries with Discord — "
                 "**it's not a substitute for professional support.** "
-                "If you're ever struggling, please reach out to a trusted person "
-                "or a crisis resource.\n\n"
+                "If you're ever struggling, please reach out to someone "
+                "you trust.\n\n"
                 "**Step 1 of 2** — 🕐 What's your timezone?"
             ),
             color=WELLNESS_PRIMARY,

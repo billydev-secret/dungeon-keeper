@@ -301,7 +301,6 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
             role_id                INTEGER NOT NULL DEFAULT 0,
             channel_id             INTEGER NOT NULL DEFAULT 0,
             active_list_message_id INTEGER NOT NULL DEFAULT 0,
-            crisis_resource_url    TEXT NOT NULL DEFAULT '',
             default_enforcement    TEXT NOT NULL DEFAULT 'gradual'
         )
         """
@@ -678,17 +677,17 @@ class WellnessConfig:
     role_id: int
     channel_id: int
     active_list_message_id: int
-    crisis_resource_url: str
     default_enforcement: str
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> WellnessConfig:
+        # Pre-2026-07-30 DBs carry an orphaned crisis_resource_url column;
+        # SELECT * returns it and from_row simply ignores it.
         return cls(
             guild_id=int(row["guild_id"]),
             role_id=int(row["role_id"]),
             channel_id=int(row["channel_id"]),
             active_list_message_id=int(row["active_list_message_id"]),
-            crisis_resource_url=str(row["crisis_resource_url"]),
             default_enforcement=str(row["default_enforcement"]),
         )
 
@@ -710,7 +709,6 @@ def upsert_wellness_config(
     role_id: int | None = None,
     channel_id: int | None = None,
     active_list_message_id: int | None = None,
-    crisis_resource_url: str | None = None,
     default_enforcement: str | None = None,
 ) -> WellnessConfig:
     """Upsert the per-guild wellness config row, only setting fields supplied."""
@@ -735,9 +733,6 @@ def upsert_wellness_config(
     if active_list_message_id is not None:
         fields.append("active_list_message_id = ?")
         values.append(int(active_list_message_id))
-    if crisis_resource_url is not None:
-        fields.append("crisis_resource_url = ?")
-        values.append(str(crisis_resource_url))
     if default_enforcement is not None and default_enforcement in ENFORCEMENT_LEVELS:
         fields.append("default_enforcement = ?")
         values.append(default_enforcement)
