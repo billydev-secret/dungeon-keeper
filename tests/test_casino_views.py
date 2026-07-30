@@ -32,6 +32,19 @@ def test_hub_view_full_house_by_default():
     assert {f"casino:{game}" for game in GAMES} <= ids
 
 
+def test_hub_view_game_rows_are_evenly_sized():
+    """Todo #87: a 5-wide row wraps on narrow clients, leaving a short
+    "derby line". Three per game row fits every client, so every game row
+    renders the same width; the two grey utility buttons keep their own row.
+    """
+    rows: dict[int, list[str]] = {}
+    for item in build_hub_view(CasinoSettings()).children:
+        rows.setdefault(item.row, []).append(getattr(item, "label", ""))
+
+    assert [len(rows[r]) for r in sorted(rows)] == [3, 3, 3, 2]
+    assert rows[3] == ["My Stats", "How It Works"]
+
+
 def test_derby_button_template_is_bounds_anchored():
     template = DerbyBetButton.__discord_ui_compiled_template__
     assert template.fullmatch(f"casino_dy:{len(logic.DERBY_FIELD) - 1}:12")
