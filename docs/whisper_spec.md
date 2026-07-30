@@ -31,7 +31,7 @@ On submit:
 - **Per-sender cooldown**: 30 seconds between any two sends.
 - **Per-target hourly cap**: 5 whispers to the same recipient in a rolling hour.
 - Timed-out targets are refused.
-- The recipient is DM'd the content with Guess / Share / Reply / Delete buttons; if the DM fails (closed DMs), nothing is persisted.
+- The recipient is DM'd the content with Guess / Share / Reply / Delete buttons; if the DM fails (closed DMs), nothing is persisted. The DM is a **branded embed** (`send_branded_dm`): the origin server's accent, plus its name and icon in the footer. The body still names the server in its opening line.
 - A best-effort announcement is posted to the feed: "Someone sent {target name} an anonymous message." — name only, no content.
 
 ### Naming people in embeds
@@ -66,7 +66,7 @@ The target gets **three guesses**. The guess picker lists every opted-in member 
 
 ### Sharing, replying, deleting, exposing
 - **Share** (target only, before solved): the no-content feed post is replaced with one showing the full content (codefence escapes neutralised so user content can't break formatting). The DM keeps the Guess + Reply buttons if still applicable. The ephemeral confirmation ("Shared to the whisper feed.") is a jump link to the new feed post when the post succeeds.
-- **Reply** (sender or target, **one reply per whisper**): a modal collects up to 1000 characters; the other party is DM'd. The reply DM carries a Report button. If the recipient's DMs are closed the reply is rolled back and the writer sees "Couldn't deliver — they have DMs disabled."
+- **Reply** (sender or target, **one reply per whisper**): a modal collects up to 1000 characters; the other party is DM'd. The reply DM carries a Report button, and is branded with the origin server (accent + footer attribution) — the reply is anonymous as to its *author*, not its origin, and the recipient sent the original whisper so the server name tells them nothing new. If the recipient's DMs are closed the reply is rolled back and the writer sees "Couldn't deliver — they have DMs disabled."
 - **Delete** (target only): soft-delete — the whisper disappears from the target's inbox but remains in the sender's sent list. Idempotent.
 - **Expose** (target only, after correct guess): edits the target's DM to append `💥 Sender: @<sender>`.
 

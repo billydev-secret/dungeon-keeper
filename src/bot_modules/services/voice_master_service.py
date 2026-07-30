@@ -963,7 +963,6 @@ def compute_reconciliation_actions(
 
 
 # ---------------------------------------------------------------------------
-# DM helper (lifted from services/wellness_enforcement.py:_try_dm)
 # ---------------------------------------------------------------------------
 
 
@@ -1020,22 +1019,3 @@ async def trusted_prune_loop(
         await asyncio.sleep(86400)  # once a day
 
 
-async def try_dm(
-    user: "discord.User | discord.Member",
-    *,
-    content: str | None = None,
-    embed: "discord.Embed | None" = None,
-) -> bool:
-    """Send a DM, swallowing Forbidden/HTTPException. Returns True on success."""
-    import discord  # local import to keep this module import-light for tests
-
-    try:
-        kwargs: dict = {}
-        if content:
-            kwargs["content"] = content
-        if embed:
-            kwargs["embed"] = embed
-        await user.send(**kwargs)
-        return True
-    except (discord.Forbidden, discord.HTTPException):
-        return False

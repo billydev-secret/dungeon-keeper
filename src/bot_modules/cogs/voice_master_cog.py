@@ -33,6 +33,7 @@ from bot_modules.commands.voice_master_commands import (
     build_panel_view,
 )
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.services.economy_rentals_service import entitlements
@@ -71,7 +72,6 @@ from bot_modules.services.voice_master_service import (
     save_profile,
     set_owner,
     set_owner_left_at,
-    try_dm,
 )
 from bot_modules.services.voice_master_service import (
     delete_profile,
@@ -961,7 +961,12 @@ class VoiceMasterCog(commands.Cog):
                 missing_target_count=len(skipped_targets),
             )
             if notes_text is not None:
-                await try_dm(member, content=notes_text)
+                await send_branded_dm(
+                    member,
+                    db_path=self.ctx.db_path,
+                    guild=guild,
+                    embed=discord.Embed(description=notes_text),
+                )
 
             # Always arm the grace timer — if the move succeeded the channel
             # has the owner in it and the timer becomes a no-op; if it failed

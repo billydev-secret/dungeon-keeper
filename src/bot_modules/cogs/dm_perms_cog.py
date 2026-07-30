@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import discord
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.dm_perms.embeds import (
     build_acceptance_embed,
@@ -280,8 +282,8 @@ class AskConsentView(discord.ui.View):
         )
 
         await interaction.response.edit_message(embed=success_embed, view=None)
-        await _safe_dm(requester, embed=success_embed)
-        await _safe_dm(target, embed=success_embed)
+        await _dm(requester, self.cog.ctx.db_path, guild, embed=success_embed)
+        await _dm(target, self.cog.ctx.db_path, guild, embed=success_embed)
 
         write_audit_log(
             self.cog.ctx.db_path, guild.id, "request_accepted",
@@ -354,7 +356,7 @@ class AskConsentView(discord.ui.View):
                 reason=reason,
                 reply=reply,
             )
-            await _safe_dm(requester, embed=req_embed)
+            await _dm(requester, self.cog.ctx.db_path, guild, embed=req_embed)
 
         write_audit_log(
             self.cog.ctx.db_path, guild.id, "request_denied",
@@ -770,11 +772,21 @@ class DmRequestPanelView(discord.ui.View):
 # Module-level DM helper
 # ---------------------------------------------------------------------------
 
-async def _safe_dm(user: discord.abc.Messageable, **kwargs: Any) -> Optional[discord.Message]:
-    try:
-        return await user.send(**kwargs)
-    except (discord.Forbidden, discord.HTTPException):
-        return None
+async def _dm(
+    user: discord.abc.Messageable,
+    db_path: Path,
+    guild: Optional[discord.Guild],
+    **kwargs: Any,
+) -> Optional[discord.Message]:
+    """DM a consent notice branded for ``guild``.
+
+    Positional ``db_path``/``guild`` keep the eight call sites terse. These
+    embeds put the requesting member in the author slot — the useful thing
+    to see on a "someone wants to connect" card — so the server name goes
+    in the footer, alongside the audit-transparency line these builders
+    already set.
+    """
+    return await send_branded_dm(user, db_path=db_path, guild=guild, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -932,7 +944,7 @@ class DmPermsCog(commands.Cog):
                     type_label=type_label,
                     request_timeout_label=REQUEST_TIMEOUT_LABEL,
                 )
-                await _safe_dm(requester, embed=exp_embed)
+                await _dm(requester, self.ctx.db_path, guild, embed=exp_embed)
 
     # ── State helpers ────────────────────────────────────────────────────────
 
@@ -1058,7 +1070,9 @@ class DmPermsCog(commands.Cog):
             color=accent,
         )
 
-        message = await _safe_dm(user, embed=embed, view=AskConsentView(self))
+        message = await _dm(
+            user, self.ctx.db_path, guild, embed=embed, view=AskConsentView(self)
+        )
         if message is None:
             await interaction.followup.send(
                 "❌ I couldn't DM that user — they may have DMs disabled.", ephemeral=True
@@ -1085,7 +1099,7 @@ class DmPermsCog(commands.Cog):
             reason=reason_clean,
             color=accent,
         )
-        await _safe_dm(requester, embed=sender_embed)
+        await _dm(requester, self.ctx.db_path, guild, embed=sender_embed)
 
         write_audit_log(
             self.ctx.db_path, guild.id, "request_asked",
@@ -1228,8 +1242,8 @@ class DmPermsCog(commands.Cog):
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     pass
 
-        await _safe_dm(actor, embed=revoked_embed)
-        await _safe_dm(target, embed=revoked_embed)
+        await _dm(actor, self.ctx.db_path, guild, embed=revoked_embed)
+        await _dm(target, self.ctx.db_path, guild, embed=revoked_embed)
 
         write_audit_log(
             self.ctx.db_path, guild_id, "relationship_revoked",

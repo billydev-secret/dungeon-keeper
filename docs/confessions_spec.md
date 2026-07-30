@@ -44,7 +44,7 @@ Each confession thread maintains two shuffled pools: a **name pool** of 660 entr
 
 ### Submitting a reply
 
-Same set of guards as a confession, plus a check that replies are enabled in this guild. The reply cooldown is half the post cooldown with a 30-second floor. There is no per-day limit on replies. The reply is posted in the spawned Discord thread when known, otherwise as a Discord reply to the parent message. If the original confessor opted into reply notifications, the bot DMs them with jump links to the reply and the original confession; closed DMs and other DM failures are silent.
+Same set of guards as a confession, plus a check that replies are enabled in this guild. The reply cooldown is half the post cooldown with a 30-second floor. There is no per-day limit on replies. The reply is posted in the spawned Discord thread when known, otherwise as a Discord reply to the parent message. If the original confessor opted into reply notifications, the bot DMs them with jump links to the reply and the original confession; closed DMs and other DM failures are silent. That DM is a branded embed (`send_branded_dm` — guild accent, name and icon in the footer) and keeps `AllowedMentions.none()`, since the body carries member-authored text.
 
 `@everyone` and `@here` in any confession or reply body are defanged before posting. Bodies are hard-truncated to 2 000 characters after the identity prefix.
 

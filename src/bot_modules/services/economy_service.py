@@ -1173,6 +1173,27 @@ async def notify_member(
         ):
             return True
 
+    if embed is not None:
+        # Branded here rather than at the ~20 call sites, so every economy
+        # notice inherits the guild's accent and attribution while this
+        # function keeps sole ownership of the delivery policy above.
+        # The bank-channel fallback below reuses the same embed: the server
+        # name in its own channel is redundant but harmless, and the accent
+        # is right either way.
+        from bot_modules.services.dm_branding import (
+            brand_dm_embed,
+            guild_display_name,
+            guild_icon_url,
+            resolve_dm_accent,
+        )
+
+        brand_dm_embed(
+            embed,
+            guild_name=guild_display_name(guild),
+            guild_icon_url=guild_icon_url(guild),
+            color=await resolve_dm_accent(db_path, guild),
+        )
+
     kwargs: dict = {}
     if content:
         kwargs["content"] = content

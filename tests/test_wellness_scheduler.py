@@ -6,7 +6,7 @@ The scheduler is 280 statements at 0% coverage before this file. Strategy:
 - Embed builders are smoke-tested for shape / fields.
 - DB-driven coroutines (_lift_expired_slow_mode, _resume_expired_pauses, etc.)
   are driven against a migrated sqlite DB seeded via the wellness_service helpers.
-- Discord-bound functions (_try_dm, _send_blackout_entry_dm, _process_blackout_transitions)
+- Discord-bound functions (_send_blackout_entry_dm, _process_blackout_transitions)
   use small dataclass-shaped fakes / unittest.mock.AsyncMock.
 - The wellness AI hook is monkeypatched to return a deterministic string so
   weekly-report tests stay offline.
@@ -41,7 +41,6 @@ from bot_modules.services.wellness_scheduler import (
     _rebuild_active_list_for_guild,
     _resume_expired_pauses,
     _send_blackout_entry_dm,
-    _try_dm,
     wellness_active_list_loop,
     wellness_tick_loop,
     wellness_weekly_report_loop,
@@ -85,11 +84,15 @@ class _FakePermissions:
 
 
 class _FakeMember:
-    def __init__(self, user_id: int, display_name: str = "Member") -> None:
+    def __init__(
+        self, user_id: int, display_name: str = "Member", guild=None
+    ) -> None:
         self.id = user_id
         self.display_name = display_name
         self.mention = f"<@{user_id}>"
         self.send = AsyncMock()
+        # Branded DMs read member.guild for the attribution line.
+        self.guild = guild
 
 
 class _FakeMessage:
@@ -310,46 +313,6 @@ def test_build_weekly_report_embed_handles_missing_fields():
     assert "🌱" in embed.description
 
 
-# ── _try_dm ──────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_try_dm_success_returns_true():
-    user = MagicMock()
-    user.send = AsyncMock()
-    ok = await _try_dm(user, content="hello")
-    assert ok is True
-    user.send.assert_awaited_once_with(content="hello")
-
-
-@pytest.mark.asyncio
-async def test_try_dm_forbidden_returns_false():
-    user = MagicMock()
-    user.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "no"))
-    ok = await _try_dm(user, content="hi")
-    assert ok is False
-
-
-@pytest.mark.asyncio
-async def test_try_dm_http_error_returns_false():
-    user = MagicMock()
-    user.send = AsyncMock(
-        side_effect=discord.HTTPException(MagicMock(status=500), "boom")
-    )
-    ok = await _try_dm(user, embed=discord.Embed(title="x"))
-    assert ok is False
-
-
-@pytest.mark.asyncio
-async def test_try_dm_passes_embed_kwarg():
-    user = MagicMock()
-    user.send = AsyncMock()
-    embed = discord.Embed(title="z")
-    ok = await _try_dm(user, embed=embed)
-    assert ok is True
-    user.send.assert_awaited_once_with(embed=embed)
-
-
 # ── _send_blackout_entry_dm ──────────────────────────────────────────
 
 
@@ -391,13 +354,14 @@ def _dm_user(level: str) -> WellnessUser:
     ],
 )
 async def test_send_blackout_entry_dm_copy_matches_level_and_window(
-    level, name, start_minute, end_minute, expect, reject
+    level, name, start_minute, end_minute, expect, reject, db_path: Path
 ):
     """The heads-up must describe what will actually happen at the member's
     level (a gentle member never gets slow mode), and not wish a 9-to-5
     blackout "Sleep well"."""
     member = MagicMock()
     member.send = AsyncMock()
+    member.guild = _FakeGuild()
     blackout = WellnessBlackout(
         id=1,
         guild_id=10,
@@ -409,7 +373,7 @@ async def test_send_blackout_entry_dm_copy_matches_level_and_window(
         enabled=True,
         created_at=0.0,
     )
-    await _send_blackout_entry_dm(member, blackout, _dm_user(level))
+    await _send_blackout_entry_dm(member, blackout, _dm_user(level), db_path)
     member.send.assert_awaited_once()
     embed = member.send.call_args.kwargs.get("embed")
     assert isinstance(embed, discord.Embed)
@@ -418,6 +382,8 @@ async def test_send_blackout_entry_dm_copy_matches_level_and_window(
         assert fragment in text
     for fragment in reject:
         assert fragment not in text
+    # A boundary nudge must say which server sent it.
+    assert embed.footer.text == "Guild10"
 
 
 # ── _lift_expired_slow_mode ──────────────────────────────────────────

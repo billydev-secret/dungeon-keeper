@@ -33,7 +33,6 @@ from bot_modules.services.wellness_enforcement import (
     _handle_away_mentions,
     _select_worst_action,
     _truncate,
-    _try_dm,
     decide_action,
     wellness_on_message,
 )
@@ -502,38 +501,6 @@ def test_bot_can_manage_returns_false_when_guild_me_is_none():
     guild.me = None
     msg.guild = guild
     assert _bot_can_manage_messages(msg) is False
-
-
-# ── _try_dm ──────────────────────────────────────────────────────────
-
-
-async def test_try_dm_returns_true_on_success():
-    user = MagicMock()
-    user.send = AsyncMock()
-    assert await _try_dm(user, content="hi") is True
-    user.send.assert_awaited_once_with(content="hi")
-
-
-async def test_try_dm_returns_false_on_forbidden():
-    user = MagicMock()
-    user.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "no"))
-    assert await _try_dm(user, content="hi") is False
-
-
-async def test_try_dm_returns_false_on_http_error():
-    user = MagicMock()
-    user.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(status=500), "x"))
-    assert await _try_dm(user, content="hi") is False
-
-
-async def test_try_dm_with_embed_only_omits_content_kwarg():
-    user = MagicMock()
-    user.send = AsyncMock()
-    embed = MagicMock()
-    await _try_dm(user, embed=embed)
-    kwargs = user.send.await_args.kwargs
-    assert "embed" in kwargs
-    assert "content" not in kwargs
 
 
 # ── decide_action ────────────────────────────────────────────────────

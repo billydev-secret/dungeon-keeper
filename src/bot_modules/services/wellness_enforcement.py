@@ -35,9 +35,11 @@ import enum
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import discord
 
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services.embeds import WELLNESS_PRIMARY
 from bot_modules.services.wellness_service import (
     NUDGE_SUPPRESSION_SECONDS,
@@ -281,24 +283,6 @@ def _arm_friction_for_caps(
 # ---------------------------------------------------------------------------
 
 
-async def _try_dm(
-    user: discord.User | discord.Member,
-    *,
-    content: str | None = None,
-    embed: discord.Embed | None = None,
-) -> bool:
-    try:
-        kwargs: dict = {}
-        if content:
-            kwargs["content"] = content
-        if embed:
-            kwargs["embed"] = embed
-        await user.send(**kwargs)
-        return True
-    except (discord.Forbidden, discord.HTTPException):
-        return False
-
-
 def _format_seconds(seconds: float) -> str:
     s = max(0, int(seconds))
     if s < 60:
@@ -353,8 +337,10 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                 # Try to delete + DM. If DM fails, do NOT delete.
                 if not _bot_can_manage_messages(message):
                     return False
-                dm_ok = await _try_dm(
+                dm_ok = await send_branded_dm(
                     author,
+                    db_path=ctx.db_path,
+                    guild=message.guild,
                     embed=discord.Embed(
                         title="🐢 Slow mode is active",
                         description=(
@@ -362,9 +348,8 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
                             f"*Adjust your settings anytime from the {wellness_dashboard_link()}.*"
                         ),
-                        color=discord.Color(WELLNESS_PRIMARY),
                     ),
-                )
+                ) is not None
                 if not dm_ok:
                     log.info(
                         "wellness: friction skipped (DM closed) for user %s", author.id
@@ -397,24 +382,26 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                 log.exception("wellness: streak violation update failed")
 
             if decision.action == Action.NUDGE:
-                await _send_nudge(conn, message, user, decision)
+                await _send_nudge(conn, message, user, decision, ctx.db_path)
                 return False
 
             if decision.action == Action.COOLDOWN:
                 # The breather message IS the cooldown — nothing is armed.
                 # (A cooldown_until column write lived here until 2026-07-30;
                 # nothing ever read it.)
-                await _send_cooldown(message, user)
+                await _send_cooldown(message, user, ctx.db_path)
                 return False
 
             if decision.action == Action.FRICTION:
                 if not _bot_can_manage_messages(message):
                     # Degrade to nudge if we can't actually delete messages
-                    await _send_nudge(conn, message, user, decision)
+                    await _send_nudge(conn, message, user, decision, ctx.db_path)
                     return False
                 # Try to DM first; only delete (and arm slow mode) if DM succeeded
-                dm_ok = await _try_dm(
+                dm_ok = await send_branded_dm(
                     author,
+                    db_path=ctx.db_path,
+                    guild=message.guild,
                     embed=discord.Embed(
                         title="🐢 Slow mode is now active",
                         description=(
@@ -423,9 +410,8 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
                             f"*Adjust your settings anytime from the {wellness_dashboard_link()}.*"
                         ),
-                        color=discord.Color(WELLNESS_PRIMARY),
                     ),
-                )
+                ) is not None
                 if not dm_ok:
                     log.info(
                         "wellness: friction skipped (DM closed) for user %s", author.id
@@ -492,6 +478,7 @@ async def _send_nudge(
     message: discord.Message,
     user: WellnessUser,
     decision: EnforcementDecision,
+    db_path: Path,
 ) -> None:
     """Send a 'heads up' message via the user's notifications_pref. Suppress if recently nudged."""
     now = time.time()
@@ -517,19 +504,21 @@ async def _send_nudge(
         f"💛 Heads up — you've hit your cap of **{effective_limit}** {window_label} messages. "
         "No worries, just keeping you in the loop. You're doing great!"
     )
-    await _deliver_user_notice(message, user, desc)
+    await _deliver_user_notice(message, user, desc, db_path)
 
 
-async def _send_cooldown(message: discord.Message, user: WellnessUser) -> None:
+async def _send_cooldown(
+    message: discord.Message, user: WellnessUser, db_path: Path
+) -> None:
     desc = (
         "☕ Time for a 5-minute breather. "
         "Stretch, hydrate, look out a window. You can keep posting — this is just a gentle pause."
     )
-    await _deliver_user_notice(message, user, desc)
+    await _deliver_user_notice(message, user, desc, db_path)
 
 
 async def _deliver_user_notice(
-    message: discord.Message, user: WellnessUser, text: str
+    message: discord.Message, user: WellnessUser, text: str, db_path: Path
 ) -> None:
     """Deliver per the user's notifications_pref (ephemeral / dm / both)."""
     pref = user.notifications_pref
@@ -548,7 +537,14 @@ async def _deliver_user_notice(
         except (discord.Forbidden, discord.HTTPException):
             sent_ephemeral = False
     if pref in ("dm", "both") or not sent_ephemeral:
-        await _try_dm(message.author, content=text)
+        # The channel copy is already in-guild, so it stays plain text; only
+        # the DM needs telling which server it came from.
+        await send_branded_dm(
+            message.author,
+            db_path=db_path,
+            guild=message.guild,
+            embed=discord.Embed(description=text),
+        )
 
 
 # ---------------------------------------------------------------------------

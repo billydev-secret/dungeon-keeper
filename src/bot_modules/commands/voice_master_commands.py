@@ -13,6 +13,7 @@ import discord
 from bot_modules.core.utils import disable_all_items
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services.moderation import write_audit
 from bot_modules.services.voice_master_service import (
     ACCESS_LOCKED,
@@ -37,7 +38,6 @@ from bot_modules.services.voice_master_service import (
     lock_status_text,
     record_edit_in_db,
     set_owner,
-    try_dm,
     update_profile_field,
 )
 from bot_modules.voice_master.embeds import (
@@ -1078,13 +1078,18 @@ async def _apply_invite(
     join_url = build_join_url(
         guild_id=channel.guild.id, channel_id=channel.id
     )
-    await try_dm(
+    _invite_ctx = _ctx_from_interaction(interaction)
+    await send_branded_dm(
         target,
-        content=format_invite_dm(
-            channel_name=channel.name,
-            inviter_mention=interaction.user.mention,
-            guild_name=channel.guild.name,
-            join_url=join_url,
+        db_path=_invite_ctx.db_path if _invite_ctx else None,
+        guild=channel.guild,
+        embed=discord.Embed(
+            description=format_invite_dm(
+                channel_name=channel.name,
+                inviter_mention=interaction.user.mention,
+                guild_name=channel.guild.name,
+                join_url=join_url,
+            )
         ),
     )
 
@@ -1938,13 +1943,17 @@ class _KnockResponseView(discord.ui.View):
                     )
 
             await asyncio.to_thread(_audit_knock)
-        await try_dm(
+        await send_branded_dm(
             requester,
-            content=format_knock_accepted_dm(
-                channel_name=channel.name,
-                join_url=build_join_url(
-                    guild_id=channel.guild.id, channel_id=channel.id
-                ),
+            db_path=ctx.db_path if ctx else None,
+            guild=channel.guild,
+            embed=discord.Embed(
+                description=format_knock_accepted_dm(
+                    channel_name=channel.name,
+                    join_url=build_join_url(
+                        guild_id=channel.guild.id, channel_id=channel.id
+                    ),
+                )
             ),
         )
         disable_all_items(self)

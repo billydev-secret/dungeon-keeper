@@ -13,7 +13,11 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from pathlib import Path
+
 import discord
+
+from bot_modules.services.dm_branding import send_branded_dm
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import disable_all_items
@@ -281,8 +285,17 @@ class _ProgressReporter:
     phases is what keeps it to a single notification.
     """
 
-    def __init__(self, interaction: discord.Interaction) -> None:
+    def __init__(
+        self,
+        interaction: discord.Interaction,
+        db_path: Path,
+        guild: discord.Guild | None,
+    ) -> None:
         self._interaction = interaction
+        # Kept for the DM fallback below, which brands the card for the
+        # server whose data is being deleted.
+        self._db_path = db_path
+        self._guild = guild
         # Sticky: once the token is gone the ephemeral message is unreachable,
         # so we never try to edit it again.
         self._fell_back = False
@@ -309,11 +322,14 @@ class _ProgressReporter:
             except (discord.HTTPException, discord.NotFound):
                 # The DM was lost (deleted?) — fall through and send a new one.
                 self._dm_message = None
-        try:
-            self._dm_message = await self._interaction.user.send(embed=embed)
-        except (discord.Forbidden, discord.HTTPException):
-            # DMs closed — nowhere left to report. Deletion still completes.
-            pass
+        # DMs closed — nowhere left to report. Deletion still completes.
+        self._dm_message = await send_branded_dm(
+            self._interaction.user,
+            db_path=self._db_path,
+            guild=self._guild,
+            embed=embed,
+            keep_color=True,
+        )
 
 
 async def _run_deletion(
@@ -337,7 +353,7 @@ async def _run_deletion(
 
     # One reporter for the whole run — it holds the single message everything
     # edits, so scan, delete, and summary share one card and one notification.
-    reporter = _ProgressReporter(original_interaction)
+    reporter = _ProgressReporter(original_interaction, ctx.db_path, guild)
 
     # Phase 1 — scan Discord directly. Authoritative: doesn't depend on what
     # the local index has captured, so messages from before the bot joined,
