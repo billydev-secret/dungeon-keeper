@@ -320,6 +320,19 @@ def test_optout_deactivates_and_lifts_slow_mode(authed_client, fake_ctx):
     assert row is None
 
 
+# ── /api/me wellness nav-gate field ──────────────────────────────────
+
+
+def test_me_wellness_opted_in_tracks_membership(authed_client, fake_ctx):
+    """The Wellness nav section gates on this field — it must follow the
+    member's actual opt-in state through the whole join/leave loop."""
+    assert authed_client.get("/api/me").json()["wellness_opted_in"] is False
+    _opt_in(fake_ctx)
+    assert authed_client.get("/api/me").json()["wellness_opted_in"] is True
+    authed_client.post("/api/wellness/optout")
+    assert authed_client.get("/api/me").json()["wellness_opted_in"] is False
+
+
 # ── /caps mutation ───────────────────────────────────────────────────
 
 

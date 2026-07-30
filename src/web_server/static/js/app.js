@@ -187,7 +187,7 @@ const SECTIONS = [
     ],
   },
   {
-    id: "wellness", label: "Wellness", perms: [], roles: ["Wellness Guardian"], icon: "♥",
+    id: "wellness", label: "Wellness", perms: [], wellnessGate: true, icon: "♥",
     items: [
       { id: "wellness-home",      label: "Overview",   module: "./panels/wellness-home.js", help: "help-wellness" },
       { id: "wellness-caps",      label: "Caps",       module: "./panels/wellness-caps.js", help: "help-wellness" },
@@ -312,13 +312,14 @@ function rebuildIndex() {
       const mgrRoleId = window.__dk_user?.economy_manager_role_id;
       return !!(mgrRoleId && userRoleIds.has(mgrRoleId));
     }
-    const permOk = !sec.perms || sec.perms.length === 0 || sec.perms.every((p) => userPerms.has(p));
-    if (!permOk) return false;
-    if (sec.roles && sec.roles.length > 0) {
+    // Wellness: opted-in members (server truth from /api/me, NOT a role-name
+    // string match — the role is assigned by id and can be renamed freely).
+    // Admins see it too so the owner can inspect the member surface.
+    if (sec.wellnessGate) {
       if (userPerms.has("manage_server") || userPerms.has("admin")) return true;
-      return sec.roles.some((r) => userRoleNames.includes(r));
+      return !!window.__dk_user?.wellness_opted_in;
     }
-    return true;
+    return !sec.perms || sec.perms.length === 0 || sec.perms.every((p) => userPerms.has(p));
   };
 
   const isAdmin = userPerms.has("admin");
@@ -921,6 +922,7 @@ function applyMeData(me) {
     primary_guild_id: primaryGuildId,
     games_editor_role_id: me.games_editor_role_id || null,
     economy_manager_role_id: me.economy_manager_role_id || null,
+    wellness_opted_in: !!me.wellness_opted_in,
   };
 
   // The panel registry resolves a spec's grant-role choices from the active

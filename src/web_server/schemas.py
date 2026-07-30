@@ -25,6 +25,7 @@ class MeResponse(BaseModel):
     status: str | None = None
     games_editor_role_id: str | None = None
     economy_manager_role_id: str | None = None
+    wellness_opted_in: bool = False
 
 
 class RoleMeta(BaseModel):

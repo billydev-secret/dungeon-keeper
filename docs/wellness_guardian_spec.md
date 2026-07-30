@@ -54,7 +54,7 @@ Notifications are delivered per the member's `notifications_pref` (`ephemeral` �
 
 ### Web dashboard — member panel (`/api/wellness`, mounted in `server.py`)
 
-Full CRUD, authenticated as the logged-in member:
+Full CRUD, authenticated as the logged-in member. The Wellness nav section is gated on `wellness_opted_in` from `/api/me` (the member's actual opt-in row — not a role-name match; changed 2026-07-30), with the usual `manage_server`/admin bypass:
 
 | Endpoint(s) | Feature |
 |---|---|
