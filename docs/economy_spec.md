@@ -670,13 +670,24 @@ the board always shows up to 2 goals rather than 1:
   pay flat tiers only — no bonus, an empty top list in the settle summary,
   and a name-free resolution beat sheet — because naming the most active
   confessors/repliers/whisperers would deanonymize the feed.
-- **Beat sheets, not bot posts:** kickoff / tier-crossed / final-24h /
-  resolution are **DMed to the community host**
-  (`EconSettings.community_host_user_id`, 0 → guild owner) as numbers +
-  suggested copy — the host narrates publicly in their own voice
-  (2026-07-18 decision). Tier crossings and the final-24h nudge are detected
-  hourly (`community_hourly_beats`; `notified_tier` / `final_notice_sent`
-  advance in the same transaction, so each beat sends once).
+- **Beat sheets, not bot posts:** kickoff / final-24h / resolution are **DMed
+  to the community host** (`EconSettings.community_host_user_id`, 0 → guild
+  owner) as numbers + suggested copy — the host narrates publicly in their own
+  voice (2026-07-18 decision).
+- **Tier crossings are the exception (2026-07-29):** they are posted by the
+  bot, to main chat, as an Event Echo (`community_tier` source — see
+  [event_echo_spec.md](event_echo_spec.md)) rather than DMed as a beat. A
+  milestone is news the moment it happens, and routing it through a human who
+  has to notice a DM and write it up is how it goes stale. The copy is the
+  "Suggested post" line that sheet used to carry (`quests.tier_echo_line`), so
+  the voice is unchanged — only the middleman is gone. The echo links the
+  leaderboard panel and is skipped when none is posted.
+- Tier crossings and the final-24h nudge are both detected hourly
+  (`community_hourly_pulse` → `HourlyPulse.crossings` / `.beats`;
+  `notified_tier` / `final_notice_sent` advance in the same transaction, so
+  each fires once). Because `notified_tier` advances there rather than inside
+  Event Echo, the tier echo is **exempt from the echo cooldowns** — nothing
+  would re-offer a crossing the global floor refused.
 - Kind community quests reject `signoff=1`, and the dashboard's manual
   progress/settle endpoints 422 on them (the Operations card renders them
   read-only with an "auto-tracking" note); the manual Settle path and the
@@ -1085,13 +1096,18 @@ fragments mid-period.
   surfaced on `/quests` (⚡ tags + banner), the leaderboard embed, the flip
   announcement, and the live tracker. A sign-off approved after the week
   flips pays at the approval week's rate — accepted drift.
-- **Flip announcement** — at the ISO-week roll the loop posts "this week's
-  quests are up" (+ the spotlight reveal) to the leaderboard panel's
-  channel, bank channel fallback (`_post_flip_announcement`; skipped when
-  neither is configured). It **pings the economy game role** (`game_role_id`,
-  the notifications opt-in) when set — the one recurring economy post that
-  reaches opted-in members without a DM — allow-listing exactly that role
-  (`flip_announcement_content`).
+- **Flip announcement** — at the ISO-week roll the loop announces "this week's
+  quests are up" (+ the pool size and the ⚡ spotlight reveal) **to main chat
+  as an Event Echo** (`quest_flip` source — see
+  [event_echo_spec.md](event_echo_spec.md)); `_echo_quest_flip` loads the
+  numbers, `flip_echo_detail` renders them. It links the leaderboard panel and
+  is skipped when none is posted.
+  **Changed 2026-07-29.** It used to post its own message to the leaderboard
+  channel (bank channel as fallback) and **ping the economy game role**
+  (`game_role_id`, the notifications opt-in). Both are gone: one announcement
+  beats two, and Event Echo is silent by design, so the ping went with the
+  post rather than becoming a per-source exception. Guilds with a bank channel
+  but no leaderboard panel used to get the fallback post and now get nothing.
 
 **Dynamic target band:** a counted quest may carry a target *band*
 (`0 < target_min < target_max`) instead of a fixed `target_count`. Each

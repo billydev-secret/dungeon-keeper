@@ -39,6 +39,8 @@ SOURCE_BOUNTY = "bounty"
 SOURCE_AUCTION_CLOSING = "auction_closing"
 SOURCE_POOLS_CLOSING = "pools_closing"
 SOURCE_RAFFLE_CLOSING = "raffle_closing"
+SOURCE_QUEST_FLIP = "quest_flip"
+SOURCE_COMMUNITY_TIER = "community_tier"
 
 # How long before a deadline the "last chance" echo fires.
 CLOSING_LEAD_SECONDS = 3600
@@ -71,17 +73,35 @@ class SourceSpec:
     headline: str  # format string over {name}
     lead: str
     icon: str
-    #: A *deadline* echo — "last chance", not "this just started".
+    #: Label on the jump link. "Jump in" is an invitation, which is the wrong
+    #: verb for a boundary the server has already crossed — nobody needs to
+    #: join a tier that is banked or a quest week that has begun.
+    cta: str = "Jump in →"
+    #: Skip both cooldown windows.
     #:
-    #: These bypass the cooldowns entirely (the per-ref claim still fires them
-    #: exactly once). Skip-don't-queue is right for a game start: miss one and
-    #: another comes along in an hour. It is wrong for a deadline, because
-    #: there is no useful later moment — an "auction ends in an hour" dropped
-    #: because a party game echoed 8 minutes ago is simply lost. The floor
-    #: exists to stop ~20 game types bursting; auctions and pools fire a
-    #: handful of times a year (2 auctions in the server's whole history), so
-    #: exempting them costs nothing and only ever saves the valuable ones.
-    deadline: bool = False
+    #: Skip-don't-queue is right for a game start: miss one and another comes
+    #: along in an hour. It is wrong wherever the moment *is* the thing — an
+    #: "auction ends in an hour" dropped because a party game echoed 8 minutes
+    #: ago is simply lost, and so is the single announcement an ISO week gets.
+    #: The floor exists to stop ~20 game types bursting; every exempt source
+    #: fires on a fixed, bounded schedule instead (auctions and pools a
+    #: handful of times a year — 2 auctions in the server's whole history; the
+    #: quest flip once a week; a community goal at most three times a period),
+    #: so exempting them costs nothing and only ever saves the valuable ones.
+    #:
+    #: The per-ref claim still holds each to one echo apiece, so "exempt"
+    #: means "can't be crowded out", not "can repeat".
+    exempt: bool = False
+    #: Drop the claim after a failed send, so a later tick tries again.
+    #:
+    #: Only meaningful for *swept* sources, which are re-offered every tick:
+    #: for those, not retrying would defeat the point of exempting them, since
+    #: one 429 on the first tick of the final hour would lose the last call
+    #: outright with hundreds of usable ticks still inside the window. Push
+    #: sources fire once from the event itself and have nothing to re-offer
+    #: them, so they keep the flagged row instead — which at least records
+    #: that a send was attempted and failed.
+    retry: bool = False
 
 
 _DEFAULT_SPEC = SourceSpec(
@@ -98,19 +118,42 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         headline="Last call: {name}",
         lead="Bidding closes soon",
         icon="🔨",
-        deadline=True,
+        exempt=True,
+        retry=True,
     ),
     SOURCE_POOLS_CLOSING: SourceSpec(
         headline="Last call: {name}",
         lead="Betting closes soon",
         icon="📈",
-        deadline=True,
+        exempt=True,
+        retry=True,
     ),
     SOURCE_RAFFLE_CLOSING: SourceSpec(
         headline="Last call: {name}",
         lead="Ticket sales close",
         icon="🎟️",
-        deadline=True,
+        exempt=True,
+        retry=True,
+    ),
+    # The third shape: "this just happened". Not an invitation to join and not
+    # a deadline — a boundary the server crossed, reported once. Both are push
+    # sources whose dedupe lives outside Event Echo (the ISO week for one,
+    # `notified_tier` for the other), so a cooldown skip here would be a
+    # permanent loss rather than a deferral — hence exempt, and hence no
+    # retry, since nothing re-offers them.
+    SOURCE_QUEST_FLIP: SourceSpec(
+        headline="{name} are up",
+        lead="A fresh set of weeklies just landed",
+        icon="📋",
+        cta="See the board →",
+        exempt=True,
+    ),
+    SOURCE_COMMUNITY_TIER: SourceSpec(
+        headline="Community goal: {name}",
+        lead="Nice work, everyone",
+        icon="🏁",
+        cta="See the board →",
+        exempt=True,
     ),
 }
 
@@ -156,7 +199,7 @@ def decide(
     now: float,
     last_same_type: float | None,
     last_any: float | None,
-    deadline: bool,
+    exempt: bool,
 ) -> EchoDecision:
     """Apply both cooldowns to a candidate echo.
 
@@ -165,14 +208,14 @@ def decide(
     migration's note on why a refusal must not push the window out).
     ``None`` means "never", which passes.
 
-    ``deadline`` skips both windows — see ``SourceSpec.deadline``, which the
+    ``exempt`` skips both windows — see ``SourceSpec.exempt``, which the
     caller resolves. Passed rather than looked up here so a function about
     clocks has no opinion about headlines, and so a caller can't silently get
-    game policy by forgetting an argument. The per-ref claim still holds a
-    deadline echo to one apiece, so "exempt" means "can't be crowded out",
-    not "can repeat".
+    game policy by forgetting an argument. The per-ref claim still holds an
+    exempt echo to one apiece, so "exempt" means "can't be crowded out", not
+    "can repeat".
     """
-    if deadline:
+    if exempt:
         return EchoDecision(True)
     if last_any is not None and now - last_any < GLOBAL_COOLDOWN_SECONDS:
         return EchoDecision(False, "global")
@@ -201,6 +244,7 @@ def build_echo_embed(
     host_name: str | None = None,
     source: str = SOURCE_PARTY_GAME,
     deadline_epoch: float | None = None,
+    detail: str | None = None,
     color: discord.Color | None = None,
 ) -> discord.Embed:
     """The echo itself: what's happening, where, and a link to go there.
@@ -213,6 +257,13 @@ def build_echo_embed(
     location string and no channel; interpolating anything else into ``<#…>``
     renders as a mention Discord can't resolve.
 
+    ``detail`` is the one concession to sources whose news is a *number* — how
+    many weeklies rolled, which tier went down. Those can't be carried by the
+    static ``lead`` and would read as noise crammed into ``name``, so they get
+    their own line, shaped by the feature that owns the numbers rather than
+    here. Keep it to one or two lines: the embed staying short is the reason
+    people don't mute the channel.
+
     ``deadline_epoch`` renders as Discord's own relative timestamp rather than
     a baked-in "in 1 hour". An auction's soft close *extends* ``ends_at`` when
     a late bid lands — which this echo is trying to cause — so any fixed
@@ -223,9 +274,12 @@ def build_echo_embed(
     spec = spec_for(source)
     where = f" in <#{channel_id}>" if channel_id is not None else ""
     when = f" <t:{int(deadline_epoch)}:R>" if deadline_epoch is not None else ""
+    body = f"{spec.lead}{where}{when}."
+    if detail:
+        body += f"\n{detail}"
     embed = discord.Embed(
         title=f"{spec.icon} {spec.headline.format(name=name)}",
-        description=f"{spec.lead}{where}{when}.\n**[Jump in →]({url})**",
+        description=f"{body}\n**[{spec.cta}]({url})**",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
     if host_name:

@@ -1425,7 +1425,7 @@ def test_month_roll_settlement_exactly_once_on_crash_replay(db):
 def test_monthly_hourly_beats_final24_uses_month_end(db):
     """The monthly goal's final-24h nudge keys off the calendar month end, not
     the ISO week end."""
-    from bot_modules.services.economy_loop import community_hourly_beats
+    from bot_modules.services.economy_loop import community_hourly_pulse
 
     _enable(db)
     _mk_monthly_kind(db, title="July msgs", kind="message_sent")
@@ -1436,16 +1436,22 @@ def test_monthly_hourly_beats_final24_uses_month_end(db):
     with open_db(db) as conn:
         assert not any(
             "Final 24h" in b.text
-            for b in community_hourly_beats(conn, GUILD, _ts("2026-07-15"))
+            for b in community_hourly_pulse(conn, GUILD, _ts("2026-07-15")).beats
         )
     # Last day of July, <24h to Aug 1: the final-24h nudge fires.
     with open_db(db) as conn:
-        beats = community_hourly_beats(conn, GUILD, _ts("2026-07-31", hour=6))
+        beats = community_hourly_pulse(conn, GUILD, _ts("2026-07-31", hour=6)).beats
     assert any("Final 24h" in b.text for b in beats)
 
 
-def test_community_hourly_beats_fire_once(db):
-    from bot_modules.services.economy_loop import community_hourly_beats
+def test_community_hourly_pulse_fires_each_thing_once(db):
+    """A tier crossing surfaces as a public echo, the 24h nudge as a host DM.
+
+    The split landed 2026-07-29: a milestone is news the moment it happens, so
+    the bot posts it directly instead of DMing the host a sheet to write up.
+    ``notified_tier`` remains the once-only guarantee for both.
+    """
+    from bot_modules.services.economy_loop import community_hourly_pulse
     from bot_modules.services.economy_quests_service import (
         activate_community_weekly,
     )
@@ -1459,18 +1465,24 @@ def test_community_hourly_beats_fire_once(db):
 
     now = _ts("2026-07-15")  # Wed of W29 — far from week end
     with open_db(db) as conn:
-        beats = community_hourly_beats(conn, GUILD, now)
-    assert len(beats) == 1 and "Tier 1 crossed" in beats[0].text
+        pulse = community_hourly_pulse(conn, GUILD, now)
+    # The crossing is a crossing, not a beat — nothing is DMed for it.
+    assert pulse.beats == ()
+    assert len(pulse.crossings) == 1
+    cross = pulse.crossings[0]
+    assert (cross.quest_id, cross.tier, cross.title) == (qid, 1, "Msgs")
+    assert (cross.current, cross.target, cross.contributors) == (5, 10, 1)
     with open_db(db) as conn:
-        assert community_hourly_beats(conn, GUILD, now) == []
+        assert community_hourly_pulse(conn, GUILD, now).crossings == ()
 
-    # Sunday inside the final day → the 24h nudge, exactly once.
+    # Sunday inside the final day → the 24h nudge, still a host beat, once.
     sunday = _ts("2026-07-19", hour=12)
     with open_db(db) as conn:
-        beats = community_hourly_beats(conn, GUILD, sunday)
-    assert len(beats) == 1 and "Final 24h" in beats[0].text
+        pulse = community_hourly_pulse(conn, GUILD, sunday)
+    assert len(pulse.beats) == 1 and "Final 24h" in pulse.beats[0].text
+    assert pulse.crossings == ()
     with open_db(db) as conn:
-        assert community_hourly_beats(conn, GUILD, sunday) == []
+        assert community_hourly_pulse(conn, GUILD, sunday).beats == ()
 
 
 # ── voice-style lapse reverts the live channel (sinks round 3, stage 3) ─
@@ -1658,24 +1670,94 @@ def test_week_roll_demurrage_disabled_collects_nothing(db):
         assert demurrage_svc.get_sweep(conn, GUILD, "2026-W28") is None
 
 
-# ── weekly flip announcement pings the economy game role (#72) ────────────────
+# ── weekly flip echo copy (was a pinging leaderboard post until 2026-07-29) ──
 
-from bot_modules.services.economy_loop import flip_announcement_content  # noqa: E402
-
-
-def test_flip_pings_game_role_when_set():
-    content, ping = flip_announcement_content(5, "Answer the QOTD", game_role_id=42)
-    assert ping == 42
-    assert content.startswith("<@&42>\n")
-    assert "This week's quests are up" in content
-    assert "Spotlight" in content and "Answer the QOTD" in content
+from bot_modules.economy.quests import tier_echo_line  # noqa: E402
+from bot_modules.services.economy_loop import flip_echo_detail  # noqa: E402
 
 
-def test_flip_has_no_ping_without_a_role():
-    content, ping = flip_announcement_content(3, None, game_role_id=0)
-    assert ping == 0
-    assert "<@&" not in content
-    assert "Spotlight" not in content  # no spotlight line when none is featured
+def test_flip_detail_keeps_the_pool_count_and_spotlight():
+    detail = flip_echo_detail(5, "Answer the QOTD")
+    assert "5" in detail and "/bank quests" in detail
+    assert "Spotlight" in detail and "Answer the QOTD" in detail
+
+
+def test_flip_detail_omits_the_spotlight_line_when_none_is_featured():
+    detail = flip_echo_detail(3, None)
+    assert "Spotlight" not in detail
+    assert "3" in detail
+
+
+def test_flip_detail_mentions_nobody():
+    """The ping went with the channel: Event Echo posts silently.
+
+    The old leaderboard post opened with `<@&game_role>`. Nothing in the copy
+    may reintroduce that — the echo's own AllowedMentions.none() would render
+    it as dead highlighted text rather than a notification.
+    """
+    assert "<@&" not in flip_echo_detail(5, "Answer the QOTD")
+    assert "@everyone" not in flip_echo_detail(5, None)
+
+
+def test_tier_echo_line_reports_the_tier_and_the_crowd():
+    line = tier_echo_line(2, 72, 100, 14)
+    assert "Tier 2 down" in line
+    assert "72%" in line and "14 of you" in line
+    assert "next tier's on the board" in line
+
+
+def test_tier_echo_line_does_not_promise_a_tier_after_the_last():
+    """A host would have caught this; an unedited bot post would not.
+
+    The copy came from the beat sheet's "Suggested post", which a human was
+    expected to fix up. Posting it verbatim means the full clear can't still
+    be pointing at a next tier.
+    """
+    line = tier_echo_line(3, 100, 100, 14)
+    assert "full clear" in line
+    assert "next tier" not in line
+
+
+def test_tier_echo_line_never_names_the_goal():
+    """The echo's headline carries the title; repeating it wastes the line."""
+    assert "Send Messages" not in tier_echo_line(1, 40, 100, 3)
+
+
+@pytest.mark.parametrize(
+    "panel, echoed",
+    [
+        pytest.param({"leaderboard_channel_id": 77, "leaderboard_message_id": 88},
+                     True, id="panel-posted"),
+        # Regressions from the old behavior, accepted with the move: these
+        # guilds used to get a post in the leaderboard or bank channel.
+        pytest.param({"leaderboard_channel_id": 77, "leaderboard_message_id": 0},
+                     False, id="channel-set-but-panel-never-posted"),
+        pytest.param({"leaderboard_channel_id": 0, "leaderboard_message_id": 0},
+                     False, id="no-panel-at-all"),
+    ],
+)
+async def test_quest_flip_echo_needs_a_panel_to_link_at(db, monkeypatch, panel, echoed):
+    """"New quests are up" pointing nowhere is an alarm, not an announcement.
+
+    The panel message is the only surface that renders the week's quests, so
+    it is what the echo links at — the same gate `raffle_last_call` applies to
+    the shop panel, for the same reason.
+    """
+    from unittest.mock import AsyncMock
+
+    from bot_modules.services import economy_loop as loop
+
+    _enable(db, **panel)
+    monkeypatch.setattr(loop.echo_svc, "echo_quest_flip", AsyncMock(return_value=True))
+    bot = _Bot([_Guild(GUILD)])
+
+    await loop._echo_quest_flip(bot, db, GUILD, _ts("2026-07-27"))
+
+    assert loop.echo_svc.echo_quest_flip.await_count == (1 if echoed else 0)
+    if echoed:
+        kwargs = loop.echo_svc.echo_quest_flip.await_args.kwargs
+        assert kwargs["week"] == "2026-W31"
+        assert (kwargs["channel_id"], kwargs["message_id"]) == (77, 88)
 
 
 # ── DB work never blocks the event loop (review A1) ───────────────────────────
