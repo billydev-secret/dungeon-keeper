@@ -307,6 +307,19 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def wellness_dashboard_link(
+    label: str = "Wellness panel on the web dashboard",
+) -> str:
+    """Markdown pointer to the member wellness panel — a real link when a
+    public dashboard URL is configured, plain text otherwise. Use inside
+    embed *descriptions* (markdown renders there; embed footers stay plain)."""
+    # Lazy import: advisor_service owns the DASHBOARD_BASE_URL lookup.
+    from bot_modules.services.advisor_service import dashboard_url
+
+    url = dashboard_url()
+    return f"[{label}]({url}/#/wellness-home)" if url else label
+
+
 # ---------------------------------------------------------------------------
 # Timezone helpers
 # ---------------------------------------------------------------------------

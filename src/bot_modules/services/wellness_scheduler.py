@@ -56,6 +56,7 @@ from bot_modules.services.wellness_service import (
     resume_user,
     upsert_wellness_config,
     user_now,
+    wellness_dashboard_link,
 )
 
 log = logging.getLogger("dungeonkeeper.wellness.scheduler")
@@ -227,7 +228,7 @@ def _build_active_embed(
             title=_ACTIVE_EMBED_TITLE,
             description=(
                 "No one has opted in with public commitment yet. "
-                "Turn it on from the Wellness panel on the web dashboard to show up here. 🌱"
+                f"Turn it on from the {wellness_dashboard_link()} to show up here. 🌱"
             ),
             color=_ACTIVE_EMBED_COLOR,
         )
@@ -438,15 +439,16 @@ def _build_weekly_report_embed(
         f"💚 Personal best: **{pb} days**\n"
         f"🌿 Clean days this week: **{clean}/7** ({pct}%)\n\n"
         f"{ai_text}"
+        f"\n\n*Manage everything from your {wellness_dashboard_link('Wellness dashboard')}.*"
     )
     embed = discord.Embed(
         title=f"💚 Your wellness summary, {user_display}",
         description=body,
         color=_WEEKLY_REPORT_COLOR,
     )
-    embed.set_footer(
-        text="Sent on Sunday mornings • manage from the Wellness dashboard"
-    )
+    # Footers can't carry markdown links, so the dashboard pointer lives in
+    # the body above.
+    embed.set_footer(text="Sent on Sunday mornings")
     return embed
 
 

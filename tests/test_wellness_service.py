@@ -299,6 +299,24 @@ def test_opt_in_user_invalid_notif_falls_back_to_default(db_conn):
     assert user.notifications_pref == ws.DEFAULT_NOTIFICATIONS
 
 
+def test_dashboard_link_plain_when_no_url(monkeypatch):
+    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
+    assert ws.wellness_dashboard_link() == "Wellness panel on the web dashboard"
+
+
+def test_dashboard_link_plain_for_localhost(monkeypatch):
+    monkeypatch.setenv("DASHBOARD_BASE_URL", "http://localhost:8080")
+    assert ws.wellness_dashboard_link() == "Wellness panel on the web dashboard"
+
+
+def test_dashboard_link_markdown_when_public_url(monkeypatch):
+    monkeypatch.setenv("DASHBOARD_BASE_URL", "https://dk.example.org/")
+    assert (
+        ws.wellness_dashboard_link("Wellness dashboard")
+        == "[Wellness dashboard](https://dk.example.org/#/wellness-home)"
+    )
+
+
 def test_opt_in_user_public_commitment_defaults_off(db_conn):
     """Opting in must never silently place a member on the public streak list."""
     user = ws.opt_in_user(db_conn, 1, 100, timezone="UTC")

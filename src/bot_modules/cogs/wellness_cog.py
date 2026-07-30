@@ -22,6 +22,7 @@ from bot_modules.services.wellness_service import (
     opt_in_user,
     update_away_message,
     update_user_settings,
+    wellness_dashboard_link,
 )
 from bot_modules.core.utils import format_user_for_log
 
@@ -159,7 +160,7 @@ class _SetupWizardView(discord.ui.View):
                 "**Next steps:**\n"
                 "• Set message caps, schedule offline hours, find an "
                 "accountability partner and fine-tune everything from the "
-                "**Wellness panel on the web dashboard**.\n"
+                f"**{wellness_dashboard_link()}**.\n"
                 "• `/wellness away set` — Turn your away auto-reply on or off, with an\n"
                 "  optional custom message"
             ),

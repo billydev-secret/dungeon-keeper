@@ -61,6 +61,7 @@ from bot_modules.services.wellness_service import (
     set_cooldown,
     update_slow_mode_last_message,
     user_now,
+    wellness_dashboard_link,
     window_start_epoch,
     window_start_for,
 )
@@ -361,7 +362,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                         description=(
                             f"Your message was held. You can post again in **{_format_seconds(wait_seconds)}**.\n\n"
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
-                            "*Adjust your settings anytime from the Wellness panel on the web dashboard.*"
+                            f"*Adjust your settings anytime from the {wellness_dashboard_link()}.*"
                         ),
                         color=discord.Color(WELLNESS_PRIMARY),
                     ),
@@ -420,7 +421,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                             f"You've gone over your cap a few times — slow mode is on so you can keep posting at a calmer pace.\n\n"
                             f"You can post again in **{_format_seconds(user.slow_mode_rate_seconds)}**.\n\n"
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
-                            "*Adjust your settings anytime from the Wellness panel on the web dashboard.*"
+                            f"*Adjust your settings anytime from the {wellness_dashboard_link()}.*"
                         ),
                         color=discord.Color(WELLNESS_PRIMARY),
                     ),
