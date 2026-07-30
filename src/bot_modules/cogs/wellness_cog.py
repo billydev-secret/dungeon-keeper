@@ -325,17 +325,17 @@ class _SettingsView(discord.ui.View):
             placeholder="Notifications…",
             options=[
                 discord.SelectOption(
-                    label="Ephemeral (only in chat)",
+                    label="In-channel reply (visible ~30s)",
                     value="ephemeral",
                     default=(current_notifications == "ephemeral"),
                 ),
                 discord.SelectOption(
-                    label="DM only",
+                    label="DM only (private)",
                     value="dm",
                     default=(current_notifications == "dm"),
                 ),
                 discord.SelectOption(
-                    label="Both",
+                    label="In-channel + DM",
                     value="both",
                     default=(current_notifications == "both"),
                 ),

@@ -44,7 +44,7 @@ The `away` subgroup is nested under `wellness`. Note: a `_SettingsView` class ex
 4. **Blackout enforcement** — during an active blackout window the member's enforcement level applies to all messages; `gradual` escalates per-day within the blackout.
 5. **Streak violation** — any overage or blackout-triggered enforcement marks the day as a slip for streak accounting.
 
-Notifications are delivered per the member's `notifications_pref` (`ephemeral` — actually a self-deleting channel reply — / `dm` / `both`).
+Notifications are delivered per the member's `notifications_pref` (`ephemeral` — actually a self-deleting channel reply — / `dm` / `both`). Since 2026-07-30 both the web select and the (dormant) Discord settings view label these honestly: "In-channel reply (visible to the room ~30s)" / "DM only (private)" / "In-channel + DM"; the enforcement selects show the wizard's friendly labels instead of raw enums.
 
 ### Daily login digest (economy DM)
 

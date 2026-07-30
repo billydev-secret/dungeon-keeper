@@ -1,4 +1,4 @@
-import { wGet, wPost, esc, showStatus } from "../wellness-helpers.js";
+import { wGet, wPost, esc, showStatus, enfLabel, notifLabel } from "../wellness-helpers.js";
 import { guardForm } from "../config-helpers.js";
 import { renderLoading, renderError } from "../states.js";
 
@@ -78,7 +78,7 @@ export function mount(container) {
           <div class="field">
             <label>Enforcement Level
               <select name="enforcement_level">
-                ${d.enforcement_levels.map(e => `<option value="${e}"${e === d.enforcement_level ? " selected" : ""}>${e}</option>`).join("")}
+                ${d.enforcement_levels.map(e => `<option value="${e}"${e === d.enforcement_level ? " selected" : ""}>${enfLabel(e)}</option>`).join("")}
               </select>
             </label>
             <div class="field-hint">How firmly Dungeon Keeper holds you to your own limits.</div>
@@ -86,10 +86,12 @@ export function mount(container) {
           <div class="field">
             <label>Notifications
               <select name="notifications_pref">
-                ${d.notification_prefs.map(e => `<option value="${e}"${e === d.notifications_pref ? " selected" : ""}>${e}</option>`).join("")}
+                ${d.notification_prefs.map(e => `<option value="${e}"${e === d.notifications_pref ? " selected" : ""}>${notifLabel(e)}</option>`).join("")}
               </select>
             </label>
-            <div class="field-hint">How much Dungeon Keeper DMs you about your progress.</div>
+            <div class="field-hint">Where limit notices go. In-channel replies delete after ~30 seconds
+            but are visible to the room while they last; DM keeps it private. This also decides whether
+            your daily digest DM includes your wellness line.</div>
           </div>
           <div class="field">
             <label>Daily Reset Hour (0-23)

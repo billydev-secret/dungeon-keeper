@@ -1,4 +1,4 @@
-import { wGet, wPost, wDelete, esc, showStatus } from "../wellness-helpers.js";
+import { wGet, wPost, wDelete, esc, showStatus, enfLabel } from "../wellness-helpers.js";
 import { toast } from "../ui.js";
 import { guardForm } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
@@ -46,7 +46,7 @@ export function mount(container) {
         <div class="field">
           <label>Default Enforcement
             <select name="default_enforcement">
-              ${defaults.enforcement_levels.map(e => `<option value="${e}"${e === cfg.default_enforcement ? " selected" : ""}>${e}</option>`).join("")}
+              ${defaults.enforcement_levels.map(e => `<option value="${e}"${e === cfg.default_enforcement ? " selected" : ""}>${enfLabel(e)}</option>`).join("")}
             </select>
           </label>
           <div class="field-hint">The starting level for members who opt in. Each member can change their own afterwards.</div>
