@@ -340,60 +340,42 @@ def _text_channel_or_400(guild, raw_channel_id):
     return channel
 
 
+# The XP coefficient names, each with the reader that coerces it. This is the
+# single list — the write path in update_xp iterates the same table, and the
+# storage key is always the name behind _XP_COEFF_PREFIX.
+_XP_COEFF_READERS: dict = {
+    "message_word_xp": _float_val,
+    "reply_bonus_xp": _float_val,
+    "image_reaction_received_xp": _float_val,
+    "reaction_given_xp": _float_val,
+    "cooldown_thresholds_seconds": _str_val,
+    "cooldown_multipliers": _str_val,
+    "duplicate_multiplier": _float_val,
+    "pair_streak_threshold": _int_val,
+    "pair_streak_multiplier": _float_val,
+    "voice_award_xp": _float_val,
+    "voice_interval_seconds": _int_val,
+    "voice_min_humans": _int_val,
+    "manual_grant_xp": _float_val,
+    "level_curve_factor": _float_val,
+}
+
+
 def _xp_coefficients(conn, guild_id: int = 0) -> dict:
     """Read XP algorithm coefficients from the config table, with defaults.
 
     Guild-scoped rows take precedence; falls back to ``guild_id=0`` legacy rows
-    via ``get_config_value``.
+    via ``get_config_value``. The two sequence-valued defaults are stored (and
+    returned) as the CSV the panel edits, not as a list.
     """
     d = DEFAULT_XP_SETTINGS
-    p = _XP_COEFF_PREFIX
-
-    def _f(key: str, default: float) -> float:
-        raw = get_config_value(conn, f"{p}{key}", str(default), guild_id)
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return default
-
-    def _i(key: str, default: int) -> int:
-        raw = get_config_value(conn, f"{p}{key}", str(default), guild_id)
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return default
-
-    def _s(key: str, default: str) -> str:
-        return get_config_value(conn, f"{p}{key}", default, guild_id)
-
-    return {
-        "message_word_xp": _f("message_word_xp", d.message_word_xp),
-        "reply_bonus_xp": _f("reply_bonus_xp", d.reply_bonus_xp),
-        "image_reaction_received_xp": _f(
-            "image_reaction_received_xp", d.image_reaction_received_xp
-        ),
-        "reaction_given_xp": _f("reaction_given_xp", d.reaction_given_xp),
-        "cooldown_thresholds_seconds": _s(
-            "cooldown_thresholds_seconds",
-            ",".join(str(v) for v in d.cooldown_thresholds_seconds),
-        ),
-        "cooldown_multipliers": _s(
-            "cooldown_multipliers",
-            ",".join(str(v) for v in d.cooldown_multipliers),
-        ),
-        "duplicate_multiplier": _f("duplicate_multiplier", d.duplicate_multiplier),
-        "pair_streak_threshold": _i("pair_streak_threshold", d.pair_streak_threshold),
-        "pair_streak_multiplier": _f(
-            "pair_streak_multiplier", d.pair_streak_multiplier
-        ),
-        "voice_award_xp": _f("voice_award_xp", d.voice_award_xp),
-        "voice_interval_seconds": _i(
-            "voice_interval_seconds", d.voice_interval_seconds
-        ),
-        "voice_min_humans": _i("voice_min_humans", d.voice_min_humans),
-        "manual_grant_xp": _f("manual_grant_xp", d.manual_grant_xp),
-        "level_curve_factor": _f("level_curve_factor", d.level_curve_factor),
-    }
+    out: dict = {}
+    for name, read in _XP_COEFF_READERS.items():
+        default = getattr(d, name)
+        if isinstance(default, (list, tuple)):
+            default = ",".join(str(v) for v in default)
+        out[name] = read(conn, f"{_XP_COEFF_PREFIX}{name}", default, guild_id)
+    return out
 
 
 def _lookup_member_name(uid: int, guild, conn, guild_id: int) -> str:
@@ -1110,6 +1092,218 @@ def _confessions_section(guild_id: int, bot, conn) -> dict:
 # ── GET: full config snapshot ──────────────────────────────────────────
 
 
+def _global_section(conn, guild_id: int) -> dict:
+    return {
+            "guild_id": _int_val(conn, "guild_id", guild_id=guild_id),
+            "tz_offset_hours": _float_val(
+                conn, "tz_offset_hours", guild_id=guild_id
+            ),
+            "mod_channel_id": _id_str(conn, "mod_channel_id", guild_id),
+            "bypass_role_ids": _id_str_list(conn, "bypass_role_ids", guild_id),
+            "recorded_bot_user_ids": _id_str_list(conn, "recorded_bot_user_ids", guild_id),
+            "booster_swatch_dir": _str_val(
+                conn, "booster_swatch_dir", guild_id=guild_id
+            ),
+        }
+
+
+def _privacy_section(conn, guild_id: int) -> dict:
+    return {
+            # "none" (default) keeps only derivations (XP/sentiment/
+            # interactions); "all" archives raw message content.
+            "message_storage_level": _str_val(
+                conn,
+                "message_storage_level",
+                STORAGE_LEVEL_NONE,
+                guild_id=guild_id,
+            ),
+        }
+
+
+def _welcome_section(conn, guild_id: int) -> dict:
+    from bot_modules.services.welcome_service import (
+        DEFAULT_LEAVE_MESSAGE,
+        DEFAULT_WELCOME_MESSAGE,
+    )
+
+    return {
+            "welcome_channel_id": _id_str(conn, "welcome_channel_id", guild_id),
+            "welcome_message": _str_val(
+                conn,
+                "welcome_message",
+                DEFAULT_WELCOME_MESSAGE,
+                guild_id=guild_id,
+            ),
+            "welcome_ping_role_id": _id_str(conn, "welcome_ping_role_id", guild_id),
+            "welcome_ping_member": _bool_val(
+                conn, "welcome_ping_member", guild_id=guild_id
+            ),
+            "welcome_trigger": _str_val(
+                conn, "welcome_trigger", "join", guild_id=guild_id
+            ),
+            "unverified_role_id": _id_str(conn, "unverified_role_id", guild_id),
+            "leave_channel_id": _id_str(conn, "leave_channel_id", guild_id),
+            "leave_message": _str_val(
+                conn,
+                "leave_message",
+                DEFAULT_LEAVE_MESSAGE,
+                guild_id=guild_id,
+            ),
+            "greeter_role_id": _id_str(conn, "greeter_role_id", guild_id),
+            "greeter_chat_channel_id": _id_str(conn, "greeter_chat_channel_id", guild_id),
+            "server_guide_channel_id": _id_str(conn, "server_guide_channel_id", guild_id),
+            "join_leave_log_channel_id": _id_str(
+                conn,
+                "join_leave_log_channel_id",
+                guild_id,
+                default=_int_val(conn, "leave_channel_id", guild_id=guild_id),
+            ),
+        }
+
+
+def _intake_section(conn, guild_id: int) -> dict:
+    return {
+            "enabled": _bool_val(conn, "intake_enabled", guild_id=guild_id),
+            "channel_id": _id_str(conn, "intake_channel_id", guild_id),
+            "completion_code": _str_val(
+                conn, "intake_completion_code", guild_id=guild_id
+            ),
+            "verified_role_id": str(
+                intake_svc.verified_role_id(conn, guild_id)
+            ),
+            # Derived, read-only: where a greeting counts (greeter
+            # chat, else the welcome channel) so the panel can name it
+            # instead of implying the card channel is watched.
+            "greet_channel_id": str(
+                intake_svc.greet_channel_id(conn, guild_id)
+            ),
+            "stale_hours": intake_svc.stale_hours(conn, guild_id),
+            # Effective step list (config, or defaults when unset) —
+            # what a card created right now would snapshot.
+            "steps": [
+                {
+                    "key": s.key,
+                    "label": s.label,
+                    "auto": s.auto_kind,
+                    "role_id": str(s.auto_role_id),
+                    "code": s.code,
+                }
+                for s in intake_svc.step_config(conn, guild_id)
+            ],
+            "reference_channel_id": str(
+                intake_ref.reference_channel_id(conn, guild_id)
+            ),
+            "reference_blocks": [
+                {"kind": b.kind, "title": b.title, "body": b.body}
+                for b in intake_ref.blocks_config(conn, guild_id)
+            ],
+        }
+
+
+def _xp_section(conn, guild_id: int) -> dict:
+    return {
+            "level_5_role_id": _id_str(conn, "xp_level_5_role_id", guild_id),
+            "promotion_review_grant_role_id": _id_str(conn, "promotion_review_grant_role_id", guild_id),
+            "level_5_log_channel_id": _id_str(conn, "xp_level_5_log_channel_id", guild_id),
+            "level_up_log_channel_id": _id_str(conn, "xp_level_up_log_channel_id", guild_id),
+            "xp_grant_allowed_user_ids": _id_str_list(conn, "xp_grant_allowed_user_ids", guild_id),
+            "xp_excluded_channel_ids": _id_str_list(conn, "xp_excluded_channel_ids", guild_id),
+            # Algorithm coefficients (loaded with defaults)
+            **_xp_coefficients(conn, guild_id),
+        }
+
+
+def _prune_section(conn, guild_id: int, guild) -> dict:
+    prune_rule = _get_prune_rule_with_conn(conn, guild_id)
+    exempt_users = [
+        {"id": str(uid), "name": _lookup_member_name(uid, guild, conn, guild_id)}
+        for uid in sorted(get_prune_exception_ids_with_conn(conn, guild_id))
+    ]
+
+    return {
+            "role_id": str(prune_rule["role_id"]) if prune_rule else "0",
+            "inactivity_days": prune_rule["inactivity_days"]
+            if prune_rule
+            else 0,
+            "exemptions": exempt_users,
+        }
+
+
+def _moderation_section(conn, guild_id: int) -> dict:
+    return {
+            "jailed_role_id": _id_str(conn, "jailed_role_id", guild_id),
+            "jail_category_id": _id_str(conn, "jail_category_id", guild_id),
+            "ticket_category_id": _id_str(conn, "ticket_category_id", guild_id),
+            "log_channel_id": _id_str(conn, "log_channel_id", guild_id),
+            "transcript_channel_id": _id_str(conn, "transcript_channel_id", guild_id),
+            "mod_role_ids": _str_val(
+                conn, "mod_role_ids", guild_id=guild_id
+            ),
+            "admin_role_ids": _str_val(
+                conn, "admin_role_ids", guild_id=guild_id
+            ),
+            "ticket_notify_on_create": _str_val(
+                conn,
+                "ticket_notify_on_create",
+                "1",
+                guild_id=guild_id,
+            ),
+            "warning_threshold": _int_val(
+                conn, "warning_threshold", 3, guild_id=guild_id
+            ),
+        }
+
+
+def _roles_section(conn, guild_id: int) -> dict:
+    grant_roles = get_grant_roles(conn, guild_id)
+
+    return {
+            name: {
+                "label": cfg["label"],
+                "role_id": str(cfg["role_id"]),
+                "log_channel_id": str(cfg["log_channel_id"]),
+                "announce_channel_id": str(cfg["announce_channel_id"]),
+                "grant_message": cfg["grant_message"],
+                "required_role_id": str(cfg["required_role_id"]),
+                "permissions": [
+                    {"entity_type": et, "entity_id": str(eid)}
+                    for et, eid in get_grant_permissions(
+                        conn, guild_id, name
+                    )
+                ],
+            }
+            for name, cfg in grant_roles.items()
+        }
+
+
+def _booster_roles_section(conn, guild_id: int) -> list:
+    return [
+        {
+            "role_key": r["role_key"],
+            "label": r["label"],
+            "role_id": str(r["role_id"]),
+            "image_path": r["image_path"],
+            "sort_order": r["sort_order"],
+        }
+        for r in get_booster_roles(conn, guild_id)
+    ]
+
+
+def _auto_delete_section(conn, guild_id: int) -> list:
+    return [
+        {
+            "channel_id": str(r["channel_id"]),
+            "max_age_seconds": int(r["max_age_seconds"]),
+            "interval_seconds": int(r["interval_seconds"]),
+            "last_run_ts": float(r["last_run_ts"]),
+            "media_only": bool(r["media_only"]),
+            "max_age_display": _fmt_dur(int(r["max_age_seconds"])),
+            "interval_display": _fmt_dur(int(r["interval_seconds"])),
+        }
+        for r in list_auto_delete_rules_for_guild_with_conn(conn, guild_id)
+    ]
+
+
 @router.get("/config")
 async def get_config(
     request: Request,
@@ -1120,135 +1314,19 @@ async def get_config(
 
     def _q():
         with ctx.open_db() as conn:
-            from bot_modules.services.welcome_service import (
-                DEFAULT_LEAVE_MESSAGE,
-                DEFAULT_WELCOME_MESSAGE,
-            )
-
-            # Reuse the open connection — the db_path variants would each
-            # open a second one, and five PRAGMAs cost more than the query.
-            prune_rule = _get_prune_rule_with_conn(conn, guild_id)
-            prune_exempt_ids = get_prune_exception_ids_with_conn(conn, guild_id)
-            grant_roles = get_grant_roles(conn, guild_id)
+            # Only what more than one section below needs; everything else
+            # each section reads for itself.
             booster_panel_refs = get_booster_panel_refs(conn, guild_id)
-
             bot = getattr(ctx, "bot", None)
             prune_guild = bot.get_guild(guild_id) if bot is not None else None
 
-            exempt_users = [
-                {"id": str(uid), "name": _lookup_member_name(uid, prune_guild, conn, guild_id)}
-                for uid in sorted(prune_exempt_ids)
-            ]
-
             return {
-                "global": {
-                    "guild_id": _int_val(conn, "guild_id", guild_id=guild_id),
-                    "tz_offset_hours": _float_val(
-                        conn, "tz_offset_hours", guild_id=guild_id
-                    ),
-                    "mod_channel_id": _id_str(conn, "mod_channel_id", guild_id),
-                    "bypass_role_ids": _id_str_list(conn, "bypass_role_ids", guild_id),
-                    "recorded_bot_user_ids": _id_str_list(conn, "recorded_bot_user_ids", guild_id),
-                    "booster_swatch_dir": _str_val(
-                        conn, "booster_swatch_dir", guild_id=guild_id
-                    ),
-                },
-                "privacy": {
-                    # "none" (default) keeps only derivations (XP/sentiment/
-                    # interactions); "all" archives raw message content.
-                    "message_storage_level": _str_val(
-                        conn,
-                        "message_storage_level",
-                        STORAGE_LEVEL_NONE,
-                        guild_id=guild_id,
-                    ),
-                },
-                "welcome": {
-                    "welcome_channel_id": _id_str(conn, "welcome_channel_id", guild_id),
-                    "welcome_message": _str_val(
-                        conn,
-                        "welcome_message",
-                        DEFAULT_WELCOME_MESSAGE,
-                        guild_id=guild_id,
-                    ),
-                    "welcome_ping_role_id": _id_str(conn, "welcome_ping_role_id", guild_id),
-                    "welcome_ping_member": _bool_val(
-                        conn, "welcome_ping_member", guild_id=guild_id
-                    ),
-                    "welcome_trigger": _str_val(
-                        conn, "welcome_trigger", "join", guild_id=guild_id
-                    ),
-                    "unverified_role_id": _id_str(conn, "unverified_role_id", guild_id),
-                    "leave_channel_id": _id_str(conn, "leave_channel_id", guild_id),
-                    "leave_message": _str_val(
-                        conn,
-                        "leave_message",
-                        DEFAULT_LEAVE_MESSAGE,
-                        guild_id=guild_id,
-                    ),
-                    "greeter_role_id": _id_str(conn, "greeter_role_id", guild_id),
-                    "greeter_chat_channel_id": _id_str(conn, "greeter_chat_channel_id", guild_id),
-                    "server_guide_channel_id": _id_str(conn, "server_guide_channel_id", guild_id),
-                    "join_leave_log_channel_id": _id_str(
-                        conn,
-                        "join_leave_log_channel_id",
-                        guild_id,
-                        default=_int_val(conn, "leave_channel_id", guild_id=guild_id),
-                    ),
-                },
-                "intake": {
-                    "enabled": _bool_val(conn, "intake_enabled", guild_id=guild_id),
-                    "channel_id": _id_str(conn, "intake_channel_id", guild_id),
-                    "completion_code": _str_val(
-                        conn, "intake_completion_code", guild_id=guild_id
-                    ),
-                    "verified_role_id": str(
-                        intake_svc.verified_role_id(conn, guild_id)
-                    ),
-                    # Derived, read-only: where a greeting counts (greeter
-                    # chat, else the welcome channel) so the panel can name it
-                    # instead of implying the card channel is watched.
-                    "greet_channel_id": str(
-                        intake_svc.greet_channel_id(conn, guild_id)
-                    ),
-                    "stale_hours": intake_svc.stale_hours(conn, guild_id),
-                    # Effective step list (config, or defaults when unset) —
-                    # what a card created right now would snapshot.
-                    "steps": [
-                        {
-                            "key": s.key,
-                            "label": s.label,
-                            "auto": s.auto_kind,
-                            "role_id": str(s.auto_role_id),
-                            "code": s.code,
-                        }
-                        for s in intake_svc.step_config(conn, guild_id)
-                    ],
-                    "reference_channel_id": str(
-                        intake_ref.reference_channel_id(conn, guild_id)
-                    ),
-                    "reference_blocks": [
-                        {"kind": b.kind, "title": b.title, "body": b.body}
-                        for b in intake_ref.blocks_config(conn, guild_id)
-                    ],
-                },
-                "xp": {
-                    "level_5_role_id": _id_str(conn, "xp_level_5_role_id", guild_id),
-                    "promotion_review_grant_role_id": _id_str(conn, "promotion_review_grant_role_id", guild_id),
-                    "level_5_log_channel_id": _id_str(conn, "xp_level_5_log_channel_id", guild_id),
-                    "level_up_log_channel_id": _id_str(conn, "xp_level_up_log_channel_id", guild_id),
-                    "xp_grant_allowed_user_ids": _id_str_list(conn, "xp_grant_allowed_user_ids", guild_id),
-                    "xp_excluded_channel_ids": _id_str_list(conn, "xp_excluded_channel_ids", guild_id),
-                    # Algorithm coefficients (loaded with defaults)
-                    **_xp_coefficients(conn, guild_id),
-                },
-                "prune": {
-                    "role_id": str(prune_rule["role_id"]) if prune_rule else "0",
-                    "inactivity_days": prune_rule["inactivity_days"]
-                    if prune_rule
-                    else 0,
-                    "exemptions": exempt_users,
-                },
+                "global": _global_section(conn, guild_id),
+                "privacy": _privacy_section(conn, guild_id),
+                "welcome": _welcome_section(conn, guild_id),
+                "intake": _intake_section(conn, guild_id),
+                "xp": _xp_section(conn, guild_id),
+                "prune": _prune_section(conn, guild_id, prune_guild),
                 "spoiler": {
                     "spoiler_required_channels": _id_str_list(conn, "spoiler_required_channels", guild_id),
                 },
@@ -1256,70 +1334,13 @@ async def get_config(
                 "auto_role": {
                     "auto_role_ids": _id_str_list(conn, "auto_role_ids", guild_id),
                 },
-                "moderation": {
-                    "jailed_role_id": _id_str(conn, "jailed_role_id", guild_id),
-                    "jail_category_id": _id_str(conn, "jail_category_id", guild_id),
-                    "ticket_category_id": _id_str(conn, "ticket_category_id", guild_id),
-                    "log_channel_id": _id_str(conn, "log_channel_id", guild_id),
-                    "transcript_channel_id": _id_str(conn, "transcript_channel_id", guild_id),
-                    "mod_role_ids": _str_val(
-                        conn, "mod_role_ids", guild_id=guild_id
-                    ),
-                    "admin_role_ids": _str_val(
-                        conn, "admin_role_ids", guild_id=guild_id
-                    ),
-                    "ticket_notify_on_create": _str_val(
-                        conn,
-                        "ticket_notify_on_create",
-                        "1",
-                        guild_id=guild_id,
-                    ),
-                    "warning_threshold": _int_val(
-                        conn, "warning_threshold", 3, guild_id=guild_id
-                    ),
-                },
-                "roles": {
-                    name: {
-                        "label": cfg["label"],
-                        "role_id": str(cfg["role_id"]),
-                        "log_channel_id": str(cfg["log_channel_id"]),
-                        "announce_channel_id": str(cfg["announce_channel_id"]),
-                        "grant_message": cfg["grant_message"],
-                        "required_role_id": str(cfg["required_role_id"]),
-                        "permissions": [
-                            {"entity_type": et, "entity_id": str(eid)}
-                            for et, eid in get_grant_permissions(
-                                conn, guild_id, name
-                            )
-                        ],
-                    }
-                    for name, cfg in grant_roles.items()
-                },
-                "booster_roles": [
-                    {
-                        "role_key": r["role_key"],
-                        "label": r["label"],
-                        "role_id": str(r["role_id"]),
-                        "image_path": r["image_path"],
-                        "sort_order": r["sort_order"],
-                    }
-                    for r in get_booster_roles(conn, guild_id)
-                ],
+                "moderation": _moderation_section(conn, guild_id),
+                "roles": _roles_section(conn, guild_id),
+                "booster_roles": _booster_roles_section(conn, guild_id),
                 "booster_panel_channel_id": (
                     str(booster_panel_refs[0][0]) if booster_panel_refs else "0"
                 ),
-                "auto_delete": [
-                    {
-                        "channel_id": str(r["channel_id"]),
-                        "max_age_seconds": int(r["max_age_seconds"]),
-                        "interval_seconds": int(r["interval_seconds"]),
-                        "last_run_ts": float(r["last_run_ts"]),
-                        "media_only": bool(r["media_only"]),
-                        "max_age_display": _fmt_dur(int(r["max_age_seconds"])),
-                        "interval_display": _fmt_dur(int(r["interval_seconds"])),
-                    }
-                    for r in list_auto_delete_rules_for_guild_with_conn(conn, guild_id)
-                ],
+                "auto_delete": _auto_delete_section(conn, guild_id),
                 "bulk_cleanup": _bulk_cleanup_section(conn, guild_id),
                 "confessions": _confessions_section(guild_id, bot, conn),
                 "dms": _dms_section_with_conn(conn, guild_id),
@@ -1951,23 +1972,7 @@ async def update_xp(
                 )
 
             # Persist algorithm coefficients
-            _COEFF_FIELDS = [
-                "message_word_xp",
-                "reply_bonus_xp",
-                "image_reaction_received_xp",
-                "reaction_given_xp",
-                "cooldown_thresholds_seconds",
-                "cooldown_multipliers",
-                "duplicate_multiplier",
-                "pair_streak_threshold",
-                "pair_streak_multiplier",
-                "voice_award_xp",
-                "voice_interval_seconds",
-                "voice_min_humans",
-                "manual_grant_xp",
-                "level_curve_factor",
-            ]
-            for field_name in _COEFF_FIELDS:
+            for field_name in _XP_COEFF_READERS:
                 val = getattr(body, field_name, None)
                 if val is not None:
                     set_config_value(
