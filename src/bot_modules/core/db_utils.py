@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Generator, Iterable
 from pathlib import Path
 from typing import TypedDict
 
@@ -158,6 +158,23 @@ def clear_config_id_bucket(
         "DELETE FROM config_ids WHERE guild_id = ? AND bucket = ?",
         (guild_id, bucket),
     )
+
+
+def replace_config_id_bucket(
+    conn: sqlite3.Connection,
+    bucket: str,
+    values: Iterable[int | str],
+    guild_id: int = 0,
+) -> None:
+    """Replace a bucket's entire contents with ``values``.
+
+    The clear-then-insert pair this composes is what "the dashboard sent the
+    full list for this bucket" always means; callers pass the raw strings a
+    JSON body carries and the int coercion happens here.
+    """
+    clear_config_id_bucket(conn, bucket, guild_id)
+    for value in values:
+        add_config_id(conn, bucket, int(value), guild_id)
 
 
 def get_config_id_set(

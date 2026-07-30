@@ -17,18 +17,17 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from bot_modules.core.db_utils import (
-    add_config_id,
     add_grant_permission,
-    clear_config_id_bucket,
+    delete_config_value,
     delete_grant_role,
     get_config_id_set,
     get_config_value,
     get_grant_permissions,
     get_grant_roles,
     get_tz_offset_hours,
-    open_db,
     parse_bool,
     remove_grant_permission,
+    replace_config_id_bucket,
     set_config_value,
     upsert_grant_role,
 )
@@ -96,7 +95,8 @@ from bot_modules.services.quote_renderer import (
 from bot_modules.services.inactivity_prune_service import (
     add_prune_exception,
     get_prune_exception_ids,
-    get_prune_rule as _get_prune_rule,
+    get_prune_exception_ids_with_conn,
+    get_prune_rule_with_conn as _get_prune_rule_with_conn,
     remove_prune_exception,
 )
 from bot_modules.services.dm_perms_service import (
@@ -187,27 +187,72 @@ _POLICY_VOTE_TIMEOUT_DEFAULT = 72
 router = APIRouter()
 
 
+class ChannelIdBody(BaseModel):
+    """A bare target channel — the body shape of every "post this panel
+    there" route. A snowflake, so it travels as a string."""
+
+    channel_id: str
+
+
 # ── Read helpers ───────────────────────────────────────────────────────
 
 
-def _id_set_list(conn, bucket: str, guild_id: int) -> list[int]:
-    return sorted(get_config_id_set(conn, bucket, guild_id))
+# ``allow_legacy_fallback=False`` means "this guild's row or the default" —
+# no falling back to the legacy guild_id=0 row. Features added after configs
+# went per-guild use it so a home-guild value never leaks into a second guild.
 
 
-def _int_val(conn, key: str, default: int = 0, guild_id: int = 0) -> int:
-    raw = get_config_value(conn, key, str(default), guild_id)
+def _id_set_list(
+    conn, bucket: str, guild_id: int, allow_legacy_fallback: bool = True
+) -> list[int]:
+    return sorted(
+        get_config_id_set(
+            conn, bucket, guild_id, allow_legacy_fallback=allow_legacy_fallback
+        )
+    )
+
+
+def _int_val(
+    conn,
+    key: str,
+    default: int = 0,
+    guild_id: int = 0,
+    allow_legacy_fallback: bool = True,
+) -> int:
+    raw = get_config_value(
+        conn, key, str(default), guild_id,
+        allow_legacy_fallback=allow_legacy_fallback,
+    )
     try:
         return int(raw)
     except (TypeError, ValueError):
         return default
 
 
-def _str_val(conn, key: str, default: str = "", guild_id: int = 0) -> str:
-    return get_config_value(conn, key, default, guild_id)
+def _str_val(
+    conn,
+    key: str,
+    default: str = "",
+    guild_id: int = 0,
+    allow_legacy_fallback: bool = True,
+) -> str:
+    return get_config_value(
+        conn, key, default, guild_id,
+        allow_legacy_fallback=allow_legacy_fallback,
+    )
 
 
-def _float_val(conn, key: str, default: float = 0.0, guild_id: int = 0) -> float:
-    raw = get_config_value(conn, key, str(default), guild_id)
+def _float_val(
+    conn,
+    key: str,
+    default: float = 0.0,
+    guild_id: int = 0,
+    allow_legacy_fallback: bool = True,
+) -> float:
+    raw = get_config_value(
+        conn, key, str(default), guild_id,
+        allow_legacy_fallback=allow_legacy_fallback,
+    )
     try:
         return float(raw)
     except (TypeError, ValueError):
@@ -219,62 +264,154 @@ def _bool_val(conn, key: str, default: bool = False, guild_id: int = 0) -> bool:
     return parse_bool(raw)
 
 
+def _raw(value):
+    """Store the value exactly as sent (it already arrives as a string)."""
+    return value
+
+
+def _flag(value) -> str:
+    """Bool -> the "1"/"0" the config table stores."""
+    return "1" if value else "0"
+
+
+def _apply_config_fields(conn, guild_id: int, body, spec: dict) -> None:
+    """Write each field of ``spec`` the caller actually sent.
+
+    ``spec`` maps a body attribute to ``(config_key, coerce)``, where
+    ``coerce`` produces the string the config table stores. A field left unset
+    — or sent as an explicit null — is skipped, which is what "no change"
+    means on these every-field-optional PUTs.
+    """
+    for field, (key, coerce) in spec.items():
+        value = getattr(body, field, None)
+        if value is not None:
+            set_config_value(conn, key, coerce(value), guild_id)
+
+
+def _id_str(conn, key: str, guild_id: int = 0, default: int = 0) -> str:
+    """Read a snowflake config value as a decimal STRING.
+
+    Discord ids exceed 2**53, so a bare JSON number loses precision in the
+    browser — every id the dashboard reads must travel as a string, and a
+    repo-wide sweep enforces it. Going through ``_int_val`` keeps the
+    normalisation ("007" -> "7", junk -> the default) these call sites have
+    always had.
+    """
+    return str(_int_val(conn, key, default, guild_id))
+
+
+def _id_str_list(
+    conn, bucket: str, guild_id: int, allow_legacy_fallback: bool = True
+) -> list[str]:
+    """The same string-not-number rule, for a whole id bucket."""
+    return [
+        str(i)
+        for i in _id_set_list(conn, bucket, guild_id, allow_legacy_fallback)
+    ]
+
+
+def _guild_or_503(ctx, guild_id: int):
+    """The active guild, or the 503 the dashboard shows as "bot offline".
+
+    Routes that act on Discord rather than just the DB all open this way.
+    Callers that must report a *different* failure first (a missing cog, say)
+    keep their own inline checks so the error precedence does not move.
+    """
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(503, "Bot not available")
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+    return guild
+
+
+def _text_channel_or_400(guild, raw_channel_id):
+    """Resolve a body's ``channel_id`` to a text channel in this guild."""
+    import discord
+
+    try:
+        channel_id = int(raw_channel_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Invalid channel_id") from None
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        raise HTTPException(400, "Channel must be a text channel in this guild")
+    return channel
+
+
+# The XP coefficient names, each with the reader that coerces it. This is the
+# single list — the write path in update_xp iterates the same table, and the
+# storage key is always the name behind _XP_COEFF_PREFIX.
+_XP_COEFF_READERS: dict = {
+    "message_word_xp": _float_val,
+    "reply_bonus_xp": _float_val,
+    "image_reaction_received_xp": _float_val,
+    "reaction_given_xp": _float_val,
+    "cooldown_thresholds_seconds": _str_val,
+    "cooldown_multipliers": _str_val,
+    "duplicate_multiplier": _float_val,
+    "pair_streak_threshold": _int_val,
+    "pair_streak_multiplier": _float_val,
+    "voice_award_xp": _float_val,
+    "voice_interval_seconds": _int_val,
+    "voice_min_humans": _int_val,
+    "manual_grant_xp": _float_val,
+    "level_curve_factor": _float_val,
+}
+
+
+_PERM_LABELS = {
+    "view_channel": "View Channel",
+    "send_messages": "Send Messages",
+    "embed_links": "Embed Links",
+    "attach_files": "Attach Files",
+}
+
+
+def _require_post_permissions(guild, channel, *required: str) -> None:
+    """Refuse up front if the bot cannot post what this panel actually posts.
+
+    Worth doing *before* calling a panel-posting service rather than letting
+    discord.Forbidden escape as a 500: post_or_update_booster_panel deletes the
+    existing panel messages before it sends the new ones, and those sends are
+    unguarded, so failing partway through leaves the guild with no panel at all
+    and a repost that fails the same way. A 400 naming the missing permission
+    is also simply actionable — the admin can go and fix it.
+
+    The flags differ per panel and must be passed explicitly: the DM perms
+    panel sends an embed, while the booster panel sends image *attachments* and
+    no embed. Checking the wrong set is worse than not checking, because it
+    both rejects channels that would have worked and waves through the one
+    failure this exists to prevent.
+    """
+    perms = channel.permissions_for(guild.me)
+    missing = [
+        _PERM_LABELS[name] for name in required if not getattr(perms, name)
+    ]
+    if missing:
+        raise HTTPException(
+            400,
+            f"The bot can't post in #{channel.name} — missing permissions: "
+            f"{', '.join(missing)}",
+        )
+
+
 def _xp_coefficients(conn, guild_id: int = 0) -> dict:
     """Read XP algorithm coefficients from the config table, with defaults.
 
     Guild-scoped rows take precedence; falls back to ``guild_id=0`` legacy rows
-    via ``get_config_value``.
+    via ``get_config_value``. The two sequence-valued defaults are stored (and
+    returned) as the CSV the panel edits, not as a list.
     """
-    from bot_modules.core.db_utils import get_config_value
-
     d = DEFAULT_XP_SETTINGS
-    p = _XP_COEFF_PREFIX
-
-    def _f(key: str, default: float) -> float:
-        raw = get_config_value(conn, f"{p}{key}", str(default), guild_id)
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return default
-
-    def _i(key: str, default: int) -> int:
-        raw = get_config_value(conn, f"{p}{key}", str(default), guild_id)
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return default
-
-    def _s(key: str, default: str) -> str:
-        return get_config_value(conn, f"{p}{key}", default, guild_id)
-
-    return {
-        "message_word_xp": _f("message_word_xp", d.message_word_xp),
-        "reply_bonus_xp": _f("reply_bonus_xp", d.reply_bonus_xp),
-        "image_reaction_received_xp": _f(
-            "image_reaction_received_xp", d.image_reaction_received_xp
-        ),
-        "reaction_given_xp": _f("reaction_given_xp", d.reaction_given_xp),
-        "cooldown_thresholds_seconds": _s(
-            "cooldown_thresholds_seconds",
-            ",".join(str(v) for v in d.cooldown_thresholds_seconds),
-        ),
-        "cooldown_multipliers": _s(
-            "cooldown_multipliers",
-            ",".join(str(v) for v in d.cooldown_multipliers),
-        ),
-        "duplicate_multiplier": _f("duplicate_multiplier", d.duplicate_multiplier),
-        "pair_streak_threshold": _i("pair_streak_threshold", d.pair_streak_threshold),
-        "pair_streak_multiplier": _f(
-            "pair_streak_multiplier", d.pair_streak_multiplier
-        ),
-        "voice_award_xp": _f("voice_award_xp", d.voice_award_xp),
-        "voice_interval_seconds": _i(
-            "voice_interval_seconds", d.voice_interval_seconds
-        ),
-        "voice_min_humans": _i("voice_min_humans", d.voice_min_humans),
-        "manual_grant_xp": _f("manual_grant_xp", d.manual_grant_xp),
-        "level_curve_factor": _f("level_curve_factor", d.level_curve_factor),
-    }
+    out: dict = {}
+    for name, read in _XP_COEFF_READERS.items():
+        default = getattr(d, name)
+        if isinstance(default, (list, tuple)):
+            default = ",".join(str(v) for v in default)
+        out[name] = read(conn, f"{_XP_COEFF_PREFIX}{name}", default, guild_id)
+    return out
 
 
 def _lookup_member_name(uid: int, guild, conn, guild_id: int) -> str:
@@ -309,45 +446,47 @@ def _bulk_cleanup_section(conn, guild_id: int) -> dict:
         _LAST_RUN_KEY,
     )
 
-    enabled = (
-        get_config_value(
+    # Strictly "1", not parse_bool — this key is only ever written as 1/0.
+    return {
+        "enabled": _str_val(
             conn, _ENABLED_KEY, "0", guild_id, allow_legacy_fallback=False
         )
-        == "1"
-    )
-    try:
-        age_days = int(
-            get_config_value(
-                conn,
-                _AGE_DAYS_KEY,
-                str(DEFAULT_AGE_DAYS),
-                guild_id,
-                allow_legacy_fallback=False,
-            )
-        )
-    except (TypeError, ValueError):
-        age_days = DEFAULT_AGE_DAYS
-    try:
-        last_run_ts = float(
-            get_config_value(
-                conn, _LAST_RUN_KEY, "0", guild_id, allow_legacy_fallback=False
-            )
-        )
-    except (TypeError, ValueError):
-        last_run_ts = 0.0
+        == "1",
+        "age_days": _int_val(
+            conn, _AGE_DAYS_KEY, DEFAULT_AGE_DAYS, guild_id,
+            allow_legacy_fallback=False,
+        ),
+        "last_run_ts": _float_val(
+            conn, _LAST_RUN_KEY, 0.0, guild_id, allow_legacy_fallback=False
+        ),
+        "excluded_channels": _id_str_list(
+            conn, EXCLUDED_BUCKET, guild_id, allow_legacy_fallback=False
+        ),
+    }
 
+
+_STARBOARD_DEFAULTS: dict = {
+    "channel_id": 0,
+    "threshold": 3,
+    "emoji": "\u2b50",
+    "enabled": 1,
+}
+
+
+def _starboard_row_or_defaults(conn, guild_id: int) -> dict:
+    """The stored starboard row, or the defaults when there is none.
+
+    ``enabled`` comes back exactly as stored — the read path presents it as a
+    bool, the write path keeps it as the 1/0 int it persists.
+    """
+    row = _get_starboard_config(conn, guild_id)
+    if not row:
+        return dict(_STARBOARD_DEFAULTS)
     return {
-        "enabled": enabled,
-        "age_days": age_days,
-        "last_run_ts": last_run_ts,
-        "excluded_channels": [
-            str(i)
-            for i in sorted(
-                get_config_id_set(
-                    conn, EXCLUDED_BUCKET, guild_id, allow_legacy_fallback=False
-                )
-            )
-        ],
+        "channel_id": int(row["channel_id"]),
+        "threshold": int(row["threshold"]),
+        "emoji": row["emoji"],
+        "enabled": row["enabled"],
     }
 
 
@@ -355,27 +494,15 @@ def _starboard_section(conn, guild_id: int) -> dict:
     import sqlite3
 
     try:
-        row = _get_starboard_config(conn, guild_id)
+        cur = _starboard_row_or_defaults(conn, guild_id)
     except sqlite3.OperationalError:
-        row = None
-    if row:
-        channel_id = int(row["channel_id"])
-        threshold = int(row["threshold"])
-        emoji = row["emoji"]
-        enabled = bool(row["enabled"])
-    else:
-        channel_id = 0
-        threshold = 3
-        emoji = "⭐"
-        enabled = True
+        cur = dict(_STARBOARD_DEFAULTS)
     return {
-        "channel_id": str(channel_id),
-        "threshold": threshold,
-        "emoji": emoji,
-        "enabled": enabled,
-        "excluded_channels": [
-            str(i) for i in _id_set_list(conn, _STARBOARD_EXCLUDED_BUCKET, guild_id)
-        ],
+        "channel_id": str(cur["channel_id"]),
+        "threshold": cur["threshold"],
+        "emoji": cur["emoji"],
+        "enabled": bool(cur["enabled"]),
+        "excluded_channels": _id_str_list(conn, _STARBOARD_EXCLUDED_BUCKET, guild_id),
     }
 
 
@@ -384,16 +511,12 @@ def _starboard_section(conn, guild_id: int) -> dict:
 
 def _birthday_section(conn, guild_id: int) -> dict:
     return {
-        "birthday_channel_id": str(
-            _int_val(conn, "birthday_channel_id", guild_id=guild_id)
-        ),
+        "birthday_channel_id": _id_str(conn, "birthday_channel_id", guild_id),
         "birthday_message": _str_val(
             conn, "birthday_message", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
         ),
         "birthday_pin": _bool_val(conn, "birthday_pin", guild_id=guild_id),
-        "birthday_channel_id_2": str(
-            _int_val(conn, "birthday_channel_id_2", guild_id=guild_id)
-        ),
+        "birthday_channel_id_2": _id_str(conn, "birthday_channel_id_2", guild_id),
         "birthday_message_2": _str_val(
             conn, "birthday_message_2", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
         ),
@@ -586,9 +709,7 @@ def _rules_watch_section(conn, guild_id: int, db_path) -> dict:
     # surface it read-only to explain a still-empty queue.
     return {
         "enabled": _bool_val(conn, "rules_watch_enabled", guild_id=guild_id),
-        "channel_id": str(
-            _int_val(conn, "rules_watch_channel_id", guild_id=guild_id)
-        ),
+        "channel_id": _id_str(conn, "rules_watch_channel_id", guild_id),
         "guard_available": _ollama_is_available(db_path),
     }
 
@@ -614,9 +735,7 @@ def _inactive_section(conn, guild_id: int, guild) -> dict:
         "sweep_cap": _int_val(conn, "inactive_sweep_cap", 25, guild_id=guild_id),
         # The panel's channel picker preselects this, so a re-point starts from
         # where the channel currently is rather than from blank.
-        "inactive_channel_id": str(
-            _int_val(conn, "inactive_channel_id", guild_id=guild_id)
-        ),
+        "inactive_channel_id": _id_str(conn, "inactive_channel_id", guild_id),
         "exemptions": exemptions,
     }
 
@@ -646,29 +765,20 @@ _DUEL_SHARED_DEFAULTS: dict = {
 
 # game_key == duel_config.game_type for every game (no renaming needed).
 _DUEL_GAMES: dict = {
-    "pressure": {
-        "table": None,
-        "defaults": {},
-        "shared_fields": (
-            "cooldown_hours", "sentence_hours",
-            "channel_allowlist", "max_nick_length", "max_stakes_length",
-        ),
-    },
+    "pressure": {"table": None, "defaults": {}, "fields": {}},
     "quickdraw": {
         "table": "quickdraw_config",
         "defaults": {"min_delay": 3.0, "max_delay": 8.0, "draw_window": 5.0},
-        "shared_fields": (
-            "cooldown_hours", "sentence_hours",
-            "channel_allowlist", "max_nick_length", "max_stakes_length",
-        ),
+        "fields": {
+            "min_delay": (0.5, None),
+            "max_delay": (1.0, None),
+            "draw_window": (1.0, None),
+        },
     },
     "hot_potato": {
         "table": "hot_potato_config",
         "defaults": {"min_timer": 10.0, "max_timer": 45.0},
-        "shared_fields": (
-            "cooldown_hours", "sentence_hours",
-            "channel_allowlist", "max_nick_length", "max_stakes_length",
-        ),
+        "fields": {"min_timer": (5.0, None), "max_timer": (10.0, None)},
     },
     "hot_potato_group": {
         "table": "hp_group_config",
@@ -676,18 +786,22 @@ _DUEL_GAMES: dict = {
             "min_fuse": 20.0, "max_fuse": 60.0, "min_hold": 2.0,
             "min_players": 2, "max_players": 10,
         },
-        "shared_fields": (
-            "cooldown_hours", "sentence_hours",
-            "channel_allowlist", "max_nick_length", "max_stakes_length",
-        ),
+        "fields": {
+            "min_fuse": (5.0, None),
+            "max_fuse": (10.0, None),
+            "min_hold": (0.0, None),
+            "min_players": (2, None),
+            "max_players": (2, None),
+        },
     },
     "chicken": {
         "table": "chicken_config",
         "defaults": {"climb_duration": 25.0, "min_players": 2, "max_players": 8},
-        "shared_fields": (
-            "cooldown_hours", "sentence_hours",
-            "channel_allowlist", "max_nick_length", "max_stakes_length",
-        ),
+        "fields": {
+            "climb_duration": (5.0, None),
+            "min_players": (2, None),
+            "max_players": (2, None),
+        },
     },
     "musical_chairs": {
         "table": "mc_config",
@@ -695,10 +809,15 @@ _DUEL_GAMES: dict = {
             "min_music": 5.0, "max_music": 15.0, "scramble_window": 8.0,
             "false_start_elim": 1, "min_players": 3, "max_players": 10,
         },
-        "shared_fields": (
-            "cooldown_hours", "sentence_hours",
-            "channel_allowlist", "max_nick_length", "max_stakes_length",
-        ),
+        # Insertion order is the order the UPDATE's SET clause is built in.
+        "fields": {
+            "min_music": (2.0, None),
+            "max_music": (3.0, None),
+            "scramble_window": (2.0, None),
+            "false_start_elim": "bool",
+            "min_players": (3, None),
+            "max_players": (3, None),
+        },
     },
 }
 
@@ -726,13 +845,64 @@ def _duel_game_table_row(conn, guild_id: int, table: str | None, defaults: dict)
 def _duel_game_section(conn, guild_id: int, game_key: str) -> dict:
     spec = _DUEL_GAMES[game_key]
     shared = _duel_shared_row(conn, guild_id, game_key)
-    out = {f: shared[f] for f in spec["shared_fields"]}
-    if "channel_allowlist" in out:
-        out["channel_allowlist"] = [
-            str(i) for i in json.loads(out["channel_allowlist"] or "[]")
-        ]
+    out = {f: shared[f] for f in _DUEL_SHARED_DEFAULTS}
+    out["channel_allowlist"] = [
+        str(i) for i in json.loads(out["channel_allowlist"] or "[]")
+    ]
     out.update(_duel_game_table_row(conn, guild_id, spec["table"], spec["defaults"]))
     return out
+
+
+def _duel_shared_updates(body) -> dict:
+    """The five knobs every duel game shares, clamped.
+
+    Written out rather than table-driven so the bounds stay greppable — they
+    are the contract, and they used to be copy-pasted into all six handlers.
+    """
+    out: dict = {}
+    if body.cooldown_hours is not None:
+        out["cooldown_hours"] = max(0, body.cooldown_hours)
+    if body.sentence_hours is not None:
+        out["sentence_hours"] = max(1, body.sentence_hours)
+    allowlist = _clamp_channel_allowlist(body.channel_allowlist)
+    if allowlist is not None:
+        out["channel_allowlist"] = allowlist
+    if body.max_nick_length is not None:
+        out["max_nick_length"] = max(1, min(32, body.max_nick_length))
+    if body.max_stakes_length is not None:
+        out["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
+    return out
+
+
+def _duel_game_updates(body, game_key: str) -> dict:
+    """The per-game knobs, clamped per ``_DUEL_GAMES[game_key]["fields"]``."""
+    out: dict = {}
+    for field, rule in _DUEL_GAMES[game_key]["fields"].items():
+        value = getattr(body, field, None)
+        if value is None:
+            continue
+        if rule == "bool":
+            out[field] = 1 if value else 0
+        else:
+            low, high = rule
+            value = max(low, value)
+            out[field] = value if high is None else min(high, value)
+    return out
+
+
+async def _save_duel_game(request, game_key: str, body) -> dict:
+    """Shared body of the six /config/games-* handlers."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        shared = _duel_shared_updates(body)
+        game = _duel_game_updates(body, game_key)
+        with ctx.open_db() as conn:
+            _duel_game_upsert(conn, guild_id, game_key, shared, game)
+        return {"ok": True}
+
+    return await run_query(_q)
 
 
 def _duel_game_upsert(
@@ -797,9 +967,7 @@ def _nsfw_classifier_section(conn, guild_id: int) -> dict:
         "sfw_log_channel_id": get_config_value(
             conn, CONFIG_KEY_SFW_LOG_CHANNEL, "0", guild_id
         ),
-        "sfw_exempt_channels": [
-            str(i) for i in _id_set_list(conn, CONFIG_BUCKET_SFW_EXEMPT, guild_id)
-        ],
+        "sfw_exempt_channels": _id_str_list(conn, CONFIG_BUCKET_SFW_EXEMPT, guild_id),
     }
 
 
@@ -881,11 +1049,10 @@ def _voice_transcription_section(conn, guild_id: int) -> dict:
 
 
 def _bump_tracker_section(conn, guild_id: int) -> dict:
-    import time as _time
     cfg = _bump_get_config(conn, guild_id)
     site_rows = _bump_list_sites(conn, guild_id)
     logs = _bump_get_all_logs(conn, guild_id)
-    now = _time.time()
+    now = time.time()
 
     detector_by_name = {
         r["site_name"]: {
@@ -961,6 +1128,218 @@ def _confessions_section(guild_id: int, bot, conn) -> dict:
 # ── GET: full config snapshot ──────────────────────────────────────────
 
 
+def _global_section(conn, guild_id: int) -> dict:
+    return {
+            "guild_id": _int_val(conn, "guild_id", guild_id=guild_id),
+            "tz_offset_hours": _float_val(
+                conn, "tz_offset_hours", guild_id=guild_id
+            ),
+            "mod_channel_id": _id_str(conn, "mod_channel_id", guild_id),
+            "bypass_role_ids": _id_str_list(conn, "bypass_role_ids", guild_id),
+            "recorded_bot_user_ids": _id_str_list(conn, "recorded_bot_user_ids", guild_id),
+            "booster_swatch_dir": _str_val(
+                conn, "booster_swatch_dir", guild_id=guild_id
+            ),
+        }
+
+
+def _privacy_section(conn, guild_id: int) -> dict:
+    return {
+            # "none" (default) keeps only derivations (XP/sentiment/
+            # interactions); "all" archives raw message content.
+            "message_storage_level": _str_val(
+                conn,
+                "message_storage_level",
+                STORAGE_LEVEL_NONE,
+                guild_id=guild_id,
+            ),
+        }
+
+
+def _welcome_section(conn, guild_id: int) -> dict:
+    from bot_modules.services.welcome_service import (
+        DEFAULT_LEAVE_MESSAGE,
+        DEFAULT_WELCOME_MESSAGE,
+    )
+
+    return {
+            "welcome_channel_id": _id_str(conn, "welcome_channel_id", guild_id),
+            "welcome_message": _str_val(
+                conn,
+                "welcome_message",
+                DEFAULT_WELCOME_MESSAGE,
+                guild_id=guild_id,
+            ),
+            "welcome_ping_role_id": _id_str(conn, "welcome_ping_role_id", guild_id),
+            "welcome_ping_member": _bool_val(
+                conn, "welcome_ping_member", guild_id=guild_id
+            ),
+            "welcome_trigger": _str_val(
+                conn, "welcome_trigger", "join", guild_id=guild_id
+            ),
+            "unverified_role_id": _id_str(conn, "unverified_role_id", guild_id),
+            "leave_channel_id": _id_str(conn, "leave_channel_id", guild_id),
+            "leave_message": _str_val(
+                conn,
+                "leave_message",
+                DEFAULT_LEAVE_MESSAGE,
+                guild_id=guild_id,
+            ),
+            "greeter_role_id": _id_str(conn, "greeter_role_id", guild_id),
+            "greeter_chat_channel_id": _id_str(conn, "greeter_chat_channel_id", guild_id),
+            "server_guide_channel_id": _id_str(conn, "server_guide_channel_id", guild_id),
+            "join_leave_log_channel_id": _id_str(
+                conn,
+                "join_leave_log_channel_id",
+                guild_id,
+                default=_int_val(conn, "leave_channel_id", guild_id=guild_id),
+            ),
+        }
+
+
+def _intake_section(conn, guild_id: int) -> dict:
+    return {
+            "enabled": _bool_val(conn, "intake_enabled", guild_id=guild_id),
+            "channel_id": _id_str(conn, "intake_channel_id", guild_id),
+            "completion_code": _str_val(
+                conn, "intake_completion_code", guild_id=guild_id
+            ),
+            "verified_role_id": str(
+                intake_svc.verified_role_id(conn, guild_id)
+            ),
+            # Derived, read-only: where a greeting counts (greeter
+            # chat, else the welcome channel) so the panel can name it
+            # instead of implying the card channel is watched.
+            "greet_channel_id": str(
+                intake_svc.greet_channel_id(conn, guild_id)
+            ),
+            "stale_hours": intake_svc.stale_hours(conn, guild_id),
+            # Effective step list (config, or defaults when unset) —
+            # what a card created right now would snapshot.
+            "steps": [
+                {
+                    "key": s.key,
+                    "label": s.label,
+                    "auto": s.auto_kind,
+                    "role_id": str(s.auto_role_id),
+                    "code": s.code,
+                }
+                for s in intake_svc.step_config(conn, guild_id)
+            ],
+            "reference_channel_id": str(
+                intake_ref.reference_channel_id(conn, guild_id)
+            ),
+            "reference_blocks": [
+                {"kind": b.kind, "title": b.title, "body": b.body}
+                for b in intake_ref.blocks_config(conn, guild_id)
+            ],
+        }
+
+
+def _xp_section(conn, guild_id: int) -> dict:
+    return {
+            "level_5_role_id": _id_str(conn, "xp_level_5_role_id", guild_id),
+            "promotion_review_grant_role_id": _id_str(conn, "promotion_review_grant_role_id", guild_id),
+            "level_5_log_channel_id": _id_str(conn, "xp_level_5_log_channel_id", guild_id),
+            "level_up_log_channel_id": _id_str(conn, "xp_level_up_log_channel_id", guild_id),
+            "xp_grant_allowed_user_ids": _id_str_list(conn, "xp_grant_allowed_user_ids", guild_id),
+            "xp_excluded_channel_ids": _id_str_list(conn, "xp_excluded_channel_ids", guild_id),
+            # Algorithm coefficients (loaded with defaults)
+            **_xp_coefficients(conn, guild_id),
+        }
+
+
+def _prune_section(conn, guild_id: int, guild) -> dict:
+    prune_rule = _get_prune_rule_with_conn(conn, guild_id)
+    exempt_users = [
+        {"id": str(uid), "name": _lookup_member_name(uid, guild, conn, guild_id)}
+        for uid in sorted(get_prune_exception_ids_with_conn(conn, guild_id))
+    ]
+
+    return {
+            "role_id": str(prune_rule["role_id"]) if prune_rule else "0",
+            "inactivity_days": prune_rule["inactivity_days"]
+            if prune_rule
+            else 0,
+            "exemptions": exempt_users,
+        }
+
+
+def _moderation_section(conn, guild_id: int) -> dict:
+    return {
+            "jailed_role_id": _id_str(conn, "jailed_role_id", guild_id),
+            "jail_category_id": _id_str(conn, "jail_category_id", guild_id),
+            "ticket_category_id": _id_str(conn, "ticket_category_id", guild_id),
+            "log_channel_id": _id_str(conn, "log_channel_id", guild_id),
+            "transcript_channel_id": _id_str(conn, "transcript_channel_id", guild_id),
+            "mod_role_ids": _str_val(
+                conn, "mod_role_ids", guild_id=guild_id
+            ),
+            "admin_role_ids": _str_val(
+                conn, "admin_role_ids", guild_id=guild_id
+            ),
+            "ticket_notify_on_create": _str_val(
+                conn,
+                "ticket_notify_on_create",
+                "1",
+                guild_id=guild_id,
+            ),
+            "warning_threshold": _int_val(
+                conn, "warning_threshold", 3, guild_id=guild_id
+            ),
+        }
+
+
+def _roles_section(conn, guild_id: int) -> dict:
+    grant_roles = get_grant_roles(conn, guild_id)
+
+    return {
+            name: {
+                "label": cfg["label"],
+                "role_id": str(cfg["role_id"]),
+                "log_channel_id": str(cfg["log_channel_id"]),
+                "announce_channel_id": str(cfg["announce_channel_id"]),
+                "grant_message": cfg["grant_message"],
+                "required_role_id": str(cfg["required_role_id"]),
+                "permissions": [
+                    {"entity_type": et, "entity_id": str(eid)}
+                    for et, eid in get_grant_permissions(
+                        conn, guild_id, name
+                    )
+                ],
+            }
+            for name, cfg in grant_roles.items()
+        }
+
+
+def _booster_roles_section(conn, guild_id: int) -> list:
+    return [
+        {
+            "role_key": r["role_key"],
+            "label": r["label"],
+            "role_id": str(r["role_id"]),
+            "image_path": r["image_path"],
+            "sort_order": r["sort_order"],
+        }
+        for r in get_booster_roles(conn, guild_id)
+    ]
+
+
+def _auto_delete_section(conn, guild_id: int) -> list:
+    return [
+        {
+            "channel_id": str(r["channel_id"]),
+            "max_age_seconds": int(r["max_age_seconds"]),
+            "interval_seconds": int(r["interval_seconds"]),
+            "last_run_ts": float(r["last_run_ts"]),
+            "media_only": bool(r["media_only"]),
+            "max_age_display": _fmt_dur(int(r["max_age_seconds"])),
+            "interval_display": _fmt_dur(int(r["interval_seconds"])),
+        }
+        for r in list_auto_delete_rules_for_guild_with_conn(conn, guild_id)
+    ]
+
+
 @router.get("/config")
 async def get_config(
     request: Request,
@@ -971,273 +1350,33 @@ async def get_config(
 
     def _q():
         with ctx.open_db() as conn:
-            from bot_modules.services.welcome_service import (
-                DEFAULT_LEAVE_MESSAGE,
-                DEFAULT_WELCOME_MESSAGE,
-            )
-
-            prune_rule = _get_prune_rule(ctx.db_path, guild_id)
-            prune_exempt_ids = get_prune_exception_ids(ctx.db_path, guild_id)
-            grant_roles = get_grant_roles(conn, guild_id)
+            # Only what more than one section below needs; everything else
+            # each section reads for itself.
             booster_panel_refs = get_booster_panel_refs(conn, guild_id)
-
             bot = getattr(ctx, "bot", None)
             prune_guild = bot.get_guild(guild_id) if bot is not None else None
 
-            exempt_users = [
-                {"id": str(uid), "name": _lookup_member_name(uid, prune_guild, conn, guild_id)}
-                for uid in sorted(prune_exempt_ids)
-            ]
-
             return {
-                "global": {
-                    "guild_id": _int_val(conn, "guild_id", guild_id=guild_id),
-                    "tz_offset_hours": _float_val(
-                        conn, "tz_offset_hours", guild_id=guild_id
-                    ),
-                    "mod_channel_id": str(
-                        _int_val(conn, "mod_channel_id", guild_id=guild_id)
-                    ),
-                    "bypass_role_ids": [
-                        str(i) for i in _id_set_list(conn, "bypass_role_ids", guild_id)
-                    ],
-                    "recorded_bot_user_ids": [
-                        str(i)
-                        for i in _id_set_list(
-                            conn, "recorded_bot_user_ids", guild_id
-                        )
-                    ],
-                    "booster_swatch_dir": _str_val(
-                        conn, "booster_swatch_dir", guild_id=guild_id
-                    ),
-                },
-                "privacy": {
-                    # "none" (default) keeps only derivations (XP/sentiment/
-                    # interactions); "all" archives raw message content.
-                    "message_storage_level": _str_val(
-                        conn,
-                        "message_storage_level",
-                        STORAGE_LEVEL_NONE,
-                        guild_id=guild_id,
-                    ),
-                },
-                "welcome": {
-                    "welcome_channel_id": str(
-                        _int_val(conn, "welcome_channel_id", guild_id=guild_id)
-                    ),
-                    "welcome_message": _str_val(
-                        conn,
-                        "welcome_message",
-                        DEFAULT_WELCOME_MESSAGE,
-                        guild_id=guild_id,
-                    ),
-                    "welcome_ping_role_id": str(
-                        _int_val(conn, "welcome_ping_role_id", guild_id=guild_id)
-                    ),
-                    "welcome_ping_member": _bool_val(
-                        conn, "welcome_ping_member", guild_id=guild_id
-                    ),
-                    "welcome_trigger": _str_val(
-                        conn, "welcome_trigger", "join", guild_id=guild_id
-                    ),
-                    "unverified_role_id": str(
-                        _int_val(conn, "unverified_role_id", guild_id=guild_id)
-                    ),
-                    "leave_channel_id": str(
-                        _int_val(conn, "leave_channel_id", guild_id=guild_id)
-                    ),
-                    "leave_message": _str_val(
-                        conn,
-                        "leave_message",
-                        DEFAULT_LEAVE_MESSAGE,
-                        guild_id=guild_id,
-                    ),
-                    "greeter_role_id": str(
-                        _int_val(conn, "greeter_role_id", guild_id=guild_id)
-                    ),
-                    "greeter_chat_channel_id": str(
-                        _int_val(conn, "greeter_chat_channel_id", guild_id=guild_id)
-                    ),
-                    "server_guide_channel_id": str(
-                        _int_val(conn, "server_guide_channel_id", guild_id=guild_id)
-                    ),
-                    "join_leave_log_channel_id": str(
-                        _int_val(
-                            conn,
-                            "join_leave_log_channel_id",
-                            _int_val(conn, "leave_channel_id", guild_id=guild_id),
-                            guild_id=guild_id,
-                        )
-                    ),
-                },
-                "intake": {
-                    "enabled": _bool_val(conn, "intake_enabled", guild_id=guild_id),
-                    "channel_id": str(
-                        _int_val(conn, "intake_channel_id", guild_id=guild_id)
-                    ),
-                    "completion_code": _str_val(
-                        conn, "intake_completion_code", guild_id=guild_id
-                    ),
-                    "verified_role_id": str(
-                        intake_svc.verified_role_id(conn, guild_id)
-                    ),
-                    # Derived, read-only: where a greeting counts (greeter
-                    # chat, else the welcome channel) so the panel can name it
-                    # instead of implying the card channel is watched.
-                    "greet_channel_id": str(
-                        intake_svc.greet_channel_id(conn, guild_id)
-                    ),
-                    "stale_hours": intake_svc.stale_hours(conn, guild_id),
-                    # Effective step list (config, or defaults when unset) —
-                    # what a card created right now would snapshot.
-                    "steps": [
-                        {
-                            "key": s.key,
-                            "label": s.label,
-                            "auto": s.auto_kind,
-                            "role_id": str(s.auto_role_id),
-                            "code": s.code,
-                        }
-                        for s in intake_svc.step_config(conn, guild_id)
-                    ],
-                    "reference_channel_id": str(
-                        intake_ref.reference_channel_id(conn, guild_id)
-                    ),
-                    "reference_blocks": [
-                        {"kind": b.kind, "title": b.title, "body": b.body}
-                        for b in intake_ref.blocks_config(conn, guild_id)
-                    ],
-                },
-                "xp": {
-                    "level_5_role_id": str(
-                        _int_val(conn, "xp_level_5_role_id", guild_id=guild_id)
-                    ),
-                    "promotion_review_grant_role_id": str(
-                        _int_val(
-                            conn, "promotion_review_grant_role_id", guild_id=guild_id
-                        )
-                    ),
-                    "level_5_log_channel_id": str(
-                        _int_val(
-                            conn, "xp_level_5_log_channel_id", guild_id=guild_id
-                        )
-                    ),
-                    "level_up_log_channel_id": str(
-                        _int_val(
-                            conn, "xp_level_up_log_channel_id", guild_id=guild_id
-                        )
-                    ),
-                    "xp_grant_allowed_user_ids": [
-                        str(i)
-                        for i in _id_set_list(
-                            conn, "xp_grant_allowed_user_ids", guild_id
-                        )
-                    ],
-                    "xp_excluded_channel_ids": [
-                        str(i)
-                        for i in _id_set_list(
-                            conn, "xp_excluded_channel_ids", guild_id
-                        )
-                    ],
-                    # Algorithm coefficients (loaded with defaults)
-                    **_xp_coefficients(conn, guild_id),
-                },
-                "prune": {
-                    "role_id": str(prune_rule["role_id"]) if prune_rule else "0",
-                    "inactivity_days": prune_rule["inactivity_days"]
-                    if prune_rule
-                    else 0,
-                    "exemptions": exempt_users,
-                },
+                "global": _global_section(conn, guild_id),
+                "privacy": _privacy_section(conn, guild_id),
+                "welcome": _welcome_section(conn, guild_id),
+                "intake": _intake_section(conn, guild_id),
+                "xp": _xp_section(conn, guild_id),
+                "prune": _prune_section(conn, guild_id, prune_guild),
                 "spoiler": {
-                    "spoiler_required_channels": [
-                        str(i)
-                        for i in _id_set_list(
-                            conn, "spoiler_required_channels", guild_id
-                        )
-                    ],
+                    "spoiler_required_channels": _id_str_list(conn, "spoiler_required_channels", guild_id),
                 },
                 "nsfw_classifier": _nsfw_classifier_section(conn, guild_id),
                 "auto_role": {
-                    "auto_role_ids": [
-                        str(i)
-                        for i in _id_set_list(conn, "auto_role_ids", guild_id)
-                    ],
+                    "auto_role_ids": _id_str_list(conn, "auto_role_ids", guild_id),
                 },
-                "moderation": {
-                    "jailed_role_id": str(
-                        _int_val(conn, "jailed_role_id", guild_id=guild_id)
-                    ),
-                    "jail_category_id": str(
-                        _int_val(conn, "jail_category_id", guild_id=guild_id)
-                    ),
-                    "ticket_category_id": str(
-                        _int_val(conn, "ticket_category_id", guild_id=guild_id)
-                    ),
-                    "log_channel_id": str(
-                        _int_val(conn, "log_channel_id", guild_id=guild_id)
-                    ),
-                    "transcript_channel_id": str(
-                        _int_val(conn, "transcript_channel_id", guild_id=guild_id)
-                    ),
-                    "mod_role_ids": _str_val(
-                        conn, "mod_role_ids", guild_id=guild_id
-                    ),
-                    "admin_role_ids": _str_val(
-                        conn, "admin_role_ids", guild_id=guild_id
-                    ),
-                    "ticket_notify_on_create": _str_val(
-                        conn,
-                        "ticket_notify_on_create",
-                        "1",
-                        guild_id=guild_id,
-                    ),
-                    "warning_threshold": _int_val(
-                        conn, "warning_threshold", 3, guild_id=guild_id
-                    ),
-                },
-                "roles": {
-                    name: {
-                        "label": cfg["label"],
-                        "role_id": str(cfg["role_id"]),
-                        "log_channel_id": str(cfg["log_channel_id"]),
-                        "announce_channel_id": str(cfg["announce_channel_id"]),
-                        "grant_message": cfg["grant_message"],
-                        "required_role_id": str(cfg["required_role_id"]),
-                        "permissions": [
-                            {"entity_type": et, "entity_id": str(eid)}
-                            for et, eid in get_grant_permissions(
-                                conn, guild_id, name
-                            )
-                        ],
-                    }
-                    for name, cfg in grant_roles.items()
-                },
-                "booster_roles": [
-                    {
-                        "role_key": r["role_key"],
-                        "label": r["label"],
-                        "role_id": str(r["role_id"]),
-                        "image_path": r["image_path"],
-                        "sort_order": r["sort_order"],
-                    }
-                    for r in get_booster_roles(conn, guild_id)
-                ],
+                "moderation": _moderation_section(conn, guild_id),
+                "roles": _roles_section(conn, guild_id),
+                "booster_roles": _booster_roles_section(conn, guild_id),
                 "booster_panel_channel_id": (
                     str(booster_panel_refs[0][0]) if booster_panel_refs else "0"
                 ),
-                "auto_delete": [
-                    {
-                        "channel_id": str(r["channel_id"]),
-                        "max_age_seconds": int(r["max_age_seconds"]),
-                        "interval_seconds": int(r["interval_seconds"]),
-                        "last_run_ts": float(r["last_run_ts"]),
-                        "media_only": bool(r["media_only"]),
-                        "max_age_display": _fmt_dur(int(r["max_age_seconds"])),
-                        "interval_display": _fmt_dur(int(r["interval_seconds"])),
-                    }
-                    for r in list_auto_delete_rules_for_guild_with_conn(conn, guild_id)
-                ],
+                "auto_delete": _auto_delete_section(conn, guild_id),
                 "bulk_cleanup": _bulk_cleanup_section(conn, guild_id),
                 "confessions": _confessions_section(guild_id, bot, conn),
                 "dms": _dms_section_with_conn(conn, guild_id),
@@ -1285,6 +1424,12 @@ class GlobalConfigUpdate(BaseModel):
     booster_swatch_dir: str | None = None
 
 
+_GLOBAL_FIELDS = {
+    "tz_offset_hours": ("tz_offset_hours", str),
+    "mod_channel_id": ("mod_channel_id", _raw),
+}
+
+
 @router.put("/config/global")
 async def update_global(
     request: Request,
@@ -1296,22 +1441,15 @@ async def update_global(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.tz_offset_hours is not None:
-                set_config_value(
-                    conn, "tz_offset_hours", str(body.tz_offset_hours), guild_id
-                )
-            if body.mod_channel_id is not None:
-                set_config_value(
-                    conn, "mod_channel_id", body.mod_channel_id, guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _GLOBAL_FIELDS)
             if body.bypass_role_ids is not None:
-                clear_config_id_bucket(conn, "bypass_role_ids", guild_id)
-                for rid in body.bypass_role_ids:
-                    add_config_id(conn, "bypass_role_ids", int(rid), guild_id)
+                replace_config_id_bucket(
+                    conn, "bypass_role_ids", body.bypass_role_ids, guild_id
+                )
             if body.recorded_bot_user_ids is not None:
-                clear_config_id_bucket(conn, "recorded_bot_user_ids", guild_id)
-                for uid in body.recorded_bot_user_ids:
-                    add_config_id(conn, "recorded_bot_user_ids", int(uid), guild_id)
+                replace_config_id_bucket(
+                    conn, "recorded_bot_user_ids", body.recorded_bot_user_ids, guild_id
+                )
             if body.booster_swatch_dir is not None:
                 # booster_swatch_dir is a single host filesystem path read
                 # globally (guild_id=0); pin the write there to avoid a
@@ -1549,6 +1687,15 @@ def _code_clash_message(clash: tuple[tuple[str, str], tuple[str, str]]) -> str:
     )
 
 
+_INTAKE_FIELDS = {
+    "enabled": ("intake_enabled", _flag),
+    "channel_id": ("intake_channel_id", _raw),
+    "verified_role_id": (intake_svc.VERIFIED_ROLE_KEY, _raw),
+    "completion_code": ("intake_completion_code", lambda v: v.strip()),
+    "stale_hours": ("intake_stale_hours", str),
+}
+
+
 @router.put("/config/intake")
 async def update_intake(
     request: Request,
@@ -1586,30 +1733,7 @@ async def update_intake(
                 )
                 if clash is not None:
                     raise HTTPException(422, _code_clash_message(clash))
-            if body.enabled is not None:
-                set_config_value(
-                    conn, "intake_enabled", "1" if body.enabled else "0", guild_id
-                )
-            if body.channel_id is not None:
-                set_config_value(conn, "intake_channel_id", body.channel_id, guild_id)
-            if body.verified_role_id is not None:
-                set_config_value(
-                    conn,
-                    intake_svc.VERIFIED_ROLE_KEY,
-                    body.verified_role_id,
-                    guild_id,
-                )
-            if body.completion_code is not None:
-                set_config_value(
-                    conn,
-                    "intake_completion_code",
-                    body.completion_code.strip(),
-                    guild_id,
-                )
-            if body.stale_hours is not None:
-                set_config_value(
-                    conn, "intake_stale_hours", str(body.stale_hours), guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _INTAKE_FIELDS)
             if steps_json is not None:
                 set_config_value(conn, "intake_steps", steps_json, guild_id)
         return {"ok": True}
@@ -1668,14 +1792,10 @@ async def update_intake_reference(
     return {"ok": True, "sync": sync}
 
 
-class IntakeReferenceImport(BaseModel):
-    channel_id: str
-
-
 @router.post("/config/intake/reference/import")
 async def import_intake_reference(
     request: Request,
-    body: IntakeReferenceImport,
+    body: ChannelIdBody,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     """One-time seed: read a channel's existing messages into draft blocks.
@@ -1852,6 +1972,14 @@ class XpConfigUpdate(BaseModel):
     level_curve_factor: float | None = None
 
 
+_XP_ID_FIELDS = {
+    "level_5_role_id": ("xp_level_5_role_id", _raw),
+    "promotion_review_grant_role_id": ("promotion_review_grant_role_id", _raw),
+    "level_5_log_channel_id": ("xp_level_5_log_channel_id", _raw),
+    "level_up_log_channel_id": ("xp_level_up_log_channel_id", _raw),
+}
+
+
 @router.put("/config/xp")
 async def update_xp(
     request: Request,
@@ -1863,66 +1991,24 @@ async def update_xp(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.level_5_role_id is not None:
-                set_config_value(
-                    conn, "xp_level_5_role_id", body.level_5_role_id, guild_id
-                )
-            if body.promotion_review_grant_role_id is not None:
-                set_config_value(
-                    conn,
-                    "promotion_review_grant_role_id",
-                    body.promotion_review_grant_role_id,
-                    guild_id,
-                )
-            if body.level_5_log_channel_id is not None:
-                set_config_value(
-                    conn,
-                    "xp_level_5_log_channel_id",
-                    body.level_5_log_channel_id,
-                    guild_id,
-                )
-            if body.level_up_log_channel_id is not None:
-                set_config_value(
-                    conn,
-                    "xp_level_up_log_channel_id",
-                    body.level_up_log_channel_id,
-                    guild_id,
-                )
+            _apply_config_fields(conn, guild_id, body, _XP_ID_FIELDS)
             if body.xp_grant_allowed_user_ids is not None:
-                clear_config_id_bucket(
-                    conn, "xp_grant_allowed_user_ids", guild_id
+                replace_config_id_bucket(
+                    conn,
+                    "xp_grant_allowed_user_ids",
+                    body.xp_grant_allowed_user_ids,
+                    guild_id,
                 )
-                for uid in body.xp_grant_allowed_user_ids:
-                    add_config_id(
-                        conn, "xp_grant_allowed_user_ids", int(uid), guild_id
-                    )
             if body.xp_excluded_channel_ids is not None:
-                clear_config_id_bucket(
-                    conn, "xp_excluded_channel_ids", guild_id
+                replace_config_id_bucket(
+                    conn,
+                    "xp_excluded_channel_ids",
+                    body.xp_excluded_channel_ids,
+                    guild_id,
                 )
-                for cid in body.xp_excluded_channel_ids:
-                    add_config_id(
-                        conn, "xp_excluded_channel_ids", int(cid), guild_id
-                    )
 
             # Persist algorithm coefficients
-            _COEFF_FIELDS = [
-                "message_word_xp",
-                "reply_bonus_xp",
-                "image_reaction_received_xp",
-                "reaction_given_xp",
-                "cooldown_thresholds_seconds",
-                "cooldown_multipliers",
-                "duplicate_multiplier",
-                "pair_streak_threshold",
-                "pair_streak_multiplier",
-                "voice_award_xp",
-                "voice_interval_seconds",
-                "voice_min_humans",
-                "manual_grant_xp",
-                "level_curve_factor",
-            ]
-            for field_name in _COEFF_FIELDS:
+            for field_name in _XP_COEFF_READERS:
                 val = getattr(body, field_name, None)
                 if val is not None:
                     set_config_value(
@@ -2028,8 +2114,6 @@ async def preview_prune(
     Does not perform any role changes. Uses saved exemptions unless
     ``exempt_user_ids`` is provided (allows preview of unsaved changes).
     """
-    import time as _time
-
     from bot_modules.core.xp_system import get_member_last_activity_map
 
     ctx = get_ctx(request)
@@ -2064,7 +2148,7 @@ async def preview_prune(
 
     activity_map = await run_query(_q)
 
-    now_ts = _time.time()
+    now_ts = time.time()
     cutoff_ts = now_ts - inactivity_days * 86400
 
     to_prune: list[dict] = []
@@ -2152,6 +2236,12 @@ class RulesWatchConfigUpdate(BaseModel):
     channel_id: str | None = None
 
 
+_RULES_WATCH_FIELDS = {
+    "enabled": ("rules_watch_enabled", _flag),
+    "channel_id": ("rules_watch_channel_id", _raw),
+}
+
+
 @router.put("/config/rules-watch")
 async def update_rules_watch(
     request: Request,
@@ -2170,17 +2260,7 @@ async def update_rules_watch(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.enabled is not None:
-                set_config_value(
-                    conn,
-                    "rules_watch_enabled",
-                    "1" if body.enabled else "0",
-                    guild_id,
-                )
-            if body.channel_id is not None:
-                set_config_value(
-                    conn, "rules_watch_channel_id", body.channel_id, guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _RULES_WATCH_FIELDS)
         return {"ok": True}
 
     return await run_query(_q)
@@ -2190,6 +2270,16 @@ class InactiveConfigUpdate(BaseModel):
     threshold_days: int | None = None
     auto_sweep: bool | None = None
     sweep_cap: int | None = None
+
+
+_INACTIVE_FIELDS = {
+    "threshold_days": (
+        "inactive_threshold_days",
+        lambda v: str(max(1, min(3650, v))),
+    ),
+    "auto_sweep": ("inactive_auto_sweep", _flag),
+    "sweep_cap": ("inactive_sweep_cap", lambda v: str(max(1, min(200, v)))),
+}
 
 
 @router.put("/config/inactive")
@@ -2208,21 +2298,7 @@ async def update_inactive(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.threshold_days is not None:
-                set_config_value(
-                    conn,
-                    "inactive_threshold_days",
-                    str(max(1, min(3650, body.threshold_days))),
-                    guild_id,
-                )
-            if body.auto_sweep is not None:
-                set_config_value(
-                    conn, "inactive_auto_sweep", "1" if body.auto_sweep else "0", guild_id
-                )
-            if body.sweep_cap is not None:
-                set_config_value(
-                    conn, "inactive_sweep_cap", str(max(1, min(200, body.sweep_cap))), guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _INACTIVE_FIELDS)
         return {"ok": True}
 
     return await run_query(_q)
@@ -2270,14 +2346,10 @@ async def delete_inactive_exemption(
     return await run_query(_q)
 
 
-class InactiveChannelRequest(BaseModel):
-    channel_id: str
-
-
 @router.post("/config/inactive/channel")
 async def setup_inactive_channel_route(
     request: Request,
-    body: InactiveChannelRequest,
+    body: ChannelIdBody,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     """Point the inactive system at a channel and publish its info panel.
@@ -2288,25 +2360,13 @@ async def setup_inactive_channel_route(
     needed, grants it access here, and revokes it from the previous channel so
     that one doesn't stay visible to inactive members forever.
     """
-    import discord
 
     from bot_modules.inactive.sweep_service import setup_inactive_channel
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    bot = getattr(ctx, "bot", None)
-    if bot is None:
-        raise HTTPException(503, "Bot not available")
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        raise HTTPException(503, "Discord guild not available")
-    try:
-        channel_id = int(body.channel_id)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "Invalid channel_id")
-    channel = guild.get_channel(channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        raise HTTPException(400, "Channel must be a text channel in this guild")
+    guild = _guild_or_503(ctx, guild_id)
+    channel = _text_channel_or_400(guild, body.channel_id)
 
     ok, note = await setup_inactive_channel(ctx, guild, channel)
     if not ok:
@@ -2333,12 +2393,7 @@ async def run_inactive_sweep_route(
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    bot = getattr(ctx, "bot", None)
-    if bot is None:
-        raise HTTPException(503, "Bot not available")
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        raise HTTPException(503, "Discord guild not available")
+    guild = _guild_or_503(ctx, guild_id)
     if not read_inactive_channel_id(ctx, guild_id):
         raise HTTPException(
             400, "No inactive channel is set up yet — set one above first."
@@ -2482,7 +2537,10 @@ def _clamp_channel_allowlist(values: list[str] | None) -> str | None:
     return json.dumps(sorted({int(v) for v in values if str(v).strip()}))
 
 
-class PressureConfigUpdate(BaseModel):
+class DuelSharedConfigUpdate(BaseModel):
+    """The knobs every duel game shares. Enforced for all six in
+    bot_modules/duels/base_duel.py and base_game.py."""
+
     cooldown_hours: int | None = None
     sentence_hours: int | None = None
     channel_allowlist: list[str] | None = None
@@ -2490,132 +2548,22 @@ class PressureConfigUpdate(BaseModel):
     max_stakes_length: int | None = None
 
 
-@router.put("/config/games-pressure")
-async def update_games_pressure(
-    request: Request,
-    body: PressureConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "pressure", shared, {})
-        return {"ok": True}
-
-    return await run_query(_q)
+class PressureConfigUpdate(DuelSharedConfigUpdate):
+    pass
 
 
-class QuickdrawConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class QuickdrawConfigUpdate(DuelSharedConfigUpdate):
     min_delay: float | None = None
     max_delay: float | None = None
     draw_window: float | None = None
 
 
-@router.put("/config/games-quickdraw")
-async def update_games_quickdraw(
-    request: Request,
-    body: QuickdrawConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.min_delay is not None:
-            game["min_delay"] = max(0.5, body.min_delay)
-        if body.max_delay is not None:
-            game["max_delay"] = max(1.0, body.max_delay)
-        if body.draw_window is not None:
-            game["draw_window"] = max(1.0, body.draw_window)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "quickdraw", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-class HotPotatoConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class HotPotatoConfigUpdate(DuelSharedConfigUpdate):
     min_timer: float | None = None
     max_timer: float | None = None
 
 
-@router.put("/config/games-hot-potato")
-async def update_games_hot_potato(
-    request: Request,
-    body: HotPotatoConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.min_timer is not None:
-            game["min_timer"] = max(5.0, body.min_timer)
-        if body.max_timer is not None:
-            game["max_timer"] = max(10.0, body.max_timer)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "hot_potato", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-class HotPotatoGroupConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class HotPotatoGroupConfigUpdate(DuelSharedConfigUpdate):
     min_fuse: float | None = None
     max_fuse: float | None = None
     min_hold: float | None = None
@@ -2623,99 +2571,13 @@ class HotPotatoGroupConfigUpdate(BaseModel):
     max_players: int | None = None
 
 
-@router.put("/config/games-hot-potato-group")
-async def update_games_hot_potato_group(
-    request: Request,
-    body: HotPotatoGroupConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.min_fuse is not None:
-            game["min_fuse"] = max(5.0, body.min_fuse)
-        if body.max_fuse is not None:
-            game["max_fuse"] = max(10.0, body.max_fuse)
-        if body.min_hold is not None:
-            game["min_hold"] = max(0.0, body.min_hold)
-        if body.min_players is not None:
-            game["min_players"] = max(2, body.min_players)
-        if body.max_players is not None:
-            game["max_players"] = max(2, body.max_players)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "hot_potato_group", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-class ChickenConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class ChickenConfigUpdate(DuelSharedConfigUpdate):
     climb_duration: float | None = None
     min_players: int | None = None
     max_players: int | None = None
 
 
-@router.put("/config/games-chicken")
-async def update_games_chicken(
-    request: Request,
-    body: ChickenConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.climb_duration is not None:
-            game["climb_duration"] = max(5.0, body.climb_duration)
-        if body.min_players is not None:
-            game["min_players"] = max(2, body.min_players)
-        if body.max_players is not None:
-            game["max_players"] = max(2, body.max_players)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "chicken", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-class MusicalChairsConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class MusicalChairsConfigUpdate(DuelSharedConfigUpdate):
     min_music: float | None = None
     max_music: float | None = None
     scramble_window: float | None = None
@@ -2724,46 +2586,58 @@ class MusicalChairsConfigUpdate(BaseModel):
     max_players: int | None = None
 
 
+@router.put("/config/games-pressure")
+async def update_games_pressure(
+    request: Request,
+    body: PressureConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "pressure", body)
+
+
+@router.put("/config/games-quickdraw")
+async def update_games_quickdraw(
+    request: Request,
+    body: QuickdrawConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "quickdraw", body)
+
+
+@router.put("/config/games-hot-potato")
+async def update_games_hot_potato(
+    request: Request,
+    body: HotPotatoConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "hot_potato", body)
+
+
+@router.put("/config/games-hot-potato-group")
+async def update_games_hot_potato_group(
+    request: Request,
+    body: HotPotatoGroupConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "hot_potato_group", body)
+
+
+@router.put("/config/games-chicken")
+async def update_games_chicken(
+    request: Request,
+    body: ChickenConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "chicken", body)
+
+
 @router.put("/config/games-musical-chairs")
 async def update_games_musical_chairs(
     request: Request,
     body: MusicalChairsConfigUpdate,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.min_music is not None:
-            game["min_music"] = max(2.0, body.min_music)
-        if body.max_music is not None:
-            game["max_music"] = max(3.0, body.max_music)
-        if body.scramble_window is not None:
-            game["scramble_window"] = max(2.0, body.scramble_window)
-        if body.false_start_elim is not None:
-            game["false_start_elim"] = 1 if body.false_start_elim else 0
-        if body.min_players is not None:
-            game["min_players"] = max(3, body.min_players)
-        if body.max_players is not None:
-            game["max_players"] = max(3, body.max_players)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "musical_chairs", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
+    return await _save_duel_game(request, "musical_chairs", body)
 
 
 class GreetingWatchConfigUpdate(BaseModel):
@@ -2956,11 +2830,12 @@ async def update_spoiler(
     def _q():
         with ctx.open_db() as conn:
             if body.spoiler_required_channels is not None:
-                clear_config_id_bucket(conn, "spoiler_required_channels", guild_id)
-                for cid in body.spoiler_required_channels:
-                    add_config_id(
-                        conn, "spoiler_required_channels", int(cid), guild_id
-                    )
+                replace_config_id_bucket(
+                    conn,
+                    "spoiler_required_channels",
+                    body.spoiler_required_channels,
+                    guild_id,
+                )
         return {"ok": True}
 
     result = await run_query(_q)
@@ -2976,6 +2851,18 @@ class NsfwClassifierUpdate(BaseModel):
     sfw_mode: str | None = None
     sfw_log_channel_id: str | None = None
     sfw_exempt_channels: list[str] | None = None
+
+
+_NSFW_FIELDS = {
+    "threshold": (CONFIG_KEY_THRESHOLD, str),
+    "sfw_threshold": (CONFIG_KEY_SFW_THRESHOLD, str),
+    "labels": (CONFIG_KEY_LABEL_SET, lambda v: serialize_label_set(frozenset(v))),
+    "sfw_mode": (CONFIG_KEY_SFW_MODE, _raw),
+    "sfw_log_channel_id": (
+        CONFIG_KEY_SFW_LOG_CHANNEL,
+        lambda v: str(int(v or 0)),
+    ),
+}
 
 
 @router.put("/config/nsfw-classifier")
@@ -3019,34 +2906,11 @@ async def update_nsfw_classifier(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.threshold is not None:
-                set_config_value(
-                    conn, CONFIG_KEY_THRESHOLD, str(body.threshold), guild_id
-                )
-            if body.sfw_threshold is not None:
-                set_config_value(
-                    conn, CONFIG_KEY_SFW_THRESHOLD, str(body.sfw_threshold), guild_id
-                )
-            if body.labels is not None:
-                set_config_value(
-                    conn,
-                    CONFIG_KEY_LABEL_SET,
-                    serialize_label_set(frozenset(body.labels)),
-                    guild_id,
-                )
-            if body.sfw_mode is not None:
-                set_config_value(conn, CONFIG_KEY_SFW_MODE, body.sfw_mode, guild_id)
-            if body.sfw_log_channel_id is not None:
-                set_config_value(
-                    conn,
-                    CONFIG_KEY_SFW_LOG_CHANNEL,
-                    str(int(body.sfw_log_channel_id or 0)),
-                    guild_id,
-                )
+            _apply_config_fields(conn, guild_id, body, _NSFW_FIELDS)
             if body.sfw_exempt_channels is not None:
-                clear_config_id_bucket(conn, CONFIG_BUCKET_SFW_EXEMPT, guild_id)
-                for cid in body.sfw_exempt_channels:
-                    add_config_id(conn, CONFIG_BUCKET_SFW_EXEMPT, int(cid), guild_id)
+                replace_config_id_bucket(
+                    conn, CONFIG_BUCKET_SFW_EXEMPT, body.sfw_exempt_channels, guild_id
+                )
         return {"ok": True}
 
     return await run_query(_q)
@@ -3144,9 +3008,9 @@ async def update_auto_role(
     def _q():
         with ctx.open_db() as conn:
             if body.auto_role_ids is not None:
-                clear_config_id_bucket(conn, "auto_role_ids", guild_id)
-                for rid in body.auto_role_ids:
-                    add_config_id(conn, "auto_role_ids", int(rid), guild_id)
+                replace_config_id_bucket(
+                    conn, "auto_role_ids", body.auto_role_ids, guild_id
+                )
         return {"ok": True}
 
     result = await run_query(_q)
@@ -3207,35 +3071,23 @@ async def remove_booster_role(
     return await run_query(_q)
 
 
-class BoosterPanelPostRequest(BaseModel):
-    channel_id: str
-
-
 @router.post("/config/booster-roles/post-panel")
 async def post_booster_panel(
     request: Request,
-    body: BoosterPanelPostRequest,
+    body: ChannelIdBody,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     """Re-post the booster cosmetic role panel in the chosen channel."""
-    import discord
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
-    bot = getattr(ctx, "bot", None)
-    if bot is None:
-        raise HTTPException(503, "Bot not available")
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        raise HTTPException(503, "Discord guild not available")
-    try:
-        channel_id = int(body.channel_id)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "Invalid channel_id")
-    channel = guild.get_channel(channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        raise HTTPException(400, "Channel must be a text channel in this guild")
+    guild = _guild_or_503(ctx, guild_id)
+    channel = _text_channel_or_400(guild, body.channel_id)
+    # Attachments, not embeds — each role posts as an image file.
+    _require_post_permissions(
+        guild, channel, "view_channel", "send_messages", "attach_files"
+    )
 
     msgs = await post_or_update_booster_panel(ctx.db_path, guild, channel)
     if not msgs:
@@ -3252,12 +3104,7 @@ async def sync_booster_swatches(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
-    bot = getattr(ctx, "bot", None)
-    if bot is None:
-        raise HTTPException(503, "Bot not available")
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        raise HTTPException(503, "Discord guild not available")
+    guild = _guild_or_503(ctx, guild_id)
 
     try:
         created, removed = await sync_swatches(ctx.db_path, guild)
@@ -3284,10 +3131,18 @@ def _safe_swatch_name(filename: str | None) -> str:
 
 def _swatch_listing(db_path, guild_id: int) -> dict:
     managed = get_guild_swatch_dir(db_path, guild_id)
-    active = resolve_swatch_directory(db_path, guild_id)
+    files = swatch_file_info(managed)
+    # The valid-swatch count resolve_swatch_directory needs is already in
+    # ``files`` — handing it over saves a second walk of the same directory.
+    active = resolve_swatch_directory(
+        db_path,
+        guild_id,
+        managed=managed,
+        managed_valid_count=sum(1 for f in files if f["valid"]),
+    )
     return {
         "ok": True,
-        "files": swatch_file_info(managed),
+        "files": files,
         "managed_dir": str(managed),
         "active_dir": active,
         "using_managed": active == str(managed),
@@ -3302,7 +3157,10 @@ async def list_booster_swatches(
     """List uploaded swatch files in this guild's managed folder."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    return _swatch_listing(ctx.db_path, guild_id)
+    # Directory walk + a config read, so off the event loop. The upload and
+    # delete handlers below still call _swatch_listing inline (and upload
+    # writes up to 8 MB per file there too) — pre-existing, not fixed here.
+    return await run_query(lambda: _swatch_listing(ctx.db_path, guild_id))
 
 
 @router.post("/config/booster-roles/swatches")
@@ -3389,7 +3247,7 @@ async def get_quote_border(
     """Metadata about this guild's uploaded quote-card border."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    return _quote_border_meta(ctx.db_path, guild_id)
+    return await run_query(lambda: _quote_border_meta(ctx.db_path, guild_id))
 
 
 @router.get("/config/quote-border/image")
@@ -3661,7 +3519,7 @@ async def update_bump_tracker(
     guild_id = get_active_guild_id(request)
 
     def _q():
-        with open_db(ctx.db_path) as conn:
+        with ctx.open_db() as conn:
             _bump_upsert_config(
                 conn,
                 guild_id,
@@ -3685,7 +3543,7 @@ async def update_bump_tracker_site(
     guild_id = get_active_guild_id(request)
 
     def _q():
-        with open_db(ctx.db_path) as conn:
+        with ctx.open_db() as conn:
             _bump_add_site(
                 conn,
                 guild_id,
@@ -3711,7 +3569,7 @@ async def update_bump_tracker_detector(
     guild_id = get_active_guild_id(request)
 
     def _q():
-        with open_db(ctx.db_path) as conn:
+        with ctx.open_db() as conn:
             updated = _bump_set_detector(
                 conn,
                 guild_id,
@@ -3737,7 +3595,7 @@ async def delete_bump_tracker_site(
     guild_id = get_active_guild_id(request)
 
     def _q():
-        with open_db(ctx.db_path) as conn:
+        with ctx.open_db() as conn:
             _bump_remove_site(conn, guild_id, site_name)
         return {"ok": True}
 
@@ -3754,7 +3612,7 @@ async def log_bump_tracker_bump(
     guild_id = get_active_guild_id(request)
 
     def _q():
-        with open_db(ctx.db_path) as conn:
+        with ctx.open_db() as conn:
             sites = [r["site_name"] for r in _bump_list_sites(conn, guild_id)]
             if site_name not in sites:
                 raise HTTPException(status_code=404, detail="Site not found")
@@ -3797,7 +3655,7 @@ async def update_pen_pals_config(
         raise HTTPException(400, "Message must be 1000 characters or fewer")
 
     def _q() -> tuple[int, int]:
-        with open_db(ctx.db_path) as conn:
+        with ctx.open_db() as conn:
             existing = _pp_get_config(conn, guild_id)
             old_channel_id = int(existing["panel_channel_id"]) if existing and existing["panel_channel_id"] else 0
             old_message_id = int(existing["panel_message_id"]) if existing and existing["panel_message_id"] else 0
@@ -3856,7 +3714,7 @@ async def update_pen_pals_timers(
         raise HTTPException(400, "question_suppress_seconds cannot be negative")
 
     def _q():
-        with open_db(ctx.db_path) as conn:
+        with ctx.open_db() as conn:
             _pp_set_timers(
                 conn,
                 guild_id,
@@ -3900,7 +3758,7 @@ async def update_pen_pals_separations(
         pairs.append((a, b))
 
     def _q():
-        with open_db(ctx.db_path) as conn:
+        with ctx.open_db() as conn:
             _pp_set_admin_separations(conn, guild_id, pairs)
         return {"ok": True}
 
@@ -3932,7 +3790,7 @@ async def update_voice_transcription_config(
     channel_ids = tuple(int(c) for c in body.channel_ids if c)
 
     def _q() -> dict:
-        with open_db(ctx.db_path) as conn:
+        with ctx.open_db() as conn:
             _vt_set_config(
                 conn,
                 guild_id,
@@ -4019,26 +3877,35 @@ async def update_confessions(
     return await run_query(_q)
 
 
-@router.put("/config/confessions/block/{user_id}")
-async def block_confessions_user(
-    user_id: str,
-    request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
+async def _set_confessions_block(ctx, guild_id: int, user_id: str, blocked: bool):
+    """Add to or remove from the confessions blocklist — the two routes below
+    are the same read-modify-write with one set operation swapped."""
 
     def _q():
         cfg = _confessions_get_config(ctx.db_path, guild_id)
         if cfg is None:
             raise HTTPException(404, "Confessions not configured for this guild")
         s = cfg.blocked_set()
-        s.add(int(user_id))
+        if blocked:
+            s.add(int(user_id))
+        else:
+            s.discard(int(user_id))
         cfg.blocked_user_ids = sorted(s)
         _confessions_upsert_config(ctx.db_path, cfg)
         return {"ok": True}
 
     return await run_query(_q)
+
+
+@router.put("/config/confessions/block/{user_id}")
+async def block_confessions_user(
+    user_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _set_confessions_block(
+        get_ctx(request), get_active_guild_id(request), user_id, True
+    )
 
 
 @router.delete("/config/confessions/block/{user_id}")
@@ -4047,30 +3914,15 @@ async def unblock_confessions_user(
     request: Request,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        cfg = _confessions_get_config(ctx.db_path, guild_id)
-        if cfg is None:
-            raise HTTPException(404, "Confessions not configured for this guild")
-        s = cfg.blocked_set()
-        s.discard(int(user_id))
-        cfg.blocked_user_ids = sorted(s)
-        _confessions_upsert_config(ctx.db_path, cfg)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-class PostButtonRequest(BaseModel):
-    channel_id: str
+    return await _set_confessions_block(
+        get_ctx(request), get_active_guild_id(request), user_id, False
+    )
 
 
 @router.post("/config/confessions/post-button")
 async def post_confessions_button(
     request: Request,
-    body: PostButtonRequest,
+    body: ChannelIdBody,
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
@@ -4146,7 +3998,7 @@ async def update_dms(
 @router.post("/config/dms/post-panel")
 async def post_dms_panel(
     request: Request,
-    body: PostButtonRequest,
+    body: ChannelIdBody,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     import discord
@@ -4168,22 +4020,9 @@ async def post_dms_panel(
     channel = guild.get_channel(channel_id)
     if not isinstance(channel, discord.TextChannel):
         raise HTTPException(400, "Channel not found or not a text channel")
-    perms = channel.permissions_for(guild.me)
-    missing = [
-        label
-        for flag, label in (
-            (perms.view_channel, "View Channel"),
-            (perms.send_messages, "Send Messages"),
-            (perms.embed_links, "Embed Links"),
-        )
-        if not flag
-    ]
-    if missing:
-        raise HTTPException(
-            400,
-            f"The bot can't post in #{channel.name} — missing permissions: "
-            f"{', '.join(missing)}",
-        )
+    _require_post_permissions(
+        guild, channel, "view_channel", "send_messages", "embed_links"
+    )
 
     message_id = await cog.post_panel(guild, channel_id)
     if message_id is None:
@@ -4217,11 +4056,11 @@ async def update_starboard(
 
     def _q():
         with ctx.open_db() as conn:
-            row = _get_starboard_config(conn, guild_id)
-            channel_id = int(row["channel_id"]) if row else 0
-            threshold = int(row["threshold"]) if row else 3
-            emoji = row["emoji"] if row else "⭐"
-            enabled = int(row["enabled"]) if row else 1
+            cur = _starboard_row_or_defaults(conn, guild_id)
+            channel_id = cur["channel_id"]
+            threshold = cur["threshold"]
+            emoji = cur["emoji"]
+            enabled = int(cur["enabled"])
 
             if body.channel_id is not None:
                 channel_id = int(body.channel_id)
@@ -4247,11 +4086,9 @@ async def update_starboard(
             )
 
             if body.excluded_channels is not None:
-                clear_config_id_bucket(conn, _STARBOARD_EXCLUDED_BUCKET, guild_id)
-                for cid in body.excluded_channels:
-                    add_config_id(
-                        conn, _STARBOARD_EXCLUDED_BUCKET, int(cid), guild_id
-                    )
+                replace_config_id_bucket(
+                    conn, _STARBOARD_EXCLUDED_BUCKET, body.excluded_channels, guild_id
+                )
         return {"ok": True}
 
     return await run_query(_q)
@@ -4292,9 +4129,9 @@ async def update_bulk_cleanup(
             if body.age_days is not None:
                 set_config_value(conn, _AGE_DAYS_KEY, str(int(body.age_days)), guild_id)
             if body.excluded_channels is not None:
-                clear_config_id_bucket(conn, EXCLUDED_BUCKET, guild_id)
-                for cid in body.excluded_channels:
-                    add_config_id(conn, EXCLUDED_BUCKET, int(cid), guild_id)
+                replace_config_id_bucket(
+                    conn, EXCLUDED_BUCKET, body.excluded_channels, guild_id
+                )
         return {"ok": True}
 
     return await run_query(_q)
@@ -4312,6 +4149,14 @@ class BirthdayConfigUpdate(BaseModel):
     birthday_pin_2: bool | None = None
 
 
+_BIRTHDAY_FIELDS = {
+    "birthday_channel_id": ("birthday_channel_id", _raw),
+    "birthday_pin": ("birthday_pin", _flag),
+    "birthday_channel_id_2": ("birthday_channel_id_2", _raw),
+    "birthday_pin_2": ("birthday_pin_2", _flag),
+}
+
+
 @router.put("/config/birthday")
 async def update_birthday(
     request: Request,
@@ -4323,32 +4168,17 @@ async def update_birthday(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.birthday_channel_id is not None:
-                set_config_value(
-                    conn, "birthday_channel_id", body.birthday_channel_id, guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _BIRTHDAY_FIELDS)
             if body.birthday_message is not None:
                 msg = body.birthday_message.strip()
                 if not msg:
                     raise HTTPException(400, "Message cannot be empty")
                 set_config_value(conn, "birthday_message", msg, guild_id)
-            if body.birthday_pin is not None:
-                set_config_value(
-                    conn, "birthday_pin", "1" if body.birthday_pin else "0", guild_id
-                )
-            if body.birthday_channel_id_2 is not None:
-                set_config_value(
-                    conn, "birthday_channel_id_2", body.birthday_channel_id_2, guild_id
-                )
             if body.birthday_message_2 is not None:
                 msg2 = body.birthday_message_2.strip()
                 if not msg2:
                     raise HTTPException(400, "Message cannot be empty")
                 set_config_value(conn, "birthday_message_2", msg2, guild_id)
-            if body.birthday_pin_2 is not None:
-                set_config_value(
-                    conn, "birthday_pin_2", "1" if body.birthday_pin_2 else "0", guild_id
-                )
         return {"ok": True}
 
     return await run_query(_q)
@@ -4389,10 +4219,7 @@ async def update_risky(
             if body.ping_role_id is not None:
                 role_id = int(body.ping_role_id)
                 if role_id == 0:
-                    conn.execute(
-                        "DELETE FROM config WHERE guild_id = ? AND key = ?",
-                        (guild_id, _RISKY_PING_KEY),
-                    )
+                    delete_config_value(conn, _RISKY_PING_KEY, guild_id)
                     clear_ping_role = True
                 else:
                     set_config_value(conn, _RISKY_PING_KEY, str(role_id), guild_id)
@@ -4400,10 +4227,7 @@ async def update_risky(
             if body.min_game_seconds is not None:
                 secs = body.min_game_seconds
                 if secs == 0:
-                    conn.execute(
-                        "DELETE FROM config WHERE guild_id = ? AND key = ?",
-                        (guild_id, _RISKY_MIN_GAME_KEY),
-                    )
+                    delete_config_value(conn, _RISKY_MIN_GAME_KEY, guild_id)
                     clear_min_secs = True
                 else:
                     set_config_value(conn, _RISKY_MIN_GAME_KEY, str(secs), guild_id)
@@ -4847,12 +4671,7 @@ async def update_bot_identity(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
-    bot = getattr(ctx, "bot", None)
-    if bot is None:
-        raise HTTPException(503, "Bot not available")
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        raise HTTPException(503, "Discord guild not available")
+    guild = _guild_or_503(ctx, guild_id)
 
     # Resolve avatar bytes: file takes priority over URL
     avatar_bytes: bytes | None = None
@@ -5028,6 +4847,14 @@ class NeedleGlobalUpdate(BaseModel):
     default_reply:    str | None = None
 
 
+_NEEDLE_FIELDS = {
+    "emoji_unanswered": ("needle_emoji_unanswered", _raw),
+    "emoji_archived": ("needle_emoji_archived", _raw),
+    "emoji_locked": ("needle_emoji_locked", _raw),
+    "default_reply": ("needle_default_reply", _raw),
+}
+
+
 @router.put("/config/needle/settings")
 async def update_needle_settings(
     request: Request,
@@ -5039,14 +4866,7 @@ async def update_needle_settings(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.emoji_unanswered is not None:
-                set_config_value(conn, "needle_emoji_unanswered", body.emoji_unanswered, guild_id)
-            if body.emoji_archived is not None:
-                set_config_value(conn, "needle_emoji_archived", body.emoji_archived, guild_id)
-            if body.emoji_locked is not None:
-                set_config_value(conn, "needle_emoji_locked", body.emoji_locked, guild_id)
-            if body.default_reply is not None:
-                set_config_value(conn, "needle_default_reply", body.default_reply, guild_id)
+            _apply_config_fields(conn, guild_id, body, _NEEDLE_FIELDS)
         return {"ok": True}
 
     return await run_query(_q)
