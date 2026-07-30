@@ -32,7 +32,7 @@ The `/wellness` group (`wellness_cog.py`) registers exactly three commands:
 | `/wellness setup` | Everyone (server only) | Opens an ephemeral 2-step wizard: (1) disclaimer + timezone select, (2) enforcement level (Gentle / Cooldown / Slow mode / Gradual). On completion, writes the member's opt-in row and assigns the Wellness Guardian role. **Aborts early** if the guild has no `role_id` configured (see activation gap). |
 | `/wellness away set state:<on\|off>` | Opted-in members | Turns the away auto-reply on or off. Optional `message` arg (≤ 500 chars, on only — passing it with `off` is refused rather than silently dropped); if omitted when turning on, the stored message is kept, falling back to a default. Turning on replies with an ephemeral preview embed. Replaced the separate `/wellness away on` and `/wellness away off` commands 2026-07-28. |
 
-The `away` subgroup is nested under `wellness`. Note: a `_SettingsView` class exists in the cog but is **not wired to any command** — a dead stub from the abandoned slash surface.
+The `away` subgroup is nested under `wellness`. Note: a `_SettingsView` class exists in the cog but is **not wired to any command** — a dead stub from the abandoned slash surface. A proposal to revive it as the shared ephemeral menu behind a channel panel (the bank paradigm) lives in `docs/plans/wellness-discord-panel.md` (2026-07-30).
 
 ### Enforcement engine (live)
 
