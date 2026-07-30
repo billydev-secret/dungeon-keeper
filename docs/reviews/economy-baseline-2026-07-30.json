@@ -1,0 +1,245 @@
+{
+  "pools_daily_net": [
+    {
+      "day": "2026-07-17",
+      "net": 2837,
+      "mint": 2912,
+      "burn": 75,
+      "hold": 0,
+      "close": 15539
+    },
+    {
+      "day": "2026-07-18",
+      "net": 4100,
+      "mint": 4175,
+      "burn": 75,
+      "hold": 0,
+      "close": 19639
+    },
+    {
+      "day": "2026-07-19",
+      "net": 2539,
+      "mint": 2774,
+      "burn": 235,
+      "hold": 0,
+      "close": 22178
+    },
+    {
+      "day": "2026-07-20",
+      "net": 4341,
+      "mint": 4676,
+      "burn": 335,
+      "hold": 0,
+      "close": 26519
+    },
+    {
+      "day": "2026-07-21",
+      "net": 4567,
+      "mint": 5522,
+      "burn": 955,
+      "hold": 0,
+      "close": 31086
+    },
+    {
+      "day": "2026-07-22",
+      "net": 6474,
+      "mint": 7864,
+      "burn": 1390,
+      "hold": 0,
+      "close": 37560
+    },
+    {
+      "day": "2026-07-23",
+      "net": 4093,
+      "mint": 5223,
+      "burn": 1130,
+      "hold": 0,
+      "close": 41653
+    },
+    {
+      "day": "2026-07-24",
+      "net": -1908,
+      "mint": 3931,
+      "burn": 860,
+      "hold": 4979,
+      "close": 39745
+    },
+    {
+      "day": "2026-07-25",
+      "net": 8441,
+      "mint": 13571,
+      "burn": 870,
+      "hold": 4260,
+      "close": 48186
+    },
+    {
+      "day": "2026-07-26",
+      "net": 3746,
+      "mint": 15886,
+      "burn": 200,
+      "hold": 11940,
+      "close": 51932
+    },
+    {
+      "day": "2026-07-27",
+      "net": 5221,
+      "mint": 12685,
+      "burn": 2870,
+      "hold": 4594,
+      "close": 57153
+    },
+    {
+      "day": "2026-07-28",
+      "net": 5443,
+      "mint": 14357,
+      "burn": 6000,
+      "hold": 2914,
+      "close": 62596
+    },
+    {
+      "day": "2026-07-29",
+      "net": 11591,
+      "mint": 10206,
+      "burn": 1860,
+      "hold": -3245,
+      "close": 74187
+    },
+    {
+      "day": "2026-07-30",
+      "net": 387,
+      "mint": 247,
+      "burn": 0,
+      "hold": -140,
+      "close": 74574
+    }
+  ],
+  "generated": "2026-07-30",
+  "guild_id": "1469491362444480666",
+  "week": "2026-07-28..2026-07-30",
+  "window_days": 3,
+  "wallets": 147,
+  "float_total": 74546,
+  "balance": {
+    "p50": 186,
+    "p75": 568,
+    "p90": 1304,
+    "p95": 1796
+  },
+  "top_wallets": [
+    {
+      "user_id": "1407937323529928774",
+      "balance": 7058
+    },
+    {
+      "user_id": "1284869710847934544",
+      "balance": 6515
+    },
+    {
+      "user_id": "203866639005908992",
+      "balance": 3884
+    },
+    {
+      "user_id": "1069501326184153088",
+      "balance": 3362
+    },
+    {
+      "user_id": "1420550841991041086",
+      "balance": 2641
+    },
+    {
+      "user_id": "1129374419911979029",
+      "balance": 2017
+    },
+    {
+      "user_id": "351152456597766144",
+      "balance": 1827
+    },
+    {
+      "user_id": "1236049683416088658",
+      "balance": 1796
+    },
+    {
+      "user_id": "597111823514468352",
+      "balance": 1638
+    },
+    {
+      "user_id": "829540023149133837",
+      "balance": 1409
+    }
+  ],
+  "weekly_earners": 87,
+  "weekly_income": {
+    "p50": 73,
+    "p75": 234,
+    "p90": 758,
+    "p95": 1873
+  },
+  "minted_week": 24810,
+  "burned_week": 10002,
+  "burn_ratio_pct": 40.3,
+  "spenders_week": 19,
+  "faucet_mix": {
+    "auction_refund": 4760,
+    "quest": 3393,
+    "game_participation": 2982,
+    "drop": 2979,
+    "cat_catch": 2811,
+    "game_win": 2402,
+    "login": 2220,
+    "game_host": 1650,
+    "quest_bonus": 550,
+    "bounty_payout": 360,
+    "qotd": 305,
+    "photo_post": 126,
+    "rental_refund": 114,
+    "qa_reward": 75,
+    "milestone": 75,
+    "intake_step": 8
+  },
+  "sink_mix": {
+    "auction_bid": 4985,
+    "rental": 2485,
+    "casino_hold": 2142,
+    "bounty_stake": 360,
+    "streak_shield": 30
+  },
+  "casino_handle": 41665,
+  "casino_returned": 39523,
+  "casino_hold": 2142,
+  "jackpot_pot": 8507,
+  "demurrage_grid": [
+    {
+      "floor": 300,
+      "wallets_hit": 58,
+      "excess": 49275,
+      "burn_at_2pct": 985,
+      "burn_at_5pct": 2463,
+      "burn_at_10pct": 4927
+    },
+    {
+      "floor": 500,
+      "wallets_hit": 40,
+      "excess": 39584,
+      "burn_at_2pct": 791,
+      "burn_at_5pct": 1979,
+      "burn_at_10pct": 3958
+    },
+    {
+      "floor": 750,
+      "wallets_hit": 29,
+      "excess": 30990,
+      "burn_at_2pct": 619,
+      "burn_at_5pct": 1549,
+      "burn_at_10pct": 3099
+    },
+    {
+      "floor": 1000,
+      "wallets_hit": 21,
+      "excess": 24886,
+      "burn_at_2pct": 497,
+      "burn_at_5pct": 1244,
+      "burn_at_10pct": 2488
+    }
+  ],
+  "hoard_weeks": 2.5
+}
