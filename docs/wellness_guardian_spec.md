@@ -58,7 +58,7 @@ Full CRUD, authenticated as the logged-in member. The Wellness nav section is ga
 
 | Endpoint(s) | Feature |
 |---|---|
-| `GET /me`, `GET /history`, `GET /xp-histogram` | Profile, streak/history, activity histogram |
+| `GET /me`, `GET /history`, `GET /activity-histogram` | Profile, streak/history, activity histogram (average *messages* per hour/day from message-shaped `xp_events` — renamed from `/xp-histogram` 2026-07-30 when it stopped averaging XP amounts, which had seeded caps several times too tight) |
 | `GET/POST/PUT/DELETE /caps` | Create, edit, remove message caps (scope, window, limit, exclude-exempt, optional bucket limits) |
 | `GET /blackouts`, `POST /blackouts`, `PUT /blackouts/{id}/toggle`, `DELETE /blackouts/{id}` | Blackout windows, including the four preset **templates** (Night Owl 23:00–07:00 daily, Work Hours 09:00–17:00 weekdays, School Hours 08:00–15:00 weekdays, Weekend Detox all-day Sat–Sun) |
 | `GET/POST /away` | Away message text + toggle (mirrors the two slash commands) |

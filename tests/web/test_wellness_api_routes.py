@@ -74,32 +74,63 @@ def test_caps_returns_seeded_caps(authed_client, fake_ctx):
     assert body["caps"][0]["label"] == "My limit"
 
 
-# ── /xp-histogram ────────────────────────────────────────────────────
+# ── /activity-histogram ──────────────────────────────────────────────
 
 
-def test_xp_histogram_rejects_invalid_mode(authed_client):
-    resp = authed_client.get("/api/wellness/xp-histogram?mode=bogus")
+def test_activity_histogram_rejects_invalid_mode(authed_client):
+    resp = authed_client.get("/api/wellness/activity-histogram?mode=bogus")
     body = resp.json()
     assert body["ok"] is False
 
 
-def test_xp_histogram_daily_returns_24_buckets(authed_client):
-    body = authed_client.get("/api/wellness/xp-histogram").json()
+def test_activity_histogram_daily_returns_24_buckets(authed_client):
+    body = authed_client.get("/api/wellness/activity-histogram").json()
     assert body["mode"] == "daily"
     assert len(body["buckets"]) == 24
 
 
-def test_xp_histogram_weekly_returns_7_buckets(authed_client):
-    body = authed_client.get("/api/wellness/xp-histogram?mode=weekly").json()
+def test_activity_histogram_weekly_returns_7_buckets(authed_client):
+    body = authed_client.get("/api/wellness/activity-histogram?mode=weekly").json()
     assert body["mode"] == "weekly"
     assert len(body["buckets"]) == 7
 
 
-def test_xp_histogram_clamps_days_into_range(authed_client):
-    too_low = authed_client.get("/api/wellness/xp-histogram?days=1").json()
+def test_activity_histogram_clamps_days_into_range(authed_client):
+    too_low = authed_client.get("/api/wellness/activity-histogram?days=1").json()
     assert too_low["days_covered"] == 7  # clamped to minimum
-    too_high = authed_client.get("/api/wellness/xp-histogram?days=999").json()
+    too_high = authed_client.get("/api/wellness/activity-histogram?days=999").json()
     assert too_high["days_covered"] == 180  # clamped to max
+
+
+def test_activity_histogram_counts_messages_not_xp(authed_client, fake_ctx):
+    """The caps sliders seed from these averages, and enforcement counts
+    messages — so the histogram must count message events (source text/reply,
+    one row each), never sum fractional XP amounts, and must ignore
+    non-message sources like voice."""
+    now = time.time()
+    with open_db(fake_ctx.db_path) as conn:
+        for i in range(10):
+            conn.execute(
+                "INSERT INTO xp_events (guild_id, user_id, source, amount, created_at) "
+                "VALUES (?, 1, 'text', 0.17, ?)",
+                (fake_ctx.guild_id, now - 60 * i),
+            )
+        conn.execute(
+            "INSERT INTO xp_events (guild_id, user_id, source, amount, created_at) "
+            "VALUES (?, 1, 'voice', 1.0, ?)",
+            (fake_ctx.guild_id, now),
+        )
+
+    body = authed_client.get("/api/wellness/activity-histogram?days=7").json()
+    # 10 message events land in one or two adjacent hour buckets; the voice
+    # event must not be counted anywhere.
+    assert body["total_events"] == 10
+    assert sum(b["count"] for b in body["buckets"]) == 10
+    # Averages are messages/period — with 10 messages over a 7-day window the
+    # non-empty buckets must sum to 10/7 ≈ 1.4, not to a fraction of an XP point.
+    assert sum(b["avg_messages"] for b in body["buckets"]) == pytest.approx(
+        10 / 7, abs=0.2
+    )
 
 
 # ── /blackouts ───────────────────────────────────────────────────────

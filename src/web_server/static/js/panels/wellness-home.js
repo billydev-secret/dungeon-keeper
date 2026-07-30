@@ -43,7 +43,7 @@ export function mount(container) {
         </div>
 
         <div class="card">
-          <div class="stat-label">Daily Caps</div>
+          <div class="stat-label">Caps</div>
           <div class="stat-value">${d.caps_count}</div>
           <a href="#/wellness-caps" class="w-card-link">Manage</a>
         </div>

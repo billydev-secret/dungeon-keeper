@@ -213,14 +213,22 @@ _HOUR_LABELS = [
 _DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
-@router.get("/xp-histogram")
-async def xp_histogram(
+@router.get("/activity-histogram")
+async def activity_histogram(
     mode: str = Query("daily"),
     days: int = Query(30),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
     guild_id: int = Depends(get_guild_id),
 ):
+    """Average messages posted per hour-of-day (daily) or day-of-week (weekly).
+
+    Enforcement counts *messages*, so the caps panel's sliders must be seeded
+    in messages too. Message-shaped xp_events (source text/reply — one row
+    per message that earned XP) are the proxy; averaging their per-message XP
+    *amount* instead (as this endpoint originally did) produced limits several
+    times tighter than real behavior, e.g. 1-message-per-hour caps.
+    """
     if mode not in ("daily", "weekly"):
         return _err("mode must be 'daily' or 'weekly'")
     days = max(7, min(days, 180))
@@ -236,8 +244,9 @@ async def xp_histogram(
                 tz = ZoneInfo("UTC")
             cutoff = time.time() - days * 86400
             rows = conn.execute(
-                "SELECT amount, created_at FROM xp_events "
-                "WHERE guild_id = ? AND user_id = ? AND created_at >= ? ORDER BY created_at",
+                "SELECT created_at FROM xp_events "
+                "WHERE guild_id = ? AND user_id = ? AND created_at >= ? "
+                "AND source IN ('text', 'reply') ORDER BY created_at",
                 (guild_id, user_id, cutoff),
             ).fetchall()
             return tz, rows
@@ -246,13 +255,11 @@ async def xp_histogram(
 
     n_buckets = 24 if mode == "daily" else 7
     labels = _HOUR_LABELS if mode == "daily" else _DAY_LABELS
-    totals = [0.0] * n_buckets
     counts = [0] * n_buckets
 
     for row in rows:
         dt = datetime.fromtimestamp(float(row["created_at"]), tz=tz)
         idx = dt.hour if mode == "daily" else dt.weekday()
-        totals[idx] += float(row["amount"])
         counts[idx] += 1
 
     # Compute number of distinct days/weeks covered for averaging
@@ -261,18 +268,15 @@ async def xp_histogram(
     else:
         distinct_periods = max(1, days // 7)
 
-    buckets = []
-    for i in range(n_buckets):
-        avg = round(totals[i] / distinct_periods, 1)
-        buckets.append(
-            {
-                "index": i,
-                "label": labels[i],
-                "avg_xp": avg,
-                "total_xp": round(totals[i], 1),
-                "count": counts[i],
-            }
-        )
+    buckets = [
+        {
+            "index": i,
+            "label": labels[i],
+            "avg_messages": round(counts[i] / distinct_periods, 1),
+            "count": counts[i],
+        }
+        for i in range(n_buckets)
+    ]
 
     return {
         "mode": mode,
