@@ -2958,8 +2958,20 @@ def test_resolve_guild_emoji_prefers_the_exact_casing_when_both_exist():
     guild = _FakeGuild(_FakeEmoji("pepe", 10), _FakeEmoji("PEPE", 11))
     assert _resolve_guild_emoji(guild, ":pepe:").id == 10
     assert _resolve_guild_emoji(guild, ":PEPE:").id == 11
-    # No exact hit — the fallback picks a case-insensitive match.
-    assert _resolve_guild_emoji(guild, ":PePe:").id in (10, 11)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_resolve_guild_emoji_ambiguous_casing_picks_the_oldest_stably(reverse):
+    """Matching no casing exactly resolves to the lowest id, whatever the order.
+
+    Discord doesn't enforce emoji-name uniqueness and ``guild.emojis`` arrives
+    in gateway-payload order, so an unordered pick would hand the member a
+    different icon after a restart or a re-upload.
+    """
+    emojis = [_FakeEmoji("PEPE", 11), _FakeEmoji("Pepe", 10)]
+    if reverse:
+        emojis.reverse()
+    assert _resolve_guild_emoji(_FakeGuild(*emojis), ":PePe:").id == 10
 
 
 @pytest.mark.parametrize(

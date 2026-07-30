@@ -251,7 +251,11 @@ def _resolve_guild_emoji(guild: discord.Guild, raw: str) -> discord.Emoji | None
     ``:monkaS:``, ``:peepoHappy:`` — was unreachable by the short name a
     member actually types, while the pasted form still worked because it
     matches by id. Exact wins first so a server holding both ``:pepe:`` and
-    ``:PEPE:`` still resolves each one precisely.
+    ``:PEPE:`` still resolves each one precisely; if input matches neither
+    exactly the fallback takes the lowest id — the oldest emoji — because
+    Discord doesn't enforce name uniqueness and ``guild.emojis`` arrives in
+    gateway-payload order, so an unordered pick would hand the member a
+    different icon after a restart or a re-upload.
     """
     raw = raw.strip()
     m = _CUSTOM_EMOJI_RE.match(raw)
@@ -264,7 +268,11 @@ def _resolve_guild_emoji(guild: discord.Guild, raw: str) -> discord.Emoji | None
     if exact is not None:
         return exact
     folded = name.casefold()
-    return next((e for e in guild.emojis if e.name.casefold() == folded), None)
+    return min(
+        (e for e in guild.emojis if e.name.casefold() == folded),
+        key=lambda e: e.id,
+        default=None,
+    )
 
 
 async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:
