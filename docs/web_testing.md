@@ -81,6 +81,22 @@ applying `[popover]` UA *styles*, so it reproduces the positioning and
 lost-visibility half of the iOS bug, not an engine that ignores the attribute
 entirely.
 
+A third case stubs `window.visualViewport` with a non-zero `offsetTop` and a
+shrunk `height` — what an iOS on-screen keyboard leaves behind — and asserts the
+list still lands flush on its input. Chromium has no software keyboard and
+Playwright cannot shift the visual viewport, so reporting the offset is the only
+way to reach that branch on this hardware. It guards a real regression: the
+placement folded `visualViewport.offsetTop` into the coordinates, which
+displaced the list by exactly that many pixels on a phone (the "dropdown
+floating loose in the corner" report) while staying a no-op on desktop, where
+the offset is always 0 — invisible to every other case in this file. The offset
+does still belong in the *fit* test that decides whether to flip above the
+field, so one parameter row puts the field low enough to force that flip and
+asserts the list is flush on top of the input rather than merely above it.
+
+The desktop-shaped `no-keyboard` row is deliberate: it fails the same way if the
+fix ever degrades into a phone-only special case.
+
 A second fixture mounts the widget with real snowflake ids to cover **matching
 by id**: pasting a channel id finds its row, a short numeric filter does not
 drag in every id containing that digit (the `MIN_ID_FILTER_LEN` gate), and name

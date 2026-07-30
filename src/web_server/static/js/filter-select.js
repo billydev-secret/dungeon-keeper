@@ -82,23 +82,32 @@ function attachPopover(input, list) {
 
   function positionFixed() {
     const r = input.getBoundingClientRect();
-    // getBoundingClientRect() is layout-viewport relative, but iOS resolves the
-    // top layer against the *visual* viewport — which the on-screen keyboard
-    // shifts without firing a document scroll, stranding the list hundreds of
-    // pixels from its input. Fold that delta in. Both offsets are 0 on an
-    // unzoomed desktop, so this is a no-op there.
+    // Two viewports, and each half of this function wants a different one.
+    //
+    // PLACEMENT uses the *layout* viewport, and needs no correction at all:
+    // getBoundingClientRect() and `position: fixed` are both resolved against
+    // it, on every engine — the top layer included. Subtracting the visual
+    // viewport's offset here does not cancel an error, it introduces one
+    // exactly that size: on iOS the keyboard shifts the visual viewport
+    // without firing a document scroll, and the list jumped that far from its
+    // field ("floating loose in the corner"). It is 0 on an unzoomed desktop,
+    // which is why the bug was invisible everywhere but a phone.
+    //
+    // THE FIT TEST does want the visual viewport: "is there room below?" means
+    // room the user can actually see, and the keyboard covers part of the
+    // layout viewport without changing its size. So `dy`/`vh` stay in the
+    // flip decision, and stay out of the coordinates.
     const vv = window.visualViewport;
-    const dx = vv ? vv.offsetLeft : 0;
     const dy = vv ? vv.offsetTop : 0;
     const vh = vv ? vv.height : window.innerHeight;
     list.style.width = r.width + "px";
-    list.style.left = (r.left - dx) + "px";
-    // Flip above the input when there isn't room below it in the viewport.
+    list.style.left = r.left + "px";
+    // Flip above the input when there isn't room below it on screen.
     const h = list.offsetHeight;
-    const below = vh - (r.bottom - dy);
+    const below = (dy + vh) - r.bottom;
     const above = r.top - dy;
     list.style.top =
-      ((h > below && above > below ? r.top - h : r.bottom) - dy) + "px";
+      (h > below && above > below ? r.top - h : r.bottom) + "px";
   }
 
   function positionAnchored() {
