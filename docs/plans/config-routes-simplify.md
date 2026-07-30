@@ -225,10 +225,24 @@ that want their own decision rather than a quiet fold-in:
   `greeting_watch_window_minutes` with `minimum=1, maximum=1440`;
   `config.py:2820` stores it with **no clamp at all**. Genuine inconsistency;
   fixing it is a behaviour change.
-- **Possible bug, for `/code-review` not `/simplify`:** of the four
-  "post a panel to a channel" routes, only `post_dms_panel` prechecks
-  send/embed permissions. The other three can post into a channel the bot
-  cannot write to and report success.
+- ~~**Possible bug, for `/code-review` not `/simplify`:** of the four "post a
+  panel to a channel" routes, only `post_dms_panel` prechecks send/embed
+  permissions. The other three can post into a channel the bot cannot write to
+  and report success.~~ **Investigated 2026-07-30 — the claim was wrong.**
+  Struck rather than deleted, because the correction is the useful part: an
+  agent finding relayed without tracing the downstream calls was wrong in both
+  directions at once, overstating three routes and missing the real defect.
+  *None* of the four reports success on failure — `setup_inactive_channel`
+  catches `Forbidden`/`HTTPException` and returns `(False, reason)` → a clean
+  400 with a helpful message, and `_send_confess_launcher` catches
+  `HTTPException` → `False` → a 500 telling the admin to check permissions.
+  The actual defect was narrower and worse than "reports success":
+  `post_or_update_booster_panel` **deletes every existing panel message before**
+  its three unguarded `channel.send` calls, so a channel missing Send Messages
+  destroyed the panel outright, returned a bare 500, and left every repost
+  failing the same way. Fixed by `_require_post_permissions()`, applied
+  *before* the destructive call and shared with `post_dms_panel`, whose inline
+  copy it replaces. Two tests, the first written to fail first.
 - **`_casino_section`'s 30 hand-listed fields** are a deliberate allow-list (its
   docstring says `panel_*` bookkeeping is excluded on purpose). A generic
   `asdict()` + stringify would let a future dataclass field silently leak into

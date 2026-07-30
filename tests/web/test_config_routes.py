@@ -583,6 +583,84 @@ def test_post_booster_panel_requires_bot(authed_client):
     assert resp.status_code == 503
 
 
+def _booster_panel_guild(fake_ctx, perms):
+    """bot/guild/channel scaffolding for the booster post-panel tests."""
+    import discord
+
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.name = "boosters"
+    channel.permissions_for = MagicMock(return_value=perms)
+
+    guild = MagicMock()
+    guild.id = fake_ctx.guild_id
+    guild.get_channel = MagicMock(return_value=channel)
+
+    bot = MagicMock()
+    bot.get_guild = MagicMock(return_value=guild)
+    fake_ctx.bot = bot
+    return channel
+
+
+def test_post_booster_panel_refuses_channel_it_cannot_post_in(
+    authed_client, fake_ctx, monkeypatch
+):
+    """A 400 *before* the service runs — not a 500 after it has already
+    deleted the old panel.
+
+    post_or_update_booster_panel deletes every existing panel message before
+    sending the new ones, and those sends are unguarded. Reaching it without
+    Send Messages destroys the panel and leaves nothing in its place, so the
+    permission check has to happen in the route.
+    """
+    import discord
+
+    called = False
+
+    async def _never(*a, **kw):
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(
+        "web_server.routes.config.post_or_update_booster_panel", _never
+    )
+    _booster_panel_guild(
+        fake_ctx,
+        discord.Permissions(view_channel=True, send_messages=False, embed_links=True),
+    )
+
+    resp = authed_client.post(
+        "/api/config/booster-roles/post-panel", json={"channel_id": "12345"}
+    )
+    assert resp.status_code == 400
+    assert "Send Messages" in resp.json()["detail"]
+    assert not called, "service ran despite missing permissions — panel would be lost"
+
+
+def test_post_booster_panel_posts_when_permitted(
+    authed_client, fake_ctx, monkeypatch
+):
+    """The precheck must not block the happy path."""
+    import discord
+
+    async def _ok(*a, **kw):
+        return [MagicMock(), MagicMock()]
+
+    monkeypatch.setattr(
+        "web_server.routes.config.post_or_update_booster_panel", _ok
+    )
+    _booster_panel_guild(
+        fake_ctx,
+        discord.Permissions(view_channel=True, send_messages=True, embed_links=True),
+    )
+
+    resp = authed_client.post(
+        "/api/config/booster-roles/post-panel", json={"channel_id": "12345"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["message_count"] == 2
+
+
 # ── PUT /api/config/auto-delete/{channel_id} ─────────────────────────
 
 

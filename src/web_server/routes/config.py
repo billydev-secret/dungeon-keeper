@@ -361,6 +361,34 @@ _XP_COEFF_READERS: dict = {
 }
 
 
+def _require_post_permissions(guild, channel) -> None:
+    """Refuse up front if the bot cannot post in ``channel``.
+
+    Worth doing *before* calling a panel-posting service rather than letting
+    discord.Forbidden escape as a 500: post_or_update_booster_panel deletes the
+    existing panel messages before it sends the new ones, and those sends are
+    unguarded, so failing partway through leaves the guild with no panel at all
+    and a repost that fails the same way. A 400 naming the missing permission
+    is also simply actionable — the admin can go and fix it.
+    """
+    perms = channel.permissions_for(guild.me)
+    missing = [
+        label
+        for flag, label in (
+            (perms.view_channel, "View Channel"),
+            (perms.send_messages, "Send Messages"),
+            (perms.embed_links, "Embed Links"),
+        )
+        if not flag
+    ]
+    if missing:
+        raise HTTPException(
+            400,
+            f"The bot can't post in #{channel.name} — missing permissions: "
+            f"{', '.join(missing)}",
+        )
+
+
 def _xp_coefficients(conn, guild_id: int = 0) -> dict:
     """Read XP algorithm coefficients from the config table, with defaults.
 
@@ -3048,6 +3076,7 @@ async def post_booster_panel(
 
     guild = _guild_or_503(ctx, guild_id)
     channel = _text_channel_or_400(guild, body.channel_id)
+    _require_post_permissions(guild, channel)
 
     msgs = await post_or_update_booster_panel(ctx.db_path, guild, channel)
     if not msgs:
@@ -3979,22 +4008,7 @@ async def post_dms_panel(
     channel = guild.get_channel(channel_id)
     if not isinstance(channel, discord.TextChannel):
         raise HTTPException(400, "Channel not found or not a text channel")
-    perms = channel.permissions_for(guild.me)
-    missing = [
-        label
-        for flag, label in (
-            (perms.view_channel, "View Channel"),
-            (perms.send_messages, "Send Messages"),
-            (perms.embed_links, "Embed Links"),
-        )
-        if not flag
-    ]
-    if missing:
-        raise HTTPException(
-            400,
-            f"The bot can't post in #{channel.name} — missing permissions: "
-            f"{', '.join(missing)}",
-        )
+    _require_post_permissions(guild, channel)
 
     message_id = await cog.post_panel(guild, channel_id)
     if message_id is None:
