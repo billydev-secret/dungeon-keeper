@@ -65,6 +65,7 @@ Full CRUD, authenticated as the logged-in member:
 | `GET /partners`, `POST /partners/request`, `DELETE /partners/{id}` | Accountability partners — request (DMs the target with Accept/Decline), list, dissolve |
 | `POST /settings` | Enforcement level, notifications pref, public-commitment toggle, timezone, daily reset hour, slow-mode rate |
 | `POST /pause`, `POST /resume` | Pause / resume the member's own tracking |
+| `POST /optout` | Leave the program — tracking deactivated, slow mode lifted, wellness role removed (best-effort); settings retained 30 days, then swept |
 
 ### Web dashboard — admin panel (`/api/wellness/admin`, requires `manage_server`)
 
@@ -79,7 +80,7 @@ The admin panel does **not** provision the wellness role/category (see activatio
 
 ### Data model (confirmed)
 
-Per-guild + per-member tables back all of the above: member settings (timezone, enforcement, notifications pref, slow-mode rate, public-commitment, daily reset hour), caps + per-window counters + overage counters, blackouts + active-marker state, the away message, streak state (current + personal-best + last-violation-date + clean-day history), partnerships, milestone-badge celebration state, weekly-report cache, per-user slow-mode state, and per-guild config (role id, channel id, active-list message id, default enforcement, exempt channels). Schema lives in `wellness_service.py` (`init_wellness_tables`). `opt_out_user()` exists as a function but is **not** surfaced by any command or endpoint.
+Per-guild + per-member tables back all of the above: member settings (timezone, enforcement, notifications pref, slow-mode rate, public-commitment, daily reset hour), caps + per-window counters + overage counters, blackouts + active-marker state, the away message, streak state (current + personal-best + last-violation-date + clean-day history), partnerships, milestone-badge celebration state, weekly-report cache, per-user slow-mode state, and per-guild config (role id, channel id, active-list message id, default enforcement, exempt channels). Schema lives in `wellness_service.py` (`init_wellness_tables`). `opt_out_user()` is surfaced via `POST /api/wellness/optout` and the Overview panel's **Leave the Program** action (added 2026-07-30).
 
 ---
 
@@ -300,4 +301,4 @@ Per-guild + per-user tables for: member settings (timezone, enforcement, notific
 
 Server-wide config tables for: server defaults, the wellness category + channel ids, the crisis-resource URL, and the exempt-channel list.
 
-On `/wellness optout`: role removed, tracking deactivated, slow mode lifted; settings retained 30 days then purged. *(The `opt_out_user()` backend exists; no command or endpoint invokes it.)*
+On `/wellness optout`: role removed, tracking deactivated, slow mode lifted; settings retained 30 days then purged. *(The dashboard exit shipped 2026-07-30 — `POST /optout` + Overview panel. The slash-command form remains roadmap.)*

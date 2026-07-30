@@ -115,6 +115,14 @@ export function mount(container) {
         </form>
         <button data-resume-btn class="btn">Resume Nudges</button>
       </div>
+
+      <div class="section-label">Leave</div>
+      <div class="w-actions">
+        <button data-optout-btn class="btn btn-danger">Leave the Program</button>
+        <span data-optout-status></span>
+      </div>
+      <div class="field-hint">Stops all tracking, nudges and enforcement immediately and removes your wellness role.
+      Your settings are kept for 30 days in case you come back, then deleted.</div>
     `;
 
     // Settings form
@@ -150,6 +158,20 @@ export function mount(container) {
     container.querySelector("[data-resume-btn]").addEventListener("click", async () => {
       try { await wPost("/api/wellness/resume", {}); showStatus(pStatus, true, "Nudges resumed"); }
       catch (err) { showStatus(pStatus, false, `Couldn’t resume — ${err.message}`); }
+    });
+
+    // Opt out
+    const oStatus = container.querySelector("[data-optout-status]");
+    container.querySelector("[data-optout-btn]").addEventListener("click", async () => {
+      if (!window.confirm(
+        "Leave the wellness program?\n\n" +
+        "All tracking, nudges and enforcement stop immediately and your wellness role is removed. " +
+        "Your caps, blackouts and settings are kept for 30 days in case you rejoin, then deleted."
+      )) return;
+      try {
+        await wPost("/api/wellness/optout", {});
+        mount(container); // re-render — shows the not-opted-in notice
+      } catch (err) { showStatus(oStatus, false, `Couldn’t leave — ${err.message}`); }
     });
   })();
 }

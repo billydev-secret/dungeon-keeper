@@ -34,12 +34,14 @@ from bot_modules.services.wellness_service import (
     find_cap_by_label,
     get_cap,
     get_partnership,
+    get_wellness_config,
     get_wellness_user,
     list_blackouts,
     list_caps,
     list_partnerships,
     list_weekly_reports,
     next_milestone,
+    opt_out_user,
     pause_user,
     remove_blackout,
     remove_cap,
@@ -512,6 +514,47 @@ async def resume(
             resume_user(conn, guild_id, user_id)
 
     await run_query(_write)
+    return _ok()
+
+
+@router.post("/optout")
+async def optout(
+    user: AuthenticatedUser = Depends(require_user),
+    ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
+) -> JSONResponse:
+    """Leave the program. A boundary tool must always have an exit.
+
+    opt_out_user() deactivates tracking, lifts slow mode, and clears pause /
+    cooldown / blackout markers; settings are retained 30 days (nightly sweep)
+    so a re-opt-in within that window restores the member's configuration.
+    """
+    await _require_active(ctx, guild_id, user.user_id)
+    user_id = user.user_id
+
+    def _write():
+        with ctx.open_db() as conn:
+            opt_out_user(conn, guild_id, user_id)
+            return get_wellness_config(conn, guild_id)
+
+    cfg = await run_query(_write)
+
+    # Best-effort: take the wellness role off so the member also leaves the
+    # wellness channels. Failure never blocks the opt-out itself.
+    bot = getattr(ctx, "bot", None)
+    if bot and cfg and cfg.role_id:
+        guild = bot.get_guild(guild_id)
+        member = guild.get_member(user_id) if guild else None
+        role = guild.get_role(cfg.role_id) if guild else None
+        if member and role and role in member.roles:
+            try:
+                await member.remove_roles(role, reason="Wellness Guardian opt-out")
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "Could not remove wellness role from %s on opt-out: %s",
+                    format_user_for_log(member, user_id),
+                    e,
+                )
     return _ok()
 
 

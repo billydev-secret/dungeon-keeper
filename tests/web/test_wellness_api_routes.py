@@ -15,6 +15,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.wellness_service import (
     add_cap,
     add_blackout,
+    arm_slow_mode,
     create_partner_request,
     opt_in_user,
 )
@@ -283,6 +284,40 @@ def test_resume_clears_pause(authed_client, fake_ctx):
 
     me = authed_client.get("/api/wellness/me").json()
     assert me["paused_until"] is None
+
+
+# ── /optout ──────────────────────────────────────────────────────────
+
+
+def test_optout_requires_opt_in(authed_client):
+    resp = authed_client.post("/api/wellness/optout")
+    assert resp.status_code == 403
+
+
+def test_optout_deactivates_and_lifts_slow_mode(authed_client, fake_ctx):
+    """The exit must be total: tracking off, slow mode lifted, /me shows out."""
+    _opt_in(fake_ctx)
+    with open_db(fake_ctx.db_path) as conn:
+        arm_slow_mode(
+            conn,
+            fake_ctx.guild_id,
+            1,
+            triggered_by_cap_id=1,
+            triggered_window_start=0,
+            active_until_ts=time.time() + 3600,
+        )
+
+    body = authed_client.post("/api/wellness/optout").json()
+    assert body["ok"] is True
+
+    me = authed_client.get("/api/wellness/me").json()
+    assert me == {"opted_in": False}
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM wellness_slow_mode WHERE guild_id = ? AND user_id = 1",
+            (fake_ctx.guild_id,),
+        ).fetchone()
+    assert row is None
 
 
 # ── /caps mutation ───────────────────────────────────────────────────
