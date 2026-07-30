@@ -711,8 +711,17 @@ def test_decide_action_blackout_gradual_starts_at_nudge(db_conn):
 
 
 @freeze_time("2026-05-31 23:30:00")
-def test_decide_action_blackout_uses_cooldown_for_cooldown_user(db_conn):
-    user = _make_user(db_conn, enforcement_level="cooldown")
+def test_decide_action_blackout_uses_cooldown_for_legacy_cooldown_row(db_conn):
+    """"cooldown" left the selectable levels 2026-07-30, but rows stored
+    before then must keep their old behavior — blackout enforcement capped
+    at the breather message. Seeded directly, as a legacy DB row would be."""
+    _make_user(db_conn)
+    db_conn.execute(
+        "UPDATE wellness_users SET enforcement_level = 'cooldown' "
+        "WHERE guild_id = 100 AND user_id = 200"
+    )
+    user = get_wellness_user(db_conn, 100, 200)
+    assert user is not None
     add_blackout(
         db_conn, 100, 200, name="night",
         start_minute=23 * 60, end_minute=7 * 60, days_mask=127,
@@ -792,7 +801,10 @@ async def test_on_message_nudge_returns_false_and_records_streak(db_path):
 
 
 @freeze_time("2026-05-31 12:30:00")
-async def test_on_message_cooldown_sets_cooldown_until(db_path):
+async def test_on_message_cooldown_sends_breather_without_arming_state(db_path):
+    """The breather notice IS the cooldown: the message is not consumed and
+    no cooldown state is armed (the cooldown_until write was removed
+    2026-07-30 along with the never-enforced "cooldown" level)."""
     with open_db(db_path) as conn:
         _make_user(conn, notifications_pref="dm")
         cap_id = add_cap(
@@ -811,12 +823,12 @@ async def test_on_message_cooldown_sets_cooldown_until(db_path):
     # This will be the 2nd overage → COOLDOWN
     result = await wellness_on_message(ctx, msg)
     assert result is False
+    msg.author.send.assert_awaited()  # the breather DM went out
 
     with open_db(db_path) as conn:
         u = get_wellness_user(conn, 100, 200)
         assert u is not None
-        assert u.cooldown_until is not None
-        assert u.cooldown_until > time.time()
+        assert u.cooldown_until is None
 
 
 @freeze_time("2026-05-31 12:30:00")

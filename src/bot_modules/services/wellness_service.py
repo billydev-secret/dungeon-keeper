@@ -22,7 +22,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 # Constants
 # ---------------------------------------------------------------------------
 
-ENFORCEMENT_LEVELS: tuple[str, ...] = ("gentle", "cooldown", "slow_mode", "gradual")
+# Selectable levels. "cooldown" was removed 2026-07-30: as a *level* it was
+# never enforced (cooldown_until had no reader), so it was Gentle with
+# different copy — a preference the bot didn't keep. Stored legacy rows still
+# behave as before via wellness_enforcement._enforcement_to_action; the value
+# just can't be picked anymore. The COOLDOWN *action* (the breather message on
+# a second overage) is unrelated and stays.
+ENFORCEMENT_LEVELS: tuple[str, ...] = ("gentle", "slow_mode", "gradual")
 NOTIFICATION_PREFS: tuple[str, ...] = ("ephemeral", "dm", "both")
 CAP_SCOPES: tuple[str, ...] = ("global", "channel", "category", "voice")
 CAP_WINDOWS: tuple[str, ...] = ("hourly", "daily", "weekly")
@@ -619,25 +625,6 @@ def resume_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> bool:
         (guild_id, user_id),
     )
     return (cur.rowcount or 0) > 0
-
-
-def set_cooldown(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    user_id: int,
-    until: float,
-) -> None:
-    conn.execute(
-        "UPDATE wellness_users SET cooldown_until = ? WHERE guild_id = ? AND user_id = ?",
-        (until, guild_id, user_id),
-    )
-
-
-def clear_cooldown(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
-    conn.execute(
-        "UPDATE wellness_users SET cooldown_until = NULL WHERE guild_id = ? AND user_id = ?",
-        (guild_id, user_id),
-    )
 
 
 def list_active_users(conn: sqlite3.Connection, guild_id: int) -> list[WellnessUser]:

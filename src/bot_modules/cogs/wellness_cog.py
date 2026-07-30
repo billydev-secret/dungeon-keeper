@@ -53,16 +53,14 @@ TIMEZONE_CHOICES: list[tuple[str, str]] = [
 
 ENFORCEMENT_LABELS: dict[str, str] = {
     "gentle": "💛 Gentle reminders",
-    "cooldown": "☕ Cooldown breaks",
     "slow_mode": "🐢 Slow mode",
     "gradual": "🌱 Gradual",
 }
 
 ENFORCEMENT_DESCRIPTIONS: dict[str, str] = {
     "gentle": "I'll send you a heads-up, but won't stop you.",
-    "cooldown": "I'll suggest a 5-minute breather when you go over.",
     "slow_mode": "I'll add a per-user slow mode so you can still post, just slower.",
-    "gradual": "Start with reminders, then breaks, then slow mode if needed.",
+    "gradual": "Start with reminders, then breather suggestions, then slow mode if needed.",
 }
 
 AWAY_MESSAGE_MAX = 500
@@ -117,7 +115,7 @@ class _SetupWizardView(discord.ui.View):
                     value=key,
                     description=ENFORCEMENT_DESCRIPTIONS[key][:100],
                 )
-                for key in ("gentle", "cooldown", "slow_mode", "gradual")
+                for key in ("gentle", "slow_mode", "gradual")
             ],
         )
         self._enf_select.callback = self._on_enf_pick  # type: ignore[assignment]
@@ -145,7 +143,7 @@ class _SetupWizardView(discord.ui.View):
                 "**Step 2 of 2** — All levels preserve your ability to post. Nothing locks you out.\n\n"
                 + "\n".join(
                     f"**{ENFORCEMENT_LABELS[k]}** — {ENFORCEMENT_DESCRIPTIONS[k]}"
-                    for k in ("gentle", "cooldown", "slow_mode", "gradual")
+                    for k in ("gentle", "slow_mode", "gradual")
                 )
             ),
             color=WELLNESS_PRIMARY,
@@ -316,7 +314,7 @@ class _SettingsView(discord.ui.View):
                     default=(k == current_enforcement),
                     description=ENFORCEMENT_DESCRIPTIONS[k][:100],
                 )
-                for k in ("gentle", "cooldown", "slow_mode", "gradual")
+                for k in ("gentle", "slow_mode", "gradual")
             ],
             row=0,
         )

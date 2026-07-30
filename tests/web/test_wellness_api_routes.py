@@ -273,7 +273,7 @@ def test_settings_accepts_valid_payload(authed_client, fake_ctx):
         "/api/wellness/settings",
         json={
             "timezone": "America/New_York",
-            "enforcement_level": "cooldown",
+            "enforcement_level": "slow_mode",
             "notifications_pref": "dm",
             "daily_reset_hour": 4,
             "slow_mode_rate_seconds": 30,
@@ -283,7 +283,18 @@ def test_settings_accepts_valid_payload(authed_client, fake_ctx):
 
     me = authed_client.get("/api/wellness/me").json()
     assert me["timezone"] == "America/New_York"
-    assert me["enforcement_level"] == "cooldown"
+    assert me["enforcement_level"] == "slow_mode"
+
+
+def test_settings_rejects_retired_cooldown_level(authed_client, fake_ctx):
+    """"cooldown" left the selectable set 2026-07-30 (never-enforced level);
+    the API must not accept new selections of it."""
+    _opt_in(fake_ctx)
+    body = authed_client.post(
+        "/api/wellness/settings",
+        json={"enforcement_level": "cooldown"},
+    ).json()
+    assert body["ok"] is False
 
 
 # ── /pause and /resume ───────────────────────────────────────────────

@@ -462,14 +462,12 @@ def test_resume_user_clears_paused_until(db_conn):
     assert user is not None and user.paused_until is None
 
 
-def test_set_then_clear_cooldown(db_conn):
-    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
-    ws.set_cooldown(db_conn, 1, 100, time.time() + 300)
-    user = ws.get_wellness_user(db_conn, 1, 100)
-    assert user is not None and user.cooldown_until is not None
-    ws.clear_cooldown(db_conn, 1, 100)
-    user = ws.get_wellness_user(db_conn, 1, 100)
-    assert user is not None and user.cooldown_until is None
+def test_enforcement_levels_no_longer_offer_cooldown():
+    """The "cooldown" *level* was never enforced (its column had no reader)
+    and was removed from the selectable set 2026-07-30. Legacy rows keep
+    their behavior via wellness_enforcement._enforcement_to_action."""
+    assert "cooldown" not in ws.ENFORCEMENT_LEVELS
+    assert ws.ENFORCEMENT_LEVELS == ("gentle", "slow_mode", "gradual")
 
 
 def test_list_active_users_excludes_opted_out(db_conn):

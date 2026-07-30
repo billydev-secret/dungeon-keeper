@@ -40,7 +40,6 @@ import discord
 
 from bot_modules.services.embeds import WELLNESS_PRIMARY
 from bot_modules.services.wellness_service import (
-    COOLDOWN_DURATION_SECONDS,
     NUDGE_SUPPRESSION_SECONDS,
     WellnessBlackout,
     WellnessCap,
@@ -58,7 +57,6 @@ from bot_modules.services.wellness_service import (
     list_blackouts,
     list_caps,
     record_away_sent,
-    set_cooldown,
     update_slow_mode_last_message,
     user_now,
     wellness_dashboard_link,
@@ -403,7 +401,9 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                 return False
 
             if decision.action == Action.COOLDOWN:
-                set_cooldown(conn, guild.id, author.id, now + COOLDOWN_DURATION_SECONDS)
+                # The breather message IS the cooldown — nothing is armed.
+                # (A cooldown_until column write lived here until 2026-07-30;
+                # nothing ever read it.)
                 await _send_cooldown(message, user)
                 return False
 
