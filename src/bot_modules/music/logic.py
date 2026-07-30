@@ -141,6 +141,56 @@ def format_spotify_summary(
     )
 
 
+# ── Track-failure messaging ──────────────────────────────────────────
+
+# Substring of the Lavalink exception (message or cause) -> plain-language
+# reason. Matched lowercase, first hit wins; ordered most-specific first.
+_FAILURE_REASONS: tuple[tuple[str, str], ...] = (
+    ("blocked due to the claimed content", "it's blocked by the rights holder on YouTube"),
+    ("copyright", "it's blocked by the rights holder on YouTube"),
+    ("sign in to confirm your age", "it's age-restricted on YouTube"),
+    ("age-restricted", "it's age-restricted on YouTube"),
+    ("private video", "the video is private"),
+    ("video is unavailable", "the video is unavailable"),
+    ("not available in your country", "it's not available in the bot's region"),
+)
+
+_MAX_TITLE = 120
+_MAX_DETAIL = 140
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def describe_track_failure(
+    title: str | None,
+    *,
+    message: str | None = None,
+    cause: str | None = None,
+) -> str:
+    """One short, Discord-safe line explaining why a track failed.
+
+    Lavalink's exception payload is ``{message, severity, cause}`` where
+    ``cause`` is a multi-KB Java stack trace -- sending it raw blows the
+    2000-char message limit and the notify silently drops (the original
+    "track vanishes with no explanation" bug). This maps the known
+    failure modes to plain language and hard-caps everything else, so
+    the returned string is always sendable.
+    """
+    label = f"**{_clip(title, _MAX_TITLE)}**" if title else "that track"
+    haystack = f"{message or ''}\n{cause or ''}".lower()
+    for needle, reason in _FAILURE_REASONS:
+        if needle in haystack:
+            return f"⚠️ Couldn't play {label} — {reason}. Skipping."
+    # Unknown failure: keep the first line of Lavalink's message as a hint.
+    detail = (message or "").strip().splitlines()[0] if message else ""
+    if detail:
+        detail = _clip(detail.rstrip("."), _MAX_DETAIL)
+        return f"⚠️ Couldn't play {label} — {detail}. Skipping."
+    return f"⚠️ Couldn't play {label} — playback failed. Skipping."
+
+
 def track_summary_from_object(track: Any, fallback_author: str | None = None) -> str:
     """Pull fields off a wavelink-like object and format the summary.
 

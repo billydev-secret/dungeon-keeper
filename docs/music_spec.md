@@ -68,7 +68,7 @@ Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are 
 | User runs `/play` while not in voice | "Join a voice channel first." |
 | User runs `/play` while in a different channel from the bot | "I'm currently in #other-channel. Join me there or wait for the queue to finish." |
 | Spotify playlist exceeds 500 tracks | "Playlist is X tracks; queued the first 500." |
-| YouTube track fails to load (region block, removed, etc.) | Skipped silently, next track plays |
+| YouTube track fails to load (rights-holder block, age gate, removed, etc.) | One plain line naming the track and the reason, e.g. "⚠️ Couldn't play **X** — it's blocked by the rights holder on YouTube. Skipping." — then the next track plays. Full Lavalink exception goes to the log only. |
 | Spotify URL is private or doesn't exist | "Playlist is private or doesn't exist." |
 | Spotify URL is malformed | "Not a valid Spotify URL." |
 | Now-playing button clicked from outside the voice channel | "You need to be in the voice channel." |

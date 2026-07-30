@@ -19,6 +19,7 @@ from discord.ext import commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.music.embeds import build_queue_embed
 from bot_modules.music.logic import (
+    describe_track_failure,
     format_spotify_summary,
     is_search_url,
     paginate_queue,
@@ -556,9 +557,23 @@ class MusicCog(commands.Cog):
     async def on_wavelink_track_exception(
         self, payload: wavelink.TrackExceptionEventPayload
     ) -> None:
-        log.warning("track exception: %s", payload.exception)
+        exc = payload.exception
+        # Full detail (multi-KB Java cause included) belongs in the log only;
+        # the channel gets one plain line from describe_track_failure.
+        log.warning(
+            "track exception for %r: severity=%s message=%s cause=%s",
+            getattr(payload.track, "title", None),
+            exc.get("severity"),
+            exc.get("message"),
+            exc.get("cause"),
+        )
         await self._notify_text(
-            payload.player, f"Track error: {payload.exception}. Skipping."
+            payload.player,
+            describe_track_failure(
+                getattr(payload.track, "title", None),
+                message=exc.get("message"),
+                cause=exc.get("cause"),
+            ),
         )
         await self._advance_after_failure(payload.player)
 
@@ -632,8 +647,13 @@ class MusicCog(commands.Cog):
         channel = player.guild.get_channel(text_id) or player.guild.get_thread(text_id)
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
             return
-        with contextlib.suppress(discord.HTTPException):
-            await channel.send(message)
+        try:
+            # Hard cap as a backstop: a message that trips the 2000-char limit
+            # gets silently rejected by Discord, which is how track errors
+            # used to vanish without a trace.
+            await channel.send(message[:1990])
+        except discord.HTTPException:
+            log.warning("notify failed in #%s: %.120s", text_id, message)
 
     async def _play_next(self, player: wavelink.Player, queue: GuildQueue) -> None:
         track = queue.next()

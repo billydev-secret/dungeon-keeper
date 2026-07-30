@@ -15,6 +15,7 @@ import pytest
 
 from bot_modules.music.embeds import build_queue_embed
 from bot_modules.music.logic import (
+    describe_track_failure,
     format_spotify_summary,
     format_track_summary,
     is_search_url,
@@ -370,5 +371,66 @@ def test_build_queue_embed_footer_reflects_loop_mode():
         loop_mode_value="track",
     )
     assert embed.footer.text == "Page 2/3 · loop: track"
+
+
+# ── describe_track_failure ───────────────────────────────────────────
+
+# A realistic AllClientsFailedException cause: the live one measured
+# 6,621 chars, which is what used to blow Discord's 2000-char limit.
+_SME_CAUSE = (
+    "com.sedmelluq.discord.lavaplayer.tools.FriendlyException: "
+    "All clients failed to load the item.\n"
+    "Client [ANDROID_VR] blocked due to the claimed content by SME.\n"
+    "Client [WEB] blocked due to the claimed content by SME.\n"
+    "Client [WEB_EMBEDDED_PLAYER] Video player configuration error\n"
+    + "\tat dev.lavalink.youtube.SomeFrame.load(SomeFrame.java:123)\n" * 120
+)
+
+
+def test_failure_message_rights_block_is_plain_and_sendable():
+    """Regression: the raw exception was ~6.6k chars, the send failed, and
+    the user saw nothing. The message must fit Discord and say why."""
+    msg = describe_track_failure(
+        "Song Title", message="All clients failed to load the item.", cause=_SME_CAUSE
+    )
+    assert len(msg) < 2000
+    assert "Song Title" in msg
+    assert "rights holder" in msg
+    assert "SomeFrame" not in msg  # no stack-trace leakage
+
+
+@pytest.mark.parametrize(
+    "message, cause, expected_reason",
+    [
+        ("x", "Client [WEB] blocked due to the claimed content by SME.", "rights holder"),
+        ("This video requires payment / copyright claim", None, "rights holder"),
+        ("Sign in to confirm your age", None, "age-restricted"),
+        (None, "This video is age-restricted", "age-restricted"),
+        ("This is a private video", None, "private"),
+        ("This video is unavailable", None, "unavailable"),
+        ("Track not available in your country", None, "region"),
+    ],
+)
+def test_failure_message_maps_known_reasons(message, cause, expected_reason):
+    msg = describe_track_failure("T", message=message, cause=cause)
+    assert expected_reason in msg
+
+
+def test_failure_message_unknown_reason_keeps_first_message_line():
+    msg = describe_track_failure(
+        "T", message="Something exploded.\nat java.base/whatever", cause=None
+    )
+    assert msg == "⚠️ Couldn't play **T** — Something exploded. Skipping."
+
+
+def test_failure_message_no_details_at_all():
+    msg = describe_track_failure(None)
+    assert msg == "⚠️ Couldn't play that track — playback failed. Skipping."
+
+
+def test_failure_message_clips_absurd_title_and_detail():
+    msg = describe_track_failure("t" * 500, message="m" * 500)
+    assert len(msg) < 400
+    assert "…" in msg
 
 
