@@ -24,6 +24,7 @@ from bot_modules.music.logic import (
     pick_substitute,
     should_advance_on_track_end,
     should_idle_disconnect,
+    substitute_queries,
     substitute_query,
     substitution_note,
     track_summary_from_object,
@@ -483,6 +484,35 @@ def test_should_advance_on_track_end(reason, expected):
 )
 def test_substitute_query(title, author, expected):
     assert substitute_query(title, author) == expected
+
+
+@pytest.mark.parametrize(
+    "title, author, expected",
+    [
+        # Real case from 2026-07-30: the uploader channel is unrelated to
+        # the song, so the channel-augmented query found nothing and the
+        # bare title was the query that rescued the track.
+        (
+            "GOT TO GIVE IT UP - MARVIN GAYE",
+            "O.E.U. Studios",
+            [
+                "GOT TO GIVE IT UP - MARVIN GAYE O.E.U. Studios",
+                "GOT TO GIVE IT UP - MARVIN GAYE",
+            ],
+        ),
+        # Author already in the title: both variants collapse to one query.
+        ("Artist - Song Title", "Artist", ["Artist - Song Title"]),
+        # Bracket-stripping applies to the title-only variant too.
+        (
+            "Song Title (Official Video)",
+            "Artist",
+            ["Song Title Artist", "Song Title"],
+        ),
+        (None, None, []),
+    ],
+)
+def test_substitute_queries(title, author, expected):
+    assert substitute_queries(title, author) == expected
 
 
 # ── pick_substitute ──────────────────────────────────────────────────

@@ -61,7 +61,10 @@ cog attempts **one** recovery before giving up:
 
 1. Search YouTube for an alternate upload (excluding the failed video id),
    then SoundCloud (`scsearch:`, requires `soundcloud: true` in
-   `lavalink/application.yml`).
+   `lavalink/application.yml`). Each source tries two queries: title +
+   uploader first, then the bare title — a YouTube "author" is the uploader
+   channel, which for re-uploads is unrelated to the song and poisons the
+   search (verified against the real 2026-07-30 failures).
 2. Each candidate must pass the guard in `music/logic.py::pick_substitute`:
    duration within ±20% of the original (floor ±15s), ≥60% of the original
    title's core words present, and no variant term (cover / remix / sped up /

@@ -28,7 +28,7 @@ from bot_modules.music.logic import (
     pick_substitute,
     should_advance_on_track_end,
     should_idle_disconnect,
-    substitute_query,
+    substitute_queries,
     substitution_note,
     track_summary_from_object,
 )
@@ -617,13 +617,17 @@ class MusicCog(commands.Cog):
         if prior is not None and prior == failed_key:
             # The substitute itself failed -- give up rather than loop.
             return False
-        query = substitute_query(
+        queries = substitute_queries(
             getattr(failed, "title", None), getattr(failed, "author", None)
         )
-        if not query:
+        if not queries:
             return False
 
-        for source in (wavelink.TrackSource.YouTube, wavelink.TrackSource.SoundCloud):
+        for source, query in (
+            (source, query)
+            for source in (wavelink.TrackSource.YouTube, wavelink.TrackSource.SoundCloud)
+            for query in queries
+        ):
             try:
                 result = await wavelink.Playable.search(query, source=source)
             except Exception as search_exc:

@@ -290,6 +290,22 @@ def substitute_query(title: str | None, author: str | None) -> str:
     return base
 
 
+def substitute_queries(title: str | None, author: str | None) -> list[str]:
+    """Ordered search queries for the recovery chain, most precise first.
+
+    A YouTube track's ``author`` is the *uploader channel*, which for
+    re-uploads is unrelated to the song (verified live: a blocked Marvin
+    Gaye upload by channel "O.E.U. Studios" searched with the channel
+    name returned only that channel's other videos, so no substitute
+    survived -- while the bare title found the real track). So: try
+    title+author first for precision, then the bare title as the rescue.
+    """
+    with_author = substitute_query(title, author)
+    title_only = _BRACKETED_RE.sub(" ", title or "").strip() or (title or "").strip()
+    queries = [q for q in (with_author, title_only) if q]
+    return list(dict.fromkeys(queries))
+
+
 def pick_substitute(
     candidates: Sequence[Any],
     *,
