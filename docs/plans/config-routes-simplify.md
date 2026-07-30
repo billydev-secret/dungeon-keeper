@@ -50,6 +50,44 @@ keep passing:
 
 Coverage floor in `pyproject.toml` is not lowered at any stage.
 
+## Outcome (all six stages shipped 2026-07-30)
+
+| after stage | lines | |
+|---|---|---|
+| baseline | 5,157 | |
+| 1 — games tests | 5,157 | tests only |
+| 2 — shared helpers | 5,068 | −89 |
+| 3 — efficiency | 5,081 | +13 (the `*_with_conn` siblings) |
+| 4 — duel games | 4,976 | −105 |
+| 5 — field tables | 4,944 | −32 |
+| 6 — section registry | 4,949 | +5 |
+| **final** | **4,949** | **−208 (−4%)** |
+
+**The line reduction came in well under the review's ~570-line estimate, and
+that is worth recording rather than glossing.** The four agents counted gross
+deletions; in practice the shared helper, the spec tables and the extracted
+section functions cost back most of what the inline code gave up. Stage 6 in
+particular is net *positive* on lines. The estimate was wrong in a predictable
+direction — dedupe of this shape trades many duplicated lines for fewer,
+denser, named ones, and the payoff is where you have to look to change
+something, not the total.
+
+What actually improved:
+
+- `get_config` 243 → 70 lines, and now a flat registry of one-line section
+  calls rather than half-registry, half-inline-blob.
+- The six duel-game handlers 284 → 103 lines.
+- `/api/config/games-*` went from **0 tests to 59**.
+- `GET /api/config`: **4 connections → 2, 17.16 ms → 11.75 ms (−32%)**,
+  measured best-of-15 on the same fixture guild.
+- All **84 route decorators preserved** — no route added or lost, so the authz
+  sweep's coverage is unchanged.
+
+Behaviour equivalence was verified per stage by diffing the full `GET
+/api/config` response (every key path, type, scalar value, and the top-level
+key order) and, for stage 5, every row written to the `config` table, against
+the pre-stage build. Identical every time.
+
 ## Stages
 
 Each stage is one commit and references its stage number. Stage 1 must precede
