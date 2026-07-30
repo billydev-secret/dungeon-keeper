@@ -17,6 +17,7 @@ from tests.db_template import migrated_db
 GUILD = 42
 ROLE = 900  # a role a sweep pruned
 GRANT_ROLE = 901  # the role the Grant button re-adds
+PING_ROLE = 902  # the role managers pinged when a card posts
 CHANNEL = 555  # the Level 5 Log / promotion-reviews channel
 SLEEPER_CHANNEL = 777  # inactive_channel_id
 
@@ -69,6 +70,32 @@ def test_config_getters_tolerate_garbage(db_path):
     with open_db(db_path) as conn:
         set_config_value(conn, svc.GRANT_ROLE_KEY, "nope", GUILD)
         assert svc.grant_role_id(conn, GUILD) == 0
+        set_config_value(conn, svc.PING_ROLE_KEY, "nope", GUILD)
+        assert svc.ping_role_id(conn, GUILD) == 0
+
+
+def test_ping_role_is_independent_of_the_grant_role(db_path):
+    """The role managers who *review* are not the role the button hands out."""
+    with open_db(db_path) as conn:
+        assert svc.ping_role_id(conn, GUILD) == 0  # unset by default
+        _set_grant_role(conn)
+        # Setting the grant role must not imply a ping role.
+        assert svc.ping_role_id(conn, GUILD) == 0
+        set_config_value(conn, svc.PING_ROLE_KEY, str(PING_ROLE), GUILD)
+        assert svc.ping_role_id(conn, GUILD) == PING_ROLE
+        assert svc.grant_role_id(conn, GUILD) == GRANT_ROLE
+
+
+@pytest.mark.parametrize(
+    ("role_id", "expected"),
+    [
+        pytest.param(PING_ROLE, f"<@&{PING_ROLE}>", id="set"),
+        pytest.param(0, "", id="unset"),
+        pytest.param(-1, "", id="negative"),
+    ],
+)
+def test_ping_mention_renders_only_when_configured(role_id, expected):
+    assert svc.ping_mention(role_id) == expected
 
 
 # ── card ledger + dedup ───────────────────────────────────────────────

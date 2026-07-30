@@ -297,10 +297,26 @@ async def maybe_log_level_5(
     # The Level 5 card doubles as a promotion review, so it carries a Grant
     # button (adds the configured promotion_review_grant_role_id). Persistent —
     # registered in __main__ — so it stays actionable across restarts.
-    from bot_modules.services.promotion_review_views import Level5PromotionView
+    from bot_modules.services.promotion_review_views import (
+        Level5PromotionView,
+        ping_send_kwargs,
+    )
+
+    # Pings promotion_review_ping_role_id (the role managers who review), which
+    # is *not* the grant role above. Silent when unset or without a db_path.
+    ping_role = 0
+    if db_path is not None:
+        try:
+            ping_role = await asyncio.to_thread(_ping_role_id, db_path, member.guild.id)
+        except Exception:
+            log.exception("Failed to read the promotion-review ping role; posting silent.")
 
     try:
-        posted = await channel.send(embed=embed, view=Level5PromotionView(member.id))
+        posted = await channel.send(
+            embed=embed,
+            view=Level5PromotionView(member.id),
+            **ping_send_kwargs(ping_role),
+        )
     except discord.Forbidden:
         log.warning(
             "Missing permission to send level %s announcements in channel %s.",
@@ -342,6 +358,13 @@ async def maybe_log_level_5(
             settings.role_grant_level,
             posted.id,
         )
+
+
+def _ping_role_id(db_path: Path, guild_id: int) -> int:
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(db_path) as conn:
+        return promo_svc.ping_role_id(conn, guild_id)
 
 
 def _record_level_5_card(

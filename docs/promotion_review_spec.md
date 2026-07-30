@@ -9,6 +9,8 @@ manager can action a return without leaving Discord — no slash commands.
 
 ## Triggers
 
+All three cards ping `promotion_review_ping_role_id` when it is set.
+
 | Kind | Fires when | Grant button does |
 |------|-----------|-------------------|
 | Level 5 | Member reaches `role_grant_level` (existing card in `maybe_log_level_5`) | Adds `promotion_review_grant_role_id` |
@@ -22,9 +24,27 @@ The `pruned_return` and `sleeper` cards also carry a **Dismiss** button.
 - Ships **dark**: the return/sleeper triggers do nothing until the Level 5 Log
   Channel is set. `pruned_return` additionally requires
   `promotion_review_grant_role_id` (else its button would no-op).
-- Both settings live on the XP config panel (`config-xp.js`,
+- These settings live on the XP config panel (`xp-settings.js`,
   `PUT /api/config/xp`).
 - Buttons are limited to admins/mods or Manage Roles.
+
+### The two roles are different settings
+
+| Key | Role it names | Used for |
+|-----|---------------|----------|
+| `promotion_review_grant_role_id` | The role handed **to** the promoted member | What the Grant button adds (`_do_grant_role`) |
+| `promotion_review_ping_role_id` | Your **role managers** | Pinged when a card posts, so a human sees it |
+
+Neither is the approver gate — that is `_can_action`: administrator, Manage
+Roles, or a configured mod. A card pings the ping role only; leave it "(none)"
+and all three cards post silently, as they did before this shipped.
+
+The mention goes in the message **content** (a role mention inside an embed
+renders but never notifies) and allow-lists exactly that one role via
+`ping_send_kwargs`. Note `discord.AllowedMentions`' unset fields default to
+*allow*, so `everyone`/`users`/`replied_user` are pinned `False` explicitly —
+the bare `AllowedMentions(roles=[...])` form still serializes
+`parse: ['everyone', 'users']`.
 
 ## Mechanics
 

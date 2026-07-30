@@ -1240,6 +1240,7 @@ def _xp_section(conn, guild_id: int) -> dict:
     return {
             "level_5_role_id": _id_str(conn, "xp_level_5_role_id", guild_id),
             "promotion_review_grant_role_id": _id_str(conn, "promotion_review_grant_role_id", guild_id),
+            "promotion_review_ping_role_id": _id_str(conn, "promotion_review_ping_role_id", guild_id),
             "level_5_log_channel_id": _id_str(conn, "xp_level_5_log_channel_id", guild_id),
             "level_up_log_channel_id": _id_str(conn, "xp_level_up_log_channel_id", guild_id),
             "xp_grant_allowed_user_ids": _id_str_list(conn, "xp_grant_allowed_user_ids", guild_id),
@@ -1949,6 +1950,7 @@ async def welcome_preview(
 class XpConfigUpdate(BaseModel):
     level_5_role_id: str | None = None
     promotion_review_grant_role_id: str | None = None
+    promotion_review_ping_role_id: str | None = None
     level_5_log_channel_id: str | None = None
     level_up_log_channel_id: str | None = None
     xp_grant_allowed_user_ids: list[str] | None = None
@@ -1975,6 +1977,7 @@ class XpConfigUpdate(BaseModel):
 _XP_ID_FIELDS = {
     "level_5_role_id": ("xp_level_5_role_id", _raw),
     "promotion_review_grant_role_id": ("promotion_review_grant_role_id", _raw),
+    "promotion_review_ping_role_id": ("promotion_review_ping_role_id", _raw),
     "level_5_log_channel_id": ("xp_level_5_log_channel_id", _raw),
     "level_up_log_channel_id": ("xp_level_up_log_channel_id", _raw),
 }

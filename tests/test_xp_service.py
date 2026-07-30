@@ -418,6 +418,61 @@ async def test_level_5_post_records_the_card_for_later_refresh(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_level_5_post_pings_only_the_configured_role_manager(tmp_path):
+    """The card announces itself to the role managers who review promotions."""
+    from bot_modules.core.db_utils import open_db, set_config_value
+    from bot_modules.services import promotion_review_service as promo_svc
+    from bot_modules.services.xp_service import maybe_log_level_5
+    from tests.db_template import migrated_db
+
+    db_path = tmp_path / "xp.db"
+    migrated_db(db_path)
+    with open_db(db_path) as conn:
+        set_config_value(conn, promo_svc.PING_ROLE_KEY, "902", GUILD_ID)
+
+    member = _FakeMember()
+    channel = AsyncMock()
+    channel.id = LOG_CHANNEL
+    channel.send.return_value = type("M", (), {"id": 9001})()
+
+    with patch(
+        "bot_modules.services.xp_service.get_guild_channel_or_thread",
+        return_value=channel,
+    ):
+        await maybe_log_level_5(member, 500.0, LOG_CHANNEL, 0, db_path=db_path)
+
+    kwargs = channel.send.await_args.kwargs
+    assert kwargs["content"] == "<@&902>"
+    # Exactly that role: no @everyone, no user mentions.
+    assert kwargs["allowed_mentions"].to_dict() == {"roles": [902], "parse": []}
+
+
+@pytest.mark.asyncio
+async def test_level_5_post_is_silent_when_no_ping_role_is_set(tmp_path):
+    """Unset ping role must not fall back to discord.py's permissive default."""
+    from bot_modules.services.xp_service import maybe_log_level_5
+    from tests.db_template import migrated_db
+
+    db_path = tmp_path / "xp.db"
+    migrated_db(db_path)
+
+    member = _FakeMember()
+    channel = AsyncMock()
+    channel.id = LOG_CHANNEL
+    channel.send.return_value = type("M", (), {"id": 9001})()
+
+    with patch(
+        "bot_modules.services.xp_service.get_guild_channel_or_thread",
+        return_value=channel,
+    ):
+        await maybe_log_level_5(member, 500.0, LOG_CHANNEL, 0, db_path=db_path)
+
+    kwargs = channel.send.await_args.kwargs
+    assert "content" not in kwargs
+    assert kwargs["allowed_mentions"].to_dict() == {"parse": []}
+
+
+@pytest.mark.asyncio
 async def test_level_5_post_without_db_path_still_posts(tmp_path):
     """Recording is additive: no db_path means no row, but the card still lands."""
     from bot_modules.services.xp_service import maybe_log_level_5
