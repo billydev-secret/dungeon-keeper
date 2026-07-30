@@ -723,17 +723,20 @@ _DUEL_SHARED_DEFAULTS: dict = {
 
 # game_key == duel_config.game_type for every game (no renaming needed).
 _DUEL_GAMES: dict = {
-    "pressure": {
-        "table": None,
-        "defaults": {},
-    },
+    "pressure": {"table": None, "defaults": {}, "fields": {}},
     "quickdraw": {
         "table": "quickdraw_config",
         "defaults": {"min_delay": 3.0, "max_delay": 8.0, "draw_window": 5.0},
+        "fields": {
+            "min_delay": (0.5, None),
+            "max_delay": (1.0, None),
+            "draw_window": (1.0, None),
+        },
     },
     "hot_potato": {
         "table": "hot_potato_config",
         "defaults": {"min_timer": 10.0, "max_timer": 45.0},
+        "fields": {"min_timer": (5.0, None), "max_timer": (10.0, None)},
     },
     "hot_potato_group": {
         "table": "hp_group_config",
@@ -741,16 +744,37 @@ _DUEL_GAMES: dict = {
             "min_fuse": 20.0, "max_fuse": 60.0, "min_hold": 2.0,
             "min_players": 2, "max_players": 10,
         },
+        "fields": {
+            "min_fuse": (5.0, None),
+            "max_fuse": (10.0, None),
+            "min_hold": (0.0, None),
+            "min_players": (2, None),
+            "max_players": (2, None),
+        },
     },
     "chicken": {
         "table": "chicken_config",
         "defaults": {"climb_duration": 25.0, "min_players": 2, "max_players": 8},
+        "fields": {
+            "climb_duration": (5.0, None),
+            "min_players": (2, None),
+            "max_players": (2, None),
+        },
     },
     "musical_chairs": {
         "table": "mc_config",
         "defaults": {
             "min_music": 5.0, "max_music": 15.0, "scramble_window": 8.0,
             "false_start_elim": 1, "min_players": 3, "max_players": 10,
+        },
+        # Insertion order is the order the UPDATE's SET clause is built in.
+        "fields": {
+            "min_music": (2.0, None),
+            "max_music": (3.0, None),
+            "scramble_window": (2.0, None),
+            "false_start_elim": "bool",
+            "min_players": (3, None),
+            "max_players": (3, None),
         },
     },
 }
@@ -785,6 +809,58 @@ def _duel_game_section(conn, guild_id: int, game_key: str) -> dict:
     ]
     out.update(_duel_game_table_row(conn, guild_id, spec["table"], spec["defaults"]))
     return out
+
+
+def _duel_shared_updates(body) -> dict:
+    """The five knobs every duel game shares, clamped.
+
+    Written out rather than table-driven so the bounds stay greppable — they
+    are the contract, and they used to be copy-pasted into all six handlers.
+    """
+    out: dict = {}
+    if body.cooldown_hours is not None:
+        out["cooldown_hours"] = max(0, body.cooldown_hours)
+    if body.sentence_hours is not None:
+        out["sentence_hours"] = max(1, body.sentence_hours)
+    allowlist = _clamp_channel_allowlist(body.channel_allowlist)
+    if allowlist is not None:
+        out["channel_allowlist"] = allowlist
+    if body.max_nick_length is not None:
+        out["max_nick_length"] = max(1, min(32, body.max_nick_length))
+    if body.max_stakes_length is not None:
+        out["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
+    return out
+
+
+def _duel_game_updates(body, game_key: str) -> dict:
+    """The per-game knobs, clamped per ``_DUEL_GAMES[game_key]["fields"]``."""
+    out: dict = {}
+    for field, rule in _DUEL_GAMES[game_key]["fields"].items():
+        value = getattr(body, field, None)
+        if value is None:
+            continue
+        if rule == "bool":
+            out[field] = 1 if value else 0
+        else:
+            low, high = rule
+            value = max(low, value)
+            out[field] = value if high is None else min(high, value)
+    return out
+
+
+async def _save_duel_game(request, game_key: str, body) -> dict:
+    """Shared body of the six /config/games-* handlers."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        shared = _duel_shared_updates(body)
+        game = _duel_game_updates(body, game_key)
+        with ctx.open_db() as conn:
+            _duel_game_upsert(conn, guild_id, game_key, shared, game)
+        return {"ok": True}
+
+    return await run_query(_q)
 
 
 def _duel_game_upsert(
@@ -2435,7 +2511,10 @@ def _clamp_channel_allowlist(values: list[str] | None) -> str | None:
     return json.dumps(sorted({int(v) for v in values if str(v).strip()}))
 
 
-class PressureConfigUpdate(BaseModel):
+class DuelSharedConfigUpdate(BaseModel):
+    """The knobs every duel game shares. Enforced for all six in
+    bot_modules/duels/base_duel.py and base_game.py."""
+
     cooldown_hours: int | None = None
     sentence_hours: int | None = None
     channel_allowlist: list[str] | None = None
@@ -2443,132 +2522,22 @@ class PressureConfigUpdate(BaseModel):
     max_stakes_length: int | None = None
 
 
-@router.put("/config/games-pressure")
-async def update_games_pressure(
-    request: Request,
-    body: PressureConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "pressure", shared, {})
-        return {"ok": True}
-
-    return await run_query(_q)
+class PressureConfigUpdate(DuelSharedConfigUpdate):
+    pass
 
 
-class QuickdrawConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class QuickdrawConfigUpdate(DuelSharedConfigUpdate):
     min_delay: float | None = None
     max_delay: float | None = None
     draw_window: float | None = None
 
 
-@router.put("/config/games-quickdraw")
-async def update_games_quickdraw(
-    request: Request,
-    body: QuickdrawConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.min_delay is not None:
-            game["min_delay"] = max(0.5, body.min_delay)
-        if body.max_delay is not None:
-            game["max_delay"] = max(1.0, body.max_delay)
-        if body.draw_window is not None:
-            game["draw_window"] = max(1.0, body.draw_window)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "quickdraw", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-class HotPotatoConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class HotPotatoConfigUpdate(DuelSharedConfigUpdate):
     min_timer: float | None = None
     max_timer: float | None = None
 
 
-@router.put("/config/games-hot-potato")
-async def update_games_hot_potato(
-    request: Request,
-    body: HotPotatoConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.min_timer is not None:
-            game["min_timer"] = max(5.0, body.min_timer)
-        if body.max_timer is not None:
-            game["max_timer"] = max(10.0, body.max_timer)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "hot_potato", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-class HotPotatoGroupConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class HotPotatoGroupConfigUpdate(DuelSharedConfigUpdate):
     min_fuse: float | None = None
     max_fuse: float | None = None
     min_hold: float | None = None
@@ -2576,99 +2545,13 @@ class HotPotatoGroupConfigUpdate(BaseModel):
     max_players: int | None = None
 
 
-@router.put("/config/games-hot-potato-group")
-async def update_games_hot_potato_group(
-    request: Request,
-    body: HotPotatoGroupConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.min_fuse is not None:
-            game["min_fuse"] = max(5.0, body.min_fuse)
-        if body.max_fuse is not None:
-            game["max_fuse"] = max(10.0, body.max_fuse)
-        if body.min_hold is not None:
-            game["min_hold"] = max(0.0, body.min_hold)
-        if body.min_players is not None:
-            game["min_players"] = max(2, body.min_players)
-        if body.max_players is not None:
-            game["max_players"] = max(2, body.max_players)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "hot_potato_group", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-class ChickenConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class ChickenConfigUpdate(DuelSharedConfigUpdate):
     climb_duration: float | None = None
     min_players: int | None = None
     max_players: int | None = None
 
 
-@router.put("/config/games-chicken")
-async def update_games_chicken(
-    request: Request,
-    body: ChickenConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.climb_duration is not None:
-            game["climb_duration"] = max(5.0, body.climb_duration)
-        if body.min_players is not None:
-            game["min_players"] = max(2, body.min_players)
-        if body.max_players is not None:
-            game["max_players"] = max(2, body.max_players)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "chicken", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-class MusicalChairsConfigUpdate(BaseModel):
-    cooldown_hours: int | None = None
-    sentence_hours: int | None = None
-    channel_allowlist: list[str] | None = None
-    max_nick_length: int | None = None
-    max_stakes_length: int | None = None
+class MusicalChairsConfigUpdate(DuelSharedConfigUpdate):
     min_music: float | None = None
     max_music: float | None = None
     scramble_window: float | None = None
@@ -2677,46 +2560,58 @@ class MusicalChairsConfigUpdate(BaseModel):
     max_players: int | None = None
 
 
+@router.put("/config/games-pressure")
+async def update_games_pressure(
+    request: Request,
+    body: PressureConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "pressure", body)
+
+
+@router.put("/config/games-quickdraw")
+async def update_games_quickdraw(
+    request: Request,
+    body: QuickdrawConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "quickdraw", body)
+
+
+@router.put("/config/games-hot-potato")
+async def update_games_hot_potato(
+    request: Request,
+    body: HotPotatoConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "hot_potato", body)
+
+
+@router.put("/config/games-hot-potato-group")
+async def update_games_hot_potato_group(
+    request: Request,
+    body: HotPotatoGroupConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "hot_potato_group", body)
+
+
+@router.put("/config/games-chicken")
+async def update_games_chicken(
+    request: Request,
+    body: ChickenConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    return await _save_duel_game(request, "chicken", body)
+
+
 @router.put("/config/games-musical-chairs")
 async def update_games_musical_chairs(
     request: Request,
     body: MusicalChairsConfigUpdate,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        shared: dict = {}
-        if body.cooldown_hours is not None:
-            shared["cooldown_hours"] = max(0, body.cooldown_hours)
-        if body.sentence_hours is not None:
-            shared["sentence_hours"] = max(1, body.sentence_hours)
-        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
-        if allowlist is not None:
-            shared["channel_allowlist"] = allowlist
-        if body.max_nick_length is not None:
-            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
-        if body.max_stakes_length is not None:
-            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
-        game: dict = {}
-        if body.min_music is not None:
-            game["min_music"] = max(2.0, body.min_music)
-        if body.max_music is not None:
-            game["max_music"] = max(3.0, body.max_music)
-        if body.scramble_window is not None:
-            game["scramble_window"] = max(2.0, body.scramble_window)
-        if body.false_start_elim is not None:
-            game["false_start_elim"] = 1 if body.false_start_elim else 0
-        if body.min_players is not None:
-            game["min_players"] = max(3, body.min_players)
-        if body.max_players is not None:
-            game["max_players"] = max(3, body.max_players)
-        with ctx.open_db() as conn:
-            _duel_game_upsert(conn, guild_id, "musical_chairs", shared, game)
-        return {"ok": True}
-
-    return await run_query(_q)
+    return await _save_duel_game(request, "musical_chairs", body)
 
 
 class GreetingWatchConfigUpdate(BaseModel):
