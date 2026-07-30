@@ -1364,22 +1364,60 @@ async def test_role_color_bad_hex(ctx, db):
     assert "hex" in interaction.response.send_message.await_args.args[0].lower()
 
 
-@pytest.mark.asyncio
-async def test_role_color_delta_e_clash(ctx, db):
-    _enable(db)
-    _add_rental(db, "role_color")
+def _staff_role(color=0xFF0000, name="Admins"):
     staff = MagicMock()
     staff.id = 77
-    staff.name = "Admins"
-    staff.color = discord.Color(0xFF0000)
+    staff.name = name
+    staff.color = discord.Color(color)
     staff.permissions = discord.Permissions(administrator=True)
+    return staff
+
+
+@pytest.mark.parametrize(
+    "picked",
+    [
+        pytest.param("#FE0101", id="near-identical-red"),
+        pytest.param("#FF0000", id="exactly-the-staff-color"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_role_color_matching_a_staff_role_is_allowed(ctx, db, picked):
+    """The ΔE staff-collision guard is gone (2026-07-29) — this is the new rule.
+
+    It refused any color within ΔE 25 of a moderation-permissioned role, on
+    the grounds that a matching hue could let a member pass for staff in the
+    member list. Every staff role in this server now carries a role icon,
+    which distinguishes staff regardless of hue, so the color no longer has to.
+    Any parseable hex is accepted, up to and including an exact match.
+    """
+    _enable(db)
+    _add_rental(db, "role_color")
     cog = _make_cog(ctx)
-    interaction = _role_interaction(_member(member_id=500), roles=[staff])
+    interaction = _role_interaction(_member(member_id=500), roles=[_staff_role()])
     with _patch_projection() as (apply_mock, _r, _n):
-        await _role_color(cog, interaction, "#FE0101")  # near-identical red
-    args = interaction.response.send_message.await_args.args
-    assert "Admins" in args[0]
-    apply_mock.assert_not_awaited()
+        await _role_color(cog, interaction, picked)
+    apply_mock.assert_awaited_once()
+    assert _personal_role(db)["color"] == int(picked.lstrip("#"), 16)
+
+
+@pytest.mark.asyncio
+async def test_role_gradient_matching_a_staff_role_is_allowed(ctx, db):
+    """Both stops were checked, so both had to stop being checked."""
+    _enable(db)
+    _add_rental(db, "role_gradient")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500), roles=[_staff_role()])
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch(
+            "bot_modules.cogs.economy_cog.feature_gate_ok",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await _role_gradient(cog, interaction, "#FF0000", "#FE0101")
+    apply_mock.assert_awaited_once()
+    row = _personal_role(db)
+    assert (row["color"], row["color2"]) == (0xFF0000, 0xFE0101)
 
 
 @pytest.mark.asyncio

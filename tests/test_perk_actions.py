@@ -1,8 +1,14 @@
-"""Projector + color-guard tests for economy/perk_actions (Stage 3, Agent C).
+"""Projector tests for economy/perk_actions (Stage 3, Agent C).
 
-Covers the ΔE staff-collision maths, hex parsing, feature gating, and the
-personal-role projection matrix (solid / gradient-supersedes / name-default /
-downgrade-clears / idempotent no-op / delete-when-empty).
+Covers hex parsing, feature gating, and the personal-role projection matrix
+(solid / gradient-supersedes / name-default / downgrade-clears / idempotent
+no-op / delete-when-empty).
+
+The ΔE staff-collision maths that used to be tested here went with
+``find_color_clash`` on 2026-07-29. What replaced it is a *cog*-level rule —
+any parseable hex is accepted — pinned in ``tests/test_economy_cog.py``
+(``test_role_color_matching_a_staff_role_is_allowed``), because with the guard
+gone there is no logic-layer function left to ask.
 """
 from __future__ import annotations
 
@@ -14,9 +20,7 @@ import pytest
 
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
-    delta_e_cie76,
     feature_gate_ok,
-    find_color_clash,
     parse_hex_color,
     revoke_role_perks,
     should_revert_nick,
@@ -115,7 +119,7 @@ def _bot(guild):
     return b
 
 
-# ── color maths ─────────────────────────────────────────────────────────────
+# ── color parsing ───────────────────────────────────────────────────────────
 
 
 def test_parse_hex_color_variants():
@@ -125,36 +129,6 @@ def test_parse_hex_color_variants():
     assert parse_hex_color("nope") is None
     assert parse_hex_color("#FFF") is None  # 3-digit shorthand not accepted
     assert parse_hex_color("#GGGGGG") is None
-
-
-def test_delta_e_identity_is_zero():
-    assert delta_e_cie76((120, 47, 247), (120, 47, 247)) == pytest.approx(0.0)
-
-
-def test_delta_e_black_white_is_large():
-    # Black↔white is the maximum lightness difference — comfortably over 25.
-    assert delta_e_cie76((0, 0, 0), (255, 255, 255)) > 90
-
-
-def test_find_color_clash_flags_near_staff_color():
-    admin = _role(
-        1, name="Admins", color=0xFF0000,
-        perms=discord.Permissions(administrator=True),
-    )
-    guild = _guild(roles=[admin])
-    # A near-identical red clashes; a distant blue does not.
-    assert find_color_clash(guild, 0xFE0101) is admin
-    assert find_color_clash(guild, 0x0000FF) is None
-
-
-def test_find_color_clash_ignores_non_staff_and_default_color():
-    plain = _role(1, name="Member", color=0xFF0000)  # colorful but not staff
-    colorless_staff = _role(
-        2, name="Mods", color=0x000000,
-        perms=discord.Permissions(manage_guild=True),
-    )
-    guild = _guild(roles=[plain, colorless_staff])
-    assert find_color_clash(guild, 0xFF0000) is None
 
 
 # ── feature gate ─────────────────────────────────────────────────────────────

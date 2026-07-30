@@ -1389,10 +1389,18 @@ cosmetic swatch band** (the "#### Cosmetics" anchor) so a rented color wins the
 display-color contest — the position is set **on create only** (a reconcile never
 re-hoists a manually moved role). The projector is idempotent: it reconciles the role
 to the member's current entitlements (name / color / gradient / icon) and downgrades
-cleanly when a component lapses. Guards: a **ΔE ≥ 25 collision check against staff role
-colors** (a too-close color is refused, the message naming the staff role it clashes
-with), and role **names run through the Voice Control name blocklist** (the shared
-matcher/table). Icon perks gate on `ROLE_ICONS` and gradient on Enhanced Role Styles
+cleanly when a component lapses. Guards: role **names run through the Voice Control
+name blocklist** (the shared matcher/table). Colors are unguarded — any parseable
+`#RRGGBB` is accepted.
+**Removed 2026-07-29:** a **ΔE ≥ 25 collision check against staff role colors**
+(`find_color_clash`) refused a too-close color, naming the staff role it clashed
+with. It was an impersonation guard: a member wearing a near-identical hue could
+pass for staff in the member list. It went because every moderation-permissioned
+role in this server now carries a **role icon**, which distinguishes staff
+independently of hue. The caveat worth remembering is that role icons need guild
+boost level 2 (`ROLE_ICONS` in `guild.features`) — a guild below that has neither
+the icons nor, now, the color guard.
+Icon perks gate on `ROLE_ICONS` and gradient on Enhanced Role Styles
 (`ENHANCED_ROLE_COLORS`) in `guild.features`. The role is deleted when the member's last
 role-perk lapses; a role-count alert fires near the 250 ceiling.
 
@@ -1479,8 +1487,8 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
     a perk the friend already has stops at an explicit "Gift anyway?" confirm
     (the rental would stack silently).
   - Each modal setter applies the matching rented component to the member's personal
-    role (§6), re-checking entitlements on submit, subject to the blocklist / ΔE /
-    feature gates. Emoji icons accept **this server's custom emojis only** (typed
+    role (§6), re-checking entitlements on submit, subject to the blocklist and
+    feature gates (the ΔE color gate was removed 2026-07-29). Emoji icons accept **this server's custom emojis only** (typed
     `:name:` or pasted; the bot stores the emoji's image; animated refused).
   - **`/bank role icon image:`** is the one surviving subcommand — modals can't take
     file uploads, so image icons (256KB max) still arrive via slash command. The

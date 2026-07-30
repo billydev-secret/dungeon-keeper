@@ -96,7 +96,7 @@ Check items off as you go. If something behaves differently than described, note
 
 - [ ] **`/bank shop`** — Open it; confirm unrented perks show Rent buttons and rented ones show a customise button.
 - [ ] **Rent a perk (Shop → Rent)** — Rent an affordable perk; confirm balance debits, your personal role updates, and weekly billing is scheduled.
-- [ ] **Customise a rented perk** — Submit a new name/color/gradient/emoji; confirm your role updates. Try a color too close to a staff role's and confirm the refusal names that role.
+- [ ] **Customise a rented perk** — Submit a new name/color/gradient/emoji; confirm your role updates. Pick a color matching a staff role's and confirm it is **accepted** (the ΔE clash guard was removed 2026-07-29; role icons distinguish staff instead).
 - [ ] **`/bank role icon image:`** — Upload a ≤256KB image while holding the icon perk; confirm your role's icon updates.
 - [ ] **`/bank gift @member <perk>`** — Gift a solid color to a friend; confirm their role updates and your balance debits.
 
