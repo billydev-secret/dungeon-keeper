@@ -59,12 +59,12 @@ exactly the parts they opted into:
   next milestone, dashboard link (link line omitted when no public URL).
 
 Both opted → one combined DM (wellness field above the quest sections).
-Economy-only → the classic digest. Wellness-only → a standalone
-"🌿 Wellness check-in" DM with **no public-channel fallback**; the combined
-digest's bank-channel fallback likewise carries a scrubbed economy-only
-embed (`notify_member(fallback_embed=…)`) so wellness state is never posted
-publicly. Guilds with the economy disabled send no daily digest at all —
-the weekly report remains the wellness DM touchpoint there.
+Economy-only → the classic digest. **Wellness content only ever rides this
+economy morning message** — a member without the economy game role gets no
+daily wellness DM (decided 2026-07-30; the weekly report remains their DM
+touchpoint). The digest's public bank-channel fallback carries a scrubbed
+economy-only embed (`notify_member(fallback_embed=…)`) so wellness state is
+never posted publicly.
 
 ### Background loops (all registered in `cog_load`)
 
