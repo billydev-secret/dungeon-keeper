@@ -286,6 +286,129 @@ class TestGamebotLobby:
         assert bot.sent_channel.send.await_count == 1
 
 
+# ── Boundary sources: a quest week rolling, a community goal tiering up ─────
+
+async def _flip(bot, guild, *, week="2026-W31", detail="**8** weeklies", now=NOW):
+    return await svc.echo_quest_flip(
+        bot, guild, week=week, detail=detail,
+        channel_id=777, message_id=888, now=now,
+    )
+
+
+async def _tier(bot, guild, *, quest_id=5, tier=1, title="Send Messages", now=NOW):
+    return await svc.echo_community_tier(
+        bot, guild, quest_id=quest_id, tier=tier, title=title,
+        detail=f"🎉 **Tier {tier} down**", channel_id=777, message_id=888, now=now,
+    )
+
+
+@pytest.mark.asyncio
+class TestQuestFlip:
+    async def test_links_the_leaderboard_panel_and_carries_the_detail(
+        self, bot, guild, sync_db_path
+    ):
+        configure(sync_db_path)
+        assert await _flip(bot, guild) is True
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "**8** weeklies" in (embed.description or "")
+        # The panel message, not just its channel — the point is landing on it.
+        assert f"/channels/{GUILD_ID}/777/888" in (embed.description or "")
+
+    async def test_one_echo_per_week(self, bot, guild, sync_db_path):
+        """The loop tick is replayable; the week is the identity."""
+        configure(sync_db_path)
+        assert await _flip(bot, guild, week="2026-W31") is True
+        assert await _flip(bot, guild, week="2026-W31", now=NOW + 3600) is False
+        assert await _flip(bot, guild, week="2026-W32", now=NOW + 604800) is True
+        assert bot.sent_channel.send.await_count == 2
+
+    async def test_a_game_echo_seconds_earlier_cannot_eat_it(
+        self, bot, guild, sync_db_path
+    ):
+        """The regression the exemption exists for.
+
+        The week rolls at a fixed instant and is never re-offered. Under the
+        global floor a party game echoing a minute before midnight would drop
+        the one announcement the week gets, silently and for good.
+        """
+        configure(sync_db_path)
+        assert await echo(bot, guild, ref="a", key="mfk") is True
+        assert await _flip(bot, guild, now=NOW + 60) is True
+        assert bot.sent_channel.send.await_count == 2
+
+    async def test_it_still_pings_nobody(self, bot, guild, sync_db_path):
+        """The ping moved out with the channel — this is the enforcement.
+
+        The old leaderboard post mentioned the opt-in economy game role. Event
+        Echo is silent by design, and the move (2026-07-29) accepted losing
+        the ping rather than carving out an exception.
+        """
+        configure(sync_db_path)
+        await _flip(bot, guild)
+        kwargs = bot.sent_channel.send.await_args.kwargs
+        assert kwargs["allowed_mentions"].roles is False
+        assert "content" not in kwargs
+        assert "<@&" not in (kwargs["embed"].description or "")
+
+
+@pytest.mark.asyncio
+class TestCommunityTier:
+    async def test_each_tier_of_one_goal_is_its_own_news(
+        self, bot, guild, sync_db_path
+    ):
+        """Three tiers a period means three echoes, and a replay means none."""
+        configure(sync_db_path)
+        assert await _tier(bot, guild, quest_id=5, tier=1) is True
+        assert await _tier(bot, guild, quest_id=5, tier=2, now=NOW + 3600) is True
+        assert await _tier(bot, guild, quest_id=5, tier=2, now=NOW + 7200) is False
+        assert bot.sent_channel.send.await_count == 2
+
+    async def test_two_goals_can_cross_the_same_tier(self, bot, guild, sync_db_path):
+        """The weekly and the monthly lane run at once and are unrelated."""
+        configure(sync_db_path)
+        assert await _tier(bot, guild, quest_id=5, tier=1) is True
+        assert await _tier(bot, guild, quest_id=6, tier=1, now=NOW + 1) is True
+        assert bot.sent_channel.send.await_count == 2
+
+    async def test_a_goal_crossing_two_tiers_in_one_pass_echoes_twice(
+        self, bot, guild, sync_db_path
+    ):
+        """A burst of activity can clear 40% and 70% inside one hourly tick.
+
+        Both go out on the same timestamp, which the global floor would
+        otherwise collapse into one.
+        """
+        configure(sync_db_path)
+        assert await _tier(bot, guild, quest_id=5, tier=1, now=NOW) is True
+        assert await _tier(bot, guild, quest_id=5, tier=2, now=NOW) is True
+        assert bot.sent_channel.send.await_count == 2
+
+    async def test_headline_names_the_goal_and_detail_carries_the_tier(
+        self, bot, guild, sync_db_path
+    ):
+        configure(sync_db_path)
+        await _tier(bot, guild, tier=2, title="Send Messages")
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "Send Messages" in (embed.title or "")
+        assert "Tier 2 down" in (embed.description or "")
+
+    async def test_a_failed_send_is_not_retried(self, bot, guild, sync_db_path):
+        """Push sources keep the flagged row rather than dropping the claim.
+
+        Nothing re-offers a tier crossing — ``notified_tier`` advanced in the
+        transaction that detected it — so releasing for retry would only erase
+        the record that a send was attempted.
+        """
+        configure(sync_db_path)
+        bot.sent_channel.send.side_effect = discord.Forbidden(MagicMock(), "no perms")
+        assert await _tier(bot, guild, quest_id=5, tier=1) is False
+        bot.sent_channel.send.side_effect = None
+        assert await _tier(bot, guild, quest_id=5, tier=1, now=NOW + 3600) is False
+        with open_db(sync_db_path) as conn:
+            # The window wasn't burned either — the next real echo still fires.
+            assert svc.last_echo_times(conn, GUILD_ID, "community_tier") == (None, None)
+
+
 # ── created_at parsing ──────────────────────────────────────────────────────
 
 @pytest.mark.parametrize(

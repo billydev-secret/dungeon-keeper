@@ -54,7 +54,6 @@ from bot_modules.economy.shop import build_shop_embed
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
-    find_color_clash,
     parse_hex_color,
     revoke_role_perks,
 )
@@ -2682,13 +2681,6 @@ class EconomyCog(commands.Cog):
                 "❌ Give a color as a hex code like `#7B2FF7`.", ephemeral=True
             )
             return
-        clash = find_color_clash(guild, value)
-        if clash is not None:
-            await interaction.response.send_message(
-                f"❌ That color is too close to **{clash.name}** — pick another.",
-                ephemeral=True,
-            )
-            return
         await asyncio.to_thread(
             self._upsert_role, guild.id, user_id, {"color": value}
         )
@@ -2713,13 +2705,6 @@ class EconomyCog(commands.Cog):
         if v1 is None or v2 is None:
             await interaction.response.send_message(
                 "❌ Give both colors as hex codes like `#7B2FF7`.", ephemeral=True
-            )
-            return
-        clash = find_color_clash(guild, v1) or find_color_clash(guild, v2)
-        if clash is not None:
-            await interaction.response.send_message(
-                f"❌ That color is too close to **{clash.name}** — pick another.",
-                ephemeral=True,
             )
             return
         await asyncio.to_thread(

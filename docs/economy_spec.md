@@ -670,13 +670,24 @@ the board always shows up to 2 goals rather than 1:
   pay flat tiers only — no bonus, an empty top list in the settle summary,
   and a name-free resolution beat sheet — because naming the most active
   confessors/repliers/whisperers would deanonymize the feed.
-- **Beat sheets, not bot posts:** kickoff / tier-crossed / final-24h /
-  resolution are **DMed to the community host**
-  (`EconSettings.community_host_user_id`, 0 → guild owner) as numbers +
-  suggested copy — the host narrates publicly in their own voice
-  (2026-07-18 decision). Tier crossings and the final-24h nudge are detected
-  hourly (`community_hourly_beats`; `notified_tier` / `final_notice_sent`
-  advance in the same transaction, so each beat sends once).
+- **Beat sheets, not bot posts:** kickoff / final-24h / resolution are **DMed
+  to the community host** (`EconSettings.community_host_user_id`, 0 → guild
+  owner) as numbers + suggested copy — the host narrates publicly in their own
+  voice (2026-07-18 decision).
+- **Tier crossings are the exception (2026-07-29):** they are posted by the
+  bot, to main chat, as an Event Echo (`community_tier` source — see
+  [event_echo_spec.md](event_echo_spec.md)) rather than DMed as a beat. A
+  milestone is news the moment it happens, and routing it through a human who
+  has to notice a DM and write it up is how it goes stale. The copy is the
+  "Suggested post" line that sheet used to carry (`quests.tier_echo_line`), so
+  the voice is unchanged — only the middleman is gone. The echo links the
+  leaderboard panel and is skipped when none is posted.
+- Tier crossings and the final-24h nudge are both detected hourly
+  (`community_hourly_pulse` → `HourlyPulse.crossings` / `.beats`;
+  `notified_tier` / `final_notice_sent` advance in the same transaction, so
+  each fires once). Because `notified_tier` advances there rather than inside
+  Event Echo, the tier echo is **exempt from the echo cooldowns** — nothing
+  would re-offer a crossing the global floor refused.
 - Kind community quests reject `signoff=1`, and the dashboard's manual
   progress/settle endpoints 422 on them (the Operations card renders them
   read-only with an "auto-tracking" note); the manual Settle path and the
@@ -1085,13 +1096,18 @@ fragments mid-period.
   surfaced on `/quests` (⚡ tags + banner), the leaderboard embed, the flip
   announcement, and the live tracker. A sign-off approved after the week
   flips pays at the approval week's rate — accepted drift.
-- **Flip announcement** — at the ISO-week roll the loop posts "this week's
-  quests are up" (+ the spotlight reveal) to the leaderboard panel's
-  channel, bank channel fallback (`_post_flip_announcement`; skipped when
-  neither is configured). It **pings the economy game role** (`game_role_id`,
-  the notifications opt-in) when set — the one recurring economy post that
-  reaches opted-in members without a DM — allow-listing exactly that role
-  (`flip_announcement_content`).
+- **Flip announcement** — at the ISO-week roll the loop announces "this week's
+  quests are up" (+ the pool size and the ⚡ spotlight reveal) **to main chat
+  as an Event Echo** (`quest_flip` source — see
+  [event_echo_spec.md](event_echo_spec.md)); `_echo_quest_flip` loads the
+  numbers, `flip_echo_detail` renders them. It links the leaderboard panel and
+  is skipped when none is posted.
+  **Changed 2026-07-29.** It used to post its own message to the leaderboard
+  channel (bank channel as fallback) and **ping the economy game role**
+  (`game_role_id`, the notifications opt-in). Both are gone: one announcement
+  beats two, and Event Echo is silent by design, so the ping went with the
+  post rather than becoming a per-source exception. Guilds with a bank channel
+  but no leaderboard panel used to get the fallback post and now get nothing.
 
 **Dynamic target band:** a counted quest may carry a target *band*
 (`0 < target_min < target_max`) instead of a fixed `target_count`. Each
@@ -1373,10 +1389,18 @@ cosmetic swatch band** (the "#### Cosmetics" anchor) so a rented color wins the
 display-color contest — the position is set **on create only** (a reconcile never
 re-hoists a manually moved role). The projector is idempotent: it reconciles the role
 to the member's current entitlements (name / color / gradient / icon) and downgrades
-cleanly when a component lapses. Guards: a **ΔE ≥ 25 collision check against staff role
-colors** (a too-close color is refused, the message naming the staff role it clashes
-with), and role **names run through the Voice Control name blocklist** (the shared
-matcher/table). Icon perks gate on `ROLE_ICONS` and gradient on Enhanced Role Styles
+cleanly when a component lapses. Guards: role **names run through the Voice Control
+name blocklist** (the shared matcher/table). Colors are unguarded — any parseable
+`#RRGGBB` is accepted.
+**Removed 2026-07-29:** a **ΔE ≥ 25 collision check against staff role colors**
+(`find_color_clash`) refused a too-close color, naming the staff role it clashed
+with. It was an impersonation guard: a member wearing a near-identical hue could
+pass for staff in the member list. It went because every moderation-permissioned
+role in this server now carries a **role icon**, which distinguishes staff
+independently of hue. The caveat worth remembering is that role icons need guild
+boost level 2 (`ROLE_ICONS` in `guild.features`) — a guild below that has neither
+the icons nor, now, the color guard.
+Icon perks gate on `ROLE_ICONS` and gradient on Enhanced Role Styles
 (`ENHANCED_ROLE_COLORS`) in `guild.features`. The role is deleted when the member's last
 role-perk lapses; a role-count alert fires near the 250 ceiling.
 
@@ -1463,8 +1487,8 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
     a perk the friend already has stops at an explicit "Gift anyway?" confirm
     (the rental would stack silently).
   - Each modal setter applies the matching rented component to the member's personal
-    role (§6), re-checking entitlements on submit, subject to the blocklist / ΔE /
-    feature gates. Emoji icons accept **this server's custom emojis only** (typed
+    role (§6), re-checking entitlements on submit, subject to the blocklist and
+    feature gates (the ΔE color gate was removed 2026-07-29). Emoji icons accept **this server's custom emojis only** (typed
     `:name:` or pasted; the bot stores the emoji's image; animated refused).
   - **`/bank role icon image:`** is the one surviving subcommand — modals can't take
     file uploads, so image icons (256KB max) still arrive via slash command. The

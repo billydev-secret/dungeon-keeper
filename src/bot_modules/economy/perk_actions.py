@@ -22,10 +22,10 @@ against, now with the real Discord projection behind them:
                          roles), so this is a plain ``in guild.features`` check —
                          no attempt-and-catch needed.
 
-Also home to the pure color maths the cog's ΔE staff-collision guard uses
-(``delta_e_cie76`` / ``find_color_clash``) and ``parse_hex_color`` — kept here
-so the projector and its guard live together and stay unit-testable without
-Discord.
+Also home to ``parse_hex_color``, kept here so the projector and the parsing
+its inputs go through stay together and unit-testable without Discord. (The
+ΔE staff-collision guard that used to live alongside it was removed on
+2026-07-29 — see the note above ``parse_hex_color``.)
 
 Discord effects are best-effort and self-healing: a failed edit/create is logged
 and the projector returns False; the next apply/revoke re-projects from the same
@@ -71,10 +71,6 @@ _FEATURE_FOR_PERK = {
 # combination the API accepts for a tertiary colour (discord.py 2.7.1 documents
 # it verbatim). The member picks nothing — renting the perk wears this shimmer.
 _HOLOGRAPHIC_PRESET = (11127295, 16759788, 16761760)
-
-# ΔE (CIE76) below this ⇒ "too close" to a staff color. Empirically ~25 is the
-# threshold where two role colors read as the same hue in the member list.
-STAFF_CLASH_THRESHOLD = 25.0
 
 
 # ── feature gate ───────────────────────────────────────────────────────
@@ -438,7 +434,20 @@ async def revoke_role_perks(
     await asyncio.to_thread(_drop)
 
 
-# ── color maths — ΔE staff-collision guard ────────────────────────────
+# ── color parsing ──────────────────────────────────────────────────────
+#
+# This section used to also hold a ΔE (CIE76) staff-collision guard:
+# `find_color_clash` refused any perk color within ΔE 25 of a role carrying a
+# moderation permission, on the grounds that a near-identical hue could let a
+# member pass for staff in the member list. Removed 2026-07-29 — every
+# moderation-permissioned role in this server now carries a **role icon**,
+# which distinguishes staff in the member list regardless of hue, so color no
+# longer has to carry that job alone.
+#
+# Worth knowing if this is ever revisited: role icons need guild boost level 2
+# (`ROLE_ICONS` in `guild.features`, which `feature_gate_ok` checks for the
+# icon perk). A guild that drops below that loses the icons and, now, has no
+# color guard either.
 
 
 def parse_hex_color(text: str) -> int | None:
@@ -452,66 +461,3 @@ def parse_hex_color(text: str) -> int | None:
         return None
 
 
-def _int_to_rgb(value: int) -> tuple[int, int, int]:
-    return ((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF)
-
-
-def _srgb_channel_to_linear(c: float) -> float:
-    c /= 255.0
-    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-
-
-def _rgb_to_lab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
-    """sRGB (0-255) → CIE L*a*b* under the D65 illuminant."""
-    r, g, b = (_srgb_channel_to_linear(c) for c in rgb)
-    # Linear RGB → XYZ (D65).
-    x = r * 0.4124 + g * 0.3576 + b * 0.1805
-    y = r * 0.2126 + g * 0.7152 + b * 0.0722
-    z = r * 0.0193 + g * 0.1192 + b * 0.9505
-    # Normalise by the D65 white point.
-    x, y, z = x / 0.95047, y / 1.0, z / 1.08883
-
-    def f(t: float) -> float:
-        return t ** (1 / 3) if t > 0.008856 else (7.787 * t) + (16 / 116)
-
-    fx, fy, fz = f(x), f(y), f(z)
-    return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
-
-
-def delta_e_cie76(rgb1: tuple[int, int, int], rgb2: tuple[int, int, int]) -> float:
-    """CIE76 color difference (Euclidean distance in L*a*b*)."""
-    l1, a1, b1 = _rgb_to_lab(rgb1)
-    l2, a2, b2 = _rgb_to_lab(rgb2)
-    return ((l1 - l2) ** 2 + (a1 - a2) ** 2 + (b1 - b2) ** 2) ** 0.5
-
-
-def _is_staff_role(role: discord.Role) -> bool:
-    """A role carrying a moderation-grade permission (admin/manage/moderate)."""
-    perms = role.permissions
-    return bool(
-        perms.administrator or perms.manage_guild or perms.moderate_members
-    )
-
-
-def find_color_clash(
-    guild: discord.Guild,
-    color_value: int,
-    *,
-    threshold: float = STAFF_CLASH_THRESHOLD,
-) -> discord.Role | None:
-    """The first staff role whose color is within ΔE ``threshold``, or None.
-
-    Staff = roles with a moderation permission AND a non-default color; a member
-    picking a near-identical hue could impersonate them in the member list, so
-    the color is rejected and this names the clashing role.
-    """
-    target = _int_to_rgb(color_value)
-    for role in getattr(guild, "roles", ()):
-        value = role.color.value
-        if value == 0:  # default/no color — nothing to clash with
-            continue
-        if not _is_staff_role(role):
-            continue
-        if delta_e_cie76(_int_to_rgb(value), target) < threshold:
-            return role
-    return None

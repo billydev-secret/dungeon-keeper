@@ -108,6 +108,7 @@ from bot_modules.services import economy_demurrage_service as demurrage_svc
 from bot_modules.services import economy_bounty_service as bounty_svc
 from bot_modules.services import economy_pin_service as pin_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
+from bot_modules.services import event_echo_service as echo_svc
 from bot_modules.services.economy_qotd_sponsor_service import (
     expire_stale_submissions,
 )
@@ -201,6 +202,38 @@ class CommunityBeat:
 
     guild_id: int
     text: str
+
+
+@dataclass(frozen=True)
+class TierCrossing:
+    """One community goal that just crossed a milestone tier.
+
+    Carries the numbers rather than a rendered string: the copy belongs in
+    ``quests`` with the rest of the goal voice, and the loop's job is to
+    notice the crossing, not to phrase it.
+    """
+
+    guild_id: int
+    quest_id: int
+    title: str
+    tier: int
+    current: int
+    target: int
+    contributors: int
+
+
+@dataclass(frozen=True)
+class HourlyPulse:
+    """What the hourly community pass found, split by who hears about it.
+
+    ``beats`` are DMed to the host to write up in their own voice; ``crossings``
+    are echoed to main chat by the bot. Tier crossings used to be beats — they
+    moved on 2026-07-29, because a milestone is news the moment it happens and
+    waiting on a human to notice a DM is how it goes stale.
+    """
+
+    beats: tuple[CommunityBeat, ...] = ()
+    crossings: tuple[TierCrossing, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -687,23 +720,29 @@ def _repair_orphaned_community_quests(
     return beats
 
 
-def community_hourly_beats(
+def community_hourly_pulse(
     conn: sqlite3.Connection,
     guild_id: int,
     now_ts: float,
-) -> list[CommunityBeat]:
-    """Every-tick beat detection for the running guild-wide goals.
+) -> HourlyPulse:
+    """Every-tick detection for the running guild-wide goals.
 
     Covers the weekly community lanes and the monthly lane. Tier crossings
     compare the live counter against ``notified_tier`` (which advances here,
-    same transaction, so a beat DMs once); the final-24h nudge fires when the
-    goal's period (ISO week for community, calendar month for monthly) has
-    under a day left and the top tier is still open.
+    same transaction, so a crossing surfaces once); the final-24h nudge fires
+    when the goal's period (ISO week for community, calendar month for
+    monthly) has under a day left and the top tier is still open.
+
+    ``notified_tier`` advancing here — outside Event Echo, in the transaction
+    that detects the crossing — is why the tier echo is exempt from the
+    cooldowns: nothing re-offers a crossing on a later tick, so an echo the
+    floor refused would be lost rather than delayed.
     """
     settings = load_econ_settings(conn, guild_id)
     if not settings.enabled:
-        return []
+        return HourlyPulse()
     beats: list[CommunityBeat] = []
+    crossings: list[TierCrossing] = []
     offset = get_tz_offset_hours(conn, guild_id)
     today = logic.local_day_for(now_ts, offset)
     active = [
@@ -723,13 +762,15 @@ def community_hourly_beats(
                 (crossed, qid),
             )
             contributors, _top = community_contrib_summary(conn, qid)
-            beats.append(
-                CommunityBeat(
-                    guild_id,
-                    quests.beat_tier(
-                        str(quest["title"]), crossed, current, target,
-                        contributors,
-                    ),
+            crossings.append(
+                TierCrossing(
+                    guild_id=guild_id,
+                    quest_id=qid,
+                    title=str(quest["title"]),
+                    tier=crossed,
+                    current=current,
+                    target=target,
+                    contributors=contributors,
                 )
             )
         if str(quest["qtype"]) == "monthly":
@@ -752,7 +793,7 @@ def community_hourly_beats(
                     quests.beat_final24(str(quest["title"]), current, target),
                 )
             )
-    return beats
+    return HourlyPulse(beats=tuple(beats), crossings=tuple(crossings))
 
 
 def _seconds_to_next_week_start(
@@ -782,35 +823,38 @@ def _seconds_to_next_month_start(
     return max(0.0, start_ts - now_ts)
 
 
-def flip_announcement_content(
-    pool: int, spot_label: str | None, game_role_id: int
-) -> tuple[str, int]:
-    """The weekly flip body + the role id to ping (0 = none).
+def flip_echo_detail(pool: int, spot_label: str | None) -> str:
+    """The detail line(s) under a quest-flip echo.
 
-    Opted-in members hold the economy game role, so the flip pings it — the one
-    recurring economy post that reaches them without a DM. The caller allow-lists
-    exactly that role so a copied body can never mint an @everyone ping.
+    Everything the old leaderboard-channel post said except its own headline,
+    which Event Echo now supplies — and except its role ping, which went with
+    the channel it used to be posted in (see ``_echo_quest_flip``).
     """
-    lines = [
-        f"📋 **This week's quests are up!** {pool} weeklies in the pool — "
-        f"`/bank quests` shows yours.",
-    ]
+    lines = [f"**{pool}** weeklies in the pool — `/bank quests` shows yours."]
     if spot_label:
         lines.append(f"⚡ **Spotlight:** {spot_label} pays **double** all week.")
-    body = "\n".join(lines)
-    if game_role_id:
-        return f"<@&{game_role_id}>\n{body}", game_role_id
-    return body, 0
+    return "\n".join(lines)
 
 
-async def _post_flip_announcement(
+async def _echo_quest_flip(
     bot: discord.Client, db_path: Path, guild_id: int, now_ts: float
 ) -> None:
-    """Post "this week's quests are up" at the ISO-week roll (stage 5).
+    """Announce "this week's quests are up" at the ISO-week roll (stage 5).
 
-    Lands in the leaderboard panel's channel when one is posted, else the
-    bank channel; silently skips guilds with neither. Reveals the ⚡
-    spotlight kind — the week's featured activity paying double.
+    Goes to main chat through Event Echo rather than posting itself (changed
+    2026-07-29). Previously this sent its own message to the leaderboard
+    channel, or the bank channel as a fallback, pinging the opt-in economy
+    game role. Routing it through Event Echo means one announcement rather
+    than two, under the same dedupe every other announcement gets — at the
+    cost of the ping, since echoes are silent by design and a per-source
+    exception is a feature to design, not a flag to leave lying around (see
+    ``event_echo_logic``'s module docstring).
+
+    Requires a **posted leaderboard panel**: that is what the echo links at,
+    and it is the only surface that renders the week's quests. "New quests are
+    up" pointing nowhere is the empty alarm ``raffle_last_call`` refuses to
+    send for the same reason. Guilds with a bank channel but no panel, which
+    used to get the fallback post, now get nothing.
     """
 
     def _load():
@@ -820,27 +864,63 @@ async def _post_flip_announcement(
             week = quests.iso_week_for(logic.local_day_for(now_ts, offset))
             spot = spotlight_kind(conn, guild_id, week)
             pool = len(list_active_pool_ids(conn, guild_id, "weekly"))
-            return settings, spot, pool
+            return settings, week, spot, pool
 
-    settings, spot, pool = await asyncio.to_thread(_load)
-    channel_id = settings.leaderboard_channel_id or settings.bank_channel_id
+    settings, week, spot, pool = await asyncio.to_thread(_load)
     guild = bot.get_guild(guild_id)
-    channel = guild.get_channel(channel_id) if guild else None
-    if not isinstance(channel, discord.TextChannel):
+    if guild is None:
+        return
+    if not settings.leaderboard_channel_id or not settings.leaderboard_message_id:
         return
     spot_label = quests.TRIGGER_KINDS.get(spot, spot) if spot else None
-    content, ping_role = flip_announcement_content(
-        pool, spot_label, settings.game_role_id
+    await echo_svc.echo_quest_flip(
+        bot,
+        guild,
+        week=week,
+        detail=flip_echo_detail(pool, spot_label),
+        channel_id=settings.leaderboard_channel_id,
+        message_id=settings.leaderboard_message_id,
+        now=now_ts,
     )
-    mentions = (
-        discord.AllowedMentions(roles=[discord.Object(id=ping_role)])
-        if ping_role
-        else discord.AllowedMentions.none()
-    )
-    try:
-        await channel.send(content, allowed_mentions=mentions)
-    except discord.HTTPException:
-        log.warning("flip announcement failed to send in %s", channel_id)
+
+
+async def _echo_tier_crossings(
+    bot: discord.Client,
+    db_path: Path,
+    guild_id: int,
+    crossings: tuple[TierCrossing, ...],
+) -> None:
+    """Echo each milestone a community goal crossed this tick.
+
+    Gated on the leaderboard panel for the same reason as the flip: the panel
+    is where the progress bar lives, so it is the only thing worth linking a
+    reader at. One settings load for the whole batch — a goal crossing two
+    tiers in one pass is rare but must not cost two reads.
+    """
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+
+    def _load(gid: int = guild_id):
+        with open_db(db_path) as conn:
+            return load_econ_settings(conn, gid)
+
+    settings = await asyncio.to_thread(_load)
+    if not settings.leaderboard_channel_id or not settings.leaderboard_message_id:
+        return
+    for cross in crossings:
+        await echo_svc.echo_community_tier(
+            bot,
+            guild,
+            quest_id=cross.quest_id,
+            tier=cross.tier,
+            title=cross.title,
+            detail=quests.tier_echo_line(
+                cross.tier, cross.current, cross.target, cross.contributors
+            ),
+            channel_id=settings.leaderboard_channel_id,
+            message_id=settings.leaderboard_message_id,
+        )
 
 
 async def _send_community_beats(
@@ -1904,21 +1984,24 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
 
         if week_rolled:
             try:
-                await _post_flip_announcement(bot, db_path, guild.id, now_ts)
+                await _echo_quest_flip(bot, db_path, guild.id, now_ts)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception(
-                    "Economy loop: flip announcement failed for guild %s.",
+                    "Economy loop: quest flip echo failed for guild %s.",
                     guild.id,
                 )
 
-        def _hourly_beats(gid: int = guild.id):
+        def _hourly_pulse(gid: int = guild.id):
             with open_db(db_path) as conn:
-                return community_hourly_beats(conn, gid, now_ts)
+                return community_hourly_pulse(conn, gid, now_ts)
 
+        crossings: tuple[TierCrossing, ...] = ()
         try:
-            beats.extend(await asyncio.to_thread(_hourly_beats))
+            pulse = await asyncio.to_thread(_hourly_pulse)
+            beats.extend(pulse.beats)
+            crossings = pulse.crossings
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1926,6 +2009,19 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                 "Economy loop: community beat check failed for guild %s.",
                 guild.id,
             )
+
+        if crossings:
+            # After the detection commits, never before: `notified_tier` has
+            # already advanced, so a raise here costs the echo and nothing else.
+            try:
+                await _echo_tier_crossings(bot, db_path, guild.id, crossings)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Economy loop: tier crossing echo failed for guild %s.",
+                    guild.id,
+                )
 
         try:
             await _send_community_beats(bot, db_path, beats)

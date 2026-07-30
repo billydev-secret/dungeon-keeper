@@ -18,9 +18,11 @@ from bot_modules.services.event_echo_logic import (
     PER_TYPE_COOLDOWN_SECONDS,
     SOURCE_AUCTION_CLOSING,
     SOURCE_BOUNTY,
+    SOURCE_COMMUNITY_TIER,
     SOURCE_DISCORD_EVENT,
     SOURCE_PARTY_GAME,
     SOURCE_POOLS_CLOSING,
+    SOURCE_QUEST_FLIP,
     SOURCE_RAFFLE_CLOSING,
     build_echo_embed,
     closing_due,
@@ -71,7 +73,7 @@ NOW = 1_800_000_000.0
 )
 def test_decide_applies_both_cooldowns(last_same_type, last_any, allowed, reason):
     verdict = decide(
-        now=NOW, last_same_type=last_same_type, last_any=last_any, deadline=False
+        now=NOW, last_same_type=last_same_type, last_any=last_any, exempt=False
     )
     assert verdict.allowed is allowed
     assert verdict.reason == reason
@@ -164,6 +166,8 @@ class TestEchoEmbed:
             # "Auction X is starting" would be actively wrong on a last-call.
             pytest.param(SOURCE_AUCTION_CLOSING, "Last call", id="auction-closing"),
             pytest.param(SOURCE_POOLS_CLOSING, "Last call", id="pools-closing"),
+            # The third shape: neither an invitation nor a warning.
+            pytest.param(SOURCE_COMMUNITY_TIER, "Community goal", id="tier-crossed"),
         ],
     )
     def test_headline_matches_what_actually_happened(self, source, expected_in_title):
@@ -171,38 +175,96 @@ class TestEchoEmbed:
         assert expected_in_title in (embed.title or "")
         assert "Thing" in (embed.title or "")
 
+    def test_detail_renders_above_the_link(self):
+        """Sources whose news is a number get one line of their own.
 
-class TestDeadlineSources:
+        The lead is static per source, so "8 weeklies in the pool" can only
+        live here — and it has to sit above the call to action, or the reader
+        hits the link before the reason to click it.
+        """
+        embed = build_echo_embed(
+            name="This week's quests", url="https://x/1",
+            source=SOURCE_QUEST_FLIP, detail="**8** weeklies in the pool",
+        )
+        desc = embed.description or ""
+        assert "**8** weeklies in the pool" in desc
+        assert desc.index("weeklies") < desc.index("https://x/1")
+
+    def test_detail_is_optional(self):
+        """Every pre-existing source passes none, and must render unchanged."""
+        embed = build_echo_embed(name="G", channel_id=9, url="u")
+        assert (embed.description or "").count("\n") == 1  # lead, then the link
+
     @pytest.mark.parametrize(
-        "source, deadline",
+        "source, cta",
         [
-            pytest.param(SOURCE_PARTY_GAME, False, id="game-start"),
-            pytest.param(SOURCE_BOUNTY, False, id="new-bounty"),
-            pytest.param(SOURCE_AUCTION_CLOSING, True, id="auction-closing"),
-            pytest.param(SOURCE_POOLS_CLOSING, True, id="pools-closing"),
-            pytest.param(SOURCE_RAFFLE_CLOSING, True, id="raffle-closing"),
+            pytest.param(SOURCE_PARTY_GAME, "Jump in", id="game-invites-you-in"),
+            pytest.param(SOURCE_AUCTION_CLOSING, "Jump in", id="deadline-invites-too"),
+            # "Jump in" is an invitation, and there is nothing to join: the
+            # week has begun, the tier is banked.
+            pytest.param(SOURCE_QUEST_FLIP, "See the board", id="flip-points-at-panel"),
+            pytest.param(
+                SOURCE_COMMUNITY_TIER, "See the board", id="tier-points-at-panel"
+            ),
         ],
     )
-    def test_which_sources_are_deadlines(self, source, deadline):
-        assert spec_for(source).deadline is deadline
+    def test_call_to_action_matches_the_shape(self, source, cta):
+        embed = build_echo_embed(name="Thing", url="u", source=source)
+        assert f"[{cta} →]" in (embed.description or "")
 
-    def test_a_deadline_echo_cannot_be_crowded_out(self):
+
+class TestExemptSources:
+    @pytest.mark.parametrize(
+        "source, exempt, retry",
+        [
+            # Start sources: cooled down like everything else, and not retried
+            # (their value expires in minutes).
+            pytest.param(SOURCE_PARTY_GAME, False, False, id="game-start"),
+            pytest.param(SOURCE_BOUNTY, False, False, id="new-bounty"),
+            # Deadline sources: exempt *and* retried — they are re-offered by
+            # the sweep on every tick inside the window.
+            pytest.param(SOURCE_AUCTION_CLOSING, True, True, id="auction-closing"),
+            pytest.param(SOURCE_POOLS_CLOSING, True, True, id="pools-closing"),
+            pytest.param(SOURCE_RAFFLE_CLOSING, True, True, id="raffle-closing"),
+            # "Just happened" sources: exempt, but never retried — nothing
+            # re-offers a push source, so dropping the claim would only lose
+            # the record that a send was attempted.
+            pytest.param(SOURCE_QUEST_FLIP, True, False, id="quest-flip"),
+            pytest.param(SOURCE_COMMUNITY_TIER, True, False, id="community-tier"),
+        ],
+    )
+    def test_exempt_and_retry_are_independent(self, source, exempt, retry):
+        """One flag used to carry both, and the third shape split them.
+
+        A deadline is exempt *because* it will be re-offered; a boundary the
+        server just crossed is exempt *because* it won't be.
+        """
+        assert spec_for(source).exempt is exempt
+        assert spec_for(source).retry is retry
+
+    @pytest.mark.parametrize(
+        "source, survives",
+        [
+            pytest.param(SOURCE_PARTY_GAME, False, id="game-start-loses"),
+            pytest.param(SOURCE_AUCTION_CLOSING, True, id="deadline-survives"),
+            pytest.param(SOURCE_QUEST_FLIP, True, id="quest-flip-survives"),
+            pytest.param(SOURCE_COMMUNITY_TIER, True, id="tier-survives"),
+        ],
+    )
+    def test_an_exempt_echo_cannot_be_crowded_out(self, source, survives):
         """The rare valuable echo must not lose to a routine one.
 
         A game echoed 30s ago would refuse anything else under the global
-        floor — but "auction ends in an hour" has no useful later moment, so
-        dropping it loses it outright.
+        floor. "Auction ends in an hour" has no useful later moment; neither
+        does an ISO week rolling or a tier going down, and for those the
+        dedupe that would have re-offered them (``notified_tier``) has already
+        advanced — so a skip is a permanent loss, not a delay.
         """
-        blocked = decide(
+        verdict = decide(
             now=NOW, last_same_type=NOW - 30, last_any=NOW - 30,
-            deadline=spec_for(SOURCE_PARTY_GAME).deadline,
+            exempt=spec_for(source).exempt,
         )
-        allowed = decide(
-            now=NOW, last_same_type=NOW - 30, last_any=NOW - 30,
-            deadline=spec_for(SOURCE_AUCTION_CLOSING).deadline,
-        )
-        assert blocked.allowed is False
-        assert allowed.allowed is True
+        assert verdict.allowed is survives
 
 
 

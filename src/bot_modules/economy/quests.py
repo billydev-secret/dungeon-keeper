@@ -365,10 +365,42 @@ def p25_target(counts: list[int], target_min: int, target_max: int) -> int:
     return max(target_min, min(target_max, max(1, round(p25))))
 
 
+def tier_echo_line(
+    tier: int, current: int, target: int, contributors: int
+) -> str:
+    """The public line for a community goal crossing a milestone tier.
+
+    Not a beat sheet — this one goes out as-is, as the detail line of an Event
+    Echo. It is the "Suggested post" the host's tier sheet used to carry, kept
+    in the same voice: that sheet existed to hand a human words worth posting,
+    so when the bot took the post over (2026-07-29) the move was to keep the
+    voice and drop the middleman, not to write a second voice for one event.
+
+    Two things the handover changed. The goal's title is gone — the echo's
+    headline carries it, and the sheet only repeated it because a pasted line
+    has no headline above it. And the last tier no longer promises a next one:
+    a host would have caught "next tier's on the board" under a full clear,
+    an unedited bot post would not.
+    """
+    pct = round(100 * current / target) if target else 0
+    if tier >= len(COMMUNITY_TIERS):
+        return (
+            f"🎉 **Tier {tier} down** — {pct}%, a full clear. "
+            f"{contributors} of you got us there, and every tier is banked!"
+        )
+    return (
+        f"🎉 **Tier {tier} down** — {pct}% and climbing, {contributors} of you "
+        f"have chipped in. Payout secured for everyone; next tier's on the board!"
+    )
+
+
 # ── Community-weekly beat sheets ──────────────────────────────────────
 # DMed to the host (not posted publicly): the numbers plus suggested copy
 # they can paste or rewrite in their own voice. Pure string builders so the
-# copy stays table-testable.
+# copy stays table-testable. Tier crossings used to be one of these; they are
+# now echoed to main chat directly (`tier_echo_line` above), so what is left
+# here is the kickoff, the final-24h nudge and the end-of-period resolution —
+# the beats that still want a human writing them.
 
 
 def beat_kickoff(title: str, kind_label: str, target: int, week: str) -> str:
@@ -382,20 +414,6 @@ def beat_kickoff(title: str, kind_label: str, target: int, week: str) -> str:
         f"counts toward it — {kind_label.lower()}. Hit {target} together "
         f"and everyone gets paid three times over. Progress lives on the "
         f"leaderboard. Go!"
-    )
-
-
-def beat_tier(
-    title: str, tier: int, current: int, target: int, contributors: int
-) -> str:
-    pct = round(100 * current / target) if target else 0
-    return (
-        f"🏁 **Tier {tier} crossed** — {title}\n"
-        f"{current}/{target} ({pct}%) · {contributors} members contributed\n\n"
-        f"Suggested post:\n"
-        f"> 🎉 Tier {tier} down on **{title}** — {pct}% and climbing, "
-        f"{contributors} of you have chipped in. Payout secured for "
-        f"everyone; next tier's on the board!"
     )
 
 

@@ -1,6 +1,6 @@
 """Event Echo — the I/O half: cooldown store, the sender, and the poll loop.
 
-Seven sources feed one sender, in two shapes.
+Nine sources feed one sender, in three shapes.
 
 **"This just started"** — echo it because someone might want to join:
 
@@ -21,13 +21,26 @@ Seven sources feed one sender, in two shapes.
 The last four are swept by :func:`econ_candidates`. Their queries live in the
 services that own those tables, so Event Echo consumes rows it doesn't shape.
 
+**"This just happened"** — echo it because the server crossed a boundary
+worth marking. Neither an invitation nor a warning; nobody has to act:
+
+  * **A new quest period going live** — ``echo_quest_flip``, called from the
+    economy loop at the ISO-week roll.
+  * **A community goal crossing a tier** — ``echo_community_tier``, called
+    from the same loop's hourly beat pass.
+
 The distinction is not cosmetic: deadline echoes bypass the cooldowns, because
-skip-don't-queue is right for a game start and wrong for a deadline (see
-``SourceSpec.deadline``).
+skip-don't-queue is right for a game start and wrong for a deadline. The two
+"just happened" sources bypass them for a different reason — their dedupe
+lives *outside* Event Echo (the ISO week; ``econ_community_progress.
+notified_tier``, which the beat pass advances in the same transaction that
+detects the crossing), so a suppressed echo is never re-offered and the news
+is gone for good rather than merely late. See ``SourceSpec.exempt``.
 
 Every one of them ends at :func:`echo_event`, which owns the destination, the
-cooldowns and the dedupe claim. An eighth source means a function returning
-:class:`EchoCandidate` and a ``SOURCE_SPECS`` row, not another dispatch path.
+cooldowns and the dedupe claim. A tenth source means a function returning
+:class:`EchoCandidate` — or, for a push source, one thin wrapper like the two
+below — and a ``SOURCE_SPECS`` row, not another dispatch path.
 
 **Why a poll loop for party games.** Not because hooking would mean touching
 28 call sites — those funnel through one ``update_game_message``, and
@@ -84,10 +97,12 @@ from bot_modules.services.event_echo_logic import (
     RETENTION_SECONDS,
     SOURCE_AUCTION_CLOSING,
     SOURCE_BOUNTY,
+    SOURCE_COMMUNITY_TIER,
     SOURCE_DISCORD_EVENT,
     SOURCE_GAMEBOT,
     SOURCE_PARTY_GAME,
     SOURCE_POOLS_CLOSING,
+    SOURCE_QUEST_FLIP,
     SOURCE_RAFFLE_CLOSING,
     build_echo_embed,
     closing_due,
@@ -196,6 +211,11 @@ def release_echo(
       lose the last call outright, with hundreds of usable ticks still inside
       the window. The deadline bounds the retries on its own — once it passes,
       the sweep stops offering the candidate at all.
+    * **"Just happened" sources** (``retry=False``) also keep the flagged row,
+      but for the opposite reason to a lobby: nothing re-offers them at all,
+      since they are pushed once from the event itself. Dropping the row would
+      leave no record that the send was ever attempted, and there is no later
+      tick for it to help.
     """
     if retry:
         conn.execute(
@@ -246,6 +266,7 @@ async def echo_event(
     url: str,
     host_name: str | None = None,
     deadline_epoch: float | None = None,
+    detail: str | None = None,
     now: float | None = None,
 ) -> bool:
     """Post one echo, subject to config, cooldowns and dedupe.
@@ -286,7 +307,7 @@ async def echo_event(
                 now=now,
                 last_same_type=last_same,
                 last_any=last_any,
-                deadline=spec_for(source).deadline,
+                exempt=spec_for(source).exempt,
             )
             claimed = claim_echo(
                 conn,
@@ -313,7 +334,7 @@ async def echo_event(
                 guild_id=guild.id,
                 source=source,
                 ref=ref,
-                retry=spec_for(source).deadline,
+                retry=spec_for(source).retry,
             )
 
     dest_id, go = await asyncio.to_thread(_claim)
@@ -338,6 +359,7 @@ async def echo_event(
             host_name=host_name,
             source=source,
             deadline_epoch=deadline_epoch,
+            detail=detail,
             color=color,
         )
         # Silent by design — see event_echo_logic's module docstring.
@@ -399,6 +421,86 @@ async def echo_discord_event(bot, event: discord.ScheduledEvent) -> bool:
         origin_channel_id=event.channel.id if event.channel is not None else None,
         url=event.url,
         host_name=event.creator.display_name if event.creator else None,
+    )
+
+
+# ── Sources 8–9: boundaries the server crossed ──────────────────────────────
+#
+# Both are *push* sources, fired once by the economy loop at the moment it
+# commits the thing being announced, and both link at the leaderboard panel —
+# the one surface that renders a week's quests and a goal's progress bar, so
+# it is where a reader who wants more than the one line actually goes.
+#
+# Neither passes `origin_channel_id`. "A fresh set of weeklies just landed in
+# #economy" is wrong: the quests aren't *in* a channel, and naming the panel's
+# channel alongside a link to the panel is the same fact twice.
+#
+# The copy for each `detail` line is built by the economy, not here — those
+# numbers (pool size, spotlight, tier, contributors) are its vocabulary, and
+# the warm phrasing for goal progress was written on purpose (see
+# `quests.TRIGGER_FLAVOR` and `quests.tier_echo_line`). Event Echo owns the
+# frame; the feature owns its own voice.
+
+async def echo_quest_flip(
+    bot,
+    guild: discord.Guild,
+    *,
+    week: str,
+    detail: str,
+    channel_id: int,
+    message_id: int,
+    now: float | None = None,
+) -> bool:
+    """Echo a new quest period going live, at the ISO-week roll.
+
+    Keyed on the week, so a loop tick replayed after a restart cannot announce
+    the same week twice.
+    """
+    return await echo_event(
+        bot,
+        guild=guild,
+        source=SOURCE_QUEST_FLIP,
+        echo_key=SOURCE_QUEST_FLIP,
+        ref=week,
+        name="This week's quests",
+        origin_channel_id=None,
+        url=jump_url(guild.id, channel_id, message_id),
+        detail=detail,
+        now=now,
+    )
+
+
+async def echo_community_tier(
+    bot,
+    guild: discord.Guild,
+    *,
+    quest_id: int,
+    tier: int,
+    title: str,
+    detail: str,
+    channel_id: int,
+    message_id: int,
+    now: float | None = None,
+) -> bool:
+    """Echo a community goal crossing a milestone tier.
+
+    ``ref`` is the goal and the tier together rather than the goal alone: a
+    period's three tiers are three separate pieces of news, and a goal that
+    crosses two of them inside one hourly pass must produce two echoes. The
+    real once-only guarantee is upstream in ``notified_tier`` — this ref is
+    the belt to its braces, and covers a replayed tick.
+    """
+    return await echo_event(
+        bot,
+        guild=guild,
+        source=SOURCE_COMMUNITY_TIER,
+        echo_key=SOURCE_COMMUNITY_TIER,
+        ref=f"{quest_id}:{tier}",
+        name=title,
+        origin_channel_id=None,
+        url=jump_url(guild.id, channel_id, message_id),
+        detail=detail,
+        now=now,
     )
 
 

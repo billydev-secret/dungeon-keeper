@@ -24,8 +24,15 @@ It is a signpost, not a notification system. It never pings.
 3. **Skipping beats queueing.** A game that arrives inside a cooldown is
    dropped, not held. Announcing it later means announcing something stale.
 4. **Rate limits are the design, not a setting.** The whole feature is
-   cooldown arithmetic wrapped around seven event sources — except for the
-   deadline ones, where the right rate limit turned out to be none at all.
+   cooldown arithmetic wrapped around nine event sources — except for the
+   exempt ones, where the right rate limit turned out to be none at all.
+5. **One announcement per event, not two.** A source that already announced
+   itself somewhere gives that up when it moves here (2026-07-29): the quest
+   flip's own leaderboard-channel post was deleted rather than left running
+   alongside its echo, and community tier crossings stopped DMing the host a
+   beat sheet. Duplicating news into two places is noise, not coverage — and
+   the cost is paid honestly, since the flip's opt-in role ping went with the
+   post rather than being carved into principle 1.
 
 ## Configuration
 
@@ -43,9 +50,10 @@ There are no slash commands. Cooldown windows are constants in
 
 ## Sources
 
-Two shapes. **"This just started"** — echo it so people can join. **"Last
-chance"** — echo it because a deadline is about to pass. The distinction is
-not cosmetic; see Rate limiting.
+Three shapes. **"This just started"** — echo it so people can join. **"Last
+chance"** — echo it because a deadline is about to pass. **"This just
+happened"** — echo it because the server crossed a boundary worth marking;
+nobody has to act. The distinction is not cosmetic; see Rate limiting.
 
 | Source | Shape | Trigger | Dedupe `ref` |
 |---|---|---|---|
@@ -56,10 +64,32 @@ not cosmetic; see Rate limiting.
 | `auction_closing` | **deadline** | An open `econ_auctions` row whose `ends_at` is within the hour | auction id |
 | `pools_closing` | **deadline** | An open `casino_pools_rounds` row whose `closes_at` is within the hour | round id |
 | `raffle_closing` | **deadline** | The guild's ISO week rolls within the hour (and the raffle is enabled) | ISO week (`2026-W31`) |
+| `quest_flip` | **happened** | A new quest period going live at the ISO-week roll | ISO week (`2026-W31`) |
+| `community_tier` | **happened** | A community goal crossing a 40% / 70% / 100% tier | `quest_id:tier` |
 
 `echo_key` is the game type for party games, the sub-game for Gamebot, and
 the source name for everything else — those fire a handful of times a year,
 so there is nothing finer to bucket by.
+
+**The two "happened" sources are pushed, not swept.** `economy_loop` calls
+`echo_quest_flip` / `echo_community_tier` at the moment it commits the thing
+being announced, the way `events_cog` calls `echo_discord_event`. Both link at
+the **leaderboard panel** (`econ_leaderboard_channel_id` /
+`econ_leaderboard_message_id`) — the one surface rendering a week's quests and
+a goal's progress bar — and both skip entirely when no panel is posted, the
+same gate the raffle applies to the shop panel and for the same reason.
+
+Neither passes an origin channel: the quests aren't *in* a channel, and naming
+the panel's channel next to a link to the panel is the same fact twice.
+
+Both carry a **`detail` line** the static `lead` can't: the pool size and ⚡
+spotlight for the flip, the tier and contributor count for a crossing. That
+copy is built by the economy (`economy_loop.flip_echo_detail`,
+`quests.tier_echo_line`), not here — Event Echo owns the frame, the feature
+owns its own voice. `tier_echo_line` is the "Suggested post" line the host's
+beat sheet used to carry, kept deliberately (see commit 723d2533), minus the
+goal title the headline already shows and minus the promise of a next tier
+when the crossing *is* the last one.
 
 **The four economy sources** are swept together by `econ_candidates`, on one
 shared read connection per tick, and each yields an `EchoCandidate` — so the
@@ -152,14 +182,29 @@ Two windows, both of which must pass — for **start** sources:
 - **Global floor** — 10 minutes. Nothing at all within 10 minutes of the last
   echo, whatever it was.
 
-**Deadline sources skip both.** Skip-don't-queue is right for a game start —
-miss one and another comes along within the hour — and wrong for a deadline,
-because there is no useful later moment: an "auction ends in an hour" dropped
-because a party game echoed 8 minutes earlier is simply lost. The floor exists
-to stop ~20 game types bursting; auctions and pools fire a handful of times a
-year (2 auctions in the server's entire history), so exempting them costs
-nothing and only ever saves the valuable ones. Exempt means "can't be crowded
-out", not "can repeat" — the per-ref claim still holds each to one echo.
+**Deadline and "happened" sources skip both.** Skip-don't-queue is right for a
+game start — miss one and another comes along within the hour — and wrong
+everywhere the moment *is* the thing: an "auction ends in an hour" dropped
+because a party game echoed 8 minutes earlier is simply lost, and so is the
+single announcement an ISO week gets. The floor exists to stop ~20 game types
+bursting; every exempt source fires on a fixed, bounded schedule instead
+(auctions and pools a handful of times a year — 2 auctions in the server's
+entire history; the flip once a week; a goal at most three times a period), so
+exempting them costs nothing and only ever saves the valuable ones. Exempt
+means "can't be crowded out", not "can repeat" — the per-ref claim still holds
+each to one echo.
+
+For the two "happened" sources the argument is sharper still: their dedupe
+lives **outside** Event Echo. The ISO week for the flip, and
+`econ_community_progress.notified_tier` for a crossing — which the hourly beat
+pass advances in the same transaction that detects it. Nothing re-offers
+either on a later tick, so an echo the floor refused would be gone for good
+rather than merely late.
+
+`SourceSpec` therefore carries `exempt` and `retry` as **independent** flags;
+one boolean used to imply both. A deadline is exempt *because* it will be
+re-offered (`retry=True`); a boundary already crossed is exempt *because* it
+won't be (`retry=False`).
 
 The global floor is the one that matters. With ~20 party-game types, per-type
 alone permits twenty posts in a minute with every one inside its own window.
@@ -203,6 +248,10 @@ opposites:
   outright, with hundreds of usable ticks still inside the window. The
   deadline bounds the retries by itself — once it passes, the sweep stops
   offering the candidate.
+* **"Happened" sources** keep the flagged row like a start source, but for the
+  opposite reason to a lobby: nothing re-offers them at all, since they are
+  pushed once from the event itself. Dropping the row would erase the only
+  record that a send was attempted, and buy no later tick to help.
 
 The claim runs under `open_db_immediate`, not the default deferred
 transaction: it is a read-then-write on the cooldown window and all three
@@ -228,13 +277,37 @@ rather than 🎲 and "A game is open". An `external` event carries a location
 string and no channel, so the `in <#…>` clause is dropped entirely — anything
 else there renders as a mention Discord can't resolve.
 
+A "happened" echo drops the invitation. There is nothing to join, so the call
+to action becomes **See the board →**, and the numbers get their own line:
+
+> **📋 This week's quests are up**
+> A fresh set of weeklies just landed.
+> **8** weeklies in the pool — `/bank quests` shows yours.
+> ⚡ **Spotlight:** Answer the QOTD pays **double** all week.
+> **[See the board →]**
+
+> **🏁 Community goal: Send Messages**
+> Nice work, everyone.
+> 🎉 **Tier 2 down** — 72% and climbing, 14 of you have chipped in. Payout
+> secured for everyone; next tier's on the board!
+> **[See the board →]**
+
+Members who held the opt-in economy game role used to be pinged by the
+quest-flip post. They aren't any more — that post is gone, and the echo that
+replaced it is silent like every other one.
+
 ## Tests
 
 - `tests/test_event_echo_logic.py` — the cooldown arithmetic, freshness, the
   jump-link format, and that no builder output can contain a mention.
 - `tests/test_event_echo_service.py` — the store (dedupe, per-guild scoping,
-  suppressed rows not extending windows, prune), the destination gate, and the
-  three ways an echo is correctly refused.
+  suppressed rows not extending windows, prune), the destination gate, the
+  three ways an echo is correctly refused, and the two "happened" sources
+  (per-week and per-`quest_id:tier` dedupe, surviving a game echo seconds
+  earlier, staying silent, not retrying a failed send).
+- `tests/test_economy_loop.py` — `flip_echo_detail` / `tier_echo_line` copy,
+  the leaderboard-panel gate, and `community_hourly_pulse` splitting crossings
+  (echoed) from beats (DMed).
 - `tests/test_embed_accent_contract.py` — the `event_echo.game_starting` row.
 
 ## Not yet built / Roadmap
@@ -242,7 +315,14 @@ else there renders as a mention Discord can't resolve.
 - **Opt-in ping role.** Considered and deliberately declined for v1 (2026-07-28)
   — silent first, watch the real rate, add a self-assign role later if the
   echoes turn out to be too easy to miss. If added, it must allow-list exactly
-  that role per `embed_style_guide.md`.
+  that role per `embed_style_guide.md`. **Re-raised and declined again
+  2026-07-29**, when the quest flip moved here: that post pinged the opt-in
+  economy game role, and a per-source ping flag was the obvious way to keep
+  it. Declined because "silent except one source" is the shape principle 1
+  exists to refuse, and because a ping earned by one weekly source is a ping
+  the next source will argue for too. The right version is still a
+  self-assign role covering the whole feature, decided on observed rate. If it
+  lands, the quest flip is the first candidate — that ping had real reach.
 - **Dashboard-tunable cooldowns.** The two windows are constants. Making them
   settings means reading them from config in `decide()` instead of from the
   module constants.
