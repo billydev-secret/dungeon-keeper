@@ -312,12 +312,17 @@ def login_digest_value(
 ) -> str | None:
     """Wellness section for the daily login digest DM, or None to omit it.
 
-    Only for active, non-paused members — a paused member asked for quiet,
-    so the digest stays economy-only for them. Read-only: a member with no
-    streak row yet renders as day 0 rather than creating one from a DM path.
+    Individually opted-in: only for active, non-paused members whose
+    ``notifications_pref`` includes DMs ("dm"/"both") — the same dial that
+    governs enforcement notices, so "ephemeral" (only in chat) keeps daily
+    DMs wellness-free. A paused member asked for quiet, so they're skipped
+    too. Read-only: a member with no streak row yet renders as day 0 rather
+    than creating one from a DM path.
     """
     user = get_wellness_user(conn, guild_id, user_id)
     if user is None or not user.is_active or user.is_paused:
+        return None
+    if user.notifications_pref not in ("dm", "both"):
         return None
     row = conn.execute(
         "SELECT current_days, current_badge FROM wellness_streaks "

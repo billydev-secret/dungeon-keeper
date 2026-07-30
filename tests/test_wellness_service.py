@@ -310,6 +310,13 @@ def test_login_digest_value_none_when_paused(db_conn):
     assert ws.login_digest_value(db_conn, 1, 100) is None
 
 
+def test_login_digest_value_none_when_pref_is_ephemeral(db_conn):
+    """notifications_pref is the wellness DM opt-in: "ephemeral" (only in
+    chat) keeps the daily digest wellness-free for that member."""
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC", notifications_pref="ephemeral")
+    assert ws.login_digest_value(db_conn, 1, 100) is None
+
+
 def test_login_digest_value_streak_milestone_and_link(db_conn, monkeypatch):
     monkeypatch.setenv("DASHBOARD_BASE_URL", "https://dk.example.org")
     ws.opt_in_user(db_conn, 1, 100, timezone="UTC")

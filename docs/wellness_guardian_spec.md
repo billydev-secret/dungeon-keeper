@@ -48,12 +48,23 @@ Notifications are delivered per the member's `notifications_pref` (`ephemeral` �
 
 ### Daily login digest (economy DM)
 
-`login_digest_value()` renders a "🌿 Wellness" field into the economy daily
-digest DM (`events_cog._econ_login_embed`) for active, non-paused wellness
-members: badge, clean-day streak, next milestone, dashboard link (link line
-omitted when no public URL). Paused or non-opted members get no wellness
-section. Note the digest itself only reaches members holding the economy
-game role, in guilds with the economy enabled.
+The two digest parts have **individual opt-ins** and each member receives
+exactly the parts they opted into:
+
+- **Economy part** — requires the opt-in economy game role (existing
+  `require_game_role` gate).
+- **Wellness part** — `login_digest_value()`: active, non-paused wellness
+  members whose `notifications_pref` includes DMs ("dm"/"both" — the same
+  dial that governs enforcement notices). Renders badge, clean-day streak,
+  next milestone, dashboard link (link line omitted when no public URL).
+
+Both opted → one combined DM (wellness field above the quest sections).
+Economy-only → the classic digest. Wellness-only → a standalone
+"🌿 Wellness check-in" DM with **no public-channel fallback**; the combined
+digest's bank-channel fallback likewise carries a scrubbed economy-only
+embed (`notify_member(fallback_embed=…)`) so wellness state is never posted
+publicly. Guilds with the economy disabled send no daily digest at all —
+the weekly report remains the wellness DM touchpoint there.
 
 ### Background loops (all registered in `cog_load`)
 

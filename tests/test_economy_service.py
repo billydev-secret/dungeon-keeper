@@ -923,6 +923,30 @@ async def test_notify_member_dm_forbidden_falls_back_to_bank_channel(db):
     assert [u.id for u in am.users] == [USER]
 
 
+async def test_notify_member_fallback_embed_replaces_dm_embed_publicly(db):
+    """The bank-channel fallback is public: callers whose DM embed carries
+    private fields (login digest + wellness section) pass a scrubbed
+    fallback_embed, and that is what must reach the channel."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bank_channel_id": 777})
+    member = _fake_member()
+    member.send.side_effect = _forbidden()
+    channel = MagicMock(spec=discord.TextChannel)
+    bot = _fake_bot(guild=_fake_guild(member=member, channel=channel))
+    dm_embed = discord.Embed(title="digest", description="private wellness bits")
+    public_embed = discord.Embed(title="digest", description="economy only")
+    assert (
+        await notify_member(
+            bot, db, GUILD, USER, embed=dm_embed, fallback_embed=public_embed
+        )
+        is True
+    )
+    # The DM leg still got the full embed…
+    assert member.send.await_args.kwargs["embed"] is dm_embed
+    # …and the public leg got only the scrubbed one.
+    assert channel.send.await_args.kwargs["embed"] is public_embed
+
+
 async def test_notify_member_no_fallback_configured_returns_false(db):
     member = _fake_member()
     member.send.side_effect = _forbidden()

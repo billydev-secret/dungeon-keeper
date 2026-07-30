@@ -1126,12 +1126,18 @@ async def notify_member(
     embed: discord.Embed | None = None,
     content: str | None = None,
     require_game_role: bool = False,
+    fallback_embed: discord.Embed | None = None,
 ) -> bool:
     """DM an economy notification, falling back to the bank channel.
 
     A muted member (econ_notify_prefs) is silently dropped and counts as
     delivered. Returns False only when both the DM and the bank-channel
     fallback fail.
+
+    ``fallback_embed``, when given, replaces ``embed`` on the public
+    bank-channel fallback — for embeds whose DM form carries fields that
+    must never be posted publicly (e.g. the login digest's wellness
+    section).
 
     ``require_game_role`` gates the notice on the opt-in economy role: a
     member without it is dropped silently (returns True, like a mute) so
@@ -1194,7 +1200,9 @@ async def notify_member(
     fallback_kwargs["allowed_mentions"] = discord.AllowedMentions(
         users=[discord.Object(id=user_id)], everyone=False, roles=False
     )
-    if embed:
+    if fallback_embed is not None:
+        fallback_kwargs["embed"] = fallback_embed
+    elif embed:
         fallback_kwargs["embed"] = embed
     try:
         await channel.send(**fallback_kwargs)

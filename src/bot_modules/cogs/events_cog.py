@@ -66,6 +66,7 @@ from bot_modules.services.message_xp_service import (
     award_message_xp,
     award_reaction_given_xp,
 )
+from bot_modules.services.embeds import WELLNESS_PRIMARY
 from bot_modules.services.sentiment_service import score_text
 from bot_modules.services.welcome_service import build_leave_embed, build_welcome_embed
 from bot_modules.services.wellness_enforcement import wellness_on_message
@@ -1231,23 +1232,53 @@ class EventsCog(commands.Cog):
             return
         settings, outcome, prior_streak, quests_out, gains, wellness_value = result
 
-        accent = await resolve_accent_color(self.ctx.db_path, message.guild)
-        embed = self._econ_login_embed(
-            settings, outcome, prior_streak, quests_out, gains, accent,
-            wellness_value=wellness_value,
+        # Two individual opt-ins, one daily touchpoint: the economy part
+        # requires the opt-in game role; the wellness part requires the
+        # member's own notifications_pref to include DMs (enforced inside
+        # login_digest_value). Each member gets exactly the parts they
+        # opted into.
+        author = message.author
+        econ_opted = bool(settings.game_role_id) and any(
+            r.id == settings.game_role_id for r in getattr(author, "roles", [])
         )
-        # A daily digest (streak + quest recap) is recurring engagement —
-        # only DM players who took the opt-in economy role. Payout stays
-        # silent for everyone else (matches the quest-card path and the
-        # game_role_id design intent).
-        await notify_member(
-            self.bot,
-            self.ctx.db_path,
-            guild_id,
-            user_id,
-            embed=embed,
-            require_game_role=True,
-        )
+
+        if econ_opted:
+            accent = await resolve_accent_color(self.ctx.db_path, message.guild)
+            embed = self._econ_login_embed(
+                settings, outcome, prior_streak, quests_out, gains, accent,
+                wellness_value=wellness_value,
+            )
+            # The bank-channel fallback is public — it must carry the
+            # economy-only form, never the wellness section.
+            fallback = (
+                self._econ_login_embed(
+                    settings, outcome, prior_streak, quests_out, gains, accent
+                )
+                if wellness_value
+                else embed
+            )
+            await notify_member(
+                self.bot,
+                self.ctx.db_path,
+                guild_id,
+                user_id,
+                embed=embed,
+                require_game_role=True,
+                fallback_embed=fallback,
+            )
+        elif wellness_value:
+            # Wellness-only member: their own check-in DM, economy-free.
+            # DM or nothing — wellness content never falls back to a
+            # public channel.
+            wellness_embed = discord.Embed(
+                title="🌿 Wellness check-in",
+                description=wellness_value,
+                color=discord.Color(WELLNESS_PRIMARY),
+            )
+            try:
+                await author.send(embed=wellness_embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     @staticmethod
     def _econ_login_embed(
