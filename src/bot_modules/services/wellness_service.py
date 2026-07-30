@@ -72,7 +72,7 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
             enforcement_level      TEXT NOT NULL DEFAULT 'gradual',
             notifications_pref     TEXT NOT NULL DEFAULT 'both',
             slow_mode_rate_seconds INTEGER NOT NULL DEFAULT 120,
-            public_commitment      INTEGER NOT NULL DEFAULT 1,
+            public_commitment      INTEGER NOT NULL DEFAULT 0,
             away_enabled           INTEGER NOT NULL DEFAULT 0,
             away_message           TEXT NOT NULL DEFAULT '',
             daily_reset_hour       INTEGER NOT NULL DEFAULT 0,
@@ -438,7 +438,12 @@ def opt_in_user(
     enforcement_level: str = DEFAULT_ENFORCEMENT,
     notifications_pref: str = DEFAULT_NOTIFICATIONS,
 ) -> WellnessUser:
-    """Insert or re-activate a wellness user. Resets opt_out timestamp."""
+    """Insert or re-activate a wellness user. Resets opt_out timestamp.
+
+    ``public_commitment`` starts OFF — appearing on the public streak list is
+    an explicit choice made later (dashboard toggle), never part of opting in.
+    A re-opt-in preserves whatever the member previously chose.
+    """
     if enforcement_level not in ENFORCEMENT_LEVELS:
         enforcement_level = DEFAULT_ENFORCEMENT
     if notifications_pref not in NOTIFICATION_PREFS:
@@ -451,7 +456,7 @@ def opt_in_user(
             guild_id, user_id, timezone, enforcement_level, notifications_pref,
             slow_mode_rate_seconds, public_commitment, away_enabled, away_message,
             daily_reset_hour, opted_in_at, opted_out_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 1, 0, '', 0, ?, NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, '', 0, ?, NULL)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
             timezone           = excluded.timezone,
             enforcement_level  = excluded.enforcement_level,

@@ -56,6 +56,7 @@ from bot_modules.services.wellness_service import (
     mark_blackout_active,
     opt_in_user,
     pause_user,
+    update_user_settings,
     upsert_wellness_config,
     user_now,
 )
@@ -682,8 +683,10 @@ async def test_rebuild_active_list_no_channel_returns_early(db_path: Path):
 async def test_rebuild_active_list_posts_and_pins_new_message(db_path: Path):
     with open_db(db_path) as conn:
         upsert_wellness_config(conn, 10, channel_id=999)
-        # An opted-in committed user with a streak so the embed is non-trivial
+        # An opted-in committed user with a streak so the embed is non-trivial.
+        # Public commitment defaults off, so the test opts in explicitly.
         opt_in_user(conn, 10, 7, timezone="UTC")
+        update_user_settings(conn, 10, 7, public_commitment=True)
         ensure_streak(conn, 10, 7, "2026-05-30")
 
     channel = _FakeTextChannel(999)
@@ -760,6 +763,7 @@ async def test_post_milestone_celebrations_seeds_celebrated_badge_silently(db_pa
     with open_db(db_path) as conn:
         upsert_wellness_config(conn, 10, channel_id=999)
         opt_in_user(conn, 10, 7, timezone="UTC")
+        update_user_settings(conn, 10, 7, public_commitment=True)
         ensure_streak(conn, 10, 7, "2026-05-30")  # default badge 🌱, days=0
         # celebrated_badge defaults to '' so it differs from '🌱'
 
@@ -784,6 +788,7 @@ async def test_post_milestone_celebrations_celebrates_real_upgrade(db_path: Path
     with open_db(db_path) as conn:
         upsert_wellness_config(conn, 10, channel_id=999)
         opt_in_user(conn, 10, 7, timezone="UTC")
+        update_user_settings(conn, 10, 7, public_commitment=True)
         ensure_streak(conn, 10, 7, "2026-05-25")
         conn.execute(
             "UPDATE wellness_streaks "
@@ -815,6 +820,7 @@ async def test_post_milestone_celebrations_skips_downgrades(db_path: Path):
     with open_db(db_path) as conn:
         upsert_wellness_config(conn, 10, channel_id=999)
         opt_in_user(conn, 10, 7, timezone="UTC")
+        update_user_settings(conn, 10, 7, public_commitment=True)
         ensure_streak(conn, 10, 7, "2026-05-25")
         conn.execute(
             "UPDATE wellness_streaks "

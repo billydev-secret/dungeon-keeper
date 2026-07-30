@@ -99,7 +99,7 @@ export function mount(container) {
           </div>
           <div class="field">
             <label><input type="checkbox" name="public_commitment" ${d.public_commitment ? "checked" : ""} /> Share My Streak Publicly</label>
-            <div class="field-hint">When on, your streak can appear on the server’s wellness leaderboard. Off keeps it private.</div>
+            <div class="field-hint">When on, your name and streak appear on the pinned Active in Commitment list, and milestone celebrations may mention you in the wellness channel. Off (the default) keeps all of that private.</div>
           </div>
           <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
       </form>

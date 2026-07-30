@@ -299,6 +299,20 @@ def test_opt_in_user_invalid_notif_falls_back_to_default(db_conn):
     assert user.notifications_pref == ws.DEFAULT_NOTIFICATIONS
 
 
+def test_opt_in_user_public_commitment_defaults_off(db_conn):
+    """Opting in must never silently place a member on the public streak list."""
+    user = ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    assert user.public_commitment is False
+
+
+def test_reopt_in_preserves_public_commitment_choice(db_conn):
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    ws.update_user_settings(db_conn, 1, 100, public_commitment=True)
+    ws.opt_out_user(db_conn, 1, 100)
+    user = ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    assert user.public_commitment is True
+
+
 def test_opt_in_user_reactivates_existing_row(db_conn):
     ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
     ws.opt_out_user(db_conn, 1, 100)
@@ -907,6 +921,7 @@ def test_apply_streak_violation_same_day_noop(db_conn):
 
 def test_mark_badge_celebrated_and_list_uncelebrated(db_conn):
     ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    ws.update_user_settings(db_conn, 1, 100, public_commitment=True)
     ws.ensure_streak(db_conn, 1, 100, "2026-05-30")
     db_conn.execute(
         "UPDATE wellness_streaks SET current_badge = '🔥' WHERE guild_id = 1 AND user_id = 100"
@@ -921,8 +936,10 @@ def test_list_committed_users_with_streaks_sorted_by_current_days(db_conn):
     ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
     ws.opt_in_user(db_conn, 1, 200, timezone="UTC")
     ws.opt_in_user(db_conn, 1, 300, timezone="UTC")
-    # 300 opts out of public commitment
-    ws.update_user_settings(db_conn, 1, 300, public_commitment=False)
+    # 100 and 200 explicitly opt into public commitment; 300 stays on the
+    # default (off) and must not appear.
+    ws.update_user_settings(db_conn, 1, 100, public_commitment=True)
+    ws.update_user_settings(db_conn, 1, 200, public_commitment=True)
 
     ws.ensure_streak(db_conn, 1, 100, "2026-05-30")
     ws.ensure_streak(db_conn, 1, 200, "2026-05-30")
