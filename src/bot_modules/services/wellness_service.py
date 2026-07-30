@@ -1764,15 +1764,20 @@ def compute_weekly_summary(
 
     Returns a dict with:
         clean_days     — count of days in [week_start, week_start+6] with a streak_history row
+        tracked_days   — days of the window the member was enrolled for AND that
+                         have already occurred (opt-in date .. today, clamped to
+                         the window). The compliance denominator: a flawless
+                         partial week reads 100%, never 57%.
         violation_days — 1 if last_violation_date falls in the week, else 0 (proxy)
-        compliance_pct — clean_days/7 * 100, rounded
+        compliance_pct — clean_days/tracked_days * 100, rounded, capped at 100
         current_days   — end-of-week streak
         personal_best  — all-time PB
         is_personal_best — whether user is currently at their PB (and PB ≥ 1)
         badge          — current badge
     """
     end = week_start + timedelta(days=6)
-    week_iso = [str((week_start + timedelta(days=i))) for i in range(7)]
+    week_days = [week_start + timedelta(days=i) for i in range(7)]
+    week_iso = [str(d) for d in week_days]
     placeholders = ",".join("?" * len(week_iso))
     row = conn.execute(
         f"""
@@ -1797,11 +1802,35 @@ def compute_weekly_summary(
     if last_violation and last_violation in week_iso:
         violation_days = 1
 
-    compliance_pct = round((clean_days / 7) * 100)
+    # Denominator: only days the member was enrolled for and that have
+    # happened. Clean-day credit lands during the day itself (tick loop), so
+    # today counts as tracked once it starts.
+    user_row = conn.execute(
+        "SELECT timezone, opted_in_at FROM wellness_users "
+        "WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    tz = safe_zone(user_row["timezone"] if user_row else None)
+    today = datetime.now(tz).date()
+    opt_in_date: date | None = None
+    if user_row and user_row["opted_in_at"]:
+        opt_in_date = datetime.fromtimestamp(
+            float(user_row["opted_in_at"]), tz
+        ).date()
+    tracked_days = sum(
+        1
+        for d in week_days
+        if d <= today and (opt_in_date is None or d >= opt_in_date)
+    )
+
+    compliance_pct = (
+        min(100, round((clean_days / tracked_days) * 100)) if tracked_days else 0
+    )
     is_pb = current_days >= personal_best and personal_best >= 1
 
     return {
         "clean_days": clean_days,
+        "tracked_days": tracked_days,
         "violation_days": violation_days,
         "compliance_pct": compliance_pct,
         "current_days": current_days,

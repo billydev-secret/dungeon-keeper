@@ -50,7 +50,7 @@ Notifications are delivered per the member's `notifications_pref` (`ephemeral` �
 
 - **`wellness_tick_loop`** (every 60s): posts blackout entry DMs on transition, lifts expired slow mode, auto-resumes paused members whose pause expired, credits a clean-day streak once per day in each member's timezone, and runs nightly GC (old counter rows + sweep opted-out members past the 30-day retention).
 - **`wellness_active_list_loop`** (hourly): rebuilds the pinned "💚 Active in Commitment" embed in the configured channel (names + streak days for members who opted into public commitment) and posts milestone-badge celebration messages. Badges: 🌱 join, 🌟 7d, 🔥 30d, 💪 100d, 👑 365d. **Public commitment defaults OFF at opt-in** (as of 2026-07-30): joining the program never places a member on the list or in celebrations — that requires the explicit dashboard toggle, and a re-opt-in preserves the earlier choice.
-- **`wellness_weekly_report_loop`** (every 5 min, gated to Sunday ≥ 09:00 local, once per ISO week): DMs each member a weekly summary embed (streak, personal best, clean-days/7, compliance %) with an AI-generated encouragement line (falls back to canned text with no API key).
+- **`wellness_weekly_report_loop`** (every 5 min, gated to Sunday ≥ 09:00 local, once per ISO week): DMs each member a weekly summary embed (streak, personal best, clean days out of *tracked* days — days since opt-in that have occurred, so a flawless partial week reads 100% — and compliance %) with an AI-generated encouragement line (falls back to canned text with no API key).
 
 ### Web dashboard — member panel (`/api/wellness`, mounted in `server.py`)
 

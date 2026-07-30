@@ -426,6 +426,7 @@ def _build_weekly_report_embed(
     week_start = summary.get("week_start", "")
     week_end = summary.get("week_end", "")
     clean = summary.get("clean_days", 0)
+    tracked = summary.get("tracked_days", 7)
     pct = summary.get("compliance_pct", 0)
     cur = summary.get("current_days", 0)
     pb = summary.get("personal_best", 0)
@@ -437,7 +438,7 @@ def _build_weekly_report_embed(
         + (" *(personal best!)*" if is_pb else "")
         + "\n"
         f"💚 Personal best: **{pb} days**\n"
-        f"🌿 Clean days this week: **{clean}/7** ({pct}%)\n\n"
+        f"🌿 Clean days this week: **{clean}/{tracked}** ({pct}%)\n\n"
         f"{ai_text}"
         f"\n\n*Manage everything from your {wellness_dashboard_link('Wellness dashboard')}.*"
     )

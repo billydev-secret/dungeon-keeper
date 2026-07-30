@@ -1126,6 +1126,46 @@ def test_compute_weekly_summary_clean_days_and_compliance(db_conn):
     assert summary["is_personal_best"] is True
 
 
+def test_compute_weekly_summary_partial_week_uses_enrolled_days(db_conn):
+    """A member who joined Thursday and stayed clean must read 100%, not 57%
+    — days before they enrolled are not failures (live bug: week-30 report
+    showed violation_days=0 but 57% compliance)."""
+    week_start = date(2026, 5, 25)  # a Monday, fully in the past
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    thursday_noon = datetime(2026, 5, 28, 12, 0, tzinfo=ZoneInfo("UTC"))
+    db_conn.execute(
+        "UPDATE wellness_users SET opted_in_at = ? WHERE user_id = 100",
+        (thursday_noon.timestamp(),),
+    )
+    for i in range(3, 7):  # Thu..Sun all clean
+        ws.increment_streak_day(
+            db_conn, 1, 100, (week_start + timedelta(days=i)).isoformat()
+        )
+    summary = ws.compute_weekly_summary(db_conn, 1, 100, week_start)
+    assert summary["tracked_days"] == 4
+    assert summary["clean_days"] == 4
+    assert summary["compliance_pct"] == 100
+
+
+def test_compute_weekly_summary_excludes_future_days(db_conn):
+    """Days of the current week that haven't happened yet are not failures."""
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    db_conn.execute(
+        "UPDATE wellness_users SET opted_in_at = ? WHERE user_id = 100",
+        (time.time() - 30 * 86400,),  # enrolled well before this week
+    )
+    today = ws.user_now("UTC").date()
+    week_start = today - timedelta(days=today.weekday())
+    for i in range(today.weekday() + 1):  # every elapsed day clean
+        ws.increment_streak_day(
+            db_conn, 1, 100, (week_start + timedelta(days=i)).isoformat()
+        )
+    summary = ws.compute_weekly_summary(db_conn, 1, 100, week_start)
+    assert summary["tracked_days"] == today.weekday() + 1
+    assert summary["clean_days"] == today.weekday() + 1
+    assert summary["compliance_pct"] == 100
+
+
 def test_compute_weekly_summary_counts_violation_in_window(db_conn):
     week_start = date(2026, 5, 25)
     ws.ensure_streak(db_conn, 1, 100, week_start.isoformat())
