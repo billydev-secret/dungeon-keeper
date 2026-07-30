@@ -106,12 +106,28 @@ def browser(dashboard) -> Iterator[object]:
 # Mounts the real widget on whatever page is loaded. `spacer` pushes the input
 # down the page so there is somewhere to scroll to; `strip_popover` simulates an
 # engine without the Popover API, which is the iOS case the fix is really about.
+# `keyboard` stubs visualViewport as an on-screen keyboard leaves it — see
+# test_dropdown_ignores_visual_viewport_offset. `optionCount` grows the list
+# past its 240px max-height, so the flip-above branch has something to flip.
 _MOUNT = """
-async ({ spacer, stripPopover }) => {
+async ({ spacer, stripPopover, keyboard, optionCount }) => {
   if (stripPopover) {
     delete HTMLElement.prototype.showPopover;
     delete HTMLElement.prototype.hidePopover;
     delete HTMLElement.prototype.togglePopover;
+  }
+  if (keyboard) {
+    // A stub, not a real keyboard: Chromium has no software keyboard and
+    // Playwright cannot shift the visual viewport, so the only way to exercise
+    // the offset iOS actually produces is to report one.
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: {
+        offsetLeft: 0, offsetTop: keyboard.offsetTop, scale: 1,
+        width: window.innerWidth, height: window.innerHeight - keyboard.height,
+        addEventListener() {}, removeEventListener() {},
+      },
+    });
   }
   document.body.innerHTML = '';
   const pad = document.createElement('div');
@@ -123,11 +139,11 @@ async ({ spacer, stripPopover }) => {
   // Cache-busted at serve time; the query keeps a stripped-popover import from
   // resolving to the module instance a previous test already evaluated.
   const mod = await import('/static/js/filter-select.js?t=' + (stripPopover ? 'np' : 'p'));
-  const fs = mod.filterSelect('Type to filter…', [
-    { id: '1', label: 'general' },
-    { id: '2', label: 'todo' },
-    { id: '3', label: 'random' },
-  ], { label: 'Channel' });
+  const names = ['general', 'todo', 'random'];
+  const options = Array.from({ length: optionCount }, (_, i) => ({
+    id: String(i + 1), label: names[i] || 'channel-' + (i + 1),
+  }));
+  const fs = mod.filterSelect('Type to filter…', options, { label: 'Channel' });
   host.appendChild(fs.el);
   const tall = document.createElement('div');
   tall.style.height = '2000px';
@@ -145,6 +161,8 @@ _GEOMETRY = """
     display: getComputedStyle(list).display,
     dx: Math.abs(lr.left - ir.left),
     dy: Math.abs(lr.top - ir.bottom),
+    // Gap on the flip-above side: 0 when the list sits on top of the input.
+    gapAbove: Math.abs(ir.top - lr.bottom),
     options: list.querySelectorAll('.filter-select-item').length,
     expanded: input.getAttribute('aria-expanded'),
   };
@@ -152,13 +170,29 @@ _GEOMETRY = """
 """
 
 
-def _page(browser, dashboard, *, spacer: int = 0, strip_popover: bool = False):
+def _page(
+    browser,
+    dashboard,
+    *,
+    spacer: int = 0,
+    strip_popover: bool = False,
+    keyboard: dict | None = None,
+    option_count: int = 3,
+):
     context = browser.new_context(viewport={"width": 420, "height": 780})
     page = context.new_page()
     errors: list[str] = []
     page.on("pageerror", lambda e: errors.append(str(e)[:200]))
     _goto_panel(page, f"{dashboard.base}/")
-    page.evaluate(_MOUNT, {"spacer": spacer, "stripPopover": strip_popover})
+    page.evaluate(
+        _MOUNT,
+        {
+            "spacer": spacer,
+            "stripPopover": strip_popover,
+            "keyboard": keyboard,
+            "optionCount": option_count,
+        },
+    )
     return context, page, errors
 
 
@@ -212,6 +246,59 @@ def test_dropdown_stays_anchored_to_its_input(browser, dashboard, strip_popover)
         assert not errors, f"uncaught JS: {errors}"
     finally:
         context.close()
+
+
+# (visual-viewport offsetTop, keyboard height, page spacer) — the offset an iOS
+# keyboard leaves behind, and how far down the page the field sits. 0/0 is the
+# desktop control: it must stay anchored too, so the fix can't be a phone-only
+# special case.
+@pytest.mark.parametrize(
+    ("offset_top", "kb_height", "spacer"),
+    [
+        pytest.param(0, 0, 300, id="no-keyboard"),
+        pytest.param(120, 340, 300, id="keyboard-shifted"),
+        pytest.param(260, 340, 300, id="keyboard-shifted-far"),
+        pytest.param(180, 340, 620, id="keyboard-shifted-flips-above"),
+    ],
+)
+def test_dropdown_ignores_visual_viewport_offset(
+    browser, dashboard, offset_top, kb_height, spacer
+):
+    """A shifted visual viewport must not move the list off its input.
+
+    The reported symptom — a dropdown "floating off in the corner" on iOS,
+    disconnected from the field that opened it. ``position: fixed`` and
+    ``getBoundingClientRect()`` are both resolved against the *layout* viewport,
+    so the visual viewport's offset belongs nowhere near the coordinates; the
+    keyboard shifts only the visual one. Folding it in displaced the list by
+    exactly ``visualViewport.offsetTop``, which is 0 on desktop — invisible to
+    every other test here, and to the two above at any scroll position.
+
+    The offset still belongs in the *fit* test (is there room below the field
+    the user can actually see?), so the last case puts the field low enough that
+    the keyboard forces a flip and asserts the list lands on top of the input —
+    flush there too, not merely somewhere above it.
+    """
+    keyboard = {"offsetTop": offset_top, "height": kb_height}
+    context, page, errors = _page(
+        browser, dashboard, spacer=spacer, keyboard=keyboard, option_count=40
+    )
+    try:
+        page.click(".filter-select-input")
+        page.wait_for_timeout(150)
+        g = page.evaluate(_GEOMETRY)
+        assert g["display"] != "none"
+        assert g["dx"] < 2, f"list drifted horizontally: {g}"
+        # Anchored on one side or the other: flush under the input, or — when
+        # the keyboard leaves no room below — flush above it.
+        assert g["dy"] < 2 or g["gapAbove"] < 2, (
+            f"list floated loose from its input (vv.offsetTop={offset_top}): {g}"
+        )
+
+        assert not errors, f"uncaught JS: {errors}"
+    finally:
+        context.close()
+
 
 # Realistic ids: the shipped fixture above uses "1"/"2"/"3", which are shorter
 # than MIN_ID_FILTER_LEN and so can't exercise the paste-an-id path at all.
