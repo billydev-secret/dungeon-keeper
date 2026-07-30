@@ -264,6 +264,30 @@ def _bool_val(conn, key: str, default: bool = False, guild_id: int = 0) -> bool:
     return parse_bool(raw)
 
 
+def _raw(value):
+    """Store the value exactly as sent (it already arrives as a string)."""
+    return value
+
+
+def _flag(value) -> str:
+    """Bool -> the "1"/"0" the config table stores."""
+    return "1" if value else "0"
+
+
+def _apply_config_fields(conn, guild_id: int, body, spec: dict) -> None:
+    """Write each field of ``spec`` the caller actually sent.
+
+    ``spec`` maps a body attribute to ``(config_key, coerce)``, where
+    ``coerce`` produces the string the config table stores. A field left unset
+    — or sent as an explicit null — is skipped, which is what "no change"
+    means on these every-field-optional PUTs.
+    """
+    for field, (key, coerce) in spec.items():
+        value = getattr(body, field, None)
+        if value is not None:
+            set_config_value(conn, key, coerce(value), guild_id)
+
+
 def _id_str(conn, key: str, guild_id: int = 0, default: int = 0) -> str:
     """Read a snowflake config value as a decimal STRING.
 
@@ -1343,6 +1367,12 @@ class GlobalConfigUpdate(BaseModel):
     booster_swatch_dir: str | None = None
 
 
+_GLOBAL_FIELDS = {
+    "tz_offset_hours": ("tz_offset_hours", str),
+    "mod_channel_id": ("mod_channel_id", _raw),
+}
+
+
 @router.put("/config/global")
 async def update_global(
     request: Request,
@@ -1354,14 +1384,7 @@ async def update_global(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.tz_offset_hours is not None:
-                set_config_value(
-                    conn, "tz_offset_hours", str(body.tz_offset_hours), guild_id
-                )
-            if body.mod_channel_id is not None:
-                set_config_value(
-                    conn, "mod_channel_id", body.mod_channel_id, guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _GLOBAL_FIELDS)
             if body.bypass_role_ids is not None:
                 replace_config_id_bucket(
                     conn, "bypass_role_ids", body.bypass_role_ids, guild_id
@@ -1607,6 +1630,15 @@ def _code_clash_message(clash: tuple[tuple[str, str], tuple[str, str]]) -> str:
     )
 
 
+_INTAKE_FIELDS = {
+    "enabled": ("intake_enabled", _flag),
+    "channel_id": ("intake_channel_id", _raw),
+    "verified_role_id": (intake_svc.VERIFIED_ROLE_KEY, _raw),
+    "completion_code": ("intake_completion_code", lambda v: v.strip()),
+    "stale_hours": ("intake_stale_hours", str),
+}
+
+
 @router.put("/config/intake")
 async def update_intake(
     request: Request,
@@ -1644,30 +1676,7 @@ async def update_intake(
                 )
                 if clash is not None:
                     raise HTTPException(422, _code_clash_message(clash))
-            if body.enabled is not None:
-                set_config_value(
-                    conn, "intake_enabled", "1" if body.enabled else "0", guild_id
-                )
-            if body.channel_id is not None:
-                set_config_value(conn, "intake_channel_id", body.channel_id, guild_id)
-            if body.verified_role_id is not None:
-                set_config_value(
-                    conn,
-                    intake_svc.VERIFIED_ROLE_KEY,
-                    body.verified_role_id,
-                    guild_id,
-                )
-            if body.completion_code is not None:
-                set_config_value(
-                    conn,
-                    "intake_completion_code",
-                    body.completion_code.strip(),
-                    guild_id,
-                )
-            if body.stale_hours is not None:
-                set_config_value(
-                    conn, "intake_stale_hours", str(body.stale_hours), guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _INTAKE_FIELDS)
             if steps_json is not None:
                 set_config_value(conn, "intake_steps", steps_json, guild_id)
         return {"ok": True}
@@ -1906,6 +1915,14 @@ class XpConfigUpdate(BaseModel):
     level_curve_factor: float | None = None
 
 
+_XP_ID_FIELDS = {
+    "level_5_role_id": ("xp_level_5_role_id", _raw),
+    "promotion_review_grant_role_id": ("promotion_review_grant_role_id", _raw),
+    "level_5_log_channel_id": ("xp_level_5_log_channel_id", _raw),
+    "level_up_log_channel_id": ("xp_level_up_log_channel_id", _raw),
+}
+
+
 @router.put("/config/xp")
 async def update_xp(
     request: Request,
@@ -1917,31 +1934,7 @@ async def update_xp(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.level_5_role_id is not None:
-                set_config_value(
-                    conn, "xp_level_5_role_id", body.level_5_role_id, guild_id
-                )
-            if body.promotion_review_grant_role_id is not None:
-                set_config_value(
-                    conn,
-                    "promotion_review_grant_role_id",
-                    body.promotion_review_grant_role_id,
-                    guild_id,
-                )
-            if body.level_5_log_channel_id is not None:
-                set_config_value(
-                    conn,
-                    "xp_level_5_log_channel_id",
-                    body.level_5_log_channel_id,
-                    guild_id,
-                )
-            if body.level_up_log_channel_id is not None:
-                set_config_value(
-                    conn,
-                    "xp_level_up_log_channel_id",
-                    body.level_up_log_channel_id,
-                    guild_id,
-                )
+            _apply_config_fields(conn, guild_id, body, _XP_ID_FIELDS)
             if body.xp_grant_allowed_user_ids is not None:
                 replace_config_id_bucket(
                     conn,
@@ -2202,6 +2195,12 @@ class RulesWatchConfigUpdate(BaseModel):
     channel_id: str | None = None
 
 
+_RULES_WATCH_FIELDS = {
+    "enabled": ("rules_watch_enabled", _flag),
+    "channel_id": ("rules_watch_channel_id", _raw),
+}
+
+
 @router.put("/config/rules-watch")
 async def update_rules_watch(
     request: Request,
@@ -2220,17 +2219,7 @@ async def update_rules_watch(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.enabled is not None:
-                set_config_value(
-                    conn,
-                    "rules_watch_enabled",
-                    "1" if body.enabled else "0",
-                    guild_id,
-                )
-            if body.channel_id is not None:
-                set_config_value(
-                    conn, "rules_watch_channel_id", body.channel_id, guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _RULES_WATCH_FIELDS)
         return {"ok": True}
 
     return await run_query(_q)
@@ -2240,6 +2229,16 @@ class InactiveConfigUpdate(BaseModel):
     threshold_days: int | None = None
     auto_sweep: bool | None = None
     sweep_cap: int | None = None
+
+
+_INACTIVE_FIELDS = {
+    "threshold_days": (
+        "inactive_threshold_days",
+        lambda v: str(max(1, min(3650, v))),
+    ),
+    "auto_sweep": ("inactive_auto_sweep", _flag),
+    "sweep_cap": ("inactive_sweep_cap", lambda v: str(max(1, min(200, v)))),
+}
 
 
 @router.put("/config/inactive")
@@ -2258,21 +2257,7 @@ async def update_inactive(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.threshold_days is not None:
-                set_config_value(
-                    conn,
-                    "inactive_threshold_days",
-                    str(max(1, min(3650, body.threshold_days))),
-                    guild_id,
-                )
-            if body.auto_sweep is not None:
-                set_config_value(
-                    conn, "inactive_auto_sweep", "1" if body.auto_sweep else "0", guild_id
-                )
-            if body.sweep_cap is not None:
-                set_config_value(
-                    conn, "inactive_sweep_cap", str(max(1, min(200, body.sweep_cap))), guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _INACTIVE_FIELDS)
         return {"ok": True}
 
     return await run_query(_q)
@@ -2827,6 +2812,18 @@ class NsfwClassifierUpdate(BaseModel):
     sfw_exempt_channels: list[str] | None = None
 
 
+_NSFW_FIELDS = {
+    "threshold": (CONFIG_KEY_THRESHOLD, str),
+    "sfw_threshold": (CONFIG_KEY_SFW_THRESHOLD, str),
+    "labels": (CONFIG_KEY_LABEL_SET, lambda v: serialize_label_set(frozenset(v))),
+    "sfw_mode": (CONFIG_KEY_SFW_MODE, _raw),
+    "sfw_log_channel_id": (
+        CONFIG_KEY_SFW_LOG_CHANNEL,
+        lambda v: str(int(v or 0)),
+    ),
+}
+
+
 @router.put("/config/nsfw-classifier")
 async def update_nsfw_classifier(
     request: Request,
@@ -2868,30 +2865,7 @@ async def update_nsfw_classifier(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.threshold is not None:
-                set_config_value(
-                    conn, CONFIG_KEY_THRESHOLD, str(body.threshold), guild_id
-                )
-            if body.sfw_threshold is not None:
-                set_config_value(
-                    conn, CONFIG_KEY_SFW_THRESHOLD, str(body.sfw_threshold), guild_id
-                )
-            if body.labels is not None:
-                set_config_value(
-                    conn,
-                    CONFIG_KEY_LABEL_SET,
-                    serialize_label_set(frozenset(body.labels)),
-                    guild_id,
-                )
-            if body.sfw_mode is not None:
-                set_config_value(conn, CONFIG_KEY_SFW_MODE, body.sfw_mode, guild_id)
-            if body.sfw_log_channel_id is not None:
-                set_config_value(
-                    conn,
-                    CONFIG_KEY_SFW_LOG_CHANNEL,
-                    str(int(body.sfw_log_channel_id or 0)),
-                    guild_id,
-                )
+            _apply_config_fields(conn, guild_id, body, _NSFW_FIELDS)
             if body.sfw_exempt_channels is not None:
                 replace_config_id_bucket(
                     conn, CONFIG_BUCKET_SFW_EXEMPT, body.sfw_exempt_channels, guild_id
@@ -4142,6 +4116,14 @@ class BirthdayConfigUpdate(BaseModel):
     birthday_pin_2: bool | None = None
 
 
+_BIRTHDAY_FIELDS = {
+    "birthday_channel_id": ("birthday_channel_id", _raw),
+    "birthday_pin": ("birthday_pin", _flag),
+    "birthday_channel_id_2": ("birthday_channel_id_2", _raw),
+    "birthday_pin_2": ("birthday_pin_2", _flag),
+}
+
+
 @router.put("/config/birthday")
 async def update_birthday(
     request: Request,
@@ -4153,32 +4135,17 @@ async def update_birthday(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.birthday_channel_id is not None:
-                set_config_value(
-                    conn, "birthday_channel_id", body.birthday_channel_id, guild_id
-                )
+            _apply_config_fields(conn, guild_id, body, _BIRTHDAY_FIELDS)
             if body.birthday_message is not None:
                 msg = body.birthday_message.strip()
                 if not msg:
                     raise HTTPException(400, "Message cannot be empty")
                 set_config_value(conn, "birthday_message", msg, guild_id)
-            if body.birthday_pin is not None:
-                set_config_value(
-                    conn, "birthday_pin", "1" if body.birthday_pin else "0", guild_id
-                )
-            if body.birthday_channel_id_2 is not None:
-                set_config_value(
-                    conn, "birthday_channel_id_2", body.birthday_channel_id_2, guild_id
-                )
             if body.birthday_message_2 is not None:
                 msg2 = body.birthday_message_2.strip()
                 if not msg2:
                     raise HTTPException(400, "Message cannot be empty")
                 set_config_value(conn, "birthday_message_2", msg2, guild_id)
-            if body.birthday_pin_2 is not None:
-                set_config_value(
-                    conn, "birthday_pin_2", "1" if body.birthday_pin_2 else "0", guild_id
-                )
         return {"ok": True}
 
     return await run_query(_q)
@@ -4847,6 +4814,14 @@ class NeedleGlobalUpdate(BaseModel):
     default_reply:    str | None = None
 
 
+_NEEDLE_FIELDS = {
+    "emoji_unanswered": ("needle_emoji_unanswered", _raw),
+    "emoji_archived": ("needle_emoji_archived", _raw),
+    "emoji_locked": ("needle_emoji_locked", _raw),
+    "default_reply": ("needle_default_reply", _raw),
+}
+
+
 @router.put("/config/needle/settings")
 async def update_needle_settings(
     request: Request,
@@ -4858,14 +4833,7 @@ async def update_needle_settings(
 
     def _q():
         with ctx.open_db() as conn:
-            if body.emoji_unanswered is not None:
-                set_config_value(conn, "needle_emoji_unanswered", body.emoji_unanswered, guild_id)
-            if body.emoji_archived is not None:
-                set_config_value(conn, "needle_emoji_archived", body.emoji_archived, guild_id)
-            if body.emoji_locked is not None:
-                set_config_value(conn, "needle_emoji_locked", body.emoji_locked, guild_id)
-            if body.default_reply is not None:
-                set_config_value(conn, "needle_default_reply", body.default_reply, guild_id)
+            _apply_config_fields(conn, guild_id, body, _NEEDLE_FIELDS)
         return {"ok": True}
 
     return await run_query(_q)
