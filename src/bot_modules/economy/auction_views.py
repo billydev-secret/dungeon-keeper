@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -30,6 +31,7 @@ from bot_modules.economy.view_helpers import coins as _coins
 from bot_modules.economy.view_helpers import safe_ephemeral as _safe_ephemeral
 from bot_modules.services.economy_auction_service import (
     SettledAuction,
+    StickyResident,
     attach_card,
     bid_count,
     cancel_auction,
@@ -433,44 +435,81 @@ async def _handle_bid(
 # ── command-backed flows (start / cancel / end) ──────────────────────────────
 
 
-async def _sticky_warning(
+@dataclass(frozen=True)
+class _StickyCheck:
+    """What is wrong with running an auction in this channel."""
+
+    message: str
+    #: True → refuse to open the auction at all. Reserved for the case where
+    #: the card would be buried *reliably and silently*; a merely-degraded
+    #: card still runs, with the message attached as a warning.
+    blocking: bool
+
+
+async def _sticky_check(
     bot: Bot, guild: discord.Guild, channel: discord.abc.Messageable
-) -> str | None:
+) -> _StickyCheck | None:
     """Why this channel won't give the card the behaviour the manual promises.
 
-    Two ways to lose it, both worth saying out loud rather than letting the
-    mod discover the card sinking:
+    Three ways to lose it. The first two warn — the auction still runs, and the
+    mod is told the card will sit still — and the third blocks:
 
-    * **a thread** — `StickyPanel._channel` resolves ids with
+    * **a thread** — ``StickyPanel._channel`` resolves ids with
       ``guild.get_channel``, which never returns a thread, and ``_freeze_card``
       wants a ``TextChannel`` too. The card posts and works; it just never
       moves. (Auctions in threads predate stickiness, so this warns rather
       than blocks — the capability isn't ours to take away.)
-    * **a channel that already hosts a sticky panel** — one bottom slot, two
-      claimants. The auction loses reliably: the resident panels re-stick
-      under bot messages and the card does not.
+    * **a resident sticky panel that only moves under human messages** (the
+      guide, leaderboard and shop panels) — one bottom slot, two claimants, so
+      the two trade places as people chat. Intermittent and visible; the mod
+      can judge it.
+    * **a resident sticky panel that re-sticks under bot messages** (the casino
+      hub, the bounty board hub) — this one blocks. Those panels re-take the
+      bottom after every card render, so the card loses the slot every single
+      time and there is nothing the mod can do in the channel to keep it in
+      view. Warning about a card that is guaranteed to vanish just documents a
+      broken auction; refusing sends the mod somewhere it will work.
+
+    Called *before* the auction is opened, so a block costs no escrow, no
+    rollback and no burned single-live-auction slot.
     """
     if not isinstance(channel, discord.TextChannel):
-        return (
-            "The card can't stay at the bottom here — sticky panels only work "
-            "in ordinary text channels, not threads or forum posts. The "
-            "auction runs fine, but the card will stay where it was posted "
-            "and won't move down as people chat."
+        return _StickyCheck(
+            message=(
+                "The card can't stay at the bottom here — sticky panels only "
+                "work in ordinary text channels, not threads or forum posts. "
+                "The auction runs fine, but the card will stay where it was "
+                "posted and won't move down as people chat."
+            ),
+            blocking=False,
         )
 
-    def _resident() -> str | None:
+    def _resident() -> StickyResident | None:
         with bot.ctx.open_db() as conn:
             return sticky_panel_channels(conn, guild.id).get(channel.id)
 
     resident = await asyncio.to_thread(_resident)
-    if resident:
-        return (
-            f"This channel already has {resident} stuck to the bottom. Both "
-            "can't be last, so the auction card will keep getting pushed "
+    if resident is None:
+        return None
+    if resident.restick_on_bot:
+        return _StickyCheck(
+            message=(
+                f"This channel is {resident.name}'s, and that panel follows "
+                "the bot's own posts to stay at the bottom — so it would push "
+                "the auction card out of view every time the card updated, and "
+                "it would never come back. Run the auction in another channel."
+            ),
+            blocking=True,
+        )
+    return _StickyCheck(
+        message=(
+            f"This channel already has {resident.name} stuck to the bottom. "
+            "Both can't be last, so the auction card will keep getting pushed "
             "above it. Run the auction somewhere else if you want the card to "
             "stay in view."
-        )
-    return None
+        ),
+        blocking=False,
+    )
 
 
 async def start_auction(
@@ -499,6 +538,14 @@ async def start_auction(
     channel = interaction.channel
     if not isinstance(channel, discord.abc.Messageable):
         await _safe_ephemeral(interaction, "❌ Run this in a text channel.")
+        return
+
+    # Checked before _open(): a channel whose resident panel chases bot posts
+    # can never show this card, and refusing now costs no escrow, no rollback
+    # and no consumed single-live-auction slot.
+    sticky = await _sticky_check(bot, guild, channel)
+    if sticky is not None and sticky.blocking:
+        await _safe_ephemeral(interaction, f"❌ {sticky.message}")
         return
 
     def _open() -> int:
@@ -554,14 +601,14 @@ async def start_auction(
     # does not stick at all for up to 300s.
     _release_panel(bot, guild.id)
 
-    warning = await _sticky_warning(bot, guild, channel)
-    if warning:
-        # The card is posted and the auction is live either way — this only
-        # tells the mod, who is standing right here choosing a channel, that
-        # the card will not behave the way the manual promises.
+    if sticky is not None:
+        # Non-blocking by now (the blocking case returned before _open). The
+        # card is posted and the auction is live either way — this only tells
+        # the mod, who is standing right here choosing a channel, that the card
+        # will not behave the way the manual promises.
         await _safe_ephemeral(
             interaction,
-            f"🔨 Auction started — the card is live.\n\n⚠️ {warning} "
+            f"🔨 Auction started — the card is live.\n\n⚠️ {sticky.message} "
             "`/bank auction cancel` refunds and clears this one if you'd "
             "rather move it.",
         )

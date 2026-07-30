@@ -254,9 +254,30 @@ to currency.
   1024-char budget, not a row count (`HUB_LIST_LIMIT` is only the read cap);
   titles are clipped and whatever doesn't fit is named in an "…and N more"
   tail. `sticky_panel_channels` counts the board channel, so
-  `/bank auction start` warns about the collision.
-  `restick_on_bot` is **off** — the hub's own channel is where bounty cards
-  post, so chasing them would be the casino's repost flood. Every stake is
+  `/bank auction start` **refuses** it outright (see the auction section).
+  `restick_on_bot` is **on** (2026-07-29): the hub's own channel is where
+  bounty cards post, and without the flag a burst of new cards stranded the
+  hub — the board's only entry point — up-channel until a human happened to
+  speak. It does not reintroduce the casino's repost flood, for two reasons
+  worth keeping written down, because the flag was originally left off on the
+  belief that it would:
+  - **The re-render paths can't arm a restick at all.** Chip-in and award edit
+    the card in place (`_refresh_card`) and so does the expiry sweep
+    (`refresh_card_by_id`); a message edit fires no `MESSAGE_CREATE`. A
+    genuinely new card is the only trigger — exactly the event the hub should
+    jump over — so a burst of N cards costs **one** repost once the channel
+    goes quiet for the 6 s debounce.
+  - **The self-chase is guarded three deep and proven in prod.** The casino hub
+    has run `restick_on_bot=True` since the real fix landed. That flood was
+    never the flag: `schedule_restick` cancel-and-rearmed the very task parked
+    inside `place()`, so the repost landed but its id was never recorded and the
+    at-the-bottom guard kept comparing against a dead message. Shielding the
+    placement fixed it (2026-07-26). The layers now are the cached-id skip in
+    `should_restick`, the `last_message_id` pre-check in `_delayed_restick`, and
+    `only_if_buried` re-deciding under the placement lock — any one of them
+    alone is enough (verified by removing each in turn against
+    `test_core_sticky.py`). No change to `core/sticky.py` was needed.
+  Every stake is
   an `apply_debit` (`bounty_stake`) recorded as its own `econ_bounty_contributions`
   row; the pot is `SUM(non-refunded contributions)` (never stored). Award credits
   one `bounty_payout` of `pot − floor(pot × bounty_rake_pct / 100)` to the winner;
@@ -311,9 +332,11 @@ to currency.
       placement returns after the settle loop closed the auction — old card
       deleted, new card recorded nowhere, stored id frozen on a dead message.
       That is precisely the storm's shape.
-    - `restick_on_bot` stays **off** and must: while an auction is open the bot
-      posts nothing into the channel (bid confirmations are ephemeral, outbid
-      notices are DMs), so there is no bot noise to chase.
+    - `restick_on_bot` stays **off**, simply because there is nothing to chase:
+      while an auction is open the bot posts nothing into the channel (bid
+      confirmations are ephemeral, outbid notices are DMs). Turning it on would
+      buy no behaviour — not court a flood; see the bounty hub's entry for why
+      the flag was never the storm's cause.
     - `_release_panel` drops the panel's TTL id cache at **both** ends of the
       lifecycle, and the start end is not optional. `on_message` reads ids
       through a 300s cache populated by *any* member message in the guild, and
@@ -342,20 +365,32 @@ to currency.
       next auction while the freeze's send is in flight would otherwise have
       their fresh card's ids overwritten by the dead one — and the next restick
       would then delete the frozen result and orphan the new card.
-  - **Where the card can't stay at the bottom.** `_sticky_warning` covers the
-    two cases and `/bank auction start` tells the mod, who is standing right
-    there choosing a channel. The auction runs either way — this is a warning,
-    not a gate.
-    - **A channel that already hosts a sticky panel.** One bottom slot, two
-      claimants; the auction loses reliably, because the resident panels
-      re-stick under bot messages and the card does not. It settles rather than
-      storming, but the card ends up buried.  `sticky_panel_channels` detects
-      the four panels reachable from a config read (guide, leaderboard, shop,
-      casino hub) instead of coupling the cogs at runtime. The other four
-      sticky panels (pen pals, DM perms, Voice Master, todo board) keep their
-      ids in their own tables and are not covered — a missed warning costs
-      nothing but the warning. Prod precedent: auction #1 ran in the casino
-      hub's channel.
+  - **Where the card can't stay at the bottom.** `_sticky_check` covers the
+    three cases and `/bank auction start` tells the mod, who is standing right
+    there choosing a channel. Two of them warn and the auction runs; the third
+    **refuses**. The split is `StickyResident.restick_on_bot` — whether the
+    resident panel follows the bot's own posts:
+    - **A channel whose resident panel re-sticks on bot messages** — the casino
+      hub and, since 2026-07-29, the bounty board hub. These re-take the bottom
+      after *every* card render, so the card loses the slot every time and
+      nothing the mod does in the channel brings it back. Warning about a card
+      guaranteed to vanish just documents a broken auction, so this **blocks**,
+      and the check runs *before* `open_auction` — a refusal costs no escrow, no
+      rollback, and doesn't consume the single-live-auction slot. Prod
+      precedent: auction #1 ran in the casino hub's channel. The reverse
+      direction (an admin repointing `bounty_channel_id` at a channel with a
+      live auction) is deliberately **not** gated: the auction is transient and
+      closes on its own, while the board channel is permanent config, so letting
+      a live auction veto an admin's setup gets the priority backwards.
+    - **A channel with a resident panel that only moves on human messages** —
+      guide, leaderboard, shop. One bottom slot, two claimants, so the two trade
+      places as people chat: intermittent and visible, so the mod can judge it.
+      This stays a warning. `sticky_panel_channels` detects the five panels
+      reachable from a config read (guide, leaderboard, shop, bounty board,
+      casino hub) instead of coupling the cogs at runtime. The other four sticky
+      panels (pen pals, DM perms, Voice Master, todo board) keep their ids in
+      their own tables and are not covered — a missed warning costs nothing but
+      the warning.
     - **A thread or forum post.** `StickyPanel._channel` resolves ids with
       `guild.get_channel`, which never returns a thread, and `_freeze_card`
       wants a `TextChannel` too — so the card posts and works but never moves.

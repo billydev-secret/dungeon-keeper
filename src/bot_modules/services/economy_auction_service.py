@@ -319,20 +319,37 @@ def attach_card_to_latest(
     )
 
 
+@dataclass(frozen=True)
+class StickyResident:
+    """A sticky panel already holding a channel's bottom slot."""
+
+    #: How to name it to a mod ("the casino hub panel").
+    name: str
+    #: Whether that panel re-sticks under *bot* messages
+    #: (``StickyPanel(restick_on_bot=True)``). This is what decides whether an
+    #: auction may share the channel at all. A resident that only moves under
+    #: *human* messages trades places with the card intermittently and
+    #: visibly — tolerable, so it warns. A resident that moves under bot
+    #: messages re-takes the bottom after every card render, so the card is
+    #: buried reliably and silently and nothing the mod does in the channel
+    #: can keep it in view — so it blocks.
+    restick_on_bot: bool
+
+
 def sticky_panel_channels(
     conn: sqlite3.Connection, guild_id: int
-) -> dict[int, str]:
-    """Channels that already host a sticky panel → that panel's name.
+) -> dict[int, StickyResident]:
+    """Channels that already host a sticky panel → what is sitting there.
 
-    Discord has one bottom slot per channel. Two sticky panels in one channel
-    therefore take turns being second, and the auction card loses that fight
-    reliably in the casino hub's channel, because the hub re-sticks under bot
-    messages (``restick_on_bot``) and the card does not. It settles rather
-    than storming — but the card ends up buried, so the feature quietly does
-    not do what it says.
+    Discord has one bottom slot per channel, so two sticky panels in one
+    channel take turns being second. How badly that goes depends entirely on
+    whether the resident re-sticks under bot messages, which is why the flag
+    rides along on ``StickyResident`` — see ``restick_on_bot`` there, and
+    ``_sticky_check`` in ``economy/auction_views.py`` for the block/warn split
+    it feeds.
 
-    Rather than couple the cogs at runtime, ``start_auction`` calls this and
-    warns the mod, who is already choosing a channel.
+    Rather than couple the cogs at runtime, ``start_auction`` calls this while
+    the mod is still choosing a channel.
 
     Covers the five panels reachable from a config read: the three economy
     panels, the bounty board hub, and the casino hub. The other four sticky
@@ -350,15 +367,21 @@ def sticky_panel_channels(
     econ = load_econ_settings(conn, guild_id)
     casino = load_casino_settings(conn, guild_id)
     named = (
-        (int(econ.guide_channel_id or 0), "the economy guide panel"),
-        (int(econ.leaderboard_channel_id or 0), "the leaderboard panel"),
-        (int(econ.shop_channel_id or 0), "the shop panel"),
+        (int(econ.guide_channel_id or 0), "the economy guide panel", False),
+        (int(econ.leaderboard_channel_id or 0), "the leaderboard panel", False),
+        (int(econ.shop_channel_id or 0), "the shop panel", False),
         # The bounty hub sits in the board channel itself, so that is the
-        # collision — not where the panel was last recorded as posted.
-        (int(econ.bounty_channel_id or 0), "the bounty board panel"),
-        (int(casino.panel_channel_id or 0), "the casino hub panel"),
+        # collision — not where the panel was last recorded as posted. It
+        # re-sticks under bot messages so it stays below its own cards, which
+        # also means it out-competes an auction card here.
+        (int(econ.bounty_channel_id or 0), "the bounty board panel", True),
+        (int(casino.panel_channel_id or 0), "the casino hub panel", True),
     )
-    return {cid: name for cid, name in named if cid}
+    return {
+        cid: StickyResident(name=name, restick_on_bot=on_bot)
+        for cid, name, on_bot in named
+        if cid
+    }
 
 
 # ── bid (the atomic heart) ──────────────────────────────────────────────────

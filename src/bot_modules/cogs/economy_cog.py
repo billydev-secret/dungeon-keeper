@@ -1227,11 +1227,12 @@ class EconomyCog(commands.Cog):
         # restick, which never creates a panel it didn't already find, simply
         # stops. No change to core.sticky was needed for that.
         #
-        # restick_on_bot stays off (the default) and must stay off: while an
-        # auction is open the bot posts NOTHING into the channel — bid
-        # confirmations are ephemeral and outbid notices are DMs — so there is
-        # no bot noise to chase, and chasing our own repost is what turned the
-        # casino hub into a 275-message flood.
+        # restick_on_bot stays off (the default), simply because there is
+        # nothing to chase: while an auction is open the bot posts NOTHING into
+        # the channel — bid confirmations are ephemeral and outbid notices are
+        # DMs. Turning it on would buy no behaviour, not court a flood; the
+        # casino's 275-message storm was an unrecorded placement id, not the
+        # flag (see the bounty hub below).
         self.auction_panel = StickyPanel(
             "econ auction", bot,
             load_ids=self._auction_card_ids,
@@ -1243,18 +1244,35 @@ class EconomyCog(commands.Cog):
         # to pick its channel: it belongs in `bounty_channel_id`, the board it
         # fronts, so its ids come from there (see _bounty_panel_ids).
         #
-        # restick_on_bot stays off, and here that matters more than anywhere
-        # else in the cog: this is the one sticky panel whose OWN channel is
-        # where the bot posts (every new bounty card, plus a re-render on every
-        # chip-in and every award). Turning it on would have the hub chase its
-        # own card posts — exactly the loop that produced the casino's
-        # 275-message flood. The cost is that the hub sits above the newest
-        # card until a human speaks, which is the right trade.
+        # restick_on_bot is ON, because this is the one sticky panel whose own
+        # channel is where the bot posts: without it a burst of new bounty
+        # cards strands the hub — the only way to post or chip in — above them
+        # until a human happens to speak.
+        #
+        # This does not reintroduce the casino's 275-message flood. That flood
+        # was never "restick_on_bot chases its own repost"; it was
+        # schedule_restick() cancel-and-rearming the very task parked inside
+        # place(), so the repost landed but its id was never recorded and the
+        # at-the-bottom guard kept comparing against a dead message. Shielding
+        # the placement fixed it (core.sticky.place, 2026-07-26), and three
+        # layers now stop the self-chase: the cached-id skip in
+        # should_restick(), the last_message_id pre-check in
+        # _delayed_restick(), and only_if_buried re-deciding under the
+        # placement lock.
+        #
+        # The re-render paths cannot arm a restick at all, which is what makes
+        # this cheap: chip-in and award edit the card in place
+        # (bounty_views._refresh_card) and the expiry sweep does too
+        # (refresh_card_by_id), and a message edit fires no MESSAGE_CREATE. A
+        # genuinely new card is the only trigger — precisely the event the hub
+        # should be jumping over — so a burst of N cards costs one repost once
+        # the channel goes quiet for the debounce.
         self.bounty_panel = StickyPanel(
             "econ bounty hub", bot,
             load_ids=self._bounty_panel_ids,
             save_ids=self._save_bounty_panel_ids,
             build=self._build_bounty_panel,
+            restick_on_bot=True,
         )
         # Photo Challenge channel id, TTL-cached so the on_message listener
         # costs a dict lookup, not a DB read, for every message in the guild:
@@ -3914,14 +3932,18 @@ class EconomyCog(commands.Cog):
 
         One listener for five panels: each ignores activity outside its own
         channel, so a message usually arms at most one repost. The auction
-        card is the exception — it can share a channel with one of the other
-        three, in which case both re-stick and one ends up second. That is
-        why ``/bank auction start`` warns the mod before it happens (see
-        ``sticky_panel_channels``); it is a bad configuration, not a bug.
+        card is the exception — it can share a channel with the guide,
+        leaderboard or shop panel, in which case both re-stick and one ends up
+        second. ``/bank auction start`` warns the mod before that happens, and
+        refuses outright for the two channels whose resident panel chases bot
+        posts (the casino hub and the bounty board) because there the card
+        would never surface at all — see ``_sticky_check`` in
+        ``economy/auction_views.py``.
 
-        The bounty hub is bot-message-blind like the rest (``restick_on_bot``
-        is off), so a burst of new bounty cards leaves it stranded up-channel
-        until a human posts. Deliberate — see the panel's declaration.
+        The bounty hub is the one panel here with ``restick_on_bot`` on, so it
+        follows its own board's new cards down instead of being stranded above
+        them. Its re-renders are edits, which fire no MESSAGE_CREATE, so only a
+        genuinely new card moves it — see the panel's declaration.
         """
         for panel in (
             self.guide_panel,

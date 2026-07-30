@@ -27,7 +27,7 @@ from bot_modules.core.sticky import StickyPanel
 from bot_modules.economy.auction_views import (
     _freeze_card,
     build_auction_panel,
-    _sticky_warning,
+    _sticky_check,
     render_auction_card,
     start_auction,
 )
@@ -37,6 +37,7 @@ from bot_modules.services.economy_auction_service import (
     card_ids,
     end_auction_now,
     get_auction,
+    get_open_auction,
     open_auction,
     place_bid,
 )
@@ -342,18 +343,31 @@ async def test_freeze_card_cannot_clobber_the_next_auctions_card(bot, db):
 
 
 @pytest.mark.parametrize(
-    ("channel_kind", "expect"),
+    ("channel_kind", "expect", "blocking"),
     [
-        pytest.param("thread", "threads", id="thread-never-sticks"),
-        pytest.param("panel", "stuck to the bottom", id="channel-already-has-a-panel"),
-        pytest.param("plain", None, id="ordinary-channel-no-warning"),
+        pytest.param("thread", "threads", False, id="thread-never-sticks"),
+        pytest.param(
+            "panel", "stuck to the bottom", False, id="human-only-panel-warns"
+        ),
+        pytest.param("plain", None, False, id="ordinary-channel-no-warning"),
+        # The two residents that follow the bot's own posts. An auction card
+        # here is pushed up after every render and never comes back, so the
+        # mod is sent elsewhere instead of being handed a broken auction.
+        pytest.param(
+            "bounty", "another channel", True, id="bounty-board-blocks"
+        ),
+        pytest.param(
+            "casino", "another channel", True, id="casino-hub-blocks"
+        ),
     ],
 )
-async def test_sticky_warning_covers_both_ways_to_lose_the_bottom(
-    bot, db, channel_kind, expect
+async def test_sticky_check_splits_warning_from_refusal(
+    bot, db, channel_kind, expect, blocking
 ):
-    """manual.html promises the card stays at the bottom; these are the two
-    channels where it can't, and the mod is told rather than left to notice."""
+    """manual.html promises the card stays at the bottom. These are the channels
+    where it can't — warned about when the loss is intermittent and visible,
+    refused when the resident panel chases bot posts and the card is guaranteed
+    to disappear."""
     if channel_kind == "thread":
         channel = MagicMock(spec=discord.Thread)
         channel.id = 77
@@ -362,12 +376,23 @@ async def test_sticky_warning_covers_both_ways_to_lose_the_bottom(
     if channel_kind == "panel":
         with open_db(db) as conn:
             save_econ_settings(conn, GUILD, {"shop_channel_id": 77})
+    if channel_kind == "bounty":
+        with open_db(db) as conn:
+            save_econ_settings(conn, GUILD, {"bounty_channel_id": 77})
+    if channel_kind == "casino":
+        with open_db(db) as conn:
+            conn.execute(
+                "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+                (GUILD, "casino_panel_channel_id", "77"),
+            )
 
-    warning = await _sticky_warning(bot, _guild(), channel)
+    check = await _sticky_check(bot, _guild(), channel)
     if expect is None:
-        assert warning is None
+        assert check is None
     else:
-        assert warning is not None and expect in warning
+        assert check is not None
+        assert expect in check.message
+        assert check.blocking is blocking
 
 
 async def test_freeze_card_also_runs_for_a_cancelled_auction(bot, db):
@@ -403,6 +428,68 @@ def _start_interaction(bot, channel):
     inter.client = bot
     inter.channel = channel
     return inter
+
+
+async def test_start_auction_refuses_the_bounty_boards_channel(bot, db):
+    """The block must land before open_auction, not after.
+
+    The old warning fired once the auction was already committed and the card
+    posted, which for a guaranteed-invisible card is the worst of both: escrow
+    rules now apply, the single-live-auction slot is consumed, and the mod's only
+    way out is /bank auction cancel. Refusing up front costs nothing.
+    """
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {
+            "enabled": True,
+            "auction_min_bid": 10,
+            "auction_min_increment": 5,
+            "auction_max_duration_hours": 168,
+            # The board channel *is* where the hub lives, and the hub follows
+            # bot posts down since 2026-07-29.
+            "bounty_channel_id": 77,
+        })
+    channel = _text_channel(cid=77)
+
+    await start_auction(
+        _start_interaction(bot, channel),
+        title="Founder role", prize="A shiny thing", duration_hours=48.0,
+    )
+
+    channel.send.assert_not_awaited()  # no card posted
+    with open_db(db) as conn:
+        assert get_open_auction(conn, GUILD) is None, (
+            "a refused auction must not consume the single-live-auction slot"
+        )
+
+
+async def test_start_auction_still_runs_where_the_clash_only_warns(bot, db):
+    """The mirror of the test above: a human-only resident panel is a warning,
+    so the auction must still open and post its card."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {
+            "enabled": True,
+            "auction_min_bid": 10,
+            "auction_min_increment": 5,
+            "auction_max_duration_hours": 168,
+            "shop_channel_id": 77,
+        })
+    channel = _text_channel(cid=77)
+    panel = StickyPanel(
+        "econ auction", MagicMock(),
+        load_ids=lambda gid: (0, 0),
+        save_ids=lambda gid, cid, mid: None,
+        build=AsyncMock(),
+    )
+    bot.get_cog = MagicMock(return_value=SimpleNamespace(auction_panel=panel))
+
+    await start_auction(
+        _start_interaction(bot, channel),
+        title="Founder role", prize="A shiny thing", duration_hours=48.0,
+    )
+
+    channel.send.assert_awaited_once()
+    with open_db(db) as conn:
+        assert get_open_auction(conn, GUILD) is not None
 
 
 async def test_start_auction_drops_the_panels_stale_no_card_cache(bot, db):

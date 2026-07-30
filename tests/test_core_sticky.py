@@ -620,6 +620,81 @@ async def test_a_queued_restick_sees_the_placement_it_waited_on():
 
 
 @pytest.mark.asyncio
+async def test_a_burst_of_foreign_bot_posts_costs_one_repost():
+    """The bounty board's shape end-to-end: many *other* bot messages, fast.
+
+    Every other restick_on_bot test interleaves the panel's *own* repost. This
+    one interleaves a burst of unrelated bot posts — new bounty cards landing in
+    the hub's own channel — which is what the economy cog turned the flag on
+    for. Ten cards inside one debounce window must leave one repost and a
+    correctly recorded id.
+
+    Deliberately an integration check, not a regression test for one guard:
+    three independent layers each suffice here (debounce coalescing, the
+    last_message_id pre-check, and only_if_buried under the placement lock), so
+    removing any single one of them still passes. Verified by hand against all
+    three. The narrow regressions live in the two tests that bracket this one —
+    the shield in ``test_a_burst_landing_during_a_placement_still_settles`` and
+    the coalescing in ``test_restick_debounce_collapses_a_burst``.
+    """
+    channel, sent = _channel()
+    guild = _guild(channel)
+    panel = _panel(_bot(guild), _Store(CHANNEL, 111), restick_on_bot=True, delay=0.02)
+
+    async def _send(*_args, **_kwargs):
+        channel.last_message_id = MESSAGE
+        return sent
+
+    channel.send = AsyncMock(side_effect=_send)
+
+    for card_id in range(2000, 2010):
+        channel.last_message_id = card_id  # each card takes the bottom slot
+        await panel.on_message(_message(bot=True, message_id=card_id))
+    await asyncio.sleep(0.1)
+
+    assert channel.send.await_count == 1
+    # And the hub really ended up below the cards, with its new id recorded.
+    assert panel._ref[GUILD][1:] == (CHANNEL, MESSAGE)
+
+
+@pytest.mark.asyncio
+async def test_a_burst_landing_during_a_placement_still_settles():
+    """The nastier burst: cards keep arriving while the repost is in flight.
+
+    Each new card arms a restick, and that cancel lands on the task parked in
+    place(). The placement is shielded so it still records its id, and the
+    follow-up restick must then find the panel at the bottom and stop — leaving
+    the panel posted exactly once per quiet period rather than climbing.
+    """
+    channel, sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, 111)
+    panel = _panel(_bot(guild), store, restick_on_bot=True, delay=0.01)
+    later = iter(range(3000, 3005))
+
+    async def _send(*_args, **_kwargs):
+        # Another bounty card lands mid-send, arming a restick whose cancel
+        # hits the task currently inside this placement.
+        card_id = next(later, None)
+        if card_id is not None:
+            channel.last_message_id = card_id
+            await panel.on_message(_message(bot=True, message_id=card_id))
+        await asyncio.sleep(0)
+        channel.last_message_id = MESSAGE
+        return sent
+
+    channel.send = AsyncMock(side_effect=_send)
+
+    channel.last_message_id = 2999
+    await panel.on_message(_message(bot=True, message_id=2999))
+    await asyncio.sleep(0.2)
+    panel.cancel_all()
+
+    assert store.ids == (CHANNEL, MESSAGE)  # recorded, not frozen on a dead id
+    assert channel.send.await_count <= 2  # settled, never a per-card climb
+
+
+@pytest.mark.asyncio
 async def test_a_panel_posted_outside_place_is_invisible_until_forget():
     """The trap for any caller that posts its panel without going through
     ``place``.
