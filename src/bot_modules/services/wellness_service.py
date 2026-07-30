@@ -307,6 +307,38 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def login_digest_value(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> str | None:
+    """Wellness section for the daily login digest DM, or None to omit it.
+
+    Only for active, non-paused members — a paused member asked for quiet,
+    so the digest stays economy-only for them. Read-only: a member with no
+    streak row yet renders as day 0 rather than creating one from a DM path.
+    """
+    user = get_wellness_user(conn, guild_id, user_id)
+    if user is None or not user.is_active or user.is_paused:
+        return None
+    row = conn.execute(
+        "SELECT current_days, current_badge FROM wellness_streaks "
+        "WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    days = int(row["current_days"]) if row else 0
+    badge = (str(row["current_badge"]) if row else "") or "🌱"
+    value = f"{badge} Day **{days}** clean streak"
+    nxt = next_milestone(days)
+    if nxt:
+        value += f" — next: {nxt[1]} at {nxt[0]} days ({nxt[0] - days} to go)"
+    # Link line only when there's a real URL — plain text here would just
+    # name a place the member can't click through to.
+    from bot_modules.services.advisor_service import dashboard_url
+
+    if dashboard_url():
+        value += f"\n{wellness_dashboard_link('Manage on your Wellness dashboard')}"
+    return value
+
+
 def wellness_dashboard_link(
     label: str = "Wellness panel on the web dashboard",
 ) -> str:

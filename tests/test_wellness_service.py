@@ -299,6 +299,43 @@ def test_opt_in_user_invalid_notif_falls_back_to_default(db_conn):
     assert user.notifications_pref == ws.DEFAULT_NOTIFICATIONS
 
 
+def test_login_digest_value_none_when_not_opted_in(db_conn):
+    assert ws.login_digest_value(db_conn, 1, 100) is None
+
+
+def test_login_digest_value_none_when_paused(db_conn):
+    """A paused member asked for quiet — the digest stays economy-only."""
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    ws.pause_user(db_conn, 1, 100, time.time() + 3600)
+    assert ws.login_digest_value(db_conn, 1, 100) is None
+
+
+def test_login_digest_value_streak_milestone_and_link(db_conn, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_BASE_URL", "https://dk.example.org")
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    ws.ensure_streak(db_conn, 1, 100, "2026-07-29")
+    db_conn.execute(
+        "UPDATE wellness_streaks SET current_days = 8, current_badge = '🌟' "
+        "WHERE guild_id = 1 AND user_id = 100"
+    )
+    value = ws.login_digest_value(db_conn, 1, 100)
+    assert value is not None
+    assert "🌟 Day **8** clean streak" in value
+    assert "🔥 at 30 days (22 to go)" in value
+    assert "https://dk.example.org/#/wellness-home" in value
+
+
+def test_login_digest_value_day_zero_and_no_dead_link(db_conn, monkeypatch):
+    """No streak row renders as day 0; no public URL means no link line at
+    all — never a place-name the member can't click through to."""
+    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    value = ws.login_digest_value(db_conn, 1, 100)
+    assert value is not None
+    assert "Day **0**" in value
+    assert "dashboard" not in value.lower()
+
+
 def test_dashboard_link_plain_when_no_url(monkeypatch):
     monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
     assert ws.wellness_dashboard_link() == "Wellness panel on the web dashboard"

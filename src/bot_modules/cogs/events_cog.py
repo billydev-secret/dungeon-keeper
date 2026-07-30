@@ -69,6 +69,9 @@ from bot_modules.services.message_xp_service import (
 from bot_modules.services.sentiment_service import score_text
 from bot_modules.services.welcome_service import build_leave_embed, build_welcome_embed
 from bot_modules.services.wellness_enforcement import wellness_on_message
+from bot_modules.services.wellness_service import (
+    login_digest_value as wellness_login_digest_value,
+)
 from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
@@ -1015,7 +1018,8 @@ class EventsCog(commands.Cog):
         hop_channel_id = parent_id or channel_id
 
         def _econ_work() -> (
-            tuple[EconSettings, LoginOutcome, int, list[dict], list[dict]] | None
+            tuple[EconSettings, LoginOutcome, int, list[dict], list[dict], str | None]
+            | None
         ):
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
@@ -1215,16 +1219,22 @@ class EventsCog(commands.Cog):
                 gains = community_gains_for_day(
                     conn, guild_id, previous_local_day(today)
                 )
-                return settings, outcome, prior_streak, quests_out, gains
+                # Wellness streak blurb for opted-in, non-paused members
+                # (None hides the section entirely).
+                wellness_value = wellness_login_digest_value(
+                    conn, guild_id, user_id
+                )
+                return settings, outcome, prior_streak, quests_out, gains, wellness_value
 
         result = await asyncio.to_thread(_econ_work)
         if result is None:
             return
-        settings, outcome, prior_streak, quests_out, gains = result
+        settings, outcome, prior_streak, quests_out, gains, wellness_value = result
 
         accent = await resolve_accent_color(self.ctx.db_path, message.guild)
         embed = self._econ_login_embed(
-            settings, outcome, prior_streak, quests_out, gains, accent
+            settings, outcome, prior_streak, quests_out, gains, accent,
+            wellness_value=wellness_value,
         )
         # A daily digest (streak + quest recap) is recurring engagement —
         # only DM players who took the opt-in economy role. Payout stays
@@ -1247,6 +1257,8 @@ class EventsCog(commands.Cog):
         quests_out: list[dict],
         gains: list[dict],
         accent: discord.Color,
+        *,
+        wellness_value: str | None = None,
     ) -> discord.Embed:
         """Daily digest DM: streak update + a fun little quest checklist."""
         embed = discord.Embed(
@@ -1290,6 +1302,10 @@ class EventsCog(commands.Cog):
                 ),
                 inline=False,
             )
+        # Wellness streak (opted-in members only) sits above the quest
+        # sections so a long quest list can't bury it.
+        if wellness_value:
+            embed.add_field(name="🌿 Wellness", value=wellness_value, inline=False)
         # Every open quest, grouped by cadence, plus yesterday's movers — the
         # digest formatting (aligned bars, blurbs, channel links, ≤1024-char
         # field packing) lives in quest_digest so it's unit-tested there.

@@ -46,6 +46,15 @@ The `away` subgroup is nested under `wellness`. Note: a `_SettingsView` class ex
 
 Notifications are delivered per the member's `notifications_pref` (`ephemeral` — actually a self-deleting channel reply — / `dm` / `both`).
 
+### Daily login digest (economy DM)
+
+`login_digest_value()` renders a "🌿 Wellness" field into the economy daily
+digest DM (`events_cog._econ_login_embed`) for active, non-paused wellness
+members: badge, clean-day streak, next milestone, dashboard link (link line
+omitted when no public URL). Paused or non-opted members get no wellness
+section. Note the digest itself only reaches members holding the economy
+game role, in guilds with the economy enabled.
+
 ### Background loops (all registered in `cog_load`)
 
 - **`wellness_tick_loop`** (every 60s): posts blackout entry DMs on transition, lifts expired slow mode, auto-resumes paused members whose pause expired, credits a clean-day streak once per day in each member's timezone, and runs nightly GC (old counter rows + sweep opted-out members past the 30-day retention).
