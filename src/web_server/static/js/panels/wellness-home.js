@@ -25,7 +25,7 @@ export function mount(container) {
     }
 
     const pausedHTML = d.paused_until && d.paused_until > Date.now() / 1000
-      ? `<div class="chip chip-warning" style="margin-top:8px;">Nudges paused until ${new Date(d.paused_until * 1000).toLocaleTimeString()}</div>`
+      ? `<div class="chip chip-warning" style="margin-top:8px;">Paused until ${new Date(d.paused_until * 1000).toLocaleTimeString()}</div>`
       : "";
 
     container.querySelector(".panel").innerHTML = `
@@ -112,11 +112,13 @@ export function mount(container) {
           <label style="display:inline-flex;align-items:center;gap:6px;">Pause for (minutes)
             <input type="number" name="minutes" min="1" max="10080" value="60" style="width:80px" />
           </label>
-          <button type="submit" class="btn">Pause Nudges</button>
+          <button type="submit" class="btn">Pause the Program</button>
           <span data-pause-status></span>
         </form>
-        <button data-resume-btn class="btn">Resume Nudges</button>
+        <button data-resume-btn class="btn">Resume</button>
       </div>
+      <div class="field-hint">Pausing stops everything until it ends — enforcement, blackout windows,
+      streak credit, and wellness DMs.</div>
 
       <div class="section-label">Leave</div>
       <div class="w-actions">
@@ -152,13 +154,13 @@ export function mount(container) {
       e.preventDefault();
       try {
         await wPost("/api/wellness/pause", { minutes: parseInt(new FormData(pForm).get("minutes"), 10) });
-        showStatus(pStatus, true, "Nudges paused");
+        showStatus(pStatus, true, "Program paused");
       } catch (err) { showStatus(pStatus, false, `Couldn’t pause — ${err.message}`); }
     });
 
     // Resume
     container.querySelector("[data-resume-btn]").addEventListener("click", async () => {
-      try { await wPost("/api/wellness/resume", {}); showStatus(pStatus, true, "Nudges resumed"); }
+      try { await wPost("/api/wellness/resume", {}); showStatus(pStatus, true, "Program resumed"); }
       catch (err) { showStatus(pStatus, false, `Couldn’t resume — ${err.message}`); }
     });
 

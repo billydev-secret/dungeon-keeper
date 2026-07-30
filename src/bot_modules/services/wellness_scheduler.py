@@ -35,6 +35,7 @@ from bot_modules.services.wellness_service import (
     SETTINGS_RETENTION_SECONDS,
     WellnessBlackout,
     WellnessStreak,
+    WellnessUser,
     clear_blackout_active,
     compute_weekly_summary,
     gc_old_cap_data,
@@ -110,20 +111,39 @@ async def _process_blackout_transitions(bot: discord.Client, db_path: Path) -> N
                     if mark_blackout_active(conn, guild.id, u.user_id, b.id):
                         member = guild.get_member(u.user_id)
                         if member:
-                            asyncio.create_task(_send_blackout_entry_dm(member, b))
+                            asyncio.create_task(
+                                _send_blackout_entry_dm(member, b, u)
+                            )
                 for bid in ended_ids:
                     clear_blackout_active(conn, guild.id, u.user_id, bid)
 
 
+def _blackout_is_nightish(blackout: WellnessBlackout) -> bool:
+    """Whether a blackout starts in the evening/night (≥21:00 or <05:00)."""
+    return blackout.start_minute >= 21 * 60 or blackout.start_minute < 5 * 60
+
+
 async def _send_blackout_entry_dm(
-    member: discord.Member, blackout: WellnessBlackout
+    member: discord.Member, blackout: WellnessBlackout, user: WellnessUser
 ) -> None:
+    """Blackout heads-up DM, worded for what will actually happen.
+
+    A gentle member only ever gets reminders — telling them "slow mode is
+    active" was untrue for them. The sign-off follows the window: "Sleep
+    well" for a 9-to-5 Work Hours blackout read as a bug.
+    """
+    end_str = _format_minute(blackout.end_minute)
+    if user.enforcement_level in ("slow_mode", "gradual"):
+        body = (
+            f"Posting during this window brings friction — up to slow mode — "
+            f"until **{end_str}**."
+        )
+    else:  # gentle (and legacy cooldown rows)
+        body = f"I'll send you a gentle reminder if you post before **{end_str}**."
+    sign_off = "Sleep well! 💚" if _blackout_is_nightish(blackout) else "Enjoy the time away! 💚"
     embed = discord.Embed(
         title=f"🌙 {blackout.name} blackout started",
-        description=(
-            f"Slow mode is active until **{_format_minute(blackout.end_minute)}**.\n\n"
-            "Sleep well! 💚"
-        ),
+        description=f"{body}\n\n{sign_off}",
         color=discord.Color(WELLNESS_PRIMARY),
     )
     await _try_dm(member, embed=embed)

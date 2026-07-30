@@ -49,6 +49,7 @@ from bot_modules.services.wellness_scheduler import (
 from bot_modules.services.wellness_service import (
     WellnessBlackout,
     WellnessStreak,
+    WellnessUser,
     add_blackout,
     arm_slow_mode,
     ensure_streak,
@@ -352,27 +353,71 @@ async def test_try_dm_passes_embed_kwarg():
 # ── _send_blackout_entry_dm ──────────────────────────────────────────
 
 
+def _dm_user(level: str) -> WellnessUser:
+    return WellnessUser(
+        guild_id=10,
+        user_id=7,
+        timezone="UTC",
+        enforcement_level=level,
+        notifications_pref="both",
+        slow_mode_rate_seconds=120,
+        public_commitment=False,
+        away_enabled=False,
+        away_message="",
+        daily_reset_hour=0,
+        opted_in_at=1.0,
+        opted_out_at=None,
+        paused_until=None,
+        cooldown_until=None,
+        last_nudge_at=None,
+    )
+
+
 @pytest.mark.asyncio
-async def test_send_blackout_entry_dm_sends_embed():
+@pytest.mark.parametrize(
+    ("level", "name", "start_minute", "end_minute", "expect", "reject"),
+    [
+        pytest.param(
+            "gradual", "Night Owl", 23 * 60, 7 * 60,
+            ["Night Owl", "07:00", "slow mode", "Sleep well"], [],
+            id="gradual-night-gets-slow-mode-copy-and-sleep-well",
+        ),
+        pytest.param(
+            "gentle", "Work Hours", 9 * 60, 17 * 60,
+            ["Work Hours", "17:00", "gentle reminder", "Enjoy the time away"],
+            ["slow mode", "Sleep well"],
+            id="gentle-day-window-gets-reminder-copy-no-sleep-well",
+        ),
+    ],
+)
+async def test_send_blackout_entry_dm_copy_matches_level_and_window(
+    level, name, start_minute, end_minute, expect, reject
+):
+    """The heads-up must describe what will actually happen at the member's
+    level (a gentle member never gets slow mode), and not wish a 9-to-5
+    blackout "Sleep well"."""
     member = MagicMock()
     member.send = AsyncMock()
     blackout = WellnessBlackout(
         id=1,
         guild_id=10,
         user_id=7,
-        name="Night Owl",
-        start_minute=23 * 60,
-        end_minute=7 * 60,
+        name=name,
+        start_minute=start_minute,
+        end_minute=end_minute,
         days_mask=127,
         enabled=True,
         created_at=0.0,
     )
-    await _send_blackout_entry_dm(member, blackout)
+    await _send_blackout_entry_dm(member, blackout, _dm_user(level))
     member.send.assert_awaited_once()
     embed = member.send.call_args.kwargs.get("embed")
     assert isinstance(embed, discord.Embed)
-    assert embed.title is not None and "Night Owl" in embed.title
-    assert embed.description is not None and "07:00" in embed.description
+    text = f"{embed.title}\n{embed.description}"
+    for fragment in expect:
+        assert fragment in text
+    for fragment in reject:
+        assert fragment not in text
 
 
 # ── _lift_expired_slow_mode ──────────────────────────────────────────
