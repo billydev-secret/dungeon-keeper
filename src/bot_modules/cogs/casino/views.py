@@ -312,7 +312,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(
         label="Roulette", emoji="🎡",
-        style=discord.ButtonStyle.primary, custom_id="casino:roulette", row=0,
+        style=discord.ButtonStyle.primary, custom_id="casino:roulette", row=1,
     )
     async def roulette(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -323,7 +323,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(
         label="Derby", emoji="🏇",
-        style=discord.ButtonStyle.primary, custom_id="casino:derby", row=0,
+        style=discord.ButtonStyle.primary, custom_id="casino:derby", row=1,
     )
     async def derby(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -345,7 +345,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(
         label="Dice", emoji="🎲",
-        style=discord.ButtonStyle.primary, custom_id="casino:dice", row=1,
+        style=discord.ButtonStyle.primary, custom_id="casino:dice", row=2,
     )
     async def dice(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -356,7 +356,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(
         label="War", emoji="⚔️",
-        style=discord.ButtonStyle.primary, custom_id="casino:war", row=1,
+        style=discord.ButtonStyle.primary, custom_id="casino:war", row=2,
     )
     async def war(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -367,7 +367,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(
         label="Keno", emoji="🔢",
-        style=discord.ButtonStyle.primary, custom_id="casino:keno", row=1,
+        style=discord.ButtonStyle.primary, custom_id="casino:keno", row=2,
     )
     async def keno(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -378,7 +378,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(
         label="My Stats", emoji="📊",
-        style=discord.ButtonStyle.secondary, custom_id="casino:stats", row=2,
+        style=discord.ButtonStyle.secondary, custom_id="casino:stats", row=3,
     )
     async def my_stats(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -389,7 +389,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(
         label="How It Works", emoji="❓",
-        style=discord.ButtonStyle.secondary, custom_id="casino:help", row=2,
+        style=discord.ButtonStyle.secondary, custom_id="casino:help", row=3,
     )
     async def help(
         self, interaction: discord.Interaction, _: discord.ui.Button

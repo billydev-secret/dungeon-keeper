@@ -27,7 +27,11 @@ jackpot embed titles interpolate the configured name directly.
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
 🏇 Derby · 🎴 Baccarat · 🎲 Dice · ⚔️ War · 🔢 Keno · 📊 My Stats ·
-❓ How It Works); every flow is buttons + amount modals.
+❓ How It Works); every flow is buttons + amount modals. The nine tables sit
+**three to a row** with the two grey utility buttons on a fourth (2026-07-30,
+todo #87): a five-wide row wraps on narrow clients, so Derby used to drop to a
+short line of its own. Rows are fixed on the decorators, not reflowed — a guild
+that closes a table leaves that row two wide.
 
 **Private play, public moments** (2026-07-24; before this, every result was
 its own public message and heavy slots play scrolled the channel non-stop,
