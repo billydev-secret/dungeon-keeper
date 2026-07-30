@@ -1490,6 +1490,11 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
     role (§6), re-checking entitlements on submit, subject to the blocklist and
     feature gates (the ΔE color gate was removed 2026-07-29). Emoji icons accept **this server's custom emojis only** (typed
     `:name:` or pasted; the bot stores the emoji's image; animated refused).
+    The typed name matches the server's exact casing first, then
+    case-insensitively (2026-07-30) — before that only an exact-case name
+    resolved, so every mixed-case emoji (`:monkaS:`, `:peepoHappy:`) was
+    unreachable by the short name members actually type, while the pasted
+    form kept working because it matches by id.
   - **`/bank role icon image:`** is the one surviving subcommand — modals can't take
     file uploads, so image icons (256KB max) still arrive via slash command. The
     former `name`/`color`/`gradient` subcommands are removed in favour of the shop's

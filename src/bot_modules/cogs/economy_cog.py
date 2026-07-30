@@ -240,9 +240,18 @@ def _resolve_guild_emoji(guild: discord.Guild, raw: str) -> discord.Emoji | None
     """Resolve member input to one of *this guild's* custom emojis.
 
     Accepts the pasted form ``<:name:id>`` (matched by id) or a typed
-    ``:name:`` / bare name (matched by name). Unicode emojis and custom
-    emojis from other servers resolve to ``None`` — role icons only take
-    images this server has already approved as emojis.
+    ``:name:`` / bare name. Unicode emojis and custom emojis from other
+    servers resolve to ``None`` — role icons only take images this server
+    has already approved as emojis.
+
+    The name match tries the server's exact casing first, then falls back to
+    a case-insensitive one, matching how Discord resolves ``:name:`` typing
+    (the same rule ``economy_emoji_service.validate_emoji_name`` applies when
+    it reserves a name). Without the fallback every mixed-case emoji —
+    ``:monkaS:``, ``:peepoHappy:`` — was unreachable by the short name a
+    member actually types, while the pasted form still worked because it
+    matches by id. Exact wins first so a server holding both ``:pepe:`` and
+    ``:PEPE:`` still resolves each one precisely.
     """
     raw = raw.strip()
     m = _CUSTOM_EMOJI_RE.match(raw)
@@ -251,7 +260,11 @@ def _resolve_guild_emoji(guild: discord.Guild, raw: str) -> discord.Emoji | None
     name = raw.strip(":").strip()
     if not name:
         return None
-    return discord.utils.get(guild.emojis, name=name)
+    exact = discord.utils.get(guild.emojis, name=name)
+    if exact is not None:
+        return exact
+    folded = name.casefold()
+    return next((e for e in guild.emojis if e.name.casefold() == folded), None)
 
 
 async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:

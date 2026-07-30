@@ -24,6 +24,7 @@ from bot_modules.services.economy_quests_service import (
 from bot_modules.cogs.economy_cog import (
     _NICK_FORBIDDEN,
     _custom_name_confirmation,
+    _resolve_guild_emoji,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -2893,6 +2894,87 @@ def test_custom_name_confirmation_variants():
 
     plain = _custom_name_confirmation("Sir Fluffy", nick_ok=False)
     assert plain == "Your role name is now **Sir Fluffy**."
+
+
+# ── role icon: resolving a custom emoji by the short name typed (#89) ─────────
+
+
+class _FakeEmoji:
+    """Just the attributes ``_resolve_guild_emoji`` reads off a real emoji."""
+
+    def __init__(self, name: str, id: int, animated: bool = False):
+        self.name, self.id, self.animated = name, id, animated
+
+
+class _FakeGuild:
+    def __init__(self, *emojis: _FakeEmoji):
+        self.emojis = list(emojis)
+
+
+def _emoji_guild() -> _FakeGuild:
+    # Mixed-case names are the norm on an emote-heavy server — that's what
+    # made this bug hit "some" emojis and not others.
+    return _FakeGuild(
+        _FakeEmoji("KEKW", 1),
+        _FakeEmoji("monkaS", 2),
+        _FakeEmoji("peepoHappy", 3),
+        _FakeEmoji("pepe", 4),
+        _FakeEmoji("dance", 5, animated=True),
+    )
+
+
+@pytest.mark.parametrize(
+    "raw, expected_id",
+    [
+        # The casing the member actually types, vs the server's stored casing.
+        (":kekw:", 1),
+        (":KEKW:", 1),
+        ("KEKW", 1),
+        (":monkas:", 2),
+        (":monkaS:", 2),
+        (":peepohappy:", 3),
+        (":PEEPOHAPPY:", 3),
+        # Already-lowercase names worked before the fix and must keep working.
+        (":pepe:", 4),
+        # Animated resolves here; the caller is what refuses it.
+        (":DANCE:", 5),
+        # The pasted form matches by id regardless of the casing shown.
+        ("<:kekw:1>", 1),
+        ("<a:DANCE:5>", 5),
+        # Whitespace around the input is tolerated.
+        ("  :monkas:  ", 2),
+    ],
+)
+def test_resolve_guild_emoji_matches_the_short_name_case_insensitively(
+    raw, expected_id
+):
+    resolved = _resolve_guild_emoji(_emoji_guild(), raw)
+    assert resolved is not None, f"{raw!r} should resolve"
+    assert resolved.id == expected_id
+
+
+def test_resolve_guild_emoji_prefers_the_exact_casing_when_both_exist():
+    """A server holding both spellings still resolves each one precisely."""
+    guild = _FakeGuild(_FakeEmoji("pepe", 10), _FakeEmoji("PEPE", 11))
+    assert _resolve_guild_emoji(guild, ":pepe:").id == 10
+    assert _resolve_guild_emoji(guild, ":PEPE:").id == 11
+    # No exact hit — the fallback picks a case-insensitive match.
+    assert _resolve_guild_emoji(guild, ":PePe:").id in (10, 11)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "   ",
+        ":::",
+        ":nothere:",
+        "🎉",  # unicode emoji — role icons only take this server's customs
+        "<:fromelsewhere:999>",  # another server's custom emoji, by id
+    ],
+)
+def test_resolve_guild_emoji_rejects_what_isnt_this_servers_emoji(raw):
+    assert _resolve_guild_emoji(_emoji_guild(), raw) is None
 
 
 @pytest.mark.asyncio
