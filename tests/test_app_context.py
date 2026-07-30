@@ -385,3 +385,110 @@ async def test_setup_hook_starts_loops_registered_before_setup():
         await bot.close()
 
     assert len(bot.startup_tasks) == 1
+
+
+# ── /grant per-grant permissions: the allow-list decides, admins excepted ──
+
+
+def _grant_ix(guild_id: int, member, *, administrator: bool = False,
+              manage_guild: bool = False) -> MagicMock:
+    ix = MagicMock(spec=discord.Interaction)
+    ix.guild_id = guild_id
+    ix.permissions = MagicMock(
+        manage_guild=manage_guild, administrator=administrator
+    )
+    ix.guild = MagicMock()
+    ix.guild.get_member = MagicMock(return_value=member)
+    ix.user = member
+    return ix
+
+
+def _member(*role_ids: int, user_id: int = 7) -> MagicMock:
+    m = MagicMock()
+    m.id = user_id
+    m.roles = [MagicMock(id=rid) for rid in role_ids]
+    return m
+
+
+MOD_ROLE = 555
+ADMIN_ROLE = 556
+KEEPER_ROLE = 557
+
+
+def _grant_ctx(db_path, guild_id: int = 20):
+    from bot_modules.core.db_utils import upsert_grant_role
+
+    ctx = _make_ctx(db_path, guild_id=guild_id)
+    with open_db(ctx.db_path) as conn:
+        _db_set(conn, "mod_role_ids", str(MOD_ROLE), guild_id=guild_id)
+        _db_set(conn, "admin_role_ids", str(ADMIN_ROLE), guild_id=guild_id)
+        upsert_grant_role(
+            conn, guild_id, "goldengirl", label="Golden Girl", role_id=900,
+            log_channel_id=0, announce_channel_id=0, grant_message="",
+        )
+    return ctx
+
+
+def test_a_moderator_no_longer_bypasses_the_per_grant_list(tmp_path):
+    """The regression this shipped for: is_mod let every mod use every grant.
+
+    With the old ``is_mod`` short-circuit the allow-list could only ever add
+    people, so "this grant belongs to one keeper" was unexpressable.
+    """
+    ctx = _grant_ctx(tmp_path / "grant_mod.db")
+    ix = _grant_ix(20, _member(MOD_ROLE))
+    assert ctx.can_use_grant_role(ix, "goldengirl") is False
+    assert ctx.can_grant_any_role(ix) is False
+
+
+def test_an_administrator_still_bypasses_every_grant(tmp_path):
+    """Admins keep the bypass so a guild can't lock itself out."""
+    ctx = _grant_ctx(tmp_path / "grant_admin.db")
+    by_perm = _grant_ix(20, _member(), administrator=True)
+    assert ctx.can_use_grant_role(by_perm, "goldengirl") is True
+    assert ctx.can_grant_any_role(by_perm) is True
+
+    by_role = _grant_ix(20, _member(ADMIN_ROLE))
+    assert ctx.can_use_grant_role(by_role, "goldengirl") is True
+
+
+def test_manage_guild_alone_does_not_bypass(tmp_path):
+    """is_admin, unlike is_mod, does not honour bare manage_guild."""
+    ctx = _grant_ctx(tmp_path / "grant_mg.db")
+    ix = _grant_ix(20, _member(), manage_guild=True)
+    assert ctx.can_use_grant_role(ix, "goldengirl") is False
+
+
+def test_a_listed_role_or_user_can_use_only_its_own_grant(tmp_path):
+    """A keeper listed on one grant gets that grant and no other."""
+    from bot_modules.core.db_utils import add_grant_permission, upsert_grant_role
+
+    ctx = _grant_ctx(tmp_path / "grant_keeper.db")
+    with open_db(ctx.db_path) as conn:
+        upsert_grant_role(
+            conn, 20, "veteran", label="Veteran", role_id=901,
+            log_channel_id=0, announce_channel_id=0, grant_message="",
+        )
+        add_grant_permission(conn, 20, "goldengirl", "role", KEEPER_ROLE)
+        add_grant_permission(conn, 20, "goldengirl", "user", 4242)
+
+    by_role = _grant_ix(20, _member(KEEPER_ROLE))
+    assert ctx.can_use_grant_role(by_role, "goldengirl") is True
+    assert ctx.can_use_grant_role(by_role, "veteran") is False
+    assert ctx.can_grant_any_role(by_role) is True
+
+    by_user = _grant_ix(20, _member(user_id=4242))
+    assert ctx.can_use_grant_role(by_user, "goldengirl") is True
+    assert ctx.can_use_grant_role(by_user, "veteran") is False
+
+
+def test_a_moderator_listed_on_a_grant_can_use_it(tmp_path):
+    """Seeding mods onto a grant restores their access — what migration 144 does."""
+    from bot_modules.core.db_utils import add_grant_permission
+
+    ctx = _grant_ctx(tmp_path / "grant_seeded.db")
+    with open_db(ctx.db_path) as conn:
+        add_grant_permission(conn, 20, "goldengirl", "role", MOD_ROLE)
+
+    ix = _grant_ix(20, _member(MOD_ROLE))
+    assert ctx.can_use_grant_role(ix, "goldengirl") is True

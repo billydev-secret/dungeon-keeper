@@ -8,7 +8,7 @@ Let trusted members hand out specific community roles with `/grant`, without giv
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/grant role:<key> member:<@member>` | Slash | Per-grant allowlist, or mod | Give a configured community role to a member |
+| `/grant role:<key> member:<@member>` | Slash | Per-grant allowlist, or admin | Give a configured community role to a member |
 | **Grant Audit → Post Card** | Web | Admin | Post (or refresh/move) the auto-updating grant-audit card. Uses the page's own grant-role and minimum-level controls, so the card matches the tables above it |
 
 The `role` argument autocompletes from the guild's configured grant roles, matching against both the internal key and the display label (max 25 choices). Members who can grant at least one role also get a "Role Grants" page in `/help` listing their available grants.
@@ -49,7 +49,30 @@ The same three buckets also render as a channel embed a mod can pin anywhere. Th
 
 ## Behavior
 
-Permission first: mods always pass; anyone else must appear in the grant's allowlist (`grant_role_permissions`) either directly by user ID or via any role they hold. The checks then run in order — guild-only, target isn't a bot, no granting to yourself (mods may), the grant has a `role_id` configured and the role still exists, the target doesn't already have it, the bot has Manage Roles, and the role sits below the bot's top role.
+Permission first: **administrators** always pass; everyone else — moderators included — must appear in the grant's allowlist (`grant_role_permissions`) either directly by user ID or via any role they hold. The checks then run in order — guild-only, target isn't a bot, no granting to yourself (mods may), the grant has a `role_id` configured and the role still exists, the target doesn't already have it, the bot has Manage Roles, and the role sits below the bot's top role.
+
+### Why admin and not mod
+
+Until 2026-07-30 the gate short-circuited on `is_mod`, which made the allowlist
+**additive only**: every moderator could hand out every configured grant, and no
+list could take that away. "Golden Girl is one keeper's to give" was
+unexpressable. `can_use_grant_role` / `can_grant_any_role` now short-circuit on
+`is_admin` instead, so the per-grant list actually decides. Administrators keep
+the bypass so a guild can't lock itself out of its own grants.
+
+Note `is_admin` is stricter than `is_mod` in a second way: it honours the
+`administrator` permission and configured admin roles, but **not** bare
+`manage_guild`.
+
+Migration `144_grant_permissions_seed_mods.sql` copies each guild's configured
+`mod_role_ids` into every grant it has, so the flip is behavior-neutral on the
+day it ships and narrowing a grant is a dashboard edit rather than an outage.
+
+Two `is_mod` checks inside `_execute_grant` are deliberately **unchanged** — they
+govern how a grant executes, not who may invoke it: the self-grant block
+(`role_grant_commands.py:62`) and the `required_role_id` bypass (`:81`). A
+non-mod keeper can therefore use their grant but still can't grant it to
+themselves.
 
 On success the bot adds the role (audit-log reason "Granted by {user} via slash command"), records a `role_events` row, and confirms to the invoker ephemerally.
 
@@ -65,7 +88,7 @@ All ephemeral.
 
 | When | The user sees |
 |---|---|
-| Not on the grant's allowlist (and not mod) | "You don't have permission to use this command." |
+| Not on the grant's allowlist (and not admin) | "You don't have permission to use this command." |
 | Grant key isn't configured | "This grant role is not configured." |
 | Used outside a guild | "This command only works in a server." |
 | Target is a bot | "Bots can't receive this role." |
