@@ -39,6 +39,11 @@ from bot_modules.games_wyr.logic import (
     toggle_vote,
 )
 from bot_modules.games.utils.audit import audit_anonymous
+from bot_modules.services.anon_audit_service import (
+    EVENT_QUESTION_POSED,
+    EVENT_VOTE,
+    EVENT_VOTERS_REVEALED,
+)
 
 log = logging.getLogger(__name__)
 
@@ -96,7 +101,7 @@ class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
             await audit_anonymous(
                 self._view.bot, self._view.db, interaction.guild,
                 game_type="wyr", user=interaction.user,
-                event="question_posed",
+                event=EVENT_QUESTION_POSED,
                 content=f"A: {a} / B: {b}", label="WYR Posed Question",
                 game_id=self._view.game_id,
                 channel_id=interaction.channel.id if interaction.channel else None,
@@ -162,18 +167,25 @@ class WYRRoundView(discord.ui.View):
             color=self.accent,
         )
 
-    async def _audit_vote(self, interaction: discord.Interaction, option: str, changed: bool) -> None:
+    async def _audit_vote(
+        self, interaction: discord.Interaction, option: str, changed: bool,
+        *, was_already_there: bool,
+    ) -> None:
         """Record a vote only while the round is actually anonymous.
 
         With ``anonymous`` off the tallies name their voters in the embed, so
         there is no anonymity for the audit trail to account for.
+
+        ``was_already_there`` skips re-presses of the side the member is
+        already on. ``toggle_vote`` treats those as no-ops, so auditing them
+        would let one member write unbounded rows by tapping the same button.
         """
-        if not self.anonymous or interaction.guild is None:
+        if not self.anonymous or interaction.guild is None or was_already_there:
             return
         await audit_anonymous(
             self.bot, self.db, interaction.guild,
             game_type="wyr", user=interaction.user,
-            event="vote",
+            event=EVENT_VOTE,
             game_id=self.game_id,
             message_id=interaction.message.id if interaction.message else None,
             channel_id=interaction.channel.id if interaction.channel else None,
@@ -186,11 +198,14 @@ class WYRRoundView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
+        was_already_there = interaction.user.id in self.votes_a
         changed = toggle_vote(self.votes_a, self.votes_b, interaction.user.id, "a")
         msg = f"✅ Voted **🅰️ Option A**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
-        await self._audit_vote(interaction, "a", changed)
+        await self._audit_vote(
+            interaction, "a", changed, was_already_there=was_already_there
+        )
 
     @discord.ui.button(label="🅱️ Option B", style=discord.ButtonStyle.primary, custom_id="wyr_b", row=0)
     async def vote_b(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -198,11 +213,14 @@ class WYRRoundView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
+        was_already_there = interaction.user.id in self.votes_b
         changed = toggle_vote(self.votes_a, self.votes_b, interaction.user.id, "b")
         msg = f"✅ Voted **🅱️ Option B**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
-        await self._audit_vote(interaction, "b", changed)
+        await self._audit_vote(
+            interaction, "b", changed, was_already_there=was_already_there
+        )
 
     @discord.ui.button(label="✍️ Pose Question", style=discord.ButtonStyle.primary, custom_id="wyr_pose", row=1)
     async def pose_question(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -241,7 +259,7 @@ class WYRRoundView(discord.ui.View):
             await audit_anonymous(
                 self.bot, self.db, interaction.guild,
                 game_type="wyr", user=interaction.user,
-                event="voters_revealed",
+                event=EVENT_VOTERS_REVEALED,
                 game_id=self.game_id,
                 message_id=interaction.message.id if interaction.message else None,
                 channel_id=interaction.channel.id if interaction.channel else None,

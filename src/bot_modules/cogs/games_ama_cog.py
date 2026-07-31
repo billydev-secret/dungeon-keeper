@@ -29,6 +29,15 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.utils.audit import audit_anonymous
+from bot_modules.services.anon_audit_service import (
+    EVENT_HOT_SEAT_CHANGED,
+    EVENT_HOT_SEAT_SKIPPED,
+    EVENT_QUESTION_ANSWERED,
+    EVENT_QUESTION_APPROVED,
+    EVENT_QUESTION_ASKED,
+    EVENT_QUESTION_PASSED,
+    EVENT_QUESTION_REJECTED,
+)
 from bot_modules.games_ama.embeds import (
     build_answered_embed,
     build_asker_dm_embed,
@@ -165,19 +174,12 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 mark_question_approved(payload, q_idx, message_id=question_msg.id)
 
             await modify_payload(self.db, self.game_id, _mark_posted)
-            # Audited after the post so the row carries the message pointer the
-            # dashboard joins against to recover the question text.
-            if interaction.guild:
-                await audit_anonymous(
-                    interaction.client, self.db, interaction.guild,
-                    game_type="ama", user=interaction.user,
-                    event="question_asked",
-                    content=self.question.value, label="AMA Question",
-                    target_id=self.target_id, game_id=self.game_id,
-                    message_id=question_msg.id, channel_id=self.channel.id,
-                    extra={"mode": "unfiltered", "question_idx": q_idx},
-                )
             await interaction.response.send_message("Your question has been posted anonymously!", ephemeral=True)
+            # Recorded after the post so the row carries the message pointer the
+            # dashboard joins against to recover the question text.
+            audit_label = "AMA Question"
+            audit_message_id = question_msg.id
+            audit_extra = {"mode": "unfiltered", "question_idx": q_idx}
             # Advance turn/status only after the question is actually posted
             await self.ama_view.after_question_posted(self.channel)
             # Unfiltered questions post immediately → credit the asker now.
@@ -219,24 +221,17 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 pass
             except discord.HTTPException:
                 pass
-            # Audited at submit, not at approval: a question the host rejects
+            # Recorded at submit, not at approval: a question the host rejects
             # never becomes a message, and that is exactly the one a mod needs
             # to be able to trace. No message pointer exists for it, so the row
             # is who-and-when only (migration 145).
-            if interaction.guild:
-                await audit_anonymous(
-                    interaction.client, self.db, interaction.guild,
-                    game_type="ama", user=interaction.user,
-                    event="question_asked",
-                    content=self.question.value, label="AMA Question (screened)",
-                    target_id=self.target_id, game_id=self.game_id,
-                    channel_id=self.channel.id,
-                    extra={
-                        "mode": "screened",
-                        "question_idx": q_idx,
-                        "delivered_to_host": dm_sent,
-                    },
-                )
+            audit_label = "AMA Question (screened)"
+            audit_message_id = None
+            audit_extra = {
+                "mode": "screened",
+                "question_idx": q_idx,
+                "delivered_to_host": dm_sent,
+            }
             if dm_sent:
                 await interaction.response.send_message(
                     "✅ Your question has been submitted for host review.", ephemeral=True
@@ -246,6 +241,19 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                     "⚠️ Couldn't reach the host (DMs may be disabled) — your question was not submitted.", ephemeral=True
                 )
             # Turn counter for screened mode advances only when the host approves
+
+        # One call for both modes — they differ only in the label, the message
+        # pointer and a few `extra` keys, set per-branch above.
+        if interaction.guild:
+            await audit_anonymous(
+                interaction.client, self.db, interaction.guild,
+                game_type="ama", user=interaction.user,
+                event=EVENT_QUESTION_ASKED,
+                content=self.question.value, label=audit_label,
+                target_id=self.target_id, game_id=self.game_id,
+                message_id=audit_message_id, channel_id=self.channel.id,
+                extra=audit_extra,
+            )
 
 
 class ReplyModal(discord.ui.Modal, title="Your Reply"):
@@ -312,7 +320,7 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
             await audit_anonymous(
                 interaction.client, self.db, interaction.guild,
                 game_type="ama", user=interaction.user,
-                event="question_answered",
+                event=EVENT_QUESTION_ANSWERED,
                 target_id=self.asker_id, game_id=self.game_id,
                 message_id=interaction.message.id,
                 channel_id=interaction.channel.id if interaction.channel else None,
@@ -386,7 +394,7 @@ class ScreenedQuestionView(discord.ui.View):
             await audit_anonymous(
                 interaction.client, self.db, self.channel.guild,
                 game_type="ama", user=interaction.user,
-                event="question_approved",
+                event=EVENT_QUESTION_APPROVED,
                 target_id=self.asker_id, game_id=self.game_id,
                 message_id=question_msg.id, channel_id=self.channel.id,
                 extra={"question_idx": self.question_idx},
@@ -420,7 +428,7 @@ class ScreenedQuestionView(discord.ui.View):
             await audit_anonymous(
                 interaction.client, self.db, self.channel.guild,
                 game_type="ama", user=interaction.user,
-                event="question_rejected",
+                event=EVENT_QUESTION_REJECTED,
                 target_id=self.asker_id, game_id=self.game_id,
                 channel_id=self.channel.id,
                 extra={"question_idx": self.question_idx},
@@ -475,7 +483,7 @@ class QuestionView(discord.ui.View):
             await audit_anonymous(
                 interaction.client, self.db, interaction.guild,
                 game_type="ama", user=interaction.user,
-                event="question_passed",
+                event=EVENT_QUESTION_PASSED,
                 target_id=self.asker_id, game_id=self.game_id,
                 message_id=interaction.message.id,
                 channel_id=interaction.channel.id if interaction.channel else None,
@@ -826,7 +834,7 @@ class AMAView(discord.ui.View):
             await audit_anonymous(
                 interaction.client, self.db, interaction.guild,
                 game_type="ama", user=interaction.user,
-                event="hot_seat_skipped",
+                event=EVENT_HOT_SEAT_SKIPPED,
                 target_id=skipped_id, game_id=self.game_id,
                 channel_id=interaction.channel.id if interaction.channel else None,
             )
@@ -945,7 +953,7 @@ class HotSeatSelect(discord.ui.Select):
             await audit_anonymous(
                 interaction.client, self.db, guild,
                 game_type="ama", user=interaction.user,
-                event="hot_seat_changed",
+                event=EVENT_HOT_SEAT_CHANGED,
                 target_id=new_member.id, game_id=self.game_id,
                 channel_id=interaction.channel.id if interaction.channel else None,
             )

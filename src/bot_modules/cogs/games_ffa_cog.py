@@ -11,6 +11,9 @@ from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS
 from bot_modules.games.utils.audit import audit_anonymous
+from bot_modules.services.anon_audit_service import (
+    EVENT_REPLY_POSTED,
+)
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
@@ -251,7 +254,7 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             await audit_anonymous(
                 bot, bot.games_db, interaction.guild,
                 game_type="ffa", user=interaction.user,
-                event="reply_posted",
+                event=EVENT_REPLY_POSTED,
                 content=content, label="FFA Anonymous Reply",
                 game_id=view.game_id,
                 message_id=reply_msg.id, channel_id=interaction.channel_id,

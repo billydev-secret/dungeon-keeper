@@ -13,6 +13,9 @@ from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.audit import audit_anonymous
+from bot_modules.services.anon_audit_service import (
+    EVENT_ENTRY_SUBMITTED,
+)
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
@@ -81,21 +84,22 @@ class SubmitEntryModal(discord.ui.Modal, title="Submit a Fantasy or Dealbreaker"
 
         await modify_payload(self.db, self.game_id, _add_entry)
 
-        # Audit log
+        await interaction.response.send_message(
+            f"Your {category.lower()} has been submitted!", ephemeral=True
+        )
+
+        # After the member has been answered — this is best-effort logging and
+        # must not spend any of Discord's 3s initial-response budget.
         if interaction.guild:
             await audit_anonymous(
                 interaction.client, self.db, interaction.guild,
                 game_type="fantasies", user=interaction.user,
-                event="entry_submitted",
+                event=EVENT_ENTRY_SUBMITTED,
                 content=self.entry.value, label=f"{category} Submission",
                 game_id=self.game_id,
                 channel_id=interaction.channel.id if interaction.channel else None,
                 extra={"category": category, "round": self.round_num},
             )
-
-        await interaction.response.send_message(
-            f"Your {category.lower()} has been submitted!", ephemeral=True
-        )
 
 
 class FantasiesMainView(discord.ui.View):

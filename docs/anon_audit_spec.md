@@ -108,10 +108,17 @@ AMA audit call moved below `mark_question_approved`.
 
 ## Retention
 
-`anon_audit_cog` runs `purge_expired` every 6 hours. Guilds with no config row
-use the 90-day default, so a server that never opens the panel is still
-bounded; a guild set to `0` is skipped. The cutoff comparison is strict
-(`created_at < cutoff`), so a row landing exactly on the boundary survives.
+`anon_audit_purge_loop` (registered as a `startup_task_factory` in `__main__`,
+alongside the other owner-less background loops) runs `purge_expired` every 6
+hours. Guilds with no config row use the 90-day default, so a server that never
+opens the panel is still bounded; a guild set to `0` is skipped. The cutoff
+comparison is strict (`created_at < cutoff`), so a row landing exactly on the
+boundary survives.
+
+`purge_expired` is a single statement correlating each row against its own
+guild's window. A per-guild loop needed a `SELECT DISTINCT guild_id` over the
+whole table first, and SQLite has no loose index scan — that walked every index
+entry four times a day just to rediscover a handful of ids.
 
 WYR votes dominate the row count. The panel's feature filter is how a mod
 narrows past them.
@@ -122,11 +129,20 @@ narrows past them.
 admin-only).
 
 - `GET /api/moderation/anon-audit` — `limit`, `offset`, `feature`, `actor_id`.
-  Returns entries plus the set of features actually recorded for the guild.
+  Reads through `list_events`/`count_events` rather than its own SQL, so the
+  filter logic has one definition. Returns entries plus the filter options,
+  built from `KNOWN_FEATURES` and labelled from `games.constants.GAME_NAMES` so
+  the panel names each game the way the rest of the dashboard does.
 - `GET|PUT /api/moderation/anon-audit/retention`.
 
-Moderation events are badged so they stand out from routine submissions. All
-snowflakes are returned as strings.
+Each entry carries `is_mod_action`, derived server-side from `MOD_EVENTS` — the
+panel badges on that flag rather than keeping its own copy of which event names
+mean "a mod acted on someone else's anonymous post". Event names are
+`EVENT_*` constants in the service, not string literals at the call sites, for
+the same reason. All snowflakes are returned as strings.
+
+`limit` is clamped at both ends: SQLite reads a negative `LIMIT` as unbounded,
+so `?limit=-1` would otherwise dump every de-anonymising row in one response.
 
 ## Tests
 

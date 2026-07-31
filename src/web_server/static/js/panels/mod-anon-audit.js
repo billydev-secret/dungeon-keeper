@@ -1,20 +1,6 @@
 import { api, apiPut } from "../api.js";
 import { auditPanel, badge, el, tsColumn } from "../audit-helpers.js";
 
-// Feature slugs mirror bot_modules/services/anon_audit_service.KNOWN_FEATURES.
-// Listed statically rather than from the response so the dropdown exists before
-// the first fetch resolves; the API also returns the set actually recorded.
-const FEATURES = [
-  { value: "", label: "All features" },
-  { value: "ama", label: "AMA" },
-  { value: "ffa", label: "Free For All" },
-  { value: "hottakes", label: "Hot Takes" },
-  { value: "fantasies", label: "Fantasies" },
-  { value: "clapback", label: "Clapback" },
-  { value: "wyr", label: "Would You Rather" },
-  { value: "compliment", label: "Spin the Compliment" },
-];
-
 const RETENTION_OPTIONS = [
   { value: "30", label: "30 days" },
   { value: "90", label: "90 days" },
@@ -23,15 +9,18 @@ const RETENTION_OPTIONS = [
   { value: "0", label: "Keep forever" },
 ];
 
-// Events that de-anonymise or moderate someone else's anonymous post, rather
-// than being an anonymous post themselves. Flagged so they stand out in a list
-// that is otherwise mostly routine submissions.
-const MOD_EVENTS = new Set([
-  "question_approved",
-  "question_rejected",
-  "voters_revealed",
-  "hot_seat_skipped",
-]);
+// Labels come from the server's canonical GAME_NAMES, so this panel names each
+// game the same way the rest of the dashboard does. Filled in on first load and
+// then left alone; re-running would clobber the mod's current selection.
+function fillFeatureOptions(sel, features) {
+  if (!sel || !features || sel.dataset.filled) return;
+  sel.dataset.filled = "1";
+  for (const f of features) {
+    const o = el("option", null, f.label);
+    o.value = f.value;
+    sel.append(o);
+  }
+}
 
 function prettyEvent(ev) {
   return String(ev || "").replace(/_/g, " ");
@@ -76,6 +65,15 @@ function buildRetentionControl() {
 }
 
 export function mount(container) {
+  // Stays synchronous: app.js does not await mount(), so returning a promise
+  // would leave it holding a Promise instead of the panel handle and skip
+  // unmount on navigation. The feature dropdown is filled in below once the
+  // first response lands.
+  //
+  // Declared up front rather than after auditPanel(): that call kicks off the
+  // first fetch synchronously, and the fetch callback closes over this.
+  let featureSel = null;
+
   const handle = auditPanel(container, {
     title: "Anonymous Features Audit",
     subtitle:
@@ -83,16 +81,18 @@ export function mount(container) {
     empty:
       "Nothing recorded yet. Anonymous submissions in AMA, Free For All, Hot Takes, Fantasies, Clapback, Would You Rather and Spin the Compliment land here.",
     filters: [
-      { name: "feature", label: "Feature", options: FEATURES },
+      { name: "feature", label: "Feature", options: [{ value: "", label: "All features" }] },
     ],
     columns: [
       {
         label: "Feature",
-        render: (e) => badge(e.feature, "badge-info"),
+        render: (e) => badge(e.feature_label || e.feature, "badge-info"),
       },
       {
         label: "Event",
-        render: (e) => (MOD_EVENTS.has(e.event)
+        // is_mod_action is derived server-side from the service's MOD_EVENTS,
+        // so renaming an event can't silently stop flagging it here.
+        render: (e) => (e.is_mod_action
           ? badge(prettyEvent(e.event), "badge-warning")
           : prettyEvent(e.event)),
       },
@@ -135,11 +135,15 @@ export function mount(container) {
     ],
     fetch: async (params) => {
       const data = await api("/api/moderation/anon-audit", params);
+      fillFeatureOptions(featureSel, data.features);
       return { rows: data.entries, total: data.total };
     },
   });
 
+  // Resolved before the retention control is appended, so it is unambiguously
+  // the feature filter rather than a positional guess among several selects.
   const controls = container.querySelector(".controls");
+  featureSel = controls ? controls.querySelector("select") : null;
   if (controls) controls.append(buildRetentionControl());
 
   const note = el("div",

@@ -18,6 +18,7 @@ thread identity, whisper state and round history.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -32,6 +33,7 @@ log = logging.getLogger("dungeonkeeper.anon_audit")
 DEFAULT_RETENTION_DAYS = 90
 RETENTION_FOREVER = 0
 SECONDS_PER_DAY = 86400
+PURGE_INTERVAL_SECONDS = 6 * 3600
 
 # Feature slugs. These double as the dashboard filter values, and where a
 # games-suite equivalent exists the slug matches ``games.constants`` game_type
@@ -54,6 +56,37 @@ KNOWN_FEATURES = (
     FEATURE_COMPLIMENT,
 )
 
+# Event names. Constants rather than bare strings at the call sites, because
+# MOD_EVENTS below assigns them meaning — renaming one silently reclassifies
+# rows, and the dashboard must not have to keep its own copy of these strings.
+EVENT_QUESTION_ASKED = "question_asked"
+EVENT_QUESTION_APPROVED = "question_approved"
+EVENT_QUESTION_REJECTED = "question_rejected"
+EVENT_QUESTION_ANSWERED = "question_answered"
+EVENT_QUESTION_PASSED = "question_passed"
+EVENT_QUESTION_POSED = "question_posed"
+EVENT_HOT_SEAT_SKIPPED = "hot_seat_skipped"
+EVENT_HOT_SEAT_CHANGED = "hot_seat_changed"
+EVENT_REPLY_POSTED = "reply_posted"
+EVENT_TAKE_SUBMITTED = "take_submitted"
+EVENT_ENTRY_SUBMITTED = "entry_submitted"
+EVENT_ANSWER_SUBMITTED = "answer_submitted"
+EVENT_VOTE = "vote"
+EVENT_VOTERS_REVEALED = "voters_revealed"
+EVENT_PAIRINGS_GENERATED = "pairings_generated"
+
+# Events where the actor is a moderator acting on someone else's anonymous
+# post, rather than a member posting anonymously. This is the most
+# accountability-relevant distinction in the table, so it is derived here and
+# shipped to the dashboard as a flag — the panel must not re-derive it from
+# event strings it would then have to keep in sync.
+MOD_EVENTS = frozenset({
+    EVENT_QUESTION_APPROVED,
+    EVENT_QUESTION_REJECTED,
+    EVENT_HOT_SEAT_SKIPPED,
+    EVENT_VOTERS_REVEALED,
+})
+
 
 @dataclass(frozen=True)
 class AnonAuditEvent:
@@ -68,6 +101,13 @@ class AnonAuditEvent:
     channel_id: int | None
     extra: dict
     created_at: float
+    # Joined from `messages` when the caller asks for it; this table never
+    # stores content of its own (migration 145).
+    content: str | None = None
+
+    @property
+    def is_mod_action(self) -> bool:
+        return self.event in MOD_EVENTS
 
 
 def _row_to_event(row: sqlite3.Row) -> AnonAuditEvent:
@@ -87,6 +127,7 @@ def _row_to_event(row: sqlite3.Row) -> AnonAuditEvent:
         channel_id=int(row["channel_id"]) if row["channel_id"] is not None else None,
         extra=extra if isinstance(extra, dict) else {},
         created_at=float(row["created_at"]),
+        content=row["content"] if "content" in row.keys() else None,
     )
 
 
@@ -179,6 +220,26 @@ def record_event(
 # ── Reading ───────────────────────────────────────────────────────────────────
 
 
+def _filter(
+    guild_id: int, feature: str | None, actor_id: int | None, *, prefix: str = ""
+) -> tuple[str, list]:
+    """Build the shared WHERE clause for the listing and its count.
+
+    ``prefix`` qualifies the column names ("a." when the caller joins), so the
+    listing, the count and the dashboard all narrow rows identically instead of
+    each maintaining its own copy of this logic.
+    """
+    clauses = [f"{prefix}guild_id = ?"]
+    params: list = [guild_id]
+    if feature:
+        clauses.append(f"{prefix}feature = ?")
+        params.append(feature)
+    if actor_id is not None:
+        clauses.append(f"{prefix}actor_id = ?")
+        params.append(actor_id)
+    return " AND ".join(clauses), params
+
+
 def list_events(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -187,22 +248,29 @@ def list_events(
     actor_id: int | None = None,
     limit: int = 50,
     offset: int = 0,
+    with_content: bool = False,
 ) -> list[AnonAuditEvent]:
-    """Most recent events first, optionally narrowed by feature and/or actor."""
-    clauses = ["guild_id = ?"]
-    params: list = [guild_id]
-    if feature:
-        clauses.append("feature = ?")
-        params.append(feature)
-    if actor_id is not None:
-        clauses.append("actor_id = ?")
-        params.append(actor_id)
-    where = " AND ".join(clauses)
+    """Most recent events first, optionally narrowed by feature and/or actor.
+
+    ``with_content`` LEFT JOINs ``messages`` to recover each row's text. This
+    table stores none of its own (migration 145), so content is present only
+    where the event produced a guild message *and* the guild retains message
+    content. The join is by rowid primary key, so it costs one seek per row.
+    """
+    where, params = _filter(guild_id, feature, actor_id, prefix="a.")
+    content_col = ", m.content" if with_content else ", NULL AS content"
+    join = (
+        "LEFT JOIN messages m ON m.message_id = a.message_id"
+        if with_content
+        else ""
+    )
     rows = conn.execute(
         f"""
-        SELECT * FROM anon_audit_log
+        SELECT a.*{content_col}
+        FROM anon_audit_log a
+        {join}
         WHERE {where}
-        ORDER BY created_at DESC, id DESC
+        ORDER BY a.created_at DESC, a.id DESC
         LIMIT ? OFFSET ?
         """,
         params + [limit, offset],
@@ -217,15 +285,7 @@ def count_events(
     feature: str | None = None,
     actor_id: int | None = None,
 ) -> int:
-    clauses = ["guild_id = ?"]
-    params: list = [guild_id]
-    if feature:
-        clauses.append("feature = ?")
-        params.append(feature)
-    if actor_id is not None:
-        clauses.append("actor_id = ?")
-        params.append(actor_id)
-    where = " AND ".join(clauses)
+    where, params = _filter(guild_id, feature, actor_id)
     return int(
         conn.execute(
             f"SELECT COUNT(*) FROM anon_audit_log WHERE {where}", params
@@ -266,28 +326,58 @@ def purge_expired(db_path: Path, *, now: float | None = None) -> int:
     that never opens the panel is still bounded. A guild set to
     :data:`RETENTION_FOREVER` is skipped entirely.
 
-    Guilds are resolved from the log itself rather than from the config table,
-    because the common case is a guild with rows and no config row.
+    One statement, correlating each row against its own guild's window. A
+    per-guild loop needed a ``SELECT DISTINCT guild_id`` over the whole table
+    first, and SQLite has no loose index scan — that walked every index entry
+    four times a day just to rediscover a handful of ids, on a table WYR votes
+    make large.
     """
     now = time.time() if now is None else now
-    removed = 0
     with open_db(db_path) as conn:
-        guild_ids = [
-            int(r[0])
-            for r in conn.execute(
-                "SELECT DISTINCT guild_id FROM anon_audit_log"
-            ).fetchall()
-        ]
-        for guild_id in guild_ids:
-            days = get_retention_days(conn, guild_id)
-            if days <= RETENTION_FOREVER:
-                continue
-            cutoff = now - (days * SECONDS_PER_DAY)
-            cur = conn.execute(
-                "DELETE FROM anon_audit_log WHERE guild_id = ? AND created_at < ?",
-                (guild_id, cutoff),
-            )
-            removed += cur.rowcount or 0
+        cur = conn.execute(
+            """
+            DELETE FROM anon_audit_log
+            WHERE created_at < ? - (? * COALESCE(
+                (SELECT c.retention_days FROM anon_audit_config c
+                  WHERE c.guild_id = anon_audit_log.guild_id), ?))
+              AND COALESCE(
+                (SELECT c.retention_days FROM anon_audit_config c
+                  WHERE c.guild_id = anon_audit_log.guild_id), ?) > ?
+            """,
+            (
+                now,
+                SECONDS_PER_DAY,
+                DEFAULT_RETENTION_DAYS,
+                DEFAULT_RETENTION_DAYS,
+                RETENTION_FOREVER,
+            ),
+        )
+        removed = cur.rowcount or 0
     if removed:
         log.info("anon audit purge removed %d row(s)", removed)
     return removed
+
+
+async def anon_audit_purge_loop(bot, db_path: Path) -> None:
+    """Apply each guild's retention window, every ``PURGE_INTERVAL_SECONDS``.
+
+    Registered as a ``startup_task_factory`` rather than living in a cog: this
+    table spans seven features, so no feature cog owns it, and the repo already
+    routes owner-less background work this way (see ``__main__``).
+
+    Six-hourly, not hourly — retention is measured in days, so landing within a
+    quarter-day of the cutoff is exact enough.
+    """
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+        await asyncio.sleep(PURGE_INTERVAL_SECONDS)
+        try:
+            removed = await asyncio.to_thread(purge_expired, db_path)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("anon audit retention sweep failed")
+            continue
+        if removed:
+            log.info("anon audit retention sweep removed %d row(s)", removed)

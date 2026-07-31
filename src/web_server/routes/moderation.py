@@ -26,8 +26,12 @@ from bot_modules.services.moderation import (
 )
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from bot_modules.games.constants import GAME_NAMES
 from bot_modules.services.anon_audit_service import (
+    KNOWN_FEATURES,
+    count_events,
     get_retention_days,
+    list_events,
     set_retention_days,
 )
 from web_server.schemas import (
@@ -1346,64 +1350,44 @@ async def anon_audit_log(
 
     def _q():
         with ctx.open_db() as conn:
-            clauses = ["a.guild_id = ?"]
-            params: list = [guild_id]
-            if feature:
-                clauses.append("a.feature = ?")
-                params.append(feature)
-            if actor_id is not None:
-                clauses.append("a.actor_id = ?")
-                params.append(actor_id)
-            where = " AND ".join(clauses)
-
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM anon_audit_log a WHERE {where}", params
-            ).fetchone()[0]
-            rows = conn.execute(
-                f"""
-                SELECT a.id, a.feature, a.event, a.actor_id, a.target_id,
-                       a.game_id, a.message_id, a.channel_id, a.extra,
-                       a.created_at, m.content
-                FROM anon_audit_log a
-                LEFT JOIN messages m ON m.message_id = a.message_id
-                WHERE {where}
-                ORDER BY a.created_at DESC, a.id DESC
-                LIMIT ? OFFSET ?
-                """,
-                params + [limit, offset],
-            ).fetchall()
-            # The filter dropdown lists only what this guild has actually
-            # recorded, so it never offers an option that returns nothing.
-            features = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT DISTINCT feature FROM anon_audit_log "
-                    "WHERE guild_id = ? ORDER BY feature",
-                    (guild_id,),
-                ).fetchall()
+            total = count_events(
+                conn, guild_id, feature=feature, actor_id=actor_id
+            )
+            events = list_events(
+                conn, guild_id,
+                feature=feature, actor_id=actor_id,
+                limit=limit, offset=offset, with_content=True,
+            )
+            entries = [
+                {
+                    "id": e.id,
+                    "feature": e.feature,
+                    # Canonical display name, so this panel calls each game
+                    # what the rest of the dashboard calls it.
+                    "feature_label": GAME_NAMES.get(e.feature, e.feature),
+                    "event": e.event,
+                    # Derived server-side from MOD_EVENTS: the panel styles on
+                    # this flag rather than keeping its own copy of which
+                    # event names mean "a mod acted on someone's anon post".
+                    "is_mod_action": e.is_mod_action,
+                    "actor_id": str(e.actor_id),
+                    "target_id": str(e.target_id) if e.target_id else None,
+                    "game_id": e.game_id,
+                    "message_id": str(e.message_id) if e.message_id else None,
+                    "channel_id": str(e.channel_id) if e.channel_id else None,
+                    "content": e.content,
+                    "extra": e.extra,
+                    "created_at": e.created_at,
+                }
+                for e in events
             ]
-
-            entries = []
-            for r in rows:
-                try:
-                    extra = json.loads(r["extra"] or "{}")
-                except (TypeError, ValueError):
-                    extra = {}
-                entries.append(
-                    {
-                        "id": r["id"],
-                        "feature": r["feature"],
-                        "event": r["event"],
-                        "actor_id": str(r["actor_id"]),
-                        "target_id": str(r["target_id"]) if r["target_id"] else None,
-                        "game_id": r["game_id"],
-                        "message_id": str(r["message_id"]) if r["message_id"] else None,
-                        "channel_id": str(r["channel_id"]) if r["channel_id"] else None,
-                        "content": r["content"],
-                        "extra": extra if isinstance(extra, dict) else {},
-                        "created_at": r["created_at"],
-                    }
-                )
+            # Filter options come from the constant, not a DISTINCT over the
+            # table: SQLite has no loose index scan, so that query walked the
+            # guild's whole partition on every page load to return ≤7 strings.
+            features = [
+                {"value": f, "label": GAME_NAMES.get(f, f)}
+                for f in KNOWN_FEATURES
+            ]
             return {"total": total, "entries": entries, "features": features}
 
     result = await run_query(_q)

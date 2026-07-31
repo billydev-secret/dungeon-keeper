@@ -11,9 +11,13 @@ from __future__ import annotations
 import time
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.games.constants import GAME_NAMES
 from bot_modules.services.anon_audit_service import (
+    EVENT_QUESTION_REJECTED,
+    EVENT_VOTE,
     FEATURE_AMA,
     FEATURE_WYR,
+    KNOWN_FEATURES,
     insert_event,
 )
 
@@ -52,7 +56,9 @@ def test_empty_on_fresh_db(open_client):
     data = resp.json()
     assert data["entries"] == []
     assert data["total"] == 0
-    assert data["features"] == []
+    # Filter options are the constant feature set, not a DISTINCT over rows,
+    # so they are offered even before anything has been recorded.
+    assert [f["value"] for f in data["features"]] == list(KNOWN_FEATURES)
 
 
 def test_returns_seeded_entry(open_client, fake_ctx):
@@ -66,7 +72,8 @@ def test_returns_seeded_entry(open_client, fake_ctx):
     assert entry["event"] == "question_asked"
     assert entry["actor_id"] == "7001"
     assert entry["game_id"] == "g-1"
-    assert data["features"] == [FEATURE_AMA]
+    # Canonical display name, shared with the rest of the dashboard.
+    assert entry["feature_label"] == GAME_NAMES[FEATURE_AMA]
 
 
 def test_content_is_joined_from_the_message_store(open_client, fake_ctx):
@@ -132,8 +139,8 @@ def test_feature_filter(open_client, fake_ctx):
     ).json()
     assert data["total"] == 1
     assert data["entries"][0]["feature"] == FEATURE_WYR
-    # The dropdown lists everything recorded, not just the filtered slice.
-    assert sorted(data["features"]) == sorted([FEATURE_AMA, FEATURE_WYR])
+    # Filtering the rows must not narrow the dropdown's options.
+    assert [f["value"] for f in data["features"]] == list(KNOWN_FEATURES)
 
 
 def test_actor_filter(open_client, fake_ctx):
@@ -247,3 +254,19 @@ def test_limit_is_capped_at_200(open_client, fake_ctx):
     _seed(fake_ctx.db_path, fake_ctx.guild_id)
     resp = open_client.get("/api/moderation/anon-audit", params={"limit": 5000})
     assert resp.status_code == 200
+
+
+def test_mod_actions_are_flagged_server_side(open_client, fake_ctx):
+    """The panel badges on this flag, so the "a mod acted on someone else's
+    anonymous post" distinction must not live only in JavaScript."""
+    _seed(fake_ctx.db_path, fake_ctx.guild_id, event=EVENT_QUESTION_REJECTED)
+    _seed(
+        fake_ctx.db_path, fake_ctx.guild_id,
+        feature=FEATURE_WYR, event=EVENT_VOTE, actor_id=222,
+    )
+
+    entries = open_client.get("/api/moderation/anon-audit").json()["entries"]
+    by_event = {e["event"]: e["is_mod_action"] for e in entries}
+
+    assert by_event[EVENT_QUESTION_REJECTED] is True
+    assert by_event[EVENT_VOTE] is False

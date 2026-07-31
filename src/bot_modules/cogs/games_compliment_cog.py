@@ -41,6 +41,9 @@ from bot_modules.games_compliment.logic import (
     toggle_participant,
 )
 from bot_modules.games.utils.audit import audit_anonymous
+from bot_modules.services.anon_audit_service import (
+    EVENT_PAIRINGS_GENERATED,
+)
 
 log = logging.getLogger(__name__)
 
@@ -152,7 +155,7 @@ class ComplimentView(discord.ui.View):
             await audit_anonymous(
                 self.bot, self.db, guild,
                 game_type="compliment", user=interaction.user,
-                event="pairings_generated",
+                event=EVENT_PAIRINGS_GENERATED,
                 game_id=self.game_id,
                 message_id=getattr(pairings_msg, "id", None),
                 channel_id=interaction.channel.id if interaction.channel else None,

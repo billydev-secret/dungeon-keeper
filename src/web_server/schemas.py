@@ -669,10 +669,19 @@ class ConfessionsAuditLogResponse(BaseModel):
     entries: list[ConfessionAuditEntry]
 
 
+class AnonAuditFeature(BaseModel):
+    value: str
+    label: str
+
+
 class AnonAuditEntry(BaseModel):
     id: int
     feature: str
+    feature_label: str = ""
     event: str
+    # Derived from the service's MOD_EVENTS — a moderator acting on someone
+    # else's anonymous post, rather than a member posting anonymously.
+    is_mod_action: bool = False
     actor_id: str
     actor_name: str = ""
     target_id: str | None = None
@@ -691,7 +700,7 @@ class AnonAuditEntry(BaseModel):
 class AnonAuditLogResponse(BaseModel):
     total: int
     entries: list[AnonAuditEntry]
-    features: list[str]
+    features: list[AnonAuditFeature]
 
 
 class AnonAuditRetentionResponse(BaseModel):

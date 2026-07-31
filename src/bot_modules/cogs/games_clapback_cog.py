@@ -60,6 +60,9 @@ from bot_modules.games_clapback.embeds import (
     build_vote_embed,
 )
 from bot_modules.games.utils.audit import audit_anonymous
+from bot_modules.services.anon_audit_service import (
+    EVENT_ANSWER_SUBMITTED,
+)
 
 log = logging.getLogger(__name__)
 
@@ -128,7 +131,7 @@ class ClapbackAnswerModal(discord.ui.Modal, title="Your Answer"):
             await audit_anonymous(
                 interaction.client, self.db, interaction.guild,
                 game_type="clapback", user=interaction.user,
-                event="answer_submitted",
+                event=EVENT_ANSWER_SUBMITTED,
                 content=answer, label="Clapback Anonymous Answer",
                 game_id=self.game_id,
                 channel_id=interaction.channel.id if interaction.channel else None,

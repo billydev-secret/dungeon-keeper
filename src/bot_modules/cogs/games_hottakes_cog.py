@@ -14,6 +14,9 @@ from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.audit import audit_anonymous
+from bot_modules.services.anon_audit_service import (
+    EVENT_TAKE_SUBMITTED,
+)
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
@@ -88,40 +91,40 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
 
         payload = await modify_payload(self.db, self.game_id, _add_take)
 
-        # Audit log
-        if interaction.guild:
-            await audit_anonymous(
-                interaction.client, self.db, interaction.guild,
-                game_type="hottakes", user=interaction.user,
-                event="take_submitted",
-                content=self.take.value, label="Hot Take Submission",
-                game_id=self.game_id,
-                channel_id=interaction.channel.id if interaction.channel else None,
-                extra={"queued": self.queue_mode},
-            )
-
         if self.queue_mode:
             await interaction.response.send_message(
                 "✅ Hot take queued! It will be voted on after the current takes.",
                 ephemeral=True,
             )
-            return
+        else:
+            take_count = len(payload.get("takes", []))
+            await interaction.response.send_message(
+                f"✅ Hot take submitted! Total submissions: {take_count}", ephemeral=True
+            )
+            msg = self._origin_message or interaction.message
+            if msg:
+                embed = msg.embeds[0]
+                for i, field in enumerate(embed.fields):
+                    if field.name == "Submissions":
+                        embed.set_field_at(i, name="Submissions", value=str(take_count), inline=True)
+                        break
+                try:
+                    await msg.edit(embed=embed)
+                except discord.HTTPException:
+                    pass
 
-        take_count = len(payload.get("takes", []))
-        await interaction.response.send_message(
-            f"✅ Hot take submitted! Total submissions: {take_count}", ephemeral=True
-        )
-        msg = self._origin_message or interaction.message
-        if msg:
-            embed = msg.embeds[0]
-            for i, field in enumerate(embed.fields):
-                if field.name == "Submissions":
-                    embed.set_field_at(i, name="Submissions", value=str(take_count), inline=True)
-                    break
-            try:
-                await msg.edit(embed=embed)
-            except discord.HTTPException:
-                pass
+        # After the member has been answered — this is best-effort logging and
+        # must not spend any of Discord's 3s initial-response budget.
+        if interaction.guild:
+            await audit_anonymous(
+                interaction.client, self.db, interaction.guild,
+                game_type="hottakes", user=interaction.user,
+                event=EVENT_TAKE_SUBMITTED,
+                content=self.take.value, label="Hot Take Submission",
+                game_id=self.game_id,
+                channel_id=interaction.channel.id if interaction.channel else None,
+                extra={"queued": self.queue_mode},
+            )
 
 
 class HotTakesSubmitView(discord.ui.View):
