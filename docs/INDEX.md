@@ -73,7 +73,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 
 | Doc | What it covers | Caveat |
 |---|---|---|
-| [wellness_guardian_spec.md](wellness_guardian_spec.md) | Wellness | Current-behavior body now matches code (only `/wellness setup`/`away on\|off` are slash commands; caps/blackouts/partners/streaks are real but dashboard- and engine-only). **Activation gap:** no code path provisions a guild's `role_id`/`channel_id`, so the whole feature is dormant unless that row is seeded manually — see the callout at the top of the doc. Unbuilt member-facing commands moved to its Roadmap section. |
+| [wellness_guardian_spec.md](wellness_guardian_spec.md) | Wellness | Current-behavior body matches code (only `/wellness setup`/`away set` are slash commands; caps/blackouts/partners/streaks are dashboard- and engine-driven; opt-out and consent defaults reworked 2026-07-30). **Activation gap (provisioning only):** no code path provisions a guild's `role_id`/`channel_id` — a NEW guild stays dormant until that row is seeded by hand. The main guild's row IS seeded and the feature is live there with real opted-in members; "dormant everywhere" stopped being true well before 2026-07-30. |
 
 ## Design specs (written to implement; may lag the code)
 
@@ -172,4 +172,4 @@ These describe features or shapes of the system that don't match reality. They'r
 
 ---
 
-*One last reminder: `games_system_spec.md` and `dk_pvp_games_suite_spec.md` were corrected on 2026-07-15 and now describe current state (their remaining unbuilt ideas live in each doc's own Roadmap section). `wellness_guardian_spec.md` is still the one to read carefully — most of what it describes is real but dormant behind an unfilled activation gap; see its caveat above.*
+*One last reminder: `games_system_spec.md` and `dk_pvp_games_suite_spec.md` were corrected on 2026-07-15 and now describe current state (their remaining unbuilt ideas live in each doc's own Roadmap section). `wellness_guardian_spec.md` is still the one to read carefully — everything it describes is real and live on the main guild, but the provisioning gap means any NEW guild needs a hand-seeded config row; see its caveat above.*
