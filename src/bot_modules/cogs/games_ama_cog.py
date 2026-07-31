@@ -38,6 +38,11 @@ from bot_modules.services.anon_audit_service import (
     EVENT_QUESTION_PASSED,
     EVENT_QUESTION_REJECTED,
 )
+from bot_modules.services import no_contact_service
+from bot_modules.services.no_contact_logic import (
+    SURFACE_AMA,
+    candidate_members_for,
+)
 from bot_modules.games_ama.embeds import (
     build_answered_embed,
     build_asker_dm_embed,
@@ -71,6 +76,20 @@ from bot_modules.games_ama.logic import (
 )
 
 log = logging.getLogger(__name__)
+
+# Response copy shared between the ordinary paths and the no-contact gate.
+# The gate must reply with text byte-identical to the real path it is
+# impersonating — a reworded copy in one branch and not the other turns the
+# silent refusal into a tell, and no test would catch it. One constant per
+# message is what keeps the two in step (see docs/no_contact_spec.md).
+STALE_PANEL_TEXT = (
+    "⚠️ That person left the panel while you were typing — please try again."
+)
+STALE_HOT_SEAT_TEXT = (
+    "⚠️ The hot seat changed while you were typing — please try again."
+)
+SUBMITTED_FOR_REVIEW_TEXT = "✅ Your question has been submitted for host review."
+POSTED_ANONYMOUSLY_TEXT = "Your question has been posted anonymously!"
 
 
 async def _fire_ama_ask_trigger(client, channel, asker_id: int, game_id: str, q_idx: int) -> None:
@@ -136,15 +155,61 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         if self.ama_view.game_format == AMA_FORMAT_PANEL:
             if not is_panel_target(self.ama_view.panel, self.target_id):
                 await interaction.response.send_message(
-                    "⚠️ That person left the panel while you were typing — please try again.",
+                    STALE_PANEL_TEXT,
                     ephemeral=True,
                 )
                 return
         elif self.ama_view.hot_seat_id != self.target_id:
             await interaction.response.send_message(
-                "⚠️ The hot seat changed while you were typing — please try again.",
+                STALE_HOT_SEAT_TEXT,
                 ephemeral=True,
             )
+            return
+
+        # No-contact gate. An AMA question is directed — the asker names a
+        # panelist — so it carries contact even though he is anonymous to
+        # everyone reading. Placed after the closed-game and stale-target
+        # guards so every ordinary refusal still reaches him unchanged.
+        #
+        # The response differs by mode, because "fake success" is only
+        # invisible when nothing was going to be publicly visible:
+        #
+        #   screened  → the question would have gone to the HOST's DMs and
+        #               nowhere he can see. Reporting success costs nothing;
+        #               a question the host never approved is the ordinary
+        #               outcome and looks identical.
+        #   unfiltered → the question would have been POSTED TO THE CHANNEL.
+        #               Telling him it posted, when he can scroll up and see
+        #               that it did not, leaves an unexplained hole — and
+        #               since he chose the panelist, the hole points at her.
+        #               So we return the existing stale-target error instead:
+        #               an ordinary, believable race he has probably hit for
+        #               real, which explains the absence without involving
+        #               her. Indistinguishable from an ordinary failure
+        #               rather than from success — the other half of the rule.
+        if interaction.guild is not None and await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            cast("Bot", interaction.client).ctx.db_path,
+            interaction.guild.id,
+            actor_id=interaction.user.id,
+            target_id=self.target_id,
+            surface=SURFACE_AMA,
+        ):
+            if self.mode != "unfiltered":
+                await interaction.response.send_message(
+                    SUBMITTED_FOR_REVIEW_TEXT,
+                    ephemeral=True,
+                )
+            elif self.ama_view.game_format == AMA_FORMAT_PANEL:
+                await interaction.response.send_message(
+                    STALE_PANEL_TEXT,
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    STALE_HOT_SEAT_TEXT,
+                    ephemeral=True,
+                )
             return
 
         q_entry = build_question_entry(
@@ -174,7 +239,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 mark_question_approved(payload, q_idx, message_id=question_msg.id)
 
             await modify_payload(self.db, self.game_id, _mark_posted)
-            await interaction.response.send_message("Your question has been posted anonymously!", ephemeral=True)
+            await interaction.response.send_message(POSTED_ANONYMOUSLY_TEXT, ephemeral=True)
             # Recorded after the post so the row carries the message pointer the
             # dashboard joins against to recover the question text.
             audit_label = "AMA Question"
@@ -234,7 +299,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             }
             if dm_sent:
                 await interaction.response.send_message(
-                    "✅ Your question has been submitted for host review.", ephemeral=True
+                    SUBMITTED_FOR_REVIEW_TEXT, ephemeral=True
                 )
             else:
                 await interaction.response.send_message(
@@ -291,7 +356,29 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
         try:
             asker = interaction.guild.get_member(self.asker_id) if interaction.guild else None
             channel = interaction.channel
-            if asker and channel is not None and not isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
+            # No-contact gate on the answer DM — the second contact channel in
+            # this feature, and the one that runs in the opposite direction.
+            # A question asked BEFORE the pair was added is still sitting in
+            # the payload, so answering it would DM him on her behalf. Skipping
+            # is invisible to both: he is not told his question was answered,
+            # and she gets no delivery receipt either way.
+            # Plain check, not check_and_record: the answerer here is the
+            # PROTECTED member replying to a question that predates the pair.
+            # Recording it as an "attempt" would put her in the mod log as the
+            # one attempting contact, which is both wrong and unpleasant to
+            # read in a harassment case.
+            blocked_dm = bool(
+                asker
+                and interaction.guild
+                and await asyncio.to_thread(
+                    no_contact_service.is_no_contact,
+                    cast("Bot", interaction.client).ctx.db_path,
+                    interaction.guild.id,
+                    interaction.user.id,
+                    self.asker_id,
+                )
+            )
+            if asker and not blocked_dm and channel is not None and not isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
                 dm_embed = build_asker_dm_embed(channel.mention, color=color)
                 await send_branded_dm(
                     asker,
@@ -364,6 +451,28 @@ class ScreenedQuestionView(discord.ui.View):
         if interaction.user.id != self.ama_view.host_id:
             await interaction.response.send_message("Only the host can approve questions.", ephemeral=True)
             return
+        # No-contact gate on approval, not just on asking. A screened question
+        # sits in the host's DMs for as long as the view lives, and the pair
+        # can be created in that window — or the question can predate the pair
+        # entirely. Approving it would post it to the channel pinging her, on
+        # the host's action rather than his. Silently drop it and tell the
+        # host it was approved: the host is a third party here, and telling
+        # them "this asker is blocked from this panelist" would leak the
+        # entry to someone who has no business knowing it.
+        if interaction.guild is not None and await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            cast("Bot", interaction.client).ctx.db_path,
+            interaction.guild.id,
+            actor_id=self.asker_id,
+            target_id=self.hot_seat_id,
+            surface=SURFACE_AMA,
+        ):
+            self.stop()
+            await interaction.response.edit_message(
+                content="✅ Question approved.", view=None
+            )
+            return
+
         color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
         embed = build_question_embed(self.question_text, color=color)
         hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
@@ -693,6 +802,32 @@ class AMAView(discord.ui.View):
             candidates = [
                 m for m in (guild.get_member(uid) if guild else None for uid in self.panel) if m
             ]
+            # Drop no-contact partners from the picker so he never selects her
+            # in the first place. This is strictly better than refusing the
+            # question afterwards: a name absent from a dropdown he has no
+            # baseline for is unnoticeable, whereas a question that vanishes
+            # after he chose a specific panelist is not. The submit-time gate
+            # below still stands as the enforcement — this only spares the
+            # common case from ever reaching it.
+            if guild is not None:
+                partners = await asyncio.to_thread(
+                    no_contact_service.no_contact_partners,
+                    cast("Bot", interaction.client).ctx.db_path,
+                    guild.id,
+                    interaction.user.id,
+                )
+                had_candidates = bool(candidates)
+                candidates = candidate_members_for(candidates, partners)
+                # Filtering is invisible while other names remain, but it can
+                # empty the list — and "nobody has joined yet" is checkable
+                # against the join announcement and the status embed both
+                # naming her. Say the panel is unavailable to him instead:
+                # true, and it makes no claim the channel contradicts.
+                if had_candidates and not candidates:
+                    await interaction.response.send_message(
+                        "You can't ask a question in this round.", ephemeral=True
+                    )
+                    return
             if not candidates:
                 await interaction.response.send_message(
                     "No one has joined the panel yet — tap 🙋 Volunteer to be the first!",

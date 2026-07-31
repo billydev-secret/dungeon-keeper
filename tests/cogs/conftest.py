@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 
@@ -24,3 +26,42 @@ def _stub_whisper_name_fn(monkeypatch):
         return lambda uid: f"<@{uid}>"
 
     monkeypatch.setattr("bot_modules.cogs.whisper_cog.build_name_fn", _fake)
+
+
+@pytest.fixture(autouse=True)
+def no_contact_absent():
+    """Default every cog test to "these two have no no-contact entry".
+
+    Cog tests run against stub db paths (``:memory:``, a mocked
+    ``interaction.client``), so the no-contact gate has no table to read and
+    would raise.
+
+    Reach, precisely: this patches attributes on the *service module*, so it
+    covers the cogs that call attribute-style after
+    ``from bot_modules.services import no_contact_service`` — whisper, AMA,
+    guess, confessions. It does **not** reach callers that bind the name at
+    import (``dm_perms_cog``, ``pen_pals_cog``, ``voice_master_service`` use
+    ``from … import is_no_contact`` / ``is_no_contact_conn`` /
+    ``no_contact_partners_conn``); those run against a real migrated DB in
+    their own tests, which is why they pass without stubbing.
+
+    Tests that want the gate to fire patch it themselves; an inner ``patch``
+    wins over this one (see tests/cogs/test_guess_no_contact.py). Because this
+    is autouse across tests/cogs/, a new test that means to exercise a gate
+    must patch it explicitly rather than relying on the default.
+    """
+    with (
+        patch(
+            "bot_modules.services.no_contact_service.check_and_record",
+            return_value=False,
+        ),
+        patch(
+            "bot_modules.services.no_contact_service.no_contact_partners",
+            return_value=set(),
+        ),
+        patch(
+            "bot_modules.services.no_contact_service.is_no_contact",
+            return_value=False,
+        ),
+    ):
+        yield

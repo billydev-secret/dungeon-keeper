@@ -1197,9 +1197,68 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         15. MEMBER SELF-SERVICE
+         15. NO-CONTACT LIST
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="self-service" class="section-break"><span class="section-num">15</span> Member Self-Service</h2>
+    <h2 id="no-contact" class="section-break"><span class="section-num">15</span> No-Contact List</h2>
+    <p>Blocking someone in Discord stops them messaging you directly — but it does not stop them
+      reaching you <em>through a bot</em>. An anonymous whisper, an AMA question, a reply to your
+      confession: all of those are the bot delivering something on their behalf, and Discord's block
+      never sees them. The no-contact list closes that gap.</p>
+
+    <p>Adding someone stops contact <strong>both ways</strong>, across every feature that can carry it:
+      whispers and whisper replies, AMA questions and the DM you'd get when one is answered,
+      confession replies, Guess Who, Pen Pals matching, voice rooms, and DM requests. If a feature
+      can pass a message between two people, it is covered.</p>
+
+    <h3 id="no-contact-privacy">They are not told, and they cannot tell</h3>
+
+    <p class="note">This is the part that matters most. The other person is <strong>never</strong>
+      notified that you added them, and nothing they try will reveal it. When they send a whisper
+      it reports as delivered; when they ask an AMA question it behaves like any ordinary hiccup.
+      There is no error naming you, and no way to probe for one by comparing against someone else.
+      You will also not see their entry if they add <em>you</em> — the secrecy runs in both directions.</p>
+
+    <p>You are not notified when they try, either. Attempts are recorded for moderators, who can act
+      if someone keeps trying, without that turning into a stream of notifications about a person
+      you asked not to hear from.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/nocontact add</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Stop a member reaching you through the bot. Takes effect immediately — no moderator needed, and nobody is told.</span>
+      <div class="cmd-params">
+        <code>member</code> — who to block.<br>
+        <code>reason</code> — optional. Only moderators ever see it; the other member never does.
+      </div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/nocontact remove</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Undo an entry that protects you. Only the person an entry protects can lift it — the other member cannot, so they can't undo your protection or talk you into handing them the button. Moderator-set separations need a moderator to lift.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/nocontact list</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Shows your own entries, privately. Entries someone else set to protect themselves from you are not shown.</span>
+    </div>
+
+    <h3 id="no-contact-mods">For moderators</h3>
+
+    <p>The <strong>Moderation → No-Contact List</strong> dashboard panel shows every entry in the
+      server and can add one on a member's behalf — for a third-party report, or someone who will
+      not file it themselves. When adding, you choose which member the entry protects (and therefore
+      who may lift it), or mark it mutual so that only staff can. Moderators can remove any entry.</p>
+
+    <p>The same panel sets where alerts go: if one member of a pair mentions or replies to the other
+      in chat, the configured channel gets a notice with a jump link. Enforcement does not depend on
+      this being set — only the notification does.</p>
+
+    <!-- ══════════════════════════════════════════════════════════
+         16. MEMBER SELF-SERVICE
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="self-service" class="section-break"><span class="section-num">16</span> Member Self-Service</h2>
     <p>Commands intended for the average member. Mods may also use them — they aren't restricted.</p>
 
     <h3 id="self-service-cmds">Personal Commands</h3>
@@ -1269,7 +1328,7 @@
     <!-- ══════════════════════════════════════════════════════════
          16. MODERATION CORE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="moderation" class="section-break"><span class="section-num">16</span> Moderation Core</h2>
+    <h2 id="moderation" class="section-break"><span class="section-num">17</span> Moderation Core</h2>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
@@ -1406,7 +1465,7 @@
     <!-- ══════════════════════════════════════════════════════════
          17. TICKETS, POLICIES & WARNINGS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="tickets" class="section-break"><span class="section-num">17</span> Tickets, Policies &amp; Warnings</h2>
+    <h2 id="tickets" class="section-break"><span class="section-num">18</span> Tickets, Policies &amp; Warnings</h2>
     <p>The escalation toolkit. Tickets create private channels between the member and the mod team (everything logged). Policies let mods propose and vote on rules. Warnings build a paper trail per member.</p>
 
     <div class="callout callout-warn">
@@ -1531,7 +1590,7 @@
     <!-- ══════════════════════════════════════════════════════════
          18. ANALYTICS & WATCH
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="analytics" class="section-break"><span class="section-num">18</span> Analytics &amp; Watch List</h2>
+    <h2 id="analytics" class="section-break"><span class="section-num">19</span> Analytics &amp; Watch List</h2>
 
     <div class="callout callout-tip">
       <span class="callout-icon">💡</span>
@@ -1612,7 +1671,7 @@
     <!-- ══════════════════════════════════════════════════════════
          19. AI MODERATION TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="ai-tools" class="section-break"><span class="section-num">19</span> AI Moderation Tools</h2>
+    <h2 id="ai-tools" class="section-break"><span class="section-num">20</span> AI Moderation Tools</h2>
     <p>AI-assisted investigation tools. The bot runs a local AI model (no messages leave your server) to summarize messages, flag rule violations, and answer free-form questions about a member or channel's recent history. All <code>/ai</code> commands reply privately — only the invoking admin sees the result. For always-on monitoring instead of on-demand questions, see <a href="#rules-watch">Rules Watch</a>.</p>
 
     <div class="callout callout-info">
@@ -1654,7 +1713,7 @@
     <!-- ══════════════════════════════════════════════════════════
          20. RULES WATCH
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="rules-watch" class="section-break"><span class="section-num">20</span> Rules Watch</h2>
+    <h2 id="rules-watch" class="section-break"><span class="section-num">21</span> Rules Watch</h2>
     <p>A passive AI moderation monitor. Once enabled, Rules Watch screens every public message against your server rules and sorts anything suspicious into a tiered queue: <strong>immediate</strong> (an alert embed posted to your alert channel with Confirm / False-positive buttons), <strong>digest</strong> (queued for review in batches), and <strong>logged</strong> (recorded but not alerted). Labeling events as violations or false positives tunes the signal over time — the stats command shows your false-positive rate. Mods can also right-click any message → <strong>Apps → Report Rule Violation</strong> to hand-file it as a confirmed example the AI missed.</p>
 
     <div class="callout callout-info">
@@ -1713,7 +1772,7 @@
     <!-- ══════════════════════════════════════════════════════════
          TODO LIST & BOARD
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="todo" class="section-break"><span class="section-num">21</span> Todo List &amp; Board</h2>
+    <h2 id="todo" class="section-break"><span class="section-num">22</span> Todo List &amp; Board</h2>
     <p>A shared worklist for the mod team. Tasks can be added from Discord or from the dashboard, and everything lands in the same list. It is moderator-only end to end — members never see it unless you post the board in a channel they can read.</p>
 
     <h3 id="todo-board">The Discord board</h3>
@@ -1747,7 +1806,7 @@
     <!-- ══════════════════════════════════════════════════════════
          (legacy section anchor preserved) SETUP & PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="setup" class="section-break"><span class="section-num">22</span> Setup &amp; Permissions</h2>
+    <h2 id="setup" class="section-break"><span class="section-num">23</span> Setup &amp; Permissions</h2>
 
     <h3 id="dashboard-pickers">Dashboard channel &amp; role pickers</h3>
     <p>Anywhere the dashboard asks you to choose a channel, role or member, the box
@@ -1821,7 +1880,7 @@
     <!-- ══════════════════════════════════════════════════════════
          22. CLEANUP & TAGGING
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="server-ops" class="section-break"><span class="section-num">23</span> Server Upkeep</h2>
+    <h2 id="server-ops" class="section-break"><span class="section-num">24</span> Server Upkeep</h2>
     <p>Ongoing housekeeping and community upkeep: scheduled cleanup, automatic threading, listing-site bump reminders, member tagging, unanswered-greeting alerts, lull-reviving questions, and channel hiding. The background schedulers run continuously; most configuration lives on the web dashboard.</p>
 
     <h3 id="auto-delete">Cleanup</h3>
@@ -2052,7 +2111,7 @@
     <!-- ══════════════════════════════════════════════════════════
          23. CONTENT & COMMS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="content-comms" class="section-break"><span class="section-num">24</span> Content &amp; Comms</h2>
+    <h2 id="content-comms" class="section-break"><span class="section-num">25</span> Content &amp; Comms</h2>
     <p>Bot-maintained content and outbound messaging: self-assign role menus, dashboard-authored documents posted into channels, and scheduled announcements. All three are built on the dashboard and post persistent messages that keep working across bot restarts.</p>
 
     <h3 id="role-menus">Role Menus</h3>
@@ -2111,7 +2170,7 @@
     <!-- ══════════════════════════════════════════════════════════
          24. NETWORK ANALYTICS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="network-analytics" class="section-break"><span class="section-num">25</span> Network Analytics</h2>
+    <h2 id="network-analytics" class="section-break"><span class="section-num">26</span> Network Analytics</h2>
     <p>Interactive graph and matrix views of who interacts with whom. Useful for spotting cliques, isolated members, and invite trees.</p>
 
     <div class="callout callout-info">
@@ -2125,7 +2184,7 @@
     <!-- ══════════════════════════════════════════════════════════
          24. CONFIGURATION REFERENCE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="config" class="section-break"><span class="section-num">26</span> Configuration Reference</h2>
+    <h2 id="config" class="section-break"><span class="section-num">27</span> Configuration Reference</h2>
     <p>Every persistent bot setting lives on the web dashboard. The retired <code>/config</code> slash command, <code>/welcome_preview</code>, and <code>/leave_preview</code> have all been replaced by interactive dashboard panels with live preview.</p>
 
     <div class="callout callout-info">
@@ -2190,7 +2249,7 @@
     <!-- ══════════════════════════════════════════════════════════
          25. QA TRACKER
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="qa-tracker" class="section-break"><span class="section-num">27</span> QA Tracker</h2>
+    <h2 id="qa-tracker" class="section-break"><span class="section-num">28</span> QA Tracker</h2>
     <p>A volunteer testing crew for the bot itself. Each new change lands as a <strong>QA card</strong> in the testing channel — an embed carrying the test checklist with <strong>Pass / Fail / Blocked</strong> buttons.</p>
     <ul>
       <li>Members holding the configured QA-crew role click a verdict. <strong>Fail</strong> requires a "what went wrong" note, which lands in the card's thread.</li>
@@ -2211,7 +2270,7 @@
     <!-- ══════════════════════════════════════════════════════════
          26. DEVELOPER / OWNER TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="owner-tools" class="section-break"><span class="section-num">28</span> Developer / Owner Tools</h2>
+    <h2 id="owner-tools" class="section-break"><span class="section-num">29</span> Developer / Owner Tools</h2>
     <p>Bot-owner-only utilities. The owner is configured at bot startup; owner status is checked inside the handler regardless of Discord permissions.</p>
 
     <div class="cmd-block">

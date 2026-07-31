@@ -61,6 +61,7 @@ from bot_modules.services.voice_master_service import (
     get_owned_channel,
     insert_active_channel,
     list_active_channels,
+    effective_blocked,
     list_blocked,
     list_name_blocklist,
     list_trusted,
@@ -805,7 +806,9 @@ class VoiceMasterCog(commands.Cog):
                             load_profile(conn, guild_id, member_id) or default_profile()
                         )
                         trusted_ids_ = list_trusted(conn, guild_id, member_id)
-                        blocked_ids_ = list_blocked(conn, guild_id, member_id)
+                        # Enforcement site: the effective list, so a
+                        # no-contact partner is denied on channel create.
+                        blocked_ids_ = effective_blocked(conn, guild_id, member_id)
                     # Voice-style lease (economy sinks round 3, stage 3): the
                     # saved name/limit only re-apply while leased — the profile
                     # stays stored (dormant), so re-renting restores the setup.

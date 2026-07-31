@@ -25,6 +25,14 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 from bot_modules.duels.filters import contains_disallowed_content
 from bot_modules.services.guess_models import BoundingBox, GuessConfig, GuessGuess, GuessRound
+from bot_modules.services import no_contact_service
+from bot_modules.services.no_contact_logic import (
+    KIND_ATTEMPT,
+    SURFACE_GUESS,
+    SURFACE_GUESS_SUBMIT,
+    candidate_members_for,
+    guess_round_blocked_for,
+)
 from bot_modules.services.guess_pipeline import (
     compute_padded_crop,
     enforce_min_size,
@@ -71,6 +79,12 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.guess")
+
+# Shared by the ordinary wrong-guess path and the no-contact gate: the
+# refused guess must read identically to a genuine miss (see
+# docs/no_contact_spec.md).
+WRONG_GUESS_TEXT = "❌ Not it. Keep trying!"
+
 
 # Originals are persisted here per-round and deleted after the first correct
 # guess reveals them. Submitters are warned at submit time that the file is
@@ -564,6 +578,49 @@ class GuessSelectView(discord.ui.View):
             await interaction.edit_original_response(content="❌ Round not found.", view=None)
             return
 
+        # No-contact on a Guess Who round. A round belongs to two members — the
+        # ANSWER (whose likeness is on display) and the SUBMITTER (who chose to
+        # put it there).
+        #
+        # The real protection is the candidate filter above: his partner is not
+        # in his picker, so he CANNOT name her and his guess on her round is
+        # always genuinely wrong. Given that, the guess is left to run its
+        # ordinary course rather than being discarded.
+        #
+        # Discarding it was worse than useless. The per-round cap and the
+        # cooldown both count rows in ``guess_guesses``, so a guess that was
+        # never written left him uncapped and never on cooldown: he could hold
+        # down the button on her round and get "Not it" forever, while every
+        # other round in the server put him on cooldown after one guess. That
+        # is a tell anyone bored enough finds in a minute, and it also wrote a
+        # log row per click. A wrong guess he could never have got right costs
+        # her nothing; being distinguishable costs her everything.
+        #
+        # One event per round still goes to the moderator log, on his first
+        # guess only, so the evidence trail survives without the flood.
+        guess_partners = await asyncio.to_thread(
+            no_contact_service.no_contact_partners,
+            db_path,
+            round_row.guild_id,
+            interaction.user.id,
+        )
+        if prior_guesses == 0 and guess_round_blocked_for(
+            viewer_id=interaction.user.id,
+            submitter_id=round_row.submitter_id,
+            answer_id=round_row.answer_id,
+            partners=guess_partners,
+        ):
+            for target in {round_row.answer_id, round_row.submitter_id} & guess_partners:
+                await asyncio.to_thread(
+                    no_contact_service.record_event,
+                    db_path,
+                    round_row.guild_id,
+                    actor_id=interaction.user.id,
+                    target_id=target,
+                    kind=KIND_ATTEMPT,
+                    surface=SURFACE_GUESS,
+                )
+
         correct = guessed_user_id == round_row.answer_id
         await asyncio.to_thread(
             _do_insert_guess,
@@ -602,8 +659,22 @@ class GuessSelectView(discord.ui.View):
                 "guess_win", occurrence=str(self.round_id),
             )
 
+            # Don't let the bot author a message that puts a no-contact pair
+            # side by side. Embed mentions don't fire a notification, but the
+            # reveal still names them together in the bot's own voice, which is
+            # the bot manufacturing the association the pair exists to prevent.
+            # Degrade to plain ids so the reveal still reads correctly.
             answer_mention = f"<@{round_row.answer_id}>"
             submitter_mention = f"<@{round_row.submitter_id}>"
+            if round_row.submitter_id != round_row.answer_id and await asyncio.to_thread(
+                no_contact_service.is_no_contact,
+                db_path,
+                round_row.guild_id,
+                round_row.answer_id,
+                round_row.submitter_id,
+            ):
+                answer_mention = f"User {round_row.answer_id}"
+                submitter_mention = f"User {round_row.submitter_id}"
             solved_emb = _solved_embed(
                 self.round_id, answer_mention, submitter_mention,
                 interaction.user.mention, guess_count, unique_count,
@@ -685,7 +756,7 @@ class GuessSelectView(discord.ui.View):
             if self.cooldown_seconds > 0:
                 self.timeout = self.cooldown_seconds + SELECT_TIMEOUT_SECONDS
             await interaction.edit_original_response(
-                content="❌ Not it. Keep trying!",
+                content=WRONG_GUESS_TEXT,
                 view=self,
             )
 
@@ -761,6 +832,23 @@ class GameView(discord.ui.View):
             return
 
         guess_members = [m for m in guess_role.members if not m.bot]
+        # Drop no-contact partners from the candidate picker. Removing a name
+        # from a long, paginated, searchable member list is unnoticeable — he
+        # has no baseline for who "should" be in it — so this costs nothing on
+        # the leak side.
+        #
+        # It also closes the one hole in the silent-discard rule below. The
+        # tell we were worried about was: guess her correctly, watch the round
+        # get solved later with the name you gave, and deduce your guess was
+        # filtered. If her name is not selectable, he can never guess her
+        # correctly, so that deduction can never be made.
+        nc_partners = await asyncio.to_thread(
+            no_contact_service.no_contact_partners,
+            db_path,
+            interaction.guild.id,
+            interaction.user.id,
+        )
+        guess_members = candidate_members_for(guess_members, nc_partners)
         if not guess_members:
             await interaction.followup.send(
                 "❌ No opted-in members to guess from.", ephemeral=True
@@ -969,9 +1057,28 @@ class CropEditorView(discord.ui.View):
             )
             return
 
-        crop_bytes = await asyncio.to_thread(render_crop, self.image_bytes, self.crop_box)
-
         db_path = self.bot.ctx.db_path
+        # No-contact gate on submission. Today both call sites set answer_id to
+        # the submitter (you can only post a photo of yourself), so this is
+        # unreachable — but submitter_id and answer_id are separate columns and
+        # the day they diverge, this is the gate that stops someone posting a
+        # cropped image of the member who blocked them for the server to guess.
+        # Cheap to hold now, expensive to notice missing later.
+        if self._answer_id != self._submitter_id and await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            db_path,
+            self.guild_id,
+            actor_id=self._submitter_id,
+            target_id=self._answer_id,
+            surface=SURFACE_GUESS_SUBMIT,
+        ):
+            self.stop()
+            await interaction.followup.send(
+                "❌ Couldn't post that round — try a different photo.", ephemeral=True
+            )
+            return
+
+        crop_bytes = await asyncio.to_thread(render_crop, self.image_bytes, self.crop_box)
         round_id = await asyncio.to_thread(
             _do_insert_round,
             db_path,

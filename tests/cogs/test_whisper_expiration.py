@@ -13,6 +13,7 @@ from tests.fakes import FakeMember, fake_interaction
 
 
 
+
 SENDER, TARGET = 1001, 2001
 ROLE = 7001
 

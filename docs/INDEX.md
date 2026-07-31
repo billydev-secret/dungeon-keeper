@@ -33,6 +33,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
 | [docs_cog_spec.md](docs_cog_spec.md) | Channel docs: dashboard posts authored docs into channels (not this docs/ folder) |
+| [no_contact_spec.md](no_contact_spec.md) | No-contact list: pairs the bot never puts in contact, across whisper/AMA/confessions/Guess Who/Pen Pals/voice/DM requests. Includes the disclosure rules — the blocked party must never be able to tell — and why `dm_consent_pairs` could not be reused |
 | [embed_style_guide.md](embed_style_guide.md) | Conventions for bot-generated embeds/panels + user-facing copy (accent color, card anatomy, Title Case ruling, error/❌ style, voice & terminology, dashboard copy) |
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |

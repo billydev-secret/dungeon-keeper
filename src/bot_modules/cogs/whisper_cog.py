@@ -63,7 +63,11 @@ from bot_modules.services.whisper_service import (
     validate_reply,
     validate_send,
     validate_share,
+    SENT_CONFIRMATION,
+    REPLY_CONFIRMATION,
 )
+from bot_modules.services import no_contact_service
+from bot_modules.services.no_contact_logic import SURFACE_WHISPER
 from bot_modules.whisper.embeds import (
     build_inbox_embed,
     build_reply_audit_embed,
@@ -786,6 +790,39 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply Anonymously"):
             )
             return
 
+        # No-contact gate on replies as well as sends. A whisper delivered
+        # *before* the pair was added is still an open two-way channel — the
+        # reply button sits in a DM that never expires — so gating only the
+        # send would leave every pre-existing thread live. Symmetric, like the
+        # rule itself: it does not matter which of the two is replying.
+        if await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            self.bot.ctx.db_path,
+            whisper.guild_id,
+            actor_id=interaction.user.id,
+            target_id=to_user_id,
+            surface=SURFACE_WHISPER,
+        ):
+            # Still write the reply row, then stop. It is never delivered and
+            # never reaches the mod log, so she sees nothing — but the row is
+            # what ``_do_count_replies`` reads, and the one-reply-per-whisper
+            # cap has to trip for him exactly as it would on a real thread.
+            # Skipping the insert made a second press succeed where a genuine
+            # one returns "already replied", so pressing Reply twice told him
+            # the thread was gated.
+            await asyncio.to_thread(
+                _do_insert_reply,
+                self.bot.ctx.db_path,
+                whisper_id=self.whisper_id,
+                from_user_id=interaction.user.id,
+                to_user_id=to_user_id,
+                content=content,
+            )
+            await interaction.response.send_message(
+                REPLY_CONFIRMATION, ephemeral=True
+            )
+            return
+
         # Persist first so we have the reply_id for the report button.
         reply_id = await asyncio.to_thread(
             _do_insert_reply,
@@ -851,7 +888,7 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply Anonymously"):
             log.warning("Failed to post whisper reply to mod log")
 
         await interaction.response.send_message(
-            "Reply delivered anonymously.", ephemeral=True
+            REPLY_CONFIRMATION, ephemeral=True
         )
 
 
@@ -2466,6 +2503,37 @@ class WhisperCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        # No-contact gate. Deliberately the LAST check before the write: every
+        # ordinary refusal above (missing role, cooldown, hourly cap, timed-out
+        # target, broken feed channel) still reaches the sender exactly as it
+        # normally would, so the only case that diverges is the one that would
+        # otherwise have succeeded — and that case is made to look like success.
+        # Telling him "blocked" would confirm she acted against him, which is
+        # the escalation this feature exists to prevent.
+        if await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            self.ctx.db_path,
+            interaction.guild.id,
+            actor_id=interaction.user.id,
+            target_id=target.id,
+            surface=SURFACE_WHISPER,
+        ):
+            await interaction.response.send_message(
+                SENT_CONFIRMATION,
+                ephemeral=True,
+            )
+            # Fire the economy trigger too. A quest that failed to tick after
+            # an apparently-delivered whisper would be a tell, and the payout
+            # is the same one a real whisper would have earned — the rate caps
+            # above already bound how often this path can be reached.
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            await fire_member_trigger(
+                self.bot, interaction.guild.id, interaction.user.id, "whisper",
+                occurrence=f"nc-{int(now * 1000)}",
+            )
+            return
+
         whisper_id = await asyncio.to_thread(
             _do_insert_whisper,
             self.ctx.db_path,
@@ -2522,7 +2590,7 @@ class WhisperCog(commands.Cog):
         )
 
         await interaction.response.send_message(
-            "Whisper delivered.",
+            SENT_CONFIRMATION,
             ephemeral=True,
         )
 

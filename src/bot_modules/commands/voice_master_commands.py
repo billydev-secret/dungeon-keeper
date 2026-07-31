@@ -31,7 +31,7 @@ from bot_modules.services.voice_master_service import (
     delete_profile,
     get_active_channel,
     get_owned_channel,
-    list_blocked,
+    effective_blocked,
     list_name_blocklist,
     list_trusted,
     load_voice_master_config,
@@ -285,7 +285,7 @@ async def _sync_lock_member_overwrites(
         with ctx.open_db() as conn:
             return (
                 list_trusted(conn, _lock_sync_guild_id, _lock_sync_owner_id),
-                list_blocked(conn, _lock_sync_guild_id, _lock_sync_owner_id),
+                effective_blocked(conn, _lock_sync_guild_id, _lock_sync_owner_id),
             )
 
     trusted_ids, blocked_ids = await asyncio.to_thread(_fetch_lock_lists)
@@ -369,7 +369,7 @@ async def _sync_hidden_member_overwrites(
         with ctx.open_db() as conn:
             return (
                 list_trusted(conn, _hide_sync_guild_id, _hide_sync_owner_id),
-                list_blocked(conn, _hide_sync_guild_id, _hide_sync_owner_id),
+                effective_blocked(conn, _hide_sync_guild_id, _hide_sync_owner_id),
             )
 
     trusted_ids, blocked_ids = await asyncio.to_thread(_fetch_hide_lists)
@@ -638,7 +638,7 @@ async def _teardown_spectator_overwrites(
         with ctx.open_db() as conn:
             return (
                 list_trusted(conn, _spec_sync_guild_id, _spec_sync_owner_id),
-                list_blocked(conn, _spec_sync_guild_id, _spec_sync_owner_id),
+                effective_blocked(conn, _spec_sync_guild_id, _spec_sync_owner_id),
             )
 
     trusted_ids, blocked_ids = await asyncio.to_thread(_fetch_spec_lists)

@@ -581,6 +581,31 @@ def list_blocked(
     return _list_targets(conn, "voice_master_blocked", guild_id, owner_id)
 
 
+def effective_blocked(
+    conn: sqlite3.Connection, guild_id: int, owner_id: int
+) -> list[int]:
+    """Blocklist to actually ENFORCE: the owner's own list plus no-contact.
+
+    Deliberately separate from :func:`list_blocked`, which backs everything
+    the owner can *see* (``/voice blocked list``, the profile embed, the
+    dashboard). Folding no-contact partners into the visible list would show
+    him her name sitting in his own blocklist — a block he never set — which
+    tells him she acted against him. That is the disclosure this whole
+    feature exists to avoid, arriving through a completely different door.
+
+    Symmetric without needing a second pass: each owner's effective list
+    picks up their own partners, so her room denies him and his denies her.
+    """
+    from bot_modules.services.no_contact_service import (  # noqa: PLC0415
+        no_contact_partners_conn,
+    )
+
+    own = _list_targets(conn, "voice_master_blocked", guild_id, owner_id)
+    seen = set(own)
+    partners = no_contact_partners_conn(conn, guild_id, owner_id)
+    return own + [p for p in sorted(partners) if p not in seen]
+
+
 def add_blocked(
     conn: sqlite3.Connection,
     guild_id: int,
