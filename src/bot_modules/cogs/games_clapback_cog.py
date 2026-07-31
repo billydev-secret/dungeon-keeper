@@ -59,6 +59,10 @@ from bot_modules.games_clapback.embeds import (
     build_submit_embed,
     build_vote_embed,
 )
+from bot_modules.games.utils.audit import audit_anonymous
+from bot_modules.services.anon_audit_service import (
+    EVENT_ANSWER_SUBMITTED,
+)
 
 log = logging.getLogger(__name__)
 
@@ -113,11 +117,26 @@ class ClapbackAnswerModal(discord.ui.Modal, title="Your Answer"):
             answers = payload.setdefault("answers", {})
             answers[str(uid)] = answer
 
-        await modify_payload(self.db, self.game_id, _store)
+        payload = await modify_payload(self.db, self.game_id, _store)
         await interaction.response.send_message(
             "Answer submitted! You can click Submit again to change it before time runs out.",
             ephemeral=True,
         )
+
+        # Only audited when the game is running anonymously. With attribution
+        # on, the answer is posted under the player's own name and there is no
+        # anonymity to account for — logging it would be plain surveillance.
+        anonymous = bool((payload.get("config") or {}).get("anonymous", False))
+        if anonymous and interaction.guild is not None:
+            await audit_anonymous(
+                interaction.client, self.db, interaction.guild,
+                game_type="clapback", user=interaction.user,
+                event=EVENT_ANSWER_SUBMITTED,
+                content=answer, label="Clapback Anonymous Answer",
+                game_id=self.game_id,
+                channel_id=interaction.channel.id if interaction.channel else None,
+                extra={"anonymous": True},
+            )
 
         # Signal the cog that a new answer arrived
         cog = self.cog

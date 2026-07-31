@@ -28,7 +28,16 @@ from bot_modules.games.utils.game_manager import (
     channel_name,
 )
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.games.utils.audit import send_audit_log
+from bot_modules.games.utils.audit import audit_anonymous
+from bot_modules.services.anon_audit_service import (
+    EVENT_HOT_SEAT_CHANGED,
+    EVENT_HOT_SEAT_SKIPPED,
+    EVENT_QUESTION_ANSWERED,
+    EVENT_QUESTION_APPROVED,
+    EVENT_QUESTION_ASKED,
+    EVENT_QUESTION_PASSED,
+    EVENT_QUESTION_REJECTED,
+)
 from bot_modules.games_ama.embeds import (
     build_answered_embed,
     build_asker_dm_embed,
@@ -150,14 +159,6 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         payload = await modify_payload(self.db, self.game_id, _add_question)
         q_idx = len(payload.get("questions", [])) - 1
 
-        # Audit log
-        if interaction.guild:
-            await send_audit_log(
-                interaction.client, self.db, interaction.guild,
-                game_type="ama", user=interaction.user,
-                content=self.question.value, label="AMA Question",
-            )
-
         if self.mode == "unfiltered":
             color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
             embed = build_question_embed(self.question.value, color=color)
@@ -174,6 +175,11 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
 
             await modify_payload(self.db, self.game_id, _mark_posted)
             await interaction.response.send_message("Your question has been posted anonymously!", ephemeral=True)
+            # Recorded after the post so the row carries the message pointer the
+            # dashboard joins against to recover the question text.
+            audit_label = "AMA Question"
+            audit_message_id = question_msg.id
+            audit_extra = {"mode": "unfiltered", "question_idx": q_idx}
             # Advance turn/status only after the question is actually posted
             await self.ama_view.after_question_posted(self.channel)
             # Unfiltered questions post immediately → credit the asker now.
@@ -215,6 +221,17 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 pass
             except discord.HTTPException:
                 pass
+            # Recorded at submit, not at approval: a question the host rejects
+            # never becomes a message, and that is exactly the one a mod needs
+            # to be able to trace. No message pointer exists for it, so the row
+            # is who-and-when only (migration 145).
+            audit_label = "AMA Question (screened)"
+            audit_message_id = None
+            audit_extra = {
+                "mode": "screened",
+                "question_idx": q_idx,
+                "delivered_to_host": dm_sent,
+            }
             if dm_sent:
                 await interaction.response.send_message(
                     "✅ Your question has been submitted for host review.", ephemeral=True
@@ -224,6 +241,19 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                     "⚠️ Couldn't reach the host (DMs may be disabled) — your question was not submitted.", ephemeral=True
                 )
             # Turn counter for screened mode advances only when the host approves
+
+        # One call for both modes — they differ only in the label, the message
+        # pointer and a few `extra` keys, set per-branch above.
+        if interaction.guild:
+            await audit_anonymous(
+                interaction.client, self.db, interaction.guild,
+                game_type="ama", user=interaction.user,
+                event=EVENT_QUESTION_ASKED,
+                content=self.question.value, label=audit_label,
+                target_id=self.target_id, game_id=self.game_id,
+                message_id=audit_message_id, channel_id=self.channel.id,
+                extra=audit_extra,
+            )
 
 
 class ReplyModal(discord.ui.Modal, title="Your Reply"):
@@ -283,6 +313,19 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
             message_id=interaction.message.id,
         )
         await update_game_payload(self.db, self.game_id, payload)
+
+        # The answerer is the public hot seat, not an anonymous poster — logged
+        # so a question and its answer sit together in one trail.
+        if interaction.guild is not None:
+            await audit_anonymous(
+                interaction.client, self.db, interaction.guild,
+                game_type="ama", user=interaction.user,
+                event=EVENT_QUESTION_ANSWERED,
+                target_id=self.asker_id, game_id=self.game_id,
+                message_id=interaction.message.id,
+                channel_id=interaction.channel.id if interaction.channel else None,
+                extra={"question_idx": self.question_idx},
+            )
 
         # Quest hook: answering as the hot seat — twin of ama_ask, keyed per
         # question so a busy AMA counts each answer once. Guarded wrapper.
@@ -344,6 +387,19 @@ class ScreenedQuestionView(discord.ui.View):
         )
         await update_game_payload(self.db, self.game_id, payload)
 
+        # The host approves from their DMs, so interaction.guild is None here —
+        # the guild comes from the game channel. Recording the message pointer
+        # now is what makes an approved screened question's text recoverable.
+        if getattr(self.channel, "guild", None):
+            await audit_anonymous(
+                interaction.client, self.db, self.channel.guild,
+                game_type="ama", user=interaction.user,
+                event=EVENT_QUESTION_APPROVED,
+                target_id=self.asker_id, game_id=self.game_id,
+                message_id=question_msg.id, channel_id=self.channel.id,
+                extra={"question_idx": self.question_idx},
+            )
+
         # Advance turn/status now that the question is actually posted
         await self.ama_view.after_question_posted(self.channel)
         # Screened questions credit the asker only on approval (rejected ones
@@ -365,6 +421,18 @@ class ScreenedQuestionView(discord.ui.View):
         payload = await get_game_payload(self.db, self.game_id)
         mark_question_rejected(payload, self.question_idx)
         await update_game_payload(self.db, self.game_id, payload)
+
+        # A rejected question never becomes a message, so this row is the only
+        # record that it was ever submitted.
+        if getattr(self.channel, "guild", None):
+            await audit_anonymous(
+                interaction.client, self.db, self.channel.guild,
+                game_type="ama", user=interaction.user,
+                event=EVENT_QUESTION_REJECTED,
+                target_id=self.asker_id, game_id=self.game_id,
+                channel_id=self.channel.id,
+                extra={"question_idx": self.question_idx},
+            )
 
 
 class QuestionView(discord.ui.View):
@@ -408,6 +476,19 @@ class QuestionView(discord.ui.View):
             message_id=interaction.message.id,
         )
         await update_game_payload(self.db, self.game_id, payload)
+
+        # Metadata only — no content arg, so this doesn't spam the audit
+        # channel with a contentless embed.
+        if interaction.guild is not None:
+            await audit_anonymous(
+                interaction.client, self.db, interaction.guild,
+                game_type="ama", user=interaction.user,
+                event=EVENT_QUESTION_PASSED,
+                target_id=self.asker_id, game_id=self.game_id,
+                message_id=interaction.message.id,
+                channel_id=interaction.channel.id if interaction.channel else None,
+                extra={"question_idx": self.question_idx},
+            )
 
         # Update main game embed status bar
         if self.ama_view and hasattr(self.ama_view, "refresh_status"):
@@ -743,9 +824,20 @@ class AMAView(discord.ui.View):
             await interaction.response.send_message("No one is in the hot seat.", ephemeral=True)
             return
         await interaction.response.defer()
+        skipped_id = self.hot_seat_id
         # Force rotation by maxing out the turn counter
         self.questions_this_turn = 4
         await self.check_turn_rotation(interaction.channel)
+
+        # Host/mod action on a live game — who cut a hot seat short, and when.
+        if interaction.guild is not None:
+            await audit_anonymous(
+                interaction.client, self.db, interaction.guild,
+                game_type="ama", user=interaction.user,
+                event=EVENT_HOT_SEAT_SKIPPED,
+                target_id=skipped_id, game_id=self.game_id,
+                channel_id=interaction.channel.id if interaction.channel else None,
+            )
 
     @discord.ui.button(label="🔄 New Hot Seat", style=discord.ButtonStyle.secondary, custom_id="ama_new_hs", row=1)
     async def new_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -856,6 +948,15 @@ class HotSeatSelect(discord.ui.Select):
         await interaction.response.defer()
         await interaction.edit_original_response(content="Hot seat updated.", view=None)
         await self.ama_view._set_hot_seat(new_member, interaction.channel, announce=True)
+
+        if guild is not None:
+            await audit_anonymous(
+                interaction.client, self.db, guild,
+                game_type="ama", user=interaction.user,
+                event=EVENT_HOT_SEAT_CHANGED,
+                target_id=new_member.id, game_id=self.game_id,
+                channel_id=interaction.channel.id if interaction.channel else None,
+            )
 
 
 class AskTargetSelect(discord.ui.Select):

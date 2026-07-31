@@ -26,7 +26,18 @@ from bot_modules.services.moderation import (
 )
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from bot_modules.games.constants import GAME_NAMES
+from bot_modules.services.anon_audit_service import (
+    KNOWN_FEATURES,
+    count_events,
+    get_retention_days,
+    list_events,
+    set_retention_days,
+)
 from web_server.schemas import (
+    AnonAuditLogResponse,
+    AnonAuditRetentionBody,
+    AnonAuditRetentionResponse,
     AuditLogResponse,
     ConfessionsAuditLogResponse,
     DMAuditLogResponse,
@@ -1306,3 +1317,122 @@ async def confessions_audit_log(
     result = await run_query(_q)
     await _resolve_names(ctx, guild, result["entries"], ("author_id", "author_name"))
     return result
+
+
+# ── Anonymous-features audit ──────────────────────────────────────────────────
+#
+# Covers the games-suite anonymous surfaces (AMA, FFA, Hot Takes, Fantasies,
+# Clapback, WYR, Compliment). Confessions, Whisper and Guess have their own
+# panels above/elsewhere — their trails live in their own operational tables.
+#
+# Content is LEFT JOINed from `messages` rather than stored, so it is present
+# only at guild storage level 'all' and absent for events that never produced a
+# guild message. See migration 145 for why that trade was made deliberately.
+
+
+@router.get("/moderation/anon-audit", response_model=AnonAuditLogResponse)
+async def anon_audit_log(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+    feature: str | None = None,
+    actor_id: int | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    # Clamped at both ends: SQLite reads a negative LIMIT as "no limit", so an
+    # unclamped `?limit=-1` would dump every de-anonymising row in one response.
+    limit = max(1, min(limit, 200))
+    offset = max(offset, 0)
+
+    def _q():
+        with ctx.open_db() as conn:
+            total = count_events(
+                conn, guild_id, feature=feature, actor_id=actor_id
+            )
+            events = list_events(
+                conn, guild_id,
+                feature=feature, actor_id=actor_id,
+                limit=limit, offset=offset, with_content=True,
+            )
+            entries = [
+                {
+                    "id": e.id,
+                    "feature": e.feature,
+                    # Canonical display name, so this panel calls each game
+                    # what the rest of the dashboard calls it.
+                    "feature_label": GAME_NAMES.get(e.feature, e.feature),
+                    "event": e.event,
+                    # Derived server-side from MOD_EVENTS: the panel styles on
+                    # this flag rather than keeping its own copy of which
+                    # event names mean "a mod acted on someone's anon post".
+                    "is_mod_action": e.is_mod_action,
+                    "actor_id": str(e.actor_id),
+                    "target_id": str(e.target_id) if e.target_id else None,
+                    "game_id": e.game_id,
+                    "message_id": str(e.message_id) if e.message_id else None,
+                    "channel_id": str(e.channel_id) if e.channel_id else None,
+                    "content": e.content,
+                    "extra": e.extra,
+                    "created_at": e.created_at,
+                }
+                for e in events
+            ]
+            # Filter options come from the constant, not a DISTINCT over the
+            # table: SQLite has no loose index scan, so that query walked the
+            # guild's whole partition on every page load to return ≤7 strings.
+            features = [
+                {"value": f, "label": GAME_NAMES.get(f, f)}
+                for f in KNOWN_FEATURES
+            ]
+            return {"total": total, "entries": entries, "features": features}
+
+    result = await run_query(_q)
+    await _resolve_names(
+        ctx,
+        guild,
+        result["entries"],
+        ("actor_id", "actor_name"),
+        ("target_id", "target_name"),
+    )
+    return result
+
+
+@router.get(
+    "/moderation/anon-audit/retention", response_model=AnonAuditRetentionResponse
+)
+async def get_anon_audit_retention(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return {"retention_days": get_retention_days(conn, guild_id)}
+
+    return await run_query(_q)
+
+
+@router.put(
+    "/moderation/anon-audit/retention", response_model=AnonAuditRetentionResponse
+)
+async def put_anon_audit_retention(
+    request: Request,
+    body: AnonAuditRetentionBody,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            set_retention_days(conn, guild_id, body.retention_days)
+            conn.commit()
+            return {"retention_days": get_retention_days(conn, guild_id)}
+
+    return await run_query(_q)

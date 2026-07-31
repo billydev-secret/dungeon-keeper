@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class GuildInfo(BaseModel):
@@ -667,6 +667,48 @@ class ConfessionAuditEntry(BaseModel):
 class ConfessionsAuditLogResponse(BaseModel):
     total: int
     entries: list[ConfessionAuditEntry]
+
+
+class AnonAuditFeature(BaseModel):
+    value: str
+    label: str
+
+
+class AnonAuditEntry(BaseModel):
+    id: int
+    feature: str
+    feature_label: str = ""
+    event: str
+    # Derived from the service's MOD_EVENTS — a moderator acting on someone
+    # else's anonymous post, rather than a member posting anonymously.
+    is_mod_action: bool = False
+    actor_id: str
+    actor_name: str = ""
+    target_id: str | None = None
+    target_name: str = ""
+    game_id: str | None = None
+    message_id: str | None = None
+    channel_id: str | None = None
+    # Joined from `messages`; null when the guild's storage level is 'none' or
+    # the event produced no guild message at all. The audit table itself never
+    # stores content — see migration 145.
+    content: str | None = None
+    extra: dict = {}
+    created_at: float
+
+
+class AnonAuditLogResponse(BaseModel):
+    total: int
+    entries: list[AnonAuditEntry]
+    features: list[AnonAuditFeature]
+
+
+class AnonAuditRetentionResponse(BaseModel):
+    retention_days: int
+
+
+class AnonAuditRetentionBody(BaseModel):
+    retention_days: int = Field(ge=0, le=3650)
 
 
 # ── Moderation: Summary stats ────────────────────────────────────────────

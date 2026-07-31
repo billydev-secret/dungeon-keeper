@@ -104,6 +104,7 @@ const SECTIONS = [
         { id: "guess-audit",       label: "Guess Who Audit",  module: "./panels/guess-audit.js", adminOnly: true },
         { id: "mod-whisper-audit", label: "Whisper Audit",    module: "./panels/mod-whisper-audit.js", adminOnly: true },
         { id: "confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js", adminOnly: true },
+        { id: "anon-audit",        label: "Anonymous Features", module: "./panels/mod-anon-audit.js", adminOnly: true, keywords: "ama ffa hot takes fantasies clapback wyr would you rather compliment anonymous audit retention" },
         { id: "grant-audit",       label: "Grant Audit",      module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card" },
       ]},
     ],
