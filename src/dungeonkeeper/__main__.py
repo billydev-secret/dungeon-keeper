@@ -204,6 +204,7 @@ def main() -> None:
     bot.extension_names = [
         "bot_modules.cogs.events_cog",
         "bot_modules.cogs.usage_telemetry_cog",
+        "bot_modules.cogs.anon_audit_cog",
         "bot_modules.cogs.role_grant_cog",
         "bot_modules.cogs.invite_cog",
         "bot_modules.cogs.support_cog",

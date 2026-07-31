@@ -12,7 +12,7 @@ from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
-from bot_modules.games.utils.audit import send_audit_log
+from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
@@ -83,10 +83,14 @@ class SubmitEntryModal(discord.ui.Modal, title="Submit a Fantasy or Dealbreaker"
 
         # Audit log
         if interaction.guild:
-            await send_audit_log(
+            await audit_anonymous(
                 interaction.client, self.db, interaction.guild,
                 game_type="fantasies", user=interaction.user,
+                event="entry_submitted",
                 content=self.entry.value, label=f"{category} Submission",
+                game_id=self.game_id,
+                channel_id=interaction.channel.id if interaction.channel else None,
+                extra={"category": category, "round": self.round_num},
             )
 
         await interaction.response.send_message(

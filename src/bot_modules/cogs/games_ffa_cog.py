@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS
-from bot_modules.games.utils.audit import send_audit_log
+from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
@@ -210,7 +210,7 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         # keeps a deleted embed from erroring the reply.
         assert interaction.channel_id is not None
         try:
-            await interaction.channel.send(
+            reply_msg = await interaction.channel.send(
                 body,
                 allowed_mentions=discord.AllowedMentions.none(),
                 reference=discord.MessageReference(
@@ -248,10 +248,14 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
 
         # Audit log records the real user behind the pseudonym.
         try:
-            await send_audit_log(
+            await audit_anonymous(
                 bot, bot.games_db, interaction.guild,
                 game_type="ffa", user=interaction.user,
+                event="reply_posted",
                 content=content, label="FFA Anonymous Reply",
+                game_id=view.game_id,
+                message_id=reply_msg.id, channel_id=interaction.channel_id,
+                extra={"root_id": str(root_id)},
             )
         except Exception:
             log.debug("ffa: failed to write audit log", exc_info=True)

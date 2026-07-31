@@ -22,13 +22,14 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [dev_sessions.md](dev_sessions.md) | Parallel feature sessions: `/dk-feature` and `/dk-ship` over tmux windows + git worktrees (replaced the clone-per-session flow 2026-07-25) |
 | [ai_moderation_spec.md](ai_moderation_spec.md) | AI moderation cog (review/scan/query, label feedback) |
 | [auto_role_spec.md](auto_role_spec.md) | Auto-role on join: dashboard-configured role set applied to new human members (apply-time hierarchy/managed filtering; jailed rejoiners skipped) |
+| [anon_audit_spec.md](anon_audit_spec.md) | Anonymous Features Audit: DB-backed trail for the anonymous games (AMA, FFA, Hot Takes, Fantasies, Clapback, WYR, Compliment) — admin panel, configurable retention. Stores no content by design; joins `messages` like the Confessions audit does. Confessions/Whisper/Guess keep their own trails |
 | [auto_react_spec.md](auto_react_spec.md) | Auto React (listener-only image auto-reactions; dashboard/API-configured) |
 | [bios_cog_spec.md](bios_cog_spec.md) | Bios cog (profiles, wizard) |
 | [booster_roles_spec.md](booster_roles_spec.md) | Booster cosmetic roles: swatch-synced gradient color roles, persistent claim buttons (boosters only, mutually exclusive), dashboard panel posting |
 | [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration, announcement message format |
 | [bump_tracker_spec.md](bump_tracker_spec.md) | Bump Tracker (`/bump log`/`status`, multi-site cooldown reminders); dashboard panel shipped 2026-07-23 — before that the routes existed with no UI and live guilds were configured by hand |
 | [clapback_spec.md](clapback_spec.md) | Clapback head-to-head comedy game: bracketing rules (3-player round-robin, fewest-byes-first rotation, duplicate-answer avoidance) and scoring (vote %, CLAPBACK bonus, bye = the round's average). Complements the suite-wide `games_system_spec.md` |
-| [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log |
+| [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log. Its metadata-plus-message-pointer shape is the model `anon_audit_spec.md` copied |
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
 | [docs_cog_spec.md](docs_cog_spec.md) | Channel docs: dashboard posts authored docs into channels (not this docs/ folder) |

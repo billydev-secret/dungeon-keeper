@@ -125,7 +125,7 @@ def stub_branding(monkeypatch):
         return None
 
     monkeypatch.setattr(ama_mod, "resolve_accent_color", _accent)
-    monkeypatch.setattr(ama_mod, "send_audit_log", _audit)
+    monkeypatch.setattr(ama_mod, "audit_anonymous", _audit)
 
 
 async def test_panel_flow_volunteer_ask_and_post(sync_db_path, stub_branding):
@@ -225,3 +225,49 @@ async def test_panel_ask_rejected_when_target_left(sync_db_path, stub_branding):
     reject_text = submit_inter.response.messages[-1][0]
     assert "left the panel" in reject_text
     assert not any(s[0] == panelist.mention for s in channel.sends)
+
+
+async def test_ask_records_an_audit_row_pointing_at_the_posted_message(sync_db_path):
+    """The one piece of glue the service tests can't reach.
+
+    The audit write was deliberately moved to *after* the question posts so the
+    row carries the message pointer the dashboard joins against for content —
+    audit before the send and every AMA row would have a null message_id and no
+    recoverable text. Deliberately does not stub audit_anonymous.
+    """
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.anon_audit_service import list_events
+
+    db = GamesDb(sync_db_path)
+    bot = FakeBot(db)
+    bot.ctx.db_path = sync_db_path  # type: ignore[attr-defined]
+    cog = AMACog(bot)  # type: ignore[arg-type]
+
+    host = FakeMember(1, "Host")
+    panelist = FakeMember(2, "Panelist")
+    asker = FakeMember(3, "Asker")
+    guild = FakeGuild([host, panelist, asker])
+    channel = FakeChannel(guild)
+
+    game_id = await cog.launch(
+        channel=channel, host_id=host.id, host_name=host.display_name,
+        guild_id=guild.id, options={"mode": "unfiltered", "format": "panel"},
+    )
+    view = bot.active_views[game_id]
+    await view._handle_volunteer(FakeInteraction(panelist, channel, guild, bot))
+
+    modal = AskQuestionModal(game_id, db, channel, "unfiltered", host.id, panelist.id, view)
+    modal.question._value = "an anonymous question"
+    await modal.on_submit(FakeInteraction(asker, channel, guild, bot))
+
+    posted = [s for s in channel.sends if s[0] == panelist.mention][-1]
+    posted_msg_id = posted[2].id
+
+    with open_db(sync_db_path) as conn:
+        (entry,) = list_events(conn, guild.id, feature="ama")
+
+    assert entry.event == "question_asked"
+    assert entry.actor_id == asker.id, "the audit must name the real asker"
+    assert entry.target_id == panelist.id
+    assert entry.message_id == posted_msg_id, "row must point at the posted message"
+    assert entry.game_id == game_id

@@ -144,7 +144,7 @@ def _stub_replies(monkeypatch):
     async def _noop_audit(*_a, **_k):
         return None
 
-    monkeypatch.setattr(ffa_mod, "send_audit_log", _noop_audit)
+    monkeypatch.setattr(ffa_mod, "audit_anonymous", _noop_audit)
 
 
 async def _launch(cog, bot, channel, guild, host):

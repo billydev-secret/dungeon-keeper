@@ -40,6 +40,7 @@ from bot_modules.games_compliment.logic import (
     serialize_pairings,
     toggle_participant,
 )
+from bot_modules.games.utils.audit import audit_anonymous
 
 log = logging.getLogger(__name__)
 
@@ -141,7 +142,22 @@ class ComplimentView(discord.ui.View):
                 except discord.HTTPException:
                     pass
             asyncio.create_task(_delete_ping())
-        await interaction.followup.send(embed=embed)
+        pairings_msg = await interaction.followup.send(embed=embed, wait=True)
+
+        # Spin the Compliment pairs people at random rather than hiding
+        # authorship — the giver→receiver map is posted in the open. So this
+        # records who rolled the pairing and points at the message that shows
+        # it, rather than duplicating the map into the audit table.
+        if guild is not None:
+            await audit_anonymous(
+                self.bot, self.db, guild,
+                game_type="compliment", user=interaction.user,
+                event="pairings_generated",
+                game_id=self.game_id,
+                message_id=getattr(pairings_msg, "id", None),
+                channel_id=interaction.channel.id if interaction.channel else None,
+                extra={"pair_count": len(pairings)},
+            )
 
         log.info("Game %s ended — %d players", self.game_id, len(participants))
         await end_game(

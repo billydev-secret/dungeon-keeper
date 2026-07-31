@@ -84,6 +84,16 @@ def purge_user_data(
         "DELETE FROM xp_events WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),
     )
+
+    # Anonymous-features audit trail. Keyed on actor_id/target_id rather than
+    # user_id, so it needs its own statements. Routinely pruned by the
+    # retention sweep (default 90 days), but a hard-erasure request must not
+    # have to wait for that — these rows are precisely the deanonymising ones.
+    for col in ("actor_id", "target_id"):
+        conn.execute(
+            f"DELETE FROM anon_audit_log WHERE guild_id = ? AND {col} = ?",
+            (guild_id, user_id),
+        )
     conn.execute(
         "DELETE FROM role_events WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),

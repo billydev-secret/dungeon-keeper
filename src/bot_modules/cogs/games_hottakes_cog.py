@@ -13,7 +13,7 @@ from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
-from bot_modules.games.utils.audit import send_audit_log
+from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
@@ -90,10 +90,14 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
 
         # Audit log
         if interaction.guild:
-            await send_audit_log(
+            await audit_anonymous(
                 interaction.client, self.db, interaction.guild,
                 game_type="hottakes", user=interaction.user,
+                event="take_submitted",
                 content=self.take.value, label="Hot Take Submission",
+                game_id=self.game_id,
+                channel_id=interaction.channel.id if interaction.channel else None,
+                extra={"queued": self.queue_mode},
             )
 
         if self.queue_mode:

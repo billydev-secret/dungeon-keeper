@@ -93,7 +93,7 @@ These settings are **live and enforced** but are configured from the web dashboa
 
 - **Channel allowlist** (`games_allowed_channels`, `guild_id`-scoped as of migration 115). Every game preflights `check_allowed_channel`; a channel that isn't on the allowlist refuses all games. The dashboard channels panel and the game-history/stats views are filtered to the active guild, so a host of one guild can't see or delete another guild's rows. (Legacy rows predating migration 115 carry `guild_id = 0`, treated as a wildcard by the in-Discord gate but invisible in the guild-scoped dashboard until reconciled.)
 - **Per-guild per-game enable/disable** (`games_game_config`, default enabled). Checked by `check_game_enabled`.
-- **Audit channel** (`games_audit_channel`). When set, anonymous submissions are mirrored there with the original author visible.
+- **Audit channel** (`games_audit_channel`). When set, anonymous submissions are mirrored there with the original author visible. This is now a *mirror*, not the record — every anonymous action is also written to `anon_audit_log` and surfaced on the admin dashboard regardless of whether this channel is configured (see `anon_audit_spec.md`).
 - **Game Host / editor role** (`games_editor_role`). Holders pass the Game-Host check for content authoring on the dashboard and can add/remove other players via `/games join|leave`.
 - **LegitLibs per-channel tier cap** (`legitlibs_channel_config.max_tier`, default 4), set per-row on the Games Config → Allowed Channels table, and LegitLibs template/vocabulary content.
 
@@ -113,7 +113,7 @@ The games cluster by shape; each cluster shares interaction patterns.
 
 ### Anonymous-submission games
 
-**Anonymous Truth or Dare (FFA), Hot Takes, Fantasies & Dealbreakers, Anonymous AMA** post submissions to the play channel without the author's name attached. If an audit channel is configured for the guild, the same submission is mirrored there with the original author visible — staff can tie content back to a person without exposing them in the play channel. Without an audit channel, the audit step is a silent no-op. `hottakes` runs in two phases (submit, then a 5-step temperature vote per take with a live results bar). `fantasies` is multi-round; each round runs Submit → Reveal → Same/Not-for-me per entry, and the host can keep running rounds before the final recap.
+**Anonymous Truth or Dare (FFA), Hot Takes, Fantasies & Dealbreakers, Anonymous AMA** post submissions to the play channel without the author's name attached. Every such submission is recorded in `anon_audit_log` — who posted it, when, and a pointer to the message — and is reviewable on the admin dashboard's **Anonymous Features** audit panel (`anon_audit_spec.md`). If an audit channel is also configured, the submission is mirrored there with the original author visible, so staff watching Discord see it without opening the dashboard. `hottakes` runs in two phases (submit, then a 5-step temperature vote per take with a live results bar). `fantasies` is multi-round; each round runs Submit → Reveal → Same/Not-for-me per entry, and the host can keep running rounds before the final recap.
 
 `ama` is the largest and longest-running game, with **two independent axes**:
 
@@ -211,7 +211,7 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 | LegitLibs has no templates matching tier / tag | Ephemeral: no published templates for that tier/tag; ask a mod to add some |
 | AMA modal submitted after the hot seat rotated / target left the panel | Ephemeral: the seat/panel changed while you were typing — try again |
 | AMA modal submitted after the game ended | Ephemeral: the game closed while you were typing — your question was not submitted |
-| Audit channel was deleted | Silently swallowed; the game continues |
+| Audit channel was deleted | Silently swallowed; the game continues, and the `anon_audit_log` row is still written |
 | AI generation API errors / times out | Falls back to bank-only or manual entry |
 | Mod-only config command run without rights | Ephemeral: you need moderator or admin permissions |
 
@@ -237,7 +237,7 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 |---|---|---|
 | Per-game `enabled` | on | Toggle a game on/off for the guild |
 | Per-game `options` | empty | Free-form per-game knob bag (only a few games consume it, e.g. Photo's ping role) |
-| Audit channel | unset | Mirror anonymous submissions here with original authors visible |
+| Audit channel | unset | Mirror anonymous submissions here with original authors visible (the DB trail is always written either way) |
 | Editor / Game Host role | unset | Role whose holders pass the Game Host check on the dashboard and can move other players |
 | External tracking watches | unset | One or more (bot, channel, kind) pairs whose result messages are banked (set on Games → External Tracking); the same bot may appear in several channels |
 
@@ -259,7 +259,7 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 
 ## Stored data
 
-Per-guild content (the seeded question bank, LegitLibs templates and their revision history, AI-prompt overrides) plus per-game runtime state (the live game's payload, the session window, audit channel and editor-role settings, allowlisted channels) and an archive of every finished game's final payload. External-tracking config and raw banked bot messages are stored per guild. User ids appear inside game payloads and the history archive. Photo Challenge registers card metadata for the economy `photo_post` payout.
+Per-guild content (the seeded question bank, LegitLibs templates and their revision history, AI-prompt overrides) plus per-game runtime state (the live game's payload, the session window, audit channel and editor-role settings, allowlisted channels, the anonymous-features audit trail and its retention setting) and an archive of every finished game's final payload. External-tracking config and raw banked bot messages are stored per guild. User ids appear inside game payloads and the history archive. Photo Challenge registers card metadata for the economy `photo_post` payout.
 
 LegitLibs additionally stores a small vocabulary table (parts of speech, domains, forms) and per-blank prompt text used to render fill modals, plus an anti-repeat window of the last few templates used per guild, channel tier caps, and user-submitted abuse reports on filled-in answers.
 

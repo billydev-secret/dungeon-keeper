@@ -38,6 +38,7 @@ from bot_modules.games_wyr.logic import (
     parse_question_input,
     toggle_vote,
 )
+from bot_modules.games.utils.audit import audit_anonymous
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +89,19 @@ class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
         except discord.HTTPException:
             pass
         await interaction.response.send_message("✅ Your question has been queued!", ephemeral=True)
+
+        # Free-text a member wrote that the channel will see with no name on
+        # it. Queued rather than posted, so there is no message to point at.
+        if interaction.guild is not None:
+            await audit_anonymous(
+                self._view.bot, self._view.db, interaction.guild,
+                game_type="wyr", user=interaction.user,
+                event="question_posed",
+                content=f"A: {a} / B: {b}", label="WYR Posed Question",
+                game_id=self._view.game_id,
+                channel_id=interaction.channel.id if interaction.channel else None,
+                extra={"queue_position": count},
+            )
 
 
 class WYRRoundView(discord.ui.View):
@@ -148,6 +162,24 @@ class WYRRoundView(discord.ui.View):
             color=self.accent,
         )
 
+    async def _audit_vote(self, interaction: discord.Interaction, option: str, changed: bool) -> None:
+        """Record a vote only while the round is actually anonymous.
+
+        With ``anonymous`` off the tallies name their voters in the embed, so
+        there is no anonymity for the audit trail to account for.
+        """
+        if not self.anonymous or interaction.guild is None:
+            return
+        await audit_anonymous(
+            self.bot, self.db, interaction.guild,
+            game_type="wyr", user=interaction.user,
+            event="vote",
+            game_id=self.game_id,
+            message_id=interaction.message.id if interaction.message else None,
+            channel_id=interaction.channel.id if interaction.channel else None,
+            extra={"option": option, "changed": changed, "round": self.round_num},
+        )
+
     @discord.ui.button(label="🅰️ Option A", style=discord.ButtonStyle.primary, custom_id="wyr_a", row=0)
     async def vote_a(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
@@ -158,6 +190,7 @@ class WYRRoundView(discord.ui.View):
         msg = f"✅ Voted **🅰️ Option A**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
+        await self._audit_vote(interaction, "a", changed)
 
     @discord.ui.button(label="🅱️ Option B", style=discord.ButtonStyle.primary, custom_id="wyr_b", row=0)
     async def vote_b(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -169,6 +202,7 @@ class WYRRoundView(discord.ui.View):
         msg = f"✅ Voted **🅱️ Option B**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
+        await self._audit_vote(interaction, "b", changed)
 
     @discord.ui.button(label="✍️ Pose Question", style=discord.ButtonStyle.primary, custom_id="wyr_pose", row=1)
     async def pose_question(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -200,6 +234,20 @@ class WYRRoundView(discord.ui.View):
         self.revealed = True
         button.disabled = True
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
+        # A host/mod deliberately de-anonymising a round — the single most
+        # accountability-relevant action in this game.
+        if interaction.guild is not None:
+            await audit_anonymous(
+                self.bot, self.db, interaction.guild,
+                game_type="wyr", user=interaction.user,
+                event="voters_revealed",
+                game_id=self.game_id,
+                message_id=interaction.message.id if interaction.message else None,
+                channel_id=interaction.channel.id if interaction.channel else None,
+                extra={"round": self.round_num,
+                       "voter_count": len(self.votes_a) + len(self.votes_b)},
+            )
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="wyr_htp", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
