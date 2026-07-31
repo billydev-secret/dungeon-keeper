@@ -16,7 +16,7 @@ from discord.ext import commands
 from bot_modules.commands.jail_commands import check_jail_rejoin
 from bot_modules.economy import quests as quest_rules
 from bot_modules.core.post_monitoring import (
-    SfwViolation,
+    BlockedImage,
     enforce_sfw_image_policy,
     enforce_spoiler_requirement,
     message_has_qualifying_image,
@@ -382,34 +382,73 @@ class EventsCog(commands.Cog):
             classify=nsfw_classifier_service.classifier_for(
                 self.ctx.db_path, message, strict=True
             ),
-            report=self._sfw_reporter(policy),
+            report=self._block_reporter(log_channel_id=policy.log_channel_id),
         )
 
-    def _sfw_reporter(
-        self, policy: nsfw_classifier_service.SfwPolicy
-    ) -> Callable[[SfwViolation], Awaitable[None]] | None:
-        """Post the audit record a mod reviews false positives from."""
-        if not policy.log_channel_id:
-            return None
+    def _block_reporter(
+        self, *, log_channel_id: int = 0
+    ) -> Callable[[BlockedImage], Awaitable[None]]:
+        """Record every destroyed image, and mirror SFW removals to the mod log.
 
-        async def report(violation: SfwViolation) -> None:
-            channel = self.bot.get_channel(policy.log_channel_id)
+        Always returns a callback, unlike the log-channel-only reporter it
+        replaces. The database row is the durable audit trail and must not
+        depend on a log channel being configured — production's is currently
+        ``0``, which meant a wrongly deleted photo left no trace anywhere.
+
+        Only the SFW surface passes a log channel: that setting is scoped to
+        SFW prevention, and spoiler-channel deletions have never been announced
+        there.
+        """
+
+        async def report(blocked: BlockedImage) -> None:
+            await asyncio.to_thread(self._persist_block, blocked)
+            if not log_channel_id:
+                return
+            channel = self.bot.get_channel(log_channel_id)
             if not isinstance(channel, discord.abc.Messageable):
                 return
-            verb = "Removed" if violation.deleted else "Would remove (log mode)"
-            where = getattr(violation.message.channel, "mention", None) or getattr(
-                violation.message.channel, "name", violation.message.channel.id
+            verb = "Removed" if blocked.deleted else "Would remove (log mode)"
+            where = getattr(blocked.message.channel, "mention", None) or getattr(
+                blocked.message.channel, "name", blocked.message.channel.id
             )
+            # Score-led: outside age-gated channels the tagger never runs, so
+            # a label is a bonus rather than the headline.
+            scored = (
+                f"scored {blocked.score:.2f}"
+                if blocked.score is not None
+                else "unreadable"
+            )
+            tag = f", tagged `{blocked.label}`" if blocked.label else ""
             await channel.send(
                 f"{verb} an explicit image from "
-                f"{format_user_for_log(violation.message.author)} in "
-                f"{where} — "
-                f"`{violation.label}` at {violation.score or 0:.2f} "
-                f"(`{violation.attachment.filename}`)",
+                f"{format_user_for_log(blocked.message.author)} in "
+                f"{where} — {scored}{tag} "
+                f"(`{blocked.attachment.filename}`)",
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 
         return report
+
+    def _persist_block(self, blocked: BlockedImage) -> None:
+        message = blocked.message
+        nsfw_classifier_service.record_block_safely(
+            self.ctx.db_path,
+            nsfw_classifier_service.Block(
+                message_id=message.id,
+                attachment_id=blocked.attachment.id,
+                guild_id=getattr(message.guild, "id", 0) or 0,
+                channel_id=message.channel.id,
+                author_id=message.author.id,
+                filename=blocked.attachment.filename,
+                score=blocked.score,
+                surface=blocked.surface,
+                action=(
+                    nsfw_classifier_service.ACTION_REMOVED
+                    if blocked.deleted
+                    else nsfw_classifier_service.ACTION_LOGGED
+                ),
+            ),
+        )
 
     def _log_background_task_result(self, task: asyncio.Task[None]) -> None:
         try:
@@ -746,6 +785,7 @@ class EventsCog(commands.Cog):
             classify=nsfw_classifier_service.classifier_for(
                 self.ctx.db_path, message
             ),
+            report=self._block_reporter(),
         )
 
         mention_ids = _message_mention_ids(cfg.recorded_bot_user_ids, message)

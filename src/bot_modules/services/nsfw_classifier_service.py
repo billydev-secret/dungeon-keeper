@@ -5,6 +5,20 @@ know whether an uploaded image is explicit. They fire off the same
 ``on_message``, so classification happens **once** per attachment and the
 result is shared (see :func:`classify_attachment`'s cache).
 
+Two models, doing different jobs:
+
+* **Marqo** (:mod:`marqo_nsfw`) produces the verdict, in every channel. It is
+  the only thing any consumer acts on.
+* **NudeNet** (:mod:`guess_nudenet`) produces labels and boxes, in age-gated
+  channels **only**, purely to fill ``nsfw_detections``. It never changes what
+  happens to an image.
+
+That split is why tagging lives on the recording path rather than beside the
+verdict: it makes it structurally impossible to derive a body-part inventory
+of an upload in general chat, which is the thing the privacy rule forbids. It
+also costs less than the arrangement it replaced, where NudeNet ran everywhere
+and its labels were discarded outside age-gated channels.
+
 The three consumers disagree about which way a *failure* should fall, so this
 module never picks for them: an unreadable or unclassifiable image yields
 ``verdict=None`` (:data:`UNKNOWN`), and each caller applies its own fallback.
@@ -12,13 +26,8 @@ Tipping reacts anyway (a CDN hiccup must not cost a poster), spoiler
 enforcement deletes (preserving today's behavior), SFW prevention does nothing
 (never delete on a failed read).
 
-Gating vs recording deliberately differ: classification runs everywhere,
-because SFW prevention needs a verdict in every channel, but detections are
-recorded only for uploads in Discord-age-gated channels. See
-docs/nsfw_classifier_spec.md.
-
-nudenet is imported lazily (via guess_nudenet), so importing this module is
-free and safe on machines without the model.
+Both models are imported lazily, so importing this module is free and safe on
+machines without the weights. See docs/nsfw_classifier_spec.md.
 """
 from __future__ import annotations
 
@@ -36,12 +45,17 @@ from bot_modules.services.guess_models import Detection
 
 log = logging.getLogger("dungeonkeeper.nsfw")
 
-MODEL_NAME = "320n"
-
-#: Labels that qualify an image as explicit. Exposed nudity only — the paired
-#: ``*_COVERED`` labels (lingerie, swimwear, implied) deliberately do not
-#: qualify. ``SEX_ACT`` is synthesised by guess_pipeline.merge_sex_act_detections
-#: when two different genital labels overlap.
+#: Labels NudeNet may report as the headline tag for a recorded row. Exposed
+#: nudity only — the paired ``*_COVERED`` labels (lingerie, swimwear, implied)
+#: deliberately do not qualify. ``SEX_ACT`` is synthesised by
+#: guess_pipeline.merge_sex_act_detections when two different genital labels
+#: overlap.
+#:
+#: This is descriptive metadata now, not a gate: Marqo decides the verdict on
+#: its own, so no label here can make an image explicit or spare it. It used to
+#: be guild-configurable; a per-label vocabulary has nothing to attach to under
+#: a single probability, and a stored preference that enforces nothing is worse
+#: than no preference at all.
 DEFAULT_LABEL_SET: frozenset[str] = frozenset({
     "MALE_GENITALIA_EXPOSED",
     "FEMALE_GENITALIA_EXPOSED",
@@ -51,22 +65,14 @@ DEFAULT_LABEL_SET: frozenset[str] = frozenset({
     "SEX_ACT",
 })
 
-#: Labels a guild may opt into on top of the defaults. Together with
-#: DEFAULT_LABEL_SET this is the detector's vocabulary as far as this feature
-#: is concerned — it lives here rather than in the web route because a label
-#: outside it matches nothing and silently disables detection for that entry,
-#: which is exactly what parse_label_set's empty-set guard exists to prevent.
-OPTIONAL_LABELS: frozenset[str] = frozenset({
-    "FEMALE_BREAST_COVERED",
-    "BUTTOCKS_COVERED",
-    "FEMALE_GENITALIA_COVERED",
-    "MALE_GENITALIA_COVERED",
-    "BELLY_EXPOSED",
-    "ARMPITS_EXPOSED",
-})
-
-#: Confidence a qualifying label must reach. Consumers that destroy content
-#: use a higher one — see CONFIG_KEY_SFW_THRESHOLD.
+#: Probability at or above which an image counts as explicit. Consumers that
+#: destroy content use a higher one — see CONFIG_KEY_SFW_THRESHOLD.
+#:
+#: Unchanged across the NudeNet-to-Marqo swap, and that is not laziness: the
+#: old value was a detector confidence and the new one is a whole-image
+#: probability, but both live on the same 0-1 scale and 0.5/0.75 sit in a wide
+#: empty gap. Measured on this model, non-explicit control images score
+#: 0.04-0.08 and the explicit image that prompted the swap scores 0.91.
 DEFAULT_THRESHOLD = 0.5
 
 #: SFW nudity prevention deletes a member's upload on a positive, so it demands
@@ -75,7 +81,6 @@ DEFAULT_SFW_THRESHOLD = 0.75
 
 CONFIG_KEY_THRESHOLD = "nsfw_classifier_threshold"
 CONFIG_KEY_SFW_THRESHOLD = "nsfw_classifier_sfw_threshold"
-CONFIG_KEY_LABEL_SET = "nsfw_classifier_labels"
 CONFIG_KEY_SFW_MODE = "nsfw_sfw_prevention_mode"
 CONFIG_KEY_SFW_LOG_CHANNEL = "nsfw_sfw_prevention_log_channel_id"
 CONFIG_BUCKET_SFW_EXEMPT = "nsfw_prevention_exempt_channels"
@@ -90,6 +95,15 @@ SFW_MODE_ENFORCE = "enforce"
 SFW_MODES = (SFW_MODE_OFF, SFW_MODE_LOG, SFW_MODE_ENFORCE)
 DEFAULT_SFW_MODE = SFW_MODE_OFF
 
+#: Which gate destroyed an image, for the blocked-images report.
+SURFACE_SFW = "sfw"
+SURFACE_SPOILER = "spoiler"
+
+#: What was actually done. ``logged`` is SFW prevention in ``log`` mode: the
+#: image survived, and the row records what would have happened.
+ACTION_REMOVED = "removed"
+ACTION_LOGGED = "logged"
+
 #: Images larger than this are not downloaded. Guards against a member pinning
 #: the bot's bandwidth with a huge upload; Discord's own limit is well under
 #: this for most users.
@@ -102,14 +116,26 @@ DOWNLOAD_TIMEOUT_SECONDS = 10.0
 #: explicit"). Callers MUST branch on this rather than treating it as False.
 UNKNOWN = None
 
-#: attachment id -> in-flight or completed (detections, inference_ms, bytes).
-#: Holds the task so concurrent consumers share one download+inference; holds
-#: detections rather than verdicts so it stays valid across thresholds and
-#: label-set edits. A completed task retains only the small detection list.
+#: attachment id -> ``(tagged, task)`` for in-flight or completed work, so
+#: concurrent consumers share one download and one pass over the image.
+#:
+#: One entry covers both models. They could be cached separately, but each
+#: would then need its own download of the same bytes, and holding the bytes to
+#: avoid that would mean keeping up to 25 MB per cached attachment alive. So a
+#: single task downloads once, scores, and tags in the same pass.
+#:
+#: ``tagged`` records whether that pass included NudeNet. It is a property of
+#: the attachment's *channel*, and an attachment belongs to exactly one
+#: message, so it cannot differ between two consumers of the same entry — the
+#: mismatch branch in :func:`_shared_infer` exists to keep that assumption from
+#: failing silently if it ever stops holding.
+#:
+#: What is held is the *score*, not a verdict, so an entry stays valid across
+#: threshold edits and across consumers applying different bars.
 _CACHE_MAX = 512
-_cache: OrderedDict[int, "asyncio.Task[tuple[list[Detection], int, int]]"] = (
-    OrderedDict()
-)
+_cache: OrderedDict[
+    int, "tuple[bool, asyncio.Task[tuple[float, list[Detection], int, int]]]"
+] = OrderedDict()
 
 
 class SupportsAttachment(Protocol):
@@ -127,24 +153,72 @@ class SupportsAttachment(Protocol):
     async def read(self) -> bytes: ...
 
 
+def model_name(*, tagged: bool) -> str:
+    """Which weights produced a row, for ``nsfw_classifications.model``.
+
+    Names both engines when NudeNet also ran, because a row that says only
+    ``marqo-384`` cannot later be told apart from one whose tags are missing.
+    The NudeNet half is read back from the loaded detector rather than assumed:
+    which file wins depends on what is on disk.
+    """
+    from bot_modules.services.marqo_nsfw import MODEL_NAME  # noqa: PLC0415
+
+    if not tagged:
+        return MODEL_NAME
+    from bot_modules.services.guess_nudenet import active_model_name  # noqa: PLC0415
+
+    tagger = active_model_name()
+    return f"{MODEL_NAME}+{tagger}" if tagger else MODEL_NAME
+
+
 @dataclass
 class Classification:
     """One attachment's verdict plus everything needed to interpret it later."""
 
     attachment_id: int
     verdict: bool | None
+    #: Marqo's probability that the image is explicit — what the verdict was
+    #: actually made from. ``None`` only when the verdict is UNKNOWN.
+    score: float | None = None
+    #: Highest-scoring qualifying NudeNet tag and its confidence. Both stay
+    #: ``None`` outside age-gated channels, where NudeNet never runs — so a
+    #: caller that wants a number to show a moderator wants :attr:`score`.
     top_label: str | None = None
     top_score: float | None = None
     detections: list[Detection] = field(default_factory=list)
+    #: Whether the tagger ran, which is not the same as whether it found
+    #: anything. An image it ran over and saw nothing in is the interesting
+    #: case — the blind spot this engine swap exists to cover — so the two must
+    #: stay distinguishable in the recorded row.
+    tagged: bool = False
     inference_ms: int = 0
     size_bytes: int = 0
     threshold: float = DEFAULT_THRESHOLD
-    label_set: frozenset[str] = DEFAULT_LABEL_SET
-    model: str = MODEL_NAME
 
     @property
     def is_unknown(self) -> bool:
         return self.verdict is UNKNOWN
+
+
+@dataclass(frozen=True)
+class Block:
+    """One image a gate destroyed, for the blocked-images report.
+
+    ``score`` is ``None`` when the image could not be read at all — spoiler
+    enforcement deletes on an unreadable image by design, and a row that
+    claimed 0.0 would read as "the model was sure it was clean, and we deleted
+    it anyway".
+    """
+
+    message_id: int
+    attachment_id: int
+    guild_id: int
+    channel_id: int
+    author_id: int
+    filename: str
+    score: float | None
+    surface: str
+    action: str
 
 
 #: The one definition of "this attachment is an image". Every consumer routes
@@ -174,23 +248,6 @@ def is_classifiable(attachment: SupportsAttachment) -> bool:
     return is_image_attachment(attachment) and attachment.size <= MAX_IMAGE_BYTES
 
 
-def parse_label_set(raw: str | None) -> frozenset[str]:
-    """Parse a comma-separated label set, falling back to the default.
-
-    An empty or whitespace-only value would otherwise produce a set that
-    nothing can ever match, silently disabling every consumer.
-    """
-    if not raw:
-        return DEFAULT_LABEL_SET
-    labels = {part.strip().upper() for part in raw.split(",") if part.strip()}
-    return frozenset(labels) if labels else DEFAULT_LABEL_SET
-
-
-def known_labels() -> frozenset[str]:
-    """Every label a guild may configure as qualifying."""
-    return DEFAULT_LABEL_SET | OPTIONAL_LABELS
-
-
 def is_valid_threshold(value: float) -> bool:
     """Thresholds outside ``(0, 1]`` answer the same way for every image, so
     they disable the gate rather than loosening it. Shared with the route so
@@ -198,30 +255,20 @@ def is_valid_threshold(value: float) -> bool:
     return 0.0 < value <= 1.0
 
 
-def serialize_label_set(labels: frozenset[str]) -> str:
-    """Stable text form for storage — sorted so rows compare as strings."""
-    return ",".join(sorted(labels))
-
-
-def load_settings(
-    db_path: Path, guild_id: int
-) -> tuple[float, float, frozenset[str]]:
-    """Return ``(threshold, sfw_threshold, label_set)`` for *guild_id*."""
+def load_settings(db_path: Path, guild_id: int) -> tuple[float, float]:
+    """Return ``(threshold, sfw_threshold)`` for *guild_id*."""
     with open_db(db_path) as conn:
         return load_settings_with_conn(conn, guild_id)
 
 
 def load_settings_with_conn(
     conn: sqlite3.Connection, guild_id: int
-) -> tuple[float, float, frozenset[str]]:
+) -> tuple[float, float]:
     threshold = _float_config(conn, CONFIG_KEY_THRESHOLD, DEFAULT_THRESHOLD, guild_id)
     sfw_threshold = _float_config(
         conn, CONFIG_KEY_SFW_THRESHOLD, DEFAULT_SFW_THRESHOLD, guild_id
     )
-    labels = parse_label_set(
-        get_config_value(conn, CONFIG_KEY_LABEL_SET, "", guild_id) or None
-    )
-    return threshold, sfw_threshold, labels
+    return threshold, sfw_threshold
 
 
 @dataclass(frozen=True)
@@ -284,25 +331,31 @@ def _float_config(
     return value
 
 
-def evaluate(
-    detections: list[Detection],
-    *,
-    threshold: float = DEFAULT_THRESHOLD,
-    label_set: frozenset[str] = DEFAULT_LABEL_SET,
-) -> tuple[bool, str | None, float | None]:
-    """Reduce raw detections to ``(is_explicit, top_label, top_score)``.
+def evaluate(score: float, *, threshold: float = DEFAULT_THRESHOLD) -> bool:
+    """Whether *score* clears *threshold*. Pure — no model, no I/O.
 
-    Pure — no model, no I/O. The top label reported is the highest-scoring
-    *qualifying* detection, so a confident ``BELLY_EXPOSED`` never becomes the
-    stated reason an image was judged explicit.
+    Inclusive at the threshold: a dial set to 0.5 is read as "0.5 counts", not
+    "anything above 0.5".
     """
-    qualifying = [
-        d for d in detections if d.label in label_set and d.score >= threshold
-    ]
+    return score >= threshold
+
+
+def top_detection(
+    detections: list[Detection],
+) -> tuple[str | None, float | None]:
+    """Highest-scoring qualifying tag, for the recorded row's headline.
+
+    Reported for description only — Marqo already decided the verdict — so a
+    confident ``BELLY_EXPOSED`` never becomes the stated reason an image was
+    judged explicit. No threshold is applied: NudeNet's own floor is the only
+    bar that means anything for a label, and the configured threshold is a
+    whole-image probability that has nothing to say about one body part.
+    """
+    qualifying = [d for d in detections if d.label in DEFAULT_LABEL_SET]
     if not qualifying:
-        return False, None, None
+        return None, None
     best = max(qualifying, key=lambda d: d.score)
-    return True, best.label, best.score
+    return best.label, best.score
 
 
 def is_age_gated_channel(channel: object) -> bool:
@@ -344,9 +397,9 @@ def record_classification(
         """
         INSERT OR REPLACE INTO nsfw_classifications
             (message_id, attachment_id, guild_id, channel_id, verdict,
-             top_label, top_score, model, threshold, label_set,
+             marqo_score, top_label, top_score, model, threshold, label_set,
              inference_ms, bytes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             message_id,
@@ -354,11 +407,14 @@ def record_classification(
             guild_id,
             channel_id,
             int(bool(result.verdict)),
+            result.score,
             result.top_label,
             result.top_score,
-            result.model,
+            model_name(tagged=result.tagged),
             result.threshold,
-            serialize_label_set(result.label_set),
+            # No configurable label set governs a verdict any more, and
+            # writing the tagger's vocabulary here would imply one did.
+            "",
             result.inference_ms,
             result.size_bytes,
             created_at,
@@ -391,24 +447,73 @@ def record_classification(
     )
 
 
+def record_block(
+    conn: sqlite3.Connection, block: Block, *, now: int | None = None
+) -> None:
+    """Persist one destroyed image. Rides the caller's transaction.
+
+    Unlike :func:`record_classification` this runs in **every** channel — it is
+    the only record that a member's upload was taken away, and the channels
+    where that is most likely to be a mistake are exactly the ones no
+    classification row is written for.
+    """
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO nsfw_blocks
+            (message_id, attachment_id, guild_id, channel_id, author_id,
+             filename, marqo_score, surface, action, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            block.message_id,
+            block.attachment_id,
+            block.guild_id,
+            block.channel_id,
+            block.author_id,
+            block.filename,
+            block.score,
+            block.surface,
+            block.action,
+            int(time.time()) if now is None else now,
+        ),
+    )
+
+
+def record_block_safely(db_path: Path, block: Block) -> None:
+    """Record a block, swallowing storage failures.
+
+    The audit trail failing must never change what happened to the member, and
+    this is called from the enforcement path itself.
+    """
+    try:
+        with open_db(db_path) as conn:
+            record_block(conn, block)
+    except sqlite3.Error as exc:
+        log.warning("nsfw: failed to record block: %s", exc)
+
+
 async def classify_attachment(
     attachment: SupportsAttachment,
     *,
     threshold: float = DEFAULT_THRESHOLD,
-    label_set: frozenset[str] = DEFAULT_LABEL_SET,
+    tag: bool = False,
 ) -> Classification:
     """Download, classify and return a verdict for one attachment.
 
-    What is cached (and shared) is the **detections**, not the verdict: the
-    model's output doesn't depend on the threshold or the label set, only
-    :func:`evaluate` does. So every consumer of an attachment shares one
-    download and one inference no matter what bar each applies, and an admin
-    editing the label set can't be served a verdict computed under the old one.
+    What is cached (and shared) is the **score**, not the verdict: the model's
+    output doesn't depend on the threshold, only :func:`evaluate` does. So
+    every consumer of an attachment shares one download and one inference no
+    matter what bar each applies, and an admin who retunes the threshold can't
+    be served a verdict computed under the old one.
 
     The cache holds the in-flight task rather than its result, so the three
     consumers that fire on the same message — which discord.py dispatches as
     concurrent tasks, not in sequence — await the same work instead of each
     starting their own.
+
+    Pass ``tag=True`` to also run the NudeNet tagger over the same bytes. Only
+    the recording path does, because tags are only ever written for age-gated
+    channels — see :class:`MessageClassifier`.
 
     Never raises: a download failure, a decode failure or a model failure all
     return ``verdict=UNKNOWN`` so each consumer applies its own fallback.
@@ -418,48 +523,55 @@ async def classify_attachment(
         verdict=UNKNOWN,
         size_bytes=attachment.size,
         threshold=threshold,
-        label_set=label_set,
     )
 
     if not is_classifiable(attachment):
         return unknown
 
     try:
-        detections, inference_ms, size_bytes = await _shared_detect(attachment)
+        score, detections, inference_ms, size_bytes = await _shared_infer(
+            attachment, tag=tag
+        )
     except Exception:  # noqa: BLE001 - already logged; every failure is UNKNOWN
         return unknown
 
-    verdict, top_label, top_score = evaluate(
-        detections, threshold=threshold, label_set=label_set
-    )
+    top_label, top_score = top_detection(detections)
     return Classification(
         attachment_id=attachment.id,
-        verdict=verdict,
+        verdict=evaluate(score, threshold=threshold),
+        score=score,
         top_label=top_label,
         top_score=top_score,
         detections=detections,
+        tagged=tag,
         inference_ms=inference_ms,
         size_bytes=size_bytes,
         threshold=threshold,
-        label_set=label_set,
     )
 
 
-async def _shared_detect(
-    attachment: SupportsAttachment,
-) -> tuple[list[Detection], int, int]:
+async def _shared_infer(
+    attachment: SupportsAttachment, *, tag: bool
+) -> tuple[float, list[Detection], int, int]:
     """Download and run inference once per attachment, shared across callers.
 
-    Returns ``(detections, inference_ms, size_bytes)``. Raises on any failure;
-    the failed task is evicted so a transient CDN error doesn't pin "unreadable"
-    for the life of the process.
+    Raises on any failure; the failed task is evicted so a transient CDN error
+    doesn't pin "unreadable" for the life of the process.
     """
-    task = _cache.get(attachment.id)
-    if task is not None:
+    entry = _cache.get(attachment.id)
+    # An entry computed without tags cannot satisfy a caller that wants them.
+    # This should be unreachable — see the cache's docstring — so it replaces
+    # the entry rather than trying to be clever about merging.
+    if entry is not None and tag and not entry[0]:
+        entry = None
+        _cache.pop(attachment.id, None)
+
+    if entry is not None:
         _cache.move_to_end(attachment.id)
+        task = entry[1]
     else:
-        task = asyncio.create_task(_download_and_detect(attachment))
-        _cache[attachment.id] = task
+        task = asyncio.create_task(_download_and_infer(attachment, tag=tag))
+        _cache[attachment.id] = (tag, task)
         while len(_cache) > _CACHE_MAX:
             _cache.popitem(last=False)
 
@@ -470,9 +582,9 @@ async def _shared_detect(
         raise
 
 
-async def _download_and_detect(
-    attachment: SupportsAttachment,
-) -> tuple[list[Detection], int, int]:
+async def _download_and_infer(
+    attachment: SupportsAttachment, *, tag: bool
+) -> tuple[float, list[Detection], int, int]:
     try:
         raw = await asyncio.wait_for(
             attachment.read(), timeout=DOWNLOAD_TIMEOUT_SECONDS
@@ -483,11 +595,23 @@ async def _download_and_detect(
 
     started = time.perf_counter()
     try:
-        detections = await asyncio.to_thread(_detect, raw)
+        score = await asyncio.to_thread(_score, raw)
     except Exception as exc:
         log.warning("nsfw: inference failed for %s: %s", attachment.id, exc)
         raise
-    return detections, int((time.perf_counter() - started) * 1000), len(raw)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+    detections: list[Detection] = []
+    if tag:
+        # Tags are metrics. The verdict is already made and is what every
+        # consumer acts on, so a tagger failure leaves the row unlabelled
+        # rather than throwing the classification away.
+        try:
+            detections = await asyncio.to_thread(_tag, raw)
+        except Exception as exc:  # noqa: BLE001 - metrics only
+            log.warning("nsfw: tagging failed for %s: %s", attachment.id, exc)
+
+    return score, detections, elapsed_ms, len(raw)
 
 
 @dataclass
@@ -499,10 +623,10 @@ class MessageClassifier:
     and keeping alive — the whole ``discord.Message`` and its guild.
 
     ``channel_is_nsfw`` is derived here rather than supplied per call site.
-    It drives the recording-scope rule, and the callers that used to pass it
-    were asserting a precondition enforced by a guard several frames away in
-    another module — true when written, silently wrong the moment those guards
-    got reordered.
+    It drives both the recording scope and whether NudeNet runs at all, and
+    the callers that used to pass it were asserting a precondition enforced by
+    a guard several frames away in another module — true when written,
+    silently wrong the moment those guards got reordered.
 
     Settings load lazily on first use and are then reused for the rest of the
     message, so constructing one is free. That matters: spoiler enforcement
@@ -516,23 +640,23 @@ class MessageClassifier:
     message_id: int
     channel_is_nsfw: bool
     strict: bool = False
-    _settings: tuple[float, frozenset[str]] | None = None
+    _threshold: float | None = None
 
-    async def _load_settings(self) -> tuple[float, frozenset[str]]:
-        if self._settings is None:
-            threshold, sfw_threshold, label_set = await asyncio.to_thread(
+    async def _load_threshold(self) -> float:
+        if self._threshold is None:
+            threshold, sfw_threshold = await asyncio.to_thread(
                 load_settings, self.db_path, self.guild_id
             )
-            self._settings = (
-                sfw_threshold if self.strict else threshold,
-                label_set,
-            )
-        return self._settings
+            self._threshold = sfw_threshold if self.strict else threshold
+        return self._threshold
 
     async def __call__(self, attachment: SupportsAttachment) -> Classification:
-        threshold, label_set = await self._load_settings()
+        threshold = await self._load_threshold()
+        # The age gate decides both whether tags are produced and whether a row
+        # is written, from the same flag — so there is no arrangement of this
+        # code that tags an image in general chat.
         result = await classify_attachment(
-            attachment, threshold=threshold, label_set=label_set
+            attachment, threshold=threshold, tag=self.channel_is_nsfw
         )
         if result.is_unknown or not self.channel_is_nsfw:
             return result
@@ -580,12 +704,19 @@ def classifier_for(
     )
 
 
-def _detect(raw: bytes) -> list[Detection]:
-    """Blocking inference, run off the event loop by :func:`classify_attachment`.
+def _score(raw: bytes) -> float:
+    """Blocking Marqo inference, run off the event loop.
 
     onnxruntime blocks in C++; calling it inline would stall the bot's
     heartbeat for the duration of every classification.
     """
+    from bot_modules.services.marqo_nsfw import score_bytes  # noqa: PLC0415
+
+    return score_bytes(raw)
+
+
+def _tag(raw: bytes) -> list[Detection]:
+    """Blocking NudeNet detection, for labels and boxes only."""
     from bot_modules.services.guess_nudenet import detect_bytes  # noqa: PLC0415
     from bot_modules.services.guess_pipeline import (  # noqa: PLC0415
         merge_sex_act_detections,
@@ -595,5 +726,5 @@ def _detect(raw: bytes) -> list[Detection]:
 
 
 def clear_cache() -> None:
-    """Drop the in-process verdict cache (tests; config changes)."""
+    """Drop the in-process cache (tests; config changes)."""
     _cache.clear()

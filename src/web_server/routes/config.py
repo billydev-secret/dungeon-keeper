@@ -48,7 +48,6 @@ from bot_modules.services.auto_delete_service import (
 )
 from bot_modules.services.nsfw_classifier_service import (
     CONFIG_BUCKET_SFW_EXEMPT,
-    CONFIG_KEY_LABEL_SET,
     CONFIG_KEY_SFW_LOG_CHANNEL,
     CONFIG_KEY_SFW_MODE,
     CONFIG_KEY_SFW_THRESHOLD,
@@ -56,9 +55,7 @@ from bot_modules.services.nsfw_classifier_service import (
     DEFAULT_SFW_MODE,
     SFW_MODES,
     is_valid_threshold,
-    known_labels,
     load_settings_with_conn,
-    serialize_label_set,
 )
 from bot_modules.services.reaction_tip_service import (
     get_rungs_for_guild_with_conn,
@@ -952,15 +949,13 @@ def _auto_react_section(conn, guild_id: int) -> list:
 
 
 def _nsfw_classifier_section(conn, guild_id: int) -> dict:
-    threshold, sfw_threshold, labels = load_settings_with_conn(conn, guild_id)
+    threshold, sfw_threshold = load_settings_with_conn(conn, guild_id)
     mode = get_config_value(
         conn, CONFIG_KEY_SFW_MODE, DEFAULT_SFW_MODE, guild_id
     ).strip().lower()
     return {
         "threshold": threshold,
         "sfw_threshold": sfw_threshold,
-        "labels": sorted(labels),
-        "available_labels": sorted(known_labels()),
         # So the panel's own guard reads the same number the service enforces.
         "min_rung": min_rung_amount(),
         "sfw_mode": mode if mode in SFW_MODES else DEFAULT_SFW_MODE,
@@ -2850,7 +2845,6 @@ async def update_spoiler(
 class NsfwClassifierUpdate(BaseModel):
     threshold: float | None = None
     sfw_threshold: float | None = None
-    labels: list[str] | None = None
     sfw_mode: str | None = None
     sfw_log_channel_id: str | None = None
     sfw_exempt_channels: list[str] | None = None
@@ -2859,7 +2853,6 @@ class NsfwClassifierUpdate(BaseModel):
 _NSFW_FIELDS = {
     "threshold": (CONFIG_KEY_THRESHOLD, str),
     "sfw_threshold": (CONFIG_KEY_SFW_THRESHOLD, str),
-    "labels": (CONFIG_KEY_LABEL_SET, lambda v: serialize_label_set(frozenset(v))),
     "sfw_mode": (CONFIG_KEY_SFW_MODE, _raw),
     "sfw_log_channel_id": (
         CONFIG_KEY_SFW_LOG_CHANNEL,
@@ -2893,19 +2886,6 @@ async def update_nsfw_classifier(
         raise HTTPException(
             status_code=400, detail=f"sfw_mode must be one of {', '.join(SFW_MODES)}"
         )
-
-    if body.labels is not None:
-        if not body.labels:
-            raise HTTPException(
-                status_code=400, detail="at least one qualifying label is required"
-            )
-        # A label outside the detector's vocabulary matches nothing, so it
-        # would quietly disable detection for that entry rather than erroring.
-        unknown = sorted(set(body.labels) - known_labels())
-        if unknown:
-            raise HTTPException(
-                status_code=400, detail=f"unknown label(s): {', '.join(unknown)}"
-            )
 
     def _q():
         with ctx.open_db() as conn:

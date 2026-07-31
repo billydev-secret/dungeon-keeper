@@ -420,7 +420,6 @@ def test_update_nsfw_classifier(authed_client, fake_ctx):
         json={
             "threshold": 0.4,
             "sfw_threshold": 0.85,
-            "labels": ["SEX_ACT", "ANUS_EXPOSED"],
             "sfw_mode": "log",
             "sfw_log_channel_id": "777",
             "sfw_exempt_channels": ["1001"],
@@ -433,9 +432,8 @@ def test_update_nsfw_classifier(authed_client, fake_ctx):
         load_sfw_policy,
     )
 
-    threshold, sfw_threshold, labels = load_settings(fake_ctx.db_path, fake_ctx.guild_id)
+    threshold, sfw_threshold = load_settings(fake_ctx.db_path, fake_ctx.guild_id)
     assert (threshold, sfw_threshold) == (0.4, 0.85)
-    assert labels == frozenset({"SEX_ACT", "ANUS_EXPOSED"})
 
     policy = load_sfw_policy(fake_ctx.db_path, fake_ctx.guild_id)
     assert policy.mode == "log"
@@ -450,11 +448,6 @@ def test_update_nsfw_classifier(authed_client, fake_ctx):
         pytest.param({"threshold": 1.5}, id="threshold-above-one"),
         pytest.param({"sfw_threshold": -0.1}, id="sfw-threshold-negative"),
         pytest.param({"sfw_mode": "delete-everything"}, id="unknown-mode"),
-        pytest.param({"labels": []}, id="empty-label-set"),
-        pytest.param({"labels": ["NOT_A_REAL_LABEL"]}, id="unknown-label"),
-        pytest.param(
-            {"labels": ["SEX_ACT", "TYPOED_LABEL"]}, id="one-unknown-among-valid"
-        ),
     ],
 )
 def test_nsfw_classifier_rejects_inert_settings(authed_client, body):

@@ -18,6 +18,27 @@ def _make_nudenet_result(class_: str, score: float, x: int, y: int, w: int, h: i
     return {"class": class_, "score": score, "box": [x, y, w, h]}
 
 
+@pytest.fixture(autouse=True)
+def _reset_detector():
+    """Drop the cached detector between tests.
+
+    ``_get_detector`` memoises, so without this every test after the first is
+    served the first test's mock and asserts against its data. These tests used
+    to pass by accident: ``patch.dict("sys.modules", ...)`` restores the dict on
+    exit, which *evicts* any module imported inside the block — so importing
+    ``guess_nudenet`` for the first time in test one meant it was re-imported,
+    detector and all, for every later test. That only held while nothing else in
+    the session imported it first, which stopped being true.
+    """
+    import bot_modules.services.guess_nudenet as gn  # noqa: PLC0415
+
+    gn._detector = None
+    gn._detector_name = None
+    yield
+    gn._detector = None
+    gn._detector_name = None
+
+
 def _mock_nudenet(raw_results: list[dict]):
     """Return a context manager that patches nudenet.NudeDetector."""
     mock_detector_instance = MagicMock()

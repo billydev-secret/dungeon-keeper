@@ -10,6 +10,11 @@ from bot_modules.services.guess_models import BoundingBox, Detection
 log = logging.getLogger("dungeonkeeper.guess")
 
 _detector = None
+#: Which weights ``_get_detector`` actually loaded. Recorded alongside
+#: classifications so a row names the model that produced it — the name used
+#: to be hardcoded to "320n", which went wrong the moment 640m.onnx was staged
+#: on disk and silently preferred.
+_detector_name: str | None = None
 # The classifier runs inference from asyncio.to_thread workers, so several
 # threads can reach the lazy init at once. Without the lock two of them can
 # each build a NudeDetector — a second ONNX model load, and an orphaned
@@ -18,7 +23,7 @@ _detector_lock = threading.Lock()
 
 
 def _get_detector():  # type: ignore[return]
-    global _detector
+    global _detector, _detector_name
     if _detector is not None:
         return _detector
     with _detector_lock:
@@ -31,10 +36,21 @@ def _get_detector():  # type: ignore[return]
         if custom.exists() and custom.stat().st_size > 10 * 1024 * 1024:
             log.info("using custom 640m.onnx from models/")
             _detector = NudeDetector(model_path=str(custom), inference_resolution=640)
+            _detector_name = "640m"
         else:
             log.info("using bundled 320n.onnx")
             _detector = NudeDetector(inference_resolution=320)
+            _detector_name = "320n"
     return _detector
+
+
+def active_model_name() -> str | None:
+    """Which NudeNet weights are loaded, or None before the first detection.
+
+    Reported rather than assumed: which file wins depends on what is on disk,
+    so the only honest answer comes from after the load.
+    """
+    return _detector_name
 
 
 def detect(image_path: str | Path) -> list[Detection]:

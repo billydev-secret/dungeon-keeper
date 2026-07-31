@@ -711,6 +711,62 @@ class AnonAuditRetentionBody(BaseModel):
     retention_days: int = Field(ge=0, le=3650)
 
 
+# ── Moderation: NSFW image reports ───────────────────────────────────────
+
+
+class NsfwTagCount(BaseModel):
+    label: str
+    count: int
+    #: Mean Marqo probability across the images carrying this tag. Reads as
+    #: "when NudeNet sees this, how sure is the verdict engine?"
+    avg_score: float
+
+
+class NsfwScoreBucket(BaseModel):
+    #: Lower bound of a 0.1-wide bucket of Marqo scores.
+    floor: float
+    count: int
+    explicit: int
+
+
+class NsfwTagsResponse(BaseModel):
+    days: int
+    classified: int
+    explicit: int
+    tagged: int
+    #: Images the verdict engine called explicit that the tagger found nothing
+    #: on — the NudeNet blind spot this swap exists to cover.
+    explicit_untagged: int
+    #: The reverse disagreement: tagged as exposed nudity, verdict said no.
+    tagged_not_explicit: int
+    avg_inference_ms: float
+    labels: list[NsfwTagCount]
+    scores: list[NsfwScoreBucket]
+
+
+class NsfwBlockEntry(BaseModel):
+    message_id: str
+    channel_id: str
+    channel_name: str = ""
+    author_id: str
+    author_name: str = ""
+    filename: str
+    #: None means the image could not be read at all.
+    score: float | None = None
+    surface: str
+    action: str
+    created_at: int
+
+
+class NsfwBlocksResponse(BaseModel):
+    days: int
+    total: int
+    removed: int
+    logged: int
+    by_surface: dict[str, int]
+    entries: list[NsfwBlockEntry]
+
+
 # ── Moderation: Summary stats ────────────────────────────────────────────
 
 
