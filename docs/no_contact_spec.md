@@ -27,7 +27,7 @@ before any implementation detail:
 
 ## Storage
 
-`no_contact_pairs` (migration 145), one row per pair:
+`no_contact_pairs` (migration 146), one row per pair:
 
 | Column | Meaning |
 |---|---|

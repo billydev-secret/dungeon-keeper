@@ -1,4 +1,4 @@
--- 145_no_contact_pairs.sql
+-- 146_no_contact_pairs.sql
 -- No-contact list — pairs of members the bot must never put in contact.
 --
 -- This is a SAFETY feature, not a preference. The motivating case: a member
