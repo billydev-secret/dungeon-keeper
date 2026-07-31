@@ -13,6 +13,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.name_resolver import NameFn, build_name_fn, mention
 from bot_modules.services.whisper_models import (
@@ -796,16 +797,24 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply Anonymously"):
         )
 
         recipient = interaction.client.get_user(to_user_id) or await interaction.client.fetch_user(to_user_id)  # type: ignore[attr-defined]
-        try:
-            await recipient.send(
-                format_reply_dm_body(
+        # The reply is anonymous as to its *author*, not its origin: the
+        # recipient sent the original whisper, so naming the server tells
+        # them nothing they don't know and keeps DM branding consistent.
+        origin = interaction.client.get_guild(whisper.guild_id)  # type: ignore[attr-defined]
+        sent = await send_branded_dm(
+            recipient,
+            db_path=self.bot.ctx.db_path,
+            guild=origin,
+            embed=discord.Embed(
+                description=format_reply_dm_body(
                     whisper_id=self.whisper_id,
                     whisper_message=whisper.message,
                     reply_content=content,
-                ),
-                view=WhisperReplyDmView(self.bot, self.whisper_id, reply_id=reply_id),
-            )
-        except (discord.Forbidden, discord.HTTPException):
+                )
+            ),
+            view=WhisperReplyDmView(self.bot, self.whisper_id, reply_id=reply_id),
+        )
+        if sent is None:
             await asyncio.to_thread(_do_delete_reply, self.bot.ctx.db_path, reply_id)
             await interaction.response.send_message(
                 "❌ Couldn't deliver — they have DMs disabled.", ephemeral=True
@@ -2466,14 +2475,18 @@ class WhisperCog(commands.Cog):
             message=message.strip(),
         )
 
-        try:
-            dm_msg = await target.send(
-                format_send_dm_body(
+        dm_msg = await send_branded_dm(
+            target,
+            db_path=self.ctx.db_path,
+            guild=interaction.guild,
+            embed=discord.Embed(
+                description=format_send_dm_body(
                     guild_name=interaction.guild.name, message=message,
-                ),
-                view=WhisperDmView(self.bot, whisper_id),
-            )
-        except (discord.Forbidden, discord.HTTPException):
+                )
+            ),
+            view=WhisperDmView(self.bot, whisper_id),
+        )
+        if dm_msg is None:
             # rollback inserted row if DM fails
             await asyncio.to_thread(_do_delete_whisper, self.ctx.db_path, whisper_id)
             await interaction.response.send_message(ERROR_BOT_DM_FAILED, ephemeral=True)

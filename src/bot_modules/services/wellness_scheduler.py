@@ -29,6 +29,7 @@ import discord
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.wellness_ai import generate_weekly_encouragement
 from bot_modules.core.utils import format_guild_for_log, format_user_for_log
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services.embeds import WELLNESS_PRIMARY
 from bot_modules.services.wellness_service import (
     MILESTONES,
@@ -63,24 +64,6 @@ from bot_modules.services.wellness_service import (
 log = logging.getLogger("dungeonkeeper.wellness.scheduler")
 
 
-async def _try_dm(
-    user: discord.User | discord.Member,
-    *,
-    content: str | None = None,
-    embed: discord.Embed | None = None,
-) -> bool:
-    try:
-        kwargs: dict = {}
-        if content:
-            kwargs["content"] = content
-        if embed:
-            kwargs["embed"] = embed
-        await user.send(**kwargs)
-        return True
-    except (discord.Forbidden, discord.HTTPException):
-        return False
-
-
 def _format_minute(minute_of_day: int) -> str:
     h, m = divmod(minute_of_day, 60)
     return f"{h:02d}:{m:02d}"
@@ -112,7 +95,7 @@ async def _process_blackout_transitions(bot: discord.Client, db_path: Path) -> N
                         member = guild.get_member(u.user_id)
                         if member:
                             asyncio.create_task(
-                                _send_blackout_entry_dm(member, b, u)
+                                _send_blackout_entry_dm(member, b, u, db_path)
                             )
                 for bid in ended_ids:
                     clear_blackout_active(conn, guild.id, u.user_id, bid)
@@ -124,7 +107,10 @@ def _blackout_is_nightish(blackout: WellnessBlackout) -> bool:
 
 
 async def _send_blackout_entry_dm(
-    member: discord.Member, blackout: WellnessBlackout, user: WellnessUser
+    member: discord.Member,
+    blackout: WellnessBlackout,
+    user: WellnessUser,
+    db_path: Path,
 ) -> None:
     """Blackout heads-up DM, worded for what will actually happen.
 
@@ -144,9 +130,10 @@ async def _send_blackout_entry_dm(
     embed = discord.Embed(
         title=f"🌙 {blackout.name} blackout started",
         description=f"{body}\n\n{sign_off}",
-        color=discord.Color(WELLNESS_PRIMARY),
     )
-    await _try_dm(member, embed=embed)
+    await send_branded_dm(
+        member, db_path=db_path, guild=member.guild, embed=embed
+    )
 
 
 async def _lift_expired_slow_mode(db_path: Path) -> None:
@@ -533,9 +520,10 @@ async def _generate_and_send_weekly_report(
     if not inserted:
         return False  # raced with another tick — skip silently
 
-    try:
-        await member.send(embed=embed)
-    except (discord.Forbidden, discord.HTTPException):
+    sent = await send_branded_dm(
+        member, db_path=db_path, guild=guild, embed=embed
+    )
+    if sent is None:
         log.warning(
             "wellness_weekly_report: DM closed for user %s — report archived but not delivered",
             format_user_for_log(member, user.user_id),

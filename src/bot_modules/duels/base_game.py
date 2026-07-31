@@ -25,6 +25,7 @@ import discord
 from discord.ext import commands, tasks
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.services import economy_wager_service as wager_svc
 from bot_modules.services.economy_service import (
@@ -260,13 +261,18 @@ class BaseGame(commands.Cog):
             await member.edit(nick=original, reason=f"{self.GAME_DISPLAY_NAME} sentence expired")
             await duels_db.mark_nick_reverted(self.db, nick_row["id"], "expired")
             restored = original or member.name
-            try:
-                await member.send(
-                    f"Your {self.GAME_DISPLAY_NAME} nickname sentence has expired. "
-                    f"Your nickname has been restored to **{restored}**."
-                )
-            except discord.Forbidden:
-                pass
+            await send_branded_dm(
+                member,
+                db_path=self.db.db_path,
+                guild=member.guild,
+                embed=discord.Embed(
+                    description=(
+                        f"Your {self.GAME_DISPLAY_NAME} nickname sentence has "
+                        f"expired. Your nickname has been restored to "
+                        f"**{restored}**."
+                    )
+                ),
+            )
             log.info(
                 "Reverted nick for user %d in guild %d (restored: %r)",
                 nick_row["loser_id"],

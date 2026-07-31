@@ -22,6 +22,7 @@ import discord
 
 from bot_modules.core.db_utils import get_config_value, open_db, parse_bool
 from bot_modules.core.utils import jump_url
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services.greeting_watch_service import (
     PendingGreeting,
     guilds_with_pending,
@@ -106,6 +107,7 @@ def _resolve_sync(
 
 async def _notify(
     bot: Bot,
+    db_path: Path,
     guild_id: int,
     notify_user_id: int,
     g: PendingGreeting,
@@ -135,17 +137,15 @@ async def _notify(
         f"{greeter_label} said hello about {window_minutes} min ago and nobody "
         f"has replied to or mentioned them since.\n{jump}"
     )
-    try:
-        await user.send(text)
-        return True
-    except discord.Forbidden:
+    sent = await send_branded_dm(
+        user, db_path=db_path, guild=guild, embed=discord.Embed(description=text)
+    )
+    if sent is None:
         log.warning(
             "greeting watch: notify user %s has DMs closed", notify_user_id
         )
         return False
-    except discord.HTTPException:
-        log.exception("greeting watch: DM to %s failed", notify_user_id)
-        return False
+    return True
 
 
 async def _process_guild(
@@ -193,7 +193,7 @@ async def _process_guild(
             )
             continue
         for notify_user_id in notify_user_ids:
-            await _notify(bot, guild_id, notify_user_id, g, window_minutes)
+            await _notify(bot, db_path, guild_id, notify_user_id, g, window_minutes)
         # Resolve whether or not the DMs landed — a closed-DM failure would
         # otherwise wedge the row into re-alerting every tick. Each failure is
         # already logged in _notify.

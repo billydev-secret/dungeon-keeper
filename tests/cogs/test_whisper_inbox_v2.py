@@ -523,8 +523,8 @@ async def test_reply_modal_dm_includes_whisper_id():
         await modal.on_submit(interaction)
 
     sender_user.send.assert_awaited_once()
-    sent_content = sender_user.send.call_args.args[0]
-    assert "Whisper #42" in sent_content
+    sent_embed = sender_user.send.call_args.kwargs["embed"]
+    assert "Whisper #42" in sent_embed.description
 
 
 @pytest.mark.asyncio

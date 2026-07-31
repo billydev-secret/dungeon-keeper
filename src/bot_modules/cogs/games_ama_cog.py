@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.utils import disable_all_items
+from bot_modules.services.dm_branding import send_branded_dm
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -198,11 +199,18 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 if host_member and guild:
                     target_member = guild.get_member(self.target_id)
                     target_name = target_member.display_name if target_member else "the hot seat"
-                    await host_member.send(
-                        f"📨 New screened question for **{target_name}** (in {self.channel.mention}):",
+                    dm_sent = await send_branded_dm(
+                        host_member,
+                        db_path=self.db,
+                        guild=guild,
+                        embed=discord.Embed(
+                            description=(
+                                f"📨 New screened question for **{target_name}** "
+                                f"(in {self.channel.mention}):"
+                            )
+                        ),
                         view=approve_view,
-                    )
-                    dm_sent = True
+                    ) is not None
             except discord.Forbidden:
                 pass
             except discord.HTTPException:
@@ -255,7 +263,12 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
             channel = interaction.channel
             if asker and channel is not None and not isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
                 dm_embed = build_asker_dm_embed(channel.mention, color=color)
-                await asker.send(embed=dm_embed)
+                await send_branded_dm(
+                    asker,
+                    db_path=self.db,
+                    guild=interaction.guild,
+                    embed=dm_embed,
+                )
         except discord.Forbidden:
             pass  # DMs disabled
         except Exception as e:

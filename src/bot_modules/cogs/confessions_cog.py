@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.confessions.logic import (
     HELP_TEXT,
     build_dm_notification_text,
@@ -622,10 +623,15 @@ class ConfessionsCog(commands.Cog):
             confession_channel_id=confession_ch,
             root_message_id=root_message_id,
         )
-        try:
-            await user.send(text, allowed_mentions=discord.AllowedMentions.none())
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+        # allowed_mentions stays none(): the body embeds a member-authored
+        # confession reply and must not be able to fire a ping.
+        await send_branded_dm(
+            user,
+            db_path=self.ctx.db_path,
+            guild=guild,
+            embed=discord.Embed(description=text),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     # ── Interaction helpers ──────────────────────────────────────────────────
 

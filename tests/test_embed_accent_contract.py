@@ -39,6 +39,7 @@ from bot_modules.games_traditional import embeds as traditional_embeds
 from bot_modules.games_ttl import embeds as ttl_embeds
 from bot_modules.games_wyr import embeds as wyr_embeds
 from bot_modules.services import branding_service
+from bot_modules.services import dm_branding
 from bot_modules.services import economy_service
 from bot_modules.services import event_echo_logic
 from bot_modules.services import embeds as services_embeds
@@ -585,6 +586,13 @@ CASES = [
             deny_reason="off-topic",
         ),
         None,
+    ),
+    case(
+        "dm_branding.branded_dm",
+        lambda **kw: dm_branding.brand_dm_embed(
+            discord.Embed(title="A DM"), guild_name="Test Guild", **kw
+        ),
+        discord.Color(services_embeds.DM_PRIMARY),
     ),
 ]
 

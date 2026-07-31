@@ -314,6 +314,37 @@ Which embed slot does which job:
 - Recurring economy DMs gate on the opt-in game role
   (`notify_member(require_game_role=True)`); don't DM members who didn't opt in.
 
+## DM branding
+
+A DM has no guild of its own. The bot's **username and avatar are global** —
+Discord exposes no per-guild identity in a DM channel, so a member who shares
+two servers with the bot sees the same sender either way. Nothing in the
+codebase can change that; don't accept a request that assumes otherwise.
+What *is* per-guild is the message body.
+
+- Send member DMs through **`services/dm_branding.py`**, not a local
+  `user.send` wrapper. Four near-identical `_try_dm` helpers had accumulated
+  before it existed; there should not be a fifth.
+  - **`send_branded_dm(user, db_path=…, guild=…, embed=…)`** — the common
+    case. Resolves the accent, attributes the guild, sends, and returns
+    `None` on a closed DM (callers that roll back DB state test for `None`).
+  - **`brand_dm_embed(embed, …)`** — pure and synchronous, for callers that
+    already own a delivery policy. `economy_service.notify_member` has mute
+    prefs, an opt-in role gate, and a bank-channel fallback; it brands with
+    this and keeps its own send path.
+- **Attribution defaults to the footer**, appended after any footer the
+  builder already set (` • ` separator). Author placement
+  (`placement=ATTRIBUTION_AUTHOR`) is opt-in, because several DM embeds use
+  the author slot for something better — `dm_perms` puts the *requesting
+  member* there.
+- **`keep_color=True`** attributes without recoloring. Use it where the color
+  is semantic rather than decorative (jail's release notice is green because
+  it's good news) — see Color.
+- Branding **never costs a delivery**: a failed accent lookup degrades to the
+  DM default, and a guild object missing `name`/`icon` just skips
+  attribution. A content-only DM is passed through unbranded — an accent
+  needs an embed to live in, so convert to an embed if it should carry one.
+
 ## Mentions, pings & user-supplied text
 
 - Escape member text with **`discord.utils.escape_markdown`** before putting it

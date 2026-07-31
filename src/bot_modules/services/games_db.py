@@ -9,6 +9,11 @@ class GamesDb:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
 
+    @property
+    def db_path(self) -> Path:
+        """The underlying database path, for helpers that take one directly."""
+        return self._db_path
+
     async def execute(self, query: str, params=()) -> sqlite3.Cursor:
         def _run():
             with open_db(self._db_path) as conn:

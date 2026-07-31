@@ -11,10 +11,17 @@ import io
 import json
 import logging
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
 
 import discord
+
+from bot_modules.services.dm_branding import (
+    brand_dm_embed,
+    guild_icon_url,
+    resolve_dm_accent,
+)
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_config_value
@@ -133,8 +140,24 @@ async def _dm_user(
     content: str | None = None,
     file: discord.File | None = None,
     fallback_channel=None,
+    db_path: Path | None = None,
+    guild: discord.Guild | None = None,
 ) -> bool:
-    """Send a DM; return True if successful.  Post note to fallback_channel on failure."""
+    """Send a DM; return True if successful.  Post note to fallback_channel on failure.
+
+    Branded with ``guild``'s attribution when the caller supplies it, but
+    with ``keep_color=True``: these embeds already choose their own color
+    deliberately — the resolved accent at most sites, and a semantic green
+    on the release notice — so branding adds the server, not a repaint.
+    """
+    if embed is not None and guild is not None:
+        brand_dm_embed(
+            embed,
+            guild_name=guild.name,
+            guild_icon_url=guild_icon_url(guild),
+            color=await resolve_dm_accent(db_path, guild) if db_path else None,
+            keep_color=True,
+        )
     try:
         kwargs: dict = {}
         if embed:
@@ -459,6 +482,8 @@ class TicketReopenButton(
                     )
                 await _dm_user(
                     creator or interaction.user,
+                    db_path=ctx.db_path,
+                    guild=interaction.guild,
                     embed=discord.Embed(
                         description=f"Your ticket in **{interaction.guild.name}** has been reopened.",  # type: ignore[union-attr]
                         color=accent,
@@ -1061,6 +1086,8 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         # DM the creator
         await _dm_user(
             user,
+                    db_path=ctx.db_path,
+                    guild=guild,
             embed=discord.Embed(
                 description=f"Your ticket has been created in **{guild.name}** → [Go to ticket]({channel.jump_url})",
                 color=accent,
@@ -1083,6 +1110,8 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
                         continue
                     await _dm_user(
                         m,
+                    db_path=ctx.db_path,
+                    guild=guild,
                         embed=discord.Embed(
                             title="📩 New Ticket",
                             description=f"**{user}** opened a ticket → [Jump to ticket]({channel.jump_url})\n\n{desc_text}",
@@ -1192,6 +1221,8 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             if creator:
                 await _dm_user(
                     creator,
+                    db_path=ctx.db_path,
+                    guild=guild,
                     embed=discord.Embed(
                         description=f"Your ticket in **{guild.name}** has been closed.\n{f'**Reason:** {reason}' if reason else ''}\nYou can still view the channel.",
                         color=accent,
@@ -1380,7 +1411,7 @@ async def _do_unjail(
         + (f"**Reason:** {reason}" if reason else ""),
         color=CLR_SUCCESS,
     )
-    await _dm_user(target, embed=dm_embed)
+    await _dm_user(target, embed=dm_embed, db_path=ctx.db_path, guild=guild)
 
     # Audit
     audit_embed = discord.Embed(

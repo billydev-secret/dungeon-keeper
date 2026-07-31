@@ -121,7 +121,10 @@ async def test_send_dm_message_frames_game_with_guess_count():
         await cog._send_impl(interaction, target=target, message="my secret")
 
     target.send.assert_awaited_once()
-    dm_body = target.send.call_args.args[0]
+    dm_embed = target.send.call_args.kwargs["embed"]
+    dm_body = dm_embed.description
     assert "Whisper" in dm_body
     assert "guesses" in dm_body.lower()
     assert "Test Server" in dm_body
+    # Branded: the origin server is attributed in the footer too.
+    assert dm_embed.footer.text == "Test Server"

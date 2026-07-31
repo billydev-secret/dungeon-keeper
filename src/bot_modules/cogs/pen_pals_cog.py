@@ -16,6 +16,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.question_source import _pick_least_recently_served
@@ -1010,14 +1011,18 @@ async def _end_session_abnormally(
             member = guild.get_member(uid)
             if member is None:
                 continue
-            try:
-                await member.send(
-                    f"Your pen pal session in **{guild.name}** ended early — your partner "
-                    "is no longer available. You've been put back in the Pen Pals pool for "
-                    "a new match."
-                )
-            except discord.HTTPException:
-                pass
+            await send_branded_dm(
+                member,
+                db_path=db_path,
+                guild=guild,
+                embed=discord.Embed(
+                    description=(
+                        f"Your pen pal session in **{guild.name}** ended early — your "
+                        "partner is no longer available. You've been put back in the "
+                        "Pen Pals pool for a new match."
+                    )
+                ),
+            )
 
     try:
         await _refresh_panel(bot, guild_id)
@@ -1552,12 +1557,17 @@ class _EndConfirmView(discord.ui.View):
         guild = self.channel.guild
         other = guild.get_member(self.other_user_id) if guild else None
         if other:
-            try:
-                await other.send(
-                    f"Your pen pal session in **{guild.name}** was ended early by your partner."
-                )
-            except discord.HTTPException:
-                pass
+            await send_branded_dm(
+                other,
+                db_path=self.db_path,
+                guild=guild,
+                embed=discord.Embed(
+                    description=(
+                        f"Your pen pal session in **{guild.name}** was ended early "
+                        "by your partner."
+                    )
+                ),
+            )
 
         # Delete the channel first, then close the session row. If the close
         # doesn't happen (crash), the loop finds the channel missing and marks

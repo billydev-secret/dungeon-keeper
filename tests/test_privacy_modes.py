@@ -254,7 +254,7 @@ def _wired(monkeypatch):
         return (len(msg_rows), 0, 0)
 
     class _FakeReporter:
-        def __init__(self, interaction):
+        def __init__(self, interaction, db_path=None, guild=None):
             pass
 
         async def update(self, embed):
@@ -324,7 +324,7 @@ async def test_the_accent_reaches_the_rendered_progress_card(monkeypatch, _wired
         return [(11, 22)]
 
     class _CapturingReporter:
-        def __init__(self, interaction):
+        def __init__(self, interaction, db_path=None, guild=None):
             pass
 
         async def update(self, embed):
