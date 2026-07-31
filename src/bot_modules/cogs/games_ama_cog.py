@@ -38,6 +38,8 @@ from bot_modules.services.anon_audit_service import (
     EVENT_QUESTION_PASSED,
     EVENT_QUESTION_REJECTED,
 )
+from bot_modules.services import no_contact_service
+from bot_modules.services.no_contact_logic import SURFACE_AMA, SURFACE_AMA_ANSWER
 from bot_modules.games_ama.embeds import (
     build_answered_embed,
     build_asker_dm_embed,
@@ -145,6 +147,52 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 "⚠️ The hot seat changed while you were typing — please try again.",
                 ephemeral=True,
             )
+            return
+
+        # No-contact gate. An AMA question is directed — the asker names a
+        # panelist — so it carries contact even though he is anonymous to
+        # everyone reading. Placed after the closed-game and stale-target
+        # guards so every ordinary refusal still reaches him unchanged.
+        #
+        # The response differs by mode, because "fake success" is only
+        # invisible when nothing was going to be publicly visible:
+        #
+        #   screened  → the question would have gone to the HOST's DMs and
+        #               nowhere he can see. Reporting success costs nothing;
+        #               a question the host never approved is the ordinary
+        #               outcome and looks identical.
+        #   unfiltered → the question would have been POSTED TO THE CHANNEL.
+        #               Telling him it posted, when he can scroll up and see
+        #               that it did not, leaves an unexplained hole — and
+        #               since he chose the panelist, the hole points at her.
+        #               So we return the existing stale-target error instead:
+        #               an ordinary, believable race he has probably hit for
+        #               real, which explains the absence without involving
+        #               her. Indistinguishable from an ordinary failure
+        #               rather than from success — the other half of the rule.
+        if interaction.guild is not None and await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            cast("Bot", interaction.client).ctx.db_path,
+            interaction.guild.id,
+            actor_id=interaction.user.id,
+            target_id=self.target_id,
+            surface=SURFACE_AMA,
+        ):
+            if self.mode != "unfiltered":
+                await interaction.response.send_message(
+                    "✅ Your question has been submitted for host review.",
+                    ephemeral=True,
+                )
+            elif self.ama_view.game_format == AMA_FORMAT_PANEL:
+                await interaction.response.send_message(
+                    "⚠️ That person left the panel while you were typing — please try again.",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    "⚠️ The hot seat changed while you were typing — please try again.",
+                    ephemeral=True,
+                )
             return
 
         q_entry = build_question_entry(
@@ -291,7 +339,24 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
         try:
             asker = interaction.guild.get_member(self.asker_id) if interaction.guild else None
             channel = interaction.channel
-            if asker and channel is not None and not isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
+            # No-contact gate on the answer DM — the second contact channel in
+            # this feature, and the one that runs in the opposite direction.
+            # A question asked BEFORE the pair was added is still sitting in
+            # the payload, so answering it would DM him on her behalf. Skipping
+            # is invisible to both: he is not told his question was answered,
+            # and she gets no delivery receipt either way.
+            blocked_dm = bool(
+                interaction.guild
+                and await asyncio.to_thread(
+                    no_contact_service.check_and_record,
+                    cast("Bot", interaction.client).ctx.db_path,
+                    interaction.guild.id,
+                    actor_id=interaction.user.id,
+                    target_id=self.asker_id,
+                    surface=SURFACE_AMA_ANSWER,
+                )
+            )
+            if asker and not blocked_dm and channel is not None and not isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
                 dm_embed = build_asker_dm_embed(channel.mention, color=color)
                 await send_branded_dm(
                     asker,
@@ -693,6 +758,22 @@ class AMAView(discord.ui.View):
             candidates = [
                 m for m in (guild.get_member(uid) if guild else None for uid in self.panel) if m
             ]
+            # Drop no-contact partners from the picker so he never selects her
+            # in the first place. This is strictly better than refusing the
+            # question afterwards: a name absent from a dropdown he has no
+            # baseline for is unnoticeable, whereas a question that vanishes
+            # after he chose a specific panelist is not. The submit-time gate
+            # below still stands as the enforcement — this only spares the
+            # common case from ever reaching it.
+            if guild is not None:
+                partners = await asyncio.to_thread(
+                    no_contact_service.no_contact_partners,
+                    cast("Bot", interaction.client).ctx.db_path,
+                    guild.id,
+                    interaction.user.id,
+                )
+                if partners:
+                    candidates = [m for m in candidates if m.id not in partners]
             if not candidates:
                 await interaction.response.send_message(
                     "No one has joined the panel yet — tap 🙋 Volunteer to be the first!",

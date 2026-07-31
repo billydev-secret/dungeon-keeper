@@ -10,6 +10,30 @@ from tests.fakes import FakeMember, fake_interaction
 
 
 @pytest.fixture(autouse=True)
+def _no_contact_absent():
+    """These tests run against a bare ``:memory:`` db with every DB call
+    patched, so the no-contact gate has no table to read. Default it to
+    "no pair" here; the gate's own behaviour is covered in
+    tests/test_no_contact_service.py, and its wiring into this flow in
+    tests/cogs/test_guess_no_contact.py."""
+    with (
+        patch(
+            "bot_modules.cogs.guess_cog.no_contact_service.check_and_record",
+            return_value=False,
+        ),
+        patch(
+            "bot_modules.cogs.guess_cog.no_contact_service.no_contact_partners",
+            return_value=set(),
+        ),
+        patch(
+            "bot_modules.cogs.guess_cog.no_contact_service.is_no_contact",
+            return_value=False,
+        ),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _patch_count_user_guesses():
     """Default per-test guess count to 0; cap tests override via their own patch."""
     with patch("bot_modules.cogs.guess_cog._do_count_user_guesses", return_value=0) as m:

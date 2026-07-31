@@ -10,6 +10,17 @@ from bot_modules.services.whisper_models import WhisperConfig
 from tests.fakes import FakeMember, FakeRole, fake_interaction
 
 
+@pytest.fixture(autouse=True)
+def _no_contact_absent():
+    """These tests run against a stub db path, so the no-contact gate has no
+    table to read. Default it to "no pair"; the gate's own behaviour is
+    covered in tests/test_no_contact_service.py."""
+    with patch(
+        "bot_modules.cogs.whisper_cog.no_contact_service.check_and_record",
+        return_value=False,
+    ):
+        yield
+
 
 ROLE = 7001
 FEED = 8001

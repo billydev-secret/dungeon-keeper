@@ -8,7 +8,7 @@ without a live gateway or the branding DB.
 """
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import discord
 import pytest
@@ -16,6 +16,24 @@ import pytest
 import bot_modules.cogs.games_ama_cog as ama_mod
 from bot_modules.cogs.games_ama_cog import AMACog, AskQuestionModal, AskTargetSelect
 from bot_modules.services.games_db import GamesDb
+
+
+@pytest.fixture(autouse=True)
+def _no_contact_absent():
+    """``interaction.client`` is a fake here, so the gate's db path doesn't
+    resolve to the migrated test DB. Default it to "no pair"; the gate's own
+    behaviour is covered in tests/test_no_contact_service.py."""
+    with (
+        patch(
+            "bot_modules.cogs.games_ama_cog.no_contact_service.check_and_record",
+            return_value=False,
+        ),
+        patch(
+            "bot_modules.cogs.games_ama_cog.no_contact_service.no_contact_partners",
+            return_value=set(),
+        ),
+    ):
+        yield
 
 
 # ── Fakes ────────────────────────────────────────────────────────────

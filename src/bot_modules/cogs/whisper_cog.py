@@ -64,6 +64,8 @@ from bot_modules.services.whisper_service import (
     validate_send,
     validate_share,
 )
+from bot_modules.services import no_contact_service
+from bot_modules.services.no_contact_logic import SURFACE_WHISPER
 from bot_modules.whisper.embeds import (
     build_inbox_embed,
     build_reply_audit_embed,
@@ -783,6 +785,24 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply Anonymously"):
         if not content:
             await interaction.response.send_message(
                 "❌ Reply can't be empty.", ephemeral=True
+            )
+            return
+
+        # No-contact gate on replies as well as sends. A whisper delivered
+        # *before* the pair was added is still an open two-way channel — the
+        # reply button sits in a DM that never expires — so gating only the
+        # send would leave every pre-existing thread live. Symmetric, like the
+        # rule itself: it does not matter which of the two is replying.
+        if await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            self.bot.ctx.db_path,
+            whisper.guild_id,
+            actor_id=interaction.user.id,
+            target_id=to_user_id,
+            surface=SURFACE_WHISPER,
+        ):
+            await interaction.response.send_message(
+                "Reply delivered anonymously.", ephemeral=True
             )
             return
 
@@ -2466,6 +2486,37 @@ class WhisperCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        # No-contact gate. Deliberately the LAST check before the write: every
+        # ordinary refusal above (missing role, cooldown, hourly cap, timed-out
+        # target, broken feed channel) still reaches the sender exactly as it
+        # normally would, so the only case that diverges is the one that would
+        # otherwise have succeeded — and that case is made to look like success.
+        # Telling him "blocked" would confirm she acted against him, which is
+        # the escalation this feature exists to prevent.
+        if await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            self.ctx.db_path,
+            interaction.guild.id,
+            actor_id=interaction.user.id,
+            target_id=target.id,
+            surface=SURFACE_WHISPER,
+        ):
+            await interaction.response.send_message(
+                "Whisper delivered.",
+                ephemeral=True,
+            )
+            # Fire the economy trigger too. A quest that failed to tick after
+            # an apparently-delivered whisper would be a tell, and the payout
+            # is the same one a real whisper would have earned — the rate caps
+            # above already bound how often this path can be reached.
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            await fire_member_trigger(
+                self.bot, interaction.guild.id, interaction.user.id, "whisper",
+                occurrence=f"nc-{int(now * 1000)}",
+            )
+            return
+
         whisper_id = await asyncio.to_thread(
             _do_insert_whisper,
             self.ctx.db_path,

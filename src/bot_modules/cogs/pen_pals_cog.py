@@ -208,8 +208,19 @@ def _get_pool(conn, guild_id: int) -> list:
 
 
 def _is_blocked_pair(conn, guild_id: int, a: int, b: int) -> bool:
-    """True if these two must never be matched (either side, either source)."""
-    return conn.execute(
+    """True if these two must never be matched (either side, either source).
+
+    Consults both this feature's own block list and the server-wide
+    no-contact list. Pen Pals is the surface where a missed gate matters
+    most: it does not relay a message, it puts two members alone together in
+    a private channel for 24 hours, and it does so on the bot's initiative
+    rather than because either of them chose it.
+
+    Extending this one predicate covers every matching path (the pool
+    filters, the swap, and the direct pairing check) — there is deliberately
+    no second place to update.
+    """
+    blocked = conn.execute(
         """
         SELECT 1 FROM pen_pals_blocks
         WHERE guild_id = ?
@@ -218,6 +229,14 @@ def _is_blocked_pair(conn, guild_id: int, a: int, b: int) -> bool:
         LIMIT 1
         """,
         (guild_id, a, b, b, a),
+    ).fetchone() is not None
+    if blocked:
+        return True
+    lo, hi = (a, b) if a < b else (b, a)
+    return conn.execute(
+        "SELECT 1 FROM no_contact_pairs "
+        "WHERE guild_id = ? AND user_low = ? AND user_high = ? LIMIT 1",
+        (guild_id, lo, hi),
     ).fetchone() is not None
 
 

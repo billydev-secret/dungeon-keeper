@@ -45,6 +45,7 @@ export const HELP_GROUPS = [
     { page: "help-emoji",     anchor: "emoji-stealer", label: "Emoji Stealer" },
     { page: "help-wellness",  anchor: "wellness",      label: "Wellness" },
     { page: "help-dms",       anchor: "dm-perms",      label: "DM Permissions" },
+    { page: "help-no-contact", anchor: "no-contact",   label: "No-Contact List" },
     { page: "help-self",      anchor: "self-service",  label: "Member Self-Service" },
     { page: "help-privacy",   anchor: "privacy",       label: "Data Erasure" },
   ]},

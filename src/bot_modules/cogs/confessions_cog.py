@@ -12,6 +12,8 @@ from discord.ext import commands, tasks
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.dm_branding import send_branded_dm
+from bot_modules.services import no_contact_service
+from bot_modules.services.no_contact_logic import SURFACE_CONFESSION_REPLY
 from bot_modules.confessions.logic import (
     HELP_TEXT,
     build_dm_notification_text,
@@ -330,6 +332,29 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         root_message_id = root_info.root_message_id
         parent_author_id = root_info.parent_author_id
         parent_notify_pref = root_info.parent_notify_pref
+
+        # No-contact gate. A confession is broadcast, but a REPLY is directed:
+        # it lands in the thread the other member started and, when their
+        # notify preference is on, DMs them about it. ``parent_author_id`` is
+        # the member being replied to, so the pair check is the same one every
+        # other surface makes.
+        #
+        # Fake success is safe here in a way it is not for AMA. He does not
+        # know whose confession this is — that is the entire point of the
+        # feature — so a reply that quietly fails to appear cannot be
+        # attributed to her. There is nothing for him to connect it to.
+        # Covers both the threaded and the inline-reply branch below, since
+        # both finish at the same ``_safe_complete``.
+        if parent_author_id and await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            db_path,
+            interaction.guild.id,
+            actor_id=interaction.user.id,
+            target_id=parent_author_id,
+            surface=SURFACE_CONFESSION_REPLY,
+        ):
+            await self.cog._safe_complete(interaction)
+            return
 
         is_op = is_op_reply(
             ephemeral=self.ephemeral,

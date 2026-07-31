@@ -65,6 +65,7 @@ from bot_modules.services.dm_perms_service import (
     upsert_request,
     write_audit_log,
 )
+from bot_modules.services.no_contact_service import is_no_contact
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -972,6 +973,16 @@ class DmPermsCog(commands.Cog):
     # ── Internal helpers ─────────────────────────────────────────────────────
 
     def _is_mutual(self, guild_id: int, a: int, b: int) -> bool:
+        # A no-contact pair reads as unconnected everywhere consent is checked,
+        # even when a consent row still exists. The row is SUPPRESSED, not
+        # deleted: it keeps the provenance of when and why they were connected,
+        # which is exactly what a mod reviewing the case wants, while granting
+        # none of the access it used to.
+        #
+        # Note this is the one direction where the in-memory cache is safe to
+        # bypass — the DB read below can only ever turn a True into a False.
+        if is_no_contact(self.ctx.db_path, guild_id, a, b):
+            return False
         pairs = self.consent_pairs.get(guild_id, set())
         return (a, b) in pairs and (b, a) in pairs
 
@@ -1006,6 +1017,16 @@ class DmPermsCog(commands.Cog):
             if isinstance(target, discord.Member)
             else ""
         )
+        # Suppressing the consent pair alone would leave the request path OPEN
+        # — "not connected" is precisely the state that invites a new request.
+        # Present the pair as though her DMs were closed instead. That reuses
+        # an existing refusal verbatim, and it is the right kind of lie: it
+        # describes a general setting of hers rather than anything about him,
+        # so it reads the same whether or not he is the reason.
+        if target_in_guild and is_no_contact(
+            self.ctx.db_path, guild.id, requester.id, target.id
+        ):
+            target_mode = "closed"
         return classify_dm_request(
             target_in_guild=target_in_guild,
             is_self=target.id == requester.id,

@@ -95,6 +95,7 @@ const SECTIONS = [
       { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/policy-tickets.js", help: "help-policies", keywords: "policy proposals votes deadline settings" },
       { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch-page.js", help: "help-rules-watch", keywords: "rules watch alerts queue ledger settings" },
       { id: "message-search", label: "Message Search",  module: "./panels/message-search.js", keywords: "messages logs find" },
+      { id: "no-contact",     label: "No-Contact List", module: "./panels/no-contact.js", help: "help-no-contact", keywords: "block harassment separate pair safety whisper ama confession stalking" },
     ],
     groups: [
       { heading: "Audit Logs", items: [
