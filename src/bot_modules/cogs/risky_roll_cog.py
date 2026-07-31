@@ -10,7 +10,11 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.services.risky_roll import state as rr_state
-from bot_modules.services.risky_roll.formatters import build_embed, resolve_embed_accent
+from bot_modules.services.risky_roll.formatters import (
+    build_embed,
+    resolve_embed_accent,
+    seed_display_names_from_db,
+)
 from bot_modules.services.risky_roll.logic import (
     collect_channel_state_ids,
     normalize_auto_close_options,
@@ -59,6 +63,14 @@ class RiskyRollCog(commands.Cog):
         rr_state.ping_roles.update(ping_roles)
         rr_state.min_game_seconds.update(min_times)
         rr_state.max_games_per_channel.update(max_games)
+
+        # The roster embed prints names from an in-memory dict that empties on
+        # restart. Refill it from known_users before any restored round renders,
+        # so players who have since left the guild — whom the member cache can
+        # no longer resolve — still show a name instead of a raw id.
+        seeded = await seed_display_names_from_db(self.ctx.db_path, active_rounds)
+        if seeded:
+            log.info("Seeded %d risky-roll display names from known_users.", seeded)
 
         now = time.time()
         for state in active_rounds:

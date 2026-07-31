@@ -10,6 +10,8 @@ import pytest
 from bot_modules.services.whisper_models import Whisper, WhisperConfig, WhisperState
 from tests.fakes import FakeMember, fake_interaction
 
+
+
 SENDER, TARGET, OTHER = 1001, 2001, 9999
 FEED, LOG = 8001, 8002
 

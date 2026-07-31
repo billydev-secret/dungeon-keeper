@@ -41,6 +41,7 @@ from bot_modules.services.risky_roll.formatters import (
     format_lowest_rolloff_note,
     format_user_mentions,
     resolve_embed_accent,
+    seed_display_names_from_db,
 )
 from bot_modules.services.risky_roll.logic import (
     build_main_prompt_state,
@@ -888,6 +889,102 @@ def test_build_embed_escapes_markdown_in_display_name(clear_name_cache):
     s.rolls = {1: 51}
     val = _embed_field_map(build_embed(s))["Rolls (1)"]
     assert r"\*\*boss\*\*" in val
+
+
+def test_build_embed_prefers_the_live_member_over_a_stale_cached_name(clear_name_cache):
+    """The member cache is nickname-fresh; the dict can hold an old name."""
+    clear_name_cache[7] = "OldNick"
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {7: 51}
+    guild = _FakeGuild({7: _FakeMember("NewNick")})
+    val = _embed_field_map(build_embed(s, guild))["Rolls (1)"]
+    assert "NewNick" in val
+    assert "OldNick" not in val
+
+
+def test_build_embed_uses_cached_name_for_a_departed_player(clear_name_cache):
+    """Left the guild: no member object, so the seeded name is all we have."""
+    clear_name_cache[7] = "Departed Dan"
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {7: 51}
+    guild = _FakeGuild({})
+    val = _embed_field_map(build_embed(s, guild))["Rolls (1)"]
+    assert "Departed Dan" in val
+    assert "<@7>" not in val
+
+
+# ── formatters.seed_display_names_from_db ───────────────────────────
+
+
+def _seed_db(tmp_path, rows):
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.message_store import (
+        init_known_users_table,
+        upsert_known_user,
+    )
+
+    db = tmp_path / "rr_names.db"
+    with open_db(db) as conn:
+        init_known_users_table(conn)
+        for guild_id, uid, username, display in rows:
+            upsert_known_user(conn, guild_id, uid, username, display, ts=1.0)
+    return db
+
+
+async def test_seed_display_names_fills_the_cache_from_known_users(
+    tmp_path, clear_name_cache
+):
+    db = _seed_db(tmp_path, [(1, 7, "dan_u", "Departed Dan")])
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {7: 51}
+
+    assert await seed_display_names_from_db(db, [s]) == 1
+    assert clear_name_cache[7] == "Departed Dan"
+
+
+async def test_seed_display_names_never_overwrites_a_live_name(
+    tmp_path, clear_name_cache
+):
+    """A name captured at roll time is fresher than the table row."""
+    clear_name_cache[7] = "Captured At Roll Time"
+    db = _seed_db(tmp_path, [(1, 7, "dan_u", "Stale Table Name")])
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {7: 51}
+
+    await seed_display_names_from_db(db, [s])
+    assert clear_name_cache[7] == "Captured At Roll Time"
+
+
+async def test_seed_display_names_includes_the_opener(tmp_path, clear_name_cache):
+    """The opener may never have rolled, but the embed can still name them."""
+    db = _seed_db(tmp_path, [(1, 10, "op_u", "Opener Olive")])
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+
+    await seed_display_names_from_db(db, [s])
+    assert clear_name_cache[10] == "Opener Olive"
+
+
+async def test_seed_display_names_is_guild_scoped(tmp_path, clear_name_cache):
+    db = _seed_db(tmp_path, [(999, 7, "other_u", "Other Guild")])
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {7: 51}
+
+    assert await seed_display_names_from_db(db, [s]) == 0
+    assert 7 not in clear_name_cache
+
+
+async def test_seed_display_names_no_rounds_makes_no_query(tmp_path, clear_name_cache):
+    assert await seed_display_names_from_db(tmp_path / "nope.db", []) == 0
+
+
+async def test_seed_display_names_survives_an_unreadable_db(tmp_path, clear_name_cache):
+    """Seeding is best-effort — a failure must not stop the cog loading."""
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {7: 51}
+    missing = tmp_path / "no_such_dir" / "rr.db"
+
+    assert await seed_display_names_from_db(missing, [s]) == 0
+    assert 7 not in clear_name_cache
 
 
 # ── formatters.build_question_reply_content ─────────────────────────
