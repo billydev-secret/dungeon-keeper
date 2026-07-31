@@ -803,6 +803,21 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply Anonymously"):
             target_id=to_user_id,
             surface=SURFACE_WHISPER,
         ):
+            # Still write the reply row, then stop. It is never delivered and
+            # never reaches the mod log, so she sees nothing — but the row is
+            # what ``_do_count_replies`` reads, and the one-reply-per-whisper
+            # cap has to trip for him exactly as it would on a real thread.
+            # Skipping the insert made a second press succeed where a genuine
+            # one returns "already replied", so pressing Reply twice told him
+            # the thread was gated.
+            await asyncio.to_thread(
+                _do_insert_reply,
+                self.bot.ctx.db_path,
+                whisper_id=self.whisper_id,
+                from_user_id=interaction.user.id,
+                to_user_id=to_user_id,
+                content=content,
+            )
             await interaction.response.send_message(
                 REPLY_CONFIRMATION, ephemeral=True
             )

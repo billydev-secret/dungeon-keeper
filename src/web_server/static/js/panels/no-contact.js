@@ -203,9 +203,13 @@ export function mount(container) {
       ev.preventDefault();
       const status = settingsForm.querySelector("[data-settings-status]");
       try {
+        // Send ids as STRINGS. A Discord snowflake exceeds 2^53, so Number()
+        // silently rounds it — "1420895763219492864" becomes …900 — and the
+        // saved channel would then resolve to nothing. Pydantic coerces the
+        // string to int server-side, losing nothing.
         await apiPost("/api/no-contact/settings", {
-          alert_channel_id: Number(channelPicker.getValue() || 0),
-          alert_role_id: Number(rolePicker.getValue() || 0),
+          alert_channel_id: channelPicker.getValue() || "0",
+          alert_role_id: rolePicker.getValue() || "0",
         });
         showStatus(status, true, "Saved.");
       } catch (err) {
@@ -269,10 +273,13 @@ export function mount(container) {
       const choice = addForm.querySelector('[name="protect"]').value;
       const protectedId = choice === "a" ? a : choice === "b" ? b : null;
       try {
+        // Strings, not Number() — see the settings save above. Rounding a
+        // member id here would write a pair naming two users who don't exist,
+        // so the entry would list in this panel while enforcing nothing.
         await apiPost("/api/no-contact/pairs", {
-          user_a: Number(a),
-          user_b: Number(b),
-          protected_user_id: protectedId == null ? null : Number(protectedId),
+          user_a: a,
+          user_b: b,
+          protected_user_id: protectedId == null ? null : protectedId,
           reason: addForm.querySelector('[name="reason"]').value || "",
         });
         addForm.querySelector('[name="reason"]').value = "";

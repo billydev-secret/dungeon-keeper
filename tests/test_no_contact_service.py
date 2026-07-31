@@ -15,6 +15,7 @@ from bot_modules.services import no_contact_service as svc
 from bot_modules.services.no_contact_logic import (
     KIND_ATTEMPT,
     SURFACE_WHISPER,
+    can_remove,
 )
 
 GUILD = 42
@@ -41,6 +42,26 @@ def test_detection_is_order_independent(db):
     svc.add_pair(db, GUILD, BOB, ALICE, created_by=ALICE, protected_user_id=ALICE)
     assert svc.is_no_contact(db, GUILD, ALICE, BOB)
     assert svc.is_no_contact(db, GUILD, BOB, ALICE)
+
+
+def test_real_snowflake_ids_survive_a_round_trip(db):
+    """Ids above 2^53 must not be mangled anywhere in the write path.
+
+    The dashboard once sent them through JS ``Number()``, which rounds
+    1420895763219492864 to …900 — the row named two members who don't exist,
+    so the panel listed an entry that enforced nothing at all.
+    """
+    big_a = 1420895763219492864
+    big_b = 1420895763219492865
+    svc.add_pair(db, GUILD, big_a, big_b, created_by=big_a, protected_user_id=big_a)
+
+    assert svc.is_no_contact(db, GUILD, big_a, big_b)
+    entry = svc.get_pair(db, GUILD, big_a, big_b)
+    assert entry is not None
+    assert entry["user_low"] == big_a
+    assert entry["user_high"] == big_b
+    assert entry["protected_user_id"] == big_a
+    assert svc.no_contact_partners(db, GUILD, big_a) == {big_b}
 
 
 def test_pairs_do_not_leak_across_guilds(db):
@@ -72,7 +93,8 @@ def test_duplicate_add_cannot_hijack_removal_rights(db):
     """Bob re-adding the pair must not make himself the protected member.
 
     Otherwise the removal rule is trivially defeated: add the same pair,
-    take ownership, then lift it.
+    take ownership, then lift it. He also must not be able to launder the
+    reason or the provenance by re-adding.
     """
     svc.add_pair(
         db, GUILD, ALICE, BOB, created_by=ALICE, protected_user_id=ALICE,
@@ -84,9 +106,50 @@ def test_duplicate_add_cannot_hijack_removal_rights(db):
     )
     entry = svc.get_pair(db, GUILD, ALICE, BOB)
     assert entry is not None
-    assert entry["protected_user_id"] == ALICE
+    # He does not take ownership; the entry escalates out of anyone's sole
+    # control instead (see test_second_party_add_escalates_to_mutual).
+    assert entry["protected_user_id"] is None
     assert entry["reason"] == "original"
     assert entry["created_by"] == ALICE
+
+
+def test_second_party_add_escalates_to_mutual(db):
+    """He adds first, she adds second — he must not keep the only key.
+
+    Before this, her add was a silent no-op: the row still recorded HIM as
+    protected, so he could lift her protection at will while she could
+    neither remove it nor see that it existed. Both asked for the
+    separation, so neither gets to undo it alone.
+    """
+    svc.add_pair(db, GUILD, BOB, ALICE, created_by=BOB, protected_user_id=BOB)
+    svc.add_pair(db, GUILD, ALICE, BOB, created_by=ALICE, protected_user_id=ALICE)
+
+    entry = svc.get_pair(db, GUILD, ALICE, BOB)
+    assert entry is not None
+    assert entry["protected_user_id"] is None
+    # Neither party can lift it now; only a moderator can.
+    for actor in (ALICE, BOB):
+        assert not can_remove(
+            protected_user_id=entry["protected_user_id"],
+            actor_id=actor,
+            actor_is_mod=False,
+        )
+
+
+def test_repeat_add_by_the_same_member_keeps_them_protected(db):
+    """Adding twice yourself must not escalate you out of your own entry."""
+    svc.add_pair(db, GUILD, ALICE, BOB, created_by=ALICE, protected_user_id=ALICE)
+    svc.add_pair(db, GUILD, ALICE, BOB, created_by=ALICE, protected_user_id=ALICE)
+    entry = svc.get_pair(db, GUILD, ALICE, BOB)
+    assert entry is not None and entry["protected_user_id"] == ALICE
+
+
+def test_mutual_entry_never_narrows_to_one_party(db):
+    """Escalation to mutual is one-way — a later add can't claim ownership."""
+    svc.add_pair(db, GUILD, ALICE, BOB, created_by=MOD, protected_user_id=None)
+    svc.add_pair(db, GUILD, ALICE, BOB, created_by=BOB, protected_user_id=BOB)
+    entry = svc.get_pair(db, GUILD, ALICE, BOB)
+    assert entry is not None and entry["protected_user_id"] is None
 
 
 def test_no_contact_partners(db):

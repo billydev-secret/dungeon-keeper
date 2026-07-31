@@ -125,10 +125,18 @@ Three further leaks are closed away from the send paths:
   `effective_blocked` (what is *enforced*). Folding no-contact partners into
   the visible list would show him her name in a blocklist he never set.
 
-A duplicate `add_pair` is `ON CONFLICT DO NOTHING` and callers must not
-distinguish it from a fresh insert: "that already exists" would tell him she
-had added one first. It also stops him rewriting `protected_user_id` to seize
-removal rights.
+A duplicate `add_pair` never rewrites `reason` or `created_by`, and callers
+must not distinguish it from a fresh insert: "that already exists" would tell
+him she had added one first.
+
+It does, however, **escalate `protected_user_id` to NULL when the second party
+adds the same pair.** Leaving the row untouched was unsafe: if he adds the pair
+first, the row records him as protected, and her later add would be a silent
+no-op — leaving him holding the only key to her protection, free to lift it,
+while she could neither remove it nor even see that it existed. When both
+parties have asked for the separation, neither gets to undo it alone.
+Escalation is one-way, so a pair can never be walked back down to
+single-party control.
 
 Each of these response strings is a **module-level constant shared by the
 ordinary path and the gated one** (`whisper_service.SENT_CONFIRMATION`,
@@ -137,13 +145,28 @@ briefly duplicated literals, which is the wrong shape for this: copy edits are
 the most common change in this repo, and rewording one branch and not the other
 would silently turn the refusal into a tell with no test failing.
 
-### Known residual: the Guess Who counter
+### Guess Who: the guess is written, not discarded
 
-If a blocked member guesses on the other's round, the round's guess counter
-does not bump. In principle that is observable. It is not attributable — the
-counter moves constantly from other players — and closing it would mean
-recording his guesses against her round, which is what the gate exists to
-prevent.
+A blocked member's guess on the other's round runs its ordinary course — row
+written, counter bumped, quest fired — and only the **candidate filter** stops
+him reaching her. That is deliberate, and it replaced an earlier design that
+discarded the guess.
+
+Discarding was worse than useless. The per-round cap and the cooldown both
+count rows in `guess_guesses`, so a guess that was never written left him
+uncapped and never on cooldown: he could hold the button down on her round and
+get "Not it" forever, while every other round in the server put him on cooldown
+after one guess. That is a tell anyone bored enough finds in a minute, and it
+wrote a log row per click. Since she is absent from his picker he cannot name
+her, so the guess was always going to be wrong — it costs her nothing, and
+being distinguishable would have cost her everything.
+
+One attempt event is still recorded per round, on his first guess only.
+
+The same reasoning applies to whisper replies: a blocked reply **writes its
+row** (and is never delivered or mod-logged), because `_do_count_replies` is
+what enforces the one-reply-per-whisper cap. Skipping the write let a second
+press succeed where a genuine one returns "already replied".
 
 ## Alerts
 

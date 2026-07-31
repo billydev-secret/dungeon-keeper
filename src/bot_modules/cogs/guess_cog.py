@@ -578,31 +578,38 @@ class GuessSelectView(discord.ui.View):
             await interaction.edit_original_response(content="❌ Round not found.", view=None)
             return
 
-        # No-contact gate on the guess itself. A round belongs to two members —
-        # the ANSWER (whose likeness is on display) and the SUBMITTER (who
-        # chose to put it there) — and either being a no-contact partner means
-        # he does not get to engage with it.
+        # No-contact on a Guess Who round. A round belongs to two members — the
+        # ANSWER (whose likeness is on display) and the SUBMITTER (who chose to
+        # put it there).
         #
-        # The response is the ordinary wrong-guess line, and here that is not
-        # even a lie: his partner's name was filtered out of the picker above,
-        # so whatever he selected really was not it. Nothing is recorded
-        # against her round and no quest fires.
-        # One partner read answers both roles, instead of a check per role.
+        # The real protection is the candidate filter above: his partner is not
+        # in his picker, so he CANNOT name her and his guess on her round is
+        # always genuinely wrong. Given that, the guess is left to run its
+        # ordinary course rather than being discarded.
+        #
+        # Discarding it was worse than useless. The per-round cap and the
+        # cooldown both count rows in ``guess_guesses``, so a guess that was
+        # never written left him uncapped and never on cooldown: he could hold
+        # down the button on her round and get "Not it" forever, while every
+        # other round in the server put him on cooldown after one guess. That
+        # is a tell anyone bored enough finds in a minute, and it also wrote a
+        # log row per click. A wrong guess he could never have got right costs
+        # her nothing; being distinguishable costs her everything.
+        #
+        # One event per round still goes to the moderator log, on his first
+        # guess only, so the evidence trail survives without the flood.
         guess_partners = await asyncio.to_thread(
             no_contact_service.no_contact_partners,
             db_path,
             round_row.guild_id,
             interaction.user.id,
         )
-        if guess_round_blocked_for(
+        if prior_guesses == 0 and guess_round_blocked_for(
             viewer_id=interaction.user.id,
             submitter_id=round_row.submitter_id,
             answer_id=round_row.answer_id,
             partners=guess_partners,
         ):
-            # Record against the answer, and against the submitter too when
-            # they are a different member — the log should show which of the
-            # two roles pulled him in.
             for target in {round_row.answer_id, round_row.submitter_id} & guess_partners:
                 await asyncio.to_thread(
                     no_contact_service.record_event,
@@ -613,11 +620,6 @@ class GuessSelectView(discord.ui.View):
                     kind=KIND_ATTEMPT,
                     surface=SURFACE_GUESS,
                 )
-            await interaction.edit_original_response(
-                content=WRONG_GUESS_TEXT,
-                view=self,
-            )
-            return
 
         correct = guessed_user_id == round_row.answer_id
         await asyncio.to_thread(

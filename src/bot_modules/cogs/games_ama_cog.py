@@ -41,7 +41,6 @@ from bot_modules.services.anon_audit_service import (
 from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import (
     SURFACE_AMA,
-    SURFACE_AMA_ANSWER,
     candidate_members_for,
 )
 from bot_modules.games_ama.embeds import (
@@ -363,15 +362,20 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
             # the payload, so answering it would DM him on her behalf. Skipping
             # is invisible to both: he is not told his question was answered,
             # and she gets no delivery receipt either way.
+            # Plain check, not check_and_record: the answerer here is the
+            # PROTECTED member replying to a question that predates the pair.
+            # Recording it as an "attempt" would put her in the mod log as the
+            # one attempting contact, which is both wrong and unpleasant to
+            # read in a harassment case.
             blocked_dm = bool(
-                interaction.guild
+                asker
+                and interaction.guild
                 and await asyncio.to_thread(
-                    no_contact_service.check_and_record,
+                    no_contact_service.is_no_contact,
                     cast("Bot", interaction.client).ctx.db_path,
                     interaction.guild.id,
-                    actor_id=interaction.user.id,
-                    target_id=self.asker_id,
-                    surface=SURFACE_AMA_ANSWER,
+                    interaction.user.id,
+                    self.asker_id,
                 )
             )
             if asker and not blocked_dm and channel is not None and not isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
@@ -447,6 +451,28 @@ class ScreenedQuestionView(discord.ui.View):
         if interaction.user.id != self.ama_view.host_id:
             await interaction.response.send_message("Only the host can approve questions.", ephemeral=True)
             return
+        # No-contact gate on approval, not just on asking. A screened question
+        # sits in the host's DMs for as long as the view lives, and the pair
+        # can be created in that window — or the question can predate the pair
+        # entirely. Approving it would post it to the channel pinging her, on
+        # the host's action rather than his. Silently drop it and tell the
+        # host it was approved: the host is a third party here, and telling
+        # them "this asker is blocked from this panelist" would leak the
+        # entry to someone who has no business knowing it.
+        if interaction.guild is not None and await asyncio.to_thread(
+            no_contact_service.check_and_record,
+            cast("Bot", interaction.client).ctx.db_path,
+            interaction.guild.id,
+            actor_id=self.asker_id,
+            target_id=self.hot_seat_id,
+            surface=SURFACE_AMA,
+        ):
+            self.stop()
+            await interaction.response.edit_message(
+                content="✅ Question approved.", view=None
+            )
+            return
+
         color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
         embed = build_question_embed(self.question_text, color=color)
         hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
@@ -790,7 +816,18 @@ class AMAView(discord.ui.View):
                     guild.id,
                     interaction.user.id,
                 )
+                had_candidates = bool(candidates)
                 candidates = candidate_members_for(candidates, partners)
+                # Filtering is invisible while other names remain, but it can
+                # empty the list — and "nobody has joined yet" is checkable
+                # against the join announcement and the status embed both
+                # naming her. Say the panel is unavailable to him instead:
+                # true, and it makes no claim the channel contradicts.
+                if had_candidates and not candidates:
+                    await interaction.response.send_message(
+                        "You can't ask a question in this round.", ephemeral=True
+                    )
+                    return
             if not candidates:
                 await interaction.response.send_message(
                     "No one has joined the panel yet — tap 🙋 Volunteer to be the first!",

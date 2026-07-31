@@ -7,7 +7,8 @@ DB access, no Discord calls. The DB layer is
 The rule this module encodes, stated once so every gate can be checked
 against it: **the bot will never put a no-contact pair in contact, and the
 blocked party must never be able to tell.** Those are two requirements, not
-one, and the second is the harder of the two — see :func:`blocked_outcome`.
+one, and the second is the harder of the two: see the per-surface
+disclosure rules in docs/no_contact_spec.md.
 """
 
 from __future__ import annotations
@@ -30,7 +31,11 @@ _M = TypeVar("_M", bound=_HasId)
 # The places that record a blocked ATTEMPT, so a mod reading the log can see
 # *how* someone kept trying, not just how often.
 #
-# Only surfaces with a discrete attempt to record appear here. Pen Pals,
+# Only surfaces with a discrete attempt BY THE BLOCKED PARTY appear here.
+# The AMA answer-DM gate is deliberately absent: the member answering is
+# the PROTECTED one, replying to a question that predates the pair, so
+# logging it would file her in the mod panel as the one attempting
+# contact. Pen Pals,
 # Voice Master and DM requests are gated by extending an existing predicate
 # (``_is_blocked_pair``, ``effective_blocked``, ``_is_mutual``) which runs
 # inside matching loops and permission syncs — there is no single moment
@@ -41,7 +46,6 @@ _M = TypeVar("_M", bound=_HasId)
 
 SURFACE_WHISPER = "whisper"
 SURFACE_AMA = "ama"
-SURFACE_AMA_ANSWER = "ama_answer"
 SURFACE_CONFESSION_REPLY = "confession_reply"
 SURFACE_GUESS_SUBMIT = "guess_submit"
 SURFACE_GUESS = "guess"
@@ -49,7 +53,6 @@ SURFACE_GUESS = "guess"
 SURFACE_LABELS = {
     SURFACE_WHISPER: "Whisper",
     SURFACE_AMA: "AMA question",
-    SURFACE_AMA_ANSWER: "AMA answer DM",
     SURFACE_CONFESSION_REPLY: "Confession reply",
     SURFACE_GUESS_SUBMIT: "Guess Who submission",
     SURFACE_GUESS: "Guess Who guess",
@@ -83,9 +86,6 @@ def pair_key(user_a: int, user_b: int) -> tuple[int, int]:
 def is_self_pair(user_a: int, user_b: int) -> bool:
     """True when both ids are the same member — never a valid pair."""
     return user_a == user_b
-
-
-# ── Blocked-contact outcome ──────────────────────────────────────────────
 
 
 # ── Removal authorisation ────────────────────────────────────────────────

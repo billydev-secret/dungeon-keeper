@@ -34,7 +34,7 @@ def is_no_contact(db_path: Path, guild_id: int, user_a: int, user_b: int) -> boo
 
     Order-independent. This is the single question every gate asks; if it
     returns True the caller must refuse the contact AND present its ordinary
-    success response (see ``no_contact_logic.ContactDecision``).
+    success response — see the disclosure rules in docs/no_contact_spec.md.
     """
     with open_db(db_path) as conn:
         return is_no_contact_conn(conn, guild_id, user_a, user_b)
@@ -102,12 +102,10 @@ def add_pair(
 ) -> bool:
     """Create a no-contact entry. Returns False only for a self-pair.
 
-    An existing entry is left completely untouched — ``ON CONFLICT DO
-    NOTHING``, not an upsert. If the other member adds the same pair, he must
-    not be able to rewrite the ``protected_user_id`` (which decides who may
-    lift it), nor the ``reason`` and ``created_by`` that record why it is
-    there and who asked for it. The safe outcome of a duplicate add is that
-    nothing changes.
+    A duplicate add never rewrites ``reason`` or ``created_by`` — the other
+    member must not be able to launder the record of why the entry is there.
+    It can, however, escalate ``protected_user_id`` to NULL (mutual); see the
+    inline comment for why leaving it alone is unsafe.
 
     Note this returns True for a duplicate as well as a fresh insert, and
     callers MUST NOT distinguish the two in what they show the member. "That
@@ -117,16 +115,45 @@ def add_pair(
         return False
     lo, hi = pair_key(user_a, user_b)
     with open_db(db_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO no_contact_pairs
-                (guild_id, user_low, user_high, protected_user_id,
-                 created_by, reason, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(guild_id, user_low, user_high) DO NOTHING
-            """,
-            (guild_id, lo, hi, protected_user_id, created_by, reason, time.time()),
-        )
+        row = conn.execute(
+            "SELECT protected_user_id FROM no_contact_pairs "
+            "WHERE guild_id = ? AND user_low = ? AND user_high = ?",
+            (guild_id, lo, hi),
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                """
+                INSERT INTO no_contact_pairs
+                    (guild_id, user_low, user_high, protected_user_id,
+                     created_by, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (guild_id, lo, hi, protected_user_id, created_by, reason, time.time()),
+            )
+            return True
+        # An entry already exists. Its reason and provenance are never
+        # overwritten — otherwise the other party could launder them by
+        # re-adding the pair himself.
+        #
+        # But the protected member CANNOT simply be left alone either. If he
+        # adds the pair first, the row records him as protected; when she then
+        # adds it, a plain no-op would leave him holding the only key to her
+        # protection — free to lift it, while she can neither remove it nor
+        # even see that it exists. That is precisely the abuse the removal
+        # rule is meant to close, arriving through the add path.
+        #
+        # When the second party asks for the same separation, the entry
+        # becomes MUTUAL: both of them wanted it, so neither gets to undo it
+        # alone and only a moderator can lift it. Escalating to NULL is
+        # one-way, so a pair can never be walked back down to single-party
+        # control. A mod-set mutual entry is already NULL and stays there.
+        existing = row["protected_user_id"]
+        if existing is not None and protected_user_id != existing:
+            conn.execute(
+                "UPDATE no_contact_pairs SET protected_user_id = NULL "
+                "WHERE guild_id = ? AND user_low = ? AND user_high = ?",
+                (guild_id, lo, hi),
+            )
     return True
 
 

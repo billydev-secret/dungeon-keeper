@@ -124,7 +124,10 @@ async def add_pair(
             guild_id,
             body.user_a,
             body.user_b,
-            created_by=int(getattr(_user, "id", 0) or 0),
+            # AuthenticatedUser exposes ``user_id``, not ``id`` — reading the
+            # wrong attribute recorded every mod-created pair as created_by 0
+            # and lost the provenance the schema exists to keep.
+            created_by=int(_user.user_id),
             protected_user_id=protected,
             reason=body.reason.strip(),
         )

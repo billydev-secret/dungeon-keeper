@@ -34,16 +34,21 @@ def no_contact_absent():
 
     Cog tests run against stub db paths (``:memory:``, a mocked
     ``interaction.client``), so the no-contact gate has no table to read and
-    would raise. Patching the *service* module rather than each cog's import
-    of it covers every gated cog at once — they all do
-    ``from bot_modules.services import no_contact_service`` and call
-    attribute-style, so one patch reaches all of them, and a newly gated cog
-    is covered without adding a sixth copy of this fixture.
+    would raise.
+
+    Reach, precisely: this patches attributes on the *service module*, so it
+    covers the cogs that call attribute-style after
+    ``from bot_modules.services import no_contact_service`` — whisper, AMA,
+    guess, confessions. It does **not** reach callers that bind the name at
+    import (``dm_perms_cog``, ``pen_pals_cog``, ``voice_master_service`` use
+    ``from … import is_no_contact`` / ``is_no_contact_conn`` /
+    ``no_contact_partners_conn``); those run against a real migrated DB in
+    their own tests, which is why they pass without stubbing.
 
     Tests that want the gate to fire patch it themselves; an inner ``patch``
-    wins over this one (see tests/cogs/test_guess_no_contact.py). The gate's
-    real behaviour is covered in tests/test_no_contact_service.py, and its
-    wiring in tests/cogs/test_guess_no_contact.py.
+    wins over this one (see tests/cogs/test_guess_no_contact.py). Because this
+    is autouse across tests/cogs/, a new test that means to exercise a gate
+    must patch it explicitly rather than relying on the default.
     """
     with (
         patch(
