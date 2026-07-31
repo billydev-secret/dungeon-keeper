@@ -10,22 +10,21 @@ from __future__ import annotations
 
 import pytest
 
+from dataclasses import dataclass
+
 from bot_modules.services.no_contact_logic import (
     KIND_MENTION,
     KIND_REPLY,
     REMOVAL_DENIED_MISSING,
     REMOVAL_DENIED_MUTUAL,
-    REMOVAL_DENIED_NOT_PROTECTED,
     SURFACE_WHISPER,
     alert_ping_prefix,
     alerts_for_message,
     can_remove,
     candidate_members_for,
-    evaluate_contact,
     guess_round_blocked_for,
     is_self_pair,
     is_visible_to,
-    jump_url,
     pair_key,
     removal_denied_message,
     resolve_protected_user,
@@ -35,6 +34,13 @@ from bot_modules.services.no_contact_logic import (
 ALICE = 100
 BOB = 200
 CAROL = 300
+
+
+@dataclass(frozen=True)
+class _Member:
+    """Stand-in for the ``discord.Member`` the picker filter really receives."""
+
+    id: int
 MOD = 999
 
 
@@ -52,27 +58,6 @@ def test_pair_key_is_order_independent(a, b):
 def test_is_self_pair():
     assert is_self_pair(ALICE, ALICE)
     assert not is_self_pair(ALICE, BOB)
-
-
-# ── The fake-success contract ────────────────────────────────────────────
-
-
-def test_blocked_contact_feigns_success():
-    """A refused contact must be dressed as success, not reported as blocked.
-
-    This is the whole anti-escalation property: if the bot says "blocked", the
-    sender learns the other person acted against him.
-    """
-    decision = evaluate_contact(no_contact=True, surface=SURFACE_WHISPER)
-    assert decision.allowed is False
-    assert decision.feign_success is True
-    assert decision.surface == SURFACE_WHISPER
-
-
-def test_allowed_contact_does_not_feign():
-    decision = evaluate_contact(no_contact=False, surface=SURFACE_WHISPER)
-    assert decision.allowed is True
-    assert decision.feign_success is False
 
 
 # ── Removal authorisation ────────────────────────────────────────────────
@@ -148,11 +133,13 @@ def test_removal_refusal_does_not_confirm_a_hidden_entry():
 
 
 def test_removal_refusal_is_explicit_when_the_entry_is_visible():
+    """A refusal on a visible entry can only mean a mutual separation.
+
+    The other visible case — the protected member acting on their own entry —
+    is allowed by ``can_remove``, so it never reaches the refusal path.
+    """
     assert removal_denied_message(None, actor_id=ALICE) == REMOVAL_DENIED_MUTUAL
-    # Someone who can see the entry but isn't the protected party: only
-    # reachable for a mutual entry, so the not-protected string is reserved
-    # for a mod-facing caller that already knows the entry exists.
-    assert REMOVAL_DENIED_NOT_PROTECTED.startswith("❌")
+    assert removal_denied_message(None, actor_id=BOB) == REMOVAL_DENIED_MUTUAL
 
 
 # ── Mention / reply alerting ─────────────────────────────────────────────
@@ -260,19 +247,6 @@ def test_alert_ping_prefix():
     assert alert_ping_prefix(0) == ""
 
 
-@pytest.mark.parametrize(
-    ("channel", "message", "expected"),
-    [
-        (10, 20, "https://discord.com/channels/1/10/20"),
-        (None, 20, ""),
-        (10, None, ""),
-        (0, 0, ""),
-    ],
-)
-def test_jump_url(channel, message, expected):
-    assert jump_url(1, channel, message) == expected
-
-
 def test_surface_label_falls_back_to_raw_value():
     assert surface_label(SURFACE_WHISPER) == "Whisper"
     assert surface_label("something_new") == "something_new"
@@ -309,10 +283,10 @@ def test_candidate_picker_drops_partners():
     If he cannot select her, he can never guess her correctly, so he can
     never notice a correct guess going unrecorded.
     """
-    assert candidate_members_for(
-        member_ids=[ALICE, BOB, CAROL], partners=[ALICE]
-    ) == [BOB, CAROL]
+    members = [_Member(ALICE), _Member(BOB), _Member(CAROL)]
+    assert candidate_members_for(members, [ALICE]) == [_Member(BOB), _Member(CAROL)]
 
 
 def test_candidate_picker_untouched_without_partners():
-    assert candidate_members_for(member_ids=[ALICE, BOB], partners=[]) == [ALICE, BOB]
+    members = [_Member(ALICE), _Member(BOB)]
+    assert candidate_members_for(members, []) == members

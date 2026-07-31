@@ -77,6 +77,18 @@ low-frequency, so every check is a direct indexed read.
 | Voice Master | Room permissions, via `effective_blocked` | `voice_master_service` |
 | DM requests | Consent suppressed; new requests refused | `dm_perms_cog` |
 
+Features that hold their own connection (Pen Pals' matching pass, Voice
+Master's permission build) consult the list through
+`is_no_contact_conn` / `no_contact_partners_conn` rather than querying
+`no_contact_pairs` directly, so the table's shape stays owned by one module —
+adding an expiry or soft-delete column is a change in one place, not a grep.
+
+Only the first six surfaces record an **attempt** event. The last three are
+gated by extending an existing predicate that runs inside matching loops and
+permission syncs; there is no single moment there that means "he tried", and
+recording per iteration would bury the real attempts. They are enforced just
+as strictly — they simply produce no log lines.
+
 `dm_consent_pairs` rows are **suppressed, not deleted**: `_is_mutual` returns
 False for a no-contact pair while the row and its provenance survive for a mod
 reviewing the case. Note the consequence — if a no-contact entry is later
@@ -117,6 +129,13 @@ A duplicate `add_pair` is `ON CONFLICT DO NOTHING` and callers must not
 distinguish it from a fresh insert: "that already exists" would tell him she
 had added one first. It also stops him rewriting `protected_user_id` to seize
 removal rights.
+
+Each of these response strings is a **module-level constant shared by the
+ordinary path and the gated one** (`whisper_service.SENT_CONFIRMATION`,
+`games_ama_cog.STALE_PANEL_TEXT`, `guess_cog.WRONG_GUESS_TEXT`, …). They were
+briefly duplicated literals, which is the wrong shape for this: copy edits are
+the most common change in this repo, and rewording one branch and not the other
+would silently turn the refusal into a tell with no test failing.
 
 ### Known residual: the Guess Who counter
 

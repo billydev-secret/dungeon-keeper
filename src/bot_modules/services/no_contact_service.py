@@ -17,12 +17,13 @@ cheap enough to be the right trade.
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.no_contact_logic import KIND_ATTEMPT, pair_key
+from bot_modules.services.no_contact_logic import KIND_ATTEMPT, is_self_pair, pair_key
 
 
 # ── Pairs ────────────────────────────────────────────────────────────────
@@ -35,15 +36,30 @@ def is_no_contact(db_path: Path, guild_id: int, user_a: int, user_b: int) -> boo
     returns True the caller must refuse the contact AND present its ordinary
     success response (see ``no_contact_logic.ContactDecision``).
     """
-    if user_a == user_b:
+    with open_db(db_path) as conn:
+        return is_no_contact_conn(conn, guild_id, user_a, user_b)
+
+
+def is_no_contact_conn(
+    conn: sqlite3.Connection, guild_id: int, user_a: int, user_b: int
+) -> bool:
+    """:func:`is_no_contact` for a caller that already holds a connection.
+
+    Exists so features with their own DB session (Pen Pals' matching pass,
+    Voice Master's permission build) can consult the list without opening a
+    second connection — and, more importantly, without hand-rolling the query.
+    Before this, ``no_contact_pairs`` was read by raw SQL from two unrelated
+    modules, which made the table's shape their maintenance problem: adding an
+    expiry or soft-delete column would have meant finding them by grep.
+    """
+    if is_self_pair(user_a, user_b):
         return False
     lo, hi = pair_key(user_a, user_b)
-    with open_db(db_path) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM no_contact_pairs "
-            "WHERE guild_id = ? AND user_low = ? AND user_high = ?",
-            (guild_id, lo, hi),
-        ).fetchone()
+    row = conn.execute(
+        "SELECT 1 FROM no_contact_pairs "
+        "WHERE guild_id = ? AND user_low = ? AND user_high = ? LIMIT 1",
+        (guild_id, lo, hi),
+    ).fetchone()
     return row is not None
 
 
@@ -55,11 +71,18 @@ def no_contact_partners(db_path: Path, guild_id: int, user_id: int) -> set[int]:
     than asking :func:`is_no_contact` once per candidate.
     """
     with open_db(db_path) as conn:
-        rows = conn.execute(
-            "SELECT user_low, user_high FROM no_contact_pairs "
-            "WHERE guild_id = ? AND (user_low = ? OR user_high = ?)",
-            (guild_id, user_id, user_id),
-        ).fetchall()
+        return no_contact_partners_conn(conn, guild_id, user_id)
+
+
+def no_contact_partners_conn(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> set[int]:
+    """:func:`no_contact_partners` for a caller that already holds a connection."""
+    rows = conn.execute(
+        "SELECT user_low, user_high FROM no_contact_pairs "
+        "WHERE guild_id = ? AND (user_low = ? OR user_high = ?)",
+        (guild_id, user_id, user_id),
+    ).fetchall()
     out: set[int] = set()
     for row in rows:
         lo, hi = int(row["user_low"]), int(row["user_high"])
@@ -90,7 +113,7 @@ def add_pair(
     callers MUST NOT distinguish the two in what they show the member. "That
     entry already exists" would tell him she had already added one.
     """
-    if user_a == user_b:
+    if is_self_pair(user_a, user_b):
         return False
     lo, hi = pair_key(user_a, user_b)
     with open_db(db_path) as conn:

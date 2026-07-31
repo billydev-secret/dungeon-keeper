@@ -596,21 +596,14 @@ def effective_blocked(
     Symmetric without needing a second pass: each owner's effective list
     picks up their own partners, so her room denies him and his denies her.
     """
+    from bot_modules.services.no_contact_service import (  # noqa: PLC0415
+        no_contact_partners_conn,
+    )
+
     own = _list_targets(conn, "voice_master_blocked", guild_id, owner_id)
-    rows = conn.execute(
-        "SELECT user_low, user_high FROM no_contact_pairs "
-        "WHERE guild_id = ? AND (user_low = ? OR user_high = ?)",
-        (guild_id, owner_id, owner_id),
-    ).fetchall()
-    merged = list(own)
     seen = set(own)
-    for row in rows:
-        lo, hi = int(row["user_low"]), int(row["user_high"])
-        partner = hi if lo == owner_id else lo
-        if partner not in seen:
-            seen.add(partner)
-            merged.append(partner)
-    return merged
+    partners = no_contact_partners_conn(conn, guild_id, owner_id)
+    return own + [p for p in sorted(partners) if p not in seen]
 
 
 def add_blocked(

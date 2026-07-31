@@ -39,7 +39,11 @@ from bot_modules.services.anon_audit_service import (
     EVENT_QUESTION_REJECTED,
 )
 from bot_modules.services import no_contact_service
-from bot_modules.services.no_contact_logic import SURFACE_AMA, SURFACE_AMA_ANSWER
+from bot_modules.services.no_contact_logic import (
+    SURFACE_AMA,
+    SURFACE_AMA_ANSWER,
+    candidate_members_for,
+)
 from bot_modules.games_ama.embeds import (
     build_answered_embed,
     build_asker_dm_embed,
@@ -73,6 +77,20 @@ from bot_modules.games_ama.logic import (
 )
 
 log = logging.getLogger(__name__)
+
+# Response copy shared between the ordinary paths and the no-contact gate.
+# The gate must reply with text byte-identical to the real path it is
+# impersonating — a reworded copy in one branch and not the other turns the
+# silent refusal into a tell, and no test would catch it. One constant per
+# message is what keeps the two in step (see docs/no_contact_spec.md).
+STALE_PANEL_TEXT = (
+    "⚠️ That person left the panel while you were typing — please try again."
+)
+STALE_HOT_SEAT_TEXT = (
+    "⚠️ The hot seat changed while you were typing — please try again."
+)
+SUBMITTED_FOR_REVIEW_TEXT = "✅ Your question has been submitted for host review."
+POSTED_ANONYMOUSLY_TEXT = "Your question has been posted anonymously!"
 
 
 async def _fire_ama_ask_trigger(client, channel, asker_id: int, game_id: str, q_idx: int) -> None:
@@ -138,13 +156,13 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         if self.ama_view.game_format == AMA_FORMAT_PANEL:
             if not is_panel_target(self.ama_view.panel, self.target_id):
                 await interaction.response.send_message(
-                    "⚠️ That person left the panel while you were typing — please try again.",
+                    STALE_PANEL_TEXT,
                     ephemeral=True,
                 )
                 return
         elif self.ama_view.hot_seat_id != self.target_id:
             await interaction.response.send_message(
-                "⚠️ The hot seat changed while you were typing — please try again.",
+                STALE_HOT_SEAT_TEXT,
                 ephemeral=True,
             )
             return
@@ -180,17 +198,17 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         ):
             if self.mode != "unfiltered":
                 await interaction.response.send_message(
-                    "✅ Your question has been submitted for host review.",
+                    SUBMITTED_FOR_REVIEW_TEXT,
                     ephemeral=True,
                 )
             elif self.ama_view.game_format == AMA_FORMAT_PANEL:
                 await interaction.response.send_message(
-                    "⚠️ That person left the panel while you were typing — please try again.",
+                    STALE_PANEL_TEXT,
                     ephemeral=True,
                 )
             else:
                 await interaction.response.send_message(
-                    "⚠️ The hot seat changed while you were typing — please try again.",
+                    STALE_HOT_SEAT_TEXT,
                     ephemeral=True,
                 )
             return
@@ -222,7 +240,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 mark_question_approved(payload, q_idx, message_id=question_msg.id)
 
             await modify_payload(self.db, self.game_id, _mark_posted)
-            await interaction.response.send_message("Your question has been posted anonymously!", ephemeral=True)
+            await interaction.response.send_message(POSTED_ANONYMOUSLY_TEXT, ephemeral=True)
             # Recorded after the post so the row carries the message pointer the
             # dashboard joins against to recover the question text.
             audit_label = "AMA Question"
@@ -282,7 +300,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             }
             if dm_sent:
                 await interaction.response.send_message(
-                    "✅ Your question has been submitted for host review.", ephemeral=True
+                    SUBMITTED_FOR_REVIEW_TEXT, ephemeral=True
                 )
             else:
                 await interaction.response.send_message(
@@ -772,8 +790,7 @@ class AMAView(discord.ui.View):
                     guild.id,
                     interaction.user.id,
                 )
-                if partners:
-                    candidates = [m for m in candidates if m.id not in partners]
+                candidates = candidate_members_for(candidates, partners)
             if not candidates:
                 await interaction.response.send_message(
                     "No one has joined the panel yet — tap 🙋 Volunteer to be the first!",

@@ -26,7 +26,13 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.duels.filters import contains_disallowed_content
 from bot_modules.services.guess_models import BoundingBox, GuessConfig, GuessGuess, GuessRound
 from bot_modules.services import no_contact_service
-from bot_modules.services.no_contact_logic import SURFACE_GUESS, SURFACE_GUESS_SUBMIT
+from bot_modules.services.no_contact_logic import (
+    KIND_ATTEMPT,
+    SURFACE_GUESS,
+    SURFACE_GUESS_SUBMIT,
+    candidate_members_for,
+    guess_round_blocked_for,
+)
 from bot_modules.services.guess_pipeline import (
     compute_padded_crop,
     enforce_min_size,
@@ -73,6 +79,12 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.guess")
+
+# Shared by the ordinary wrong-guess path and the no-contact gate: the
+# refused guess must read identically to a genuine miss (see
+# docs/no_contact_spec.md).
+WRONG_GUESS_TEXT = "❌ Not it. Keep trying!"
+
 
 # Originals are persisted here per-round and deleted after the first correct
 # guess reveals them. Submitters are warned at submit time that the file is
@@ -575,26 +587,34 @@ class GuessSelectView(discord.ui.View):
         # even a lie: his partner's name was filtered out of the picker above,
         # so whatever he selected really was not it. Nothing is recorded
         # against her round and no quest fires.
-        if await asyncio.to_thread(
-            no_contact_service.check_and_record,
+        # One partner read answers both roles, instead of a check per role.
+        guess_partners = await asyncio.to_thread(
+            no_contact_service.no_contact_partners,
             db_path,
             round_row.guild_id,
-            actor_id=interaction.user.id,
-            target_id=round_row.answer_id,
-            surface=SURFACE_GUESS,
-        ) or (
-            round_row.submitter_id != round_row.answer_id
-            and await asyncio.to_thread(
-                no_contact_service.check_and_record,
-                db_path,
-                round_row.guild_id,
-                actor_id=interaction.user.id,
-                target_id=round_row.submitter_id,
-                surface=SURFACE_GUESS,
-            )
+            interaction.user.id,
+        )
+        if guess_round_blocked_for(
+            viewer_id=interaction.user.id,
+            submitter_id=round_row.submitter_id,
+            answer_id=round_row.answer_id,
+            partners=guess_partners,
         ):
+            # Record against the answer, and against the submitter too when
+            # they are a different member — the log should show which of the
+            # two roles pulled him in.
+            for target in {round_row.answer_id, round_row.submitter_id} & guess_partners:
+                await asyncio.to_thread(
+                    no_contact_service.record_event,
+                    db_path,
+                    round_row.guild_id,
+                    actor_id=interaction.user.id,
+                    target_id=target,
+                    kind=KIND_ATTEMPT,
+                    surface=SURFACE_GUESS,
+                )
             await interaction.edit_original_response(
-                content="❌ Not it. Keep trying!",
+                content=WRONG_GUESS_TEXT,
                 view=self,
             )
             return
@@ -734,7 +754,7 @@ class GuessSelectView(discord.ui.View):
             if self.cooldown_seconds > 0:
                 self.timeout = self.cooldown_seconds + SELECT_TIMEOUT_SECONDS
             await interaction.edit_original_response(
-                content="❌ Not it. Keep trying!",
+                content=WRONG_GUESS_TEXT,
                 view=self,
             )
 
@@ -826,8 +846,7 @@ class GameView(discord.ui.View):
             interaction.guild.id,
             interaction.user.id,
         )
-        if nc_partners:
-            guess_members = [m for m in guess_members if m.id not in nc_partners]
+        guess_members = candidate_members_for(guess_members, nc_partners)
         if not guess_members:
             await interaction.followup.send(
                 "❌ No opted-in members to guess from.", ephemeral=True

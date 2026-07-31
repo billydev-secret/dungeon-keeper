@@ -63,6 +63,8 @@ from bot_modules.services.whisper_service import (
     validate_reply,
     validate_send,
     validate_share,
+    SENT_CONFIRMATION,
+    REPLY_CONFIRMATION,
 )
 from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import SURFACE_WHISPER
@@ -802,7 +804,7 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply Anonymously"):
             surface=SURFACE_WHISPER,
         ):
             await interaction.response.send_message(
-                "Reply delivered anonymously.", ephemeral=True
+                REPLY_CONFIRMATION, ephemeral=True
             )
             return
 
@@ -871,7 +873,7 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply Anonymously"):
             log.warning("Failed to post whisper reply to mod log")
 
         await interaction.response.send_message(
-            "Reply delivered anonymously.", ephemeral=True
+            REPLY_CONFIRMATION, ephemeral=True
         )
 
 
@@ -2502,7 +2504,7 @@ class WhisperCog(commands.Cog):
             surface=SURFACE_WHISPER,
         ):
             await interaction.response.send_message(
-                "Whisper delivered.",
+                SENT_CONFIRMATION,
                 ephemeral=True,
             )
             # Fire the economy trigger too. A quest that failed to tick after
@@ -2573,7 +2575,7 @@ class WhisperCog(commands.Cog):
         )
 
         await interaction.response.send_message(
-            "Whisper delivered.",
+            SENT_CONFIRMATION,
             ephemeral=True,
         )
 

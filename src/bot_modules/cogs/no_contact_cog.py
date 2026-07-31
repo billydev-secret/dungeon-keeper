@@ -28,6 +28,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.utils import get_guild_channel_or_thread, jump_url
 from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import (
     KIND_MENTION,
@@ -35,8 +36,8 @@ from bot_modules.services.no_contact_logic import (
     alert_ping_prefix,
     alerts_for_message,
     can_remove,
+    is_self_pair,
     is_visible_to,
-    jump_url,
     removal_denied_message,
 )
 
@@ -94,7 +95,7 @@ class NoContactCog(commands.Cog):
     ) -> None:
         if interaction.guild is None:
             return
-        if member.id == interaction.user.id:
+        if is_self_pair(member.id, interaction.user.id):
             await interaction.response.send_message(SELF_TEXT, ephemeral=True)
             return
         if member.bot:
@@ -131,18 +132,21 @@ class NoContactCog(commands.Cog):
             interaction.user.id,
             member.id,
         )
-        protected = entry["protected_user_id"] if entry else None
         # A missing entry and an entry the caller may not know about produce
         # the SAME response — see ``removal_denied_message``.
-        if entry is None or not can_remove(
+        if entry is None:
+            await interaction.response.send_message(
+                REMOVAL_DENIED_MISSING, ephemeral=True
+            )
+            return
+        protected = entry["protected_user_id"]
+        if not can_remove(
             protected_user_id=protected,
             actor_id=interaction.user.id,
             actor_is_mod=False,
         ):
             await interaction.response.send_message(
-                removal_denied_message(protected, actor_id=interaction.user.id)
-                if entry
-                else REMOVAL_DENIED_MISSING,
+                removal_denied_message(protected, actor_id=interaction.user.id),
                 ephemeral=True,
             )
             return
@@ -220,9 +224,14 @@ class NoContactCog(commands.Cog):
         if message.guild is None or message.author.bot:
             return
 
+        # Order matters — this runs on every message in the server. Everything
+        # before the first DB touch is in-memory, and the partners lookup (one
+        # indexed read, empty for virtually every author) is what gates the
+        # rest. Resolving the reply author can itself hit the DB, so it waits
+        # until we know this author has a partner at all; otherwise every
+        # reply in the guild would pay for a lookup whose answer is discarded.
         mentioned_ids = [u.id for u in message.mentions if not u.bot]
-        reply_author_id = await self._reply_author_id(message)
-        if not mentioned_ids and reply_author_id is None:
+        if not mentioned_ids and message.reference is None:
             return
 
         partners = await asyncio.to_thread(
@@ -237,8 +246,15 @@ class NoContactCog(commands.Cog):
         alerts = alerts_for_message(
             author_id=message.author.id,
             mentioned_ids=mentioned_ids,
-            reply_to_author_id=reply_author_id,
+            reply_to_author_id=await self._reply_author_id(message),
             no_contact_partners=partners,
+        )
+        if not alerts:
+            return
+
+        # Per-guild constants, read once rather than once per alert.
+        settings = await asyncio.to_thread(
+            no_contact_service.get_settings, self.ctx.db_path, message.guild.id
         )
         for alert in alerts:
             await asyncio.to_thread(
@@ -251,7 +267,19 @@ class NoContactCog(commands.Cog):
                 channel_id=message.channel.id,
                 message_id=message.id,
             )
-            await self._post_alert(message, alert)
+        # The event rows above are the durable record and are written whether
+        # or not a guild ever configured a channel; only the Discord ping is
+        # optional, so bail out of all of it in one place.
+        channel = (
+            get_guild_channel_or_thread(message.guild, settings["alert_channel_id"])
+            if settings["alert_channel_id"]
+            else None
+        )
+        if channel is None:
+            return
+        accent = await resolve_accent_color(self.ctx.db_path, message.guild)
+        for alert in alerts:
+            await self._post_alert(message, alert, channel, settings, accent)
 
     async def _reply_author_id(self, message: discord.Message) -> Optional[int]:
         """Author of the message this one replies to, or None.
@@ -282,29 +310,27 @@ class NoContactCog(commands.Cog):
 
         return await asyncio.to_thread(_lookup)
 
-    async def _post_alert(self, message: discord.Message, alert) -> None:
-        """Post one alert to the configured staff channel. Best-effort."""
-        assert message.guild is not None
-        settings = await asyncio.to_thread(
-            no_contact_service.get_settings, self.ctx.db_path, message.guild.id
-        )
-        channel_id = settings["alert_channel_id"]
-        if not channel_id:
-            # Unconfigured guilds still get full enforcement — the event row
-            # is already written and shows on the dashboard. Only the Discord
-            # ping is optional.
-            return
-        channel = message.guild.get_channel(channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            return
+    async def _post_alert(
+        self,
+        message: discord.Message,
+        alert,
+        channel,
+        settings: dict[str, int],
+        accent,
+    ) -> None:
+        """Post one alert to the configured staff channel. Best-effort.
 
+        Destination, settings and accent are resolved once by the caller and
+        passed in — they are per-guild constants, and a message mentioning
+        several partners would otherwise re-read them per alert.
+        """
+        assert message.guild is not None
         actor = message.guild.get_member(alert.actor_id)
         target = message.guild.get_member(alert.target_id)
         actor_name = actor.display_name if actor else f"User {alert.actor_id}"
         target_name = target.display_name if target else f"User {alert.target_id}"
         verb = "mentioned" if alert.kind == KIND_MENTION else "replied to"
 
-        accent = await resolve_accent_color(self.ctx.db_path, message.guild)
         embed = discord.Embed(
             title="No-contact alert",
             description=(
@@ -322,8 +348,7 @@ class NoContactCog(commands.Cog):
             inline=True,
         )
         link = jump_url(message.guild.id, message.channel.id, message.id)
-        if link:
-            embed.add_field(name="Message", value=f"[Jump]({link})", inline=True)
+        embed.add_field(name="Message", value=f"[Jump]({link})", inline=True)
         # No message text: content retention is off by default, so it usually
         # isn't stored, and widening retention server-wide to serve this
         # feature would cost every other member's privacy. The link is enough

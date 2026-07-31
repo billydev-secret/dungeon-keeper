@@ -20,6 +20,7 @@ from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.question_source import _pick_least_recently_served
+from bot_modules.services.no_contact_service import is_no_contact_conn
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -232,12 +233,7 @@ def _is_blocked_pair(conn, guild_id: int, a: int, b: int) -> bool:
     ).fetchone() is not None
     if blocked:
         return True
-    lo, hi = (a, b) if a < b else (b, a)
-    return conn.execute(
-        "SELECT 1 FROM no_contact_pairs "
-        "WHERE guild_id = ? AND user_low = ? AND user_high = ? LIMIT 1",
-        (guild_id, lo, hi),
-    ).fetchone() is not None
+    return is_no_contact_conn(conn, guild_id, a, b)
 
 
 def _add_block(conn, guild_id: int, user_id: int, blocked_user_id: int) -> None:

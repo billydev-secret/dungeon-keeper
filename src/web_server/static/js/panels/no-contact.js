@@ -25,17 +25,24 @@ const KIND_LABEL = {
   reply: "Reply",
 };
 
-function memberName(members, id) {
-  if (!id) return "—";
-  const m = members.find((x) => String(x.id) === String(id));
-  return m ? (m.display_name || m.name) : `User ${id}`;
+// Built once per mount from the member list. A `.find()` per cell turned each
+// render into a full scan of every guild member — ~200 scans for a 100-row
+// event table alone, repeated on every refresh.
+function nameLookup(members) {
+  const byId = new Map(
+    members.map((m) => [String(m.id), m.display_name || m.name]),
+  );
+  return (id) => {
+    if (!id) return "—";
+    return byId.get(String(id)) || `User ${id}`;
+  };
 }
 
-function pairRow(p, members) {
-  const a = memberName(members, p.user_low);
-  const b = memberName(members, p.user_high);
+function pairRow(p, memberName) {
+  const a = memberName(p.user_low);
+  const b = memberName(p.user_high);
   const protectedName = p.protected_user_id
-    ? memberName(members, p.protected_user_id)
+    ? memberName(p.protected_user_id)
     : null;
   const protectedCell = protectedName
     ? esc(protectedName)
@@ -53,16 +60,33 @@ function pairRow(p, members) {
     </tr>`;
 }
 
-function eventRow(e, members) {
+function eventRow(e, memberName) {
   const what = KIND_LABEL[e.kind] || e.kind;
   const detail = e.surface_label ? ` — ${esc(e.surface_label)}` : "";
   return `
     <tr>
       <td>${esc(what)}${detail}</td>
-      <td class="user-cell">${esc(memberName(members, e.actor_id))}</td>
-      <td class="user-cell">${esc(memberName(members, e.target_id))}</td>
+      <td class="user-cell">${esc(memberName(e.actor_id))}</td>
+      <td class="user-cell">${esc(memberName(e.target_id))}</td>
       <td>${fmtTs(e.created_at)}</td>
     </tr>`;
+}
+
+// One table shell for both tables below — they differed only in headers, row
+// builder and empty copy, so any change to the scroll wrapper or header markup
+// had to be made twice.
+function renderTable(el, rows, { headers, rowFn, empty }) {
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty">${empty}</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="table-scroll">
+      <table class="table">
+        <thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map(rowFn).join("")}</tbody>
+      </table>
+    </div>`;
 }
 
 export function mount(container) {
@@ -202,36 +226,22 @@ export function mount(container) {
     const pairsEl = container.querySelector("[data-pairs]");
     const eventsEl = container.querySelector("[data-events]");
 
+    const memberName = nameLookup(members);
+
     function renderPairs(pairs) {
-      if (!pairs.length) {
-        pairsEl.innerHTML = `<div class="empty">No entries. Members can add their own with <code>/nocontact</code>.</div>`;
-        return;
-      }
-      pairsEl.innerHTML = `
-        <div class="table-scroll">
-          <table class="table">
-            <thead><tr>
-              <th>Pair</th><th>Protects</th><th>Reason</th><th>Added</th><th></th>
-            </tr></thead>
-            <tbody>${pairs.map((p) => pairRow(p, members)).join("")}</tbody>
-          </table>
-        </div>`;
+      renderTable(pairsEl, pairs, {
+        headers: ["Pair", "Protects", "Reason", "Added", ""],
+        rowFn: (p) => pairRow(p, memberName),
+        empty: "No entries. Members can add their own with <code>/nocontact</code>.",
+      });
     }
 
     function renderEvents(events) {
-      if (!events.length) {
-        eventsEl.innerHTML = `<div class="empty">Nothing recorded yet.</div>`;
-        return;
-      }
-      eventsEl.innerHTML = `
-        <div class="table-scroll">
-          <table class="table">
-            <thead><tr>
-              <th>What</th><th>Who</th><th>Toward</th><th>When</th>
-            </tr></thead>
-            <tbody>${events.map((e) => eventRow(e, members)).join("")}</tbody>
-          </table>
-        </div>`;
+      renderTable(eventsEl, events, {
+        headers: ["What", "Who", "Toward", "When"],
+        rowFn: (e) => eventRow(e, memberName),
+        empty: "Nothing recorded yet.",
+      });
     }
 
     async function refresh() {

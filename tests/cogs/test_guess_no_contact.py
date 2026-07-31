@@ -51,9 +51,12 @@ async def test_blocked_guess_is_never_recorded():
             return_value=_make_round(answer_id=2001),
         ),
         patch(
-            "bot_modules.cogs.guess_cog.no_contact_service.check_and_record",
-            return_value=True,
+            "bot_modules.cogs.guess_cog.no_contact_service.no_contact_partners",
+            return_value={2001},
         ),
+        patch(
+            "bot_modules.cogs.guess_cog.no_contact_service.record_event"
+        ) as record,
         patch("bot_modules.cogs.guess_cog._do_insert_guess") as insert,
         patch("bot_modules.cogs.guess_cog._do_mark_solved") as solved,
     ):
@@ -61,6 +64,8 @@ async def test_blocked_guess_is_never_recorded():
 
     insert.assert_not_called()
     solved.assert_not_called()
+    # The attempt is still logged for staff — silent to him, not to moderators.
+    record.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -84,9 +89,10 @@ async def test_blocked_guess_gets_the_ordinary_wrong_answer_reply():
             return_value=_make_round(answer_id=2001),
         ),
         patch(
-            "bot_modules.cogs.guess_cog.no_contact_service.check_and_record",
-            return_value=True,
+            "bot_modules.cogs.guess_cog.no_contact_service.no_contact_partners",
+            return_value={2001},
         ),
+        patch("bot_modules.cogs.guess_cog.no_contact_service.record_event"),
         patch("bot_modules.cogs.guess_cog._do_insert_guess"),
     ):
         await view._on_select(interaction)

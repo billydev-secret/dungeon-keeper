@@ -19,6 +19,14 @@ def safe_codefence_content(s: str) -> str:
     """Replace triple-backticks with homoglyphs so user content can't break out of a ``` block."""
     return s.replace("```", "ʼʼʼ")
 
+# Success confirmations. These live here, beside the ERROR_* strings, because
+# the no-contact gate must reply with the EXACT same text as a real delivery —
+# a refused send that reads even slightly differently is a tell, and that is
+# the whole security property (see docs/no_contact_spec.md). Keeping one
+# constant per message means a copy edit can't desynchronise the two branches.
+SENT_CONFIRMATION = "Whisper delivered."
+REPLY_CONFIRMATION = "Reply delivered anonymously."
+
 ERROR_NOT_CONFIGURED = "❌ Whispers aren't set up in this server yet."
 ERROR_SENDER_NEEDS_ROLE = (
     "❌ You need the Whisper role to send whispers. Use `/whisper optin` to join."

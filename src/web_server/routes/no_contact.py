@@ -24,7 +24,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from bot_modules.services import no_contact_service
-from bot_modules.services.no_contact_logic import surface_label
+from bot_modules.services.no_contact_logic import (
+    is_self_pair,
+    resolve_protected_user,
+    surface_label,
+)
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
 
 router = APIRouter()
@@ -103,16 +107,16 @@ async def add_pair(
     guild_id: int = Depends(get_active_guild_id),
     ctx=Depends(get_ctx),
 ) -> dict[str, Any]:
-    if body.user_a == body.user_b:
+    if is_self_pair(body.user_a, body.user_b):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A no-contact entry needs two different members.",
         )
     # A protected member outside the pair would grant removal rights to
     # someone who isn't in it, so anything unexpected collapses to mutual.
-    protected = body.protected_user_id
-    if protected is not None and protected not in (body.user_a, body.user_b):
-        protected = None
+    protected = resolve_protected_user(
+        user_a=body.user_a, user_b=body.user_b, protect=body.protected_user_id
+    )
 
     def _q():
         return no_contact_service.add_pair(

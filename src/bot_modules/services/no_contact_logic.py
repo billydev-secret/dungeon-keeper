@@ -14,12 +14,30 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Protocol, TypeVar
+
+
+class _HasId(Protocol):
+    """Anything carrying a Discord snowflake — ``discord.Member`` in practice."""
+
+    @property
+    def id(self) -> int: ...
+
+
+_M = TypeVar("_M", bound=_HasId)
 
 # ── Surfaces ─────────────────────────────────────────────────────────────
-# Every place the bot can carry contact between two members. Recorded on a
-# blocked attempt so a mod reading the log can see *how* someone kept trying,
-# not just how often. Adding a relaying feature means adding a constant here
-# and a gate that uses it — the list doubles as the audit checklist.
+# The places that record a blocked ATTEMPT, so a mod reading the log can see
+# *how* someone kept trying, not just how often.
+#
+# Only surfaces with a discrete attempt to record appear here. Pen Pals,
+# Voice Master and DM requests are gated by extending an existing predicate
+# (``_is_blocked_pair``, ``effective_blocked``, ``_is_mutual``) which runs
+# inside matching loops and permission syncs — there is no single moment
+# there that means "he tried", and recording per loop iteration would bury
+# the real attempts. They are enforced just as strictly; they simply do not
+# generate log lines. Constants for them existed briefly and were removed
+# rather than left as labels the dashboard could never render.
 
 SURFACE_WHISPER = "whisper"
 SURFACE_AMA = "ama"
@@ -27,21 +45,6 @@ SURFACE_AMA_ANSWER = "ama_answer"
 SURFACE_CONFESSION_REPLY = "confession_reply"
 SURFACE_GUESS_SUBMIT = "guess_submit"
 SURFACE_GUESS = "guess"
-SURFACE_PEN_PALS = "pen_pals"
-SURFACE_VOICE = "voice"
-SURFACE_DM_REQUEST = "dm_request"
-
-ALL_SURFACES = (
-    SURFACE_WHISPER,
-    SURFACE_AMA,
-    SURFACE_AMA_ANSWER,
-    SURFACE_CONFESSION_REPLY,
-    SURFACE_GUESS_SUBMIT,
-    SURFACE_GUESS,
-    SURFACE_PEN_PALS,
-    SURFACE_VOICE,
-    SURFACE_DM_REQUEST,
-)
 
 SURFACE_LABELS = {
     SURFACE_WHISPER: "Whisper",
@@ -50,9 +53,6 @@ SURFACE_LABELS = {
     SURFACE_CONFESSION_REPLY: "Confession reply",
     SURFACE_GUESS_SUBMIT: "Guess Who submission",
     SURFACE_GUESS: "Guess Who guess",
-    SURFACE_PEN_PALS: "Pen Pals match",
-    SURFACE_VOICE: "Voice room",
-    SURFACE_DM_REQUEST: "DM request",
 }
 
 # Event kinds recorded in no_contact_events.
@@ -88,48 +88,8 @@ def is_self_pair(user_a: int, user_b: int) -> bool:
 # ── Blocked-contact outcome ──────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class ContactDecision:
-    """What a gate should do about one attempted contact.
-
-    ``allowed`` is the only field a caller needs to route on. ``feign_success``
-    exists to make the intent unmissable at every call site: when contact is
-    refused, the caller must present its ORDINARY SUCCESS response and simply
-    not perform the action.
-
-    Why the response has to be a lie: if the bot says "blocked", the blocked
-    party learns the other person acted against him, which in a harassment
-    case is the escalation this feature exists to prevent. A generic error
-    ("they aren't accepting whispers right now") is not enough either — he can
-    probe by sending to someone else and comparing, and the opt-in role is
-    visible on her. Only a response indistinguishable from success survives
-    probing. For these surfaces that is also cheap: a whisper or an AMA
-    question that never gets a reply is already the ordinary case.
-    """
-
-    allowed: bool
-    feign_success: bool = False
-    surface: str = ""
-
-
-def evaluate_contact(*, no_contact: bool, surface: str) -> ContactDecision:
-    """Decide whether one member may reach another through ``surface``.
-
-    ``no_contact`` comes from
-    :func:`no_contact_service.is_no_contact`. Kept as a separate pure step so
-    the fake-success contract is unit-testable without a database.
-    """
-    if no_contact:
-        return ContactDecision(allowed=False, feign_success=True, surface=surface)
-    return ContactDecision(allowed=True, feign_success=False, surface=surface)
-
-
 # ── Removal authorisation ────────────────────────────────────────────────
 
-REMOVAL_DENIED_NOT_PROTECTED = (
-    "❌ Only the member this entry protects can remove it. "
-    "Ask a moderator if you think it shouldn't be there."
-)
 REMOVAL_DENIED_MUTUAL = (
     "❌ This is a moderator-set separation — neither member can lift it. "
     "Speak to a moderator."
@@ -195,12 +155,15 @@ def removal_denied_message(
     is no entry — not that they lack permission to remove it. "You can't
     remove this" is a confirmation that something is there to remove, which
     is the same leak by a different route.
+
+    Only two outcomes are reachable. A refusal on a *visible* entry can only
+    mean a mutual separation: the sole other visible case is the protected
+    member acting on their own entry, and :func:`can_remove` allows that, so
+    it never reaches here.
     """
     if not is_visible_to(protected_user_id=protected_user_id, viewer_id=actor_id):
         return REMOVAL_DENIED_MISSING
-    if protected_user_id is None:
-        return REMOVAL_DENIED_MUTUAL
-    return REMOVAL_DENIED_NOT_PROTECTED
+    return REMOVAL_DENIED_MUTUAL
 
 
 def resolve_protected_user(
@@ -287,19 +250,6 @@ def alert_ping_prefix(alert_role_id: int) -> str:
     return f"<@&{alert_role_id}> " if alert_role_id else ""
 
 
-def jump_url(guild_id: int, channel_id: int | None, message_id: int | None) -> str:
-    """Build a Discord jump link, or an empty string when ids are missing.
-
-    Alerts carry a link rather than the message text: ``messages.content`` is
-    nullable and content retention is off by default, so the text is usually
-    not there to quote — and turning retention on server-wide to serve this
-    feature would cost every other member's privacy to watch one person.
-    """
-    if not channel_id or not message_id:
-        return ""
-    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
-
-
 # ── Guess Who ────────────────────────────────────────────────────────────
 
 
@@ -318,13 +268,18 @@ def guess_round_blocked_for(
 
 
 def candidate_members_for(
-    *, member_ids: Iterable[int], partners: Iterable[int]
-) -> list[int]:
-    """Drop no-contact partners from a Guess Who candidate picker.
+    members: Iterable[_M], partners: Iterable[int]
+) -> list[_M]:
+    """Drop no-contact partners from a member picker.
 
     Removing a name from a long paginated member list is invisible to the
     person using it — there is nothing to notice missing — so this costs
     nothing on the leak side.
+
+    Takes whatever the caller already holds (``discord.Member`` at both the
+    Guess Who and AMA call sites) and returns the same objects, so the tested
+    filter is the shipped filter rather than a parallel id-only version the
+    cogs then re-implement by hand.
     """
     partner_set = set(partners)
-    return [uid for uid in member_ids if uid not in partner_set]
+    return [m for m in members if m.id not in partner_set]

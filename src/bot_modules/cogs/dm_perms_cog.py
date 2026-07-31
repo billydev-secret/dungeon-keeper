@@ -972,7 +972,9 @@ class DmPermsCog(commands.Cog):
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
-    def _is_mutual(self, guild_id: int, a: int, b: int) -> bool:
+    def _is_mutual(
+        self, guild_id: int, a: int, b: int, *, check_no_contact: bool = True
+    ) -> bool:
         # A no-contact pair reads as unconnected everywhere consent is checked,
         # even when a consent row still exists. The row is SUPPRESSED, not
         # deleted: it keeps the provenance of when and why they were connected,
@@ -981,7 +983,11 @@ class DmPermsCog(commands.Cog):
         #
         # Note this is the one direction where the in-memory cache is safe to
         # bypass — the DB read below can only ever turn a True into a False.
-        if is_no_contact(self.ctx.db_path, guild_id, a, b):
+        #
+        # ``check_no_contact=False`` is for the one caller that has already
+        # made this exact query and folds the result in itself; it must never
+        # be passed by a caller that hasn't.
+        if check_no_contact and is_no_contact(self.ctx.db_path, guild_id, a, b):
             return False
         pairs = self.consent_pairs.get(guild_id, set())
         return (a, b) in pairs and (b, a) in pairs
@@ -1023,16 +1029,20 @@ class DmPermsCog(commands.Cog):
         # an existing refusal verbatim, and it is the right kind of lie: it
         # describes a general setting of hers rather than anything about him,
         # so it reads the same whether or not he is the reason.
-        if target_in_guild and is_no_contact(
-            self.ctx.db_path, guild.id, requester.id, target.id
-        ):
+        no_contact = is_no_contact(self.ctx.db_path, guild.id, requester.id, target.id)
+        if target_in_guild and no_contact:
             target_mode = "closed"
         return classify_dm_request(
             target_in_guild=target_in_guild,
             is_self=target.id == requester.id,
             target_is_bot=target.bot,
             target_mode=target_mode,
-            is_mutual=self._is_mutual(guild.id, requester.id, target.id),
+            # Reuse the lookup above rather than letting ``_is_mutual`` run the
+            # identical query a second time.
+            is_mutual=(
+                not no_contact
+                and self._is_mutual(guild.id, requester.id, target.id, check_no_contact=False)
+            ),
             has_pending=self._has_pending_request(guild.id, requester.id, target.id),
             target_display_name=getattr(target, "display_name", str(target.id)),
         )
