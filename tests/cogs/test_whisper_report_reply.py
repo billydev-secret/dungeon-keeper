@@ -21,6 +21,8 @@ from bot_modules.services.whisper_models import (
 )
 from tests.fakes import FakeMember, fake_interaction
 
+
+
 SENDER, TARGET, OTHER = 1001, 2001, 9999
 REPLY_ID = 55
 WHISPER_ID = 42

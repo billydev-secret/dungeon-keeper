@@ -52,6 +52,21 @@ A configurable min-game-time floor (default 30 minutes) prevents premature close
 
 Active rounds, pending questions, and posted questions are all stored in SQLite. On bot restart the cog re-attaches all persistent views to the original messages, re-schedules auto-close timers from the remaining elapsed time, and sweeps posted questions older than 7 days.
 
+**Roster names across a restart.** The roster embed prints display names as
+plain text, never `<@id>` mentions — an embed mention is resolved client-side
+only, so it shows a bare numeric id to any viewer who hasn't cached that user.
+Names resolve via the shared chain in `services.name_resolver`: live member
+cache → `state.display_names` → `<@id>`.
+
+`state.display_names` is an in-memory dict filled when a player rolls, so it
+empties on restart. Present players are recovered from the member cache, but
+players who have since **left** cannot be — so on cog load
+`seed_display_names_from_db` refills the dict from the persistent `known_users`
+table for every restored round's roster (rollers plus the opener). Seeding never
+overwrites an existing entry (a name captured at roll time is fresher than the
+table) and is best-effort: a failed lookup logs and leaves those names as
+mentions rather than blocking cog load.
+
 ## Permissions
 
 - **User-side**:

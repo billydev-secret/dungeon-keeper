@@ -351,6 +351,35 @@ def get_known_users_bulk(
     return {int(r[0]): str(r[1]) for r in rows}
 
 
+def get_known_user_names_bulk(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_ids: list[int],
+) -> dict[int, str]:
+    """Return {user_id: best_known_name} for a batch, falling back to username.
+
+    Unlike :func:`get_known_users_bulk` this keeps the ``username`` column in
+    play, so a row recorded before the user had a guild nickname (blank
+    ``display_name``) still yields something readable instead of dropping to a
+    raw id. Rows whose name columns are both empty are omitted entirely, so a
+    caller can treat "absent from the result" as "no name on file".
+    """
+    if not user_ids:
+        return {}
+    ph = ",".join("?" * len(user_ids))
+    rows = conn.execute(
+        f"SELECT user_id, display_name, username FROM known_users "
+        f"WHERE guild_id = ? AND user_id IN ({ph})",
+        [guild_id, *user_ids],
+    ).fetchall()
+    out: dict[int, str] = {}
+    for r in rows:
+        name = (r["display_name"] or "").strip() or (r["username"] or "").strip()
+        if name:
+            out[int(r["user_id"])] = name
+    return out
+
+
 def init_known_channels_table(conn: sqlite3.Connection) -> None:
     """Create the known_channels lookup table for offline channel name resolution."""
     conn.execute(

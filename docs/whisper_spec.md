@@ -32,7 +32,30 @@ On submit:
 - **Per-target hourly cap**: 5 whispers to the same recipient in a rolling hour.
 - Timed-out targets are refused.
 - The recipient is DM'd the content with Guess / Share / Reply / Delete buttons; if the DM fails (closed DMs), nothing is persisted.
-- A best-effort announcement is posted to the feed: "Someone sent {target.mention} an anonymous message." — mention only, no content.
+- A best-effort announcement is posted to the feed: "Someone sent {target name} an anonymous message." — name only, no content.
+
+### Naming people in embeds
+Every embed that names a participant renders a **resolved display name as plain
+text**, never a `<@id>` mention. A mention inside an embed is not resolved by
+Discord's servers: it renders as a name only when the reading client already has
+that user cached, and shows the bare numeric id otherwise — which for a whisper,
+where the parties are by design not interacting, was the common case.
+
+Names come from `services.name_resolver.build_name_fn`, whose chain is:
+
+1. `guild.get_member(uid).display_name` — the gateway member cache. It goes
+   first because `intents.members` is on, so it is complete for present members
+   and updates the instant someone changes their nickname.
+2. `known_users.display_name`, then `known_users.username` — persistent, and the
+   only source that covers members who have **left** the guild.
+3. `<@id>` — genuine last resort for a user neither source knows.
+
+Results are markdown-escaped so a name containing `*` or `_` can't reformat the
+surrounding copy. The mod-log embeds keep the raw id alongside the name
+(`Name (\`id\`)`) so moderators retain a copyable identifier.
+
+No ping is lost by this: embed mentions never notified anyone in the first
+place, and the feed posts already send with `AllowedMentions.none()`.
 
 ### Guessing
 The target gets **three guesses**. The guess picker lists every opted-in member except the target, same paginated + filterable shape as the send picker. Guess consumption is atomic — two clicks racing on the same whisper can both pass pre-checks but only one will succeed; the other sees "This whisper was solved by another tab."

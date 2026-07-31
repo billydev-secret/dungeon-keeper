@@ -14,6 +14,7 @@ from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
+from bot_modules.services.name_resolver import NameFn, build_name_fn, mention
 from bot_modules.services.whisper_models import (
     STATE_PENDING,
     STATE_SHARED,
@@ -426,6 +427,12 @@ class WhisperShareButton(
             feed_channel = guild.get_channel(cfg.channel_id)
             if isinstance(feed_channel, discord.TextChannel):
                 accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
+                name_fn = await build_name_fn(
+                    guild=guild,
+                    db_path=self.bot.ctx.db_path,
+                    guild_id=whisper.guild_id,
+                    user_ids=[whisper.target_id],
+                )
                 if whisper.channel_msg_id:
                     try:
                         old = await feed_channel.fetch_message(whisper.channel_msg_id)
@@ -434,7 +441,9 @@ class WhisperShareButton(
                         log.warning("Failed to delete original announcement on share")
                 try:
                     new_msg = await feed_channel.send(
-                        embed=build_share_feed_embed(whisper, color=accent),
+                        embed=build_share_feed_embed(
+                            whisper, color=accent, name_fn=name_fn
+                        ),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                     feed_jump_url = new_msg.jump_url
@@ -818,6 +827,12 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply Anonymously"):
                             from_user_id=interaction.user.id,
                             to_user_id=to_user_id,
                             content=content,
+                            name_fn=await build_name_fn(
+                                guild=guild,
+                                db_path=self.bot.ctx.db_path,
+                                guild_id=whisper.guild_id,
+                                user_ids=[interaction.user.id, to_user_id],
+                            ),
                         )
                         await log_channel.send(
                             embed=emb,
@@ -896,7 +911,16 @@ class WhisperReportModal(discord.ui.Modal, title="Report Whisper"):
         if cfg.log_channel_id and interaction.guild is not None:
             log_channel = interaction.guild.get_channel(cfg.log_channel_id)
             if isinstance(log_channel, discord.TextChannel):
-                emb = build_report_audit_embed(whisper=whisper, reason=reason)
+                emb = build_report_audit_embed(
+                    whisper=whisper,
+                    reason=reason,
+                    name_fn=await build_name_fn(
+                        guild=interaction.guild,
+                        db_path=self.bot.ctx.db_path,
+                        guild_id=whisper.guild_id,
+                        user_ids=[whisper.sender_id, whisper.target_id],
+                    ),
+                )
                 try:
                     await log_channel.send(
                         embed=emb,
@@ -969,6 +993,12 @@ class WhisperReportReplyModal(discord.ui.Modal, title="Report Reply"):
                     reply=reply,
                     reporter_id=interaction.user.id,
                     reason=reason,
+                    name_fn=await build_name_fn(
+                        guild=interaction.guild,
+                        db_path=self.bot.ctx.db_path,
+                        guild_id=whisper.guild_id,
+                        user_ids=[reply.from_user_id, interaction.user.id],
+                    ),
                 )
                 try:
                     await log_channel.send(
@@ -1377,6 +1407,12 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
     if not isinstance(feed_channel, discord.TextChannel):
         return
     accent = await resolve_accent_color(bot.ctx.db_path, guild)
+    name_fn = await build_name_fn(
+        guild=guild,
+        db_path=bot.ctx.db_path,
+        guild_id=whisper.guild_id,
+        user_ids=[whisper.target_id],
+    )
     if whisper.channel_msg_id:
         try:
             old = await feed_channel.fetch_message(whisper.channel_msg_id)
@@ -1385,7 +1421,7 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
             log.warning("Failed to delete original announcement on share")
     try:
         new_msg = await feed_channel.send(
-            embed=build_share_feed_embed(whisper, color=accent),
+            embed=build_share_feed_embed(whisper, color=accent, name_fn=name_fn),
             allowed_mentions=discord.AllowedMentions.none(),
         )
         await asyncio.to_thread(
@@ -1445,12 +1481,16 @@ class WhisperInboxSelectView(discord.ui.View):
         invoker_id: int,
         mode: str = "received",
         accent: "discord.Color | None" = None,
+        name_fn: NameFn | None = None,
     ) -> None:
         super().__init__(timeout=300)
         self.bot = bot
         self._invoker_id = invoker_id
         self._mode = mode
         self._accent = accent
+        # embed() is sync (it re-renders on every dropdown/page interaction), so
+        # the resolver is prefetched by the caller rather than looked up here.
+        self._name_fn: NameFn = name_fn or mention
         self._all: list[Whisper] = list(whispers)
         self._display: list[Whisper] = list(whispers)
         self._filter_query = ""
@@ -1486,6 +1526,7 @@ class WhisperInboxSelectView(discord.ui.View):
             selected=self._selected(),
             mode=self._mode,
             color=self._accent,
+            name_fn=self._name_fn,
         )
 
     # ── view building ──────────────────────────────────────────────────────
@@ -1972,9 +2013,15 @@ class WhisperFeedView(discord.ui.View):
             states=[STATE_PENDING, STATE_SHARED],
         )
         accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
+        name_fn = await build_name_fn(
+            guild=interaction.guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=interaction.guild.id,
+            user_ids=[w.target_id for w in whispers],
+        )
         view = WhisperInboxSelectView(
             self.bot, whispers, invoker_id=interaction.user.id, mode="received",
-            accent=accent,
+            accent=accent, name_fn=name_fn,
         )
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True
@@ -1990,9 +2037,15 @@ class WhisperFeedView(discord.ui.View):
         )
         active = [w for w in whispers if not is_terminal_for_sender(w)]
         accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
+        name_fn = await build_name_fn(
+            guild=interaction.guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=interaction.guild.id,
+            user_ids=[w.target_id for w in active],
+        )
         view = WhisperInboxSelectView(
             self.bot, active, invoker_id=interaction.user.id, mode="sent",
-            accent=accent,
+            accent=accent, name_fn=name_fn,
         )
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True
@@ -2326,9 +2379,15 @@ class WhisperCog(commands.Cog):
         )
         active = [w for w in whispers if not is_terminal_for_sender(w)]
         accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        name_fn = await build_name_fn(
+            guild=interaction.guild,
+            db_path=self.ctx.db_path,
+            guild_id=interaction.guild.id,
+            user_ids=[w.target_id for w in active],
+        )
         view = WhisperInboxSelectView(
             self.bot, active, invoker_id=interaction.user.id, mode="sent",
-            accent=accent,
+            accent=accent, name_fn=name_fn,
         )
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True
@@ -2427,8 +2486,14 @@ class WhisperCog(commands.Cog):
             # to ping. Post the embed only — it names the recipient visibly,
             # once, without firing a redundant channel notification.
             accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+            name_fn = await build_name_fn(
+                guild=interaction.guild,
+                db_path=self.ctx.db_path,
+                guild_id=interaction.guild.id,
+                user_ids=[target.id],
+            )
             feed_msg = await feed_channel.send(
-                embed=build_send_feed_embed(target.id, color=accent),
+                embed=build_send_feed_embed(target.id, color=accent, name_fn=name_fn),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             asyncio.create_task(self.refresh_whisper_launcher(interaction.guild.id))

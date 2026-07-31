@@ -10,6 +10,8 @@ from bot_modules.services.whisper_models import Whisper
 from bot_modules.services.whisper_service import LOCK_DURATION_SECONDS
 from tests.fakes import FakeMember, fake_interaction
 
+
+
 SENDER, TARGET, OTHER_TARGET = 1001, 2001, 3003
 NOW = time.time()
 

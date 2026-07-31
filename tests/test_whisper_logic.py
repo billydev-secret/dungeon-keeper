@@ -877,3 +877,108 @@ def test_reply_report_audit_embed_escapes_codefence():
     )
     assert emb.description is not None
     assert "ʼʼʼ" in emb.description
+
+
+# ── Display names instead of raw ids (regression) ────────────────────────────
+#
+# Whisper embeds used to emit ``<@id>`` for the sender/target. Nothing resolves
+# a mention inside an embed server-side, so readers whose Discord client hadn't
+# cached that user saw a bare numeric id — and for a whisper, whose whole point
+# is that the two parties aren't otherwise interacting, that was the common
+# case. The builders now take a ``name_fn`` (see services.name_resolver).
+
+
+def _names(mapping: dict[int, str]):
+    """A stand-in resolver; the real chain is tested in test_name_resolver_logic."""
+    return lambda uid: mapping.get(uid, f"<@{uid}>")
+
+
+def test_send_feed_embed_names_the_recipient():
+    emb = build_send_feed_embed(200, name_fn=_names({200: "Target Tina"}))
+    assert emb.description == "Someone sent Target Tina an anonymous message."
+    assert "<@200>" not in (emb.description or "")
+
+
+def test_send_feed_embed_falls_back_to_a_mention_for_an_unknown_id():
+    emb = build_send_feed_embed(200, name_fn=_names({}))
+    assert "<@200>" in (emb.description or "")
+
+
+def test_share_feed_embed_names_the_recipient():
+    w = _whisper(target_id=200, message="secret")
+    emb = build_share_feed_embed(w, name_fn=_names({200: "Target Tina"}))
+    assert emb.description is not None
+    assert "Someone sent Target Tina an anonymous message!" in emb.description
+    assert "<@200>" not in emb.description
+
+
+def test_inbox_sent_header_names_the_recipient():
+    w = _whisper(id=12, target_id=200)
+    emb = build_inbox_embed(
+        whispers=[w], selected=w, mode="sent", now=1_000.0,
+        name_fn=_names({200: "Target Tina"}),
+    )
+    assert emb.description is not None
+    assert "Whisper #12 → Target Tina" in emb.description
+    assert "<@200>" not in emb.description
+
+
+def test_inbox_received_header_needs_no_name():
+    """Received mode shows no counterparty, so the resolver is never consulted."""
+    w = _whisper(id=12, target_id=200)
+
+    def _boom(uid: int) -> str:
+        raise AssertionError("received mode must not resolve a name")
+
+    emb = build_inbox_embed(
+        whispers=[w], selected=w, mode="received", now=1_000.0, name_fn=_boom,
+    )
+    assert emb.description is not None
+    assert "Whisper #12" in emb.description
+
+
+def test_reply_audit_embed_names_both_parties_and_keeps_ids():
+    emb = build_reply_audit_embed(
+        whisper_id=7, from_user_id=100, to_user_id=200, content="hi",
+        name_fn=_names({100: "Sender Sam", 200: "Target Tina"}),
+    )
+    fields = {f.name: f.value for f in emb.fields}
+    # The mod-facing embeds keep the copyable raw id alongside the name.
+    assert fields["From"] == "Sender Sam (`100`)"
+    assert fields["To"] == "Target Tina (`200`)"
+
+
+def test_report_audit_embed_names_both_parties_and_keeps_ids():
+    w = _whisper(sender_id=100, target_id=200)
+    emb = build_report_audit_embed(
+        whisper=w, reason="spam",
+        name_fn=_names({100: "Sender Sam", 200: "Target Tina"}),
+    )
+    fields = {f.name: f.value for f in emb.fields}
+    assert fields["Sender"] == "Sender Sam (`100`)"
+    assert fields["Reporter (Target)"] == "Target Tina (`200`)"
+
+
+def test_reply_report_audit_embed_names_both_parties_and_keeps_ids():
+    emb = build_reply_report_audit_embed(
+        reply=_reply(), reporter_id=200, reason="harassment",
+        name_fn=_names({100: "Sender Sam", 200: "Target Tina"}),
+    )
+    fields = {f.name: f.value for f in emb.fields}
+    assert fields["Sender (anonymous)"] == "Sender Sam (`100`)"
+    assert fields["Reporter (recipient)"] == "Target Tina (`200`)"
+
+
+def test_audit_embed_still_shows_the_id_when_the_name_is_unknown():
+    """A departed user with no row still gives the mod something to click."""
+    emb = build_reply_audit_embed(
+        whisper_id=7, from_user_id=100, to_user_id=200, content="hi",
+        name_fn=_names({}),
+    )
+    fields = {f.name: f.value for f in emb.fields}
+    assert fields["From"] == "<@100> (`100`)"
+
+
+def test_builders_default_to_mentions_when_no_resolver_is_passed():
+    """The default keeps old behaviour for any caller that doesn't inject one."""
+    assert "<@200>" in (build_send_feed_embed(200).description or "")

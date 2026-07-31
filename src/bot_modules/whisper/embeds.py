@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 import discord
 
+from bot_modules.services.name_resolver import NameFn, mention as _mention
 from bot_modules.services.whisper_models import Whisper, WhisperReply
 from bot_modules.services.whisper_service import safe_codefence_content
 from bot_modules.whisper.logic import (
@@ -29,6 +30,14 @@ from bot_modules.whisper.logic import (
     preview,
     status_pill,
 )
+
+
+# Every builder takes a ``name_fn`` so the cog can inject a resolver backed by
+# the live member cache and ``known_users`` (see ``services.name_resolver``).
+# A <@id> inside an embed is resolved purely client-side, so it degrades to a
+# bare numeric id for any viewer who doesn't already have that user cached —
+# which, for a whisper, is the normal case rather than the exception. The
+# ``_mention`` default preserves the old output for callers that don't care.
 
 
 # ── Mod-log embeds ───────────────────────────────────────────────────────────
@@ -40,6 +49,7 @@ def build_reply_audit_embed(
     from_user_id: int,
     to_user_id: int,
     content: str,
+    name_fn: NameFn = _mention,
     now: datetime | None = None,
 ) -> discord.Embed:
     """Build the "Whisper Reply" mod-log embed.
@@ -55,12 +65,12 @@ def build_reply_audit_embed(
     )
     embed.add_field(
         name="From",
-        value=f"<@{from_user_id}> (`{from_user_id}`)",
+        value=f"{name_fn(from_user_id)} (`{from_user_id}`)",
         inline=False,
     )
     embed.add_field(
         name="To",
-        value=f"<@{to_user_id}> (`{to_user_id}`)",
+        value=f"{name_fn(to_user_id)} (`{to_user_id}`)",
         inline=False,
     )
     embed.add_field(name="Whisper ID", value=str(whisper_id), inline=False)
@@ -71,6 +81,7 @@ def build_report_audit_embed(
     *,
     whisper: Whisper,
     reason: str,
+    name_fn: NameFn = _mention,
     now: datetime | None = None,
 ) -> discord.Embed:
     """Build the "Whisper Reported" mod-log embed.
@@ -87,12 +98,12 @@ def build_report_audit_embed(
     )
     embed.add_field(
         name="Sender",
-        value=f"<@{whisper.sender_id}> (`{whisper.sender_id}`)",
+        value=f"{name_fn(whisper.sender_id)} (`{whisper.sender_id}`)",
         inline=False,
     )
     embed.add_field(
         name="Reporter (Target)",
-        value=f"<@{whisper.target_id}> (`{whisper.target_id}`)",
+        value=f"{name_fn(whisper.target_id)} (`{whisper.target_id}`)",
         inline=False,
     )
     embed.add_field(name="Reason", value=reason, inline=False)
@@ -105,6 +116,7 @@ def build_reply_report_audit_embed(
     reply: WhisperReply,
     reporter_id: int,
     reason: str,
+    name_fn: NameFn = _mention,
     now: datetime | None = None,
 ) -> discord.Embed:
     """Build the "Whisper Reply Reported" mod-log embed.
@@ -120,12 +132,12 @@ def build_reply_report_audit_embed(
     )
     embed.add_field(
         name="Sender (anonymous)",
-        value=f"<@{reply.from_user_id}> (`{reply.from_user_id}`)",
+        value=f"{name_fn(reply.from_user_id)} (`{reply.from_user_id}`)",
         inline=False,
     )
     embed.add_field(
         name="Reporter (recipient)",
-        value=f"<@{reporter_id}> (`{reporter_id}`)",
+        value=f"{name_fn(reporter_id)} (`{reporter_id}`)",
         inline=False,
     )
     embed.add_field(name="Reason", value=reason, inline=False)
@@ -138,27 +150,34 @@ def build_reply_report_audit_embed(
 
 
 def build_send_feed_embed(
-    target_id: int, color: "discord.Color | None" = None
+    target_id: int,
+    color: "discord.Color | None" = None,
+    name_fn: NameFn = _mention,
 ) -> discord.Embed:
     """The public feed announcement posted when a Whisper is sent.
 
     Replaces the old plain-text ``📬 Someone sent @x an anonymous message``
-    line with a styled embed (accent bar + bold heading). The embed names the
-    recipient once (embed mentions render but don't ping) — and that's fine,
-    since the recipient is already notified by the DM that carries the actual
-    message. The feed post is posted with no content ping at all.
+    line with a styled embed (accent bar + bold heading). The recipient is
+    named once as resolved plain text: this used to emit a ``<@id>`` on the
+    assumption that embed mentions render without pinging, but only the "don't
+    ping" half of that is true. Nothing resolves an embed mention server-side,
+    so readers whose client hadn't cached the recipient saw a bare numeric id.
+    No ping is lost by naming them — the recipient is already notified by the
+    DM carrying the actual message, and the feed post carries no content ping.
     """
     if color is None:
         color = discord.Color.blurple()
     return discord.Embed(
         title="\U0001f4ec Someone Sent a Whisper",
-        description=f"Someone sent <@{target_id}> an anonymous message.",
+        description=f"Someone sent {name_fn(target_id)} an anonymous message.",
         color=color,
     )
 
 
 def build_share_feed_embed(
-    whisper: Whisper, color: "discord.Color | None" = None
+    whisper: Whisper,
+    color: "discord.Color | None" = None,
+    name_fn: NameFn = _mention,
 ) -> discord.Embed:
     """The public "a fresh whisper was shared" feed post, as a styled embed.
 
@@ -174,7 +193,7 @@ def build_share_feed_embed(
     embed = discord.Embed(
         title="\U0001f4ec A Fresh Whisper Was Shared",
         description=(
-            f"Someone sent <@{whisper.target_id}> an anonymous message!\n\n"
+            f"Someone sent {name_fn(whisper.target_id)} an anonymous message!\n\n"
             f"“{safe}”"
         ),
         color=color,
@@ -196,6 +215,7 @@ def build_inbox_embed(
     mode: str,
     now: float | None = None,
     color: "discord.Color | None" = None,
+    name_fn: NameFn = _mention,
 ) -> discord.Embed:
     """Build the embed shown above the whisper-inbox dropdown view.
 
@@ -228,7 +248,7 @@ def build_inbox_embed(
         header = f"**Whisper #{selected.id}** · {status} · *{time_ago}*"
     else:
         header = (
-            f"**Whisper #{selected.id} → <@{selected.target_id}>** · "
+            f"**Whisper #{selected.id} → {name_fn(selected.target_id)}** · "
             f"{status} · *{time_ago}*"
         )
     embed.description = (

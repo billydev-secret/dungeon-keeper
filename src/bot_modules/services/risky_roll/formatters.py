@@ -1,10 +1,19 @@
+import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Iterable
+from pathlib import Path
 
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.db_utils import open_db
 from bot_modules.services.embeds import COLOR_GREEN
+from bot_modules.services.message_store import get_known_user_names_bulk
+from bot_modules.services.name_resolver import (
+    NameFn,
+    mention as _mention,
+    resolve_name_from,
+)
 from . import state as app_state
 from .models import PendingQuestionState, PostedQuestionState, PromptKind, RiskyRollState
 
@@ -29,35 +38,74 @@ async def resolve_embed_accent(guild: "discord.Guild | None") -> "discord.Color 
         log.debug("risky_roll: accent resolve failed; using fallback color", exc_info=True)
         return None
 
-# A NameFn turns a user id into embed-ready text: a cached display name (escaped)
-# or, for a user we can't resolve, a raw <@id> mention as a last resort.
-NameFn = Callable[[int], str]
-
-
-def _mention(uid: int) -> str:
-    return f"<@{uid}>"
-
-
 def make_name_resolver(guild: "discord.Guild | None") -> NameFn:
-    """Return a resolver that prints cached display names as plain text.
+    """Return a resolver that prints display names as plain text.
 
-    Names are cached at roll time; on a cache miss we backfill from the guild's
-    member cache (sync, no network) so a round restored after a restart still
-    shows names for members who are still present. Only a genuinely unknown
-    user — typically someone who has left — falls back to a <@id> mention.
+    Delegates to the shared chain in ``services.name_resolver``: the live
+    member cache first (complete and nickname-fresh, since ``intents.members``
+    is on), then ``app_state.display_names``, then a ``<@id>`` mention.
+
+    ``app_state.display_names`` is an in-memory dict that empties on restart,
+    which used to make the "a restored round still shows names" promise false
+    for anyone who had since left the guild — the member cache can't recover
+    them either. ``seed_display_names_from_db`` now refills it from the
+    persistent ``known_users`` table when rounds are restored, so a departed
+    player still renders by name rather than as a bare id.
     """
     def resolve(uid: int) -> str:
-        name = app_state.display_names.get(uid)
-        if name is None and guild is not None:
-            member = guild.get_member(uid)
-            if member is not None:
-                name = member.display_name
+        # Memoise live-cache hits: if this player leaves mid-round, the name we
+        # saw while they were present is the only one left to print. The live
+        # rung is handled here, so the shared chain is asked for the table and
+        # mention rungs only (guild=None) rather than repeating the lookup.
+        member = guild.get_member(uid) if guild is not None else None
+        if member is not None:
+            name = (member.display_name or "").strip()
+            if name:
                 app_state.display_names[uid] = name
-        if name is None:
-            return _mention(uid)
-        return discord.utils.escape_markdown(name)
+        return resolve_name_from(
+            uid, guild=None, table_names=app_state.display_names
+        )
 
     return resolve
+
+
+async def seed_display_names_from_db(
+    db_path: "Path", states: "Iterable[RiskyRollState]"
+) -> int:
+    """Prime ``app_state.display_names`` from ``known_users`` for restored rounds.
+
+    Called once at cog load, after active rounds come back from the store. Only
+    ids the in-memory dict doesn't already hold are looked up, and existing
+    entries are never overwritten. Returns the number of names seeded.
+
+    Never raises: a failed lookup only means the roster falls back to mentions,
+    which must not stop the cog from loading.
+    """
+    by_guild: dict[int, set[int]] = {}
+    for state in states:
+        wanted = set(state.rolls) | {state.opener_id}
+        missing = {uid for uid in wanted if uid not in app_state.display_names}
+        if missing:
+            by_guild.setdefault(state.guild_id, set()).update(missing)
+    if not by_guild:
+        return 0
+
+    def _lookup() -> dict[int, str]:
+        found: dict[int, str] = {}
+        with open_db(db_path) as conn:
+            for guild_id, uids in by_guild.items():
+                found.update(get_known_user_names_bulk(conn, guild_id, sorted(uids)))
+        return found
+
+    try:
+        found = await asyncio.to_thread(_lookup)
+    except Exception:
+        log.warning("risky_roll: display-name seeding failed", exc_info=True)
+        return 0
+
+    for uid, name in found.items():
+        app_state.display_names.setdefault(uid, name)
+    return len(found)
 
 
 def format_user_mentions(user_ids: set[int]) -> str:
