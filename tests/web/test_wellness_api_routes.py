@@ -15,6 +15,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.wellness_service import (
     add_cap,
     add_blackout,
+    arm_slow_mode,
     create_partner_request,
     opt_in_user,
 )
@@ -73,32 +74,63 @@ def test_caps_returns_seeded_caps(authed_client, fake_ctx):
     assert body["caps"][0]["label"] == "My limit"
 
 
-# ── /xp-histogram ────────────────────────────────────────────────────
+# ── /activity-histogram ──────────────────────────────────────────────
 
 
-def test_xp_histogram_rejects_invalid_mode(authed_client):
-    resp = authed_client.get("/api/wellness/xp-histogram?mode=bogus")
+def test_activity_histogram_rejects_invalid_mode(authed_client):
+    resp = authed_client.get("/api/wellness/activity-histogram?mode=bogus")
     body = resp.json()
     assert body["ok"] is False
 
 
-def test_xp_histogram_daily_returns_24_buckets(authed_client):
-    body = authed_client.get("/api/wellness/xp-histogram").json()
+def test_activity_histogram_daily_returns_24_buckets(authed_client):
+    body = authed_client.get("/api/wellness/activity-histogram").json()
     assert body["mode"] == "daily"
     assert len(body["buckets"]) == 24
 
 
-def test_xp_histogram_weekly_returns_7_buckets(authed_client):
-    body = authed_client.get("/api/wellness/xp-histogram?mode=weekly").json()
+def test_activity_histogram_weekly_returns_7_buckets(authed_client):
+    body = authed_client.get("/api/wellness/activity-histogram?mode=weekly").json()
     assert body["mode"] == "weekly"
     assert len(body["buckets"]) == 7
 
 
-def test_xp_histogram_clamps_days_into_range(authed_client):
-    too_low = authed_client.get("/api/wellness/xp-histogram?days=1").json()
+def test_activity_histogram_clamps_days_into_range(authed_client):
+    too_low = authed_client.get("/api/wellness/activity-histogram?days=1").json()
     assert too_low["days_covered"] == 7  # clamped to minimum
-    too_high = authed_client.get("/api/wellness/xp-histogram?days=999").json()
+    too_high = authed_client.get("/api/wellness/activity-histogram?days=999").json()
     assert too_high["days_covered"] == 180  # clamped to max
+
+
+def test_activity_histogram_counts_messages_not_xp(authed_client, fake_ctx):
+    """The caps sliders seed from these averages, and enforcement counts
+    messages — so the histogram must count message events (source text/reply,
+    one row each), never sum fractional XP amounts, and must ignore
+    non-message sources like voice."""
+    now = time.time()
+    with open_db(fake_ctx.db_path) as conn:
+        for i in range(10):
+            conn.execute(
+                "INSERT INTO xp_events (guild_id, user_id, source, amount, created_at) "
+                "VALUES (?, 1, 'text', 0.17, ?)",
+                (fake_ctx.guild_id, now - 60 * i),
+            )
+        conn.execute(
+            "INSERT INTO xp_events (guild_id, user_id, source, amount, created_at) "
+            "VALUES (?, 1, 'voice', 1.0, ?)",
+            (fake_ctx.guild_id, now),
+        )
+
+    body = authed_client.get("/api/wellness/activity-histogram?days=7").json()
+    # 10 message events land in one or two adjacent hour buckets; the voice
+    # event must not be counted anywhere.
+    assert body["total_events"] == 10
+    assert sum(b["count"] for b in body["buckets"]) == 10
+    # Averages are messages/period — with 10 messages over a 7-day window the
+    # non-empty buckets must sum to 10/7 ≈ 1.4, not to a fraction of an XP point.
+    assert sum(b["avg_messages"] for b in body["buckets"]) == pytest.approx(
+        10 / 7, abs=0.2
+    )
 
 
 # ── /blackouts ───────────────────────────────────────────────────────
@@ -241,7 +273,7 @@ def test_settings_accepts_valid_payload(authed_client, fake_ctx):
         "/api/wellness/settings",
         json={
             "timezone": "America/New_York",
-            "enforcement_level": "cooldown",
+            "enforcement_level": "slow_mode",
             "notifications_pref": "dm",
             "daily_reset_hour": 4,
             "slow_mode_rate_seconds": 30,
@@ -251,7 +283,18 @@ def test_settings_accepts_valid_payload(authed_client, fake_ctx):
 
     me = authed_client.get("/api/wellness/me").json()
     assert me["timezone"] == "America/New_York"
-    assert me["enforcement_level"] == "cooldown"
+    assert me["enforcement_level"] == "slow_mode"
+
+
+def test_settings_rejects_retired_cooldown_level(authed_client, fake_ctx):
+    """"cooldown" left the selectable set 2026-07-30 (never-enforced level);
+    the API must not accept new selections of it."""
+    _opt_in(fake_ctx)
+    body = authed_client.post(
+        "/api/wellness/settings",
+        json={"enforcement_level": "cooldown"},
+    ).json()
+    assert body["ok"] is False
 
 
 # ── /pause and /resume ───────────────────────────────────────────────
@@ -283,6 +326,53 @@ def test_resume_clears_pause(authed_client, fake_ctx):
 
     me = authed_client.get("/api/wellness/me").json()
     assert me["paused_until"] is None
+
+
+# ── /optout ──────────────────────────────────────────────────────────
+
+
+def test_optout_requires_opt_in(authed_client):
+    resp = authed_client.post("/api/wellness/optout")
+    assert resp.status_code == 403
+
+
+def test_optout_deactivates_and_lifts_slow_mode(authed_client, fake_ctx):
+    """The exit must be total: tracking off, slow mode lifted, /me shows out."""
+    _opt_in(fake_ctx)
+    with open_db(fake_ctx.db_path) as conn:
+        arm_slow_mode(
+            conn,
+            fake_ctx.guild_id,
+            1,
+            triggered_by_cap_id=1,
+            triggered_window_start=0,
+            active_until_ts=time.time() + 3600,
+        )
+
+    body = authed_client.post("/api/wellness/optout").json()
+    assert body["ok"] is True
+
+    me = authed_client.get("/api/wellness/me").json()
+    assert me == {"opted_in": False}
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM wellness_slow_mode WHERE guild_id = ? AND user_id = 1",
+            (fake_ctx.guild_id,),
+        ).fetchone()
+    assert row is None
+
+
+# ── /api/me wellness nav-gate field ──────────────────────────────────
+
+
+def test_me_wellness_opted_in_tracks_membership(authed_client, fake_ctx):
+    """The Wellness nav section gates on this field — it must follow the
+    member's actual opt-in state through the whole join/leave loop."""
+    assert authed_client.get("/api/me").json()["wellness_opted_in"] is False
+    _opt_in(fake_ctx)
+    assert authed_client.get("/api/me").json()["wellness_opted_in"] is True
+    authed_client.post("/api/wellness/optout")
+    assert authed_client.get("/api/me").json()["wellness_opted_in"] is False
 
 
 # ── /caps mutation ───────────────────────────────────────────────────

@@ -21,12 +21,13 @@ export function mount(container) {
 
     const reportsHTML = d.reports.map(r => {
       const s = r.summary;
-      const statsHTML = s.total_messages !== undefined
+      // compliance_pct is stored 0-100 (never re-scale it — a 57 rendered as
+      // 5700% once), and the stats gate matches fields the summary really has.
+      const statsHTML = s.clean_days !== undefined
         ? `<div class="w-report-stats">
-            <span>${s.total_messages || 0} messages</span>
-            <span>${s.caps_hit || 0} caps hit</span>
-            <span>${s.blackout_violations || 0} blackout violations</span>
-            <span>${Math.round((s.compliance_pct || 0) * 100)}% compliance</span>
+            <span>${s.clean_days || 0}/${s.tracked_days ?? 7} clean days</span>
+            <span>${Math.round(s.compliance_pct || 0)}% compliance</span>
+            ${s.violation_days ? `<span>${s.violation_days} slip day${s.violation_days === 1 ? "" : "s"}</span>` : ""}
           </div>`
         : "";
       return `

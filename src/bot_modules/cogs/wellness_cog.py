@@ -22,6 +22,7 @@ from bot_modules.services.wellness_service import (
     opt_in_user,
     update_away_message,
     update_user_settings,
+    wellness_dashboard_link,
 )
 from bot_modules.core.utils import format_user_for_log
 
@@ -52,16 +53,14 @@ TIMEZONE_CHOICES: list[tuple[str, str]] = [
 
 ENFORCEMENT_LABELS: dict[str, str] = {
     "gentle": "💛 Gentle reminders",
-    "cooldown": "☕ Cooldown breaks",
     "slow_mode": "🐢 Slow mode",
     "gradual": "🌱 Gradual",
 }
 
 ENFORCEMENT_DESCRIPTIONS: dict[str, str] = {
     "gentle": "I'll send you a heads-up, but won't stop you.",
-    "cooldown": "I'll suggest a 5-minute breather when you go over.",
     "slow_mode": "I'll add a per-user slow mode so you can still post, just slower.",
-    "gradual": "Start with reminders, then breaks, then slow mode if needed.",
+    "gradual": "Start with reminders, then breather suggestions, then slow mode if needed.",
 }
 
 AWAY_MESSAGE_MAX = 500
@@ -116,7 +115,7 @@ class _SetupWizardView(discord.ui.View):
                     value=key,
                     description=ENFORCEMENT_DESCRIPTIONS[key][:100],
                 )
-                for key in ("gentle", "cooldown", "slow_mode", "gradual")
+                for key in ("gentle", "slow_mode", "gradual")
             ],
         )
         self._enf_select.callback = self._on_enf_pick  # type: ignore[assignment]
@@ -130,8 +129,8 @@ class _SetupWizardView(discord.ui.View):
             description=(
                 "This tool helps you set healthy boundaries with Discord — "
                 "**it's not a substitute for professional support.** "
-                "If you're ever struggling, please reach out to a trusted person "
-                "or a crisis resource.\n\n"
+                "If you're ever struggling, please reach out to someone "
+                "you trust.\n\n"
                 "**Step 1 of 2** — 🕐 What's your timezone?"
             ),
             color=WELLNESS_PRIMARY,
@@ -144,7 +143,7 @@ class _SetupWizardView(discord.ui.View):
                 "**Step 2 of 2** — All levels preserve your ability to post. Nothing locks you out.\n\n"
                 + "\n".join(
                     f"**{ENFORCEMENT_LABELS[k]}** — {ENFORCEMENT_DESCRIPTIONS[k]}"
-                    for k in ("gentle", "cooldown", "slow_mode", "gradual")
+                    for k in ("gentle", "slow_mode", "gradual")
                 )
             ),
             color=WELLNESS_PRIMARY,
@@ -159,7 +158,7 @@ class _SetupWizardView(discord.ui.View):
                 "**Next steps:**\n"
                 "• Set message caps, schedule offline hours, find an "
                 "accountability partner and fine-tune everything from the "
-                "**Wellness panel on the web dashboard**.\n"
+                f"**{wellness_dashboard_link()}**.\n"
                 "• `/wellness away set` — Turn your away auto-reply on or off, with an\n"
                 "  optional custom message"
             ),
@@ -315,7 +314,7 @@ class _SettingsView(discord.ui.View):
                     default=(k == current_enforcement),
                     description=ENFORCEMENT_DESCRIPTIONS[k][:100],
                 )
-                for k in ("gentle", "cooldown", "slow_mode", "gradual")
+                for k in ("gentle", "slow_mode", "gradual")
             ],
             row=0,
         )
@@ -326,17 +325,17 @@ class _SettingsView(discord.ui.View):
             placeholder="Notifications…",
             options=[
                 discord.SelectOption(
-                    label="Ephemeral (only in chat)",
+                    label="In-channel reply (visible ~30s)",
                     value="ephemeral",
                     default=(current_notifications == "ephemeral"),
                 ),
                 discord.SelectOption(
-                    label="DM only",
+                    label="DM only (private)",
                     value="dm",
                     default=(current_notifications == "dm"),
                 ),
                 discord.SelectOption(
-                    label="Both",
+                    label="In-channel + DM",
                     value="both",
                     default=(current_notifications == "both"),
                 ),

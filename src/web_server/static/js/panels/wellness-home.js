@@ -1,4 +1,4 @@
-import { wGet, wPost, esc, showStatus } from "../wellness-helpers.js";
+import { wGet, wPost, esc, showStatus, enfLabel, notifLabel } from "../wellness-helpers.js";
 import { guardForm } from "../config-helpers.js";
 import { renderLoading, renderError } from "../states.js";
 
@@ -25,7 +25,7 @@ export function mount(container) {
     }
 
     const pausedHTML = d.paused_until && d.paused_until > Date.now() / 1000
-      ? `<div class="chip chip-warning" style="margin-top:8px;">Nudges paused until ${new Date(d.paused_until * 1000).toLocaleTimeString()}</div>`
+      ? `<div class="chip chip-warning" style="margin-top:8px;">Paused until ${new Date(d.paused_until * 1000).toLocaleTimeString()}</div>`
       : "";
 
     container.querySelector(".panel").innerHTML = `
@@ -43,7 +43,7 @@ export function mount(container) {
         </div>
 
         <div class="card">
-          <div class="stat-label">Daily Caps</div>
+          <div class="stat-label">Caps</div>
           <div class="stat-value">${d.caps_count}</div>
           <a href="#/wellness-caps" class="w-card-link">Manage</a>
         </div>
@@ -78,7 +78,7 @@ export function mount(container) {
           <div class="field">
             <label>Enforcement Level
               <select name="enforcement_level">
-                ${d.enforcement_levels.map(e => `<option value="${e}"${e === d.enforcement_level ? " selected" : ""}>${e}</option>`).join("")}
+                ${d.enforcement_levels.map(e => `<option value="${e}"${e === d.enforcement_level ? " selected" : ""}>${enfLabel(e)}</option>`).join("")}
               </select>
             </label>
             <div class="field-hint">How firmly Dungeon Keeper holds you to your own limits.</div>
@@ -86,10 +86,12 @@ export function mount(container) {
           <div class="field">
             <label>Notifications
               <select name="notifications_pref">
-                ${d.notification_prefs.map(e => `<option value="${e}"${e === d.notifications_pref ? " selected" : ""}>${e}</option>`).join("")}
+                ${d.notification_prefs.map(e => `<option value="${e}"${e === d.notifications_pref ? " selected" : ""}>${notifLabel(e)}</option>`).join("")}
               </select>
             </label>
-            <div class="field-hint">How much Dungeon Keeper DMs you about your progress.</div>
+            <div class="field-hint">Where limit notices go. In-channel replies delete after ~30 seconds
+            but are visible to the room while they last; DM keeps it private. This also decides whether
+            your daily digest DM includes your wellness line.</div>
           </div>
           <div class="field">
             <label>Daily Reset Hour (0-23)
@@ -99,7 +101,7 @@ export function mount(container) {
           </div>
           <div class="field">
             <label><input type="checkbox" name="public_commitment" ${d.public_commitment ? "checked" : ""} /> Share My Streak Publicly</label>
-            <div class="field-hint">When on, your streak can appear on the server’s wellness leaderboard. Off keeps it private.</div>
+            <div class="field-hint">When on, your name and streak appear on the pinned Active in Commitment list, and milestone celebrations may mention you in the wellness channel. Off (the default) keeps all of that private.</div>
           </div>
           <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
       </form>
@@ -110,13 +112,21 @@ export function mount(container) {
           <label style="display:inline-flex;align-items:center;gap:6px;">Pause for (minutes)
             <input type="number" name="minutes" min="1" max="10080" value="60" style="width:80px" />
           </label>
-          <button type="submit" class="btn">Pause Nudges</button>
+          <button type="submit" class="btn">Pause the Program</button>
           <span data-pause-status></span>
         </form>
-        <button data-resume-btn class="btn">Resume Nudges</button>
+        <button data-resume-btn class="btn">Resume</button>
       </div>
+      <div class="field-hint">Pausing stops everything until it ends — enforcement, blackout windows,
+      streak credit, and wellness DMs.</div>
 
-      ${d.crisis_resource_url ? `<div class="w-crisis"><a href="${esc(d.crisis_resource_url)}" target="_blank" rel="noopener">Crisis resources</a></div>` : ""}
+      <div class="section-label">Leave</div>
+      <div class="w-actions">
+        <button data-optout-btn class="btn btn-danger">Leave the Program</button>
+        <span data-optout-status></span>
+      </div>
+      <div class="field-hint">Stops all tracking, nudges and enforcement immediately and removes your wellness role.
+      Your settings are kept for 30 days in case you come back, then deleted.</div>
     `;
 
     // Settings form
@@ -144,14 +154,28 @@ export function mount(container) {
       e.preventDefault();
       try {
         await wPost("/api/wellness/pause", { minutes: parseInt(new FormData(pForm).get("minutes"), 10) });
-        showStatus(pStatus, true, "Nudges paused");
+        showStatus(pStatus, true, "Program paused");
       } catch (err) { showStatus(pStatus, false, `Couldn’t pause — ${err.message}`); }
     });
 
     // Resume
     container.querySelector("[data-resume-btn]").addEventListener("click", async () => {
-      try { await wPost("/api/wellness/resume", {}); showStatus(pStatus, true, "Nudges resumed"); }
+      try { await wPost("/api/wellness/resume", {}); showStatus(pStatus, true, "Program resumed"); }
       catch (err) { showStatus(pStatus, false, `Couldn’t resume — ${err.message}`); }
+    });
+
+    // Opt out
+    const oStatus = container.querySelector("[data-optout-status]");
+    container.querySelector("[data-optout-btn]").addEventListener("click", async () => {
+      if (!window.confirm(
+        "Leave the wellness program?\n\n" +
+        "All tracking, nudges and enforcement stop immediately and your wellness role is removed. " +
+        "Your caps, blackouts and settings are kept for 30 days in case you rejoin, then deleted."
+      )) return;
+      try {
+        await wPost("/api/wellness/optout", {});
+        mount(container); // re-render — shows the not-opted-in notice
+      } catch (err) { showStatus(oStatus, false, `Couldn’t leave — ${err.message}`); }
     });
   })();
 }

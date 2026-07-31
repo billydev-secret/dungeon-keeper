@@ -49,6 +49,7 @@ from bot_modules.services.wellness_scheduler import (
 from bot_modules.services.wellness_service import (
     WellnessBlackout,
     WellnessStreak,
+    WellnessUser,
     add_blackout,
     arm_slow_mode,
     ensure_streak,
@@ -56,6 +57,7 @@ from bot_modules.services.wellness_service import (
     mark_blackout_active,
     opt_in_user,
     pause_user,
+    update_user_settings,
     upsert_wellness_config,
     user_now,
 )
@@ -351,27 +353,71 @@ async def test_try_dm_passes_embed_kwarg():
 # ── _send_blackout_entry_dm ──────────────────────────────────────────
 
 
+def _dm_user(level: str) -> WellnessUser:
+    return WellnessUser(
+        guild_id=10,
+        user_id=7,
+        timezone="UTC",
+        enforcement_level=level,
+        notifications_pref="both",
+        slow_mode_rate_seconds=120,
+        public_commitment=False,
+        away_enabled=False,
+        away_message="",
+        daily_reset_hour=0,
+        opted_in_at=1.0,
+        opted_out_at=None,
+        paused_until=None,
+        cooldown_until=None,
+        last_nudge_at=None,
+    )
+
+
 @pytest.mark.asyncio
-async def test_send_blackout_entry_dm_sends_embed():
+@pytest.mark.parametrize(
+    ("level", "name", "start_minute", "end_minute", "expect", "reject"),
+    [
+        pytest.param(
+            "gradual", "Night Owl", 23 * 60, 7 * 60,
+            ["Night Owl", "07:00", "slow mode", "Sleep well"], [],
+            id="gradual-night-gets-slow-mode-copy-and-sleep-well",
+        ),
+        pytest.param(
+            "gentle", "Work Hours", 9 * 60, 17 * 60,
+            ["Work Hours", "17:00", "gentle reminder", "Enjoy the time away"],
+            ["slow mode", "Sleep well"],
+            id="gentle-day-window-gets-reminder-copy-no-sleep-well",
+        ),
+    ],
+)
+async def test_send_blackout_entry_dm_copy_matches_level_and_window(
+    level, name, start_minute, end_minute, expect, reject
+):
+    """The heads-up must describe what will actually happen at the member's
+    level (a gentle member never gets slow mode), and not wish a 9-to-5
+    blackout "Sleep well"."""
     member = MagicMock()
     member.send = AsyncMock()
     blackout = WellnessBlackout(
         id=1,
         guild_id=10,
         user_id=7,
-        name="Night Owl",
-        start_minute=23 * 60,
-        end_minute=7 * 60,
+        name=name,
+        start_minute=start_minute,
+        end_minute=end_minute,
         days_mask=127,
         enabled=True,
         created_at=0.0,
     )
-    await _send_blackout_entry_dm(member, blackout)
+    await _send_blackout_entry_dm(member, blackout, _dm_user(level))
     member.send.assert_awaited_once()
     embed = member.send.call_args.kwargs.get("embed")
     assert isinstance(embed, discord.Embed)
-    assert embed.title is not None and "Night Owl" in embed.title
-    assert embed.description is not None and "07:00" in embed.description
+    text = f"{embed.title}\n{embed.description}"
+    for fragment in expect:
+        assert fragment in text
+    for fragment in reject:
+        assert fragment not in text
 
 
 # ── _lift_expired_slow_mode ──────────────────────────────────────────
@@ -682,8 +728,10 @@ async def test_rebuild_active_list_no_channel_returns_early(db_path: Path):
 async def test_rebuild_active_list_posts_and_pins_new_message(db_path: Path):
     with open_db(db_path) as conn:
         upsert_wellness_config(conn, 10, channel_id=999)
-        # An opted-in committed user with a streak so the embed is non-trivial
+        # An opted-in committed user with a streak so the embed is non-trivial.
+        # Public commitment defaults off, so the test opts in explicitly.
         opt_in_user(conn, 10, 7, timezone="UTC")
+        update_user_settings(conn, 10, 7, public_commitment=True)
         ensure_streak(conn, 10, 7, "2026-05-30")
 
     channel = _FakeTextChannel(999)
@@ -760,6 +808,7 @@ async def test_post_milestone_celebrations_seeds_celebrated_badge_silently(db_pa
     with open_db(db_path) as conn:
         upsert_wellness_config(conn, 10, channel_id=999)
         opt_in_user(conn, 10, 7, timezone="UTC")
+        update_user_settings(conn, 10, 7, public_commitment=True)
         ensure_streak(conn, 10, 7, "2026-05-30")  # default badge 🌱, days=0
         # celebrated_badge defaults to '' so it differs from '🌱'
 
@@ -784,6 +833,7 @@ async def test_post_milestone_celebrations_celebrates_real_upgrade(db_path: Path
     with open_db(db_path) as conn:
         upsert_wellness_config(conn, 10, channel_id=999)
         opt_in_user(conn, 10, 7, timezone="UTC")
+        update_user_settings(conn, 10, 7, public_commitment=True)
         ensure_streak(conn, 10, 7, "2026-05-25")
         conn.execute(
             "UPDATE wellness_streaks "
@@ -815,6 +865,7 @@ async def test_post_milestone_celebrations_skips_downgrades(db_path: Path):
     with open_db(db_path) as conn:
         upsert_wellness_config(conn, 10, channel_id=999)
         opt_in_user(conn, 10, 7, timezone="UTC")
+        update_user_settings(conn, 10, 7, public_commitment=True)
         ensure_streak(conn, 10, 7, "2026-05-25")
         conn.execute(
             "UPDATE wellness_streaks "

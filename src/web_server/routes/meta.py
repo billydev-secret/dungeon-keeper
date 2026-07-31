@@ -29,6 +29,31 @@ def _guilds_from_session(request: Request) -> list[dict]:
     return session.get("guilds", []) if session else []
 
 
+def _me_extras(ctx, guild_id: int, user_id: int) -> tuple[str | None, str | None, bool]:
+    """Per-guild feature fields for MeResponse: games editor role, economy
+    manager role, and whether this user is an active wellness participant
+    (drives the Wellness nav gate — the panels' own opted-in truth, not a
+    role-name string match)."""
+    with ctx.open_db() as conn:
+        row = conn.execute(
+            "SELECT role_id FROM games_editor_role WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+        games_role = str(row["role_id"]) if row else None
+        econ_role_id = load_econ_settings(conn, guild_id).manager_role_id
+        econ_role = str(econ_role_id) if econ_role_id else None
+        wrow = conn.execute(
+            "SELECT opted_in_at, opted_out_at FROM wellness_users "
+            "WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        ).fetchone()
+        wellness = bool(
+            wrow
+            and wrow["opted_in_at"] is not None
+            and wrow["opted_out_at"] is None
+        )
+        return games_role, econ_role, wellness
+
+
 @router.get("/me", response_model=MeResponse)
 async def me(
     request: Request,
@@ -45,17 +70,9 @@ async def me(
         if member is not None:
             status = str(member.status)
 
-    def _q_editor_role():
-        with ctx.open_db() as conn:
-            row = conn.execute(
-                "SELECT role_id FROM games_editor_role WHERE guild_id = ?", (guild_id,)
-            ).fetchone()
-            games_role = str(row["role_id"]) if row else None
-            econ_role_id = load_econ_settings(conn, guild_id).manager_role_id
-            econ_role = str(econ_role_id) if econ_role_id else None
-            return games_role, econ_role
-
-    games_editor_role_id, economy_manager_role_id = await run_query(_q_editor_role)
+    games_editor_role_id, economy_manager_role_id, wellness_opted_in = await run_query(
+        _me_extras, ctx, guild_id, user.user_id
+    )
 
     return MeResponse(
         user_id=str(user.user_id),
@@ -74,6 +91,7 @@ async def me(
         status=status,
         games_editor_role_id=games_editor_role_id,
         economy_manager_role_id=economy_manager_role_id,
+        wellness_opted_in=wellness_opted_in,
     )
 
 
@@ -141,18 +159,8 @@ async def select_guild(
     if is_support:
         perms = sorted({"admin", "moderator", "manage_server"})
 
-    def _q_editor_role_select():
-        with ctx.open_db() as conn:
-            row = conn.execute(
-                "SELECT role_id FROM games_editor_role WHERE guild_id = ?", (guild_id,)
-            ).fetchone()
-            games_role = str(row["role_id"]) if row else None
-            econ_role_id = load_econ_settings(conn, guild_id).manager_role_id
-            econ_role = str(econ_role_id) if econ_role_id else None
-            return games_role, econ_role
-
-    games_editor_role_id, economy_manager_role_id = await run_query(
-        _q_editor_role_select
+    games_editor_role_id, economy_manager_role_id, wellness_opted_in = await run_query(
+        _me_extras, ctx, guild_id, user.user_id
     )
 
     session_guilds = _guilds_from_session(request)
@@ -173,6 +181,7 @@ async def select_guild(
         status=status,
         games_editor_role_id=games_editor_role_id,
         economy_manager_role_id=economy_manager_role_id,
+        wellness_opted_in=wellness_opted_in,
     )
 
     from web_server.routes.oauth import _is_secure

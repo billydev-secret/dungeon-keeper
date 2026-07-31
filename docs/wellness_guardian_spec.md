@@ -12,7 +12,7 @@ At the code level, **there is no supported way to turn Wellness Guardian on for 
 
 - `/wellness setup` refuses to run unless `wellness_config.role_id` is set, and points the user at the web dashboard.
 - **`/wellness-admin setup` does not exist** — there is no `/wellness-admin` slash command group anywhere. The member-facing "not set up" error strings (`wellness_cog.py:228,249,496`) now all point at the web dashboard rather than naming a phantom command.
-- The dashboard admin router (`/api/wellness/admin`) has **no create-role / create-category / provisioning endpoint**. Its only writer of config sets `default_enforcement` and `crisis_resource_url` — never `role_id` or `channel_id`.
+- The dashboard admin router (`/api/wellness/admin`) has **no create-role / create-category / provisioning endpoint**. Its only writer of config sets `default_enforcement` — never `role_id` or `channel_id`.
 - The only other writer of the config row is the background scheduler, which sets `active_list_message_id` only.
 
 Net effect: unless a `wellness_config` row is seeded out-of-band (e.g. a manual DB edit), no member can opt in, so no enforcement, dashboard data, or loops have any subject to act on. **Provisioning is the single genuinely-missing piece** — see [Roadmap](#provisioning-admin-setup).
@@ -29,10 +29,10 @@ The `/wellness` group (`wellness_cog.py`) registers exactly three commands:
 
 | Command | Permission | Behavior |
 |---|---|---|
-| `/wellness setup` | Everyone (server only) | Opens an ephemeral 2-step wizard: (1) disclaimer + timezone select, (2) enforcement level (Gentle / Cooldown / Slow mode / Gradual). On completion, writes the member's opt-in row and assigns the Wellness Guardian role. **Aborts early** if the guild has no `role_id` configured (see activation gap). |
+| `/wellness setup` | Everyone (server only) | Opens an ephemeral 2-step wizard: (1) disclaimer + timezone select, (2) enforcement level (Gentle / Slow mode / Gradual — the never-enforced "Cooldown" level was retired 2026-07-30; stored legacy rows keep their old behavior). On completion, writes the member's opt-in row and assigns the Wellness Guardian role. **Aborts early** if the guild has no `role_id` configured (see activation gap). |
 | `/wellness away set state:<on\|off>` | Opted-in members | Turns the away auto-reply on or off. Optional `message` arg (≤ 500 chars, on only — passing it with `off` is refused rather than silently dropped); if omitted when turning on, the stored message is kept, falling back to a default. Turning on replies with an ephemeral preview embed. Replaced the separate `/wellness away on` and `/wellness away off` commands 2026-07-28. |
 
-The `away` subgroup is nested under `wellness`. Note: a `_SettingsView` class exists in the cog but is **not wired to any command** — a dead stub from the abandoned slash surface.
+The `away` subgroup is nested under `wellness`. Note: a `_SettingsView` class exists in the cog but is **not wired to any command** — a dead stub from the abandoned slash surface. A proposal to revive it as the shared ephemeral menu behind a channel panel (the bank paradigm) lives in `docs/plans/wellness-discord-panel.md` (2026-07-30).
 
 ### Enforcement engine (live)
 
@@ -40,38 +40,59 @@ The `away` subgroup is nested under `wellness`. Note: a `_SettingsView` class ex
 
 1. **Away-mention interception** — if the message @-mentions any opted-in member who has away mode on, the bot posts an in-channel auto-reply embed (rate-limited per channel). Fires regardless of whether the *author* is opted in; never deletes the message.
 2. **Slow-mode pre-check** — if the author has active per-user slow mode and is posting inside their rate interval, the bot deletes the message and DMs them the held content plus a countdown. **Per-user global**, not per-channel — switching channels doesn't defeat it. If the bot lacks Manage Messages, or the user's DMs are closed, the message is **not** deleted (no silent destruction).
-3. **Cap evaluation + escalation** — increments per-cap counters; on overage within a window, escalates: 1st → **nudge**, 2nd → **cooldown** (bot interactions paused ~5 min), 3rd+ → **friction** (arm slow mode). The action is capped by the member's enforcement level (`gentle`→nudge max, `cooldown`→cooldown max, `slow_mode`/`gradual`→friction). Caps support `global` / `channel` / `category` scope, `hourly` / `daily` / `weekly` windows, an `exclude_exempt` flag, and optional per-hour/per-day `bucket_limits`. (`voice` scope is rejected as "coming soon".)
+3. **Cap evaluation + escalation** — increments per-cap counters; on overage within a window, escalates: 1st → **nudge**, 2nd → **cooldown** (bot interactions paused ~5 min), 3rd+ → **friction** (arm slow mode). The action is capped by the member's enforcement level (`gentle`→nudge max, `slow_mode`/`gradual`→friction; legacy `cooldown` rows→cooldown max). Caps support `global` / `channel` / `category` scope, `hourly` / `daily` / `weekly` windows, an `exclude_exempt` flag, and optional per-hour/per-day `bucket_limits`. (`voice` scope is rejected as "coming soon".)
 4. **Blackout enforcement** — during an active blackout window the member's enforcement level applies to all messages; `gradual` escalates per-day within the blackout.
 5. **Streak violation** — any overage or blackout-triggered enforcement marks the day as a slip for streak accounting.
 
-Notifications are delivered per the member's `notifications_pref` (`ephemeral` — actually a self-deleting channel reply — / `dm` / `both`).
+Notifications are delivered per the member's `notifications_pref` (`ephemeral` — actually a self-deleting channel reply — / `dm` / `both`). Since 2026-07-30 both the web select and the (dormant) Discord settings view label these honestly: "In-channel reply (visible to the room ~30s)" / "DM only (private)" / "In-channel + DM"; the enforcement selects show the wizard's friendly labels instead of raw enums.
+
+### Daily login digest (economy DM)
+
+The two digest parts have **individual opt-ins** and each member receives
+exactly the parts they opted into:
+
+- **Economy part** — requires the opt-in economy game role (existing
+  `require_game_role` gate).
+- **Wellness part** — `login_digest_value()`: active, non-paused wellness
+  members whose `notifications_pref` includes DMs ("dm"/"both" — the same
+  dial that governs enforcement notices). Renders badge, clean-day streak,
+  next milestone, dashboard link (link line omitted when no public URL).
+
+Both opted → one combined DM (wellness field above the quest sections).
+Economy-only → the classic digest. **Wellness content only ever rides this
+economy morning message** — a member without the economy game role gets no
+daily wellness DM (decided 2026-07-30; the weekly report remains their DM
+touchpoint). The digest's public bank-channel fallback carries a scrubbed
+economy-only embed (`notify_member(fallback_embed=…)`) so wellness state is
+never posted publicly.
 
 ### Background loops (all registered in `cog_load`)
 
 - **`wellness_tick_loop`** (every 60s): posts blackout entry DMs on transition, lifts expired slow mode, auto-resumes paused members whose pause expired, credits a clean-day streak once per day in each member's timezone, and runs nightly GC (old counter rows + sweep opted-out members past the 30-day retention).
-- **`wellness_active_list_loop`** (hourly): rebuilds the pinned "💚 Active in Commitment" embed in the configured channel (names + streak days for members who opted into public commitment) and posts milestone-badge celebration messages. Badges: 🌱 join, 🌟 7d, 🔥 30d, 💪 100d, 👑 365d.
-- **`wellness_weekly_report_loop`** (every 5 min, gated to Sunday ≥ 09:00 local, once per ISO week): DMs each member a weekly summary embed (streak, personal best, clean-days/7, compliance %) with an AI-generated encouragement line (falls back to canned text with no API key).
+- **`wellness_active_list_loop`** (hourly): rebuilds the pinned "💚 Active in Commitment" embed in the configured channel (names + streak days for members who opted into public commitment) and posts milestone-badge celebration messages. Badges: 🌱 join, 🌟 7d, 🔥 30d, 💪 100d, 👑 365d. **Public commitment defaults OFF at opt-in** (as of 2026-07-30): joining the program never places a member on the list or in celebrations — that requires the explicit dashboard toggle, and a re-opt-in preserves the earlier choice.
+- **`wellness_weekly_report_loop`** (every 5 min, gated to Sunday ≥ 09:00 local, once per ISO week): DMs each member a weekly summary embed (streak, personal best, clean days out of *tracked* days — days since opt-in that have occurred, so a flawless partial week reads 100% — and compliance %) with an AI-generated encouragement line (falls back to canned text with no API key).
 
 ### Web dashboard — member panel (`/api/wellness`, mounted in `server.py`)
 
-Full CRUD, authenticated as the logged-in member:
+Full CRUD, authenticated as the logged-in member. The Wellness nav section is gated on `wellness_opted_in` from `/api/me` (the member's actual opt-in row — not a role-name match; changed 2026-07-30), with the usual `manage_server`/admin bypass:
 
 | Endpoint(s) | Feature |
 |---|---|
-| `GET /me`, `GET /history`, `GET /xp-histogram` | Profile, streak/history, activity histogram |
+| `GET /me`, `GET /history`, `GET /activity-histogram` | Profile, streak/history, activity histogram (average *messages* per hour/day from message-shaped `xp_events` — renamed from `/xp-histogram` 2026-07-30 when it stopped averaging XP amounts, which had seeded caps several times too tight) |
 | `GET/POST/PUT/DELETE /caps` | Create, edit, remove message caps (scope, window, limit, exclude-exempt, optional bucket limits) |
 | `GET /blackouts`, `POST /blackouts`, `PUT /blackouts/{id}/toggle`, `DELETE /blackouts/{id}` | Blackout windows, including the four preset **templates** (Night Owl 23:00–07:00 daily, Work Hours 09:00–17:00 weekdays, School Hours 08:00–15:00 weekdays, Weekend Detox all-day Sat–Sun) |
 | `GET/POST /away` | Away message text + toggle (mirrors the two slash commands) |
 | `GET /partners`, `POST /partners/request`, `DELETE /partners/{id}` | Accountability partners — request (DMs the target with Accept/Decline), list, dissolve |
 | `POST /settings` | Enforcement level, notifications pref, public-commitment toggle, timezone, daily reset hour, slow-mode rate |
 | `POST /pause`, `POST /resume` | Pause / resume the member's own tracking |
+| `POST /optout` | Leave the program — tracking deactivated, slow mode lifted, wellness role removed (best-effort); settings retained 30 days, then swept |
 
 ### Web dashboard — admin panel (`/api/wellness/admin`, requires `manage_server`)
 
 | Endpoint(s) | Feature |
 |---|---|
 | `GET /dashboard` | Active-member count, exempt channels, server config summary |
-| `GET/POST /defaults` | Server default enforcement level + crisis-resource URL |
+| `GET/POST /defaults` | Server default enforcement level |
 | `GET /users`, `POST /users/{id}/pause`, `POST /users/{id}/resume` | List opted-in members; admin pause/resume a member |
 | `GET/POST /exempt`, `DELETE /exempt/{id}` | Manage the exempt-channel list |
 
@@ -79,7 +100,7 @@ The admin panel does **not** provision the wellness role/category (see activatio
 
 ### Data model (confirmed)
 
-Per-guild + per-member tables back all of the above: member settings (timezone, enforcement, notifications pref, slow-mode rate, public-commitment, daily reset hour), caps + per-window counters + overage counters, blackouts + active-marker state, the away message, streak state (current + personal-best + last-violation-date + clean-day history), partnerships, milestone-badge celebration state, weekly-report cache, per-user slow-mode state, and per-guild config (role id, channel id, active-list message id, default enforcement, crisis URL, exempt channels). Schema lives in `wellness_service.py` (`init_wellness_tables`). `opt_out_user()` exists as a function but is **not** surfaced by any command or endpoint.
+Per-guild + per-member tables back all of the above: member settings (timezone, enforcement, notifications pref, slow-mode rate, public-commitment, daily reset hour), caps + per-window counters + overage counters, blackouts + active-marker state, the away message, streak state (current + personal-best + last-violation-date + clean-day history), partnerships, milestone-badge celebration state, weekly-report cache, per-user slow-mode state, and per-guild config (role id, channel id, active-list message id, default enforcement, exempt channels). Schema lives in `wellness_service.py` (`init_wellness_tables`). `opt_out_user()` is surfaced via `POST /api/wellness/optout` and the Overview panel's **Leave the Program** action (added 2026-07-30).
 
 ---
 
@@ -136,7 +157,7 @@ The original design placed all admin functionality in the **web Wellness panel**
 
 > *A short historical mapping from the retired `/wellness-admin X` commands to their dashboard equivalents lived here while admins migrated. It's now retained only in git history.*
 
-*Built today:* defaults (enforcement + crisis URL), per-user pause/resume, exempt-channel management, stats tile. *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
+*Built today:* defaults (enforcement), per-user pause/resume, exempt-channel management, stats tile. *(Crisis-resource URL support was removed 2026-07-30 — the setup disclaimer no longer references a crisis resource; pre-existing DBs keep an orphaned `crisis_resource_url` column.)* *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
 
 ### Onboarding (`/wellness setup`) — original 3-step design
 
@@ -286,7 +307,7 @@ A user can apply a template and customize it, or build a fully custom recurring 
 
 #### Per guild (dashboard)
 - Wellness category + channel provisioning *(not built)*
-- Server-side defaults (enforcement, caps, blackout template, crisis-resource URL) *(only enforcement + crisis URL built)*
+- Server-side defaults (enforcement, caps, blackout template, crisis-resource URL) *(only enforcement built; crisis URL removed 2026-07-30)*
 - Exempt-channel multi-select
 - Per-user overrides *(not built)*
 
@@ -300,4 +321,4 @@ Per-guild + per-user tables for: member settings (timezone, enforcement, notific
 
 Server-wide config tables for: server defaults, the wellness category + channel ids, the crisis-resource URL, and the exempt-channel list.
 
-On `/wellness optout`: role removed, tracking deactivated, slow mode lifted; settings retained 30 days then purged. *(The `opt_out_user()` backend exists; no command or endpoint invokes it.)*
+On `/wellness optout`: role removed, tracking deactivated, slow mode lifted; settings retained 30 days then purged. *(The dashboard exit shipped 2026-07-30 — `POST /optout` + Overview panel. The slash-command form remains roadmap.)*

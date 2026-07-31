@@ -2152,8 +2152,6 @@ textarea.field-input { resize: vertical; }
 
 .w-notice { color: var(--ink-dim); padding: 20px 0; }
 .w-notice code { background: var(--bg-alt); padding: 2px 6px; border-radius: 3px; font-size: 13px; }
-.w-crisis { margin-top: 24px; font-size: 12px; }
-.w-crisis a { color: var(--gold-solid); }
 .w-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
 /* ── Wellness Histogram Caps ──────────────────────────────────────── */

@@ -1,4 +1,4 @@
-import { wGet, wPost, wDelete, esc, showStatus } from "../wellness-helpers.js";
+import { wGet, wPost, wDelete, esc, showStatus, enfLabel } from "../wellness-helpers.js";
 import { toast } from "../ui.js";
 import { guardForm } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
@@ -46,16 +46,10 @@ export function mount(container) {
         <div class="field">
           <label>Default Enforcement
             <select name="default_enforcement">
-              ${defaults.enforcement_levels.map(e => `<option value="${e}"${e === cfg.default_enforcement ? " selected" : ""}>${e}</option>`).join("")}
+              ${defaults.enforcement_levels.map(e => `<option value="${e}"${e === cfg.default_enforcement ? " selected" : ""}>${enfLabel(e)}</option>`).join("")}
             </select>
           </label>
           <div class="field-hint">The starting level for members who opt in. Each member can change their own afterwards.</div>
-        </div>
-        <div class="field">
-          <label>Crisis Resource URL
-            <input type="url" name="crisis_resource_url" value="${esc(cfg.crisis_resource_url || "")}" placeholder="https://findahelpline.com/" />
-          </label>
-          <div class="field-hint">Linked from every member’s wellness page. Leave blank to hide the link.</div>
         </div>
         <div><button type="submit" class="btn btn-primary">Save</button><span data-defaults-status></span></div>
       </form>`;
@@ -130,7 +124,6 @@ export function mount(container) {
       try {
         await wPost("/api/wellness/admin/defaults", {
           default_enforcement: fd.get("default_enforcement"),
-          crisis_resource_url: fd.get("crisis_resource_url"),
         });
         showStatus(dStatus, true);
       } catch (err) { showStatus(dStatus, false, `Couldn’t save — ${err.message}`); }

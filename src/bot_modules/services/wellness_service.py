@@ -22,7 +22,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 # Constants
 # ---------------------------------------------------------------------------
 
-ENFORCEMENT_LEVELS: tuple[str, ...] = ("gentle", "cooldown", "slow_mode", "gradual")
+# Selectable levels. "cooldown" was removed 2026-07-30: as a *level* it was
+# never enforced (cooldown_until had no reader), so it was Gentle with
+# different copy — a preference the bot didn't keep. Stored legacy rows still
+# behave as before via wellness_enforcement._enforcement_to_action; the value
+# just can't be picked anymore. The COOLDOWN *action* (the breather message on
+# a second overage) is unrelated and stays.
+ENFORCEMENT_LEVELS: tuple[str, ...] = ("gentle", "slow_mode", "gradual")
 NOTIFICATION_PREFS: tuple[str, ...] = ("ephemeral", "dm", "both")
 CAP_SCOPES: tuple[str, ...] = ("global", "channel", "category", "voice")
 CAP_WINDOWS: tuple[str, ...] = ("hourly", "daily", "weekly")
@@ -72,7 +78,7 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
             enforcement_level      TEXT NOT NULL DEFAULT 'gradual',
             notifications_pref     TEXT NOT NULL DEFAULT 'both',
             slow_mode_rate_seconds INTEGER NOT NULL DEFAULT 120,
-            public_commitment      INTEGER NOT NULL DEFAULT 1,
+            public_commitment      INTEGER NOT NULL DEFAULT 0,
             away_enabled           INTEGER NOT NULL DEFAULT 0,
             away_message           TEXT NOT NULL DEFAULT '',
             daily_reset_hour       INTEGER NOT NULL DEFAULT 0,
@@ -301,11 +307,60 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
             role_id                INTEGER NOT NULL DEFAULT 0,
             channel_id             INTEGER NOT NULL DEFAULT 0,
             active_list_message_id INTEGER NOT NULL DEFAULT 0,
-            crisis_resource_url    TEXT NOT NULL DEFAULT '',
             default_enforcement    TEXT NOT NULL DEFAULT 'gradual'
         )
         """
     )
+
+
+def login_digest_value(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> str | None:
+    """Wellness section for the daily login digest DM, or None to omit it.
+
+    Individually opted-in: only for active, non-paused members whose
+    ``notifications_pref`` includes DMs ("dm"/"both") — the same dial that
+    governs enforcement notices, so "ephemeral" (only in chat) keeps daily
+    DMs wellness-free. A paused member asked for quiet, so they're skipped
+    too. Read-only: a member with no streak row yet renders as day 0 rather
+    than creating one from a DM path.
+    """
+    user = get_wellness_user(conn, guild_id, user_id)
+    if user is None or not user.is_active or user.is_paused:
+        return None
+    if user.notifications_pref not in ("dm", "both"):
+        return None
+    row = conn.execute(
+        "SELECT current_days, current_badge FROM wellness_streaks "
+        "WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    days = int(row["current_days"]) if row else 0
+    badge = (str(row["current_badge"]) if row else "") or "🌱"
+    value = f"{badge} Day **{days}** clean streak"
+    nxt = next_milestone(days)
+    if nxt:
+        value += f" — next: {nxt[1]} at {nxt[0]} days ({nxt[0] - days} to go)"
+    # Link line only when there's a real URL — plain text here would just
+    # name a place the member can't click through to.
+    from bot_modules.services.advisor_service import dashboard_url
+
+    if dashboard_url():
+        value += f"\n{wellness_dashboard_link('Manage on your Wellness dashboard')}"
+    return value
+
+
+def wellness_dashboard_link(
+    label: str = "Wellness panel on the web dashboard",
+) -> str:
+    """Markdown pointer to the member wellness panel — a real link when a
+    public dashboard URL is configured, plain text otherwise. Use inside
+    embed *descriptions* (markdown renders there; embed footers stay plain)."""
+    # Lazy import: advisor_service owns the DASHBOARD_BASE_URL lookup.
+    from bot_modules.services.advisor_service import dashboard_url
+
+    url = dashboard_url()
+    return f"[{label}]({url}/#/wellness-home)" if url else label
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +493,12 @@ def opt_in_user(
     enforcement_level: str = DEFAULT_ENFORCEMENT,
     notifications_pref: str = DEFAULT_NOTIFICATIONS,
 ) -> WellnessUser:
-    """Insert or re-activate a wellness user. Resets opt_out timestamp."""
+    """Insert or re-activate a wellness user. Resets opt_out timestamp.
+
+    ``public_commitment`` starts OFF — appearing on the public streak list is
+    an explicit choice made later (dashboard toggle), never part of opting in.
+    A re-opt-in preserves whatever the member previously chose.
+    """
     if enforcement_level not in ENFORCEMENT_LEVELS:
         enforcement_level = DEFAULT_ENFORCEMENT
     if notifications_pref not in NOTIFICATION_PREFS:
@@ -451,7 +511,7 @@ def opt_in_user(
             guild_id, user_id, timezone, enforcement_level, notifications_pref,
             slow_mode_rate_seconds, public_commitment, away_enabled, away_message,
             daily_reset_hour, opted_in_at, opted_out_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 1, 0, '', 0, ?, NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, '', 0, ?, NULL)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
             timezone           = excluded.timezone,
             enforcement_level  = excluded.enforcement_level,
@@ -567,25 +627,6 @@ def resume_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> bool:
     return (cur.rowcount or 0) > 0
 
 
-def set_cooldown(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    user_id: int,
-    until: float,
-) -> None:
-    conn.execute(
-        "UPDATE wellness_users SET cooldown_until = ? WHERE guild_id = ? AND user_id = ?",
-        (until, guild_id, user_id),
-    )
-
-
-def clear_cooldown(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
-    conn.execute(
-        "UPDATE wellness_users SET cooldown_until = NULL WHERE guild_id = ? AND user_id = ?",
-        (guild_id, user_id),
-    )
-
-
 def list_active_users(conn: sqlite3.Connection, guild_id: int) -> list[WellnessUser]:
     rows = conn.execute(
         "SELECT * FROM wellness_users WHERE guild_id = ? AND opted_in_at IS NOT NULL AND opted_out_at IS NULL",
@@ -673,17 +714,17 @@ class WellnessConfig:
     role_id: int
     channel_id: int
     active_list_message_id: int
-    crisis_resource_url: str
     default_enforcement: str
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> WellnessConfig:
+        # Pre-2026-07-30 DBs carry an orphaned crisis_resource_url column;
+        # SELECT * returns it and from_row simply ignores it.
         return cls(
             guild_id=int(row["guild_id"]),
             role_id=int(row["role_id"]),
             channel_id=int(row["channel_id"]),
             active_list_message_id=int(row["active_list_message_id"]),
-            crisis_resource_url=str(row["crisis_resource_url"]),
             default_enforcement=str(row["default_enforcement"]),
         )
 
@@ -705,7 +746,6 @@ def upsert_wellness_config(
     role_id: int | None = None,
     channel_id: int | None = None,
     active_list_message_id: int | None = None,
-    crisis_resource_url: str | None = None,
     default_enforcement: str | None = None,
 ) -> WellnessConfig:
     """Upsert the per-guild wellness config row, only setting fields supplied."""
@@ -730,9 +770,6 @@ def upsert_wellness_config(
     if active_list_message_id is not None:
         fields.append("active_list_message_id = ?")
         values.append(int(active_list_message_id))
-    if crisis_resource_url is not None:
-        fields.append("crisis_resource_url = ?")
-        values.append(str(crisis_resource_url))
     if default_enforcement is not None and default_enforcement in ENFORCEMENT_LEVELS:
         fields.append("default_enforcement = ?")
         values.append(default_enforcement)
@@ -1751,15 +1788,20 @@ def compute_weekly_summary(
 
     Returns a dict with:
         clean_days     — count of days in [week_start, week_start+6] with a streak_history row
+        tracked_days   — days of the window the member was enrolled for AND that
+                         have already occurred (opt-in date .. today, clamped to
+                         the window). The compliance denominator: a flawless
+                         partial week reads 100%, never 57%.
         violation_days — 1 if last_violation_date falls in the week, else 0 (proxy)
-        compliance_pct — clean_days/7 * 100, rounded
+        compliance_pct — clean_days/tracked_days * 100, rounded, capped at 100
         current_days   — end-of-week streak
         personal_best  — all-time PB
         is_personal_best — whether user is currently at their PB (and PB ≥ 1)
         badge          — current badge
     """
     end = week_start + timedelta(days=6)
-    week_iso = [str((week_start + timedelta(days=i))) for i in range(7)]
+    week_days = [week_start + timedelta(days=i) for i in range(7)]
+    week_iso = [str(d) for d in week_days]
     placeholders = ",".join("?" * len(week_iso))
     row = conn.execute(
         f"""
@@ -1784,11 +1826,35 @@ def compute_weekly_summary(
     if last_violation and last_violation in week_iso:
         violation_days = 1
 
-    compliance_pct = round((clean_days / 7) * 100)
+    # Denominator: only days the member was enrolled for and that have
+    # happened. Clean-day credit lands during the day itself (tick loop), so
+    # today counts as tracked once it starts.
+    user_row = conn.execute(
+        "SELECT timezone, opted_in_at FROM wellness_users "
+        "WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    tz = safe_zone(user_row["timezone"] if user_row else None)
+    today = datetime.now(tz).date()
+    opt_in_date: date | None = None
+    if user_row and user_row["opted_in_at"]:
+        opt_in_date = datetime.fromtimestamp(
+            float(user_row["opted_in_at"]), tz
+        ).date()
+    tracked_days = sum(
+        1
+        for d in week_days
+        if d <= today and (opt_in_date is None or d >= opt_in_date)
+    )
+
+    compliance_pct = (
+        min(100, round((clean_days / tracked_days) * 100)) if tracked_days else 0
+    )
     is_pb = current_days >= personal_best and personal_best >= 1
 
     return {
         "clean_days": clean_days,
+        "tracked_days": tracked_days,
         "violation_days": violation_days,
         "compliance_pct": compliance_pct,
         "current_days": current_days,

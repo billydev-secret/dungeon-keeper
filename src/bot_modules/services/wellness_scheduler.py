@@ -35,6 +35,7 @@ from bot_modules.services.wellness_service import (
     SETTINGS_RETENTION_SECONDS,
     WellnessBlackout,
     WellnessStreak,
+    WellnessUser,
     clear_blackout_active,
     compute_weekly_summary,
     gc_old_cap_data,
@@ -56,6 +57,7 @@ from bot_modules.services.wellness_service import (
     resume_user,
     upsert_wellness_config,
     user_now,
+    wellness_dashboard_link,
 )
 
 log = logging.getLogger("dungeonkeeper.wellness.scheduler")
@@ -109,20 +111,39 @@ async def _process_blackout_transitions(bot: discord.Client, db_path: Path) -> N
                     if mark_blackout_active(conn, guild.id, u.user_id, b.id):
                         member = guild.get_member(u.user_id)
                         if member:
-                            asyncio.create_task(_send_blackout_entry_dm(member, b))
+                            asyncio.create_task(
+                                _send_blackout_entry_dm(member, b, u)
+                            )
                 for bid in ended_ids:
                     clear_blackout_active(conn, guild.id, u.user_id, bid)
 
 
+def _blackout_is_nightish(blackout: WellnessBlackout) -> bool:
+    """Whether a blackout starts in the evening/night (≥21:00 or <05:00)."""
+    return blackout.start_minute >= 21 * 60 or blackout.start_minute < 5 * 60
+
+
 async def _send_blackout_entry_dm(
-    member: discord.Member, blackout: WellnessBlackout
+    member: discord.Member, blackout: WellnessBlackout, user: WellnessUser
 ) -> None:
+    """Blackout heads-up DM, worded for what will actually happen.
+
+    A gentle member only ever gets reminders — telling them "slow mode is
+    active" was untrue for them. The sign-off follows the window: "Sleep
+    well" for a 9-to-5 Work Hours blackout read as a bug.
+    """
+    end_str = _format_minute(blackout.end_minute)
+    if user.enforcement_level in ("slow_mode", "gradual"):
+        body = (
+            f"Posting during this window brings friction — up to slow mode — "
+            f"until **{end_str}**."
+        )
+    else:  # gentle (and legacy cooldown rows)
+        body = f"I'll send you a gentle reminder if you post before **{end_str}**."
+    sign_off = "Sleep well! 💚" if _blackout_is_nightish(blackout) else "Enjoy the time away! 💚"
     embed = discord.Embed(
         title=f"🌙 {blackout.name} blackout started",
-        description=(
-            f"Slow mode is active until **{_format_minute(blackout.end_minute)}**.\n\n"
-            "Sleep well! 💚"
-        ),
+        description=f"{body}\n\n{sign_off}",
         color=discord.Color(WELLNESS_PRIMARY),
     )
     await _try_dm(member, embed=embed)
@@ -227,7 +248,7 @@ def _build_active_embed(
             title=_ACTIVE_EMBED_TITLE,
             description=(
                 "No one has opted in with public commitment yet. "
-                "Turn it on from the Wellness panel on the web dashboard to show up here. 🌱"
+                f"Turn it on from the {wellness_dashboard_link()} to show up here. 🌱"
             ),
             color=_ACTIVE_EMBED_COLOR,
         )
@@ -425,6 +446,7 @@ def _build_weekly_report_embed(
     week_start = summary.get("week_start", "")
     week_end = summary.get("week_end", "")
     clean = summary.get("clean_days", 0)
+    tracked = summary.get("tracked_days", 7)
     pct = summary.get("compliance_pct", 0)
     cur = summary.get("current_days", 0)
     pb = summary.get("personal_best", 0)
@@ -436,17 +458,18 @@ def _build_weekly_report_embed(
         + (" *(personal best!)*" if is_pb else "")
         + "\n"
         f"💚 Personal best: **{pb} days**\n"
-        f"🌿 Clean days this week: **{clean}/7** ({pct}%)\n\n"
+        f"🌿 Clean days this week: **{clean}/{tracked}** ({pct}%)\n\n"
         f"{ai_text}"
+        f"\n\n*Manage everything from your {wellness_dashboard_link('Wellness dashboard')}.*"
     )
     embed = discord.Embed(
         title=f"💚 Your wellness summary, {user_display}",
         description=body,
         color=_WEEKLY_REPORT_COLOR,
     )
-    embed.set_footer(
-        text="Sent on Sunday mornings • manage from the Wellness dashboard"
-    )
+    # Footers can't carry markdown links, so the dashboard pointer lives in
+    # the body above.
+    embed.set_footer(text="Sent on Sunday mornings")
     return embed
 
 

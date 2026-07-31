@@ -18,7 +18,7 @@ export function mount(container) {
     try {
       [caps, histo] = await Promise.all([
         wGet("/api/wellness/caps"),
-        wGet(`/api/wellness/xp-histogram?mode=${currentMode}&days=${currentDays}`),
+        wGet(`/api/wellness/activity-histogram?mode=${currentMode}&days=${currentDays}`),
       ]);
     } catch (e) {
       container.querySelector(".panel").innerHTML =
@@ -26,7 +26,7 @@ export function mount(container) {
       return;
     }
 
-    bucketAvgs = histo.buckets.map(b => b.avg_xp);
+    bucketAvgs = histo.buckets.map(b => b.avg_messages);
     const labels = histo.buckets.map(b => b.label);
     const nBuckets = bucketAvgs.length;
 
@@ -76,10 +76,10 @@ export function mount(container) {
       </header>
 
       <div class="w-histo-help">
-        <p><strong>How it works:</strong> The gold bars show your average XP earned during each
-        time period over the last <strong>${histo.days_covered} days</strong>.
-        Use the sliders below to set a cap for each period &mdash; when your activity
-        exceeds the cap, the wellness system will gently nudge you based on your
+        <p><strong>How it works:</strong> The gold bars show the average number of messages
+        you posted during each time period over the last <strong>${histo.days_covered} days</strong>.
+        Use the sliders below to set a message cap for each period &mdash; when you post
+        past a cap, the wellness system will gently nudge you based on your
         enforcement level.</p>
         <p class="field-hint">${currentMode === "daily"
           ? "Each bar represents one hour of the day. Great for setting different limits for morning vs. evening — lower caps for late-night hours, higher caps during your normal active hours."
@@ -143,11 +143,6 @@ export function mount(container) {
           </div>
           <div class="field-row">
             <div class="field">
-              <label>Scope
-                <select name="scope">${caps.scopes.map(s => `<option value="${s}">${s}</option>`).join("")}</select>
-              </label>
-            </div>
-            <div class="field">
               <label>Window
                 <select name="window">${caps.windows.map(w => `<option value="${w}">${w}</option>`).join("")}</select>
               </label>
@@ -162,6 +157,8 @@ export function mount(container) {
             <label><input type="checkbox" name="exclude_exempt" checked /> Don’t Count Exempt Channels</label>
             <div class="field-hint">Messages in channels your server marked exempt won’t count toward this cap.</div>
           </div>
+          <div class="field-hint">Manual caps count messages across all channels.
+          Per-channel and per-category caps arrive with a channel picker.</div>
           <div><button type="submit" class="btn btn-primary">Add Cap</button><span data-add-status></span></div>
         </form>
       </details>
@@ -176,7 +173,7 @@ export function mount(container) {
         labels,
         datasets: [
           {
-            label: "Avg XP",
+            label: "Avg messages",
             data: [...bucketAvgs],
             backgroundColor: "#E6B84C",
             barPercentage: 0.85,
@@ -392,7 +389,9 @@ export function mount(container) {
       try {
         await wPost("/api/wellness/caps", {
           label: fd.get("label"),
-          scope: fd.get("scope"),
+          // Only global is creatable from the panel until the channel picker
+          // exists — the API rejects channel/category caps without a target.
+          scope: "global",
           window: fd.get("window"),
           limit: parseInt(fd.get("limit"), 10),
           exclude_exempt: form.querySelector("[name=exclude_exempt]").checked,

@@ -299,6 +299,82 @@ def test_opt_in_user_invalid_notif_falls_back_to_default(db_conn):
     assert user.notifications_pref == ws.DEFAULT_NOTIFICATIONS
 
 
+def test_login_digest_value_none_when_not_opted_in(db_conn):
+    assert ws.login_digest_value(db_conn, 1, 100) is None
+
+
+def test_login_digest_value_none_when_paused(db_conn):
+    """A paused member asked for quiet — the digest stays economy-only."""
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    ws.pause_user(db_conn, 1, 100, time.time() + 3600)
+    assert ws.login_digest_value(db_conn, 1, 100) is None
+
+
+def test_login_digest_value_none_when_pref_is_ephemeral(db_conn):
+    """notifications_pref is the wellness DM opt-in: "ephemeral" (only in
+    chat) keeps the daily digest wellness-free for that member."""
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC", notifications_pref="ephemeral")
+    assert ws.login_digest_value(db_conn, 1, 100) is None
+
+
+def test_login_digest_value_streak_milestone_and_link(db_conn, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_BASE_URL", "https://dk.example.org")
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    ws.ensure_streak(db_conn, 1, 100, "2026-07-29")
+    db_conn.execute(
+        "UPDATE wellness_streaks SET current_days = 8, current_badge = '🌟' "
+        "WHERE guild_id = 1 AND user_id = 100"
+    )
+    value = ws.login_digest_value(db_conn, 1, 100)
+    assert value is not None
+    assert "🌟 Day **8** clean streak" in value
+    assert "🔥 at 30 days (22 to go)" in value
+    assert "https://dk.example.org/#/wellness-home" in value
+
+
+def test_login_digest_value_day_zero_and_no_dead_link(db_conn, monkeypatch):
+    """No streak row renders as day 0; no public URL means no link line at
+    all — never a place-name the member can't click through to."""
+    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    value = ws.login_digest_value(db_conn, 1, 100)
+    assert value is not None
+    assert "Day **0**" in value
+    assert "dashboard" not in value.lower()
+
+
+def test_dashboard_link_plain_when_no_url(monkeypatch):
+    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
+    assert ws.wellness_dashboard_link() == "Wellness panel on the web dashboard"
+
+
+def test_dashboard_link_plain_for_localhost(monkeypatch):
+    monkeypatch.setenv("DASHBOARD_BASE_URL", "http://localhost:8080")
+    assert ws.wellness_dashboard_link() == "Wellness panel on the web dashboard"
+
+
+def test_dashboard_link_markdown_when_public_url(monkeypatch):
+    monkeypatch.setenv("DASHBOARD_BASE_URL", "https://dk.example.org/")
+    assert (
+        ws.wellness_dashboard_link("Wellness dashboard")
+        == "[Wellness dashboard](https://dk.example.org/#/wellness-home)"
+    )
+
+
+def test_opt_in_user_public_commitment_defaults_off(db_conn):
+    """Opting in must never silently place a member on the public streak list."""
+    user = ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    assert user.public_commitment is False
+
+
+def test_reopt_in_preserves_public_commitment_choice(db_conn):
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    ws.update_user_settings(db_conn, 1, 100, public_commitment=True)
+    ws.opt_out_user(db_conn, 1, 100)
+    user = ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    assert user.public_commitment is True
+
+
 def test_opt_in_user_reactivates_existing_row(db_conn):
     ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
     ws.opt_out_user(db_conn, 1, 100)
@@ -386,14 +462,12 @@ def test_resume_user_clears_paused_until(db_conn):
     assert user is not None and user.paused_until is None
 
 
-def test_set_then_clear_cooldown(db_conn):
-    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
-    ws.set_cooldown(db_conn, 1, 100, time.time() + 300)
-    user = ws.get_wellness_user(db_conn, 1, 100)
-    assert user is not None and user.cooldown_until is not None
-    ws.clear_cooldown(db_conn, 1, 100)
-    user = ws.get_wellness_user(db_conn, 1, 100)
-    assert user is not None and user.cooldown_until is None
+def test_enforcement_levels_no_longer_offer_cooldown():
+    """The "cooldown" *level* was never enforced (its column had no reader)
+    and was removed from the selectable set 2026-07-30. Legacy rows keep
+    their behavior via wellness_enforcement._enforcement_to_action."""
+    assert "cooldown" not in ws.ENFORCEMENT_LEVELS
+    assert ws.ENFORCEMENT_LEVELS == ("gentle", "slow_mode", "gradual")
 
 
 def test_list_active_users_excludes_opted_out(db_conn):
@@ -907,6 +981,7 @@ def test_apply_streak_violation_same_day_noop(db_conn):
 
 def test_mark_badge_celebrated_and_list_uncelebrated(db_conn):
     ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    ws.update_user_settings(db_conn, 1, 100, public_commitment=True)
     ws.ensure_streak(db_conn, 1, 100, "2026-05-30")
     db_conn.execute(
         "UPDATE wellness_streaks SET current_badge = '🔥' WHERE guild_id = 1 AND user_id = 100"
@@ -921,8 +996,10 @@ def test_list_committed_users_with_streaks_sorted_by_current_days(db_conn):
     ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
     ws.opt_in_user(db_conn, 1, 200, timezone="UTC")
     ws.opt_in_user(db_conn, 1, 300, timezone="UTC")
-    # 300 opts out of public commitment
-    ws.update_user_settings(db_conn, 1, 300, public_commitment=False)
+    # 100 and 200 explicitly opt into public commitment; 300 stays on the
+    # default (off) and must not appear.
+    ws.update_user_settings(db_conn, 1, 100, public_commitment=True)
+    ws.update_user_settings(db_conn, 1, 200, public_commitment=True)
 
     ws.ensure_streak(db_conn, 1, 100, "2026-05-30")
     ws.ensure_streak(db_conn, 1, 200, "2026-05-30")
@@ -1089,6 +1166,46 @@ def test_compute_weekly_summary_clean_days_and_compliance(db_conn):
     # PB should also be 4 → is_personal_best == True
     assert summary["personal_best"] == 4
     assert summary["is_personal_best"] is True
+
+
+def test_compute_weekly_summary_partial_week_uses_enrolled_days(db_conn):
+    """A member who joined Thursday and stayed clean must read 100%, not 57%
+    — days before they enrolled are not failures (live bug: week-30 report
+    showed violation_days=0 but 57% compliance)."""
+    week_start = date(2026, 5, 25)  # a Monday, fully in the past
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    thursday_noon = datetime(2026, 5, 28, 12, 0, tzinfo=ZoneInfo("UTC"))
+    db_conn.execute(
+        "UPDATE wellness_users SET opted_in_at = ? WHERE user_id = 100",
+        (thursday_noon.timestamp(),),
+    )
+    for i in range(3, 7):  # Thu..Sun all clean
+        ws.increment_streak_day(
+            db_conn, 1, 100, (week_start + timedelta(days=i)).isoformat()
+        )
+    summary = ws.compute_weekly_summary(db_conn, 1, 100, week_start)
+    assert summary["tracked_days"] == 4
+    assert summary["clean_days"] == 4
+    assert summary["compliance_pct"] == 100
+
+
+def test_compute_weekly_summary_excludes_future_days(db_conn):
+    """Days of the current week that haven't happened yet are not failures."""
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    db_conn.execute(
+        "UPDATE wellness_users SET opted_in_at = ? WHERE user_id = 100",
+        (time.time() - 30 * 86400,),  # enrolled well before this week
+    )
+    today = ws.user_now("UTC").date()
+    week_start = today - timedelta(days=today.weekday())
+    for i in range(today.weekday() + 1):  # every elapsed day clean
+        ws.increment_streak_day(
+            db_conn, 1, 100, (week_start + timedelta(days=i)).isoformat()
+        )
+    summary = ws.compute_weekly_summary(db_conn, 1, 100, week_start)
+    assert summary["tracked_days"] == today.weekday() + 1
+    assert summary["clean_days"] == today.weekday() + 1
+    assert summary["compliance_pct"] == 100
 
 
 def test_compute_weekly_summary_counts_violation_in_window(db_conn):
