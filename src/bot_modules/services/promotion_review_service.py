@@ -17,6 +17,10 @@ button to the cards:
 Both new triggers ship **dark** until the Level 5 Log Channel is configured;
 the pruned-return trigger additionally needs ``promotion_review_grant_role_id``.
 
+All three cards ping ``promotion_review_ping_role_id`` — the role managers who
+*review* promotions — when it is set. That is a different role from
+``promotion_review_grant_role_id``, which is what the Grant button *hands out*.
+
 This module owns the durable card ledger (``promotion_review_cards``, migration
 112) and the pure gating logic. The Discord embed + persistent buttons live in
 :mod:`bot_modules.services.promotion_review_views`; the message-hot-path hook
@@ -33,6 +37,7 @@ from bot_modules.inactive.store import active_inactive_user_ids
 
 CHANNEL_KEY = "xp_level_5_log_channel_id"  # the promotion-reviews channel
 GRANT_ROLE_KEY = "promotion_review_grant_role_id"
+PING_ROLE_KEY = "promotion_review_ping_role_id"
 SLEEPER_CHANNEL_KEY = "inactive_channel_id"
 
 KIND_PRUNED_RETURN = "pruned_return"
@@ -61,6 +66,24 @@ def review_channel_id(conn: sqlite3.Connection, guild_id: int) -> int:
 
 def grant_role_id(conn: sqlite3.Connection, guild_id: int) -> int:
     return _int_config(conn, GRANT_ROLE_KEY, guild_id)
+
+
+def ping_role_id(conn: sqlite3.Connection, guild_id: int) -> int:
+    """Role pinged when a review card posts, so role managers see it.
+
+    Distinct from :func:`grant_role_id`, which is the role *handed to* the
+    member when someone presses Grant. 0 when unset — cards then post silent.
+    """
+    return _int_config(conn, PING_ROLE_KEY, guild_id)
+
+
+def ping_mention(role_id: int) -> str:
+    """``<@&id>`` for the card's message content, or "" when unset.
+
+    The mention has to live in ``content``: a role mention inside an embed
+    renders but never notifies.
+    """
+    return f"<@&{role_id}>" if role_id > 0 else ""
 
 
 def sleeper_channel_id(conn: sqlite3.Connection, guild_id: int) -> int:

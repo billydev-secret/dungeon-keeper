@@ -19,6 +19,7 @@ from bot_modules.services import promotion_review_service as svc
 from bot_modules.services.promotion_review_views import (
     build_review_embed,
     format_prune_lines,
+    ping_send_kwargs,
     refresh_level_5_cards,
     refresh_spicy_field,
 )
@@ -26,6 +27,23 @@ from bot_modules.services.promotion_review_views import (
 GUILD_ID = 42
 MEMBER_ID = 7
 CARD_CHANNEL = 555
+PING_ROLE = 902
+
+
+# ── the review-card ping allow-list ───────────────────────────────────
+
+
+def test_ping_kwargs_allow_list_exactly_the_ping_role():
+    kwargs = ping_send_kwargs(PING_ROLE)
+    # The mention must be in content — inside an embed it renders but never pings.
+    assert kwargs["content"] == f"<@&{PING_ROLE}>"
+    assert kwargs["allowed_mentions"].to_dict() == {"roles": [PING_ROLE], "parse": []}
+
+
+def test_ping_kwargs_stay_silent_when_the_role_is_unset():
+    kwargs = ping_send_kwargs(0)
+    assert "content" not in kwargs
+    assert kwargs["allowed_mentions"].to_dict() == {"parse": []}
 
 
 def _level_5_embed(spicy_value: str | None) -> discord.Embed:

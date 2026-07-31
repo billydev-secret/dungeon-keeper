@@ -32,7 +32,7 @@ function render(container, grants, channels, roles) {
             ${esc(permLabel(p, roles))}
             <button type="button" class="tag-remove perm-remove" data-grant="${esc(name)}" data-idx="${i}" title="Remove ${esc(permLabel(p, roles))}">&times;</button>
           </span>`).join("")}</div>`
-      : '<em style="color:var(--ink-mute);">Moderators only — nobody else can hand this role out.</em>';
+      : '<em style="color:var(--ink-mute);">Admins only — nobody else can hand this role out.</em>';
 
     return `
       <div class="role-card card" style="margin-bottom:16px;" data-grant="${esc(name)}">
@@ -82,7 +82,7 @@ function render(container, grants, channels, roles) {
               <input type="text" data-perm-user="${esc(name)}" id="cr-perm-user-${esc(name)}" inputmode="numeric" placeholder="Member ID (17–20 digits)" style="width:180px; display:none;" />
               <button type="button" class="btn btn-sm" data-perm-add="${esc(name)}">Add</button>
             </div>
-            <div class="field-hint">Anyone listed here can hand out this role without being a moderator. Leave it empty to keep it moderator-only. A member ID is the long number from Discord's "Copy User ID".</div>
+            <div class="field-hint">This list decides who can hand out this role — moderators included, so a grant can belong to one keeper rather than to all staff. Administrators can always use every grant and don't need listing. Leave it empty and only admins can hand this one out. A member ID is the long number from Discord's "Copy User ID".</div>
           </div>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <button type="submit" class="btn btn-primary">Save</button>
@@ -235,7 +235,7 @@ function render(container, grants, channels, roles) {
     const perms = g._perms || [];
     const listEl = container.querySelector(`[data-perm-list="${CSS.escape(name)}"]`);
     if (!perms.length) {
-      listEl.innerHTML = '<em style="color:var(--ink-mute);">Moderators only — nobody else can hand this role out.</em>';
+      listEl.innerHTML = '<em style="color:var(--ink-mute);">Admins only — nobody else can hand this role out.</em>';
       return;
     }
     const tagsHTML = perms.map((p, i) => `

@@ -37,6 +37,32 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+
+def ping_send_kwargs(role_id: int) -> dict:
+    """``content``/``allowed_mentions`` for a review-card post.
+
+    Allow-lists **exactly** the ping role — never a blanket ``roles=True`` —
+    per docs/embed_style_guide.md. Unset role ⇒ silent post, as before.
+
+    ``everyone``/``users``/``replied_user`` are pinned False on purpose:
+    ``AllowedMentions``' unset fields default to *allow*, so the bare
+    ``AllowedMentions(roles=[...])`` form still serializes
+    ``parse: ['everyone', 'users']``.
+    """
+    mention = svc.ping_mention(role_id)
+    if not mention:
+        return {"allowed_mentions": discord.AllowedMentions.none()}
+    return {
+        "content": mention,
+        "allowed_mentions": discord.AllowedMentions(
+            everyone=False,
+            users=False,
+            roles=[discord.Object(id=role_id)],
+            replied_user=False,
+        ),
+    }
+
+
 _GRANT_CID = re.compile(r"promo_review:grant:(?P<cid>\d+)")
 _DISMISS_CID = re.compile(r"promo_review:dismiss:(?P<cid>\d+)")
 _LEVEL5_CID = re.compile(r"promo_review:l5grant:(?P<uid>\d+)")
@@ -399,6 +425,7 @@ async def post_review_card(
                 svc.review_channel_id(conn, guild_id),
                 svc.pruned_roles_for(conn, guild_id, user_id),
                 svc.member_level(conn, guild_id, user_id),
+                svc.ping_role_id(conn, guild_id),
             )
 
     try:
@@ -413,7 +440,7 @@ async def post_review_card(
             svc.discard(guild_id, user_id)
         return
 
-    _, kind, card_id, review_ch_id, pruned_roles, level = prepared
+    _, kind, card_id, review_ch_id, pruned_roles, level, ping_role = prepared
 
     channel = guild.get_channel(review_ch_id)
     if not isinstance(channel, discord.abc.Messageable):
@@ -442,7 +469,7 @@ async def post_review_card(
         posted = await channel.send(
             embed=embed,
             view=ReviewCardView(card_id),
-            allowed_mentions=discord.AllowedMentions.none(),
+            **ping_send_kwargs(ping_role),
         )
     except discord.HTTPException:
         log.warning("promo review: failed to post card in guild %s", guild_id)

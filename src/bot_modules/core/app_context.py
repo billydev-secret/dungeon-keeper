@@ -601,7 +601,7 @@ class AppContext:
 
     def can_grant_any_role(self, interaction: discord.Interaction) -> bool:
         """Returns True if user can grant ANY configured grant role."""
-        if self.is_mod(interaction):
+        if self.is_admin(interaction):
             return True
         member = self.get_interaction_member(interaction)
         if member is None or interaction.guild_id is None:
@@ -617,7 +617,15 @@ class AppContext:
     def can_use_grant_role(
         self, interaction: discord.Interaction, grant_name: str
     ) -> bool:
-        if self.is_mod(interaction):
+        """Per-grant gate: the allow-list decides, admins excepted.
+
+        Deliberately ``is_admin``, not ``is_mod``. Under ``is_mod`` the
+        per-grant list could only ever *add* people — every moderator could
+        hand out every grant and no list could take that away, so "this role
+        is one keeper's to give" was unexpressable. Administrators keep the
+        bypass so a guild can't lock itself out of its own grants.
+        """
+        if self.is_admin(interaction):
             return True
         member = self.get_interaction_member(interaction)
         if member is None or interaction.guild_id is None:

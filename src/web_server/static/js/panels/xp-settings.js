@@ -58,9 +58,14 @@ export function mountSettings(container) {
               <div class="field-hint">Given automatically the first time a member reaches level 5. Choose "(none)" to hand out no role.</div>
             </div>
             <div class="field">
-              <label>Promotion Review Role</label>
+              <label>Promotion Review Grant Role</label>
               <div data-picker="promotion_review_grant_role_id"></div>
-              <div class="field-hint">Members with this role can approve promotion reviews. Choose "(none)" to leave reviews to admins.</div>
+              <div class="field-hint">Handed <em>to</em> the member when someone presses Grant on a promotion review card — typically your NSFW-access role. Choose "(none)" and the Grant button has nothing to give. Who may press Grant is separate: admins, mods, and anyone with Manage Roles.</div>
+            </div>
+            <div class="field">
+              <label>Promotion Review Ping Role</label>
+              <div data-picker="promotion_review_ping_role_id"></div>
+              <div class="field-hint">Pinged when a promotion review card posts, so your role managers know someone is up for review. Choose "(none)" to post the cards silently.</div>
             </div>
             <div class="field">
               <label>Level 5 Log Channel</label>
@@ -202,7 +207,8 @@ export function mountSettings(container) {
     const status = container.querySelector("[data-status]");
 
     const level5Role = mountRolePicker(form.querySelector('[data-picker="level_5_role_id"]'), roles, xp.level_5_role_id, { label: "Level 5 Role" });
-    const promotionReviewGrantRole = mountRolePicker(form.querySelector('[data-picker="promotion_review_grant_role_id"]'), roles, xp.promotion_review_grant_role_id, { label: "Promotion Review Role" });
+    const promotionReviewGrantRole = mountRolePicker(form.querySelector('[data-picker="promotion_review_grant_role_id"]'), roles, xp.promotion_review_grant_role_id, { label: "Promotion Review Grant Role" });
+    const promotionReviewPingRole = mountRolePicker(form.querySelector('[data-picker="promotion_review_ping_role_id"]'), roles, xp.promotion_review_ping_role_id, { label: "Promotion Review Ping Role" });
     const level5Log = mountChannelPicker(form.querySelector('[data-picker="level_5_log_channel_id"]'), channels, xp.level_5_log_channel_id, { label: "Level 5 Log Channel" });
     const levelUpLog = mountChannelPicker(form.querySelector('[data-picker="level_up_log_channel_id"]'), channels, xp.level_up_log_channel_id, { label: "Level-Up Log Channel" });
     const grantUsers = mountMemberMultiPicker(form.querySelector('[data-picker="xp_grant_allowed_user_ids"]'), members, xp.xp_grant_allowed_user_ids, { label: "Members Who Can Grant XP" });
@@ -252,6 +258,7 @@ export function mountSettings(container) {
         await apiPut("/api/config/xp", {
           level_5_role_id: level5Role.getValue(),
           promotion_review_grant_role_id: promotionReviewGrantRole.getValue(),
+          promotion_review_ping_role_id: promotionReviewPingRole.getValue(),
           level_5_log_channel_id: level5Log.getValue(),
           level_up_log_channel_id: levelUpLog.getValue(),
           xp_grant_allowed_user_ids: grantUsers.getValues(),

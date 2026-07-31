@@ -841,6 +841,7 @@
         <strong>role</strong> — autocompletes from roles configured on the <strong>Role Grants</strong> dashboard panel.<br>
         <strong>member</strong> — member to receive the role.
       </div>
+      <p><strong>Who can use each grant.</strong> Every grant has its own <em>Who Can Hand This Out</em> list on the <a href="/#/config-roles">Role Grants</a> panel, and that list is the whole answer — moderators included. A moderator who isn't listed on a grant can't hand that role out, which is what lets one role belong to one keeper instead of to all staff. Administrators can always use every grant and never need listing, so you can't lock yourself out. An empty list means admins only.</p>
     </div>
 
     <p class="note">The <strong>grant-audit card</strong> — who's missing the grant role and
@@ -872,6 +873,7 @@
           <li><strong>Sleeper stirred</strong> — a member held in the Inactive channel posts there again; the button fully reactivates them (restores their saved roles, removes <code>@Inactive</code>).</li>
         </ul>
         <p>Return/sleeper cards also have a <strong>Dismiss</strong> button, and each returning member gets one card at a time. Set the <strong>Promotion Review Grant Role</strong> on the XP &amp; Leveling panel — whichever role you hand out at promotion, typically your NSFW-access role — to arm the Grant button; the return/sleeper cards stay dormant until the Level 5 Log Channel is set. Buttons are limited to admins/mods (or anyone with Manage Roles).</p>
+        <p><strong>Getting told a card is waiting.</strong> Set the <strong>Promotion Review Ping Role</strong> on the same panel and all three cards ping that role when they post, so your role managers don't have to watch the channel. This is a <em>different</em> setting from the Grant Role: the Grant Role is what the button hands <em>to</em> the member, while the Ping Role is your reviewers. Leave it "(none)" and cards post silently, as before. Only that one role is ever pinged — never <code>@everyone</code>.</p>
       </div>
     </div>
 
