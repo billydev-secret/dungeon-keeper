@@ -495,11 +495,44 @@ def purge(channel: str, tok: str, me: str) -> int:
             return removed
 
 
+def merged_commits(sha: str) -> list[str]:
+    """The commits whose ``Testing:`` sections a hook run for ``sha`` posts.
+
+    A plain commit is just itself. A merge commit — what dk-ship's --no-ff
+    integration hands the hook — has no ``Testing:`` section of its own: the
+    checklists live in the branch-side commits it lands, where the hook never
+    fired (worktrees carry no .env, deliberately — a card posted
+    mid-development would invite testing a feature that isn't live yet, and
+    dk-ship's rebase would re-post it under new shas). Expanding the merge
+    posts those cards exactly once, at ship time, with the final shas.
+
+    ``first-parent..merge`` bounds the range to what the merge brought in;
+    ``--no-merges`` drops the merge itself and any main-into-branch
+    back-merges, whose messages never carry checklists.
+    """
+    parents = (git("log", "-1", "--format=%P", sha) or "").split()
+    if len(parents) < 2:
+        return [sha]
+    out = git("rev-list", "--reverse", "--no-merges", f"{parents[0]}..{sha}")
+    shas = [line.strip() for line in (out or "").splitlines() if line.strip()]
+    return shas or [sha]
+
+
 def post_commit(sha: str, *, dry_run: bool) -> None:
+    """Post QA cards for one hook invocation: the commit, or what it merged.
+
+    Used by the post-commit hook. Failures are contained per commit inside
+    ``post_one_commit`` — the hook must never break a commit, and one dead
+    card must not starve the rest of a merged branch.
+    """
+    for commit in merged_commits(sha):
+        post_one_commit(commit, dry_run=dry_run)
+
+
+def post_one_commit(sha: str, *, dry_run: bool) -> None:
     """Post the QA card for one commit's ``Testing:`` section, if it has one.
 
-    Used by the post-commit hook. Any DB or REST failure prints a warning
-    and returns normally — the hook must never break a commit. No state
+    Any DB or REST failure prints a warning and returns normally. No state
     ledger is needed: ``insert_qa_test``'s ``ON CONFLICT DO NOTHING`` on
     ``(guild_id, entry_key, commit_sha)`` already makes a hook re-run for
     the same sha (a retried commit, a rebase replay) reuse the existing row

@@ -227,3 +227,19 @@ commits. See CLAUDE.md's Commits section for the `Testing:` trailer
 convention. `post_commit()`/`testing_checklist()` in
 `scripts/post_testing_docs.py` carry the new logic; the role checklists
 (admin/moderator/user) are unaffected — still dumped via `--only`.
+
+## Addendum — merge commits expand to the branch side (2026-07-30)
+
+Feature work happens in dk-session worktrees, which deliberately carry no
+`.env` — so the hook no-ops on every worktree commit, and the `--no-ff`
+merge that `/dk-ship` lands in prod (where the hook *does* run) has no
+`Testing:` section of its own. Net effect: shipped features posted no card
+unless someone ran `--commit <child sha>` by hand.
+
+`post_commit()` now expands a merge commit into the commits it merged
+(`first-parent..merge`, `--no-merges`, oldest first) and posts one card per
+branch commit that carries a `Testing:` section, keyed on that commit's own
+sha and subject. The worktree no-op is kept on purpose: a card posted
+mid-development would invite testing a feature that isn't live, and the
+ship-time rebase would re-post it under new shas. Plain commits on prod
+main behave exactly as before.

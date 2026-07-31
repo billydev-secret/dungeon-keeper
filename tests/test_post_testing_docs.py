@@ -278,6 +278,83 @@ def test_unset_channel_setting_falls_back_to_hardcoded(mod, monkeypatch, qa_db) 
     assert message_posts(mod, calls)
 
 
+# ── merge commits: dk-ship's --no-ff merge expands to the branch side ────
+
+
+SUBJECT_2 = "Widget: retune it"
+
+
+def wire_merge(mod, monkeypatch, db, c2_body: str):
+    """A --no-ff merge "m" of branch commits c1 (has a checklist) and c2."""
+    calls = wire(mod, monkeypatch, db)
+
+    def fake_git(*args: str) -> str:
+        return {
+            ("log", "-1", "--format=%P", "m"): "p1 p2",
+            ("rev-list", "--reverse", "--no-merges", "p1..m"): "c1\nc2\n",
+            ("log", "-1", "--format=%B", "m"): "Merge branch 'widget'\n",
+            ("log", "-1", "--format=%P", "c1"): "p0",
+            ("log", "-1", "--format=%B", "c1"): COMMIT_BODY,
+            ("log", "-1", "--format=%s", "c1"): SUBJECT,
+            ("rev-parse", "--short", "c1"): "c1c1c1c",
+            ("log", "-1", "--format=%P", "c2"): "c1",
+            ("log", "-1", "--format=%B", "c2"): c2_body,
+            ("log", "-1", "--format=%s", "c2"): SUBJECT_2,
+            ("rev-parse", "--short", "c2"): "c2c2c2c",
+        }.get(args, "")
+
+    monkeypatch.setattr(mod, "git", fake_git)
+    return calls
+
+
+def test_merge_posts_cards_for_each_merged_checklist(mod, monkeypatch, qa_db) -> None:
+    """The ship-time merge is where worktree commits' cards finally post:
+    one card per branch commit with a Testing: section, in branch order,
+    keyed on that commit's own sha/subject — not the merge's."""
+    calls = wire_merge(
+        mod, monkeypatch, qa_db,
+        c2_body=f"{SUBJECT_2}\n\nWhy.\n\nTesting:\n- [ ] spin it\n",
+    )
+
+    mod.post_commit("m", dry_run=False)
+
+    first, second = rows(qa_db)
+    assert (first["commit_sha"], first["title"]) == ("c1c1c1c", SUBJECT)
+    assert (second["commit_sha"], second["title"]) == ("c2c2c2c", SUBJECT_2)
+    posts = message_posts(mod, calls)
+    assert [p["embeds"][0]["footer"]["text"] for p in posts] == [
+        f"c1c1c1c · {SUBJECT}",
+        f"c2c2c2c · {SUBJECT_2}",
+    ]
+
+
+def test_merge_skips_branch_commits_without_a_checklist(
+    mod, monkeypatch, qa_db
+) -> None:
+    calls = wire_merge(
+        mod, monkeypatch, qa_db, c2_body=f"{SUBJECT_2}\n\nProse only, no section.\n"
+    )
+
+    mod.post_commit("m", dry_run=False)
+
+    (row,) = rows(qa_db)
+    assert row["commit_sha"] == "c1c1c1c"
+    assert len(message_posts(mod, calls)) == 1
+
+
+def test_merged_commits_passes_a_plain_commit_through(mod) -> None:
+    git_returning(mod, None)  # every git call fails -> fall back to the sha
+    assert mod.merged_commits("x") == ["x"]
+
+
+def test_merged_commits_falls_back_when_rev_list_fails(mod) -> None:
+    def fake_git(*args: str) -> str | None:
+        return {("log", "-1", "--format=%P", "m"): "p1 p2"}.get(args)
+
+    mod.git = fake_git
+    assert mod.merged_commits("m") == ["m"]
+
+
 # ── role checklists: unaffected by the per-commit path above ─────────────
 
 
