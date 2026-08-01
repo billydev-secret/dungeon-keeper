@@ -637,6 +637,11 @@ def stale_cards(
     "No progress" means no step has ticked within the window — any tick
     resets the clock, so an intake that's moving (however slowly) is never
     nudged, only one that's sitting.
+
+    A card whose every step is done or skipped is excluded: it's complete
+    and merely awaiting closure, and the nudge asks greeters to pick work
+    up — pinging them about an intake with nothing left to do teaches them
+    to ignore the ping. (A stepless card still nudges; nothing was done.)
     """
     cutoff = now - stale_hours(conn, guild_id) * 3600.0
     return conn.execute(
@@ -644,7 +649,9 @@ def stale_cards(
         "LEFT JOIN intake_card_steps s ON s.card_id = c.id "
         "WHERE c.guild_id = ? AND c.resolved_at IS NULL AND c.nudged_at IS NULL "
         "GROUP BY c.id "
-        "HAVING COALESCE(MAX(s.done_at), c.created_at) <= ?",
+        "HAVING COALESCE(MAX(s.done_at), c.created_at) <= ? "
+        "AND (COUNT(s.id) = 0 OR SUM(CASE WHEN s.done_at IS NULL "
+        "AND s.skipped = 0 THEN 1 ELSE 0 END) > 0)",
         (guild_id, cutoff),
     ).fetchall()
 
