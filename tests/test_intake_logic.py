@@ -793,6 +793,40 @@ def test_stale_respects_configured_hours(db_path):
         assert len(svc.stale_cards(conn, GUILD, 3 * hour)) == 1
 
 
+def test_stale_skips_fully_completed_cards(db_path):
+    """All steps done = complete-awaiting-closure, not stalled: the nudge
+    asks greeters to pick work up, and there is none. (Live incident: card 8
+    got a 24h "no progress" ping a day after its last step ticked.)"""
+    hour = 3600.0
+    with open_db(db_path) as conn:
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 0.0)
+        keys = [
+            str(r["step_key"])
+            for r in conn.execute(
+                "SELECT step_key FROM intake_card_steps WHERE card_id = ? "
+                "ORDER BY position",
+                (cid,),
+            )
+        ]
+        for key in keys[:-1]:
+            svc.set_step_state(conn, cid, key, done=True, actor_id=GREETER, at=hour)
+        # One pending step -> still nudgeable once the window passes.
+        assert [c["id"] for c in svc.stale_cards(conn, GUILD, 30 * hour)] == [cid]
+        svc.set_step_state(conn, cid, keys[-1], done=True, actor_id=GREETER, at=2 * hour)
+        # Nothing left to tick -> never stale, however long it sits open.
+        assert svc.stale_cards(conn, GUILD, 40 * hour) == []
+        # A skipped remainder counts as not-pending too (same rule the
+        # progress bar applies), not as work awaiting a greeter.
+        other = svc.create_card(conn, GUILD, 8, 0.0)
+        svc.set_step_state(conn, other, keys[0], done=True, actor_id=GREETER, at=hour)
+        conn.execute(
+            "UPDATE intake_card_steps SET skipped = 1 "
+            "WHERE card_id = ? AND done_at IS NULL",
+            (other,),
+        )
+        assert svc.stale_cards(conn, GUILD, 40 * hour) == []
+
+
 # ── reports ───────────────────────────────────────────────────────────
 
 
