@@ -1,0 +1,33 @@
+#!/bin/sh
+# Post QA cards for the commits a merge just landed on this branch.
+#
+# git does NOT run post-commit for `git merge` — merges get this hook
+# instead. post_testing_docs.py expands a merge commit into its branch-side
+# commits' Testing: sections (see merged_commits there), so /dk-ship's
+# --no-ff integration posts one card per shipped commit. A conflicted merge
+# finished by `git commit` fires post-commit rather than this hook; both
+# paths run the same script, and the (guild, entry_key, sha) unique index
+# makes any overlap idempotent.
+#
+# $1 is git's squash flag — a squash merge stages changes without creating
+# a merge commit, so there is nothing to expand; skip it.
+#
+# Installed by scripts/hooks/install.sh into the shared common-dir hooks,
+# same as post-commit. Never fails the merge: every path exits 0.
+# Escape hatch: DK_NO_QUEUE_POST=1 git merge ...
+
+[ -n "$DK_NO_QUEUE_POST" ] && exit 0
+[ "$1" = "1" ] && exit 0
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+script="$top/scripts/post_testing_docs.py"
+
+[ -f "$script" ] || exit 0
+[ -f "$top/.env" ] || exit 0
+
+sha=$(git rev-parse HEAD 2>/dev/null) || exit 0
+
+# Bounded so a network stall can never hold the merge open.
+timeout 90 python3 "$script" --commit "$sha" 2>&1 | sed 's/^/  /'
+
+exit 0

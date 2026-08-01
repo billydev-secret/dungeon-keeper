@@ -243,3 +243,12 @@ sha and subject. The worktree no-op is kept on purpose: a card posted
 mid-development would invite testing a feature that isn't live, and the
 ship-time rebase would re-post it under new shas. Plain commits on prod
 main behave exactly as before.
+
+**Correction (2026-08-01):** the expansion alone wasn't enough — git runs
+`post-commit` only for `git commit`; a clean `git merge` fires `post-merge`
+instead, so ship merges still posted nothing (first observed on the
+wellness ship, confirmed on the intake-stale-nudge ship). A `post-merge`
+hook now invokes the same script with the merge sha (squash merges skipped
+— no commit to expand), `install.sh` installs both hooks, and a conflicted
+merge finished by `git commit` still lands in `post-commit` — either path
+runs the same expansion, deduped by the (guild, entry_key, sha) index.

@@ -39,9 +39,10 @@ Steps:
    a. Verify prod is on `main` with a clean tracked tree:
       `git -C "$MAIN" rev-parse --abbrev-ref HEAD` (must be `main`) and
       `git -C "$MAIN" status --porcelain -uno` (must be empty). If not, STOP.
-   b. `git -C "$MAIN" merge --no-ff "$BRANCH"` — a merge commit, so the post-commit
-      QA/Testing card hook fires and posts a card for each merged commit that has
-      a `Testing:` section (the hook expands the merge to its branch side).
+   b. `git -C "$MAIN" merge --no-ff "$BRANCH"` — a merge commit, so the QA/Testing
+      card hook fires (post-merge for a clean merge, post-commit if conflict
+      resolution ended in `git commit`) and posts a card for each merged commit
+      that has a `Testing:` section (the hook expands the merge to its branch side).
    c. Unless `--no-push`: `git -C "$MAIN" push`.
 
    If the lock is held, say so — a blocked ship looks identical to a hung one, and

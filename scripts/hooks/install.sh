@@ -1,5 +1,9 @@
 #!/bin/sh
-# Install the repo's post-commit hook.
+# Install the repo's QA-card hooks (post-commit + post-merge).
+#
+# Two hooks because git splits the trigger: `git commit` fires post-commit,
+# `git merge` fires post-merge — a --no-ff ship lands via the latter, and
+# without it the merged commits' Testing: cards silently never post.
 #
 # Deliberately copies into $(git rev-parse --git-common-dir)/hooks rather than
 # setting core.hooksPath: this repo already relies on the pre-commit framework's
@@ -12,7 +16,8 @@ hooks="$(cd "$top" && git rev-parse --git-common-dir)/hooks"
 case "$hooks" in /*) ;; *) hooks="$top/$hooks" ;; esac
 
 mkdir -p "$hooks"
-cp "$top/scripts/hooks/post-commit" "$hooks/post-commit"
-chmod +x "$hooks/post-commit"
-
-echo "installed: $hooks/post-commit"
+for hook in post-commit post-merge; do
+    cp "$top/scripts/hooks/$hook" "$hooks/$hook"
+    chmod +x "$hooks/$hook"
+    echo "installed: $hooks/$hook"
+done
