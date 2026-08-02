@@ -225,9 +225,9 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "game_win": "Winning a party game (only types with a real winner resolve one: NHIE guiltiest, TTL best liar, Hot Takes hottest). Event cadence: once per game.",
     "duel_win": "Winning a duel/PvP match. Event cadence: once per match.",
     "duel_lose": "Not winning a duel/PvP match (every participant who wasn't the winner). Event cadence: once per match.",
-    "confession": "Submitting an anonymous confession. The confessor is credited privately — there is no public 'quest complete' message, only their own quest log (the only trace is the staff-side ledger row). Event cadence: once per confession — use daily/weekly with a target count.",
+    "confession": "Submitting an anonymous confession. The confessor is credited privately — no 'quest complete' message, no register-feed entry, and sign-off can't be turned on; the payout shows only on their own quest log and wallet (the sole other trace is the staff-side ledger row). Event cadence: once per confession — use daily/weekly with a target count.",
     "ama_ask": "Asking a question in an AMA. Unfiltered questions fire on submit; screened questions fire only once the host approves (rejected ones never pay). Event cadence: once per question — use daily/weekly with a target count.",
-    "whisper": "Sending an anonymous whisper to another member. Event cadence: once per whisper — use daily/weekly with a target count.",
+    "whisper": "Sending an anonymous whisper to another member. Credited privately like `confession` — no register-feed entry and no sign-off, so the payout can't be timed against the whisper landing in the feed. Event cadence: once per whisper — use daily/weekly with a target count.",
     "quote": "Turning someone's message into a quote card with the make-it-a-quote role (the quoter who invokes it is credited). Event cadence: once per quoted message — mildly farmable, so use daily/weekly with a target count.",
     "chat_revive": "Responding to a Chat Revive prompt while the lull window is open (the reply the revive service counts as an answer). Event cadence: once per prompt.",
     "bump": "Bumping the server on a listing site (the member who ran the bump command is credited). Event cadence: once per bump — bump cooldowns are the natural rate limit.",
@@ -258,7 +258,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "birthday_wish": "Wishing a member happy birthday on a day their birthday was announced — a reply/mention of the birthday member, or a birthday-wish phrase anywhere. Only publicly-announced birthdays count, so quiet birthdays never become quest bait. Event cadence: once per birthday member per day.",
     "drop_claim": "Winning a coin-drop Claim race. Pays beside the drop itself (the cat_catch pattern); the drop cadence is the natural rate limit. Event cadence: once per drop.",
     "role_pick": "Self-assigning a role via a role menu or an announcement role button. One-time setup quest (the bio_set pattern): claims once ever, drops off the board once done. Event cadence: once ever.",
-    "confession_reply": "Posting an anonymous reply to someone ELSE's confession (replying to your own never fires). Credited privately like `confession` — no channel noise. Event cadence: once per reply — use daily/weekly with a target count.",
+    "confession_reply": "Posting an anonymous reply to someone ELSE's confession (replying to your own never fires). Credited privately like `confession` — no channel noise, no register-feed entry, no sign-off. Event cadence: once per reply — use daily/weekly with a target count.",
     "shop_purchase": "Making a shop purchase: perk rental, streak shield, emoji or QOTD sponsorship, raffle tickets (automatic renewal billing never fires). One-time setup quest teaching the earn→spend loop. Event cadence: once ever.",
     "daily_complete": "Any of the member's daily quests paying out — occurrences are the (quest, day) of the completed daily, so a weekly counted quest reads 'complete N dailies this week' with a progress bar. The board meta-quest: dailies are the check-offs, this is the progression. Not allowed on daily cadence (a daily that completes itself).",
 }
@@ -282,12 +282,24 @@ _REWARD_BANDS: dict[str, tuple[int, int]] = {
 # direction). Scoped quests on other kinds keep unscaled sizing.
 CHANNEL_SHARE_KINDS = frozenset({"message_sent", "reply_sent", "media_post"})
 
-# Kinds whose per-member counts must never surface as "top contributors":
-# naming the most active confessors/repliers/whisperers would deanonymize an
-# anonymous feed. A community weekly on these kinds pays flat tiers only —
-# no top-contributor bonus, no names in the beat sheet (even the owner DM:
-# the sheet is written to be pasted publicly).
-ANON_COMMUNITY_KINDS = frozenset({"confession", "confession_reply", "whisper"})
+# Kinds whose member is never named on a public surface: the action itself is
+# anonymous, so anything that attaches a name to it deanonymizes the feed —
+# either directly, or by timing correlation ("X earned Send a Whisper" posted
+# seconds after an anonymous whisper appears names the whisperer).
+#
+# Three surfaces enforce this, and a new one must opt in deliberately:
+#   * community quests pay flat tiers only — no top-contributor bonus, no
+#     names in the beat sheet (even the owner DM: it's written to be pasted
+#     publicly);
+#   * the register feed drops these payouts entirely (economy/register.py);
+#   * sign-off is refused at config time, since a sign-off card names the
+#     claimant in the bank channel (_check_trigger_config).
+#
+# ``whisper_guess`` is deliberately NOT here: the guesser is the whisper's
+# recipient, and the cog already posts "@target solved the whisper!" to the
+# feed, so naming them costs nothing the game hasn't already said. Only the
+# anonymous *sender* needs covering.
+ANON_KINDS = frozenset({"confession", "confession_reply", "whisper"})
 
 # Community weekly milestone tiers, as fractions of the auto-sized target.
 # Tier 1 is sized to be near-certain, tier 3 a genuine stretch; each tier

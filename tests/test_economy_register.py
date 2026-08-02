@@ -8,6 +8,7 @@ import discord
 import pytest
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.economy import quests as quest_logic
 from bot_modules.economy.register import (
     CREDIT_COLOUR,
     DEBIT_COLOUR,
@@ -228,6 +229,105 @@ def test_collect_honours_limit(db):
         entries = collect_register_entries(conn, GUILD_ID, 0, 2)
 
     assert len(entries) == 2
+
+
+# ── anonymous-kind quests are never posted ─────────────────────────────
+
+
+def _mk_quest(conn, *, trigger_kind, qtype="daily"):
+    """An active auto-tracked quest on ``trigger_kind``."""
+    qid = quests_svc.create_quest(
+        conn, GUILD_ID, title=f"q-{trigger_kind}", description="", qtype=qtype,
+        reward=50, signoff=0, criteria="", starts_at=None, ends_at=None,
+        rotate_tag="", community_target=None, created_by=None,
+        trigger_kind=trigger_kind,
+    )
+    quests_svc.set_quest_active(conn, GUILD_ID, qid, True)
+    return qid
+
+
+@pytest.mark.parametrize("kind", sorted(quest_logic.ANON_KINDS))
+def test_anon_kind_quest_payouts_are_never_collected(db, kind):
+    """The deanonymization-by-timing leak: a register card reading
+    "**X** earned *Send a Whisper*" lands seconds after the anonymous whisper
+    itself, naming the sender. The payout must not reach the feed at all —
+    redacting the title would still name the member at the telltale moment."""
+    with open_db(db) as conn:
+        qid = _mk_quest(conn, trigger_kind=kind)
+        _row(conn, USER_ID, 50, kind="quest", meta={"quest_id": qid})
+        entries = collect_register_entries(conn, GUILD_ID, 0, 10)
+
+    assert entries == []
+
+
+@pytest.mark.parametrize("ledger_kind", ["quest", "quest_community",
+                                         "quest_community_bonus"])
+def test_anon_suppression_covers_every_quest_ledger_kind(db, ledger_kind):
+    """All three ledger kinds carry ``meta.quest_id``; the community ones name
+    contributors just as directly as the per-member payout."""
+    with open_db(db) as conn:
+        qid = _mk_quest(conn, trigger_kind="whisper")
+        _row(conn, USER_ID, 50, kind=ledger_kind, meta={"quest_id": qid})
+        entries = collect_register_entries(conn, GUILD_ID, 0, 10)
+
+    assert entries == []
+
+
+def test_non_anon_quest_payouts_still_post(db):
+    """Only the anonymous kinds go quiet — including whisper_guess, whose
+    solve the whisper cog already announces publicly by name."""
+    with open_db(db) as conn:
+        loud = _mk_quest(conn, trigger_kind="whisper_guess")
+        quiet = _mk_quest(conn, trigger_kind="whisper")
+        _row(conn, USER_ID, 50, kind="quest", meta={"quest_id": quiet})
+        _row(conn, USER_ID, 25, kind="quest", meta={"quest_id": loud})
+        entries = collect_register_entries(conn, GUILD_ID, 0, 10)
+
+    assert [e.amount for e in entries] == [25]
+
+
+def test_anon_rows_do_not_starve_the_batch(db):
+    """Same SQL-not-Python rule as SKIP_KINDS, and with sharper teeth here:
+    the drain cursor only advances over rows collect *returns*, so a batch
+    that filtered to empty in Python would park the cursor and stall the feed
+    permanently rather than merely delaying it."""
+    with open_db(db) as conn:
+        quiet = _mk_quest(conn, trigger_kind="confession")
+        for _ in range(50):
+            _row(conn, USER_ID, 5, kind="quest", meta={"quest_id": quiet})
+        _row(conn, USER_ID, 50, kind="grant")
+        entries = collect_register_entries(conn, GUILD_ID, 0, 8)
+
+    assert [e.kind for e in entries] == ["grant"]
+
+
+def test_anon_suppressed_rows_still_move_the_balance(db):
+    """A suppressed payout is real money — the reconstructed balance on the
+    next posted entry has to include it, or the feed prints bad arithmetic."""
+    with open_db(db) as conn:
+        quiet = _mk_quest(conn, trigger_kind="whisper")
+        _row(conn, USER_ID, 30, kind="quest", meta={"quest_id": quiet})
+        _row(conn, USER_ID, 50, kind="grant")
+        entries = collect_register_entries(conn, GUILD_ID, 0, 10)
+
+    assert [e.balance_after for e in entries] == [80]
+
+
+def test_null_and_malformed_meta_survive_the_anon_filter(db):
+    """The filter reaches into ``meta`` in SQL, where json_extract raises on a
+    non-JSON value — a single hand-written row must not break the whole drain."""
+    with open_db(db) as conn:
+        _mk_quest(conn, trigger_kind="whisper")  # arms the filter clause
+        _row(conn, USER_ID, 10, kind="grant")  # meta NULL
+        conn.execute(
+            "INSERT INTO econ_ledger "
+            "(guild_id, user_id, amount, kind, actor_id, meta, created_at) "
+            "VALUES (?, ?, ?, ?, NULL, ?, ?)",
+            (GUILD_ID, USER_ID, 20, "grant", "not json", NOW),
+        )
+        entries = collect_register_entries(conn, GUILD_ID, 0, 10)
+
+    assert [e.amount for e in entries] == [10, 20]
 
 
 # ── skipped kinds ──────────────────────────────────────────────────────

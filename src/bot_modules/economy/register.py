@@ -178,6 +178,26 @@ def _parse_meta(raw: object) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _anon_quest_ids(conn: sqlite3.Connection, guild_id: int) -> list[int]:
+    """Quest ids the register must never post a payout for.
+
+    Quests on an anonymous trigger kind (:data:`quests.ANON_KINDS`): posting
+    "**X** earned *Send a Whisper*" seconds after an anonymous whisper lands in
+    the feed names the whisperer by timing correlation, which is the whole
+    thing the anonymity is for. The member still sees the credit on every
+    private surface — their own ``/quests`` log and ``/bank wallet`` read the
+    ledger directly, and neither goes through here.
+    """
+    return [
+        int(r["id"])
+        for r in conn.execute(
+            "SELECT id FROM econ_quests WHERE guild_id = ? AND trigger_kind IN "
+            f"({','.join('?' * len(quest_logic.ANON_KINDS))})",
+            [guild_id, *sorted(quest_logic.ANON_KINDS)],
+        ).fetchall()
+    ]
+
+
 def collect_register_entries(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -186,9 +206,13 @@ def collect_register_entries(
 ) -> list[RegisterEntry]:
     """Drain up to ``limit`` postable ledger rows newer than ``after_id``.
 
-    Oldest first. :data:`SKIP_KINDS` is filtered out in SQL, not afterwards, so
-    a midnight burst of login/conversion rows can't consume the whole batch and
-    starve the entries anyone wants to read.
+    Oldest first. :data:`SKIP_KINDS` and anonymous-kind quest payouts (see
+    :func:`_anon_quest_ids`) are filtered out in SQL, not afterwards, for two
+    reasons: a midnight burst of login/conversion rows can't consume the whole
+    batch and starve the entries anyone wants to read, and — the sharper one —
+    the drain cursor only advances over rows this function *returns*. A batch
+    that filtered to empty in Python would leave the cursor parked, re-read the
+    same rows next tick, and stall the feed permanently.
 
     Balances are reconstructed rather than read live — the live wallet balance
     is only right for the newest row. The rewind walks **every** row for these
@@ -198,15 +222,25 @@ def collect_register_entries(
     credit can't skew it.
     """
     skips = ",".join("?" * len(SKIP_KINDS))
+    anon_ids = _anon_quest_ids(conn, guild_id)
+    # ``meta`` is NULL on plenty of rows and json_extract would raise on a
+    # hand-written non-JSON one, so normalise before reaching into it.
+    anon_clause = ""
+    if anon_ids:
+        anon_clause = (
+            " AND COALESCE(json_extract("
+            "CASE WHEN json_valid(meta) THEN meta ELSE '{}' END, '$.quest_id'), 0) "
+            f"NOT IN ({','.join('?' * len(anon_ids))})"
+        )
     rows = conn.execute(
         f"""
         SELECT id, user_id, amount, kind, actor_id, meta, created_at
         FROM econ_ledger
-        WHERE guild_id = ? AND id > ? AND kind NOT IN ({skips})
+        WHERE guild_id = ? AND id > ? AND kind NOT IN ({skips}){anon_clause}
         ORDER BY id ASC
         LIMIT ?
         """,
-        (guild_id, after_id, *SKIP_KINDS, limit),
+        (guild_id, after_id, *SKIP_KINDS, *anon_ids, limit),
     ).fetchall()
     if not rows:
         return []
