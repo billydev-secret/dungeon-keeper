@@ -57,6 +57,7 @@ from bot_modules.services.moderation import (
     PolicyTicketRow,
     TicketRow,
 )
+from bot_modules.jail.apply import create_jail_channel
 from bot_modules.jail.embeds import (
     build_policy_vote_update_embed,
 )
@@ -1331,15 +1332,58 @@ async def _do_jail(
     )
 
 
+async def resolve_release_target(
+    bot: discord.Client,
+    guild: discord.Guild,
+    user_id: int,
+) -> discord.Member | discord.User | None:
+    """Resolve ``user_id`` to something :func:`_do_unjail` can release.
+
+    Prefers the guild member, so a present user still gets full role
+    restoration. Falls back to the global user object — cache first, then a
+    REST fetch — which is what lets a departed member be released with a
+    transcript, channel cleanup, and audit trail instead of a bare DB update.
+
+    Returns ``None`` only when Discord has no such user at all (a deleted
+    account, or an id that never existed); callers close the row out directly
+    in that case rather than leaving it active forever.
+    """
+    member = guild.get_member(user_id)
+    if member is not None:
+        return member
+    user = bot.get_user(user_id)
+    if user is not None:
+        return user
+    try:
+        return await bot.fetch_user(user_id)
+    except (discord.NotFound, discord.HTTPException):
+        return None
+
+
 async def _do_unjail(
     ctx: AppContext,
     guild: discord.Guild,
-    target: discord.Member,
+    target: discord.Member | discord.User,
     *,
     reason: str = "",
     actor: discord.Member | None = None,
 ) -> str:
-    """Core unjail logic.  Returns a status message."""
+    """Core unjail logic.  Returns a status message.
+
+    ``target`` may be a :class:`discord.User` rather than a
+    :class:`discord.Member` — a jailed member who leaves the server keeps their
+    ``active`` row (``check_jail_rejoin`` re-applies the hold if they return),
+    so releasing them has to work without a guild member to act on. Role
+    restoration is the *only* member-specific step; the transcript, channel
+    cleanup, DM, audit row, and audit embed all run either way, which is what
+    makes this the single release path for the slash command, the dashboard
+    route, and the expiry loop alike.
+
+    Releasing an absent user is a real decision, not bookkeeping: their stored
+    roles are dropped for good, since a later rejoin sees no active jail and
+    restores nothing. The returned message says so explicitly.
+    """
+    present = isinstance(target, discord.Member)
 
     def _fetch_jail():
         with ctx.open_db() as conn:
@@ -1349,25 +1393,29 @@ async def _do_unjail(
     if not jail:
         return f"{target} is not currently jailed."
 
-    # Restore roles — use remove/add rather than edit(roles=...) so that any
-    # managed roles the member holds are left in place instead of causing 403.
     stored = json.loads(jail["stored_roles"])
-    available_role_ids = {r.id for r in guild.roles}
-    restorable_ids, missing = compute_roles_to_restore(stored, available_role_ids)
-    roles_to_add: list[discord.Role] = [
-        r for r in (guild.get_role(rid) for rid in restorable_ids) if r is not None
-    ]
+    missing: list[int] = []
 
-    jailed_role_id = _get_config(ctx, "jailed_role_id", guild_id=guild.id)
-    jailed_role = guild.get_role(jailed_role_id)
+    if present:
+        # Restore roles — use remove/add rather than edit(roles=...) so that any
+        # managed roles the member holds are left in place instead of causing 403.
+        member = cast(discord.Member, target)
+        available_role_ids = {r.id for r in guild.roles}
+        restorable_ids, missing = compute_roles_to_restore(stored, available_role_ids)
+        roles_to_add: list[discord.Role] = [
+            r for r in (guild.get_role(rid) for rid in restorable_ids) if r is not None
+        ]
 
-    try:
-        if jailed_role:
-            await target.remove_roles(jailed_role, reason=f"Unjailed: {reason}")
-        if roles_to_add:
-            await target.add_roles(*roles_to_add, reason=f"Unjailed: {reason}")
-    except discord.Forbidden:
-        return "Could not restore roles — missing permissions."
+        jailed_role_id = _get_config(ctx, "jailed_role_id", guild_id=guild.id)
+        jailed_role = guild.get_role(jailed_role_id)
+
+        try:
+            if jailed_role:
+                await member.remove_roles(jailed_role, reason=f"Unjailed: {reason}")
+            if roles_to_add:
+                await member.add_roles(*roles_to_add, reason=f"Unjailed: {reason}")
+        except discord.Forbidden:
+            return "Could not restore roles — missing permissions."
 
     # Transcript
     jail_channel = guild.get_channel(jail["channel_id"])
@@ -1389,6 +1437,11 @@ async def _do_unjail(
     # Update DB
     actor_id = actor.id if actor else 0
     jail_id_rel = jail["id"]
+    audit_extra: dict = {"jail_id": jail_id_rel, "reason": reason}
+    if not present:
+        # Matches the note the dashboard route used to write on its own
+        # absent-release path, so existing audit consumers keep working.
+        audit_extra["note"] = "user_left_guild"
 
     def _release():
         with ctx.open_db() as conn:
@@ -1399,7 +1452,7 @@ async def _do_unjail(
                 action="jail_release",
                 actor_id=actor_id,
                 target_id=target.id,
-                extra={"jail_id": jail_id_rel, "reason": reason},
+                extra=audit_extra,
             )
 
     await asyncio.to_thread(_release)
@@ -1418,10 +1471,20 @@ async def _do_unjail(
         title="🔓 Member Released",
         description=f"{target.mention} released"
         + (f" by {actor.mention}" if actor else " (auto-expired)")
+        + ("" if present else "\n*(had already left the server)*")
         + (f"\n**Reason:** {reason}" if reason else ""),
         color=CLR_SUCCESS,
     )
     await _post_audit(ctx, guild, audit_embed)
+
+    if not present:
+        note = ""
+        if stored:
+            note = (
+                f"\n⚠️ They aren't in the server, so their {len(stored)} stored "
+                "role(s) were not restored — rejoining now gives them a clean slate."
+            )
+        return f"✅ Jail #{jail_id_rel} closed for {target} (no longer in the server).{note}"
 
     note = ""
     if missing:
@@ -1434,8 +1497,18 @@ async def _do_unjail(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-async def check_jail_rejoin(ctx: AppContext, member: discord.Member) -> bool:
-    """If the member has an active jail, re-apply it. Returns True if jailed."""
+async def check_jail_rejoin(
+    ctx: AppContext,
+    member: discord.Member,
+    *,
+    note: str | None = None,
+) -> bool:
+    """If the member has an active jail, re-apply it. Returns True if jailed.
+
+    ``note`` overrides the line posted in the jail channel, so the startup
+    reconcile can say *why* the hold was re-applied instead of claiming a
+    rejoin it didn't observe.
+    """
 
     def _fetch_rejoin_jail():
         with ctx.open_db() as conn:
@@ -1456,17 +1529,51 @@ async def check_jail_rejoin(ctx: AppContext, member: discord.Member) -> bool:
             log.warning("Could not re-jail %s on rejoin", member)
 
     jail_channel = member.guild.get_channel(jail["channel_id"])
-    if isinstance(jail_channel, discord.TextChannel):
-        await jail_channel.set_permissions(
+    if not isinstance(jail_channel, discord.TextChannel):
+        # No channel to return to: it was deleted while they were away, or was
+        # never created because the original jail hit a missing Manage Channels
+        # (``apply_jail`` stores ``channel_id`` 0 in that case). Rebuild it —
+        # without one the member is re-jailed into a server the Jailed role
+        # hides completely, with nowhere to appeal and no notice that anything
+        # happened. The new id is written back to the row by the helper.
+        jail_channel = await create_jail_channel(
+            ctx,
+            member.guild,
             member,
-            view_channel=True,
-            send_messages=True,
-            read_message_history=True,
-            attach_files=True,
+            jail_id=jail["id"],
+            jailed_role=jailed_role,
         )
-        await jail_channel.send(
-            f"⚠️ {member.mention} left and rejoined. Jail has been re-applied."
-        )
+        if jail_channel is None:
+            log.warning(
+                "Re-jailed %s but could not recreate jail channel for jail #%s",
+                member,
+                jail["id"],
+            )
+            await _post_audit(
+                ctx,
+                member.guild,
+                discord.Embed(
+                    title="⚠️ Jail channel missing",
+                    description=(
+                        f"{member.mention} returned while jailed (jail #{jail['id']}), "
+                        "but I couldn't recreate their jail channel — grant "
+                        "**Manage Channels**. They're re-jailed with nowhere to appeal."
+                    ),
+                    color=CLR_JAIL,
+                ),
+            )
+            return True
+
+    await jail_channel.set_permissions(
+        member,
+        view_channel=True,
+        send_messages=True,
+        read_message_history=True,
+        attach_files=True,
+    )
+    await jail_channel.send(
+        note or f"⚠️ {member.mention} left and rejoined. Jail has been re-applied."
+    )
     return True
 
 
@@ -1553,6 +1660,96 @@ async def jail_channel_deny_sweep(bot: discord.Client, ctx: AppContext) -> None:
         )
 
 
+async def jail_rejoin_reconcile_sweep(bot: discord.Client, ctx: AppContext) -> None:
+    """One-shot startup sweep: re-apply holds that lapsed while the bot was down.
+
+    ``check_jail_rejoin`` only fires on ``on_member_join``. A member who left
+    while jailed and rejoined during downtime never triggers it — Discord
+    restores no roles on rejoin, so they come back with @everyone, full
+    visibility, and an ``active`` jails row nobody reads. From the member's side
+    that is indistinguishable from being released.
+
+    Only members who look like fresh rejoiners are re-jailed: holding no roles
+    beyond @everyone and integration-managed ones. A member missing the Jailed
+    role but *holding* other roles was almost certainly released by hand by a
+    moderator, and ``check_jail_rejoin`` would wipe those roles
+    (``edit(roles=[jailed_role])``) to enforce a hold nobody wants. That case
+    gets a mod-log line instead — the ambiguity is a human's to resolve, and
+    silently stripping a member's roles at boot is the worse failure.
+    """
+    await bot.wait_until_ready()
+    guild = bot.get_guild(ctx.guild_id)
+    if guild is None:
+        return
+    jailed_role_id = _get_config(ctx, "jailed_role_id", guild_id=guild.id)
+    jailed_role = guild.get_role(jailed_role_id) if jailed_role_id else None
+    if jailed_role is None:
+        return
+
+    guild_id = guild.id
+
+    def _fetch_active():
+        with ctx.open_db() as conn:
+            return [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT id, user_id FROM jails "
+                    "WHERE guild_id = ? AND status = 'active'",
+                    (guild_id,),
+                ).fetchall()
+            ]
+
+    active = await asyncio.to_thread(_fetch_active)
+    if not active:
+        return
+
+    reapplied = 0
+    for jail in active:
+        member = guild.get_member(jail["user_id"])
+        if member is None:
+            continue  # still absent — the rejoin listener covers their return
+        if jailed_role in member.roles:
+            continue  # hold is intact
+        extra_roles = [
+            r for r in member.roles if not r.is_default() and not r.managed
+        ]
+        if extra_roles:
+            log.warning(
+                "Jail #%s is active for %s but they hold %d role(s) and no Jailed "
+                "role — leaving alone, needs a human.",
+                jail["id"],
+                member,
+                len(extra_roles),
+            )
+            await _post_audit(
+                ctx,
+                guild,
+                discord.Embed(
+                    title="⚠️ Jail state mismatch",
+                    description=(
+                        f"{member.mention} has an active hold (jail #{jail['id']}) "
+                        "but isn't wearing the Jailed role. They may have been "
+                        "released by hand — I left their roles alone.\n"
+                        f"Use `/unjail` to close jail #{jail['id']} out."
+                    ),
+                    color=CLR_JAIL,
+                ),
+            )
+            continue
+        await check_jail_rejoin(
+            ctx,
+            member,
+            note=(
+                f"⚠️ {member.mention} rejoined while the bot was offline. "
+                "Jail has been re-applied."
+            ),
+        )
+        reapplied += 1
+
+    if reapplied:
+        log.info("Jail reconcile sweep: re-applied %d lapsed hold(s).", reapplied)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # AUTO-EXPIRY BACKGROUND TASK
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1573,21 +1770,49 @@ async def jail_expiry_loop(bot: discord.Client, ctx: AppContext) -> None:
 
                 expired = await asyncio.to_thread(_get_expired)
                 for jail in expired:
-                    member = guild.get_member(jail["user_id"])
-                    if member:
+                    target = await resolve_release_target(
+                        bot, guild, jail["user_id"]
+                    )
+                    if target is not None:
+                        # One release path for present and departed members
+                        # alike: a departed one still gets their transcript,
+                        # channel cleanup, and audit row, none of which the
+                        # old DB-only shortcut here wrote.
                         await _do_unjail(
-                            ctx, guild, member, reason="Jail duration expired"
+                            ctx,
+                            guild,
+                            target,
+                            reason="Jail duration expired"
+                            + ("" if isinstance(target, discord.Member) else " (user left)"),
                         )
                     else:
-                        # User left — just release the record
+                        # Discord has no such user (deleted account). Nothing
+                        # to transcript or DM — close the row so it stops
+                        # being re-examined every minute.
                         expired_jail_id = jail["id"]
+                        expired_user_id = jail["user_id"]
 
-                        def _release_left(jid: int = expired_jail_id) -> None:
+                        def _release_left(
+                            jid: int = expired_jail_id,
+                            uid: int = expired_user_id,
+                        ) -> None:
                             with ctx.open_db() as conn:
                                 release_jail(
                                     conn,
                                     jid,
-                                    reason="Jail duration expired (user left)",
+                                    reason="Jail duration expired (user unreachable)",
+                                )
+                                write_audit(
+                                    conn,
+                                    guild_id=el_guild_id,
+                                    action="jail_release",
+                                    actor_id=0,
+                                    target_id=uid,
+                                    extra={
+                                        "jail_id": jid,
+                                        "reason": "expired",
+                                        "note": "user_unresolvable",
+                                    },
                                 )
 
                         await asyncio.to_thread(_release_left)
