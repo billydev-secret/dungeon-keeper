@@ -1,6 +1,6 @@
 # Confessions — Feature Spec
 
-Anonymous confession box with a persistent **Confess** launcher button at the bottom of a configured channel. Submitters open a modal; the bot reposts the text into a destination channel (or a forum thread) and seeds it with an anonymous-reply button bar. Replies are themselves anonymous — each replier gets a stable name + color per thread, or a fresh "someone new" identity on demand. Every confession and reply is mirrored to a moderator log channel.
+Anonymous confession box with a persistent **Confess** launcher button at the bottom of a configured channel. Submitters open a modal; the bot reposts the text into a destination channel (or a forum thread) and seeds it with an anonymous-reply button bar. Replies are themselves anonymous — each replier gets a stable name + color per thread, or a fresh "someone new" identity on demand. Every confession and reply is recorded, with its real author, in the admin-gated **Confessions Audit Log** panel on the dashboard. A Discord mod-log channel can additionally mirror them, but it is optional and off by default — anyone who can read that channel can de-anonymise every confession in it, whereas the panel is admin-only.
 
 ## Commands
 
@@ -11,10 +11,10 @@ Anonymous confession box with a persistent **Confess** launcher button at the bo
 | **🎭 Reply Anonymously** | Persistent button | Everyone | Open the reply modal with the user's **stable** identity for this thread |
 | **🎲 Reply as Someone New** | Persistent button | Everyone | Open the reply modal with a fresh **ephemeral** identity (not stored) |
 | **❓ What's this?** | Persistent button | Everyone | Ephemeral help text comparing the two reply modes |
-| Confessions config | Web | Admin reads; Game host writes | Edit destination / log channel, cooldown, character cap, panic / replies flags, per-day limit |
+| Confessions config | Web | Admin reads; Game host writes | Edit destination channel, optional mod-log channel, cooldown, character cap, panic / replies flags, per-day limit |
 | Confessions block list | Web | Admin | Add / remove per-guild blocklist entries |
 | Launcher placement | Web | Game host | Post / move the launcher button to a specified channel |
-| Confessions audit log | Web | Admin | Recent confessions joined with archived bodies for moderator review |
+| Confessions audit log | Web | Admin | Every confession and anonymous reply with its real author, joined with archived bodies for moderator review |
 
 Bot-side perms required in the destination channel: **Send Messages**, **Embed Links** (for the log embed), **Create Public Threads** (text-channel destination — the bot creates a thread for the reply bar) or **Send Messages in Threads** (forum destination). All modals reject DMs implicitly.
 
@@ -32,7 +32,7 @@ The modal accepts the body plus a notify-pref textbox (yes / no / unset). On sub
 - the submitter is still inside the cooldown,
 - or the submitter has reached the per-day limit.
 
-On success the bot posts the body to the destination channel. For a forum destination it creates a new thread (using the first available tag if the forum requires one); for a text channel it sends the message then creates a thread on it for the reply bar. The reply button bar (the three buttons above) is posted into the thread. The mod log channel receives a mirror embed. The launcher button is re-pinned to the bottom of the launcher channel.
+On success the bot posts the body to the destination channel. For a forum destination it creates a new thread (using the first available tag if the forum requires one); for a text channel it sends the message then creates a thread on it for the reply bar. The reply button bar (the three buttons above) is posted into the thread. An audit row is written to `anon_audit_log`, and if a mod log channel is configured it also receives a mirror embed. The launcher button is re-pinned to the bottom of the launcher channel.
 
 ### Reply identity model
 
@@ -99,7 +99,10 @@ Stale-interaction races (Discord internal-defer collisions) silently no-op — t
 Per-guild settings, editable from the dashboard:
 
 - **Destination channel** — text channel or forum channel where confessions are reposted.
-- **Log channel** — mod-only mirror; logging is best-effort and won't block a post.
+- **Log channel** — *optional*, disabled by default. A mod-only Discord mirror
+  of the audit trail; logging is best-effort and won't block a post. Confessions
+  works fully without one — the audit panel is the moderation view, and unlike a
+  channel it cannot be read by anyone below admin.
 - **Post cooldown** — seconds between confessions per user (default 120).
 - **Reply cooldown** — derived as half the post cooldown, floor 30 s; not directly configurable.
 - **Character cap** — per-body cap (default 2000, clamped to Discord's actual limit).
@@ -113,5 +116,14 @@ Per-guild settings, editable from the dashboard:
 ## Stored data
 
 Per-guild: a config row (settings + block list), the per-user rate-limit row (last-confess and last-reply timestamps plus the UTC-day key and counter), thread metadata for every bot-posted message (root or reply, with the real author id kept internal and the spawned Discord thread id), persistent identity assignments keyed by (guild, root message, user), and the shuffled identity pools (name and color) keyed by (guild, root message). Thread metadata is auto-purged after seven days. No DM data is ever stored.
+
+The moderator-facing audit trail is kept **separately**, as `anon_audit_log`
+rows under the `confessions` feature slug (one per confession and per reply,
+carrying the real author id, the message pointer and the root message id — but
+never the body; see migration 145). The two lifetimes are deliberately
+independent: seven days is the operational TTL that bounds thread identity and
+reply routing, not a sensible retention policy for a moderation record. Audit
+rows expire on the guild-wide anon-audit retention window (default 90 days,
+`0` to keep forever), configured on the Anonymous Features panel.
 
 Ephemeral identity replies pop the shared pools but never write an assignment row, by design — that's what makes them ephemeral. Launcher state lives in memory as per-guild locks; pool state lives in the database so identities survive bot restarts.

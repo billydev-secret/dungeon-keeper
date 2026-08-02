@@ -2,9 +2,23 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 
+import pytest
 
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.anon_audit_service import (
+    DEFAULT_RETENTION_DAYS,
+    EVENT_CONFESSION_POSTED,
+    FEATURE_CONFESSIONS,
+    RETENTION_FOREVER,
+    SECONDS_PER_DAY,
+    insert_event,
+    list_events,
+    purge_expired,
+    set_retention_days,
+)
 from bot_modules.services.confessions_service import (
     MAX_DISCORD_MESSAGE_LENGTH,
     _ANON_ADJECTIVES,
@@ -19,6 +33,7 @@ from bot_modules.services.confessions_service import (
     get_ephemeral_anon_identity,
     get_or_assign_anon_identity,
     pop_pool_index,
+    purge_old_thread_posts,
 )
 
 
@@ -211,3 +226,90 @@ def test_build_anon_reply_defangs_everyone():
     result = build_anon_reply("@everyone listen up", is_op=False, circle="🟢", anon_name="Quiet Yak")
     assert "@everyone" not in result
     assert "@​everyone" in result
+
+
+# ── Audit trail vs operational TTL ────────────────────────────────────
+#
+# The confessions audit panel reads `anon_audit_log`, not `confession_threads`.
+# These two lifetimes must stay independent: the operational table is purged at
+# a seven-day TTL so thread identity and reply routing stay bounded, and before
+# this split that TTL silently truncated the moderation record to a rolling
+# week. Since the Discord mod-log channel became optional, the audit row is the
+# only durable trace of who is behind an anonymous post.
+
+
+def test_operational_purge_leaves_audit_trail_intact(sync_db_path: Path):
+    guild_id, message_id = 4242, 777
+    old = int(time.time()) - (30 * 86400)
+    with open_db(sync_db_path) as conn:
+        conn.execute(
+            "INSERT INTO confession_threads (guild_id, message_id, channel_id,"
+            " root_message_id, original_author_id, notify_original_author, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (guild_id, message_id, 100, message_id, 42, 1, old),
+        )
+        insert_event(
+            conn,
+            guild_id=guild_id,
+            feature=FEATURE_CONFESSIONS,
+            event=EVENT_CONFESSION_POSTED,
+            actor_id=42,
+            message_id=message_id,
+            created_at=old,
+        )
+
+    removed = purge_old_thread_posts(sync_db_path)
+
+    assert removed == 1
+    with open_db(sync_db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM confession_threads WHERE guild_id = ?", (guild_id,)
+        ).fetchone()[0] == 0
+        # The moderator-facing record outlives it.
+        surviving = list_events(conn, guild_id, feature=FEATURE_CONFESSIONS)
+        assert [e.actor_id for e in surviving] == [42]
+
+
+def test_audit_row_expires_on_its_own_retention_window(sync_db_path: Path):
+    """Confessions rows are purged by the anon-audit window like any other."""
+    guild_id = 4242
+    stale = time.time() - (DEFAULT_RETENTION_DAYS + 1) * SECONDS_PER_DAY
+    fresh = time.time()
+    with open_db(sync_db_path) as conn:
+        for ts in (stale, fresh):
+            insert_event(
+                conn,
+                guild_id=guild_id,
+                feature=FEATURE_CONFESSIONS,
+                event=EVENT_CONFESSION_POSTED,
+                actor_id=42,
+                created_at=ts,
+            )
+
+    purge_expired(sync_db_path)
+
+    with open_db(sync_db_path) as conn:
+        remaining = list_events(conn, guild_id, feature=FEATURE_CONFESSIONS)
+    assert len(remaining) == 1
+    assert remaining[0].created_at == pytest.approx(fresh)
+
+
+def test_retention_off_keeps_confessions_forever(sync_db_path: Path):
+    """`0` disables purging — the guild's opt-out of a bounded audit window."""
+    guild_id = 4242
+    ancient = time.time() - (10 * 365 * SECONDS_PER_DAY)
+    with open_db(sync_db_path) as conn:
+        set_retention_days(conn, guild_id, RETENTION_FOREVER)
+        insert_event(
+            conn,
+            guild_id=guild_id,
+            feature=FEATURE_CONFESSIONS,
+            event=EVENT_CONFESSION_POSTED,
+            actor_id=42,
+            created_at=ancient,
+        )
+
+    purge_expired(sync_db_path)
+
+    with open_db(sync_db_path) as conn:
+        assert len(list_events(conn, guild_id, feature=FEATURE_CONFESSIONS)) == 1

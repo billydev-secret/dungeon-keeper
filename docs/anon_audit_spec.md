@@ -21,14 +21,27 @@ The channel mirror is still there; it is just no longer the only record.
 | Feature | Trail |
 |---|---|
 | AMA, Free For All, Hot Takes, Fantasies, Clapback, WYR, Compliment | `anon_audit_log` (this spec) |
-| Confessions | `confession_threads` + Confessions Audit panel |
+| Confessions | `anon_audit_log` under the `confessions` slug, surfaced on its own Confessions Audit panel |
 | Whisper | `whispers` + Whisper Audit panel |
 | Guess (`/guess confess`) | `guess_audit_log` via `guess_cog._do_audit` + Guess Who Audit panel |
 
-Confessions, Whisper and Guess are deliberately **not** migrated onto this
-table. Their tables are load-bearing for the features themselves — thread
-identity, whisper state, round history — so putting them under a retention
-purge would break them.
+Whisper and Guess are deliberately **not** migrated onto this table. Their
+tables are load-bearing for the features themselves — whisper state, round
+history — so putting them under a retention purge would break them.
+
+Confessions was originally excluded for the same reason, and that reason still
+holds: `confession_threads` carries thread identity and reply routing, and is
+**not** migrated here. Instead confessions *also write* an audit row (migration
+`147`), which decouples the two lifetimes. This matters because
+`confession_threads` is purged at a seven-day operational TTL, so while the
+Confessions panel read it, the moderation record was a rolling week — tolerable
+only while a Discord mod-log channel held the permanent copy. That channel is
+now optional and off by default (it de-anonymises every confession to whoever
+can read it), so the audit row is the durable trace.
+
+Confessions therefore shares this table's guild-wide retention dial rather than
+having its own. One window for every de-anonymising record is the intended
+posture; a per-feature column is the change to make if that ever stops holding.
 
 ## Schema
 

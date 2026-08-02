@@ -1,5 +1,5 @@
 import { api, apiPut } from "../api.js";
-import { auditPanel, badge, el, tsColumn } from "../audit-helpers.js";
+import { auditPanel, badge, el, jumpAnchor, tsColumn } from "../audit-helpers.js";
 
 const RETENTION_OPTIONS = [
   { value: "30", label: "30 days" },
@@ -120,16 +120,7 @@ export function mount(container) {
       },
       {
         label: "Message",
-        render: (e) => (e.message_id && e.channel_id
-          ? el("a",
-              {
-                href: `https://discord.com/channels/@me/${e.channel_id}/${e.message_id}`,
-                target: "_blank",
-                rel: "noopener noreferrer",
-              },
-              "jump",
-            )
-          : "—"),
+        render: (e) => (e.message_id ? jumpAnchor(e.channel_id, e.message_id, "jump") : "—"),
       },
       tsColumn("created_at"),
     ],
