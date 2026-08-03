@@ -666,10 +666,13 @@ the board always shows up to 2 goals rather than 1:
   bonus**: `reward // 2` to the top 3 by contribution). Contribution and
   tier-payout rows reset at the next activation, so a re-run pays afresh;
   idempotency only has to hold within a run. **Anonymous kinds**
-  (`quests.ANON_COMMUNITY_KINDS`: confession, confession_reply, whisper)
+  (`quests.ANON_KINDS`: confession, confession_reply, whisper)
   pay flat tiers only — no bonus, an empty top list in the settle summary,
   and a name-free resolution beat sheet — because naming the most active
-  confessors/repliers/whisperers would deanonymize the feed.
+  confessors/repliers/whisperers would deanonymize the feed. The same set
+  now gates two further surfaces: the register feed drops these payouts
+  (§10.1) and sign-off is refused at config time (a sign-off card names the
+  claimant in the bank channel).
 - **Beat sheets, not bot posts:** kickoff / final-24h / resolution are **DMed
   to the community host** (`EconSettings.community_host_user_id`, 0 → guild
   owner) as numbers + suggested copy — the host narrates publicly in their own
@@ -861,10 +864,15 @@ and community guild-wide sums — plan
 the xp_events-mirrored kinds is a stage-2 script job, not a migration
 (local-day bucketing needs per-guild tz offsets).
 
-`confession` quests reject `signoff=1` at creation/update: a sign-off claim
-posts a bank-channel card naming the claimant, timing-correlatable against the
-anonymous feed. (Community quests already forbid any trigger kind, so the only
-paths left for confession are the silent daily/weekly/event auto-claims.)
+Quests on an anonymous kind (`quests.ANON_KINDS`: `confession`,
+`confession_reply`, `whisper`) reject `signoff=1` at creation/update: a sign-off
+claim posts a bank-channel card naming the claimant, timing-correlatable against
+the anonymous feed. (Community quests already forbid any trigger kind, so the
+only paths left for these kinds are the silent daily/weekly/event auto-claims,
+whose ledger rows the register feed also drops — §10.1.) Widened from
+`confession` alone on 2026-08-02; `whisper` and `confession_reply` were the same
+leak with no guard. `whisper_guess` stays outside the set — the whisper cog
+already names the solver in the feed.
 
 **Monthly cadence (guild-wide, migration 125):** `qtype='monthly'` is a
 **community-measured** goal — the monthly sibling of the weekly `community`
@@ -1788,11 +1796,32 @@ skipped because a transfer writes two rows for one event: the register posts the
 neutral colour — the currency moved sideways rather than entering or leaving the
 economy) with the sender's resulting balance.
 
-The skip list is applied **in SQL, before the LIMIT** — filtering after it would
-let a midnight flood of login rows fill the batch and starve the entries anyone
-wants to read. Balance reconstruction still walks the *unfiltered* rows: a
-skipped login between two posted entries moved the wallet, and ignoring it would
-print arithmetic that doesn't add up.
+**Anonymous quest payouts are never posted** (fixed 2026-08-02). A payout for a
+quest whose `trigger_kind` is in `quests.ANON_KINDS` (confession,
+confession_reply, whisper) is dropped from the drain entirely —
+`register._anon_quest_ids` resolves the guild's anon quests and the collector
+excludes any row whose `meta.quest_id` matches, covering all three quest ledger
+kinds (`quest`, `quest_community`, `quest_community_bonus`). A card reading
+"**X** earned *Send a Whisper*" posts seconds after the anonymous whisper lands
+in its feed, so the pair names the sender by timing correlation — the exact
+deanonymization the silent auto-claim exists to prevent. Redacting the title
+would not be enough: the member is still named at the telltale moment, so the
+row has to go. The credit is unaffected on every **private** surface — the
+member's own `/quests` log and `/bank wallet` read the ledger directly and never
+route through the register — so a quiet payout never reads as a missing one.
+`whisper_guess` is deliberately *not* suppressed: the guesser is the whisper's
+recipient, and the whisper cog already posts "@target solved the whisper!" to
+the same feed by name.
+
+The skip list and the anon filter are both applied **in SQL, before the LIMIT** —
+filtering after it would let a midnight flood of login rows fill the batch and
+starve the entries anyone wants to read. For the anon filter the stake is
+higher than starvation: the drain cursor only advances over rows the collector
+*returns*, so a batch filtered to empty in Python would park the cursor, re-read
+the same rows every tick, and stall the feed permanently. Balance reconstruction
+still walks the *unfiltered* rows: a skipped login (or a suppressed whisper
+payout) between two posted entries moved the wallet, and ignoring it would print
+arithmetic that doesn't add up.
 
 **Completions only.** A ledger row exists only once a transaction has happened,
 so there is no per-tick progress spam. A counted quest's entry shows the final

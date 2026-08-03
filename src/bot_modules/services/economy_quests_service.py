@@ -229,10 +229,11 @@ def _check_trigger_config(
     are **auto-tracked only**: they REQUIRE a trigger kind, cannot be sign-off
     (month-end tier settlement is automatic), and never take trigger words.
 
-    The ``confession`` kind additionally forbids sign-off: a sign-off claim
+    The anonymous kinds (:data:`quests.ANON_KINDS` — confession,
+    confession_reply, whisper) additionally forbid sign-off: a sign-off claim
     posts a bank-channel card naming the claimant, which is timing-correlatable
-    against the anonymous confessions feed — exactly the deanonymization we
-    keep the auto-claim silent to avoid.
+    against the anonymous feed — exactly the deanonymization the silent
+    auto-claim and the register-feed suppression exist to avoid.
     """
     if trigger_kind and trigger_kind not in quests.TRIGGER_KINDS:
         raise ValueError(f"unknown trigger kind: {trigger_kind!r}")
@@ -265,8 +266,11 @@ def _check_trigger_config(
             )
     if trigger_kind and trigger_words.strip():
         raise ValueError("a quest takes trigger words or a trigger kind, not both")
-    if trigger_kind == "confession" and signoff:
-        raise ValueError("confession quests cannot require sign-off (it would deanonymize the confessor)")
+    if trigger_kind in quests.ANON_KINDS and signoff:
+        raise ValueError(
+            f"{trigger_kind} quests cannot require sign-off "
+            "(the bank-channel card would deanonymize the member)"
+        )
 
 
 def _check_target_count(
@@ -2887,7 +2891,7 @@ def settle_community_weekly(
     # Anonymous kinds pay flat tiers only: surfacing the top confessors /
     # repliers / whisperers (in the bonus ledger or the paste-ready beat
     # sheet) would deanonymize the feed the kind exists to protect.
-    anonymous = str(quest["trigger_kind"] or "") in quests.ANON_COMMUNITY_KINDS
+    anonymous = str(quest["trigger_kind"] or "") in quests.ANON_KINDS
     contributors, top = community_contrib_summary(conn, qid)
     if anonymous:
         top = []

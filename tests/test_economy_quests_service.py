@@ -18,6 +18,7 @@ import pytest
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.quests import (
+    ANON_KINDS,
     POOL_CAP,
     TRIGGER_KIND_INFO,
     TRIGGER_KINDS,
@@ -1037,16 +1038,24 @@ def test_fire_trigger_quests_without_occurrence_skips_event(db):
         assert get_balance(conn, GUILD, USER) == 10
 
 
-def test_confession_quest_rejects_signoff(db):
-    # A sign-off confession quest would post a bank-channel card naming the
-    # confessor — the deanonymization the silent auto-claim exists to avoid.
+@pytest.mark.parametrize("kind", sorted(ANON_KINDS))
+def test_anon_kind_quests_reject_signoff(db, kind):
+    # A sign-off claim on an anonymous kind posts a bank-channel card naming
+    # the claimant, timing-correlatable against the anonymous feed — the
+    # deanonymization the silent auto-claim and the quiet register exist to
+    # avoid. Whisper used to be allowed here; it is the same leak.
     with open_db(db) as conn:
         with pytest.raises(ValueError, match="deanonymize"):
-            _make(conn, qtype="daily", trigger_kind="confession", signoff=1)
-        # Non-sign-off confession quests are fine, and other kinds still allow
-        # sign-off.
-        _make(conn, qtype="daily", trigger_kind="confession", signoff=0)
-        _make(conn, qtype="daily", trigger_kind="whisper", signoff=1)
+            _make(conn, qtype="daily", trigger_kind=kind, signoff=1)
+        # Without sign-off the same quest is fine.
+        _make(conn, qtype="daily", trigger_kind=kind, signoff=0)
+
+
+def test_whisper_guess_still_allows_signoff(db):
+    # The guesser is the whisper's recipient and the cog already announces the
+    # solve by name, so this kind stays outside the quiet set.
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="whisper_guess", signoff=1)
 
 
 def list_income_sources_has(db, kind):
