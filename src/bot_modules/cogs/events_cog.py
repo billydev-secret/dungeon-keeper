@@ -31,7 +31,7 @@ from bot_modules.services.birthday_service import (
     announced_birthday_ids,
     is_birthday_wish,
 )
-from bot_modules.services import nsfw_classifier_service
+from bot_modules.services import marqo_nsfw, nsfw_classifier_service
 from bot_modules.services.discord_scan import collect_messageable_channels
 from bot_modules.services.event_echo_service import echo_discord_event
 from bot_modules.services.greeting_watch_service import (
@@ -484,6 +484,24 @@ class EventsCog(commands.Cog):
             self.ctx.guild_id,
             [_ch(c) for c in cfg.spoiler_required_channels],
         )
+        # The weights live in gitignored models/ and are deployed by hand, so
+        # unlike the pip-bundled detector they replaced they can simply go
+        # missing after a partial sync. Every image would then classify as
+        # UNKNOWN, and spoiler enforcement deletes on UNKNOWN by design — so
+        # the gate silently reverts to removing *every* unspoilered image,
+        # which is the false-positive class the classifier exists to prevent.
+        # Said once, loudly, at boot; per-image warnings are too late and too
+        # quiet to notice.
+        if marqo_nsfw.is_available():
+            log.info("NSFW verdict engine: %s ready", marqo_nsfw.MODEL_NAME)
+        else:
+            log.error(
+                "NSFW MODEL MISSING (%s in %s) — every image will classify as "
+                "UNKNOWN, so spoiler channels will delete every unspoilered "
+                "image and SFW prevention will stop acting entirely.",
+                marqo_nsfw.MODEL_FILENAME,
+                marqo_nsfw.model_dir(),
+            )
         log.info(
             "XP config loaded: level-%s role=%s level-up-log=%s level-%s-log=%s.",
             cfg.xp_settings.role_grant_level,

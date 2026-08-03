@@ -39,11 +39,13 @@ Three-valued, and the third value is the point:
 
 The higher threshold for SFW prevention is deliberate. A false positive there deletes a member's innocent photo, so it demands more certainty than merely qualifying a post for coins.
 
-A missing model file lands as `UNKNOWN` too, so a deploy without the weights degrades to "we could not tell" rather than to a wrong verdict.
+A missing model file lands as `UNKNOWN` too, so a deploy without the weights degrades to "we could not tell" rather than to a wrong verdict. That is safe per image but not per deploy: the weights live in gitignored `models/` and are placed by hand, so unlike the pip-bundled detector they replaced they can go missing — and since spoiler enforcement deletes on `UNKNOWN` by design, the gate would silently revert to removing *every* unspoilered image. `on_ready` therefore checks `marqo_nsfw.is_available()` and logs the absence at ERROR once at boot, rather than leaving it to a per-image warning nobody reads.
 
 ## Preprocessing
 
-The transform matches timm's eval transform for this model (`crop_pct=1.0`): RGB, shortest edge resized to 384 bicubic, centre crop 384×384, normalized `mean=0.5 std=0.5`, fed as float32 NCHW. Softmax over the two output logits; `label_names` is `['NSFW', 'SFW']`, so index **0** is the probability used.
+The transform matches timm's eval transform for this model (`crop_pct=1.0`): RGB, centre crop to the source's largest square, resized to 384×384 bicubic, normalized `mean=0.5 std=0.5`, fed as float32 NCHW. Softmax over the two output logits; `label_names` is `['NSFW', 'SFW']`, so index **0** is the probability used.
+
+Cropping **before** resizing is deliberate and is a denial-of-service fix, not a style choice. timm expresses the transform as `Resize(shortest edge → 384)` then `CenterCrop(384)`, which in source coordinates selects exactly that square, so the two orders agree (measured: within 0.0012). But resizing first builds an intermediate of `(long / short) × 384 × 384` pixels, and the only upstream guard is `MAX_IMAGE_BYTES`, which bounds *encoded bytes* and says nothing about dimensions. A **114-byte** 4000×2 PNG passes the 25 MB cap and expands to 295 Mpx — roughly 0.9 GB and 2.5 s; 16000×1 would be ~7 GB. A member posting a handful of those could take the process out. Cropping first makes every resize output exactly 384×384.
 
 Matching timm exactly is worth the few extra lines: squashing the image to a square instead scores the reference image 0.879 where the real transform scores 0.912 — a silent accuracy regression nothing else would notice.
 
@@ -163,10 +165,10 @@ Total compute is **lower** than before the swap in typical traffic, because Nude
 
 ## Tests
 
-`tests/test_marqo_nsfw.py` — preprocessing shape across six aspect ratios (including the extremes that would otherwise crop off the image), normalization range, channel-first RGB ordering, float32 dtype, centre-crop-not-squash, paletted/greyscale decoding, undecodable bytes, the NSFW label index, softmax overflow, missing-weights errors naming the file, and a single session under eight concurrent loaders.
+`tests/test_marqo_nsfw.py` — preprocessing shape across eight aspect ratios (including the degenerate 4000×2 / 2×4000 pair that used to build a 0.9 GB intermediate), an assertion that **every resize targets 384×384 exactly** so the unbounded-intermediate bug cannot return, normalization range, channel-first RGB ordering, float32 dtype, centre-crop-not-squash, paletted/greyscale decoding, undecodable bytes, the NSFW label index, softmax overflow, missing-weights errors naming the file, and a single session under eight concurrent loaders.
 
 `tests/test_nsfw_classifier_service.py` — threshold boundaries (inclusive at the threshold), the stricter-threshold override, tag membership per qualifying and non-qualifying label, model-name reporting, config parsing and out-of-range rejection, attachment type/size gating, `UNKNOWN` for download failure / timeout / inference failure / missing model / unclassifiable type, cache reuse across consumers, cache bypass on a differing threshold, `UNKNOWN` never cached, **the tagger never running or recording in a SFW channel**, tagging failure still recording the verdict, two consumers sharing one tagging pass and one download, recording writes both tables with near-misses kept, `UNKNOWN` never recorded, recording idempotent per attachment, no `author_id` column, and block rows keeping an unreadable image distinct from a low score.
 
 `tests/test_post_monitoring.py` — spoiler and SFW block reporting, including the unreadable-image case and a report failure not resurrecting the message.
 
-`tests/web/test_nsfw_report_routes.py` — both report endpoints: the disagreement counts, the score histogram's top-bucket fold, pre-swap rows excluded, snowflake-safe string ids, surface filtering, and guild scoping.
+`tests/web/test_nsfw_report_routes.py` — both report endpoints plus the legacy Image Guard summary: the disagreement counts, the score histogram's top-bucket fold, pre-swap rows excluded from all three, snowflake-safe string ids, surface filtering, and guild scoping.

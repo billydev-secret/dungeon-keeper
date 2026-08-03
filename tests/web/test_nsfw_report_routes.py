@@ -219,3 +219,33 @@ def test_blocks_scoped_to_the_active_guild(open_client, fake_ctx):
            surface=SURFACE_SFW, action=ACTION_REMOVED)
 
     assert open_client.get("/api/moderation/nsfw-blocks").json()["total"] == 1
+
+
+# ── the legacy Image Guard summary shares the engine filter ───────────
+
+
+def test_image_guard_metrics_excludes_pre_swap_rows(open_client, fake_ctx):
+    # The panel an admin reads while choosing thresholds must not blend a
+    # NudeNet-derived verdict with a Marqo-derived one — they mean different
+    # things, and the mix only clears once the 30-day window rolls past deploy.
+    gid = fake_ctx.guild_id
+    _classify(fake_ctx.db_path, gid, message_id=1, score=0.9, verdict=True,
+              label="SEX_ACT")
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO nsfw_classifications
+                (message_id, attachment_id, guild_id, channel_id, verdict,
+                 top_label, top_score, model, threshold, label_set,
+                 inference_ms, bytes, created_at)
+            VALUES (9, 1, ?, 55, 1, 'ANUS_EXPOSED', 0.8, '320n', 0.5,
+                    'ANUS_EXPOSED', 74, 1000, ?)
+            """,
+            (gid, int(time.time())),
+        )
+
+    data = open_client.get("/api/nsfw-classifier/metrics").json()
+
+    assert data["classified"] == 1
+    assert data["explicit"] == 1
+    assert [row["label"] for row in data["labels"]] == ["SEX_ACT"]

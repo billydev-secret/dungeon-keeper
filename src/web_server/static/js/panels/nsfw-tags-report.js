@@ -93,112 +93,118 @@ function scoreTable(scores) {
 }
 
 export function mount(container) {
-  container.replaceChildren(
-    el("div", { className: "panel" }, el("div", { className: "empty" }, "Loading…")),
-  );
+  // The panel shell is built once, synchronously, and only `body` is replaced
+  // when data lands. app.js prepends its help/related bar to `container` AFTER
+  // mount() returns, so a panel that replaceChildren()s the container later
+  // deletes that bar — and with it this page's "Related: Image Guard" link.
+  const body = el("div", null, el("div", { className: "empty" }, "Loading…"));
+  const panel = el("div", { className: "panel" }, body);
+  container.replaceChildren(panel);
+
+  // Navigating away mid-fetch would otherwise let this resolve and paint the
+  // tags report over whichever panel replaced it.
+  let cancelled = false;
 
   (async () => {
     let data;
     try {
       data = await api("/api/moderation/nsfw-tags", { days: 30 });
     } catch (err) {
-      container.replaceChildren(
-        el("div", { className: "panel" }, el("div", { className: "error" }, err.message)),
-      );
+      if (cancelled) return;
+      body.replaceChildren(el("div", { className: "error" }, err.message));
       return;
     }
+    if (cancelled) return;
 
     if (!data.classified) {
-      container.replaceChildren(
+      body.replaceChildren(
+        el("header", null, el("h2", null, "Image Tags")),
         el(
           "div",
-          { className: "panel" },
-          el("header", null, el("h2", null, "Image Tags")),
-          el(
-            "div",
-            { className: "empty" },
-            "Nothing recorded yet. Images are only tagged in age-gated (NSFW-marked) channels.",
-          ),
+          { className: "empty" },
+          "Nothing recorded yet. Images are only tagged in age-gated (NSFW-marked) channels.",
         ),
       );
       return;
     }
 
-    container.replaceChildren(
+    body.replaceChildren(
+      el(
+        "header",
+        null,
+        el("h2", null, "Image Tags"),
+        el(
+          "div",
+          { className: "subtitle" },
+          `What was detected in age-gated channels over the last ${data.days} days`,
+        ),
+      ),
       el(
         "div",
-        { className: "panel" },
+        { className: "card" },
         el(
-          "header",
-          null,
-          el("h2", null, "Image Tags"),
-          el(
-            "div",
-            { className: "subtitle" },
-            `What was detected in age-gated channels over the last ${data.days} days`,
-          ),
+          "div",
+          {
+            style:
+              "display:flex; flex-wrap:wrap; gap:24px 32px; margin-bottom:8px;",
+          },
+          stat(data.classified, "images checked"),
+          stat(data.explicit, "judged explicit"),
+          stat(data.tagged, "carried a tag"),
+          stat(`${data.avg_inference_ms}ms`, "average per image"),
         ),
         el(
           "div",
-          { className: "card" },
-          el(
-            "div",
-            {
-              style:
-                "display:flex; flex-wrap:wrap; gap:24px 32px; margin-bottom:8px;",
-            },
-            stat(data.classified, "images checked"),
-            stat(data.explicit, "judged explicit"),
-            stat(data.tagged, "carried a tag"),
-            stat(`${data.avg_inference_ms}ms`, "average per image"),
-          ),
-          el(
-            "div",
-            { className: "field-hint" },
-            "Only age-gated channels are tagged and recorded — checks elsewhere leave " +
-              "no trace here. Removals in any channel are on the Blocked Images report.",
-          ),
+          { className: "field-hint" },
+          "Only age-gated channels are tagged and recorded — checks elsewhere leave " +
+            "no trace here. Removals in any channel are on the Blocked Images report.",
+        ),
+      ),
+      el(
+        "div",
+        { className: "card" },
+        el("div", { className: "section-label" }, "Where the two models disagree"),
+        el(
+          "div",
+          { style: "display:flex; flex-wrap:wrap; gap:24px 32px;" },
+          stat(data.explicit_untagged, "explicit, nothing tagged"),
+          stat(data.tagged_not_explicit, "tagged, judged not explicit"),
         ),
         el(
           "div",
-          { className: "card" },
-          el("div", { className: "section-label" }, "Where the two models disagree"),
-          el(
-            "div",
-            { style: "display:flex; flex-wrap:wrap; gap:24px 32px;" },
-            stat(data.explicit_untagged, "explicit, nothing tagged"),
-            stat(data.tagged_not_explicit, "tagged, judged not explicit"),
-          ),
-          el(
-            "div",
-            { className: "field-hint" },
-            "The verdict comes from a whole-image model; the tags come from a " +
-              "body-part detector. The first number is content the tagger cannot " +
-              "see — the blind spot that caused the switch. The second is where the " +
-              "tagger found exposed nudity the verdict let through, and is worth a " +
-              "look if it grows.",
-          ),
+          { className: "field-hint" },
+          "The verdict comes from a whole-image model; the tags come from a " +
+            "body-part detector. The first number is content the tagger cannot " +
+            "see — the blind spot that caused the switch. The second is where the " +
+            "tagger found exposed nudity the verdict let through, and is worth a " +
+            "look if it grows.",
         ),
+      ),
+      el(
+        "div",
+        { className: "card" },
+        el("div", { className: "section-label" }, "Most common tags"),
+        labelTable(data.labels),
+      ),
+      el(
+        "div",
+        { className: "card" },
+        el("div", { className: "section-label" }, "Confidence distribution"),
+        scoreTable(data.scores),
         el(
           "div",
-          { className: "card" },
-          el("div", { className: "section-label" }, "Most common tags"),
-          labelTable(data.labels),
-        ),
-        el(
-          "div",
-          { className: "card" },
-          el("div", { className: "section-label" }, "Confidence distribution"),
-          scoreTable(data.scores),
-          el(
-            "div",
-            { className: "field-hint" },
-            "How the verdict engine scored what it saw. A clean split — most images " +
-              "low, a few high — means the thresholds on Image Guard have room; a " +
-              "crowded middle means they don't.",
-          ),
+          { className: "field-hint" },
+          "How the verdict engine scored what it saw. A clean split — most images " +
+            "low, a few high — means the thresholds on Image Guard have room; a " +
+            "crowded middle means they don't.",
         ),
       ),
     );
   })();
+
+  return {
+    unmount() {
+      cancelled = true;
+    },
+  };
 }

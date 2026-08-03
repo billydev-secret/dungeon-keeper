@@ -119,21 +119,23 @@ def preprocess(raw: bytes) -> np.ndarray:
         # first frame and gives every path the same three channels.
         rgb = image.convert("RGB")
         width, height = rgb.size
-        if width < height:
-            new_width = INPUT_SIZE
-            new_height = round(height * INPUT_SIZE / width)
-        else:
-            new_height = INPUT_SIZE
-            new_width = round(width * INPUT_SIZE / height)
-        # An extreme aspect ratio can round the long edge down to 383 and make
-        # the crop below run off the image.
-        new_width = max(new_width, INPUT_SIZE)
-        new_height = max(new_height, INPUT_SIZE)
-        resized = rgb.resize((new_width, new_height), Image.Resampling.BICUBIC)
-        left = (new_width - INPUT_SIZE) // 2
-        top = (new_height - INPUT_SIZE) // 2
-        cropped = resized.crop((left, top, left + INPUT_SIZE, top + INPUT_SIZE))
-        pixels = np.asarray(cropped, dtype=np.float32) / 255.0
+        # Crop to the central square first, then resize once to the input size.
+        #
+        # timm's transform is Resize(shortest edge -> 384) then CenterCrop(384),
+        # which in source coordinates selects exactly this square — so this is
+        # equivalent (measured: within 0.0012 of the resize-first order) while
+        # being bounded. Resizing first is not: the intermediate is
+        # (long / short) * 384 x 384 px, and the only upstream guard is
+        # MAX_IMAGE_BYTES, which bounds *encoded bytes* and says nothing about
+        # dimensions. A 114-byte 4000x2 PNG sails through that cap and expands
+        # to 295 Mpx (~0.9 GB, 2.5 s); a few of those posted together would
+        # take the bot's process out.
+        side = min(width, height)
+        left = (width - side) // 2
+        top = (height - side) // 2
+        square = rgb.crop((left, top, left + side, top + side))
+        resized = square.resize((INPUT_SIZE, INPUT_SIZE), Image.Resampling.BICUBIC)
+        pixels = np.asarray(resized, dtype=np.float32) / 255.0
 
     pixels = (pixels - _normalize_mean) / _normalize_std
     return pixels.transpose(2, 0, 1)[None]

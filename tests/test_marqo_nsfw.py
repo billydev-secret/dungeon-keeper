@@ -67,12 +67,43 @@ class FakeSession:
         pytest.param(64, 64, id="smaller-than-input"),
         pytest.param(4000, 100, id="extreme-landscape"),
         pytest.param(100, 4000, id="extreme-portrait"),
+        # Under the resize-first order these built a ~295 Mpx intermediate
+        # (~0.9 GB) from a 114-byte file — see test_preprocess_never_builds_a
+        # _large_intermediate below.
+        pytest.param(4000, 2, id="degenerate-landscape"),
+        pytest.param(2, 4000, id="degenerate-portrait"),
     ],
 )
 def test_preprocess_always_produces_the_model_input_shape(width, height):
     # An extreme aspect ratio can round the long edge down to 383 and make the
     # centre crop run off the image, which would raise rather than classify.
     assert preprocess(png(width, height)).shape == (1, 3, INPUT_SIZE, INPUT_SIZE)
+
+
+def test_preprocess_never_builds_a_large_intermediate(monkeypatch):
+    """Every resize must target the input size exactly.
+
+    MAX_IMAGE_BYTES bounds encoded bytes, not dimensions, so a tiny file can
+    carry an extreme aspect ratio. Resizing the shortest edge to 384 first
+    made an intermediate of (long / short) * 384 x 384: a 114-byte 4000x2 PNG
+    became 295 Mpx / ~0.9 GB / 2.5 s, and a handful posted together would OOM
+    the bot. Asserting on the requested size pins the invariant directly,
+    where a timing or RSS assertion would be flaky.
+    """
+    seen = []
+    original = Image.Image.resize
+
+    def spy(self, size, *args, **kwargs):
+        seen.append(size)
+        return original(self, size, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "resize", spy)
+    preprocess(png(4000, 2))
+    preprocess(png(2, 4000))
+    preprocess(png(1536, 1024))
+
+    assert seen, "no resize happened — the spy is not wired up"
+    assert all(s == (INPUT_SIZE, INPUT_SIZE) for s in seen), seen
 
 
 def test_preprocess_normalizes_to_signed_unit_range():

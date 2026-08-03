@@ -1606,6 +1606,12 @@ async def nsfw_blocks_report(
     result = await run_query(_q)
     await _resolve_names(ctx, guild, result["entries"], ("author_id", "author_name"))
     for entry in result["entries"]:
-        channel = guild.get_channel(int(entry["channel_id"])) if guild else None
+        # get_channel_or_thread, not get_channel: both gates fire on messages in
+        # threads (is_age_gated_channel deliberately resolves through a thread's
+        # parent), and get_channel returns None for them — which rendered every
+        # thread-hosted block as a bare numeric id in the report.
+        channel = (
+            guild.get_channel_or_thread(int(entry["channel_id"])) if guild else None
+        )
         entry["channel_name"] = getattr(channel, "name", "") or ""
     return result

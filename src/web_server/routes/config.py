@@ -2909,6 +2909,13 @@ async def nsfw_classifier_metrics(
 
     Admin-gated: these rows describe members' uploads and are never exposed
     more widely. Only age-gated channels are recorded in the first place.
+
+    Scoped to ``marqo_score IS NOT NULL`` — rows written before the engine swap
+    carry a verdict derived from NudeNet labels instead, and blending the two
+    would give a "judged explicit" split that means two different things at
+    once. It matters most in the 30 days after deploy, which is exactly when an
+    admin is reading this panel to choose thresholds. The same filter guards
+    /moderation/nsfw-tags.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -2924,7 +2931,7 @@ async def nsfw_classifier_metrics(
                        COALESCE(AVG(inference_ms), 0) AS avg_ms,
                        COALESCE(SUM(bytes), 0) AS total_bytes
                 FROM nsfw_classifications
-                WHERE guild_id = ? AND created_at >= ?
+                WHERE guild_id = ? AND created_at >= ? AND marqo_score IS NOT NULL
                 """,
                 (guild_id, since),
             ).fetchone()
@@ -2932,7 +2939,8 @@ async def nsfw_classifier_metrics(
                 """
                 SELECT top_label AS label, COUNT(*) AS n
                 FROM nsfw_classifications
-                WHERE guild_id = ? AND created_at >= ? AND top_label IS NOT NULL
+                WHERE guild_id = ? AND created_at >= ? AND marqo_score IS NOT NULL
+                      AND top_label IS NOT NULL
                 GROUP BY top_label
                 ORDER BY n DESC
                 """,
@@ -2944,7 +2952,7 @@ async def nsfw_classifier_metrics(
                        COUNT(*) AS classified,
                        COALESCE(SUM(verdict), 0) AS explicit
                 FROM nsfw_classifications
-                WHERE guild_id = ? AND created_at >= ?
+                WHERE guild_id = ? AND created_at >= ? AND marqo_score IS NOT NULL
                 GROUP BY day
                 ORDER BY day DESC
                 """,
