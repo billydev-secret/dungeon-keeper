@@ -437,6 +437,21 @@ class JailCog(commands.Cog):
 
         jail_id = jail["id"]
 
+        # on_member_remove fires for kicks and bans too. Promising "they'll be
+        # re-jailed if they rejoin" is false for a ban, so check the ban list
+        # before choosing the wording — one API call, and only ever on the rare
+        # occasion that a *jailed* member leaves.
+        banned = False
+        try:
+            await guild.fetch_ban(member)
+            banned = True
+        except discord.NotFound:
+            pass  # genuinely left, or was kicked
+        except discord.HTTPException:
+            # No Ban Members permission, or the API is unhappy. Fall back to the
+            # neutral wording rather than asserting either way.
+            log.debug("Could not check ban list for %s", member.id, exc_info=True)
+
         def _audit():
             with ctx.open_db() as conn:
                 write_audit(
@@ -445,32 +460,45 @@ class JailCog(commands.Cog):
                     action="jail_member_left",
                     actor_id=0,
                     target_id=member.id,
-                    extra={"jail_id": jail_id},
+                    extra={"jail_id": jail_id, "banned": banned},
                 )
 
         await asyncio.to_thread(_audit)
 
+        if banned:
+            title = "🔨 Jailed member banned"
+            body = (
+                f"{member.mention} was banned while jailed (jail #{jail_id}).\n"
+                "The hold is now moot — they can't return. Use `/unjail` with "
+                f"their ID (`{member.id}`) to close the record out."
+            )
+            channel_note = (
+                f"🔨 {member.mention} was banned. The hold no longer applies."
+            )
+        else:
+            title = "🚪 Jailed member left"
+            body = (
+                f"{member.mention} left while jailed (jail #{jail_id}).\n"
+                "The hold stays active — they'll be re-jailed automatically if "
+                f"they rejoin. Use `/unjail` with their ID (`{member.id}`) to "
+                "close it out instead; their stored roles won't survive that."
+            )
+            channel_note = (
+                f"🚪 {member.mention} left the server. The hold is still "
+                "active — rejoining re-applies it."
+            )
+
         await _post_audit(
             ctx,
             guild,
-            discord.Embed(
-                title="🚪 Jailed member left",
-                description=(
-                    f"{member.mention} left while jailed (jail #{jail_id}).\n"
-                    "The hold stays active — they'll be re-jailed automatically if "
-                    f"they rejoin. Use `/unjail` with their ID (`{member.id}`) to "
-                    "close it out instead; their stored roles won't survive that."
-                ),
-                color=CLR_JAIL,
-            ),
+            discord.Embed(title=title, description=body, color=CLR_JAIL),
         )
 
         jail_channel = guild.get_channel(jail["channel_id"])
         if isinstance(jail_channel, discord.TextChannel):
             try:
                 await jail_channel.send(
-                    f"🚪 {member.mention} left the server. The hold is still "
-                    "active — rejoining re-applies it.",
+                    channel_note,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except discord.HTTPException:

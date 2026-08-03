@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -53,28 +54,58 @@ def _make_ctx(db_path, *, guild_id: int = 100) -> AppContext:
     return ctx
 
 
+# Role mocks are interned by identity: production code does membership tests
+# like ``jailed_role in member.roles``, and two MagicMocks with the same id
+# would compare unequal, silently defeating the check under test.
+_ROLE_CACHE: dict[tuple[int, bool, bool], MagicMock] = {}
+
+
 def _role(role_id: int, *, managed: bool = False, default: bool = False) -> MagicMock:
+    key = (role_id, managed, default)
+    cached = _ROLE_CACHE.get(key)
+    if cached is not None:
+        return cached
     r = MagicMock(spec=discord.Role)
     r.id = role_id
     r.name = f"role{role_id}"
     r.managed = managed
     r.is_default = MagicMock(return_value=default)
+    _ROLE_CACHE[key] = r
     return r
 
 
-def _member(member_id: int, *, role_ids: tuple[int, ...] = ()) -> MagicMock:
+def _member(
+    member_id: int,
+    *,
+    role_ids: tuple[int, ...] = (),
+    managed_role_ids: tuple[int, ...] = (),
+    joined_at: datetime | None = None,
+) -> MagicMock:
     m = MagicMock(spec=discord.Member)
     m.id = member_id
     m.bot = False
     m.name = f"u{member_id}"
     m.display_name = m.name
     m.mention = f"<@{member_id}>"
-    m.roles = [_role(rid) for rid in role_ids]
+    m.roles = [_role(rid) for rid in role_ids] + [
+        _role(rid, managed=True) for rid in managed_role_ids
+    ]
+    # The reconcile sweep keys off this. Defaults to just *after* now, so a
+    # member built before a jail is seeded still reads as having rejoined after
+    # it — the fresh-rejoiner case. Tests that need a long-standing member
+    # (hand-released, never left) pass an explicit past ``joined_at``.
+    m.joined_at = (
+        joined_at if joined_at is not None else _now_dt() + timedelta(minutes=1)
+    )
     m.remove_roles = AsyncMock()
     m.add_roles = AsyncMock()
     m.edit = AsyncMock()
     m.send = AsyncMock()
     return m
+
+
+def _now_dt() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _user(user_id: int) -> MagicMock:
@@ -106,6 +137,10 @@ def _guild(*, guild_id: int = 100, members: list | None = None) -> MagicMock:
     g.channels = []
     g.get_channel = MagicMock(return_value=None)
     g.create_text_channel = AsyncMock()
+    # Default: not on the ban list, i.e. they genuinely left or were kicked.
+    g.fetch_ban = AsyncMock(
+        side_effect=discord.NotFound(MagicMock(status=404), "not banned")
+    )
     g.me = _member(99)
     return g
 
@@ -321,6 +356,25 @@ async def test_resolve_release_target_returns_none_for_unknown_account(tmp_path)
     assert await resolve_release_target(bot, guild, 42) is None
 
 
+@pytest.mark.asyncio
+async def test_resolve_release_target_propagates_transient_api_errors(tmp_path):
+    """A 5xx must not read as "this account doesn't exist".
+
+    ``NotFound`` subclasses ``HTTPException``, so catching the parent would
+    make a Discord blip look like a deleted account — and callers close the
+    hold out on ``None``, skipping the transcript and orphaning the channel.
+    """
+    guild = _guild()
+    bot = MagicMock()
+    bot.get_user = MagicMock(return_value=None)
+    bot.fetch_user = AsyncMock(
+        side_effect=discord.DiscordServerError(MagicMock(status=503), "upstream")
+    )
+
+    with pytest.raises(discord.HTTPException):
+        await resolve_release_target(bot, guild, 42)
+
+
 # ── check_jail_rejoin: missing channel ──────────────────────────────
 
 
@@ -343,7 +397,7 @@ async def test_rejoin_recreates_a_deleted_jail_channel(tmp_path):
     assert _jail_row(ctx, jail_id)["channel_id"] == 6100
     new_channel.set_permissions.assert_awaited_once()
     new_channel.send.assert_awaited_once()
-    member.edit.assert_awaited_once()
+    member.add_roles.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -376,7 +430,7 @@ async def test_rejoin_survives_channel_creation_forbidden(tmp_path):
 
     assert await check_jail_rejoin(ctx, member) is True
 
-    member.edit.assert_awaited_once()
+    member.add_roles.assert_awaited_once()
     assert _jail_row(ctx, jail_id)["status"] == "active"
 
 
@@ -399,6 +453,65 @@ async def test_rejoin_uses_existing_channel_when_present(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_rejoin_survives_channel_creation_http_error(tmp_path):
+    """A guild at the channel cap raises plain HTTPException, not Forbidden.
+
+    check_jail_rejoin is the first statement of on_member_join, so anything
+    that escapes here aborts the member's whole join pipeline.
+    """
+    ctx = _make_ctx(tmp_path / "rejoincap.db")
+    member = _member(42)
+    guild = _guild(guild_id=ctx.guild_id, members=[member])
+    member.guild = guild
+    _seed_jail(ctx, user_id=42, channel_id=6000)
+    guild.create_text_channel = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(status=400), "max channels")
+    )
+
+    assert await check_jail_rejoin(ctx, member) is True
+
+
+@pytest.mark.asyncio
+async def test_rejoin_preserves_integration_managed_roles(tmp_path):
+    """Nitro Booster is re-granted on rejoin; stripping it wholesale 403s."""
+    ctx = _make_ctx(tmp_path / "rejoinmanaged.db")
+    member = _member(42, role_ids=(700,), managed_role_ids=(900,))
+    guild = _guild(guild_id=ctx.guild_id, members=[member])
+    member.guild = guild
+    _seed_jail(ctx, user_id=42, channel_id=0)
+    guild.create_text_channel = AsyncMock(return_value=_text_channel(6400))
+
+    assert await check_jail_rejoin(ctx, member) is True
+
+    stripped = {r.id for r in member.remove_roles.call_args.args}
+    assert stripped == {700}  # the managed role and @everyone are left alone
+    member.edit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rejoin_reports_failure_instead_of_claiming_success(tmp_path):
+    """A 403 on the role apply must not post "jail has been re-applied"."""
+    ctx = _make_ctx(tmp_path / "rejoinrolefail.db")
+    member = _member(42, role_ids=(700,))
+    existing = _text_channel(6000)
+    guild = _guild(guild_id=ctx.guild_id, members=[member])
+    member.guild = guild
+    guild.get_channel = MagicMock(
+        side_effect=lambda cid: existing if cid == 6000 else None
+    )
+    _seed_jail(ctx, user_id=42, channel_id=6000)
+    member.remove_roles = AsyncMock(
+        side_effect=discord.Forbidden(MagicMock(status=403), "role hierarchy")
+    )
+
+    # Still counts as jailed for the join pipeline — the hold is active in the
+    # DB, so a welcome card plus auto-roles would compound the problem.
+    assert await check_jail_rejoin(ctx, member) is True
+    # ...but it must not have announced a successful re-jail in the channel.
+    existing.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_rejoin_returns_false_without_an_active_jail(tmp_path):
     ctx = _make_ctx(tmp_path / "rejoinnone.db")
     member = _member(42)
@@ -406,7 +519,7 @@ async def test_rejoin_returns_false_without_an_active_jail(tmp_path):
     member.guild = guild
 
     assert await check_jail_rejoin(ctx, member) is False
-    member.edit.assert_not_awaited()
+    member.add_roles.assert_not_awaited()
 
 
 # ── jail_rejoin_reconcile_sweep ─────────────────────────────────────
@@ -431,21 +544,81 @@ async def test_reconcile_reapplies_hold_for_a_roleless_rejoiner(tmp_path):
 
     await jail_rejoin_reconcile_sweep(_sweep_bot(guild), ctx)
 
-    member.edit.assert_awaited_once()
+    member.add_roles.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_reconcile_leaves_a_member_holding_other_roles_alone(tmp_path):
     """A hand-released member must not have their roles wiped at boot."""
     ctx = _make_ctx(tmp_path / "reconcilekeep.db")
-    member = _member(42, role_ids=(700, 701))
+    member = _member(
+        42, role_ids=(700, 701), joined_at=_now_dt() - timedelta(days=30)
+    )
     guild = _guild(guild_id=ctx.guild_id, members=[member])
     member.guild = guild
     _seed_jail(ctx, user_id=42)
 
     await jail_rejoin_reconcile_sweep(_sweep_bot(guild), ctx)
 
-    member.edit.assert_not_awaited()
+    member.add_roles.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skips_a_roleless_member_who_never_rejoined(tmp_path):
+    """The case a role-count heuristic gets exactly backwards.
+
+    Jailing strips every non-managed role, so a member released by hand — mod
+    removes @Jailed and nothing else — holds no roles at all, and looks
+    identical to a fresh rejoiner. Only the join timestamp separates them.
+    """
+    ctx = _make_ctx(tmp_path / "reconcilehandreleased.db")
+    member = _member(42, joined_at=_now_dt() - timedelta(days=30))
+    guild = _guild(guild_id=ctx.guild_id, members=[member])
+    member.guild = guild
+    _seed_jail(ctx, user_id=42)  # created just now, well after they joined
+
+    await jail_rejoin_reconcile_sweep(_sweep_bot(guild), ctx)
+
+    member.add_roles.assert_not_awaited()
+    member.remove_roles.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skips_holds_that_already_expired(tmp_path):
+    """Re-applying one only to release it 60s later is pure churn."""
+    ctx = _make_ctx(tmp_path / "reconcileexpired.db")
+    member = _member(42)
+    guild = _guild(guild_id=ctx.guild_id, members=[member])
+    member.guild = guild
+    _seed_jail(ctx, user_id=42, duration_seconds=-5)
+
+    await jail_rejoin_reconcile_sweep(_sweep_bot(guild), ctx)
+
+    member.add_roles.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_continues_past_a_failing_member(tmp_path):
+    """One bad member must not abandon everyone after them in the list.
+
+    An escaping exception crashes the startup task; the resilient runner then
+    restarts it to fail on the same member until it gives up for good.
+    """
+    ctx = _make_ctx(tmp_path / "reconcileresilient.db")
+    broken = _member(42)
+    ok = _member(43)
+    guild = _guild(guild_id=ctx.guild_id, members=[broken, ok])
+    broken.guild = guild
+    ok.guild = guild
+    broken.remove_roles = AsyncMock(side_effect=RuntimeError("boom"))
+    broken.add_roles = AsyncMock(side_effect=RuntimeError("boom"))
+    _seed_jail(ctx, user_id=42, channel_id=0)
+    _seed_jail(ctx, user_id=43, channel_id=0)
+    guild.create_text_channel = AsyncMock(return_value=_text_channel(6500))
+
+    await jail_rejoin_reconcile_sweep(_sweep_bot(guild), ctx)
+
+    ok.add_roles.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -458,7 +631,7 @@ async def test_reconcile_skips_members_still_wearing_the_jailed_role(tmp_path):
 
     await jail_rejoin_reconcile_sweep(_sweep_bot(guild), ctx)
 
-    member.edit.assert_not_awaited()
+    member.add_roles.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -529,6 +702,50 @@ async def test_leaving_while_jailed_is_recorded_and_keeps_the_channel(tmp_path):
     # Deleting it here would strand a returning member with nowhere to appeal.
     jail_channel.delete.assert_not_awaited()
     assert _jail_row(ctx, jail_id)["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_banning_a_jailed_member_is_not_reported_as_leaving(tmp_path):
+    """on_member_remove fires for bans too — don't promise a re-jail."""
+    from bot_modules.cogs.jail_cog import JailCog
+
+    ctx = _make_ctx(tmp_path / "banned.db")
+    jail_channel = _text_channel(6000)
+    member = _member(42)
+    guild = _guild(guild_id=ctx.guild_id, members=[member])
+    guild.get_channel = MagicMock(
+        side_effect=lambda cid: jail_channel if cid == 6000 else None
+    )
+    guild.fetch_ban = AsyncMock(return_value=MagicMock())  # they are banned
+    member.guild = guild
+    _seed_jail(ctx, user_id=42, channel_id=6000)
+
+    cog = JailCog(MagicMock(), ctx)
+    await cog._note_jailed_member_left(member)
+
+    assert json.loads(_audit_rows(ctx, "jail_member_left")[0]["extra"])["banned"] is True
+    note = jail_channel.send.call_args.args[0]
+    assert "banned" in note.lower()
+    assert "rejoining re-applies" not in note
+
+
+@pytest.mark.asyncio
+async def test_leaving_falls_back_to_neutral_wording_without_ban_perms(tmp_path):
+    from bot_modules.cogs.jail_cog import JailCog
+
+    ctx = _make_ctx(tmp_path / "bannoperm.db")
+    member = _member(42)
+    guild = _guild(guild_id=ctx.guild_id, members=[member])
+    guild.fetch_ban = AsyncMock(
+        side_effect=discord.Forbidden(MagicMock(status=403), "no Ban Members")
+    )
+    member.guild = guild
+    _seed_jail(ctx, user_id=42)
+
+    cog = JailCog(MagicMock(), ctx)
+    await cog._note_jailed_member_left(member)
+
+    assert json.loads(_audit_rows(ctx, "jail_member_left")[0]["extra"])["banned"] is False
 
 
 @pytest.mark.asyncio

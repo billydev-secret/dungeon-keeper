@@ -13,6 +13,7 @@ followup, a JSON 200/400 response, etc.).
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
@@ -31,6 +32,8 @@ from bot_modules.services.moderation import (
 )
 from bot_modules.services.embeds import MOD_JAIL as _CLR_JAIL
 from bot_modules.jail.logic import sanitize_channel_name
+
+log = logging.getLogger("dungeonkeeper.jail")
 
 
 # ── Result type ──────────────────────────────────────────────────────
@@ -212,7 +215,15 @@ async def create_jail_channel(
         jail_channel = await guild.create_text_channel(
             ch_name, category=category, overwrites=overwrites,  # type: ignore[arg-type]
         )
-    except discord.Forbidden:
+    except discord.HTTPException:
+        # Forbidden (no Manage Channels) is the common case, but a guild at the
+        # 500-channel cap, a full category, or a 5xx all raise the plain
+        # HTTPException. Degrading to None covers every one of them: the caller
+        # keeps the jail row and reports the missing channel. This must not
+        # raise — ``check_jail_rejoin`` runs as the first statement of
+        # ``on_member_join``, so an exception here would abort the whole join
+        # pipeline (known-user upsert, intake card, welcome) for that member.
+        log.warning("Could not create jail channel for jail #%s", jail_id)
         return None
 
     jail_channel_id = jail_channel.id
