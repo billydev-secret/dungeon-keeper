@@ -22,6 +22,7 @@ from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import SURFACE_CONFESSION_REPLY
 from bot_modules.confessions.logic import (
     HELP_TEXT,
+    audit_channel_id,
     build_dm_notification_text,
     compute_confession_max_chars,
     compute_reply_cooldown,
@@ -245,7 +246,12 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             )
             await _record_confession_audit(
                 db_path, guild_id=interaction.guild.id, author_id=interaction.user.id,
-                message_id=root_message_id, channel_id=dest_channel.id,
+                message_id=root_message_id,
+                channel_id=audit_channel_id(
+                    dest_channel_id=dest_channel.id,
+                    thread_id=forum_thread.id,
+                    is_forum=True,
+                ),
                 root_message_id=root_message_id,
             )
             update_discord_thread_id(db_path, interaction.guild.id, root_message_id, forum_thread.id)
@@ -280,7 +286,11 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
         )
         await _record_confession_audit(
             db_path, guild_id=interaction.guild.id, author_id=interaction.user.id,
-            message_id=sent.id, channel_id=dest_channel.id, root_message_id=sent.id,
+            message_id=sent.id,
+            channel_id=audit_channel_id(
+                dest_channel_id=dest_channel.id, thread_id=sent.id, is_forum=False
+            ),
+            root_message_id=sent.id,
         )
         try:
             thread = await sent.create_thread(name=thread_name_from_content(content), auto_archive_duration=10080)

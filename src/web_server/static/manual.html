@@ -475,7 +475,7 @@
         <tr><td><strong><a href="#photo-challenge">Photo Challenge</a></strong></td><td>Scheduled photo-prompt cards in a dedicated channel; posting a photo there earns economy currency.</td></tr>
         <tr><td><strong><a href="#guess">Guess Who</a></strong></td><td>Image-guessing game (SFW or NSFW) with cropped previews, a searchable member picker for guessing, leaderboards, and anonymous text confessions.</td></tr>
         <tr><td><strong><a href="#whisper">Whisper</a></strong></td><td>Anonymous member↔member DM game with reply / share / report inbox.</td></tr>
-        <tr><td><strong><a href="#confessions">Confessions</a></strong></td><td>Anonymous member submissions with mod-only emoji identifiers.</td></tr>
+        <tr><td><strong><a href="#confessions">Confessions</a></strong></td><td>Anonymous member submissions with anonymous threaded replies; mods trace authorship on the admin-only audit panel.</td></tr>
         <tr><td><strong><a href="#pen-pals">Pen Pals</a></strong></td><td>Opt-in pool that pairs members into private 2-person channels with a conversation starter; channels retire automatically after a configurable session length.</td></tr>
         <tr><td><strong><a href="#community">Community &amp; XP</a></strong></td><td>Earn XP by posting / replying / image-reacts / voice. Manual XP grants. Role grants (denizen, NSFW, etc). Leave-of-absence system. Starboard.</td></tr>
         <tr><td><strong><a href="#economy">Economy &amp; Perk Shop</a></strong></td><td>Per-server currency earned from activity — daily logins, quests, games, QOTD — spent on weekly-renewing role perks (color, name, icon, gradient, holographic) and gifts.</td></tr>
@@ -763,12 +763,12 @@
     <h2 id="confessions" class="section-break"><span class="section-num">7</span> Confessions</h2>
 
     <h3 id="confess">Anonymous Confessions</h3>
-    <p>The confessions system lets members post anonymously to a configured channel. Each confessor is assigned a colored emoji (e.g. 🔴🟢🔵) so mods can identify repeat posters without exposing identity to other members.</p>
+    <p>The confessions system lets members post anonymously to a configured channel. Confessions themselves carry no identifier at all. Anyone replying in a confession's thread gets a colored emoji and nickname (e.g. 🔴 Brave Owl) that stays consistent within that thread so a conversation is followable — everyone sees it, and it says nothing about who the person is. To put a real name to a confession or reply, mods use the admin-only <a href="/#/confessions-audit">Confessions Audit Log</a>.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/confess</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Opens an anonymous submission modal (up to 4,000 characters). The confession is posted to the confessions channel with a colored emoji identifier visible only to mods.</span>
+      <span class="cmd-desc">Opens an anonymous submission modal (up to 4,000 characters). The confession is posted to the confessions channel with no identifier attached, and seeded with a reply bar so others can respond anonymously.</span>
     </div>
 
     <div class="callout callout-info">

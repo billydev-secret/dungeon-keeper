@@ -42,7 +42,12 @@ export function mount(container) {
           if (e.replied_to_name || e.replied_to_id) {
             return e.replied_to_name || e.replied_to_id;
           }
-          return jumpAnchor(e.channel_id, e.root_message_id, "confession");
+          // Link the thread, not the root message. A reply's channel_id is the
+          // thread it was posted into, while the root confession lives in the
+          // parent channel — addressing one through the other resolves to
+          // nothing. A thread spawned from a message shares that message's id,
+          // so root_message_id *is* the thread id on both destination shapes.
+          return jumpAnchor(e.root_message_id, null, "confession");
         },
       },
       tsColumn("created_at"),
