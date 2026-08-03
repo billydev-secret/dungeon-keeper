@@ -110,6 +110,41 @@ In practice a default-length (24-hour) session shows only the opening question: 
 
 A manual swap does not reset the 24-hour auto-cadence clock. After the configured swap cap is used (default 3) the command is blocked: "You've used all N question swaps for this session."
 
+### Reply reminders
+
+`pen_pals_config.reply_reminder_seconds` (dashboard, **0 = off, the default**) nudges
+whoever the room is waiting on. On each 5-minute tick, `_reply_reminder_due` reads
+the most recent message in the channel authored by *either member* — from the
+guild-wide `messages` log, which keeps author + timestamp at every content-storage
+level, so Pen Pals needs no ingest of its own — and if that message is older than
+the configured window, the member who is **not** its author gets:
+
+```
+👋 {quiet.mention} — your pen pal's still waiting on a reply. No rush, but don't leave them hanging!
+```
+
+`allowed_mentions` allow-lists that one member: the partner is prose, not a ping.
+
+**Once per silence.** `pen_pals_sessions.reply_reminder_sent_at` stamps the nudge
+and is compared against the last member message rather than being cleared on reply
+— once the quiet member speaks, their message is newer than the stamp and the next
+lull re-arms on its own. The stamp is written even when the send fails, so an
+unpostable channel can't re-qualify every tick.
+
+Four things suppress a reminder:
+
+- **Nobody has spoken yet.** Only member messages count, so an unanswered
+  auto-question is not somebody's partner waiting on them — that is the question
+  cadence's business, not this.
+- **The closing warning is out** (`close_warning_sent`, including a warning posted
+  on this same tick) — no "reply!" stacked on "this closes in an hour".
+- **A question was posted on this tick**, which already pinged both members.
+- **The pair is blocked or on the no-contact list.** Neither ends a running
+  session, so the reminder has to check at send time: nudging someone toward a
+  partner they have since blocked is exactly what those lists exist to prevent.
+
+There is no per-member opt-out; the dial is guild-level.
+
 ### Match cooldown
 
 A member is only eligible for a new pairing once they've had no pen pal for a configurable cooldown (default a month), measured from the moment their most recent chat **ended** — `closed_at`, falling back to `started_at` for a session still open (`_last_pen_pal_ended_at`). The cooldown is rest *between* chats, so it does not tick while a chat is running: a 48-hour cooldown means 48 hours of quiet after the channel closes, whatever the session length. (It was originally anchored to `started_at`, which made real rest `cooldown - session_length` and made any cooldown shorter than the session no rest at all.) It applies to both sides of a match on every path: instant matching (when in that mode) checks the joiner *and* the candidate, and a round — instant mode's sweep or scheduled mode's daily draw — skips ineligible members and leaves them untouched in the pool. They become eligible automatically once the cooldown has passed. Set it to 0 to allow back-to-back chats. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown — but not the one-chat-at-a-time rule, and not consent: both members must already be in the pool (`/penpals join`), the same population a round draws from. There is no bypass flag; if an override is ever wanted it belongs on the dashboard.
@@ -190,10 +225,11 @@ Per-guild keys set via the dashboard:
 - **Max question swaps** — how many times a pair can swap the conversation-starter per session. Default 3.
 - **Close-warning window** — how much session time must remain to post the "closing soon" notice. Default 1 hour.
 - **Question-suppress window** — skip posting a new auto-question if less than this much session time remains. Default 2 hours.
+- **Reply-reminder window** — how long a member message can sit unanswered before the quiet partner is nudged. Default 0 (no reminders). See **Reply reminders** above.
 
 ## Stored data
 
-**`pen_pals_sessions`** — one row per active or closed pair: `session_id`, `guild_id`, `channel_id`, `user1_id`, `user2_id`, `started_at`, `expiry_at`, `next_question_at`, `question_swaps_used`, `closed_at`, `state` (`active` / `closed`), `close_reason` (`expired` / `early` / `admin` / `channel_missing`). `next_question_at` advances by 24 hours each time an auto question fires; the background task also uses it to decide whether to post.
+**`pen_pals_sessions`** — one row per active or closed pair: `session_id`, `guild_id`, `channel_id`, `user1_id`, `user2_id`, `started_at`, `expiry_at`, `next_question_at`, `question_swaps_used`, `closed_at`, `state` (`active` / `closed`), `close_reason` (`expired` / `early` / `admin` / `channel_missing`). `next_question_at` advances by 24 hours each time an auto question fires; the background task also uses it to decide whether to post. `reply_reminder_sent_at` stamps the last reply nudge (0 = none yet) and is compared against the last member message, which is what makes reminders fire once per silence rather than once per session.
 
 **`pen_pals_pool`** — one row per queued member: `guild_id`, `user_id`, `joined_at`.
 

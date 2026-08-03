@@ -959,6 +959,8 @@ def test_get_config_includes_pen_pals_timer_defaults(authed_client):
     assert pp["max_question_swaps"] == 3
     assert pp["warn_seconds"] == 3600
     assert pp["question_suppress_seconds"] == 7200
+    # Reply reminders ship off — a guild only starts nudging once a mod says so.
+    assert pp["reply_reminder_seconds"] == 0
 
 
 def test_update_pen_pals_timers_persists(authed_client, fake_ctx):
@@ -970,6 +972,7 @@ def test_update_pen_pals_timers_persists(authed_client, fake_ctx):
             "max_question_swaps": 1,
             "warn_seconds": 300,
             "question_suppress_seconds": 600,
+            "reply_reminder_seconds": 21600,
         },
     )
     assert resp.status_code == 200
@@ -982,6 +985,22 @@ def test_update_pen_pals_timers_persists(authed_client, fake_ctx):
     assert pp["max_question_swaps"] == 1
     assert pp["warn_seconds"] == 300
     assert pp["question_suppress_seconds"] == 600
+    assert pp["reply_reminder_seconds"] == 21600
+
+
+def test_update_pen_pals_timers_rejects_a_negative_reply_reminder(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals/timers",
+        json={
+            "session_seconds": 1800,
+            "match_cooldown_seconds": 86400,
+            "max_question_swaps": 1,
+            "warn_seconds": 300,
+            "question_suppress_seconds": 600,
+            "reply_reminder_seconds": -60,
+        },
+    )
+    assert resp.status_code == 400
 
 
 def test_get_config_pen_pals_room_visibility_defaults_to_mods(authed_client):

@@ -153,15 +153,16 @@ def _set_timers(
     max_question_swaps: int,
     warn_seconds: int,
     question_suppress_seconds: int,
+    reply_reminder_seconds: int = 0,
 ) -> None:
     conn.execute("INSERT OR IGNORE INTO pen_pals_config (guild_id) VALUES (?)", (guild_id,))
     conn.execute(
         """UPDATE pen_pals_config
            SET session_seconds=?, match_cooldown_seconds=?, max_question_swaps=?,
-               warn_seconds=?, question_suppress_seconds=?
+               warn_seconds=?, question_suppress_seconds=?, reply_reminder_seconds=?
            WHERE guild_id=?""",
         (session_seconds, match_cooldown_seconds, max_question_swaps,
-         warn_seconds, question_suppress_seconds, guild_id),
+         warn_seconds, question_suppress_seconds, max(0, reply_reminder_seconds), guild_id),
     )
 
 
@@ -411,6 +412,13 @@ def _set_close_warning_sent(conn, session_id: str) -> None:
     conn.execute(
         "UPDATE pen_pals_sessions SET close_warning_sent = 1 WHERE session_id = ?",
         (session_id,),
+    )
+
+
+def _set_reply_reminder_sent(conn, session_id: str, at: float) -> None:
+    conn.execute(
+        "UPDATE pen_pals_sessions SET reply_reminder_sent_at = ? WHERE session_id = ?",
+        (at, session_id),
     )
 
 
@@ -1045,6 +1053,63 @@ async def _end_session_abnormally(
         log.warning("pen_pals: panel refresh after abnormal close failed in %d: %s", guild_id, exc)
 
 
+# ── Reply reminders ───────────────────────────────────────────────────────────
+# One member said something, the other went quiet: ping the quiet one. The
+# guild's reply_reminder_seconds is the whole dial (0 = off).
+
+
+def _last_member_message(
+    conn, guild_id: int, channel_id: int, user1_id: int, user2_id: int
+) -> tuple[int, float] | None:
+    """(author_id, ts) of the room's most recent member message, or None.
+
+    Reads the guild-wide message log, which keeps author/timestamp for every
+    message whatever the guild's content-storage level, so Pen Pals needs no
+    ingest of its own. Restricting the authors to the two members also drops
+    the bot's own posts — an unanswered auto-question is not somebody's
+    partner waiting on them.
+    """
+    row = conn.execute(
+        """
+        SELECT author_id, ts FROM messages
+        WHERE guild_id = ? AND channel_id = ? AND author_id IN (?, ?)
+        ORDER BY ts DESC LIMIT 1
+        """,
+        (guild_id, channel_id, user1_id, user2_id),
+    ).fetchone()
+    return (int(row["author_id"]), float(row["ts"])) if row else None
+
+
+def _reply_reminder_due(conn, row, now: float, reminder_seconds: int) -> int | None:
+    """The member who owes their pen pal a reply, or None if nobody does.
+
+    Fires once per lull: the stamp is compared against the last member
+    message rather than cleared on reply, so the moment the quiet member
+    speaks their message outruns the stamp and the next lull re-arms itself.
+    """
+    if reminder_seconds <= 0 or row["close_warning_sent"]:
+        return None
+
+    guild_id, user1_id, user2_id = row["guild_id"], row["user1_id"], row["user2_id"]
+    last = _last_member_message(conn, guild_id, row["channel_id"], user1_id, user2_id)
+    if last is None:
+        return None  # nobody has spoken yet — that's the auto-question's job
+
+    speaker_id, last_ts = last
+    if now - last_ts < reminder_seconds:
+        return None
+    if row["reply_reminder_sent_at"] >= last_ts:
+        return None  # this lull already got its nudge
+
+    # A block or no-contact pair can land mid-session (neither ends the room),
+    # and nudging someone toward a partner they've since blocked is exactly
+    # what those lists exist to prevent.
+    if _is_blocked_pair(conn, guild_id, user1_id, user2_id):
+        return None
+
+    return user2_id if speaker_id == user1_id else user1_id
+
+
 # ── Background loop ───────────────────────────────────────────────────────────
 
 
@@ -1141,9 +1206,12 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                 with open_db(db_path) as conn:
                     _set_close_warning_sent(conn, sid)
             await asyncio.to_thread(_mark_warned)
+            warned = 1
 
         # Auto question (skip if too little session time remains)
+        posted_question = False
         if next_q_at <= now and (expiry_at - now) >= q_suppress_seconds:
+            posted_question = True
             question = await _draw_question(db_path, session_id, _cfg_allows_nsfw(cfg))
             try:
                 await channel.send(
@@ -1158,6 +1226,40 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                     _record_question(conn, sid, q)
                     _advance_next_question(conn, sid, nq + _Q_INTERVAL)
             await asyncio.to_thread(_save_q)
+
+        # Reply reminder. Suppressed once the closing warning is out — nobody
+        # needs "reply!" stacked on "this closes in an hour" — and in a tick
+        # that just posted a question, which already pinged both members.
+        reminder_seconds = int(cfg["reply_reminder_seconds"]) if cfg else 0
+        if reminder_seconds > 0 and not warned and not posted_question:
+            def _due(r=row, secs: int = reminder_seconds):
+                with open_db(db_path) as conn:
+                    return _reply_reminder_due(conn, r, now, secs)
+            quiet_id = await asyncio.to_thread(_due)
+
+            if quiet_id is not None:
+                try:
+                    await channel.send(
+                        f"👋 <@{quiet_id}> — your pen pal's still waiting on a reply. "
+                        "No rush, but don't leave them hanging!",
+                        allowed_mentions=discord.AllowedMentions(
+                            everyone=False,
+                            roles=False,
+                            users=[discord.Object(id=quiet_id)],
+                        ),
+                    )
+                except discord.HTTPException as exc:
+                    log.warning(
+                        "pen_pals: reply reminder failed in %d: %s", channel_id, exc
+                    )
+
+                # Stamped even when the send failed: a channel we can't post in
+                # would otherwise re-qualify on every tick for the rest of the
+                # session.
+                def _stamp(sid: str = session_id, at: float = now):
+                    with open_db(db_path) as conn:
+                        _set_reply_reminder_sent(conn, sid, at)
+                await asyncio.to_thread(_stamp)
 
     # Pool sweep. In instant mode, joining pairs on the spot, so a backlog only
     # forms when someone was ineligible at join time (on cooldown, mid-session)

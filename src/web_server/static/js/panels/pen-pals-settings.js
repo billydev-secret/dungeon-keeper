@@ -12,6 +12,7 @@ const TIMER_FIELDS = [
   ["max_question_swaps", "Question Swaps Allowed", 0, 1],
   ["warn_minutes", "Closing-Soon Warning", 0, 60],
   ["question_suppress_minutes", "Stop New Questions When Less Than", 0, 60],
+  ["reply_reminder_hours", "Nudge A Quiet Partner After", 0, 3600],
 ];
 
 /**
@@ -151,6 +152,12 @@ export function mountSettings(container) {
               <input type="number" name="question_suppress_minutes" id="pp-question_suppress_minutes" required min="0" step="1" value="${Math.round((pp.question_suppress_seconds ?? 7200) / 60)}" style="max-width:140px;" />
               <div class="field-hint">Near the end of a session, a fresh question just goes unanswered — no new one is posted once the time left drops below this. Enter 0 to keep posting until the end.</div>
             </div>
+
+            <div class="field">
+              <label for="pp-reply_reminder_hours">Nudge A Quiet Partner After (hours)</label>
+              <input type="number" name="reply_reminder_hours" id="pp-reply_reminder_hours" required min="0" step="1" value="${Math.round((pp.reply_reminder_seconds ?? 0) / 3600)}" style="max-width:140px;" />
+              <div class="field-hint">When one member has said something and the other hasn't answered for this long, the chat gets a short reminder pinging only the member who owes a reply. It fires once per silence — if they reply and later go quiet again, they're nudged again. No reminder is posted once the closing-soon warning is out. Enter 0 to never nudge.</div>
+            </div>
           </div>
 
           <div style="display:flex; gap:8px; align-items:center;">
@@ -275,6 +282,7 @@ export function mountSettings(container) {
           max_question_swaps:         vals.max_question_swaps,
           warn_seconds:               vals.warn_minutes * 60,
           question_suppress_seconds:  vals.question_suppress_minutes * 60,
+          reply_reminder_seconds:     vals.reply_reminder_hours * 3600,
         });
         showStatus(timersStatus, true);
       } catch (err) {
