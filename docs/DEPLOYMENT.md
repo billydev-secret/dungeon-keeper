@@ -293,7 +293,10 @@ that off unless you fully control the network path.
   On boot the bot force-moves the `deployed` git tag to the running commit,
   so `git describe --always deployed` always answers "what's live" (the boot
   log warns loudly if the working tree was dirty).
-- **Logs** — `journalctl -u dungeon-keeper`.
+- **Logs** — `log.txt` in the checkout is wiped on every boot by design
+  (`src/dungeonkeeper/__main__.py`) and rotates at ~2MB, so it only ever holds
+  the current run. journald retains the stream copy: `journalctl -u
+  dungeon-keeper` is the durable history for anything before the last restart.
 - **QA card recovery** — the post-commit hook that posts QA Tracker cards reads
   the `Testing:` section off the commit, but it **skips worktree commits** (no
   `.env` in the worktree) and **fast-forward merges** (no merge commit to fire
