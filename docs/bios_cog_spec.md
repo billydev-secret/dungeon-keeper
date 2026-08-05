@@ -9,7 +9,7 @@
 
 A wizard-driven member bio system for The Golden Meadow.
 
-A member triggers the wizard, the bot creates a private, single-use channel, and walks them one step at a time through a community-authored set of profile fields plus a rotating pool of icebreaker questions. On completion the bot renders a styled embed and posts it to the bios channel, then destroys the wizard channel. Bios are edited in place on update and removed when a member leaves the server.
+A member triggers the wizard, the bot creates a private, single-use channel, and walks them one step at a time through a community-authored set of profile fields plus a rotating pool of icebreaker questions. On completion the bot renders a styled embed and posts it to the bios channel, then destroys the wizard channel. Bios are edited in place on update; when a member leaves the embed is deleted and the bio archived for rejoin resurrection, purged for good after 12 months away.
 
 Profile fields and the icebreaker pool are not hardcoded — they are managed entirely through the DK web dashboard.
 
@@ -228,14 +228,33 @@ The template must know which field supplies the embed title. Use an explicit **`
 
 ---
 
-## 8. Member leave handling
+## 8. Member leave handling: archive, resurrect, purge
 
 An `on_member_remove` listener:
 1. Look up the leaving member's `bios` row for that guild.
 2. Delete the posted message (ignore 404 — already gone).
-3. Delete the user's rows from `bios`, `bio_field_values`, and `bio_answers`.
+3. **Archive** the bio (`archive_user_bio`): zero out `message_id` /
+   `channel_id` as the archived sentinel and stamp `archived_at`. The
+   snapshotted `bio_field_values` and `bio_answers` rows are kept.
 
 If no `bios` row exists, do nothing.
+
+**Resurrection on rejoin** (`bios/resurrect.py`): when something needs the
+member's bio link (e.g. welcome_service's `{member_bio_link}`) and the row
+is archived, the embed is rebuilt from the snapshot, reposted to the bios
+channel, and the row is repointed at the new message — clearing
+`archived_at`, which stops the purge clock. Re-running the wizard over an
+archived row does the same via the upsert.
+
+**Stale-archive purge**: a daily `tasks.loop` on the cog calls
+`purge_stale_archived_bios` (default window 12 months). Bios archived for
+longer than the window — the member never came back — are permanently
+deleted (`bios` row + field values + answers), exactly what
+`delete_user_bio` removes. Live bios are never touched regardless of age.
+A member who returns after the purge simply has no bio and rebuilds one
+through the wizard. Migration 149 added `archived_at`; pre-existing
+archived rows were stamped at migration time, so their window starts
+then, not at their original leave date.
 
 ---
 
@@ -321,7 +340,8 @@ single row — one channel, one fault, one fix.
 - Template field retired after a user posted → their posted bio is unaffected (snapshotted label/value); it simply isn't re-asked on their next edit.
 - Question retired after a user answered it → unaffected in their posted bio (snapshotted text); re-roll/redraw won't surface it again.
 - Posted message manually deleted → next edit hits 404 → repost + update `message_id`.
-- Member leaves → bio message and all rows removed.
+- Member leaves → bio message deleted, row archived (snapshot kept for
+  rejoin resurrection); archived 12+ months → all rows purged.
 - Optional field skipped → omitted from embed, no empty label.
 - Member with no bio leaves → no-op.
 

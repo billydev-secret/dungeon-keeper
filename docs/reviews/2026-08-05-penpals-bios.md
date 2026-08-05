@@ -27,6 +27,9 @@
   unbounded retention of self-disclosed content for people who *left*.
   Recommendation: purge archived bios after 12 months post-leave (they can
   rebuild via the wizard). Register: needs-decision, medium.
+  **SHIPPED 2026-08-06** — owner approved; `purge_stale_archived_bios` +
+  daily loop on the cog, migration 149 (`archived_at`, existing archived
+  rows stamped at migration time so the clock starts then).
 - G3 — `bios`/`bio_answers`/`bio_field_values` not in `purge_user_data`;
   self-service delete covers the living, but a legal-erasure run should
   sweep them too — add to the purge list alongside the whisper-style

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot_modules.bios import db as bios_db
 from bot_modules.bios.config import BiosConfig
@@ -42,6 +42,31 @@ class BiosCog(commands.Cog):
         self.bot.add_view(PersistentTriggerView())
         # Sweep orphan wizard channels left by a crashed/restarted session.
         asyncio.create_task(self._sweep_orphans())
+        self._purge_archived_loop.start()
+
+    async def cog_unload(self) -> None:
+        self._purge_archived_loop.cancel()
+
+    # ── Daily purge of stale archived bios ───────────────────────────
+
+    @tasks.loop(hours=24)
+    async def _purge_archived_loop(self) -> None:
+        """Permanently drop bios archived >12 months ago (member never
+        returned) — see bios_db.purge_stale_archived_bios."""
+        try:
+            def _purge() -> int:
+                with self.ctx.open_db() as conn:
+                    return bios_db.purge_stale_archived_bios(conn)
+
+            purged = await asyncio.to_thread(_purge)
+            if purged:
+                log.info("Purged %d stale archived bio(s)", purged)
+        except Exception:
+            log.exception("Stale archived bio purge failed")
+
+    @_purge_archived_loop.before_loop
+    async def _before_purge_archived(self) -> None:
+        await self.bot.wait_until_ready()
 
     async def _sweep_orphans(self) -> None:
         await self.bot.wait_until_ready()
