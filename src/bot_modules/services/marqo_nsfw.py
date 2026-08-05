@@ -6,12 +6,8 @@ localization, which is the reason the Guess pipeline still runs NudeNet — see
 "where?".
 
 It replaced NudeNet as the *verdict* engine because NudeNet could not see the
-content it exists to catch. On a dark, warm-monochrome boudoir photo that
-passed straight through an enforcing SFW gate, NudeNet 320n returned zero
-detections (even cropped and brightened) and 640m only a 0.26
-``MALE_BREAST_EXPOSED``; this model scores it 0.91, against 0.04–0.08 for
-non-explicit control images. That lighting is simply outside NudeNet's
-training data.
+content the moderation gates exist to catch — see docs/nsfw_classifier_spec.md
+for the measurements behind that decision.
 
 Weights live in ``models/``, which is gitignored and deployed to disk like the
 other model files. A checkout without them imports fine and fails only when a
@@ -53,14 +49,6 @@ INPUT_SIZE = 384
 #: the softmaxed logits is the probability we want.
 NSFW_INDEX = 0
 
-#: timm's eval transform for this model uses ``crop_pct=1.0``: the shortest
-#: edge is resized to the input size and a centre crop is taken. Squashing the
-#: image to a square instead is close but not equal — it scored the reference
-#: image 0.879 where the real transform scores 0.912 — so this matches timm.
-#: The cost is a genuine blind spot: content at the far edge of a very wide or
-#: very tall image falls outside the crop and is never seen.
-_normalize_mean = 0.5
-_normalize_std = 0.5
 
 _session = None
 # Three consumers fire off one ``on_message`` and reach inference concurrently
@@ -115,29 +103,40 @@ def preprocess(raw: bytes) -> np.ndarray:
     from PIL import Image  # noqa: PLC0415
 
     with Image.open(io.BytesIO(raw)) as image:
-        # Animated GIFs and paletted PNGs both land here; convert() takes the
-        # first frame and gives every path the same three channels.
-        rgb = image.convert("RGB")
-        width, height = rgb.size
-        # Crop to the central square first, then resize once to the input size.
-        #
-        # timm's transform is Resize(shortest edge -> 384) then CenterCrop(384),
-        # which in source coordinates selects exactly this square — so this is
-        # equivalent (measured: within 0.0012 of the resize-first order) while
-        # being bounded. Resizing first is not: the intermediate is
-        # (long / short) * 384 x 384 px, and the only upstream guard is
-        # MAX_IMAGE_BYTES, which bounds *encoded bytes* and says nothing about
-        # dimensions. A 114-byte 4000x2 PNG sails through that cap and expands
-        # to 295 Mpx (~0.9 GB, 2.5 s); a few of those posted together would
-        # take the bot's process out.
+        width, height = image.size
+        # Crop to the central square first, then resize once — so every resize
+        # outputs exactly INPUT_SIZE**2. timm expresses this as Resize(shortest
+        # edge) then CenterCrop, which selects the same square; doing it in that
+        # order instead builds an intermediate of (long / short) * 384 x 384 px,
+        # unbounded because MAX_IMAGE_BYTES caps encoded bytes and not
+        # dimensions. See docs/nsfw_classifier_spec.md §Preprocessing, and
+        # test_preprocess_never_builds_a_large_intermediate, which pins it.
         side = min(width, height)
         left = (width - side) // 2
         top = (height - side) // 2
-        square = rgb.crop((left, top, left + side, top + side))
+        # Crop before convert("RGB"), and skip the convert entirely when the
+        # mode already matches: PIL's convert is `if mode == self.mode: return
+        # self.copy()`, a full-size buffer copy for no gain — and RGB is what
+        # the common JPEG upload already is. Between them these avoid two
+        # multi-MB allocations per image (27 MB each on a 4000x3000 photo).
+        # Cropping first needs only image.size, so the bound argued above is
+        # unchanged.
+        square = image.crop((left, top, left + side, top + side))
+        if square.mode != "RGB":
+            square = square.convert("RGB")
         resized = square.resize((INPUT_SIZE, INPUT_SIZE), Image.Resampling.BICUBIC)
-        pixels = np.asarray(resized, dtype=np.float32) / 255.0
+        # np.array rather than asarray to say plainly that we own this buffer,
+        # since the normalization below mutates it. (PIL hands numpy a fresh
+        # copy either way, so this costs nothing.)
+        pixels = np.array(resized, dtype=np.float32)
 
-    pixels = (pixels - _normalize_mean) / _normalize_std
+    # timm's mean=0.5, std=0.5 folded: (x / 255 - 0.5) / 0.5 is x / 127.5 - 1.
+    # Applied in place, that is one allocation and two passes, where the
+    # unfolded form allocated three 1.7 MB intermediates per image. Named
+    # constants would label the 127.5 and leave the 1.0 bare, which is worse
+    # than one line of arithmetic with the derivation above it.
+    pixels *= 1.0 / 127.5
+    pixels -= 1.0
     return pixels.transpose(2, 0, 1)[None]
 
 

@@ -51,11 +51,8 @@ log = logging.getLogger("dungeonkeeper.nsfw")
 #: guess_pipeline.merge_sex_act_detections when two different genital labels
 #: overlap.
 #:
-#: This is descriptive metadata now, not a gate: Marqo decides the verdict on
-#: its own, so no label here can make an image explicit or spare it. It used to
-#: be guild-configurable; a per-label vocabulary has nothing to attach to under
-#: a single probability, and a stored preference that enforces nothing is worse
-#: than no preference at all.
+#: Descriptive metadata, not a gate: Marqo decides the verdict on its own, so
+#: no label here can make an image explicit or spare it.
 DEFAULT_LABEL_SET: frozenset[str] = frozenset({
     "MALE_GENITALIA_EXPOSED",
     "FEMALE_GENITALIA_EXPOSED",
@@ -66,13 +63,9 @@ DEFAULT_LABEL_SET: frozenset[str] = frozenset({
 })
 
 #: Probability at or above which an image counts as explicit. Consumers that
-#: destroy content use a higher one — see CONFIG_KEY_SFW_THRESHOLD.
-#:
-#: Unchanged across the NudeNet-to-Marqo swap, and that is not laziness: the
-#: old value was a detector confidence and the new one is a whole-image
-#: probability, but both live on the same 0-1 scale and 0.5/0.75 sit in a wide
-#: empty gap. Measured on this model, non-explicit control images score
-#: 0.04-0.08 and the explicit image that prompted the swap scores 0.91.
+#: destroy content use a higher one — see CONFIG_KEY_SFW_THRESHOLD. Both sit in
+#: a wide empty gap between the measured controls and the measured true
+#: positive; docs/nsfw_classifier_spec.md carries the numbers.
 DEFAULT_THRESHOLD = 0.5
 
 #: SFW nudity prevention deletes a member's upload on a positive, so it demands
@@ -221,12 +214,25 @@ class Block:
     action: str
 
 
-#: The one definition of "this attachment is an image". Every consumer routes
-#: through it — ``post_monitoring.attachment_is_image`` delegates here and the
-#: auto-react cog filters with :func:`is_classifiable` — so the three copies
-#: that used to disagree (over ``.tiff``, and over attachments Discord serves
-#: with no ``content_type``) can no longer drift apart.
+#: What classification treats as an image. ``post_monitoring.attachment_is_image``
+#: delegates here and the auto-react cog filters with :func:`is_classifiable`,
+#: so the copies that used to disagree (over ``.tiff``, and over attachments
+#: Discord serves with no ``content_type``) can no longer drift apart.
+#:
+#: :data:`SPOILER_IMAGE_EXTENSIONS` is the documented exception — read that
+#: before adding a format here, because it will not move with this one.
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff")
+
+#: What spoiler enforcement treats as an image — deliberately a strict subset,
+#: and deliberately without the ``content_type`` fallback that
+#: :func:`is_image_attachment` applies.
+#:
+#: This gate deletes members' posts, including on an unreadable image, so
+#: widening it is a behaviour change and not a tidy-up: every format added here
+#: becomes newly deletable. It predates the Marqo swap and is kept narrow on
+#: purpose. ``test_spoiler_extensions_are_a_strict_subset`` pins the
+#: relationship so the two can't silently converge or diverge further.
+SPOILER_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 
 def is_image_attachment(attachment: SupportsAttachment) -> bool:
@@ -640,15 +646,28 @@ class MessageClassifier:
     message_id: int
     channel_is_nsfw: bool
     strict: bool = False
-    _threshold: float | None = None
+    _threshold_task: "asyncio.Task[float] | None" = None
 
     async def _load_threshold(self) -> float:
-        if self._threshold is None:
-            threshold, sfw_threshold = await asyncio.to_thread(
-                load_settings, self.db_path, self.guild_id
-            )
-            self._threshold = sfw_threshold if self.strict else threshold
-        return self._threshold
+        # The task, not the value: the auto-react cog gathers classify() over
+        # every attachment, so with a plain value all N coroutines see None in
+        # the same tick and each opens its own connection.
+        if self._threshold_task is None:
+            self._threshold_task = asyncio.create_task(self._read_threshold())
+        try:
+            return await asyncio.shield(self._threshold_task)
+        except Exception:
+            # Evict, like _shared_infer does: a cached failed task would
+            # re-raise for every remaining attachment of the message, where the
+            # plain value this replaced simply retried.
+            self._threshold_task = None
+            raise
+
+    async def _read_threshold(self) -> float:
+        threshold, sfw_threshold = await asyncio.to_thread(
+            load_settings, self.db_path, self.guild_id
+        )
+        return sfw_threshold if self.strict else threshold
 
     async def __call__(self, attachment: SupportsAttachment) -> Classification:
         threshold = await self._load_threshold()

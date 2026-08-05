@@ -25,7 +25,9 @@ from bot_modules.services.nsfw_classifier_service import (
     ACTION_REMOVED,
     DEFAULT_SFW_THRESHOLD,
     DEFAULT_THRESHOLD,
+    IMAGE_EXTENSIONS,
     SFW_MODE_OFF,
+    SPOILER_IMAGE_EXTENSIONS,
     SURFACE_SFW,
     SURFACE_SPOILER,
     UNKNOWN,
@@ -367,6 +369,17 @@ def test_is_classifiable_types(filename, content_type, expected):
 def test_is_classifiable_rejects_oversized():
     att = FakeAttachment(size=26 * 1024 * 1024)
     assert is_classifiable(att) is False
+
+
+def test_spoiler_extensions_are_a_strict_subset():
+    # Spoiler enforcement deletes what it matches — including on an unreadable
+    # image — so its list is narrower than the classifier's on purpose. Adding
+    # a format to IMAGE_EXTENSIONS must not silently make it deletable, and
+    # collapsing the two must not happen as a "tidy-up": both directions fail
+    # here rather than in production.
+    assert set(SPOILER_IMAGE_EXTENSIONS) < set(IMAGE_EXTENSIONS)
+    assert ".bmp" not in SPOILER_IMAGE_EXTENSIONS
+    assert ".tiff" not in SPOILER_IMAGE_EXTENSIONS
 
 
 # --------------------------------------------------------------------------
@@ -932,8 +945,14 @@ async def test_settings_are_read_once_per_message_not_per_attachment(
     )
 
     classify = classifier_for(sync_db_path, FakeMessage(nsfw=False))
-    for i in range(3):
-        await classify(FakeAttachment(attachment_id=i))
+    # Gathered, not sequential. The auto-react cog fans classify() out across a
+    # message's attachments, so every coroutine reaches the lazy load in the
+    # same tick — which a plain cached value does NOT survive: each would see
+    # None and open its own connection. Awaiting these in a loop passes either
+    # way and so pins nothing.
+    await asyncio.gather(
+        *(classify(FakeAttachment(attachment_id=i)) for i in range(3))
+    )
 
     assert len(calls) == 1
 

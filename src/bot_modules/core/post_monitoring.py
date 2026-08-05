@@ -9,6 +9,7 @@ import discord
 
 from bot_modules.core.utils import format_user_for_log
 from bot_modules.services.nsfw_classifier_service import (
+    SPOILER_IMAGE_EXTENSIONS,
     SURFACE_SFW,
     SURFACE_SPOILER,
     Classification,
@@ -21,7 +22,10 @@ from bot_modules.services.nsfw_classifier_service import (
 def attachment_is_image(attachment: discord.Attachment) -> bool:
     """Delegates so this and the classifier can't disagree about what an
     image is — they previously differed over ``.tiff``, which made a .tiff
-    upload reach the classifier and come back permanently UNKNOWN."""
+    upload reach the classifier and come back permanently UNKNOWN.
+
+    :func:`enforce_spoiler_requirement` deliberately does *not* use this — see
+    ``SPOILER_IMAGE_EXTENSIONS``."""
     return is_image_attachment(attachment)
 
 
@@ -85,8 +89,9 @@ async def enforce_spoiler_requirement(
         return False
 
     for attachment in message.attachments:
-        filename = attachment.filename.lower()
-        if not filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+        # Not attachment_is_image: this gate is narrower on purpose, because
+        # everything it matches becomes deletable. See SPOILER_IMAGE_EXTENSIONS.
+        if not attachment.filename.lower().endswith(SPOILER_IMAGE_EXTENSIONS):
             continue
         if attachment.is_spoiler():
             continue

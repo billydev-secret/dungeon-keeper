@@ -67,6 +67,12 @@ No threshold is applied when picking the headline tag: NudeNet's own floor is th
 
 **One definition of "image".** `is_image_attachment` in this module is the single predicate; `post_monitoring.attachment_is_image` delegates to it and the auto-react cog filters with `is_classifiable` (the same predicate plus the size cap). They previously disagreed — over `.tiff`, and over attachments Discord serves with no `content_type` — which meant a file could be handed to the classifier by one consumer and silently skipped by another.
 
+**One documented exception.** `enforce_spoiler_requirement` filters on `SPOILER_IMAGE_EXTENSIONS` — `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, and no `content_type` check — so a `.bmp`, a `.tiff`, or an extensionless upload Discord types as an image is not subject to the *spoiler* rule. This predates the Marqo swap and is kept deliberately: everything the gate matches becomes deletable, including on an unreadable image, so widening it is a behaviour change rather than a tidy-up.
+
+It is a named constant rather than an inline literal precisely so this can't be "fixed" by accident, and `test_spoiler_extensions_are_a_strict_subset` fails if the two lists converge or diverge further — a divergence recorded only here would be recorded only in the surface this project declares subordinate to the code.
+
+**That is not a way through.** Spoiler enforcement returns early only when it *deleted*, so a skipped `.bmp` falls through to SFW prevention, which has no exemption for spoiler-required channels — only age-gated and explicitly exempt ones. In a spoiler-required channel that isn't age-gated, with prevention enforcing, that `.bmp` is still removed: by the other gate, at the stricter threshold, recorded under `surface='sfw'`. Under the shipped defaults (prevention off, spoiler channels usually age-gated) it simply isn't checked.
+
 **Attachments only.** Embeds are never classified. The auto-react cog's `_has_image` matches `gifv`/`rich` embeds whose images live on arbitrary external hosts; fetching those would point the bot's outbound requests at member-supplied URLs — SSRF probing of the local network, IP-logging pixels, hostile payloads — so they are out of scope entirely. In a tipping-enabled channel this means embeds get no emoji at all, since a bot-placed emoji is a live tip and nothing may be tipped that wasn't classified.
 
 Attachments over 25 MB are not downloaded. Downloads time out at 10 s. Both failures land as `UNKNOWN`.

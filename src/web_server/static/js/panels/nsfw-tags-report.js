@@ -15,80 +15,47 @@ function stat(value, caption) {
 }
 
 // A horizontal bar sized as a share of the largest row, so the shape of the
-// distribution reads without an axis.
+// distribution reads without an axis. --accent is injected per guild by the
+// branding system; --gold-solid is the palette default, so an unbranded
+// dashboard matches the rest of the UI and a palette retune reaches this.
+// Same default as miniBarHTML in tiles/tile-helpers.js.
 function bar(fraction) {
   return el("div", {
     style:
-      "height:8px; border-radius:4px; background:var(--accent, #888);" +
+      "height:8px; border-radius:4px; background:var(--accent, var(--gold-solid));" +
       `width:${Math.max(2, Math.round(fraction * 100))}%;`,
   });
 }
 
-function labelTable(labels) {
-  if (!labels.length) {
-    return el("div", { className: "empty" }, "Nothing tagged yet.");
+// Both distributions on this panel are the same table: labelled columns plus a
+// proportion bar scaled to the largest count. They were written out twice and
+// had already drifted (one hoisted its thead, the other inlined it), so a
+// styling fix to the bar column had to be made in two places.
+function distributionTable(rows, { headers, cells, empty }) {
+  if (!rows.length) {
+    return el("div", { className: "empty" }, empty);
   }
-  const most = Math.max(...labels.map((l) => l.count));
-  const head = el(
-    "thead",
-    null,
-    el(
-      "tr",
-      null,
-      el("th", null, "Tag"),
-      el("th", null, "Images"),
-      el("th", null, "Avg verdict score"),
-      el("th", null, ""),
-    ),
-  );
-  const body = el(
-    "tbody",
-    null,
-    ...labels.map((l) =>
-      el(
-        "tr",
-        null,
-        el("td", null, labelText(l.label)),
-        el("td", null, String(l.count)),
-        el("td", null, l.avg_score.toFixed(2)),
-        el("td", { style: "width:40%;" }, bar(l.count / most)),
-      ),
-    ),
-  );
-  return el("table", { className: "data-table" }, head, body);
-}
-
-function scoreTable(scores) {
-  if (!scores.length) {
-    return el("div", { className: "empty" }, "Nothing scored yet.");
-  }
-  const most = Math.max(...scores.map((s) => s.count));
-  const rows = scores.map((s) =>
-    el(
-      "tr",
-      null,
-      el("td", null, `${s.floor.toFixed(1)} – ${(s.floor + 0.1).toFixed(1)}`),
-      el("td", null, String(s.count)),
-      el("td", null, String(s.explicit)),
-      el("td", { style: "width:40%;" }, bar(s.count / most)),
-    ),
-  );
+  const most = Math.max(...rows.map((r) => r.count));
   return el(
     "table",
     { className: "data-table" },
     el(
       "thead",
       null,
-      el(
-        "tr",
-        null,
-        el("th", null, "Score"),
-        el("th", null, "Images"),
-        el("th", null, "Judged explicit"),
-        el("th", null, ""),
+      el("tr", null, ...headers.map((h) => el("th", null, h)), el("th", null, "")),
+    ),
+    el(
+      "tbody",
+      null,
+      ...rows.map((r) =>
+        el(
+          "tr",
+          null,
+          ...cells(r).map((c) => el("td", null, c)),
+          el("td", { style: "width:40%;" }, bar(r.count / most)),
+        ),
       ),
     ),
-    el("tbody", null, ...rows),
   );
 }
 
@@ -184,13 +151,25 @@ export function mount(container) {
         "div",
         { className: "card" },
         el("div", { className: "section-label" }, "Most common tags"),
-        labelTable(data.labels),
+        distributionTable(data.labels, {
+          headers: ["Tag", "Images", "Avg verdict score"],
+          cells: (l) => [labelText(l.label), String(l.count), l.avg_score.toFixed(2)],
+          empty: "Nothing tagged yet.",
+        }),
       ),
       el(
         "div",
         { className: "card" },
         el("div", { className: "section-label" }, "Confidence distribution"),
-        scoreTable(data.scores),
+        distributionTable(data.scores, {
+          headers: ["Score", "Images", "Judged explicit"],
+          cells: (s) => [
+            `${s.floor.toFixed(1)} – ${(s.floor + 0.1).toFixed(1)}`,
+            String(s.count),
+            String(s.explicit),
+          ],
+          empty: "Nothing scored yet.",
+        }),
         el(
           "div",
           { className: "field-hint" },
