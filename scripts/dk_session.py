@@ -9,6 +9,8 @@ same repo — no push-into-MAINREPO round trip.
 
     dk_session.py new [MODEL] NAME...   worktree off origin/main + tmux window
     dk_session.py list                  every session: branch, dirty, window
+    dk_session.py snapshot              record which sessions are live right now
+    dk_session.py restore               rebuild them after a reboot
     dk_session.py teardown NAME         remove worktree, drop branch, kill window
 
 `new` names the branch, the worktree directory, and the tmux window the same
@@ -22,14 +24,16 @@ get its final report on screen before the pane disappears.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import time
-from pathlib import Path, PurePath
+from pathlib import Path, PurePath, PurePosixPath
 
 SESSIONS_DIRNAME = "dk-sessions"
 
@@ -390,6 +394,318 @@ def tmux_windows() -> dict[str, str]:
     return out
 
 
+# ── surviving a reboot ───────────────────────────────────────────────────
+#
+# A host reboot kills the tmux server and every session in it, and leaves no
+# record of what was running: the worktrees survive, the transcripts survive,
+# but the mapping between them does not, so recovery means grepping transcript
+# files for their `cwd`. It does not have to. Claude Code already keeps a live
+# registry at ~/.claude/sessions/<pid>.json holding a session's id, cwd and
+# name — everything a restore needs.
+#
+# The catch, and the reason `snapshot` exists at all: that registry is deleted
+# on SIGTERM, which is exactly what a reboot sends. The data is on disk right
+# up to the moment it becomes useful and is then erased. So take a copy while
+# the machine is still up, somewhere that isn't tmpfs.
+
+CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
+RESTORE_DIR = Path.home() / ".claude" / "dk-restore"
+MANIFEST_PATH = RESTORE_DIR / "manifest.json"
+EMPTY_SINCE_PATH = RESTORE_DIR / "empty-since"
+TMUX_SESSION = "dk"
+
+# How long the machine must show *no* live sessions before an empty snapshot is
+# allowed to replace a populated manifest. Shutdown SIGTERMs every claude, each
+# of which unlinks its own registry file, so a snapshot landing in that window
+# sees an empty machine and would otherwise erase the very thing it exists to
+# preserve — seconds before the reboot it is meant to survive. Emptiness that
+# *persists* means the sessions really were closed; emptiness that appears and
+# is immediately followed by a reboot means they were killed.
+EMPTY_GRACE_SECONDS = 300
+
+# Resuming trips Claude Code's "this session is old and large" dialog — it
+# fires past 70 minutes and 100k tokens, thresholds every post-reboot resume
+# clears. Left alone it parks each restored session on a menu (the exact state
+# session_state() calls WAITING). Suppressed, the session resumes *full*, which
+# is the expensive option. Picking "Resume from summary" in that dialog does
+# nothing more than run /compact, so suppressing the dialog and sending
+# /compact reproduces that choice exactly — unattended, and with no pane left
+# blocked on a prompt nobody is sitting in front of.
+RESUME_DIALOG_OFF = "CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999"
+RESUME_SUMMARY_PROMPT = "/compact"
+
+_TRUST_PROMPT_MARK = "do you trust the files in this folder"
+
+
+def proc_start_ticks(pid: int) -> str | None:
+    """Field 22 of /proc/<pid>/stat — when the process started, or None.
+
+    Paired with the `procStart` the registry file recorded, this is what tells
+    a live session from a dead one whose pid has been reused. The comm field
+    can contain spaces and parentheses, so the split starts after its last ')'.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    tail = stat[stat.rfind(")") + 2:].split(" ")
+    return tail[19] if len(tail) > 19 else None
+
+
+def session_is_live(entry: dict, observed: str | None) -> bool:
+    """Is the pid in *entry* still the process that wrote it?
+
+    A registry file with no procStart is trusted on the pid alone — that is the
+    format's own fallback, and it is better to offer a dead session for restore
+    than to silently drop a live one.
+    """
+    if observed is None:
+        return False
+    recorded = entry.get("procStart")
+    return recorded is None or str(recorded) == str(observed)
+
+
+def read_live_sessions(sessions_dir: Path = CLAUDE_SESSIONS_DIR,
+                       proc_start=proc_start_ticks) -> list[dict[str, str]]:
+    """Every Claude Code session running right now, as {session_id, cwd, name}."""
+    out: list[dict[str, str]] = []
+    if not sessions_dir.is_dir():
+        return out
+    for f in sorted(sessions_dir.glob("*.json")):
+        try:
+            entry = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue  # a half-written file is not worth failing a snapshot over
+        if not isinstance(entry, dict):
+            continue
+        pid, cwd, sid = entry.get("pid"), entry.get("cwd"), entry.get("sessionId")
+        if not isinstance(pid, int) or not cwd or not sid:
+            continue
+        if not session_is_live(entry, proc_start(pid)):
+            continue
+        out.append({"session_id": sid, "cwd": cwd, "name": entry.get("name") or ""})
+    return out
+
+
+def build_manifest(sessions: list[dict[str, str]], taken_at: float) -> dict:
+    return {"version": 1, "taken_at": taken_at, "sessions": sessions}
+
+
+def should_replace_manifest(old_count: int, new_count: int, empty_for: float,
+                            grace: float = EMPTY_GRACE_SECONDS) -> bool:
+    """May a snapshot of *new_count* sessions overwrite one of *old_count*?
+
+    Anything non-empty is written. An empty snapshot only replaces a populated
+    manifest once the machine has been empty for *grace* seconds — see
+    EMPTY_GRACE_SECONDS for why that distinction is the whole point.
+    """
+    if new_count > 0 or old_count == 0:
+        return True
+    return empty_for >= grace
+
+
+def load_manifest(path: Path = MANIFEST_PATH) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_manifest(manifest: dict, path: Path = MANIFEST_PATH) -> None:
+    """Atomically, so a snapshot interrupted mid-write leaves the old one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+def window_name(cwd: str, main_repo: str) -> str:
+    """The tmux window a recorded cwd belongs in.
+
+    The prod checkout is the one session that is not a worktree; it keeps the
+    window name `main` it already has, and every worktree is named after its
+    directory — the convention `teardown --window` relies on.
+    """
+    cwd_p, main_p = PurePosixPath(cwd), PurePosixPath(main_repo)
+    return "main" if cwd_p == main_p else cwd_p.name
+
+
+def elide(name: str, limit: int = 44) -> str:
+    """Shorten a window name for a table, keeping both ends recognizable."""
+    if len(name) <= limit:
+        return name
+    head = (limit - 1) // 2
+    tail = limit - 1 - head
+    return f"{name[:head]}…{name[len(name) - tail:]}"
+
+
+def in_scope(cwd: str, main_repo: str) -> bool:
+    """Is this session one of *ours* — the prod checkout or a dk worktree?
+
+    The snapshot records every Claude Code session on the machine, because a
+    durable record of what was running is worth having regardless. Restore is
+    narrower: rebuilding the `dk` tmux session should not invent windows for
+    unrelated projects that happen to have been open.
+    """
+    # Built with PurePosixPath rather than sessions_dir()'s Path, so the answer
+    # is the same on the Windows remote runner — see agent_tmp_name.
+    cwd_p, main_p = PurePosixPath(cwd), PurePosixPath(main_repo)
+    if cwd_p == main_p:
+        return True
+    # A *direct* child of dk-sessions only. A session started in some
+    # subdirectory of a worktree would otherwise earn its own window, named
+    # after that subdirectory ("src"), which is not a session anyone can find.
+    return cwd_p.parent == main_p.parent / SESSIONS_DIRNAME
+
+
+def restore_plan(sessions: list[dict[str, str]], main_repo: str,
+                 exists, dirty_count, max_resume: int | None = None) -> list[dict]:
+    """Decide, per recorded session, whether it comes back live or as a shell.
+
+    A tree with uncommitted work comes back as a resumed session; a clean one
+    comes back as a shell holding the command to resume it by hand. That split
+    is deliberate — respawning every session costs real usage for workers you
+    would have abandoned, and a clean tree has nothing in flight to lose.
+
+    Sessions outside this repo (`foreign`) and worktrees torn down since the
+    snapshot (`gone`) are reported rather than skipped, so a restore never
+    silently drops something it was asked about. Prod sorts first so it keeps
+    window 1.
+    """
+    plan: list[dict] = []
+    seen: set[str] = set()
+    for s in sessions:
+        cwd = s.get("cwd", "")
+        if not cwd or cwd in seen:
+            continue
+        seen.add(cwd)
+        entry = dict(s, window=window_name(cwd, main_repo), dirty=0, capped=False)
+        if not in_scope(cwd, main_repo):
+            entry["mode"] = "foreign"
+        elif not exists(cwd):
+            entry["mode"] = "gone"
+        else:
+            entry["dirty"] = dirty_count(cwd)
+            entry["mode"] = "resume" if entry["dirty"] else "shell"
+        plan.append(entry)
+
+    plan.sort(key=lambda e: (e["window"] != "main", e["window"]))
+
+    if max_resume is not None:
+        live = 0
+        for entry in plan:
+            if entry["mode"] != "resume":
+                continue
+            live += 1
+            if live > max_resume:
+                entry["mode"] = "shell"
+                entry["capped"] = True
+    return plan
+
+
+def resume_claude_command(session_id: str, name: str,
+                          permission_mode: str | None = DEFAULT_PERMISSION_MODE,
+                          summary: bool = True) -> str:
+    """The shell line that brings one session back in its window."""
+    cmd = (f"claude --resume {shlex.quote(session_id)} "
+           f"--remote-control {shlex.quote(name)}")
+    if permission_mode:
+        cmd += f" --permission-mode {shlex.quote(permission_mode)}"
+    if summary:
+        cmd += f" {shlex.quote(RESUME_SUMMARY_PROMPT)}"
+    # The dialog is suppressed either way: unanswered it blocks the session,
+    # and when resuming from summary /compact is what answers it anyway.
+    return f"{RESUME_DIALOG_OFF} {cmd}; exec $SHELL"
+
+
+def shell_window_command(session_id: str, name: str) -> str:
+    """A clean tree's window: a shell, with the resume line ready to paste."""
+    resume = resume_claude_command(session_id, name)
+    resume = resume[: -len("; exec $SHELL")]
+    msg = (f"clean tree — prior session {session_id}\n"
+           f"resume it with:\n  {resume}")
+    return f"printf '%s\\n' {shlex.quote(msg)}; exec $SHELL"
+
+
+def window_command(entry: dict) -> str:
+    if entry["mode"] == "resume":
+        return resume_claude_command(entry["session_id"], entry["window"])
+    return shell_window_command(entry["session_id"], entry["window"])
+
+
+def restore_new_session_args(window: str, path: str, command: str) -> list[str]:
+    return ["tmux", "new-session", "-d", "-s", TMUX_SESSION,
+            "-n", window, "-c", str(path), command]
+
+
+def restore_new_window_args(window: str, path: str, command: str) -> list[str]:
+    return ["tmux", "new-window", "-d", "-t", f"{TMUX_SESSION}:",
+            "-n", window, "-c", str(path), command]
+
+
+def wait_for_network(host: str = "api.anthropic.com", port: int = 443,
+                     timeout: float = 120.0, interval: float = 2.0,
+                     probe=None, now=time.monotonic, sleep=time.sleep) -> bool:
+    """Block until *host* answers, or *timeout* elapses.
+
+    A restore driven by a systemd **user** unit cannot order itself after the
+    system's network-online.target, and a claude that starts before DNS works
+    fails its first call rather than retrying. So poll instead of ordering.
+    """
+    if probe is None:
+        def probe() -> bool:
+            try:
+                socket.create_connection((host, port), timeout=5).close()
+                return True
+            except OSError:
+                return False
+    deadline = now() + timeout
+    while True:
+        if probe():
+            return True
+        if now() >= deadline:
+            return False
+        sleep(interval)
+
+
+def dirty_file_count(path: Path) -> int:
+    """Uncommitted files in a worktree, untracked ones included.
+
+    Deliberately *not* `-uno` (which `list` uses): a session whose only work so
+    far is a new file has work worth restoring, and reporting it clean would
+    quietly drop exactly the session most worth bringing back.
+    """
+    res = run(["git", "-C", str(path), "status", "--porcelain"], check=False)
+    if res.returncode != 0:
+        return 0
+    return len([ln for ln in res.stdout.splitlines() if ln.strip()])
+
+
+def tmux_session_exists(session: str = TMUX_SESSION) -> bool:
+    return run(["tmux", "has-session", "-t", session], check=False).returncode == 0
+
+
+def clear_trust_prompt(window: str, attempts: int = 10, delay: float = 1.5) -> bool:
+    """Answer the "do you trust this folder?" dialog in a restored window.
+
+    A session started in a directory Claude Code has not been trusted in blocks
+    on this before it does anything else, which unattended means a restore that
+    silently restores nothing. Narrow on purpose: this answers that one dialog
+    and no other — every path involved came out of our own manifest.
+    """
+    for _ in range(attempts):
+        pane = run(["tmux", "capture-pane", "-p", "-S", "-20", "-t", window],
+                   check=False)
+        if pane.returncode != 0:
+            return False
+        if _TRUST_PROMPT_MARK in pane.stdout.lower():
+            run(["tmux", "send-keys", "-t", window, "1", "Enter"], check=False)
+            return True
+        time.sleep(delay)
+    return False
+
+
 # ── commands ─────────────────────────────────────────────────────────────
 
 def cmd_new(args: argparse.Namespace) -> int:
@@ -552,6 +868,115 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    live = read_live_sessions()
+    old = load_manifest()
+    old_count = len(old.get("sessions", []))
+    now = time.time()
+
+    RESTORE_DIR.mkdir(parents=True, exist_ok=True)
+    empty_for = 0.0
+    if live:
+        EMPTY_SINCE_PATH.unlink(missing_ok=True)
+    else:
+        if not EMPTY_SINCE_PATH.exists():
+            EMPTY_SINCE_PATH.write_text(str(now), encoding="utf-8")
+        try:
+            empty_for = now - float(EMPTY_SINCE_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            empty_for = 0.0
+
+    if not should_replace_manifest(old_count, len(live), empty_for):
+        if args.verbose:
+            print(f"kept manifest ({old_count} session(s)); machine has been "
+                  f"empty {empty_for:.0f}s of {EMPTY_GRACE_SECONDS:.0f}s")
+        return 0
+
+    write_manifest(build_manifest(live, now))
+    if args.verbose:
+        print(f"snapshot: {len(live)} live session(s) -> {MANIFEST_PATH}")
+        for s in live:
+            print(f"  {s['session_id'][:8]}  {s['cwd']}")
+    return 0
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    main_repo = find_main_repo()
+    manifest = load_manifest()
+    sessions = manifest.get("sessions", [])
+    if not sessions:
+        print(f"no manifest at {MANIFEST_PATH} — nothing to restore")
+        return 0
+
+    taken = manifest.get("taken_at")
+    stamp = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(taken))
+             if isinstance(taken, (int, float)) else "?")
+    print(f"manifest: {len(sessions)} session(s), taken {stamp}")
+
+    plan = restore_plan(
+        sessions, str(main_repo),
+        exists=lambda p: Path(p).is_dir(),
+        dirty_count=lambda p: dirty_file_count(Path(p)),
+        max_resume=args.max,
+    )
+
+    # Feature names come from free prose, so a window name can run to 130
+    # characters; elided, the table stays readable in an 80-column pane.
+    labels = {e["session_id"]: elide(e["window"]) for e in plan}
+    width = max([len("WINDOW"), *(len(v) for v in labels.values())])
+    print(f"\n{'WINDOW'.ljust(width)}  MODE     DIRTY  SESSION")
+    for e in plan:
+        note = " (capped)" if e["capped"] else ""
+        print(f"{labels[e['session_id']].ljust(width)}  {e['mode'].ljust(7)}  "
+              f"{str(e['dirty']).rjust(5)}  {e['session_id'][:8]}{note}")
+
+    tally = {mode: sum(1 for e in plan if e["mode"] == mode)
+             for mode in ("resume", "shell", "gone", "foreign")}
+    print(f"\n{tally['resume']} to resume, {tally['shell']} as shells, "
+          f"{tally['gone']} worktree(s) gone, "
+          f"{tally['foreign']} outside this repo (left alone)")
+
+    # Checked here rather than up front: a dry run is always safe to look at,
+    # and "what would have come back?" is a fair question to ask of a machine
+    # whose sessions are already running.
+    if tmux_session_exists() and not args.force:
+        print(f"\ntmux session {TMUX_SESSION!r} already exists — refusing to "
+              "restore on top of it (pass --force if that is what you want)",
+              file=sys.stderr)
+        return 1 if args.apply else 0
+
+    if not args.apply:
+        print("\ndry run — pass --apply to rebuild the tmux session")
+        return 0
+
+    if args.wait_online and tally["resume"]:
+        if not wait_for_network(timeout=args.wait_online):
+            print("warning: network never came up; resuming anyway",
+                  file=sys.stderr)
+
+    started: list[str] = []
+    for e in plan:
+        if e["mode"] in ("gone", "foreign"):
+            continue
+        cmd = window_command(e)
+        first = not started and not tmux_session_exists()
+        make = restore_new_session_args if first else restore_new_window_args
+        res = run(make(e["window"], e["cwd"], cmd), check=False)
+        if res.returncode != 0:
+            print(f"window {e['window']} failed: {res.stderr.strip()}",
+                  file=sys.stderr)
+            continue
+        started.append(e["window"])
+
+    for e in plan:
+        if e["mode"] == "resume" and e["window"] in started:
+            clear_trust_prompt(e["window"])
+
+    print(f"\nrestored {len(started)} window(s) — attach with: "
+          f"tmux attach -t {TMUX_SESSION}")
+    return 0
+
+
 def cmd_teardown(args: argparse.Namespace) -> int:
     main_repo = find_main_repo()
     name = normalize_name([args.name])
@@ -627,6 +1052,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_sweep.add_argument("--apply", action="store_true", help="actually delete (default: dry run)")
     p_sweep.set_defaults(func=cmd_sweep)
+
+    p_snap = sub.add_parser(
+        "snapshot", help="record which Claude Code sessions are live right now",
+    )
+    p_snap.add_argument("--verbose", action="store_true", help="print what was recorded")
+    p_snap.set_defaults(func=cmd_snapshot)
+
+    p_res = sub.add_parser(
+        "restore", help="rebuild the tmux session from the last snapshot",
+    )
+    p_res.add_argument("--apply", action="store_true",
+                       help="actually rebuild (default: dry run)")
+    p_res.add_argument("--force", action="store_true",
+                       help="restore even though a tmux session already exists")
+    p_res.add_argument("--max", type=int, default=None, metavar="N",
+                       help="resume at most N sessions; the rest come back as shells")
+    p_res.add_argument("--wait-online", type=float, default=0.0, metavar="SECONDS",
+                       help="wait up to SECONDS for the network before resuming")
+    p_res.set_defaults(func=cmd_restore)
 
     p_rec = sub.add_parser(
         "recover", help="restore work pre-commit stashed and never gave back",

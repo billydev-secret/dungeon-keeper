@@ -225,6 +225,84 @@ The sweep only ever considers directories whose name was mangled from
 dk-sessions/ **and** whose worktree no longer exists, so a live session's
 scratch is never a candidate.
 
+## Surviving a reboot
+
+A host reboot kills the tmux server and every session in it. The worktrees survive,
+the transcripts survive — but on 2026-08-04 a reboot took down nine sessions and the
+*mapping* between those two things did not survive, so recovery meant grepping
+transcript files for their `cwd` and rebuilding the tmux session by hand.
+
+    python scripts/dk_session.py snapshot     # record what's live (runs on a timer)
+    python scripts/dk_session.py restore      # dry run: what would come back
+    python scripts/dk_session.py restore --apply
+
+### Why a snapshot is needed at all
+
+Claude Code already keeps a live registry at `~/.claude/sessions/<pid>.json` holding
+each session's id, cwd and name — exactly what a restore needs. Two properties matter,
+both verified rather than assumed:
+
+- a stale file is **never** reaped at startup, so the registry does not clean itself up
+  behind your back; but
+- the file is **deleted on SIGTERM**, which is precisely what a reboot sends.
+
+So the data is on disk right up to the moment it becomes useful, and is then erased.
+`snapshot` copies it to `~/.claude/dk-restore/manifest.json`, which is on xfs rather
+than the 5.7 G tmpfs that `/tmp` (and every agent scratch dir) lives on.
+
+**The empty-snapshot guard.** Shutdown SIGTERMs every `claude`, each of which unlinks
+its own registry file. A snapshot landing in that window sees an empty machine, and
+overwriting the manifest there would erase it seconds before the reboot it exists to
+survive. So an empty snapshot only replaces a populated manifest once the machine has
+been empty for `EMPTY_GRACE_SECONDS` (5 minutes) — emptiness that *persists* means the
+sessions were really closed; emptiness followed immediately by a reboot means they were
+killed. This is the single most important rule in the file.
+
+### What comes back, and what it costs
+
+| tree | what happens |
+|---|---|
+| uncommitted work | resumed as a live `claude`, from a summary |
+| clean | a shell in the worktree, with the resume line printed in the pane |
+| worktree torn down | reported as `gone` |
+| session outside this repo | reported as `foreign`, left alone |
+
+The split is deliberate: respawning everything bills for workers you would have
+abandoned, and a clean tree has nothing in flight to lose. `--max N` caps how many
+resume; the excess comes back as shells. Prod sorts first so it keeps window 1 — and
+note that prod is restored on the same rule as everything else, so a dirty prod tree
+brings up an unattended auto-mode session in the production checkout.
+
+**Resuming from a summary is not a flag.** Claude Code's "this session is old and
+large" dialog fires past 70 minutes / 100k tokens, which every post-reboot resume
+clears. Left alone it parks each restored session on a menu — the state `session_state()`
+reports as `WAITING`, which is the failure mode an unattended restore must not create.
+Suppressing it (`CLAUDE_CODE_RESUME_THRESHOLD_MINUTES`) resumes the session *full*,
+which is the expensive option. Picking "Resume from summary" in that dialog does nothing
+more than run `/compact` — so restore suppresses the dialog and sends `/compact` as the
+opening prompt, which reproduces that choice exactly and unattended.
+
+Restore refuses to run when a `dk` tmux session already exists, so it cannot stack
+windows on a machine that is already up. `--force` overrides. A dry run is always safe
+to look at and prints the plan either way.
+
+### Installing the timer and the boot unit
+
+The units live in `scripts/systemd/` and are **user** units:
+
+    mkdir -p ~/.config/systemd/user
+    cp scripts/systemd/dk-*.{service,timer} ~/.config/systemd/user/
+    systemctl --user daemon-reload
+    systemctl --user enable --now dk-snapshot.timer
+    systemctl --user enable dk-restore.service
+    sudo loginctl enable-linger ben        # ← the one step that needs root
+
+`Linger=no` is the default, and without it a user manager only starts when you log in —
+so the restore would fire on login rather than at boot. `enable-linger` is what makes it
+a boot-time restore. A user unit also cannot order itself after the *system's*
+`network-online.target`, and a `claude` that starts before DNS resolves fails its first
+call rather than retrying, so `restore --wait-online 120` polls for connectivity itself.
+
 ## When a commit is interrupted
 
 pre-commit stashes **unstaged** changes while hooks run and restores them after.

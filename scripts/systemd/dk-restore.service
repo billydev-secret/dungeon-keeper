@@ -1,0 +1,20 @@
+[Unit]
+Description=Rebuild the dk tmux session after a reboot
+Documentation=file:%h/discord-bots/dungeon-keeper/docs/dev_sessions.md
+After=default.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/discord-bots/dungeon-keeper
+
+# A user unit cannot order itself after the *system* network-online.target,
+# and a claude that starts before DNS resolves fails its first call rather
+# than retrying — so restore polls for connectivity itself instead.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TERM=tmux-256color
+ExecStart=%h/discord-bots/dungeon-keeper/.venv/bin/python \
+    %h/discord-bots/dungeon-keeper/scripts/dk_session.py restore --apply --wait-online 120
+
+[Install]
+WantedBy=default.target
