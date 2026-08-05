@@ -131,7 +131,7 @@ def evaluate_guess(
     now: float | None = None,
 ) -> GuessOutcome:
     """Pure-logic guess evaluator. Caller is responsible for persisting the
-    resulting state changes (insert_guess, decrement_guesses_left, mark_solved)."""
+    resulting state changes (insert_guess, try_consume_guess, mark_solved)."""
     if guesser_id != whisper.target_id:
         raise GuessValidationError(ERROR_GUESS_NOT_TARGET)
     if guessed_id == guesser_id:

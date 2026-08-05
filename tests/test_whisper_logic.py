@@ -982,3 +982,61 @@ def test_audit_embed_still_shows_the_id_when_the_name_is_unknown():
 def test_builders_default_to_mentions_when_no_resolver_is_passed():
     """The default keeps old behaviour for any caller that doesn't inject one."""
     assert "<@200>" in (build_send_feed_embed(200).description or "")
+
+
+# ── /whisper forget-me: guild scoping (2026-08 review, whisper A1) ─────
+
+
+def test_forget_me_does_not_delete_replies_in_other_guilds(tmp_path):
+    """Prod runs two guilds; forget-me in one must not touch the other.
+
+    The old orphan-reply cleanup deleted by from/to user id with no guild
+    filter, so a forget-me in guild B destroyed the member's reply history
+    in guild A. True orphans (parent whisper already gone — unattributable
+    to any guild) are still swept: deleting stranded rows is the
+    privacy-safe direction.
+    """
+    from bot_modules.cogs.whisper_cog import _do_forget_user
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.whisper_repo import insert_reply, insert_whisper
+    from tests.db_template import migrated_db
+
+    db_path = tmp_path / "test.db"
+    migrated_db(db_path)
+    guild_a, guild_b, user, friend = 111, 222, 1001, 1002
+    with open_db(db_path) as conn:
+        # Guild A: user replies to a whisper they received — must survive.
+        wa = insert_whisper(
+            conn, guild_id=guild_a, sender_id=friend, target_id=user, message="a"
+        )
+        insert_reply(
+            conn, whisper_id=wa, from_user_id=user, to_user_id=friend, content="keep"
+        )
+        # Guild B: the user's own whisper + reply — must go.
+        wb = insert_whisper(
+            conn, guild_id=guild_b, sender_id=user, target_id=friend, message="b"
+        )
+        insert_reply(
+            conn, whisper_id=wb, from_user_id=friend, to_user_id=user, content="drop"
+        )
+        # True orphan naming the user (parent long gone) — swept regardless.
+        insert_reply(
+            conn, whisper_id=999_999, from_user_id=user, to_user_id=friend,
+            content="orphan",
+        )
+
+    _do_forget_user(db_path, guild_id=guild_b, user_id=user)
+
+    with open_db(db_path) as conn:
+        kept = conn.execute(
+            "SELECT content FROM whisper_replies ORDER BY id"
+        ).fetchall()
+        whispers_a = conn.execute(
+            "SELECT COUNT(*) FROM whispers WHERE guild_id = ?", (guild_a,)
+        ).fetchone()[0]
+        whispers_b = conn.execute(
+            "SELECT COUNT(*) FROM whispers WHERE guild_id = ?", (guild_b,)
+        ).fetchone()[0]
+    assert [r["content"] for r in kept] == ["keep"]
+    assert whispers_a == 1
+    assert whispers_b == 0

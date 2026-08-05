@@ -84,7 +84,7 @@ Recipients can report a whisper; reply recipients can report a reply. The reason
 The dashboard's audit log lists every whisper with its state, report count, sender, and target. Filters by state and reported-only. If a mod-log channel is set, every send, accept, reply, and report also fans out there as an embed; failures to post are logged and don't block the user action.
 
 ### Opt-out and forget-me
-`/whisper optout` removes the role only — sent and received whispers stay intact. `/whisper forget-me` is a destructive nuke that requires a two-step confirm and deletes every whisper, reply, guess, and report where you are either party.
+`/whisper optout` removes the role only — sent and received whispers stay intact. `/whisper forget-me` is a destructive nuke that requires a two-step confirm and deletes, **for the guild it is run in**, every whisper you sent or received (their guesses, replies, and reports cascade with them) plus any reply you wrote or received. Reports you filed on other people's whispers, and guess rows recording that someone guessed *you* on a third party's whisper, are rows about their whispers and survive. Stranded replies whose parent whisper is already gone are swept regardless of guild — with no parent left, they can't be attributed to one.
 
 ## Permissions
 

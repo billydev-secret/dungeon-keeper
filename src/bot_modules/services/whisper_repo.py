@@ -155,13 +155,6 @@ def list_guesses(conn: sqlite3.Connection, *, whisper_id: int) -> list[WhisperGu
     return [_row_to_guess(r) for r in rows]
 
 
-def decrement_guesses_left(conn: sqlite3.Connection, whisper_id: int) -> None:
-    conn.execute(
-        "UPDATE whispers SET guesses_left = guesses_left - 1 WHERE id = ?",
-        (whisper_id,),
-    )
-
-
 def try_consume_guess(conn: sqlite3.Connection, whisper_id: int) -> bool:
     """Atomically decrement guesses_left; returns True if succeeded (>0 attempts remained and not yet solved)."""
     cur = conn.execute(

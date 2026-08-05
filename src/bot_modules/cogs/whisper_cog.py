@@ -2105,6 +2105,24 @@ def _do_forget_user(db_path: Path, *, guild_id: int, user_id: int) -> None:
     """Delete all whisper data for user_id in guild_id (both sent and received)."""
     with open_db(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
+        # Replies the user wrote or received on THIS guild's whispers — swept
+        # before the parent deletes below so the guild attribution still
+        # exists (whisper_replies has no guild column of its own). True
+        # orphans (parent whisper already gone, so no guild left to attribute
+        # them to) are swept regardless of guild: deleting stranded rows is
+        # the privacy-safe direction. Prod runs more than one guild, and the
+        # old unscoped delete here destroyed the member's reply history in
+        # every OTHER guild too (2026-08 review, whisper A1).
+        for col in ("from_user_id", "to_user_id"):
+            conn.execute(
+                f"""
+                DELETE FROM whisper_replies
+                 WHERE {col} = ?
+                   AND (whisper_id IN (SELECT id FROM whispers WHERE guild_id = ?)
+                        OR whisper_id NOT IN (SELECT id FROM whispers))
+                """,
+                (user_id, guild_id),
+            )
         # Whispers user sent — cascade deletes replies/guesses/reports
         conn.execute(
             "DELETE FROM whispers WHERE guild_id = ? AND sender_id = ?",
@@ -2114,15 +2132,6 @@ def _do_forget_user(db_path: Path, *, guild_id: int, user_id: int) -> None:
         conn.execute(
             "DELETE FROM whispers WHERE guild_id = ? AND target_id = ?",
             (guild_id, user_id),
-        )
-        # Orphaned replies they sent/received (parent whisper may already be gone)
-        conn.execute(
-            "DELETE FROM whisper_replies WHERE from_user_id = ?",
-            (user_id,),
-        )
-        conn.execute(
-            "DELETE FROM whisper_replies WHERE to_user_id = ?",
-            (user_id,),
         )
 
 

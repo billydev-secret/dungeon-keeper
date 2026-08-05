@@ -5,7 +5,6 @@ from pathlib import Path
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.whisper_repo import (
-    decrement_guesses_left,
     get_whisper,
     insert_guess,
     insert_whisper,
@@ -26,15 +25,6 @@ def test_insert_and_list_guess(sync_db_path: Path):
         guesses = list_guesses(conn, whisper_id=wid)
     assert len(guesses) == 2
     assert sum(1 for g in guesses if g.correct) == 1
-
-
-def test_decrement_guesses_left(sync_db_path: Path):
-    with open_db(sync_db_path) as conn:
-        wid = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="x")
-        decrement_guesses_left(conn, wid)
-        w = get_whisper(conn, wid)
-    assert w is not None
-    assert w.guesses_left == 2
 
 
 def test_mark_solved(sync_db_path: Path):
