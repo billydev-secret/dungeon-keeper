@@ -433,6 +433,7 @@ async def chat(
     if _model is None:
         raise RuntimeError("LLM model is not loaded.")
 
+    # Must stay at debug level: the truncated prompt carries member text (2026-08 review, logging L1).
     log.debug("LLM request max_tokens=%d system=%.120s user=%.120s", max_tokens, system, user_content)
 
     loop = asyncio.get_event_loop()
