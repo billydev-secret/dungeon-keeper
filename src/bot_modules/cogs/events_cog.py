@@ -343,10 +343,51 @@ class EventsCog(commands.Cog):
         # Strong refs for fire-and-forget card refreshes, so they aren't GC'd
         # mid-flight. Discarded as each finishes.
         self._card_refresh_tasks: set[asyncio.Task[None]] = set()
+        # Same, for the metrics-only image scan in age-gated channels.
+        self._observe_tasks: set[asyncio.Task[None]] = set()
         super().__init__()
 
     async def cog_load(self) -> None:
         self.bot.tree.error(_on_tree_error)
+
+    def _observe_age_gated_images(self, message: discord.Message) -> None:
+        """Kick off the metrics-only scan of an age-gated upload. Glue.
+
+        Fire-and-forget on purpose. This downloads and classifies images the
+        gates never needed a verdict for, so awaiting it would put a download
+        plus inference per attachment in front of spoiler enforcement,
+        persistence and XP — latency paid by every member for a row nobody
+        reads in real time. Nothing downstream depends on the result, so
+        there is nothing to wait for.
+
+        The two cheap in-memory filters run here rather than in the task, so
+        the overwhelming majority of messages never allocate one.
+        """
+        if not nsfw_classifier_service.is_age_gated_channel(message.channel):
+            return
+        if not nsfw_classifier_service.classifiable_attachments(message):
+            return
+
+        task = asyncio.create_task(self._observe_images(message))
+        # Strong ref, or the loop may collect it mid-download.
+        self._observe_tasks.add(task)
+        task.add_done_callback(self._observe_tasks.discard)
+
+    async def _observe_images(self, message: discord.Message) -> None:
+        guild_id = message.guild.id if message.guild else 0
+        try:
+            enabled = await asyncio.to_thread(
+                nsfw_classifier_service.load_observe_policy,
+                self.ctx.db_path,
+                guild_id,
+            )
+            await nsfw_classifier_service.observe_images(
+                self.ctx.db_path, message, enabled=enabled
+            )
+        except Exception:
+            # Observation is a side effect of a side effect. It has no bearing
+            # on what happens to the image, so it never escalates past a log.
+            log.exception("nsfw: observing images failed in guild %s", guild_id)
 
     async def _enforce_sfw_images(self, message: discord.Message, cfg) -> bool:
         """Run SFW nudity prevention. Glue — the rules live in post_monitoring.
@@ -794,6 +835,8 @@ class EventsCog(commands.Cog):
                 await handle_intake_message(self.ctx, message)
             except Exception:
                 log.exception("intake: message hook failed in guild %s", guild_id)
+
+        self._observe_age_gated_images(message)
 
         spoiler_deleted = await enforce_spoiler_requirement(
             message,

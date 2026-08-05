@@ -26,6 +26,11 @@ Tipping reacts anyway (a CDN hiccup must not cost a poster), spoiler
 enforcement deletes (preserving today's behavior), SFW prevention does nothing
 (never delete on a failed read).
 
+A fourth caller, :func:`observe_images`, is not a consumer at all: it asks for
+a verdict on every image in an age-gated channel so the metrics table stops
+describing only the images a gate happened to judge, and then does nothing
+with the answer. It is opt-in per guild.
+
 Both models are imported lazily, so importing this module is free and safe on
 machines without the weights. See docs/nsfw_classifier_spec.md.
 """
@@ -40,7 +45,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from bot_modules.core.db_utils import get_config_id_set, get_config_value, open_db
+from bot_modules.core.db_utils import (
+    get_config_id_set,
+    get_config_value,
+    open_db,
+    parse_bool,
+)
 from bot_modules.services.guess_models import Detection
 
 log = logging.getLogger("dungeonkeeper.nsfw")
@@ -77,6 +87,11 @@ CONFIG_KEY_SFW_THRESHOLD = "nsfw_classifier_sfw_threshold"
 CONFIG_KEY_SFW_MODE = "nsfw_sfw_prevention_mode"
 CONFIG_KEY_SFW_LOG_CHANNEL = "nsfw_sfw_prevention_log_channel_id"
 CONFIG_BUCKET_SFW_EXEMPT = "nsfw_prevention_exempt_channels"
+
+#: Classify every image in an age-gated channel, whether or not a gate needed
+#: a verdict for it. Off by default — see :func:`observe_images` for why this
+#: is a choice a server makes rather than something that just happens.
+CONFIG_KEY_OBSERVE = "nsfw_observe_age_gated"
 
 #: SFW nudity prevention is the only thing here that destroys a member's
 #: upload, so it ships **off** and is turned on from the dashboard. ``log``
@@ -320,6 +335,18 @@ def load_sfw_policy(db_path: Path, guild_id: int) -> SfwPolicy:
     return SfwPolicy(
         mode=raw_mode, log_channel_id=log_channel_id, exempt_channel_ids=exempt
     )
+
+
+def load_observe_policy(db_path: Path, guild_id: int) -> bool:
+    """Whether *guild_id* opted into scanning every age-gated upload.
+
+    A plain bool rather than a policy object: there is exactly one decision
+    here, and the scope it applies to (age-gated channels) is not
+    configurable — widening it is what the privacy rule forbids, so there is
+    nothing for a channel list to say.
+    """
+    with open_db(db_path) as conn:
+        return parse_bool(get_config_value(conn, CONFIG_KEY_OBSERVE, "0", guild_id))
 
 
 def _float_config(
@@ -721,6 +748,77 @@ def classifier_for(
         channel_is_nsfw=is_age_gated_channel(channel),
         strict=strict,
     )
+
+
+def classifiable_attachments(message: object) -> list[SupportsAttachment]:
+    """Every attachment on *message* this service is willing to look at."""
+    return [
+        att
+        for att in getattr(message, "attachments", ()) or ()
+        if is_classifiable(att)
+    ]
+
+
+async def observe_images(
+    db_path: Path, message: object, *, enabled: bool
+) -> list[Classification]:
+    """Classify and record every image in an age-gated channel. Acts on nothing.
+
+    The three gates only ever ask for a verdict when they might *do* something
+    about it, so the metrics table has only ever seen the images that were
+    about to be judged: in a spoiler-required channel that is the handful
+    somebody forgot to spoiler, and in an age-gated channel with no spoiler
+    rule it is nothing at all. Every question those rows exist to answer —
+    where does the score distribution actually sit, what should the threshold
+    be, how often is the model wrong — was being answered from the one sample
+    guaranteed to be unrepresentative.
+
+    This pass closes that gap by classifying the compliant uploads too. It is
+    deliberately inert: it returns verdicts to nobody, and no caller may act on
+    what it returns. A spoilered image in a spoiler channel is *compliant*, and
+    the moment a verdict here could delete one, this stops being observation.
+
+    Scope is age-gated channels and nothing else, because that is already the
+    boundary recording lives inside — :class:`MessageClassifier` writes a row
+    only when ``channel_is_nsfw``, and the same flag turns the tagger on. So
+    this widens *which* images inside that boundary are seen; it does not move
+    the boundary. Off unless a guild turns it on, because it does mean the
+    most sensitive table this bot holds grows to cover ordinary compliant
+    posts rather than only the ones a gate had to judge.
+
+    Never raises: this runs beside message handling and must not be able to
+    take it down. A failure to observe is a missing metrics row, nothing more.
+    """
+    if not enabled:
+        return []
+    if not is_age_gated_channel(getattr(message, "channel", None)):
+        return []
+    # Bots and webhooks are exempt, as they are for SFW prevention, but here
+    # the reason is measurement rather than mercy: the Guess game re-uploads a
+    # member's own submission as SPOILER_guess_full.jpg, so counting the bot's
+    # posts would enter the same picture into the sample twice and skew the
+    # distribution these rows exist to describe.
+    author = getattr(message, "author", None)
+    if getattr(author, "bot", False) or getattr(message, "webhook_id", None):
+        return []
+    attachments = classifiable_attachments(message)
+    if not attachments:
+        return []
+
+    # The standard threshold, not the strict one: these rows sit alongside the
+    # gates' own, and a mixed table where the verdict column means a different
+    # bar per row would be worse than no rows.
+    classify = classifier_for(db_path, message)
+    results = await asyncio.gather(
+        *(classify(att) for att in attachments), return_exceptions=True
+    )
+    out: list[Classification] = []
+    for att, result in zip(attachments, results):
+        if isinstance(result, BaseException):
+            log.warning("nsfw: observing %s failed: %s", att.id, result)
+            continue
+        out.append(result)
+    return out
 
 
 def _score(raw: bytes) -> float:

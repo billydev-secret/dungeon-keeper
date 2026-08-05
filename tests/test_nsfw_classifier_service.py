@@ -39,9 +39,11 @@ from bot_modules.services.nsfw_classifier_service import (
     evaluate,
     is_age_gated_channel,
     is_classifiable,
+    load_observe_policy,
     load_settings,
     load_sfw_policy,
     model_name,
+    observe_images,
     record_block,
     record_block_safely,
     record_classification,
@@ -809,11 +811,16 @@ def _rows(db_path) -> int:
 
 
 class FakeMessage:
-    def __init__(self, *, nsfw: bool) -> None:
+    def __init__(
+        self, *, nsfw: bool, attachments=(), bot: bool = False, webhook_id=None
+    ) -> None:
         self.id = MESSAGE
         self.guild = type("G", (), {"id": GUILD})()
         self.channel = _FakeNsfwChannel(nsfw)
         self.channel.id = CHANNEL
+        self.attachments = list(attachments)
+        self.author = type("A", (), {"bot": bot})()
+        self.webhook_id = webhook_id
 
 
 @pytest.mark.asyncio
@@ -1001,3 +1008,249 @@ async def test_an_image_the_tagger_saw_nothing_in_still_names_the_tagger(
 
     assert row["model"] == "marqo-384+640m"
     assert row["top_label"] is None
+
+
+# ── Observation: every image in an age-gated channel ──────────────────────
+#
+# The gates only ask for a verdict when they might act on one, so before this
+# pass the metrics table held the compliance failures and nothing else. These
+# tests pin the two things that make widening it safe: it records only inside
+# the age-gated boundary recording already lived in, and it acts on nothing.
+
+
+def _labels(db_path) -> list[str | None]:
+    with open_db(db_path) as conn:
+        return [
+            r["top_label"]
+            for r in conn.execute(
+                "SELECT top_label FROM nsfw_classifications ORDER BY attachment_id"
+            )
+        ]
+
+
+def test_observe_policy_defaults_to_off(sync_db_path):
+    assert load_observe_policy(sync_db_path, GUILD) is False
+
+
+@pytest.mark.parametrize(
+    "stored, expected",
+    [("1", True), ("true", True), ("on", True), ("0", False), ("", False),
+     ("nonsense", False)],
+)
+def test_observe_policy_reads_the_toggle(sync_db_path, stored, expected):
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, "nsfw_observe_age_gated", stored, GUILD)
+
+    assert load_observe_policy(sync_db_path, GUILD) is expected
+
+
+@pytest.mark.asyncio
+async def test_observe_records_images_no_gate_would_have_judged(
+    sync_db_path, patched_score, patched_tag
+):
+    # The whole point: a compliant, spoilered upload in a spoiler-required
+    # channel is one no gate ever classifies, so before this it was invisible
+    # to every threshold-tuning question the table exists to answer.
+    patched_score(0.9)
+    patched_tag([det("SEX_ACT", 0.8)])
+    attachments = [FakeAttachment(attachment_id=i) for i in (1, 2, 3)]
+
+    results = await observe_images(
+        sync_db_path,
+        FakeMessage(nsfw=True, attachments=attachments),
+        enabled=True,
+    )
+
+    assert [r.verdict for r in results] == [True, True, True]
+    assert _rows(sync_db_path) == 3
+
+
+@pytest.mark.asyncio
+async def test_observe_records_the_spoilered_upload_the_gate_skips(
+    sync_db_path, patched_score
+):
+    # enforce_spoiler_requirement returns before classifying anything already
+    # spoilered, which is right for enforcement — a spoilered image is
+    # compliant, there is nothing to delete — and is exactly why 93% of the
+    # traffic in those channels never reached the table. Nothing about a
+    # spoiler may make an image invisible to observation.
+    patched_score(0.9)
+    spoilered = FakeAttachment(filename="SPOILER_pic.png")
+
+    results = await observe_images(
+        sync_db_path,
+        FakeMessage(nsfw=True, attachments=[spoilered]),
+        enabled=True,
+    )
+
+    assert [r.verdict for r in results] == [True]
+    assert _rows(sync_db_path) == 1
+
+
+@pytest.mark.asyncio
+async def test_observe_tags_what_it_records(
+    sync_db_path, patched_score, patched_tag
+):
+    # Full parity with the rows the gates write: same channel, same scope, so
+    # a row from either path means the same thing.
+    patched_score(0.9)
+    patched_tag([det("FEMALE_BREAST_EXPOSED", 0.7)])
+
+    await observe_images(
+        sync_db_path,
+        FakeMessage(nsfw=True, attachments=[FakeAttachment()]),
+        enabled=True,
+    )
+
+    assert _labels(sync_db_path) == ["FEMALE_BREAST_EXPOSED"]
+
+
+@pytest.mark.asyncio
+async def test_observe_does_nothing_until_a_guild_turns_it_on(
+    sync_db_path, patched_score, patched_tag
+):
+    patched_score(0.9)
+    tag_calls = patched_tag([det("SEX_ACT", 0.8)])
+    att = FakeAttachment()
+
+    results = await observe_images(
+        sync_db_path, FakeMessage(nsfw=True, attachments=[att]), enabled=False
+    )
+
+    assert results == []
+    assert att.reads == 0
+    assert tag_calls == []
+    assert _rows(sync_db_path) == 0
+
+
+@pytest.mark.asyncio
+async def test_observe_never_reaches_outside_age_gated_channels(
+    sync_db_path, patched_score, patched_tag
+):
+    # The privacy boundary, and the reason this is a widening of *which*
+    # images are seen rather than of where. Turning the toggle on must not
+    # produce a single row — or a single tagger run — for general chat.
+    patched_score(0.9)
+    tag_calls = patched_tag([det("SEX_ACT", 0.8)])
+    att = FakeAttachment()
+
+    results = await observe_images(
+        sync_db_path, FakeMessage(nsfw=False, attachments=[att]), enabled=True
+    )
+
+    assert results == []
+    assert att.reads == 0
+    assert tag_calls == []
+    assert _rows(sync_db_path) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"bot": True}, id="bot"),
+        pytest.param({"webhook_id": 42}, id="webhook"),
+    ],
+)
+async def test_observe_ignores_what_the_bot_posted_itself(
+    sync_db_path, patched_score, kwargs
+):
+    # The Guess game re-uploads a member's own submission as
+    # SPOILER_guess_full.jpg. Counting it would enter the same image into the
+    # sample twice and bias the distribution these rows exist to describe.
+    patched_score(0.9)
+    att = FakeAttachment()
+
+    results = await observe_images(
+        sync_db_path,
+        FakeMessage(nsfw=True, attachments=[att], **kwargs),
+        enabled=True,
+    )
+
+    assert results == []
+    assert att.reads == 0
+    assert _rows(sync_db_path) == 0
+
+
+@pytest.mark.asyncio
+async def test_observe_shares_the_gates_download_and_inference(
+    sync_db_path, patched_score, patched_tag
+):
+    # Observation runs beside spoiler enforcement on the same message. If it
+    # paid for its own download the pass would cost double in exactly the
+    # channels it runs in most.
+    patched_score(0.9)
+    tag_calls = patched_tag([det("SEX_ACT", 0.8)])
+    att = FakeAttachment()
+    message = FakeMessage(nsfw=True, attachments=[att])
+
+    await observe_images(sync_db_path, message, enabled=True)
+    await classifier_for(sync_db_path, message)(att)
+
+    assert att.reads == 1
+    assert len(tag_calls) == 1
+    assert _rows(sync_db_path) == 1
+
+
+@pytest.mark.asyncio
+async def test_observe_skips_what_the_service_will_not_look_at(
+    sync_db_path, patched_score
+):
+    patched_score(0.9)
+    text = FakeAttachment(
+        attachment_id=1, filename="notes.txt", content_type="text/plain"
+    )
+    image = FakeAttachment(attachment_id=2)
+
+    results = await observe_images(
+        sync_db_path,
+        FakeMessage(nsfw=True, attachments=[text, image]),
+        enabled=True,
+    )
+
+    assert text.reads == 0
+    assert len(results) == 1
+    assert _rows(sync_db_path) == 1
+
+
+@pytest.mark.asyncio
+async def test_one_unreadable_image_does_not_cost_the_others(
+    sync_db_path, patched_score
+):
+    patched_score(0.9)
+    broken = FakeAttachment(attachment_id=1, error=RuntimeError("cdn down"))
+    fine = FakeAttachment(attachment_id=2)
+
+    results = await observe_images(
+        sync_db_path,
+        FakeMessage(nsfw=True, attachments=[broken, fine]),
+        enabled=True,
+    )
+
+    # UNKNOWN is returned but never recorded — same rule the gates follow.
+    assert [r.is_unknown for r in results] == [True, False]
+    assert _rows(sync_db_path) == 1
+
+
+@pytest.mark.asyncio
+async def test_observe_survives_a_failure_it_cannot_classify_around(
+    sync_db_path, patched_score, monkeypatch
+):
+    # It runs beside message handling as a fire-and-forget task, so a DB
+    # failure here must land as a missing metrics row, never as an exception
+    # escaping into the listener.
+    patched_score(0.9)
+    monkeypatch.setattr(
+        nsfw_module,
+        "load_settings",
+        lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("locked")),
+    )
+
+    results = await observe_images(
+        sync_db_path,
+        FakeMessage(nsfw=True, attachments=[FakeAttachment()]),
+        enabled=True,
+    )
+
+    assert results == []
+    assert _rows(sync_db_path) == 0
