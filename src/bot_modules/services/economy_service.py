@@ -1230,3 +1230,96 @@ async def notify_member(
         return True
     except (discord.Forbidden, discord.HTTPException):
         return False
+
+
+# ── legal-erasure sweep ────────────────────────────────────────────────
+
+
+# Per-member economy/casino state removed by a legal erasure
+# (``privacy_service.purge_user_data``). ``econ_ledger`` is deliberately
+# absent: it is the pseudonymous financial record, and deleting one side of
+# transfers/rakes would break double-entry audit sums and every baseline
+# report. Round/draw history keyed by winner (drops, bounties, raffle draws,
+# auctions, qotd) is likewise kept as game history.
+#
+# Maintenance rule (docs/reviews/2026-08-05-gdpr-register.md): a new econ_*/
+# casino_* table with per-member rows either joins this list or documents why
+# it is preserved.
+_PURGE_USER_ID_TABLES: tuple[str, ...] = (
+    "econ_wallets",
+    "econ_streaks",
+    "econ_logins",
+    "econ_notify_prefs",
+    "econ_conversions",
+    "econ_quest_claims",
+    "econ_quest_progress",
+    "econ_quest_progress_marks",
+    "econ_rerolls",
+    "econ_set_bonus",
+    "econ_board_overrides",
+    "econ_kind_activity",
+    "econ_kind_activity_occ",
+    "econ_setup_marks",
+    "econ_onboarding_dms",
+    "econ_personal_roles",
+    "econ_rentals",
+    "econ_vouchers",
+    "econ_raffle_tickets",
+    "econ_photo_rewards",
+    "econ_intake_rewards",
+    "econ_qotd_rewards",
+    "econ_pin_submissions",
+    "econ_community_contrib",
+    "econ_community_tier_payouts",
+    "econ_game_wagers",
+    "econ_bounty_contributions",
+    "econ_auction_bids",
+    "casino_daily",
+    "casino_weekly",
+    "casino_member_stats",
+    "casino_daily_net",
+    "casino_ticker",
+    "casino_blackjack_hands",
+    "casino_war_hands",
+    "casino_race_bets",
+    "casino_keno_bets",
+    "casino_roulette_bets",
+    "casino_baccarat_bets",
+    "casino_dice_bets",
+    "casino_pools_bets",
+)
+
+
+def econ_purge_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
+    """Delete every per-member economy/casino row for *user_id* in *guild_id*.
+
+    Missing tables are tolerated (guild deployments differ in age); a failed
+    table logs and the sweep continues, matching ``purge_user_data``'s
+    schema-tolerance contract.
+    """
+    import logging
+
+    log = logging.getLogger("dungeonkeeper.economy")
+    for table in _PURGE_USER_ID_TABLES:
+        try:
+            conn.execute(
+                f"DELETE FROM {table} WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            )
+        except sqlite3.Error as exc:
+            log.warning(
+                "econ purge: failed on %s for user %d in guild %d: %s",
+                table, user_id, guild_id, exc,
+            )
+    # Reply-credit rows name the member on either side.
+    for col in ("target_author_id", "replier_id"):
+        try:
+            conn.execute(
+                f"DELETE FROM econ_msg_replies WHERE guild_id = ? AND {col} = ?",
+                (guild_id, user_id),
+            )
+        except sqlite3.Error as exc:
+            log.warning(
+                "econ purge: failed on econ_msg_replies.%s for user %d in guild %d: %s",
+                col, user_id, guild_id, exc,
+            )

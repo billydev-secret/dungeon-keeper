@@ -1292,3 +1292,40 @@ def test_purchase_shield_fires_shop_purchase_trigger(db):
             (GUILD, USER),
         ).fetchone()
         assert row is not None
+
+
+# ── legal-erasure sweep ────────────────────────────────────────────────
+
+
+def test_econ_purge_user_clears_member_state_but_keeps_ledger(tmp_path):
+    """econ_purge_user (called from privacy's purge_user_data) removes
+    per-member rows on both sides of econ_msg_replies, tolerates absent
+    tables, and never touches the ledger."""
+    from bot_modules.services.economy_service import econ_purge_user
+
+    db_path = tmp_path / "test.db"
+    migrated_db(db_path)
+    guild, user, other = 123, 1001, 1002
+    with open_db(db_path) as conn:
+        apply_credit(conn, guild, user, 100, "test")
+        conn.execute(
+            "INSERT INTO econ_msg_replies "
+            "(guild_id, target_message_id, target_author_id, replier_id, created_at) "
+            "VALUES (?, 1, ?, ?, 0), (?, 2, ?, ?, 0)",
+            (guild, user, other, guild, other, user),
+        )
+        econ_purge_user(conn, guild, user)
+        assert get_balance(conn, guild, user) == 0
+        wallets = conn.execute(
+            "SELECT COUNT(*) FROM econ_wallets WHERE user_id = ?", (user,)
+        ).fetchone()[0]
+        ledger = conn.execute(
+            "SELECT COUNT(*) FROM econ_ledger WHERE user_id = ?", (user,)
+        ).fetchone()[0]
+        replies = conn.execute(
+            "SELECT COUNT(*) FROM econ_msg_replies WHERE target_author_id = ? OR replier_id = ?",
+            (user, user),
+        ).fetchone()[0]
+    assert wallets == 0
+    assert ledger == 1  # deliberately preserved
+    assert replies == 0
