@@ -19,6 +19,7 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from bot_modules.services import casino_service as svc
 from bot_modules.services import pools_logic as L
+from bot_modules.services import pools_metrics
 from bot_modules.services import pools_service as ps
 from bot_modules.services.economy_service import (
     apply_credit,
@@ -444,18 +445,23 @@ def test_idle_tick_never_touches_the_ledger(db):
         finally:
             ps.daily_series = real
     assert tick.idle
-    assert tick.series is None
     assert calls == [], "an idle tick must not scan the ledger"
 
 
 def test_working_tick_carries_its_series(db):
-    """Settlement wants the same rows for its chart; recomputing them would
-    be a second full scan for an answer already in hand."""
+    """Each job carries the rows its own decision came from.
+
+    Settlement draws the result card's chart from them, so recomputing
+    would be a second read that could disagree with the number members
+    were just paid on. Since rotation the series lives on the job rather
+    than the tick: the round being settled and the round being opened are
+    usually measuring different things.
+    """
     with open_db(db) as conn:
         _seed_history(conn)
         tick = _tick(conn, NOON + 8 * 86_400)
     assert tick.open is not None
-    assert tick.series is not None
+    assert tick.open.series is not None
 
 
 def test_tick_does_not_reopen_an_existing_round(db):
@@ -518,3 +524,162 @@ def test_leaver_refund_still_works_for_short_windowed_games(db):
         svc.place_keno_ticket(conn, rid, A, 4, 40, now=NOON)
         out = svc.refund_member_live_stakes(conn, GUILD, A, now=NOON + 9999)
     assert out.get("keno") == 40
+
+
+# ── metric rotation (docs/plans/pools-metric-rotation.md) ──────────────
+#
+# The lifecycle tests above run on a database with only ledger rows, so
+# the economy metric is the only eligible one and the draw is a formality.
+# These seed a second metric's data on purpose, because everything that
+# can go wrong with rotation needs at least two metrics to go wrong.
+
+
+def _seed_messages(conn, days=8, authors=6, each=5, start=None):
+    """Enough chat history for the `messages` metric to derive a line."""
+    base = NOON if start is None else start
+    for i in range(days):
+        for author in range(authors):
+            for n in range(each):
+                conn.execute(
+                    "INSERT INTO messages (message_id, guild_id, channel_id, "
+                    "author_id, ts) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        hash((i, author, n)) & 0x7FFFFFFF, GUILD, CHAN,
+                        7000 + author, base + i * 86_400 + n,
+                    ),
+                )
+
+
+def test_open_round_records_which_metric_it_bet(db):
+    """Without this column a round is unsettleable the moment the draw
+    moves on — the outcome is recomputed, not stored."""
+    with open_db(db) as conn:
+        rid = svc.open_pools_round(
+            conn, GUILD, CHAN, DAY, 10.5, NOON + 3600,
+            metric="messages", now=NOON,
+        )
+        assert rid is not None
+        assert str(svc.get_pools_round(conn, rid)["metric"]) == "messages"
+
+
+def test_pre_rotation_rounds_read_as_the_economy_metric(db):
+    """Migration 147's DEFAULT is what makes it safe on a live table: the
+    rounds already on disk were all bet on the economy's net change."""
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO casino_pools_rounds (guild_id, channel_id, "
+            "local_day, line, opened_at, closes_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (GUILD, CHAN, DAY, 100.5, NOON, NOON + 3600),
+        )
+        row = conn.execute(
+            "SELECT metric FROM casino_pools_rounds WHERE local_day = ?", (DAY,)
+        ).fetchone()
+    assert str(row["metric"]) == "economy_net"
+
+
+def test_settlement_uses_the_rounds_own_metric_not_todays(db):
+    """The draw has already moved on by the time yesterday settles.
+
+    A round opened on `messages` must be measured against messages, even
+    though the tick that settles it is opening an economy round.
+    """
+    with open_db(db) as conn:
+        _seed_history(conn)
+        _seed_messages(conn, days=9, authors=6, each=5)
+        day = ps._local_day(NOON, TZ)
+        svc.open_pools_round(
+            conn, GUILD, CHAN, day, 5.5, NOON + 3600,
+            metric="messages", now=NOON,
+        )
+        tick = _tick(conn, NOON + 8 * 86_400)
+    settle = [j for j in tick.settle if j.day == day]
+    assert len(settle) == 1
+    assert settle[0].metric == "messages"
+    # 6 authors * 5 messages, each well under the 30-per-member cap.
+    assert settle[0].result == 30
+    assert not settle[0].unsettleable
+
+
+def test_a_round_on_a_retired_metric_is_refunded_not_guessed(db):
+    """No spec, no way to recompute the outcome. Refunding is the honest
+    answer; settling against some other metric would pay out on a market
+    nobody bet on."""
+    with open_db(db) as conn:
+        _seed_history(conn)
+        day = ps._local_day(NOON, TZ)
+        conn.execute(
+            "INSERT INTO casino_pools_rounds (guild_id, channel_id, "
+            "local_day, line, opened_at, closes_at, metric) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'retired_metric')",
+            (GUILD, CHAN, day, 100.5, NOON, NOON + 3600),
+        )
+        tick = _tick(conn, NOON + 8 * 86_400)
+    settle = [j for j in tick.settle if j.day == day]
+    assert len(settle) == 1
+    assert settle[0].unsettleable
+
+
+def test_the_draw_never_repeats_yesterdays_metric(db):
+    """Two eligible metrics and yesterday was economy — today must be the
+    other one, every time rather than merely usually."""
+    with open_db(db) as conn:
+        _seed_history(conn, days=40)
+        _seed_messages(conn, days=40, authors=6, each=5)
+        now = NOON + 40 * 86_400
+        # Guard against the vacuous version of this test: with no previous
+        # round the economy metric must be drawable, or "never economy"
+        # below would pass for the wrong reason.
+        drawn = {_tick(conn, now).open.metric for _ in range(40)}
+        assert "economy_net" in drawn and len(drawn) > 1
+
+        yesterday = ps._local_day(now - 86_400, TZ)
+        conn.execute(
+            "INSERT INTO casino_pools_rounds (guild_id, channel_id, "
+            "local_day, line, opened_at, closes_at, metric, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'economy_net', 'settled')",
+            (GUILD, CHAN, yesterday, 100.5, now - 86_400, now - 82_800),
+        )
+        for _ in range(25):
+            opened = _tick(conn, now).open
+            assert opened is not None
+            assert opened.metric != "economy_net"
+
+
+def test_disabled_metrics_are_never_drawn(db):
+    """The dashboard roster is a real gate, not a display filter."""
+    with open_db(db) as conn:
+        _seed_history(conn, days=40)
+        _seed_messages(conn, days=40, authors=6, each=5)
+        now = NOON + 40 * 86_400
+        for _ in range(25):
+            opened = ps.plan_tick(
+                conn, GUILD, tz_offset_hours=TZ, close_hour=18, now=now,
+                enabled_metrics="economy_net",
+            ).open
+            assert opened is not None
+            assert opened.metric == "economy_net"
+
+
+def test_no_market_opens_when_no_metric_has_enough_history(db):
+    with open_db(db) as conn:
+        _seed_history(conn, days=3)
+        _seed_messages(conn, days=3, authors=6, each=5)
+        assert _tick(conn, NOON + 3 * 86_400).open is None
+
+
+def test_the_open_job_carries_the_metric_it_drew(db):
+    """The line and the metric have to travel together — a line derived
+    from one metric written onto a round naming another would settle every
+    bet against the wrong number."""
+    with open_db(db) as conn:
+        _seed_history(conn, days=40)
+        _seed_messages(conn, days=40, authors=6, each=5)
+        job = _tick(conn, NOON + 40 * 86_400).open
+        assert job is not None
+        spec = pools_metrics.spec_for(job.metric)
+        assert spec is not None
+        days = spec.series(
+            conn, GUILD, tz_offset_hours=TZ, now=NOON + 40 * 86_400
+        )
+    completed = [d for d in days if d.day < job.day]
+    assert job.line == pools_metrics.line_for(spec, completed)

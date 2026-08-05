@@ -1227,6 +1227,14 @@ def _pool_bar(prob: float | None, width: int = 20) -> str:
     return f"{bar}  **{prob * 100:.0f}%** over"
 
 
+def _pools_question(spec, econ: EconSettings, line: float, day: str) -> str:
+    return spec.question.format(
+        line=pools_logic.format_line(line),
+        day=day,
+        currency=econ.currency_plural,
+    )
+
+
 def build_pools_panel_embed(
     econ: EconSettings,
     line: float,
@@ -1235,14 +1243,20 @@ def build_pools_panel_embed(
     day: str,
     accent: discord.Color | None,
     *,
+    spec,
     closed: bool = False,
 ) -> discord.Embed:
     """The standing market panel, repainted as stakes land.
 
     Deliberately states what the number means and where it comes from: this
     is the only game in the casino whose outcome is not something members
-    watch happen, so "the bot counts the ledger at midnight" has to be on
-    the card rather than in the manual.
+    watch happen, so "the bot counts it at midnight" has to be on the card
+    rather than in the manual.
+
+    Under rotation that goes double for the cap. A capped metric is only
+    safe to bet on *because* one member cannot run the number up, and a
+    member deciding whether to bet has to be able to see that rule — so
+    ``spec.cap_note`` prints next to the buttons, not in the manual.
     """
     prob = pools_logic.implied_probability(split)
     when = (
@@ -1251,11 +1265,9 @@ def build_pools_panel_embed(
         else f"Betting closes <t:{int(closes_at)}:R>."
     )
     embed = discord.Embed(
-        title="📈 Pools — today's market",
+        title=f"📈 Pools — today's market · {spec.label}",
         description=(
-            f"Will the economy grow by more than "
-            f"**{pools_logic.format_line(line)}** {econ.currency_plural} "
-            f"today ({day})?\n"
+            f"{_pools_question(spec, econ, line, day)}\n"
             f"{when}\n​"
         ),
         color=_accent(accent),
@@ -1274,9 +1286,19 @@ def build_pools_panel_embed(
         name="How it settles",
         value=(
             "Winners split the whole pool pro-rata — you're betting against "
-            "the other side, not the house. The bot totals every coin minted "
-            "and burned today and compares it to the line; there is nothing "
-            "to dispute.\n​"
+            "the other side, not the house. The bot counts it up when the "
+            "day rolls over and compares it to the line; there is nothing "
+            "to dispute."
+            + (f"\n{spec.cap_note}" if spec.cap_note else "")
+            + "\n​"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Tomorrow",
+        value=(
+            "A different metric is drawn each day — never the same one two "
+            "days running.\n​"
         ),
         inline=False,
     )
@@ -1295,13 +1317,22 @@ def build_pools_result_embed(
     takeout: int,
     accent: discord.Color | None,
     *,
+    spec,
     chart: bool = True,
 ) -> discord.Embed:
-    """``payouts`` = (user_id, stake, payout), biggest return first."""
+    """``payouts`` = (user_id, stake, payout), biggest return first.
+
+    The metric is named in the title rather than assumed: a member reading
+    this card hours later has seen other markets since, and "closed at
+    1,204" means nothing without the thing that was counted.
+    """
+    unit = spec.unit.format(currency=econ.currency_plural)
+    measured = f"{result:+,}" if spec.signed else f"{result:,}"
     embed = discord.Embed(
-        title="📈 Pools — the day is in",
+        title=f"📈 Pools — the day is in · {spec.label}",
         description=(
-            f"**{day}** closed at **{result:+,}** against a line of "
+            f"**{day}** closed at **{measured}**"
+            f"{f' {unit}' if unit else ''} against a line of "
             f"**{pools_logic.format_line(line)}** — "
             f"**{pools_logic.describe_side(winning_side)}** takes it.\n​"
         ),
@@ -1339,16 +1370,32 @@ def build_pools_result_embed(
 
 
 def build_pools_void_embed(
-    day: str, refunded: int, accent: discord.Color | None
+    day: str,
+    refunded: int,
+    accent: discord.Color | None,
+    *,
+    unmeasurable: bool = False,
 ) -> discord.Embed:
     """One-sided pools have no counterparty, so everyone gets their coins
-    back rather than the house taking a cut of the only side that showed."""
+    back rather than the house taking a cut of the only side that showed.
+
+    ``unmeasurable`` covers the other refund case rotation introduced: a
+    round whose metric the bot can no longer measure. Members are told the
+    truth — the bot could not count it — rather than being shown the
+    one-sided-pool wording for a thing that was not their doing.
+    """
+    reason = (
+        "the bot can no longer measure what it was counting, so there is no "
+        "honest way to settle it"
+        if unmeasurable
+        else "everyone who staked backed the same side, so there was nothing "
+        "to play against"
+    )
     return discord.Embed(
         title="📈 Pools — no market today",
         description=(
-            f"Everyone who staked on **{day}** backed the same side, so "
-            f"there was nothing to play against. All **{refunded:,}** "
-            "staked has been refunded in full.\n​"
+            f"The market for **{day}** has been called off: {reason}. All "
+            f"**{refunded:,}** staked has been refunded in full.\n​"
         ),
         color=_accent(accent),
     ).set_footer(text=_FOOTER)

@@ -147,6 +147,7 @@ All movement goes through `services/casino_service.py`:
 | `pools_channel_id` | 0 | where the market panel lives; 0 = fall back to `channel_id`. Its own channel because the round is a day long |
 | `pools_close_hour` | 18 | guild-local hour betting shuts on the day being measured (bounds 0–23). Settlement is at the day roll, not here |
 | `pools_takeout_pct` | 5 | % of the whole pool taken at settle and **burned** (bounds 0–50). Distinct from `jackpot_cut_pct`, which is skimmed per lost stake and fed to a pot that re-mints it |
+| `pools_metrics` | `""` | comma-separated `pools_metrics` keys the daily draw may pick from. Empty = the whole roster, which is also what an untouched guild runs |
 | `broadcast_min_payout` | 0 | instant-game wins paying at least this get a public broadcast; 0 = never (jackpot celebrations always post) |
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
 
@@ -157,7 +158,7 @@ guild's casino name, which is edited on **Config → Branding**
 `casino_config_change` so the cog re-ensures the panel without a restart
 (post/edit/move/tear down; a channel move deletes the old panel).
 
-The four `pools_*` keys are **not** on that page. Since 2026-07-28 they have
+The five `pools_*` keys are **not** on that page. Since 2026-07-28 they have
 their own admin-only **Economy → Pools** page (`config-pools.js`,
 [plans/pools-own-config-page.md](plans/pools-own-config-page.md)): a day-long
 parimutuel round whose takeout is burned had nothing in common with nine
@@ -165,7 +166,7 @@ instant-settle tables, and `pools_takeout_pct` sat one card from
 `jackpot_cut_pct`, which re-mints what it skims. The keys keep their
 `casino_pools_*` names in the `config` table, both pages write through the same
 `PUT /api/config/casino` (its body model is every-field-optional, so the Pools
-page sends four fields and leaves the rest untouched), and both therefore
+page sends five fields and leaves the rest untouched), and both therefore
 dispatch `casino_config_change`. There is no `/api/config/pools` route.
 
 ## Games
@@ -318,28 +319,44 @@ cards, hit/stand/dealer flow) live in `resolve_blackjack_action` /
 the double's second stake is derived from the hand row, never
 caller-supplied.
 
-## Pools — the parimutuel prediction market (migration 140)
+## Pools — the parimutuel prediction market (migrations 140, 148)
 
 Not a table: **player-versus-player with the house as bookkeeper only.** One
 round per guild-local day, opened and settled by the bot with no admin
 authoring and no admin resolution.
 
-- **The question** is whether the day's *net change in the economy* (mint
-  minus burn) lands over or under a line. The line is the trailing 7-day
-  median **plus 0.5**, so an exact hit is unreachable and there is no push
-  rule to write.
-- **Settlement is arithmetic, not judgement.** The metric is the change in
-  total circulation, which is exactly the running sum of `econ_ledger.amount`
-  — so it is recomputable from the ledger at any later time. A missed close,
-  a restart or hours of downtime all settle to the same answer, which no
-  other game in the casino can say.
+- **The question** is whether some measure of the day lands over or under a
+  line. The line is that metric's trailing 7-day median **plus 0.5**, so an
+  exact hit is unreachable and there is no push rule to write.
+- **The metric rotates** (migration 148, since 2026-08-03). Eleven metrics
+  live in `services/pools_metrics.py` and one is drawn uniformly at random
+  each day, never the same one two days running. The round row records
+  which metric it bet — settlement recomputes the outcome, and the draw has
+  moved on by then. Admins pick the roster on the dashboard; the draw
+  itself is not configurable. Full reasoning, the per-metric caps and the
+  backtest: [plans/pools-metric-rotation.md](plans/pools-metric-rotation.md).
+- **Every count metric is capped per member**, and the cap is stated on the
+  panel where members bet. The economy metric is safe structurally (pools'
+  own rows are excluded from it); a metric counting what members do has no
+  such defence, so the cap is what makes it bettable at all. Caps are code
+  constants — changing one retroactively changes what past days measured.
+- **A metric sits out** until it has 7 completed days, and — count metrics
+  only — whenever its trailing window contains a zero day. A zero means the
+  feature behind it was dormant, and a line across dormancy prices whether
+  the bot ran rather than how members behaved.
+- **Settlement is arithmetic, not judgement.** Every metric is recomputable
+  from stored history at any later time. A missed close, a restart or hours
+  of downtime all settle to the same answer, which no other game in the
+  casino can say. A round naming a metric the code no longer defines is
+  **voided and refunded** rather than guessed at.
 - **Session-day attribution.** Both halves of a casino session are booked to
   the day its round or hand *opened*, not to each ledger row's timestamp.
   Without this, a hand dealt at 23:59 and stood at 00:00:30 shifts the metric
   by its whole stake for an expected cost of nothing. `take_stake` records
   `round_id` for this reason.
 - **Pools' own rows are excluded** from the metric, or a bigger pool would
-  drag the number it is betting on.
+  drag the number it is betting on. The same exclusion is made by the
+  `handle` metric (Petals staked across the casino) for the same reason.
 - **The takeout is burned**, not fed to the jackpot: the pot re-mints what it
   holds, so routing the takeout there would return it to the metric weeks
   later.
@@ -431,8 +448,9 @@ trimmed to `TICKER_KEEP` rows per guild on insert).
 (`_casino_section`, `update_casino`) · `static/js/panels/config-casino.js`.
 
 Pools adds `services/pools_logic.py` (pool split, line, candle assembly),
-`services/pools_service.py` (the economy metric and the day-roll plan),
-`services/pools_charts.py` (matplotlib renderers),
+`services/pools_metrics.py` (the metric roster, the per-member caps and the
+daily draw), `services/pools_service.py` (the economy metric and the
+day-roll plan), `services/pools_charts.py` (matplotlib renderers),
 `cogs/casino/pools_panel.py` (a mixin on `CasinoCog`, kept out of the
 84k `cog.py`) and `static/js/panels/config-pools.js` (its own dashboard page —
 no route of its own; it partial-saves through `update_casino`).

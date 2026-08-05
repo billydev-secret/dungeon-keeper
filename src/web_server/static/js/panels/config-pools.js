@@ -53,10 +53,10 @@ export function mount(container) {
     // takeout destroys currency rather than recycling it.
     sub.textContent =
       "One round a day, not an instant-settle table: members bet over or " +
-      "under a line the bot sets on how much the economy grows that day, and " +
-      "the winning side splits the pool pro-rata. The house never wins or " +
-      "loses — it takes only the takeout, which is burned. This is the " +
-      "casino's one deflationary sink.";
+      "under a line the bot sets on something the server did that day, and " +
+      "the winning side splits the pool pro-rata. A different metric is " +
+      "drawn each day. The house never wins or loses — it takes only the " +
+      "takeout, which is burned. This is the casino's one deflationary sink.";
     hdr.append(h2, sub);
     panel.appendChild(hdr);
 
@@ -119,6 +119,34 @@ export function mount(container) {
         "return, the same band as the tables.",
     ));
 
+    // ── The roster the daily draw picks from ────────────────────────────
+    // The catalogue comes from the server (pools_metrics.SPECS) rather than
+    // being listed here, so adding a metric in Python adds its checkbox.
+    const cardMetrics = card("What the Market Bets On");
+    const catalog = c.pools_metric_catalog || [];
+    // Empty stored value means the whole roster — the same default an
+    // untouched guild runs on, so the boxes start all-checked.
+    const stored = String(c.pools_metrics || "").trim();
+    const chosen = stored
+      ? new Set(stored.split(",").map((s) => s.trim()).filter(Boolean))
+      : new Set(catalog.map((m) => m.key));
+    const metricRow = document.createElement("div");
+    metricRow.style.cssText =
+      "display:flex; flex-wrap:wrap; gap:8px 16px;";
+    for (const m of catalog) {
+      const box = checkbox(`metric_${m.key}`, chosen.has(m.key), m.label);
+      if (m.cap_note) box.title = m.cap_note;
+      metricRow.appendChild(box);
+    }
+    cardMetrics.appendChild(field(
+      "Metrics In Rotation", metricRow,
+      "One is drawn at random each day, never the same one two days " +
+        "running. A metric sits out automatically until it has seven " +
+        "clear days of history, so a newly-ticked box may take a week to " +
+        "appear. Unticking every box falls back to the full roster — to " +
+        "stop the market entirely, untick \"Run a Daily Market\" above.",
+    ));
+
     const row = document.createElement("div");
     row.style.cssText = "display:flex; gap:8px; align-items:center;";
     const saveBtn = document.createElement("button");
@@ -151,12 +179,18 @@ export function mount(container) {
         }
         nums[name] = v;
       }
+      // All boxes ticked is stored as "" — the roster is the default, and
+      // recording it as an explicit list would silently freeze this page's
+      // idea of the roster into config the day a metric is added.
+      const picked = catalog.map((m) => m.key)
+        .filter((key) => fd.has(`metric_${key}`));
       try {
-        // Four fields only — see the header note on partial saves.
+        // Five fields only — see the header note on partial saves.
         await apiPut("/api/config/casino", {
           ...nums,
           pools_enabled: fd.has("pools_enabled"),
           pools_channel_id: chanPicker.getValue() || "0", // string — snowflake rule
+          pools_metrics: picked.length === catalog.length ? "" : picked.join(","),
         });
         showStatus(statusEl, true);
       } catch (err) {

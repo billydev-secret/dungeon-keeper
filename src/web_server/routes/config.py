@@ -33,6 +33,7 @@ from bot_modules.core.db_utils import (
 )
 from bot_modules.services import intake_reference_service as intake_ref
 from bot_modules.services import intake_service as intake_svc
+from bot_modules.services import pools_metrics
 from bot_modules.services.message_store import (
     SUPPORTED_STORAGE_LEVELS,
     STORAGE_LEVEL_NONE,
@@ -650,6 +651,14 @@ def _casino_section(conn, guild_id: int) -> dict:
         "pools_channel_id": str(s.pools_channel_id),
         "pools_close_hour": s.pools_close_hour,
         "pools_takeout_pct": s.pools_takeout_pct,
+        # The stored roster (empty = all), plus the catalogue the panel
+        # renders its checkboxes from, so the metric list lives in one
+        # place rather than being duplicated in JS.
+        "pools_metrics": s.pools_metrics,
+        "pools_metric_catalog": [
+            {"key": m.key, "label": m.label, "cap_note": m.cap_note}
+            for m in pools_metrics.SPECS.values()
+        ],
         "roulette_window_seconds": s.roulette_window_seconds,
         "derby_window_seconds": s.derby_window_seconds,
         "baccarat_window_seconds": s.baccarat_window_seconds,
@@ -4279,6 +4288,10 @@ class CasinoConfigUpdate(BaseModel):
     pools_close_hour: int | None = Field(default=None, ge=0, le=23)
     # Burned, not fed to the jackpot — the pot re-mints what it holds.
     pools_takeout_pct: int | None = Field(default=None, ge=0, le=50)
+    # Comma-separated pools_metrics keys the daily draw may pick from.
+    # Empty = the whole roster. Validated against the registry on save so
+    # a typo cannot quietly shrink the roster to nothing.
+    pools_metrics: str | None = None
     roulette_window_seconds: int | None = Field(default=None, ge=15, le=600)
     derby_window_seconds: int | None = Field(default=None, ge=15, le=600)
     baccarat_window_seconds: int | None = Field(default=None, ge=15, le=600)
@@ -4323,6 +4336,16 @@ async def update_casino(
                 raise HTTPException(
                     400, f"{key} must be a snowflake or 0"
                 ) from None
+    if "pools_metrics" in values:
+        raw = str(values["pools_metrics"])
+        chosen = [part.strip() for part in raw.split(",") if part.strip()]
+        unknown = [key for key in chosen if key not in pools_metrics.SPECS]
+        if unknown:
+            raise HTTPException(400, f"unknown pools metric(s): {unknown}")
+        # An explicit empty roster would open no market at all, which is
+        # what pools_enabled is for — so it is stored as "all", matching
+        # what an untouched guild already gets.
+        values["pools_metrics"] = ",".join(chosen)
 
     def _q():
         with ctx.open_db() as conn:

@@ -29,7 +29,7 @@ from dataclasses import dataclass, fields
 from typing import NamedTuple
 
 from bot_modules.economy.logic import local_day_bounds, local_day_for
-from bot_modules.services import casino_logic, pools_logic
+from bot_modules.services import casino_logic, pools_logic, pools_metrics
 from bot_modules.services.economy_service import (
     apply_credit,
     apply_debit,
@@ -79,6 +79,10 @@ class CasinoSettings:
     # jackpot_cut_pct, which is skimmed from each fully-lost stake and fed
     # to a pot that re-mints it. Same number today, different bases.
     pools_takeout_pct: int = 5
+    # Which metrics the daily market may draw from, as a comma-separated
+    # list of pools_metrics keys. Empty = the whole roster, which is also
+    # what every guild gets before an admin ever opens the panel.
+    pools_metrics: str = ""
     roulette_window_seconds: int = 45
     # Derby races want a touch more hype time than a roulette spin.
     derby_window_seconds: int = 60
@@ -124,8 +128,13 @@ _BOOL_KEYS = [
     "pools_enabled",
     "jackpot_enabled",
 ]
+# Free-text settings — stored and returned verbatim rather than coerced.
+_STR_KEYS = ["pools_metrics"]
 # Everything else on the dataclass is a plain int.
-_INT_KEYS = [f.name for f in fields(CasinoSettings) if f.name not in _BOOL_KEYS]
+_INT_KEYS = [
+    f.name for f in fields(CasinoSettings)
+    if f.name not in _BOOL_KEYS and f.name not in _STR_KEYS
+]
 _ALL_KEYS = frozenset(f.name for f in fields(CasinoSettings))
 
 
@@ -154,6 +163,10 @@ def load_casino_settings(conn: sqlite3.Connection, guild_id: int) -> CasinoSetti
         raw = stored.get(key, "")
         if raw:
             kwargs[key] = parse_bool(raw, getattr(defaults, key))
+    for key in _STR_KEYS:
+        raw = stored.get(key, "")
+        if raw:
+            kwargs[key] = raw
     for key in _INT_KEYS:
         raw = stored.get(key, "")
         if raw:
@@ -1898,6 +1911,7 @@ def open_pools_round(
     line: float,
     closes_at: float,
     *,
+    metric: str = pools_metrics.ANCHOR,
     now: float | None = None,
 ) -> int | None:
     """Open the day's market. None = one already exists for that day.
@@ -1907,14 +1921,19 @@ def open_pools_round(
     round whose close was missed by hours must still settle against the
     line members actually bet into — not one recomputed from a history
     that has since grown.
+
+    ``metric`` persists for the same reason and one more: the draw has
+    moved on by the time yesterday's round settles, so the outcome can only
+    be recomputed against the metric this row named (migration 148).
     """
     ts = time.time() if now is None else now
     try:
         cur = conn.execute(
             "INSERT INTO casino_pools_rounds "
-            "(guild_id, channel_id, local_day, line, opened_at, closes_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (guild_id, channel_id, day, float(line), ts, closes_at),
+            "(guild_id, channel_id, local_day, line, opened_at, closes_at, "
+            " metric) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (guild_id, channel_id, day, float(line), ts, closes_at, metric),
         )
     except sqlite3.IntegrityError:
         return None
