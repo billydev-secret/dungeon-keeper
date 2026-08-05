@@ -179,6 +179,20 @@ def test_admin_prompt_also_states_data_is_kept() -> None:
     assert "erased" not in out.lower()
 
 
+def test_prompt_admits_text_retention_when_guild_stores_content() -> None:
+    """message_storage_level='all' keeps full text — the disclosure must say
+    so instead of hedging with 'metadata' (2026-08 review, privacy U1)."""
+    out = render_confirm_prompt(mode=MODE_ALL, retains_content=True)
+    assert "including the message text" in out
+    assert "not the text" not in out
+
+
+def test_prompt_says_metadata_only_at_the_default_storage_level() -> None:
+    out = render_confirm_prompt(mode=MODE_ALL, retains_content=False)
+    assert "not the text" in out
+    assert "including the message text" not in out
+
+
 def test_partial_prompt_names_only_its_slice() -> None:
     out = render_confirm_prompt(mode=MODE_MEDIA)
     assert "images & files" in out

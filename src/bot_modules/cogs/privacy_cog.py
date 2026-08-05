@@ -240,6 +240,17 @@ _DONE_COLOR = discord.Color.green()
 _PROGRESS_TITLE = "Deleting your messages"
 
 
+def _guild_retains_content(db_path: Path, guild_id: int) -> bool:
+    """Whether this guild's archive keeps message text — read pre-confirm so
+    the disclosure in the prompt matches what the server actually retains
+    (storage level ``all`` vs the metadata-only default)."""
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.message_store import guild_retains_content
+
+    with open_db(db_path) as conn:
+        return guild_retains_content(conn, guild_id)
+
+
 def _scan_embed(
     done: int, total: int, found: int, color: "discord.Color | None" = None
 ) -> discord.Embed:
@@ -468,8 +479,11 @@ class PrivacyCog(commands.Cog):
             actor_id=interaction.user.id,
             confirm_label=confirm_button_label(mode_value, self_service=True),
         )
+        retains_content = await asyncio.to_thread(
+            _guild_retains_content, self.ctx.db_path, interaction.guild.id
+        )
         await interaction.response.send_message(
-            render_confirm_prompt(mode=mode_value),
+            render_confirm_prompt(mode=mode_value, retains_content=retains_content),
             view=view,
             ephemeral=True,
         )
@@ -537,10 +551,14 @@ class PrivacyCog(commands.Cog):
             actor_id=interaction.user.id,
             confirm_label=confirm_button_label(mode_value, self_service=False),
         )
+        retains_content = await asyncio.to_thread(
+            _guild_retains_content, self.ctx.db_path, interaction.guild.id
+        )
         await interaction.response.send_message(
             render_confirm_prompt(
                 mode=mode_value,
                 subject=member.mention,
+                retains_content=retains_content,
             ),
             view=view,
             ephemeral=True,

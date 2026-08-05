@@ -185,6 +185,7 @@ def render_confirm_prompt(
     *,
     mode: str,
     subject: str | None = None,
+    retains_content: bool = False,
 ) -> str:
     """Copy shown immediately before the irreversible click.
 
@@ -195,6 +196,12 @@ def render_confirm_prompt(
     member's Discord messages go. Their XP, activity, profile, and the server's
     own copy of the messages are kept for moderation — the person is told that
     here rather than discovering it in the summary afterwards.
+
+    *retains_content* mirrors the guild's ``message_storage_level``: when the
+    guild has opted into ``all``, the server's copy includes the message
+    **text**, and saying anything softer here would be a false disclosure
+    (2026-08 review, privacy U1). At the default level the copy stays
+    metadata-only, and the prompt says that instead.
     """
     who = "your" if subject is None else f"{subject}'s"
     whose = "Your" if subject is None else f"{subject}'s"
@@ -206,11 +213,16 @@ def render_confirm_prompt(
     elif mode == MODE_TEXT:
         detail = " — every message that carries no attachment or media"
 
+    kept = (
+        "including the message text"
+        if retains_content
+        else "as metadata (who, where, when — not the text)"
+    )
     return (
         f"⚠️ **This will delete {who} {noun} from Discord**{detail}.\n\n"
         f"{whose} XP, activity, and profile stay exactly as they are, and the "
-        f"server keeps its own copy of {who} messages for moderation — this only "
-        "removes them from Discord, not from those records.\n\n"
+        f"server keeps its own copy of {who} messages for moderation — {kept}. "
+        "This only removes them from Discord, not from those records.\n\n"
         "This cannot be undone. Are you sure?"
     )
 
