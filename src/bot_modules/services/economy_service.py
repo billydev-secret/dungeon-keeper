@@ -89,6 +89,17 @@ class EconSettings:
     # score's ratio to the winner's, rounded to the nearest coin (a share that
     # rounds to 0 pays nothing). 0 turns the payout off for CAH entirely.
     reward_cah_win_max: int = 50
+    # Cat Bot catch payouts by rarity tier — games_external/parser groups the
+    # 22 cat types into these six tiers. Hardcoded in the parser until
+    # 2026-08-06, when the 07-30 retune postmortem found cat_catch had become
+    # the #2 faucet with no dial (loose-ends §1). Defaults are the shipped
+    # table; tune from the Income Sources panel.
+    catcatch_coins_common: int = 1
+    catcatch_coins_uncommon: int = 3
+    catcatch_coins_rare: int = 11
+    catcatch_coins_epic: int = 35
+    catcatch_coins_mythic: int = 102
+    catcatch_coins_divine: int = 300
     # Host bounty: the member who *ran* a game earns per attendee who joined
     # (excluding themselves), capped at ``host_bounty_cap`` attendees so one
     # busy game can't dwarf other faucets. The point is recruiting hosts, so

@@ -10,6 +10,7 @@ table, so re-parsing on a format change never loses history.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -32,6 +33,19 @@ from bot_modules.games_external import logic, parser
 from bot_modules.services.event_echo_service import echo_gamebot_lobby
 
 log = logging.getLogger(__name__)
+
+
+def _load_catcatch_tier_coins(db_path, guild_id: int) -> dict[str, int]:
+    """The guild's six cat-catch tier dials as the parser's override table."""
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.economy_service import load_econ_settings
+
+    with open_db(db_path) as conn:
+        settings = load_econ_settings(conn, guild_id)
+    return {
+        tier: int(getattr(settings, f"catcatch_coins_{tier}"))
+        for tier in ("common", "uncommon", "rare", "epic", "mythic", "divine")
+    }
 
 
 def is_mod_or_admin():
@@ -332,7 +346,16 @@ class GamesExternalCog(commands.Cog):
         if guild is None:
             return
         try:
-            catch = parser.parse_cat_catch(message.content or "")
+            # Dial-load failure must never cost a member their catch — fall
+            # back to the parser's shipped defaults and pay anyway.
+            try:
+                tier_coins = await asyncio.to_thread(
+                    _load_catcatch_tier_coins, self.bot.ctx.db_path, guild.id
+                )
+            except Exception:
+                log.exception("cat_catch: dial load failed — using shipped defaults")
+                tier_coins = None
+            catch = parser.parse_cat_catch(message.content or "", tier_coins)
             if catch is None:
                 return
             member = guild.get_member_named(catch.username)

@@ -447,7 +447,8 @@ def extract_anagrams_game(
 # The username arrives markdown-*escaped* (``tryingnewthingz\_0504``) in either
 # order, and the payout resolves it by name, so the escapes must come off.
 
-# Rarity → tier → coins (defaults; a future dashboard panel can override).
+# Rarity → tier → coins (defaults; per-guild EconSettings.catcatch_coins_*
+# override these — the cog passes the guild's table into parse_cat_catch).
 # Tapered against an earlier flatter table (3/8/20/50/120/300): a 75% cut on the
 # lowest tier scaling linearly to 0% at the top, so common catches barely pay
 # while the rare top-end keeps its pull.
@@ -480,9 +481,15 @@ def _unescape_markdown(name: str) -> str:
     return _MD_ESCAPE.sub(r"\1", name)
 
 
-def rarity_coins(rarity: str) -> int:
-    """Coins for catching a cat of ``rarity`` (unknown rarities fall to common)."""
+def rarity_coins(rarity: str, tier_coins: Mapping[str, int] | None = None) -> int:
+    """Coins for catching a cat of ``rarity`` (unknown rarities fall to common).
+
+    ``tier_coins`` overrides the default table per guild (the six
+    ``EconSettings.catcatch_coins_*`` dials); missing tiers fall back to the
+    shipped defaults so a partial mapping can't zero a tier by accident."""
     tier = _RARITY_TIER.get(rarity.lower(), _DEFAULT_TIER)
+    if tier_coins is not None:
+        return int(tier_coins.get(tier, _TIER_COINS[tier]))
     return _TIER_COINS[tier]
 
 
@@ -496,12 +503,15 @@ class CatCatch:
     coins: int
 
 
-def parse_cat_catch(content: str) -> CatCatch | None:
+def parse_cat_catch(
+    content: str, tier_coins: Mapping[str, int] | None = None
+) -> CatCatch | None:
     """Extract (catcher username, rarity, doubled, coins) from a catch, or None.
 
     Only an *individual* catch parses — spawns ("has appeared", no "cought") and
     the bonus blurb ("Anyone who cought this cat…", where "cought" isn't next to
-    the emoji) return None, so they never pay.
+    the emoji) return None, so they never pay. ``tier_coins`` is the guild's
+    dial table (see :func:`rarity_coins`).
     """
     if not content or "cought" not in content:
         return None
@@ -523,7 +533,7 @@ def parse_cat_catch(content: str) -> CatCatch | None:
             continue
         rarity = rarity.lower()
         doubled = _BLESSED in content
-        coins = rarity_coins(rarity) * (2 if doubled else 1)
+        coins = rarity_coins(rarity, tier_coins) * (2 if doubled else 1)
         return CatCatch(username=username, rarity=rarity, doubled=doubled, coins=coins)
     return None
 

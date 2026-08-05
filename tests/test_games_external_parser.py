@@ -679,3 +679,43 @@ def test_host_from_window_finds_the_lobby_anywhere_in_the_game():
     assert parser.host_from_window(window) == "host"
     # A window whose lobby aged out has no host to attribute.
     assert parser.host_from_window([_standings({ALICE: 1}), _game_over(ALICE)]) is None
+
+
+# ── cat_catch tier dials (2026-08 review / retune round 2) ─────────────
+
+
+def test_parse_cat_catch_uses_guild_tier_overrides():
+    from bot_modules.games_external.parser import parse_cat_catch
+
+    msg = "billy cought <:finecat:123>"
+    default = parse_cat_catch(msg)
+    tuned = parse_cat_catch(msg, {"common": 0})
+    assert default is not None and default.coins == 1
+    assert tuned is not None and tuned.coins == 0
+
+
+def test_parse_cat_catch_partial_override_falls_back_to_defaults():
+    from bot_modules.games_external.parser import parse_cat_catch
+
+    # Divine cat with an override map that only names the common tier: the
+    # divine tier must keep its shipped default, not zero out.
+    msg = "billy cought <:divinecat:123>"
+    got = parse_cat_catch(msg, {"common": 0})
+    assert got is not None and got.coins == 300
+
+
+def test_econ_settings_carry_catcatch_dials_roundtrip(tmp_path):
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.economy_service import (
+        load_econ_settings,
+        save_econ_settings,
+    )
+    from tests.db_template import migrated_db
+
+    db_path = tmp_path / "test.db"
+    migrated_db(db_path)
+    with open_db(db_path) as conn:
+        save_econ_settings(conn, 9, {"catcatch_coins_mythic": 40})
+        s = load_econ_settings(conn, 9)
+    assert s.catcatch_coins_mythic == 40
+    assert s.catcatch_coins_divine == 300  # untouched dial keeps its default

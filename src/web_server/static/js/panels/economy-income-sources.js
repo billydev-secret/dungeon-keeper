@@ -25,6 +25,12 @@ const FAUCET_FIELDS = [
   ["host_bounty_cap", "Host bounty attendee cap (0 = off)", 1000],
   ["reward_photo_post", "Entering the photo challenge", 1000000],
   ["reward_intake_step", "Ticking a step on a newcomer's intake card", 1000000],
+  ["catcatch_coins_common", "Cat Bot catch — common tier (fine/nice/good)", 1000000],
+  ["catcatch_coins_uncommon", "Cat Bot catch — uncommon tier (rare/wild/gremlin)", 1000000],
+  ["catcatch_coins_rare", "Cat Bot catch — rare tier (epic/sus/brave/rickroll/reverse)", 1000000],
+  ["catcatch_coins_epic", "Cat Bot catch — epic tier (superior/trash/legendary)", 1000000],
+  ["catcatch_coins_mythic", "Cat Bot catch — mythic tier (mythic/8bit/corrupt/professor)", 1000000],
+  ["catcatch_coins_divine", "Cat Bot catch — divine tier (divine/real/ultimate/egirl)", 1000000],
   ["xp_per_coin", "XP needed to earn one coin", 100000],
   ["conversion_daily_cap", "Most one member's XP can earn per day (0 = no limit)", 1000000],
 ];
