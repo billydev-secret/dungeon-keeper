@@ -19,7 +19,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [README.md](../README.md) | Feature overview + quick start, written for someone evaluating the bot (slimmed 2026-07-27: 365→193 lines). Its command table is a hand-picked highlights list, deliberately **not** a reference — `/help` and `manual.html` are. Not on the per-commit docs contract; update it when a feature area appears or disappears |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
 | [dev_remote_testing.md](dev_remote_testing.md) | Dispatching pytest to a faster machine over SSH (opt-in, falls back to local) |
-| [dev_sessions.md](dev_sessions.md) | Parallel feature sessions: `/dk-feature` and `/dk-ship` over tmux windows + git worktrees (replaced the clone-per-session flow 2026-07-25) |
+| [dev_sessions.md](dev_sessions.md) | Parallel feature sessions: `/dk-feature` and `/dk-ship` over tmux windows + git worktrees (replaced the clone-per-session flow 2026-07-25); `snapshot`/`restore` rebuild them after a reboot |
 | [ai_moderation_spec.md](ai_moderation_spec.md) | AI moderation cog (review/scan/query, label feedback) |
 | [auto_role_spec.md](auto_role_spec.md) | Auto-role on join: dashboard-configured role set applied to new human members (apply-time hierarchy/managed filtering; jailed rejoiners skipped) |
 | [anon_audit_spec.md](anon_audit_spec.md) | Anonymous Features Audit: DB-backed trail for the anonymous games (AMA, FFA, Hot Takes, Fantasies, Clapback, WYR, Compliment) — admin panel, configurable retention. Stores no content by design; joins `messages` like the Confessions audit does. Confessions/Whisper/Guess keep their own trails |

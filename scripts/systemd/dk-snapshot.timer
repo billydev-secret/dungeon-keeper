@@ -1,0 +1,14 @@
+[Unit]
+Description=Snapshot live dev sessions once a minute
+
+# The snapshot is the only durable record of which sessions were running:
+# Claude Code's own registry is deleted on SIGTERM, so a reboot erases it.
+# A minute is the worst-case age of that record — i.e. the worst case is
+# losing a session started in the last 60 seconds, which has nothing in it.
+[Timer]
+OnStartupSec=30
+OnUnitActiveSec=60
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

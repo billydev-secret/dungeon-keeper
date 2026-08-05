@@ -1,0 +1,9 @@
+[Unit]
+Description=Record which Claude Code dev sessions are live
+Documentation=file:%h/discord-bots/dungeon-keeper/docs/dev_sessions.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/discord-bots/dungeon-keeper
+ExecStart=%h/discord-bots/dungeon-keeper/.venv/bin/python \
+    %h/discord-bots/dungeon-keeper/scripts/dk_session.py snapshot

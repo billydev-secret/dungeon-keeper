@@ -467,3 +467,299 @@ def test_link_venv_without_a_prod_venv_is_not_fatal(tmp_path):
 
     assert msg is not None and "skipped" in msg
     assert not (session / ".venv").exists()
+
+
+# ── surviving a reboot: snapshot ─────────────────────────────────────────
+
+def _registry(tmp_path, pid, sid="s-1", cwd="/w", proc_start="1234", **extra):
+    """Write one Claude Code registry file, the shape ~/.claude/sessions holds."""
+    entry = {"pid": pid, "sessionId": sid, "cwd": cwd,
+             "procStart": proc_start, "name": "n", **extra}
+    (tmp_path / f"{pid}.json").write_text(__import__("json").dumps(entry))
+    return entry
+
+
+@pytest.mark.parametrize(
+    ("recorded", "observed", "live"),
+    [
+        ("1234", "1234", True),    # same process
+        ("1234", "9999", False),   # pid reused by something else
+        ("1234", None, False),     # process is gone
+        (None, "1234", True),      # no identity recorded — trust the pid
+        (None, None, False),
+    ],
+)
+def test_session_is_live(recorded, observed, live):
+    assert dk_session.session_is_live({"procStart": recorded}, observed) is live
+
+
+def test_read_live_sessions_keeps_only_running_processes(tmp_path):
+    _registry(tmp_path, 100, sid="alive", cwd="/w/a", proc_start="11")
+    _registry(tmp_path, 101, sid="dead", cwd="/w/b", proc_start="22")
+    starts = {100: "11", 101: None}
+
+    got = dk_session.read_live_sessions(tmp_path, proc_start=starts.get)
+
+    assert [s["session_id"] for s in got] == ["alive"]
+    assert got[0]["cwd"] == "/w/a"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "{not json",                                  # half-written file
+        '{"pid": 1}',                                 # no sessionId or cwd
+        '{"sessionId": "x", "cwd": "/w"}',            # no pid
+        '["a list"]',                                 # wrong shape entirely
+    ],
+)
+def test_read_live_sessions_ignores_unusable_files(tmp_path, payload):
+    """A snapshot runs every minute; one bad file must not break it."""
+    (tmp_path / "1.json").write_text(payload)
+    assert dk_session.read_live_sessions(tmp_path, proc_start=lambda p: "1") == []
+
+
+def test_read_live_sessions_without_a_registry_dir(tmp_path):
+    assert dk_session.read_live_sessions(tmp_path / "nope") == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "empty_for", "replace"),
+    [
+        (3, 5, 0, True),        # normal snapshot
+        (0, 0, 0, True),        # nothing to lose
+        (3, 3, 0, True),        # still populated
+        # THE case this whole guard exists for: shutdown SIGTERMs every claude,
+        # each unlinks its registry file, and the last snapshot before the
+        # reboot sees an empty machine. Overwriting here erases the manifest
+        # seconds before the reboot it is meant to survive.
+        (3, 0, 0, False),
+        (3, 0, 60, False),
+        (3, 0, dk_session.EMPTY_GRACE_SECONDS - 1, False),
+        # Emptiness that persists means the sessions really were closed.
+        (3, 0, dk_session.EMPTY_GRACE_SECONDS, True),
+        (3, 0, 86400, True),
+    ],
+)
+def test_should_replace_manifest(old, new, empty_for, replace):
+    assert dk_session.should_replace_manifest(old, new, empty_for) is replace
+
+
+def test_manifest_round_trips(tmp_path):
+    path = tmp_path / "manifest.json"
+    manifest = dk_session.build_manifest([{"session_id": "a", "cwd": "/w"}], 12.5)
+
+    dk_session.write_manifest(manifest, path)
+
+    assert dk_session.load_manifest(path) == manifest
+    assert not path.with_suffix(".json.tmp").exists()  # atomic write cleaned up
+
+
+def test_load_manifest_survives_a_corrupt_file(tmp_path):
+    path = tmp_path / "manifest.json"
+    path.write_text("{truncated")
+    assert dk_session.load_manifest(path) == {}
+
+
+def test_load_manifest_without_a_file(tmp_path):
+    assert dk_session.load_manifest(tmp_path / "missing.json") == {}
+
+
+# ── surviving a reboot: the restore plan ─────────────────────────────────
+
+PROD = "/home/ben/discord-bots/dungeon-keeper"
+SESSIONS = "/home/ben/discord-bots/dk-sessions"
+
+
+def test_window_name_keeps_prod_as_main():
+    assert dk_session.window_name(PROD, PROD) == "main"
+
+
+def test_window_name_of_a_worktree_is_its_directory():
+    assert dk_session.window_name(f"{SESSIONS}/casino-derby", PROD) == "casino-derby"
+
+
+def _plan(sessions, dirty, exists=None, **kw):
+    return dk_session.restore_plan(
+        sessions, PROD,
+        exists=exists or (lambda p: True),
+        dirty_count=lambda p: dirty.get(p, 0),
+        **kw,
+    )
+
+
+def test_dirty_trees_resume_and_clean_trees_come_back_as_shells():
+    """The split the whole control turns on: respawning everything bills for
+    workers you would have abandoned; a clean tree has nothing in flight."""
+    plan = _plan(
+        [{"session_id": "a", "cwd": f"{SESSIONS}/dirty"},
+         {"session_id": "b", "cwd": f"{SESSIONS}/clean"}],
+        dirty={f"{SESSIONS}/dirty": 7},
+    )
+    modes = {e["window"]: e["mode"] for e in plan}
+    assert modes == {"dirty": "resume", "clean": "shell"}
+    assert [e["dirty"] for e in plan if e["window"] == "dirty"] == [7]
+
+
+def test_a_torn_down_worktree_is_reported_not_dropped():
+    """A restore must never silently lose something it was asked about."""
+    plan = _plan(
+        [{"session_id": "a", "cwd": f"{SESSIONS}/gone"}],
+        dirty={}, exists=lambda p: False,
+    )
+    assert [e["mode"] for e in plan] == ["gone"]
+
+
+def test_prod_sorts_first_so_it_keeps_window_one():
+    plan = _plan(
+        [{"session_id": "a", "cwd": f"{SESSIONS}/zzz"},
+         {"session_id": "b", "cwd": PROD}],
+        dirty={},
+    )
+    assert plan[0]["window"] == "main"
+
+
+def test_one_window_per_directory():
+    """Two sessions can share a cwd; two windows must not share a name."""
+    plan = _plan(
+        [{"session_id": "a", "cwd": f"{SESSIONS}/feat"},
+         {"session_id": "b", "cwd": f"{SESSIONS}/feat"}],
+        dirty={},
+    )
+    assert [e["session_id"] for e in plan] == ["a"]
+
+
+def test_max_resume_downgrades_the_excess_to_shells():
+    plan = _plan(
+        [{"session_id": s, "cwd": f"{SESSIONS}/w{s}"} for s in "abcd"],
+        dirty={f"{SESSIONS}/w{s}": 3 for s in "abcd"},
+        max_resume=2,
+    )
+    assert [e["mode"] for e in plan] == ["resume", "resume", "shell", "shell"]
+    assert [e["capped"] for e in plan] == [False, False, True, True]
+
+
+def test_no_cap_resumes_every_dirty_tree():
+    plan = _plan(
+        [{"session_id": s, "cwd": f"{SESSIONS}/w{s}"} for s in "abcd"],
+        dirty={f"{SESSIONS}/w{s}": 1 for s in "abcd"},
+    )
+    assert all(e["mode"] == "resume" for e in plan)
+
+
+# ── surviving a reboot: the commands a window runs ───────────────────────
+
+def test_resume_command_resumes_the_recorded_session():
+    cmd = dk_session.resume_claude_command("abc-123", "casino-derby")
+    assert "--resume abc-123" in cmd
+    assert "--remote-control casino-derby" in cmd
+    assert cmd.endswith("; exec $SHELL")
+
+
+def test_resume_command_asks_for_a_summary_not_a_full_replay():
+    """Picking "Resume from summary" in Claude Code's dialog just runs
+    /compact; unattended, sending it is how that choice gets made."""
+    cmd = dk_session.resume_claude_command("abc-123", "x")
+    assert shlex.split(cmd[: -len("; exec $SHELL")])[-1] == "/compact"
+
+
+def test_resume_command_suppresses_the_blocking_dialog():
+    """Unanswered, that dialog parks the restored session on a menu — the
+    exact state session_state() reports as WAITING."""
+    for summary in (True, False):
+        cmd = dk_session.resume_claude_command("a", "x", summary=summary)
+        assert dk_session.RESUME_DIALOG_OFF in cmd
+
+
+def test_full_resume_omits_the_compact_prompt():
+    cmd = dk_session.resume_claude_command("a", "x", summary=False)
+    assert "/compact" not in cmd
+
+
+def test_shell_window_never_starts_a_billing_session():
+    """A clean tree's window is a shell — the resume line is text to read."""
+    cmd = dk_session.shell_window_command("abc-123", "x")
+    assert cmd.startswith("printf ")
+    assert cmd.endswith("; exec $SHELL")
+    assert shlex.split(cmd[: -len("; exec $SHELL")])[-1].count("abc-123") == 2
+
+
+def test_window_command_dispatches_on_mode():
+    resume = dk_session.window_command(
+        {"mode": "resume", "session_id": "a", "window": "w"})
+    shell = dk_session.window_command(
+        {"mode": "shell", "session_id": "a", "window": "w"})
+    assert resume.startswith(dk_session.RESUME_DIALOG_OFF)
+    assert shell.startswith("printf ")
+
+
+def test_restore_targets_the_dk_session():
+    first = dk_session.restore_new_session_args("main", "/w", "cmd")
+    later = dk_session.restore_new_window_args("feat", "/w", "cmd")
+    assert first[:5] == ["tmux", "new-session", "-d", "-s", dk_session.TMUX_SESSION]
+    assert later[:3] == ["tmux", "new-window", "-d"]
+    assert later[later.index("-t") + 1] == f"{dk_session.TMUX_SESSION}:"
+    for args in (first, later):
+        assert args[args.index("-c") + 1] == "/w"
+        assert args[-1] == "cmd"
+
+
+# ── surviving a reboot: waiting for the network ──────────────────────────
+
+def test_wait_for_network_returns_once_the_host_answers():
+    answers = iter([False, False, True])
+    slept = []
+    assert dk_session.wait_for_network(
+        probe=lambda: next(answers), now=lambda: 0.0, sleep=slept.append) is True
+    assert slept == [2.0, 2.0]
+
+
+def test_wait_for_network_gives_up_at_the_deadline():
+    clock = iter([0.0, 10.0, 20.0])
+    assert dk_session.wait_for_network(
+        probe=lambda: False, timeout=15.0,
+        now=lambda: next(clock), sleep=lambda s: None) is False
+
+
+# ── table formatting ─────────────────────────────────────────────────────
+
+def test_elide_leaves_short_names_alone():
+    assert dk_session.elide("marqo-nsfw-swap") == "marqo-nsfw-swap"
+
+
+def test_elide_keeps_both_ends_of_a_long_name():
+    """Feature names are free prose and run to 130 characters."""
+    name = "i-m-trying-to-think-of-more-quests-and-community-quests-in-the-casino"
+    out = dk_session.elide(name, limit=20)
+    assert len(out) == 20
+    assert out.startswith("i-m-tryin")
+    assert out.endswith("the-casino")
+
+
+def test_sessions_outside_this_repo_are_left_alone():
+    """The snapshot records every session on the machine; restore rebuilds
+    only the dk tmux session, not windows for unrelated projects."""
+    plan = _plan(
+        [{"session_id": "a", "cwd": "/home/ben"},
+         {"session_id": "b", "cwd": "/home/ben/scarecrow"},
+         {"session_id": "c", "cwd": PROD},
+         {"session_id": "d", "cwd": f"{SESSIONS}/feat"}],
+        dirty={},
+    )
+    modes = {e["session_id"]: e["mode"] for e in plan}
+    assert modes == {"a": "foreign", "b": "foreign", "c": "shell", "d": "shell"}
+
+
+@pytest.mark.parametrize(
+    ("cwd", "ours"),
+    [
+        (PROD, True),
+        (f"{SESSIONS}/casino-derby", True),
+        (f"{SESSIONS}/casino-derby/src", False),   # a subdir is not a session
+        ("/home/ben", False),
+        ("/home/ben/scarecrow", False),
+        ("/home/ben/discord-bots/other-repo", False),
+    ],
+)
+def test_in_scope(cwd, ours):
+    assert dk_session.in_scope(cwd, PROD) is ours
