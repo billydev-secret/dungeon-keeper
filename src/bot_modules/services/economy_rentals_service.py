@@ -104,6 +104,11 @@ class BillingResult:
     perk: str
     user_id: int
     beneficiary_id: int
+    # On a CHARGE whose re-read price differs from the price snapshotted at
+    # the previous cycle: what the member paid last time. 0 = unchanged.
+    # Renewals used to re-price silently — the 07-30 reprice billed existing
+    # subscribers at new rates with no notice (2026-08 review, economy A2).
+    previous_price: int = 0
 
 
 def _catalog_icon_price(
@@ -552,10 +557,13 @@ def bill_rental(
     user_id = int(rental["user_id"])
     beneficiary_id = int(rental["beneficiary_id"])
 
-    def _result(action: BillingAction, charged: int = 0) -> BillingResult:
+    def _result(
+        action: BillingAction, charged: int = 0, previous_price: int = 0
+    ) -> BillingResult:
         return BillingResult(
             rental_id=rental_id, action=action.value, charged=charged,
             perk=perk, user_id=user_id, beneficiary_id=beneficiary_id,
+            previous_price=previous_price,
         )
 
     action = classify(
@@ -613,7 +621,12 @@ def bill_rental(
             """,
             (next_bill_at, price, rental_id),
         )
-        return _result(BillingAction.CHARGE, charged=price)
+        old_price = int(rental["price"])
+        return _result(
+            BillingAction.CHARGE,
+            charged=price,
+            previous_price=old_price if old_price != price else 0,
+        )
 
     # Debit failed.
     if action is BillingAction.RETRY:

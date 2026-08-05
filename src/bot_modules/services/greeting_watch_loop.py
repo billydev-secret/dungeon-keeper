@@ -220,6 +220,19 @@ async def run_tick(bot: Bot, db_path: Path, now_ts: float) -> None:
             raise
         except Exception:
             log.exception("greeting watch tick failed for guild %s", guild_id)
+    # Retention: verdicted rows have no ongoing use; sweep the old ones.
+    try:
+        await asyncio.to_thread(_gc_resolved, db_path)
+    except Exception:
+        log.exception("greeting watch: resolved-row GC failed")
+
+
+def _gc_resolved(db_path: Path) -> None:
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.greeting_watch_service import gc_resolved_watches
+
+    with open_db(db_path) as conn:
+        gc_resolved_watches(conn)
 
 
 async def greeting_watch_loop(bot: Bot, db_path: Path) -> None:

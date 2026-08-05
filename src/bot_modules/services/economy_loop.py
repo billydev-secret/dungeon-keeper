@@ -1395,7 +1395,9 @@ async def _dispatch_rental_effects(
     perk, DMs the owner, and courtesy-DMs the beneficiary of a lapsed *gift*;
     ``cancel_period_end`` revokes the beneficiary silently (member-initiated);
     ``charge`` (renewal or grace-recovery) and ``retry`` are silent with NO
-    re-projection — grace never revoked the perk, so nothing needs rebuilding.
+    re-projection — grace never revoked the perk, so nothing needs rebuilding —
+    EXCEPT a charge whose re-read price differs from the previous cycle's,
+    which DMs the owner the old and new price (economy A2).
     """
     for notice in outcome.suspensions:
         if notice.suspended:
@@ -1455,7 +1457,20 @@ async def _dispatch_rental_effects(
                         bot, db_path, guild_id, res.beneficiary_id,
                         "A perk gifted to you has lapsed.",
                     )
-        # charge / retry / none → silent (no DM, no re-projection).
+        elif res.action == BillingAction.CHARGE.value and res.previous_price:
+            # A renewal at a changed price is the one charge that must not be
+            # silent: the member agreed to the old rate, and the 07-30 reprice
+            # billed subscribers at new rates with no notice (2026-08 review,
+            # economy A2). Unchanged-price renewals stay silent as before.
+            await _safe_dm(
+                bot, db_path, guild_id, res.user_id,
+                f"Heads up — your **{res.perk}** perk renewed at its new "
+                f"price: **{res.charged}** (was {res.previous_price}). "
+                "Cancel anytime from `/bank shop` if that doesn't work "
+                "for you.",
+            )
+        # unchanged-price charge / retry / none → silent (no DM, no
+        # re-projection).
 
 
 async def run_guild_leaderboard(

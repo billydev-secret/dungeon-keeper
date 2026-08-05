@@ -810,3 +810,31 @@ def test_renewal_billing_never_fires_shop_purchase(db):
     res = _bill(db, r["id"], T0 + WEEK_SECONDS + 1)
     assert res.action == "charge"
     assert _shop_activity(db, USER) == 0
+
+
+# ── renewal reprice notice (2026-08 review, economy A2) ────────────────
+
+
+def test_bill_renewal_reports_previous_price_when_price_changed(db):
+    """An admin reprice between cycles must surface on the BillingResult so
+    the loop can DM the owner — the 07-30 reprice billed silently."""
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_color")  # snapshots the 50 default
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT * FROM econ_rentals WHERE id = ?", (r["id"],)
+        ).fetchone()
+        res = bill_rental(
+            conn, EconSettings(price_role_color=65), row, T0 + WEEK_SECONDS + 1
+        )
+    assert res.action == "charge"
+    assert res.charged == 65
+    assert res.previous_price == 50
+
+
+def test_bill_renewal_previous_price_zero_when_unchanged(db):
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_color")
+    res = _bill(db, r["id"], T0 + WEEK_SECONDS + 1)
+    assert res.action == "charge"
+    assert res.previous_price == 0

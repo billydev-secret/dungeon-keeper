@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot_modules.economy.game_rewards import (
     pay_cah_game_by_score,
@@ -70,6 +70,25 @@ class GamesExternalCog(commands.Cog):
                 )
         except Exception:
             log.exception("External game tracking: failed to warm watch cache")
+        self._buffer_sweep_loop.start()
+
+    async def cog_unload(self) -> None:
+        self._buffer_sweep_loop.cancel()
+
+    @tasks.loop(hours=24)
+    async def _buffer_sweep_loop(self) -> None:
+        """Retention: the capture buffer's payouts are booked at parse time,
+        so rows past 30 days have no read-back use — sweep them."""
+        try:
+            removed = await logic.sweep_old_buffer_rows(self.db)
+            if removed:
+                log.info("External game tracking: swept %d old buffer rows", removed)
+        except Exception:
+            log.exception("External game tracking: buffer sweep failed")
+
+    @_buffer_sweep_loop.before_loop
+    async def _before_buffer_sweep(self) -> None:
+        await self.bot.wait_until_ready()
 
     # ── collection ────────────────────────────────────────────────────────
     def _watched_kind(self, message: discord.Message) -> str | None:

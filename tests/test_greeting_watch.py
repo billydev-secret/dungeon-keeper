@@ -364,3 +364,30 @@ def test_pending_greetings_for_multiple_targets(db_path):
         record_greeting(conn, GUILD, 2, CHANNEL, OTHER, created_ts=110)
         got = pending_greetings_for(conn, GUILD, (CHANNEL,), (GREETER, OTHER))
         assert sorted(got) == [(1, GREETER), (2, OTHER)]
+
+
+# ── resolved-row GC (2026-08 review, intake G1) ──────────────────────
+
+
+def test_gc_resolved_watches_sweeps_only_old_resolved_rows(db_path):
+    import time as _time
+
+    from bot_modules.services.greeting_watch_service import gc_resolved_watches
+
+    now = _time.time()
+    with open_db(db_path) as conn:
+        # Old + resolved → swept.
+        record_greeting(conn, GUILD, 1, CHANNEL, GREETER, created_ts=100)
+        mark_resolved(conn, GUILD, 1, "acknowledged", now_ts=now - 40 * 86400)
+        # Recent + resolved → kept.
+        record_greeting(conn, GUILD, 2, CHANNEL, GREETER, created_ts=100)
+        mark_resolved(conn, GUILD, 2, "unanswered", now_ts=now - 86400)
+        # Pending → never touched, however old.
+        record_greeting(conn, GUILD, 3, CHANNEL, OTHER, created_ts=100)
+
+        removed = gc_resolved_watches(conn)
+        rows = conn.execute(
+            "SELECT message_id FROM greeting_watch ORDER BY message_id"
+        ).fetchall()
+    assert removed == 1
+    assert [r["message_id"] for r in rows] == [2, 3]

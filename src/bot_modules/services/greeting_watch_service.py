@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 from functools import lru_cache
 from typing import NamedTuple
 
@@ -297,3 +298,21 @@ def mark_resolved(
         """,
         (now_ts, outcome, guild_id, message_id),
     )
+
+
+RESOLVED_RETENTION_SECONDS = 30 * 86400
+
+
+def gc_resolved_watches(
+    conn: sqlite3.Connection, *, older_than_seconds: int = RESOLVED_RETENTION_SECONDS
+) -> int:
+    """Delete resolved watch rows past the retention window. Returns rows
+    deleted. A verdicted row (acknowledged / unanswered / skipped) has no
+    ongoing use — the alert already fired or was never needed — so keeping
+    ids+timestamps forever is pure residue (2026-08 review, intake G1)."""
+    cutoff = time.time() - older_than_seconds
+    cur = conn.execute(
+        "DELETE FROM greeting_watch WHERE resolved_at IS NOT NULL AND resolved_at < ?",
+        (cutoff,),
+    )
+    return cur.rowcount or 0

@@ -138,3 +138,22 @@ async def test_recent_channel_messages_oldest_first_and_scoped(gdb):
         gdb, GUILD, CHAN_A, GAMEBOT, "2026-07-21T01:00:05"
     )
     assert [int(r["message_id"]) for r in rows] == [1, 2]  # scoped + oldest-first
+
+
+# ── parse-buffer retention (2026-08 review, games batch-bc A1) ────────
+
+
+@pytest.mark.asyncio
+async def test_sweep_old_buffer_rows_deletes_only_old_rows(gdb):
+    from bot_modules.games_external.logic import sweep_old_buffer_rows
+
+    await gdb.execute(
+        "INSERT INTO games_external_messages (message_id, guild_id, channel_id, "
+        "author_id, created_at, content, collected_at) "
+        "VALUES (1, 9, 1, 2, 'x', 'old', datetime('now', '-40 days')), "
+        "       (2, 9, 1, 2, 'x', 'new', datetime('now', '-1 days'))",
+    )
+    removed = await sweep_old_buffer_rows(gdb)
+    rows = await gdb.fetchall("SELECT message_id FROM games_external_messages")
+    assert removed == 1
+    assert [r["message_id"] for r in rows] == [2]

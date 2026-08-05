@@ -401,3 +401,40 @@ def test_repeat_authors_needs_two_distinct_targets(db):
     assert len(repeats) == 1
     assert repeats[0]["author_id"] == AUTHOR
     assert repeats[0]["distinct_targets"] == 2
+
+
+# ── dismissed-event retention (2026-08 review, ai-moderation G1) ──────
+
+
+def _event(conn, event_id, *, detected_at, dismissed=None):
+    conn.execute(
+        "INSERT INTO rules_events (id, guild_id, message_id, author_id, "
+        "channel_id, detected_at) VALUES (?,?,?,?,?,?)",
+        (event_id, GUILD, event_id, 1001, CHANNEL, detected_at),
+    )
+    if dismissed is not None:
+        conn.execute(
+            "INSERT INTO rules_labels (event_id, is_violation, labeled_by, labeled_at) "
+            "VALUES (?,?,?,?)",
+            (event_id, 0 if dismissed else 1, 42, detected_at),
+        )
+
+
+def test_purge_old_dismissed_events_spares_confirmed_and_recent(db):
+    import time as _time
+
+    from bot_modules.rules_watch.ledger import purge_old_dismissed_events
+
+    now = _time.time()
+    with open_db(db) as conn:
+        _event(conn, 1, detected_at=now - 200 * DAY, dismissed=True)   # → purged
+        _event(conn, 2, detected_at=now - 10 * DAY, dismissed=True)    # recent → kept
+        _event(conn, 3, detected_at=now - 200 * DAY, dismissed=False)  # confirmed → kept
+        _event(conn, 4, detected_at=now - 200 * DAY)                   # unlabeled → kept
+
+        removed = purge_old_dismissed_events(conn)
+        events = [r["id"] for r in conn.execute("SELECT id FROM rules_events ORDER BY id")]
+        labels = [r["event_id"] for r in conn.execute("SELECT event_id FROM rules_labels ORDER BY event_id")]
+    assert removed == 1
+    assert events == [2, 3, 4]
+    assert labels == [2, 3]

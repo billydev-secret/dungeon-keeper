@@ -12,13 +12,16 @@ duplicated those three panels were removed 2026-07-28.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot_modules.services.replies import NO_PERMISSION
+
+_purge_log = logging.getLogger("dungeonkeeper.rules_watch")
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -129,12 +132,38 @@ class RulesWatchCog(commands.Cog):
         menu.default_permissions = discord.Permissions(manage_guild=True)
         self.bot.tree.add_command(menu)
         self._report_context_menu = menu
+        self._dismissed_purge_loop.start()
 
     async def cog_unload(self) -> None:
+        self._dismissed_purge_loop.cancel()
         if hasattr(self, "_report_context_menu"):
             self.bot.tree.remove_command(
                 _REPORT_CTX_MENU_NAME, type=discord.AppCommandType.message
             )
+
+    @tasks.loop(hours=24)
+    async def _dismissed_purge_loop(self) -> None:
+        """Retention: mod-dismissed events (labeled false positives) age out
+        after 180 days — their excerpt/context-window content outlives its
+        tuning value. Confirmed violations are never touched."""
+
+        def _purge() -> int:
+            from bot_modules.core.db_utils import open_db
+            from bot_modules.rules_watch.ledger import purge_old_dismissed_events
+
+            with open_db(self.ctx.db_path) as conn:
+                return purge_old_dismissed_events(conn)
+
+        try:
+            removed = await asyncio.to_thread(_purge)
+            if removed:
+                _purge_log.info("purged %d dismissed rules events past retention", removed)
+        except Exception:
+            _purge_log.exception("dismissed-event purge failed")
+
+    @_dismissed_purge_loop.before_loop
+    async def _before_dismissed_purge(self) -> None:
+        await self.bot.wait_until_ready()
 
 
 async def setup(bot: Bot) -> None:

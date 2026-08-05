@@ -437,3 +437,37 @@ def get_repeat_authors(
         """,
         (guild_id, kind, min_targets),
     ).fetchall()
+
+
+DISMISSED_RETENTION_SECONDS = 180 * 86400
+
+
+def purge_old_dismissed_events(
+    conn: sqlite3.Connection, *, older_than_seconds: int = DISMISSED_RETENTION_SECONDS
+) -> int:
+    """Delete mod-dismissed events (and their label rows) past 180 days.
+
+    A dismissed event is a labeled false positive: its excerpt and context
+    window keep tuning value for a while (they are the negative class of the
+    training set — see the 07-20 tuning work), but a 6-month-old false
+    positive's content cost outlives that value. Confirmed violations are
+    never touched — they are the evidentiary record (2026-08 review,
+    ai-moderation G1)."""
+    cutoff = time.time() - older_than_seconds
+    ids = [
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT e.id FROM rules_events e
+            JOIN rules_labels l ON l.event_id = e.id
+            WHERE l.is_violation = 0 AND e.detected_at < ?
+            """,
+            (cutoff,),
+        ).fetchall()
+    ]
+    for i in range(0, len(ids), 500):
+        chunk = ids[i : i + 500]
+        ph = ",".join("?" * len(chunk))
+        conn.execute(f"DELETE FROM rules_labels WHERE event_id IN ({ph})", chunk)
+        conn.execute(f"DELETE FROM rules_events WHERE id IN ({ph})", chunk)
+    return len(ids)

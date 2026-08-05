@@ -226,3 +226,26 @@ async def count_messages(
         params.append(channel_id)
     r = await db.fetchone(sql, tuple(params))
     return int(r["n"]) if r else 0
+
+
+PARSE_BUFFER_RETENTION_DAYS = 30
+
+
+async def sweep_old_buffer_rows(
+    db, *, older_than_days: int = PARSE_BUFFER_RETENTION_DAYS
+) -> int:
+    """Delete parse-buffer rows collected more than *older_than_days* ago.
+
+    games_external_messages is a capture buffer for external game bots'
+    output: rows exist to be parsed into ledger payouts, and once the parser
+    has moved past them (whatever their parse_status) they have no read-back
+    use — the payouts are already booked. Left alone the buffer never
+    empties and retains channel content indefinitely (2026-08 review,
+    games batch-bc A1). ``collected_at`` is a TEXT timestamp, so the cutoff
+    is computed in SQL datetime terms."""
+    cur = await db.execute(
+        "DELETE FROM games_external_messages "
+        "WHERE collected_at < datetime('now', ?)",
+        (f"-{int(older_than_days)} days",),
+    )
+    return getattr(cur, "rowcount", 0) or 0

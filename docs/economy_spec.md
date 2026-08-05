@@ -1336,7 +1336,9 @@ and the spotlight slot stays **v2** — both still design-only below.
 Weekly rentals bill on personal anniversary tick. Defaults below; every price per-guild
 tunable (§9). **Renewal bills the CURRENT guild price at each anniversary** — the
 rent-time price is snapshotted only for week one; a price tuned in the config panel
-takes effect on the next cycle, never retroactively.
+takes effect on the next cycle, never retroactively. Since 2026-08-06 a renewal whose
+re-read price differs from the previous cycle's **DMs the owner** the old and new price
+(with a pointer to cancel from `/bank shop`); unchanged-price renewals stay silent.
 
 | Perk | Per week | Repo grounding |
 |---|---|---|
