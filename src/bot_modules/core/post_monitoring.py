@@ -9,6 +9,9 @@ import discord
 
 from bot_modules.core.utils import format_user_for_log
 from bot_modules.services.nsfw_classifier_service import (
+    SPOILER_IMAGE_EXTENSIONS,
+    SURFACE_SFW,
+    SURFACE_SPOILER,
     Classification,
     SfwPolicy,
     is_age_gated_channel,
@@ -19,12 +22,36 @@ from bot_modules.services.nsfw_classifier_service import (
 def attachment_is_image(attachment: discord.Attachment) -> bool:
     """Delegates so this and the classifier can't disagree about what an
     image is — they previously differed over ``.tiff``, which made a .tiff
-    upload reach the classifier and come back permanently UNKNOWN."""
+    upload reach the classifier and come back permanently UNKNOWN.
+
+    :func:`enforce_spoiler_requirement` deliberately does *not* use this — see
+    ``SPOILER_IMAGE_EXTENSIONS``."""
     return is_image_attachment(attachment)
 
 
 def message_has_qualifying_image(message: discord.Message) -> bool:
     return any(attachment_is_image(attachment) for attachment in message.attachments)
+
+
+@dataclass
+class BlockedImage:
+    """One image a gate destroyed, for the mod log and the blocked-images report.
+
+    ``score`` is Marqo's whole-image probability — the number the verdict was
+    actually made from, and the only one available in a channel that isn't
+    age-gated. ``None`` means the image could not be read at all.
+
+    ``label`` is a NudeNet tag and is populated **only** in age-gated channels,
+    where the tagger runs. Anything rendering this must treat it as optional
+    rather than as the headline.
+    """
+
+    message: discord.Message
+    attachment: discord.Attachment
+    surface: str
+    score: float | None
+    label: str | None
+    deleted: bool
 
 
 async def enforce_spoiler_requirement(
@@ -34,6 +61,7 @@ async def enforce_spoiler_requirement(
     bypass_role_ids: frozenset[int] | set[int],
     log: logging.Logger,
     classify: Callable[[discord.Attachment], Awaitable[Classification]] | None = None,
+    report: Callable[[BlockedImage], Awaitable[None]] | None = None,
 ) -> bool:
     """Delete unspoilered images in spoiler-required channels.
 
@@ -61,18 +89,21 @@ async def enforce_spoiler_requirement(
         return False
 
     for attachment in message.attachments:
-        filename = attachment.filename.lower()
-        if not filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+        # Not attachment_is_image: this gate is narrower on purpose, because
+        # everything it matches becomes deletable. See SPOILER_IMAGE_EXTENSIONS.
+        if not attachment.filename.lower().endswith(SPOILER_IMAGE_EXTENSIONS):
             continue
         if attachment.is_spoiler():
             continue
 
-        if classify is not None and (await classify(attachment)).verdict is False:
+        result = await classify(attachment) if classify is not None else None
+        if result is not None and result.verdict is False:
             # Read it, and it isn't explicit — this is the deletion the
             # classifier exists to prevent. Keep checking the other
             # attachments; one innocent image doesn't clear the message.
             continue
 
+        deleted = False
         try:
             log.info(
                 "Deleting spoilerless image from %s: %s",
@@ -80,6 +111,7 @@ async def enforce_spoiler_requirement(
                 message.content,
             )
             await message.delete()
+            deleted = True
             await message.channel.send(
                 "Beep Boop - friendly bot helper: Images in this channel must be marked as spoiler.",
                 delete_after=5,
@@ -108,9 +140,43 @@ async def enforce_spoiler_requirement(
                 channel_label,
                 e,
             )
+
+        if deleted and report is not None:
+            await _report_safely(
+                report,
+                BlockedImage(
+                    message=message,
+                    attachment=attachment,
+                    surface=SURFACE_SPOILER,
+                    # None when the image was unreadable — this gate deletes on
+                    # UNKNOWN by design, and that is the case most worth being
+                    # able to find again.
+                    score=result.score if result is not None else None,
+                    label=result.top_label if result is not None else None,
+                    deleted=True,
+                ),
+                log=log,
+            )
         return True
 
     return False
+
+
+async def _report_safely(
+    report: Callable[[BlockedImage], Awaitable[None]],
+    blocked: BlockedImage,
+    *,
+    log: logging.Logger,
+) -> None:
+    """Run a block report without letting it change the outcome.
+
+    The audit trail failing must not alter what happened to the member, nor
+    abort the rest of the on_message pipeline.
+    """
+    try:
+        await report(blocked)
+    except Exception:
+        log.exception("nsfw: failed to report blocked image")
 
 
 SFW_NOTICE = (
@@ -120,17 +186,6 @@ SFW_NOTICE = (
 )
 
 
-@dataclass
-class SfwViolation:
-    """One explicit image found in a SFW channel, for the mod-log record."""
-
-    message: discord.Message
-    attachment: discord.Attachment
-    label: str | None
-    score: float | None
-    deleted: bool
-
-
 async def enforce_sfw_image_policy(
     message: discord.Message,
     *,
@@ -138,7 +193,7 @@ async def enforce_sfw_image_policy(
     bypass_role_ids: frozenset[int] | set[int],
     log: logging.Logger,
     classify: Callable[[discord.Attachment], Awaitable[Classification]],
-    report: Callable[[SfwViolation], Awaitable[None]] | None = None,
+    report: Callable[[BlockedImage], Awaitable[None]] | None = None,
 ) -> bool:
     """Remove explicit images posted in channels that aren't age-gated.
 
@@ -188,12 +243,13 @@ async def enforce_sfw_image_policy(
             # leave the image alone.
             continue
 
+        # The score, not a label: this runs where the channel isn't age-gated,
+        # so the tagger never ran and top_label is always None here.
         log.info(
-            "nsfw: explicit image by %s in #%s (%s %.2f) — mode=%s",
+            "nsfw: explicit image by %s in #%s (%.2f) — mode=%s",
             format_user_for_log(message.author),
             getattr(message.channel, "name", message.channel.id),
-            result.top_label,
-            result.top_score or 0.0,
+            result.score or 0.0,
             policy.mode,
         )
 
@@ -202,20 +258,18 @@ async def enforce_sfw_image_policy(
             deleted = await _remove_and_return(message, attachment, log=log)
 
         if report is not None:
-            try:
-                await report(
-                    SfwViolation(
-                        message=message,
-                        attachment=attachment,
-                        label=result.top_label,
-                        score=result.top_score,
-                        deleted=deleted,
-                    )
-                )
-            except Exception:
-                # The audit trail failing must not change the outcome for the
-                # member, nor abort the rest of the on_message pipeline.
-                log.exception("nsfw: failed to report SFW violation")
+            await _report_safely(
+                report,
+                BlockedImage(
+                    message=message,
+                    attachment=attachment,
+                    surface=SURFACE_SFW,
+                    score=result.score,
+                    label=result.top_label,
+                    deleted=deleted,
+                ),
+                log=log,
+            )
 
         return deleted
 

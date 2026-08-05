@@ -29,13 +29,6 @@ export function mount(container) {
     const s = config.spoiler;
     const n = config.nsfw_classifier;
 
-    const labelRows = n.available_labels
-      .map((label) => {
-        const on = n.labels.includes(label) ? "checked" : "";
-        return `<label style="display:flex; gap:6px; align-items:center; min-width:180px;"><input type="checkbox" data-label value="${label}" ${on}> ${labelText(label)}</label>`;
-      })
-      .join("");
-
     const modeOptions = Object.keys(MODE_HINTS)
       .map(
         (m) =>
@@ -76,7 +69,8 @@ export function mount(container) {
               <label>Log Channel</label>
               <span data-picker="sfw_log_channel"></span>
               <div class="field-hint">Where each call is reported for review, with the
-                detected label and confidence — this is how you spot false positives.</div>
+                confidence score — this is how you spot false positives as they happen.
+                Removals are recorded on the Blocked Images report either way.</div>
             </div>
             <div class="field">
               <label>Exempt Channels</label>
@@ -91,9 +85,9 @@ export function mount(container) {
             <div class="field">
               <label>Confidence Threshold</label>
               <input type="number" data-field="threshold" min="0.05" max="1" step="0.05" value="${n.threshold}">
-              <div class="field-hint">How sure the bot must be before treating an image
-                as explicit. Used for spoiler checks and for tip eligibility. Lower
-                catches more and misjudges more.</div>
+              <div class="field-hint">How likely an image must be to be explicit before
+                the bot treats it as such, from 0 to 1. Used for spoiler checks and for
+                tip eligibility. Lower catches more and misjudges more.</div>
             </div>
             <div class="field">
               <label>SFW Removal Threshold</label>
@@ -101,12 +95,6 @@ export function mount(container) {
               <div class="field-hint">A separate, stricter bar for actually deleting
                 someone's image in a SFW channel — being wrong there costs a member
                 their photo, so it should demand more certainty than the setting above.</div>
-            </div>
-            <div class="field">
-              <label>What Counts As Explicit</label>
-              <div style="display:flex; flex-wrap:wrap; gap:8px 16px;">${labelRows}</div>
-              <div class="field-hint">Exposed nudity only by default. Adding the
-                "covered" entries makes lingerie and swimwear count too.</div>
             </div>
           </div>
 
@@ -184,13 +172,6 @@ export function mount(container) {
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const labels = [...form.querySelectorAll("[data-label]:checked")].map(
-        (el) => el.value,
-      );
-      if (!labels.length) {
-        showStatus(status, false, "Pick at least one label that counts as explicit.");
-        return;
-      }
       try {
         // Independent endpoints — no reason to pay two round trips in series.
         await Promise.all([
@@ -202,7 +183,6 @@ export function mount(container) {
             sfw_threshold: Number(
               form.querySelector('[data-field="sfw_threshold"]').value,
             ),
-            labels,
             sfw_mode: modeSelect.value,
             sfw_log_channel_id: logPicker.getValue() || "0",
             sfw_exempt_channels: exemptPicker.getValues(),

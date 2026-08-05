@@ -4,6 +4,11 @@ The service exists so three consumers with *different* failure tolerances can
 share one classification, so the tests that matter most here are the ones
 pinning UNKNOWN as distinct from False, and recording as scoped to age-gated
 channels only.
+
+Since the Marqo swap there is a second scoping rule with teeth: the NudeNet
+tagger runs **only** where rows are recorded, so a body-part inventory can
+never be derived from an upload in general chat. Several tests below exist
+purely to keep that true.
 """
 from __future__ import annotations
 
@@ -16,11 +21,17 @@ from bot_modules.services import nsfw_classifier_service as nsfw_module
 from bot_modules.core.db_utils import add_config_id, open_db, set_config_value
 from bot_modules.services.guess_models import BoundingBox, Detection
 from bot_modules.services.nsfw_classifier_service import (
-    DEFAULT_LABEL_SET,
+    ACTION_LOGGED,
+    ACTION_REMOVED,
     DEFAULT_SFW_THRESHOLD,
     DEFAULT_THRESHOLD,
+    IMAGE_EXTENSIONS,
     SFW_MODE_OFF,
+    SPOILER_IMAGE_EXTENSIONS,
+    SURFACE_SFW,
+    SURFACE_SPOILER,
     UNKNOWN,
+    Block,
     Classification,
     classifier_for,
     classify_attachment,
@@ -30,9 +41,11 @@ from bot_modules.services.nsfw_classifier_service import (
     is_classifiable,
     load_settings,
     load_sfw_policy,
-    parse_label_set,
+    model_name,
+    record_block,
+    record_block_safely,
     record_classification,
-    serialize_label_set,
+    top_detection,
 )
 
 GUILD = 1234
@@ -97,18 +110,40 @@ def _clear_cache():
 
 
 @pytest.fixture
-def patched_detect(monkeypatch):
-    """Replace inference with a canned detection list."""
+def patched_score(monkeypatch):
+    """Replace Marqo inference with a canned probability."""
+
+    def _install(score: float | Exception):
+        def fake(_raw: bytes) -> float:
+            if isinstance(score, Exception):
+                raise score
+            return score
+
+        monkeypatch.setattr(
+            "bot_modules.services.nsfw_classifier_service._score", fake
+        )
+
+    return _install
+
+
+@pytest.fixture
+def patched_tag(monkeypatch):
+    """Replace NudeNet tagging with a canned detection list.
+
+    Counts calls, because "the tagger did not run here" is the assertion
+    several of these tests are actually making.
+    """
+    calls: list[bytes] = []
 
     def _install(detections: list[Detection] | Exception):
-        def fake(_raw: bytes) -> list[Detection]:
+        def fake(raw: bytes) -> list[Detection]:
+            calls.append(raw)
             if isinstance(detections, Exception):
                 raise detections
             return detections
 
-        monkeypatch.setattr(
-            "bot_modules.services.nsfw_classifier_service._detect", fake
-        )
+        monkeypatch.setattr("bot_modules.services.nsfw_classifier_service._tag", fake)
+        return calls
 
     return _install
 
@@ -119,69 +154,100 @@ def patched_detect(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("label", "score", "expected"),
-    [
-        pytest.param("FEMALE_BREAST_EXPOSED", 0.9, True, id="exposed-qualifies"),
-        pytest.param("MALE_GENITALIA_EXPOSED", 0.9, True, id="genitalia-qualifies"),
-        pytest.param("ANUS_EXPOSED", 0.9, True, id="anus-qualifies"),
-        pytest.param("BUTTOCKS_EXPOSED", 0.9, True, id="buttocks-qualifies"),
-        pytest.param("SEX_ACT", 0.9, True, id="sex-act-qualifies"),
-        pytest.param("FEMALE_BREAST_COVERED", 0.99, False, id="covered-does-not"),
-        pytest.param("BUTTOCKS_COVERED", 0.99, False, id="covered-buttocks-does-not"),
-        pytest.param("FEMALE_GENITALIA_COVERED", 0.99, False, id="covered-gen-does-not"),
-        pytest.param("BELLY_EXPOSED", 0.99, False, id="belly-does-not"),
-        pytest.param("ARMPITS_EXPOSED", 0.99, False, id="armpits-does-not"),
-        pytest.param("FACE_FEMALE", 0.99, False, id="face-does-not"),
-    ],
-)
-def test_evaluate_label_membership(label, score, expected):
-    verdict, _, _ = evaluate([det(label, score)])
-    assert verdict is expected
-
-
-@pytest.mark.parametrize(
     ("score", "expected"),
     [
         pytest.param(0.49, False, id="below-threshold"),
         pytest.param(0.5, True, id="at-threshold-inclusive"),
         pytest.param(0.51, True, id="above-threshold"),
+        pytest.param(0.0, False, id="floor"),
+        pytest.param(1.0, True, id="ceiling"),
     ],
 )
 def test_evaluate_threshold_boundary(score, expected):
-    verdict, _, _ = evaluate([det("FEMALE_BREAST_EXPOSED", score)])
-    assert verdict is expected
+    assert evaluate(score) is expected
 
 
-def test_evaluate_reports_highest_scoring_qualifying_label():
+def test_evaluate_honors_a_stricter_threshold():
+    # The SFW consumer runs the same score at a higher bar and must get the
+    # opposite answer — this is the knob that keeps innocent photos alive.
+    assert evaluate(0.6, threshold=DEFAULT_THRESHOLD) is True
+    assert evaluate(0.6, threshold=DEFAULT_SFW_THRESHOLD) is False
+
+
+# --------------------------------------------------------------------------
+# top_detection() — descriptive tags, never a gate
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "qualifies"),
+    [
+        pytest.param("FEMALE_BREAST_EXPOSED", True, id="exposed-qualifies"),
+        pytest.param("MALE_GENITALIA_EXPOSED", True, id="genitalia-qualifies"),
+        pytest.param("ANUS_EXPOSED", True, id="anus-qualifies"),
+        pytest.param("BUTTOCKS_EXPOSED", True, id="buttocks-qualifies"),
+        pytest.param("SEX_ACT", True, id="sex-act-qualifies"),
+        pytest.param("FEMALE_BREAST_COVERED", False, id="covered-does-not"),
+        pytest.param("BUTTOCKS_COVERED", False, id="covered-buttocks-does-not"),
+        pytest.param("FEMALE_GENITALIA_COVERED", False, id="covered-gen-does-not"),
+        pytest.param("BELLY_EXPOSED", False, id="belly-does-not"),
+        pytest.param("ARMPITS_EXPOSED", False, id="armpits-does-not"),
+        pytest.param("FACE_FEMALE", False, id="face-does-not"),
+    ],
+)
+def test_top_detection_label_membership(label, qualifies):
+    top_label, _ = top_detection([det(label, 0.9)])
+    assert (top_label == label) is qualifies
+
+
+def test_top_detection_reports_highest_scoring_qualifying_label():
     # A very confident non-qualifying detection must never be reported as the
-    # reason an image was judged explicit.
-    verdict, label, score = evaluate([
+    # headline tag for an image.
+    label, score = top_detection([
         det("BELLY_EXPOSED", 0.99),
         det("FEMALE_BREAST_EXPOSED", 0.6),
         det("ANUS_EXPOSED", 0.8),
     ])
-    assert verdict is True
     assert label == "ANUS_EXPOSED"
     assert score == 0.8
 
 
-def test_evaluate_no_detections_is_not_explicit():
-    verdict, label, score = evaluate([])
-    assert (verdict, label, score) == (False, None, None)
+def test_top_detection_with_nothing_qualifying():
+    assert top_detection([]) == (None, None)
+    assert top_detection([det("BELLY_EXPOSED", 0.99)]) == (None, None)
 
 
-def test_evaluate_honors_a_stricter_threshold():
-    # The SFW consumer runs the same detections at a higher bar and must get
-    # the opposite answer — this is the knob that keeps innocent photos alive.
-    detections = [det("BUTTOCKS_EXPOSED", 0.6)]
-    assert evaluate(detections, threshold=DEFAULT_THRESHOLD)[0] is True
-    assert evaluate(detections, threshold=DEFAULT_SFW_THRESHOLD)[0] is False
+def test_top_detection_ignores_the_verdict_threshold():
+    # The configured threshold is a whole-image probability. Applying it to a
+    # per-part confidence would drop tags for no defensible reason.
+    label, score = top_detection([det("SEX_ACT", 0.05)])
+    assert (label, score) == ("SEX_ACT", 0.05)
 
 
-def test_evaluate_honors_a_custom_label_set():
-    detections = [det("FEMALE_BREAST_COVERED", 0.9)]
-    assert evaluate(detections)[0] is False
-    assert evaluate(detections, label_set=frozenset({"FEMALE_BREAST_COVERED"}))[0] is True
+# --------------------------------------------------------------------------
+# model_name — a row must name the weights that produced it
+# --------------------------------------------------------------------------
+
+
+def test_model_name_without_tags_is_the_verdict_engine_alone():
+    assert model_name(tagged=False) == "marqo-384"
+
+
+def test_model_name_reports_the_loaded_tagger(monkeypatch):
+    # Which NudeNet file wins depends on what is on disk, so it is read back
+    # rather than assumed — the old hardcoded "320n" went wrong the moment
+    # 640m.onnx was staged.
+    monkeypatch.setattr(
+        "bot_modules.services.guess_nudenet.active_model_name", lambda: "640m"
+    )
+    assert model_name(tagged=True) == "marqo-384+640m"
+
+
+def test_model_name_omits_an_unloaded_tagger(monkeypatch):
+    monkeypatch.setattr(
+        "bot_modules.services.guess_nudenet.active_model_name", lambda: None
+    )
+    assert model_name(tagged=True) == "marqo-384"
 
 
 # --------------------------------------------------------------------------
@@ -189,47 +255,20 @@ def test_evaluate_honors_a_custom_label_set():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        pytest.param("", DEFAULT_LABEL_SET, id="empty-falls-back"),
-        pytest.param("   ", DEFAULT_LABEL_SET, id="whitespace-falls-back"),
-        pytest.param(None, DEFAULT_LABEL_SET, id="none-falls-back"),
-        pytest.param(",,", DEFAULT_LABEL_SET, id="separators-only-falls-back"),
-        pytest.param("SEX_ACT", frozenset({"SEX_ACT"}), id="single"),
-        pytest.param(
-            "sex_act, anus_exposed",
-            frozenset({"SEX_ACT", "ANUS_EXPOSED"}),
-            id="case-and-space-normalised",
-        ),
-    ],
-)
-def test_parse_label_set(raw, expected):
-    # An empty set would match nothing and silently disable every consumer.
-    assert parse_label_set(raw) == expected
-
-
-def test_serialize_label_set_is_sorted():
-    assert serialize_label_set(frozenset({"B", "A", "C"})) == "A,B,C"
-
-
 def test_load_settings_defaults(sync_db_path):
-    threshold, sfw_threshold, labels = load_settings(sync_db_path, GUILD)
+    threshold, sfw_threshold = load_settings(sync_db_path, GUILD)
     assert threshold == DEFAULT_THRESHOLD
     assert sfw_threshold == DEFAULT_SFW_THRESHOLD
-    assert labels == DEFAULT_LABEL_SET
 
 
 def test_load_settings_reads_configured_values(sync_db_path):
     with open_db(sync_db_path) as conn:
         set_config_value(conn, "nsfw_classifier_threshold", "0.4", GUILD)
         set_config_value(conn, "nsfw_classifier_sfw_threshold", "0.9", GUILD)
-        set_config_value(conn, "nsfw_classifier_labels", "SEX_ACT", GUILD)
 
-    threshold, sfw_threshold, labels = load_settings(sync_db_path, GUILD)
+    threshold, sfw_threshold = load_settings(sync_db_path, GUILD)
     assert threshold == 0.4
     assert sfw_threshold == 0.9
-    assert labels == frozenset({"SEX_ACT"})
 
 
 @pytest.mark.parametrize(
@@ -247,7 +286,7 @@ def test_load_settings_rejects_out_of_range_threshold(sync_db_path, bad):
     with open_db(sync_db_path) as conn:
         set_config_value(conn, "nsfw_classifier_threshold", bad, GUILD)
 
-    threshold, _, _ = load_settings(sync_db_path, GUILD)
+    threshold, _ = load_settings(sync_db_path, GUILD)
     assert threshold == DEFAULT_THRESHOLD
 
 
@@ -332,31 +371,55 @@ def test_is_classifiable_rejects_oversized():
     assert is_classifiable(att) is False
 
 
+def test_spoiler_extensions_are_a_strict_subset():
+    # Spoiler enforcement deletes what it matches — including on an unreadable
+    # image — so its list is narrower than the classifier's on purpose. Adding
+    # a format to IMAGE_EXTENSIONS must not silently make it deletable, and
+    # collapsing the two must not happen as a "tidy-up": both directions fail
+    # here rather than in production.
+    assert set(SPOILER_IMAGE_EXTENSIONS) < set(IMAGE_EXTENSIONS)
+    assert ".bmp" not in SPOILER_IMAGE_EXTENSIONS
+    assert ".tiff" not in SPOILER_IMAGE_EXTENSIONS
+
+
 # --------------------------------------------------------------------------
 # classify_attachment — failure direction and caching
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_classify_returns_verdict_and_metrics(patched_detect):
-    patched_detect([det("FEMALE_BREAST_EXPOSED", 0.8)])
+async def test_classify_returns_verdict_and_metrics(patched_score):
+    patched_score(0.88)
     att = FakeAttachment(data=b"x" * 100)
 
     result = await classify_attachment(att)
 
     assert result.verdict is True
-    assert result.top_label == "FEMALE_BREAST_EXPOSED"
-    assert result.top_score == 0.8
+    assert result.score == 0.88
     assert result.size_bytes == 100
     assert result.threshold == DEFAULT_THRESHOLD
     assert result.inference_ms >= 0
 
 
 @pytest.mark.asyncio
-async def test_classify_non_explicit_is_false_not_unknown(patched_detect):
+async def test_classify_does_not_tag(patched_score, patched_tag):
+    # The verdict path never runs the tagger — it is scoped to recording, and
+    # classify_attachment has no idea whether the channel is age-gated.
+    patched_score(0.9)
+    calls = patched_tag([det("SEX_ACT", 0.9)])
+
+    result = await classify_attachment(FakeAttachment())
+
+    assert result.verdict is True
+    assert result.top_label is None
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_classify_non_explicit_is_false_not_unknown(patched_score):
     # "We looked, it isn't explicit" must be distinguishable from "we couldn't
     # tell" — the three consumers branch differently on the two.
-    patched_detect([det("BELLY_EXPOSED", 0.99)])
+    patched_score(0.02)
 
     result = await classify_attachment(FakeAttachment())
 
@@ -365,19 +428,31 @@ async def test_classify_non_explicit_is_false_not_unknown(patched_detect):
 
 
 @pytest.mark.asyncio
-async def test_download_failure_is_unknown(patched_detect):
-    patched_detect([det("SEX_ACT", 0.99)])
+async def test_download_failure_is_unknown(patched_score):
+    patched_score(0.99)
     att = FakeAttachment(error=RuntimeError("cdn is having a day"))
 
     result = await classify_attachment(att)
 
     assert result.verdict is UNKNOWN
     assert result.is_unknown is True
+    assert result.score is None
 
 
 @pytest.mark.asyncio
-async def test_inference_failure_is_unknown(patched_detect):
-    patched_detect(ValueError("undecodable image"))
+async def test_inference_failure_is_unknown(patched_score):
+    patched_score(ValueError("undecodable image"))
+
+    result = await classify_attachment(FakeAttachment())
+
+    assert result.verdict is UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_missing_model_is_unknown_not_not_explicit(patched_score):
+    # A checkout or deploy without the weights must degrade to "we could not
+    # tell", never to "we looked and it was clean".
+    patched_score(FileNotFoundError("marqo_nsfw_384.onnx"))
 
     result = await classify_attachment(FakeAttachment())
 
@@ -386,9 +461,9 @@ async def test_inference_failure_is_unknown(patched_detect):
 
 @pytest.mark.asyncio
 async def test_unclassifiable_attachment_is_unknown_without_downloading(
-    patched_detect,
+    patched_score,
 ):
-    patched_detect([det("SEX_ACT", 0.99)])
+    patched_score(0.99)
     att = FakeAttachment(filename="notes.txt", content_type="text/plain")
 
     result = await classify_attachment(att)
@@ -398,12 +473,12 @@ async def test_unclassifiable_attachment_is_unknown_without_downloading(
 
 
 @pytest.mark.asyncio
-async def test_download_timeout_is_unknown(patched_detect, monkeypatch):
+async def test_download_timeout_is_unknown(patched_score, monkeypatch):
     monkeypatch.setattr(
         "bot_modules.services.nsfw_classifier_service.DOWNLOAD_TIMEOUT_SECONDS",
         0.01,
     )
-    patched_detect([det("SEX_ACT", 0.99)])
+    patched_score(0.99)
 
     result = await classify_attachment(FakeAttachment(delay=0.2))
 
@@ -411,10 +486,10 @@ async def test_download_timeout_is_unknown(patched_detect, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_second_consumer_reuses_the_cached_verdict(patched_detect):
+async def test_second_consumer_reuses_the_cached_verdict(patched_score):
     # Spoiler enforcement and auto-react both fire on the same on_message;
     # the image must be downloaded and classified once between them.
-    patched_detect([det("SEX_ACT", 0.9)])
+    patched_score(0.9)
     att = FakeAttachment()
 
     first = await classify_attachment(att)
@@ -427,12 +502,12 @@ async def test_second_consumer_reuses_the_cached_verdict(patched_detect):
 
 @pytest.mark.asyncio
 async def test_a_stricter_threshold_reuses_the_download_but_not_the_verdict(
-    patched_detect,
+    patched_score,
 ):
-    # The SFW consumer runs a stricter bar over the same image. It must get
-    # its own verdict, but must not pay for a second download and inference —
-    # what's cached is the detections, which don't depend on the threshold.
-    patched_detect([det("BUTTOCKS_EXPOSED", 0.6)])
+    # The SFW consumer runs a stricter bar over the same image. It must get its
+    # own verdict, but must not pay for a second download and inference — what's
+    # cached is the score, which doesn't depend on the threshold.
+    patched_score(0.6)
     att = FakeAttachment()
 
     permissive = await classify_attachment(att, threshold=0.5)
@@ -444,27 +519,11 @@ async def test_a_stricter_threshold_reuses_the_download_but_not_the_verdict(
 
 
 @pytest.mark.asyncio
-async def test_a_changed_label_set_is_not_served_a_stale_verdict(patched_detect):
-    # An admin editing "what counts as explicit" on the dashboard must take
-    # effect immediately, not after a restart.
-    patched_detect([det("FEMALE_BREAST_COVERED", 0.9)])
-    att = FakeAttachment()
-
-    before = await classify_attachment(att)
-    after = await classify_attachment(
-        att, label_set=frozenset({"FEMALE_BREAST_COVERED"})
-    )
-
-    assert before.verdict is False
-    assert after.verdict is True
-
-
-@pytest.mark.asyncio
-async def test_concurrent_consumers_share_one_download(patched_detect):
+async def test_concurrent_consumers_share_one_download(patched_score):
     # discord.py dispatches each cog's listener as its own task, so the
     # consumers reach the classifier concurrently rather than in sequence.
     # Without in-flight sharing they'd each start their own download.
-    patched_detect([det("SEX_ACT", 0.9)])
+    patched_score(0.9)
     att = FakeAttachment(delay=0.05)
 
     results = await asyncio.gather(
@@ -478,10 +537,10 @@ async def test_concurrent_consumers_share_one_download(patched_detect):
 
 
 @pytest.mark.asyncio
-async def test_unknown_results_are_not_cached(patched_detect):
+async def test_unknown_results_are_not_cached(patched_score):
     # A transient CDN failure must not pin UNKNOWN for the life of the process.
     att = FakeAttachment(error=RuntimeError("transient"))
-    patched_detect([det("SEX_ACT", 0.9)])
+    patched_score(0.9)
 
     assert (await classify_attachment(att)).is_unknown is True
 
@@ -492,8 +551,6 @@ async def test_unknown_results_are_not_cached(patched_detect):
 # --------------------------------------------------------------------------
 # recording — scoped to age-gated channels
 # --------------------------------------------------------------------------
-
-
 
 
 @pytest.mark.parametrize(
@@ -515,9 +572,11 @@ def _classification(**overrides) -> Classification:
     base = dict(
         attachment_id=42,
         verdict=True,
+        score=0.91,
         top_label="SEX_ACT",
-        top_score=0.91,
-        detections=[det("SEX_ACT", 0.91), det("BELLY_EXPOSED", 0.3)],
+        top_score=0.77,
+        detections=[det("SEX_ACT", 0.77), det("BELLY_EXPOSED", 0.3)],
+        tagged=True,
         inference_ms=74,
         size_bytes=2048,
     )
@@ -546,18 +605,76 @@ def test_record_writes_summary_and_detections(sync_db_path):
         ).fetchall()
 
     assert row["verdict"] == 1
-    assert row["top_label"] == "SEX_ACT"
     assert row["inference_ms"] == 74
     assert row["bytes"] == 2048
     assert row["created_at"] == 1700000000
-    # Threshold and label set are stored per row so the data stays readable
-    # after a retune.
+    # The threshold is stored per row so the data stays readable after a retune.
     assert row["threshold"] == DEFAULT_THRESHOLD
-    assert row["label_set"] == serialize_label_set(DEFAULT_LABEL_SET)
-    assert row["model"] == "320n"
+    # Two engines, two numbers: the verdict came from the score, the tag did
+    # not. Conflating them would make the recorded data uninterpretable.
+    assert row["marqo_score"] == 0.91
+    assert row["top_label"] == "SEX_ACT"
+    assert row["top_score"] == 0.77
     # Near-misses are kept — a threshold sweep needs the ones that didn't
     # qualify, not just the ones that did.
     assert [d["label"] for d in detections] == ["BELLY_EXPOSED", "SEX_ACT"]
+
+
+def test_record_leaves_label_set_empty(sync_db_path):
+    # No configurable label set governs a verdict any more; writing the
+    # tagger's vocabulary here would imply one did.
+    with open_db(sync_db_path) as conn:
+        record_classification(
+            conn,
+            _classification(),
+            guild_id=GUILD,
+            channel_id=CHANNEL,
+            message_id=MESSAGE,
+        )
+        row = conn.execute(
+            "SELECT label_set FROM nsfw_classifications WHERE message_id=?", (MESSAGE,)
+        ).fetchone()
+
+    assert row["label_set"] == ""
+
+
+def test_record_names_both_engines(sync_db_path, monkeypatch):
+    monkeypatch.setattr(
+        "bot_modules.services.guess_nudenet.active_model_name", lambda: "640m"
+    )
+    with open_db(sync_db_path) as conn:
+        record_classification(
+            conn,
+            _classification(),
+            guild_id=GUILD,
+            channel_id=CHANNEL,
+            message_id=MESSAGE,
+        )
+        row = conn.execute(
+            "SELECT model FROM nsfw_classifications WHERE message_id=?", (MESSAGE,)
+        ).fetchone()
+
+    assert row["model"] == "marqo-384+640m"
+
+
+def test_record_names_only_marqo_when_the_tagger_never_ran(sync_db_path):
+    # A SFW-channel classification, had one ever been recorded: no tagger, so
+    # nothing to name beyond the verdict engine.
+    with open_db(sync_db_path) as conn:
+        record_classification(
+            conn,
+            _classification(
+                detections=[], tagged=False, top_label=None, top_score=None
+            ),
+            guild_id=GUILD,
+            channel_id=CHANNEL,
+            message_id=MESSAGE,
+        )
+        row = conn.execute(
+            "SELECT model FROM nsfw_classifications WHERE message_id=?", (MESSAGE,)
+        ).fetchone()
+
+    assert row["model"] == "marqo-384"
 
 
 def test_record_stores_no_author_id(sync_db_path):
@@ -576,7 +693,7 @@ def test_record_skips_unknown_verdicts(sync_db_path):
     with open_db(sync_db_path) as conn:
         record_classification(
             conn,
-            _classification(verdict=UNKNOWN, top_label=None, top_score=None),
+            _classification(verdict=UNKNOWN, score=None, top_label=None, top_score=None),
             guild_id=GUILD,
             channel_id=CHANNEL,
             message_id=MESSAGE,
@@ -586,6 +703,97 @@ def test_record_skips_unknown_verdicts(sync_db_path):
         ).fetchone()["c"]
 
     assert count == 0
+
+
+def test_record_is_idempotent_per_attachment(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        for _ in range(2):
+            record_classification(
+                conn,
+                _classification(),
+                guild_id=GUILD,
+                channel_id=CHANNEL,
+                message_id=MESSAGE,
+            )
+        summaries = conn.execute(
+            "SELECT COUNT(*) c FROM nsfw_classifications"
+        ).fetchone()["c"]
+        detections = conn.execute(
+            "SELECT COUNT(*) c FROM nsfw_detections"
+        ).fetchone()["c"]
+
+    assert summaries == 1
+    assert detections == 2  # replaced, not duplicated
+
+
+# --------------------------------------------------------------------------
+# blocks — the record of what was destroyed
+# --------------------------------------------------------------------------
+
+
+def _block(**overrides) -> Block:
+    base = dict(
+        message_id=MESSAGE,
+        attachment_id=42,
+        guild_id=GUILD,
+        channel_id=CHANNEL,
+        author_id=999,
+        filename="holiday.jpg",
+        score=0.93,
+        surface=SURFACE_SFW,
+        action=ACTION_REMOVED,
+    )
+    base.update(overrides)
+    return Block(**base)
+
+
+def test_record_block_writes_a_row(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        record_block(conn, _block(), now=1700000000)
+        row = conn.execute("SELECT * FROM nsfw_blocks").fetchone()
+
+    assert row["author_id"] == 999
+    assert row["filename"] == "holiday.jpg"
+    assert row["marqo_score"] == 0.93
+    assert row["surface"] == SURFACE_SFW
+    assert row["action"] == ACTION_REMOVED
+    assert row["created_at"] == 1700000000
+
+
+def test_record_block_keeps_an_unreadable_image_distinct_from_a_low_score(
+    sync_db_path,
+):
+    # Spoiler enforcement deletes on an unreadable image by design. A row
+    # claiming 0.0 would read as "the model was sure it was clean, and we
+    # deleted it anyway" — the opposite of what happened.
+    with open_db(sync_db_path) as conn:
+        record_block(conn, _block(score=None, surface=SURFACE_SPOILER))
+        row = conn.execute("SELECT * FROM nsfw_blocks").fetchone()
+
+    assert row["marqo_score"] is None
+
+
+def test_record_block_stores_log_mode_separately(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        record_block(conn, _block(action=ACTION_LOGGED))
+        row = conn.execute("SELECT action FROM nsfw_blocks").fetchone()
+
+    assert row["action"] == ACTION_LOGGED
+
+
+def test_record_block_is_idempotent_per_attachment(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        record_block(conn, _block())
+        record_block(conn, _block())
+        count = conn.execute("SELECT COUNT(*) c FROM nsfw_blocks").fetchone()["c"]
+
+    assert count == 1
+
+
+def test_record_block_safely_swallows_storage_failures(tmp_path):
+    # The audit trail failing must never change what happened to the member,
+    # and this runs on the enforcement path itself.
+    record_block_safely(tmp_path / "nonexistent" / "no.db", _block())
 
 
 # --------------------------------------------------------------------------
@@ -609,50 +817,109 @@ class FakeMessage:
 
 
 @pytest.mark.asyncio
-async def test_classifier_records_in_an_age_gated_channel(
-    sync_db_path, patched_detect
+async def test_classifier_records_and_tags_in_an_age_gated_channel(
+    sync_db_path, patched_score, patched_tag
 ):
-    patched_detect([det("SEX_ACT", 0.9)])
+    patched_score(0.9)
+    calls = patched_tag([det("SEX_ACT", 0.8)])
     classify = classifier_for(sync_db_path, FakeMessage(nsfw=True))
 
     result = await classify(FakeAttachment())
 
     assert result.verdict is True
+    assert result.top_label == "SEX_ACT"
+    assert len(calls) == 1
     assert _rows(sync_db_path) == 1
 
 
 @pytest.mark.asyncio
-async def test_classifier_does_not_record_in_a_sfw_channel(
-    sync_db_path, patched_detect
+async def test_classifier_does_not_record_or_tag_in_a_sfw_channel(
+    sync_db_path, patched_score, patched_tag
 ):
     # Classification still happens — SFW prevention needs the verdict — but no
-    # dataset is built out of general chat.
-    patched_detect([det("SEX_ACT", 0.9)])
+    # dataset is built out of general chat, and the tagger never even runs, so
+    # no body-part inventory of the image exists to leak.
+    patched_score(0.9)
+    calls = patched_tag([det("SEX_ACT", 0.8)])
     classify = classifier_for(sync_db_path, FakeMessage(nsfw=False))
 
     result = await classify(FakeAttachment())
 
     assert result.verdict is True
+    assert result.top_label is None
+    assert calls == []
     assert _rows(sync_db_path) == 0
 
 
 @pytest.mark.asyncio
-async def test_classifier_derives_the_age_gate_itself(sync_db_path, patched_detect):
+async def test_unknown_verdicts_are_never_tagged(
+    sync_db_path, patched_score, patched_tag
+):
+    # No verdict means nothing to describe, and running the tagger anyway would
+    # burn inference on an image the service has already given up on.
+    patched_score(RuntimeError("model exploded"))
+    calls = patched_tag([det("SEX_ACT", 0.8)])
+
+    result = await classifier_for(sync_db_path, FakeMessage(nsfw=True))(
+        FakeAttachment()
+    )
+
+    assert result.is_unknown is True
+    assert calls == []
+    assert _rows(sync_db_path) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_tagging_failure_still_records_the_verdict(
+    sync_db_path, patched_score, patched_tag
+):
+    # Tags are metrics; the verdict is already made and is what consumers act
+    # on. A tagger failure leaves the row unlabelled, not unwritten.
+    patched_score(0.9)
+    patched_tag(RuntimeError("nudenet is unhappy"))
+
+    result = await classifier_for(sync_db_path, FakeMessage(nsfw=True))(
+        FakeAttachment()
+    )
+
+    assert result.verdict is True
+    assert result.top_label is None
+    assert _rows(sync_db_path) == 1
+
+
+@pytest.mark.asyncio
+async def test_two_consumers_share_one_tagging_pass(
+    sync_db_path, patched_score, patched_tag
+):
+    # Tipping and spoiler enforcement both fire in an age-gated channel. Without
+    # a shared cache they would each pay for their own NudeNet run.
+    patched_score(0.9)
+    calls = patched_tag([det("SEX_ACT", 0.8)])
+    att = FakeAttachment()
+    message = FakeMessage(nsfw=True)
+
+    await classifier_for(sync_db_path, message)(att)
+    await classifier_for(sync_db_path, message)(att)
+
+    assert len(calls) == 1
+    assert att.reads == 1
+
+
+@pytest.mark.asyncio
+async def test_classifier_derives_the_age_gate_itself(sync_db_path):
     # The recording-scope flag is derived from the channel, not supplied by
     # the caller — a caller can no longer assert a precondition that a guard
     # in another module is responsible for.
-    patched_detect([det("SEX_ACT", 0.9)])
-
     assert classifier_for(sync_db_path, FakeMessage(nsfw=True)).channel_is_nsfw is True
     assert classifier_for(sync_db_path, FakeMessage(nsfw=False)).channel_is_nsfw is False
 
 
 @pytest.mark.asyncio
 async def test_strict_classifier_applies_the_higher_threshold(
-    sync_db_path, patched_detect
+    sync_db_path, patched_score
 ):
-    # Same image, same detections: permissive says explicit, strict does not.
-    patched_detect([det("BUTTOCKS_EXPOSED", 0.6)])
+    # Same image, same score: permissive says explicit, strict does not.
+    patched_score(0.6)
     att = FakeAttachment()
     message = FakeMessage(nsfw=False)
 
@@ -666,9 +933,9 @@ async def test_strict_classifier_applies_the_higher_threshold(
 
 @pytest.mark.asyncio
 async def test_settings_are_read_once_per_message_not_per_attachment(
-    sync_db_path, patched_detect, monkeypatch
+    sync_db_path, patched_score, monkeypatch
 ):
-    patched_detect([det("SEX_ACT", 0.9)])
+    patched_score(0.9)
     calls = []
     real = nsfw_module.load_settings
     monkeypatch.setattr(
@@ -677,20 +944,27 @@ async def test_settings_are_read_once_per_message_not_per_attachment(
         lambda *a, **k: (calls.append(1), real(*a, **k))[1],
     )
 
-    classify = classifier_for(sync_db_path, FakeMessage(nsfw=True))
-    for i in range(3):
-        await classify(FakeAttachment(attachment_id=i))
+    classify = classifier_for(sync_db_path, FakeMessage(nsfw=False))
+    # Gathered, not sequential. The auto-react cog fans classify() out across a
+    # message's attachments, so every coroutine reaches the lazy load in the
+    # same tick — which a plain cached value does NOT survive: each would see
+    # None and open its own connection. Awaiting these in a loop passes either
+    # way and so pins nothing.
+    await asyncio.gather(
+        *(classify(FakeAttachment(attachment_id=i)) for i in range(3))
+    )
 
     assert len(calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_classifier_returns_a_verdict_when_recording_fails(
-    sync_db_path, patched_detect, monkeypatch
+    sync_db_path, patched_score, patched_tag, monkeypatch
 ):
     # Metrics are a side effect; a write failure must not change what the
     # consumer does about the image.
-    patched_detect([det("SEX_ACT", 0.9)])
+    patched_score(0.9)
+    patched_tag([det("SEX_ACT", 0.8)])
 
     def boom(*_args, **_kwargs):
         raise sqlite3.OperationalError("database is locked")
@@ -704,22 +978,26 @@ async def test_classifier_returns_a_verdict_when_recording_fails(
     assert result.verdict is True
 
 
-def test_record_is_idempotent_per_attachment(sync_db_path):
-    with open_db(sync_db_path) as conn:
-        for _ in range(2):
-            record_classification(
-                conn,
-                _classification(),
-                guild_id=GUILD,
-                channel_id=CHANNEL,
-                message_id=MESSAGE,
-            )
-        summaries = conn.execute(
-            "SELECT COUNT(*) c FROM nsfw_classifications"
-        ).fetchone()["c"]
-        detections = conn.execute(
-            "SELECT COUNT(*) c FROM nsfw_detections"
-        ).fetchone()["c"]
+@pytest.mark.asyncio
+async def test_an_image_the_tagger_saw_nothing_in_still_names_the_tagger(
+    sync_db_path, patched_score, patched_tag, monkeypatch
+):
+    # The blind-spot case: explicit verdict, tagger ran, tagger found nothing.
+    # If the row named Marqo alone it would be indistinguishable from one that
+    # was never tagged, and the disagreement count the report is built on would
+    # be unauditable.
+    monkeypatch.setattr(
+        "bot_modules.services.guess_nudenet.active_model_name", lambda: "640m"
+    )
+    patched_score(0.91)
+    patched_tag([])
 
-    assert summaries == 1
-    assert detections == 2  # replaced, not duplicated
+    await classifier_for(sync_db_path, FakeMessage(nsfw=True))(FakeAttachment())
+
+    with open_db(sync_db_path) as conn:
+        row = conn.execute(
+            "SELECT model, top_label FROM nsfw_classifications"
+        ).fetchone()
+
+    assert row["model"] == "marqo-384+640m"
+    assert row["top_label"] is None

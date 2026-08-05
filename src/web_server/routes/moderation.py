@@ -43,6 +43,8 @@ from web_server.schemas import (
     DMAuditLogResponse,
     JailsResponse,
     ModerationStatsResponse,
+    NsfwBlocksResponse,
+    NsfwTagsResponse,
     PolicyTicketsResponse,
     SimpleActionResult,
     TicketActionResult,
@@ -1436,3 +1438,180 @@ async def put_anon_audit_retention(
             return {"retention_days": get_retention_days(conn, guild_id)}
 
     return await run_query(_q)
+
+
+# ── NSFW image reports ───────────────────────────────────────────────────
+#
+# Both are admin-gated. These rows describe members' uploads and are never
+# surfaced more widely — see docs/nsfw_classifier_spec.md.
+
+
+@router.get("/moderation/nsfw-tags", response_model=NsfwTagsResponse)
+async def nsfw_tags_report(
+    request: Request,
+    days: int = 30,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """What the tagger saw, and where it disagreed with the verdict engine.
+
+    Age-gated channels only — that is the sole scope NudeNet runs in, so it is
+    the sole scope this can describe.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    window = max(1, min(int(days), 365))
+
+    def _q():
+        with ctx.open_db() as conn:
+            since = int(time.time()) - window * 86400
+            scope = "guild_id = ? AND created_at >= ? AND marqo_score IS NOT NULL"
+            params = (guild_id, since)
+            totals = conn.execute(
+                f"""
+                SELECT COUNT(*) AS classified,
+                       COALESCE(SUM(verdict), 0) AS explicit,
+                       COALESCE(SUM(top_label IS NOT NULL), 0) AS tagged,
+                       COALESCE(SUM(verdict = 1 AND top_label IS NULL), 0)
+                           AS explicit_untagged,
+                       COALESCE(SUM(verdict = 0 AND top_label IS NOT NULL), 0)
+                           AS tagged_not_explicit,
+                       COALESCE(AVG(inference_ms), 0) AS avg_ms
+                FROM nsfw_classifications WHERE {scope}
+                """,
+                params,
+            ).fetchone()
+            labels = conn.execute(
+                f"""
+                SELECT top_label AS label, COUNT(*) AS n,
+                       COALESCE(AVG(marqo_score), 0) AS avg_score
+                FROM nsfw_classifications
+                WHERE {scope} AND top_label IS NOT NULL
+                GROUP BY top_label ORDER BY n DESC
+                """,
+                params,
+            ).fetchall()
+            # Ten fixed 0.1-wide buckets. A score of exactly 1.0 would land in
+            # a non-existent eleventh, so it is folded into the top one.
+            scores = conn.execute(
+                f"""
+                SELECT MIN(CAST(marqo_score * 10 AS INTEGER), 9) AS bucket,
+                       COUNT(*) AS n,
+                       COALESCE(SUM(verdict), 0) AS explicit
+                FROM nsfw_classifications WHERE {scope}
+                GROUP BY bucket ORDER BY bucket
+                """,
+                params,
+            ).fetchall()
+        return {
+            "days": window,
+            "classified": int(totals["classified"]),
+            "explicit": int(totals["explicit"]),
+            "tagged": int(totals["tagged"]),
+            "explicit_untagged": int(totals["explicit_untagged"]),
+            "tagged_not_explicit": int(totals["tagged_not_explicit"]),
+            "avg_inference_ms": round(float(totals["avg_ms"]), 1),
+            "labels": [
+                {
+                    "label": r["label"],
+                    "count": int(r["n"]),
+                    "avg_score": round(float(r["avg_score"]), 3),
+                }
+                for r in labels
+            ],
+            "scores": [
+                {
+                    "floor": round(int(r["bucket"]) / 10, 1),
+                    "count": int(r["n"]),
+                    "explicit": int(r["explicit"]),
+                }
+                for r in scores
+            ],
+        }
+
+    return await run_query(_q)
+
+
+@router.get("/moderation/nsfw-blocks", response_model=NsfwBlocksResponse)
+async def nsfw_blocks_report(
+    request: Request,
+    days: int = 30,
+    limit: int = 100,
+    surface: str | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Every image a gate destroyed, so a false positive is reviewable.
+
+    Unlike the tag report this covers **every** channel: the places a deletion
+    is most likely to be a mistake are exactly the ones no classification row
+    is written for.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    window = max(1, min(int(days), 365))
+    limit = max(1, min(int(limit), 500))
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            since = int(time.time()) - window * 86400
+            clauses = ["guild_id = ?", "created_at >= ?"]
+            params: list = [guild_id, since]
+            if surface:
+                clauses.append("surface = ?")
+                params.append(surface)
+            where = " AND ".join(clauses)
+            totals = conn.execute(
+                f"""
+                SELECT COUNT(*) AS total,
+                       COALESCE(SUM(action = 'removed'), 0) AS removed,
+                       COALESCE(SUM(action = 'logged'), 0) AS logged
+                FROM nsfw_blocks WHERE {where}
+                """,
+                params,
+            ).fetchone()
+            by_surface = conn.execute(
+                f"SELECT surface, COUNT(*) AS n FROM nsfw_blocks "
+                f"WHERE {where} GROUP BY surface",
+                params,
+            ).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM nsfw_blocks WHERE {where} "
+                f"ORDER BY created_at DESC LIMIT ?",
+                params + [limit],
+            ).fetchall()
+        return {
+            "days": window,
+            "total": int(totals["total"]),
+            "removed": int(totals["removed"]),
+            "logged": int(totals["logged"]),
+            "by_surface": {r["surface"]: int(r["n"]) for r in by_surface},
+            "entries": [
+                {
+                    # Snowflakes cross to the browser as strings so JS float
+                    # math can't round them into non-existent members.
+                    "message_id": str(r["message_id"]),
+                    "channel_id": str(r["channel_id"]),
+                    "author_id": str(r["author_id"]),
+                    "filename": r["filename"],
+                    "score": r["marqo_score"],
+                    "surface": r["surface"],
+                    "action": r["action"],
+                    "created_at": int(r["created_at"]),
+                }
+                for r in rows
+            ],
+        }
+
+    result = await run_query(_q)
+    await _resolve_names(ctx, guild, result["entries"], ("author_id", "author_name"))
+    for entry in result["entries"]:
+        # get_channel_or_thread, not get_channel: both gates fire on messages in
+        # threads (is_age_gated_channel deliberately resolves through a thread's
+        # parent), and get_channel returns None for them — which rendered every
+        # thread-hosted block as a bare numeric id in the report.
+        channel = (
+            guild.get_channel_or_thread(int(entry["channel_id"])) if guild else None
+        )
+        entry["channel_name"] = getattr(channel, "name", "") or ""
+    return result

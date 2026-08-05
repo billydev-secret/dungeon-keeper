@@ -21,6 +21,8 @@ from bot_modules.services.nsfw_classifier_service import (
     SFW_MODE_ENFORCE,
     SFW_MODE_LOG,
     SFW_MODE_OFF,
+    SURFACE_SFW,
+    SURFACE_SPOILER,
     Classification,
     SfwPolicy,
 )
@@ -135,19 +137,26 @@ def _member_isinstance(monkeypatch):
     )
 
 
-def classification(verdict_value, label="FEMALE_BREAST_EXPOSED", score=0.9):
+def classification(verdict_value, label=None, score=0.9):
+    # top_label defaults to None: the tagger only runs in age-gated channels,
+    # so outside them the score is the only number a consumer has.
     return Classification(
-        attachment_id=1, verdict=verdict_value, top_label=label, top_score=score
+        attachment_id=1,
+        verdict=verdict_value,
+        score=score if verdict_value is not None else None,
+        top_label=label,
+        top_score=0.7 if label else None,
     )
 
 
-async def run(message, classify=None, bypass=frozenset()):
+async def run(message, classify=None, bypass=frozenset(), report=None):
     return await enforce_spoiler_requirement(
         message,
         spoiler_required_channels={SPOILER_CHANNEL},
         bypass_role_ids=bypass,
         log=log,
         classify=classify,
+        report=report,
     )
 
 
@@ -329,7 +338,8 @@ async def test_sfw_explicit_image_is_removed_and_reported():
     assert message.author.dms  # image returned to the poster
     assert len(reports) == 1
     assert reports[0].deleted is True
-    assert reports[0].label == "FEMALE_BREAST_EXPOSED"
+    # The verdict score, not a label — SFW channels are never tagged.
+    assert reports[0].score == 0.9
 
 
 @pytest.mark.asyncio
@@ -516,3 +526,79 @@ async def test_sfw_non_image_attachments_are_ignored():
 
     assert deleted is False
     assert calls == []
+
+
+# --------------------------------------------------------------------------
+# block reporting — the record of what was destroyed
+# --------------------------------------------------------------------------
+
+
+async def _collect_spoiler_blocks(message, classify=None):
+    blocks: list = []
+
+    async def report(blocked):
+        blocks.append(blocked)
+
+    await run(message, classify=classify, report=report)
+    return blocks
+
+
+@pytest.mark.asyncio
+async def test_spoiler_deletion_is_reported_with_its_score():
+    # Spoiler-channel deletions used to leave no trace outside the log file.
+    message = FakeMessage(attachments=[FakeAttachment()])
+
+    (blocked,) = await _collect_spoiler_blocks(message, classify=verdict(True))
+
+    assert blocked.surface == SURFACE_SPOILER
+    assert blocked.score == 0.9
+    assert blocked.deleted is True
+    assert blocked.attachment is message.attachments[0]
+
+
+@pytest.mark.asyncio
+async def test_spoiler_deletion_on_an_unreadable_image_reports_no_score():
+    # This gate deletes on UNKNOWN by design. A score of 0.0 would read as "the
+    # model was sure it was clean and we deleted it anyway", so it must stay
+    # None — this is the case most worth finding again in the report.
+    message = FakeMessage(attachments=[FakeAttachment()])
+
+    (blocked,) = await _collect_spoiler_blocks(message, classify=verdict(None))
+
+    assert blocked.score is None
+    assert blocked.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_spoiler_reports_nothing_when_the_image_is_not_explicit():
+    message = FakeMessage(attachments=[FakeAttachment()])
+
+    assert await _collect_spoiler_blocks(message, classify=verdict(False)) == []
+    assert message.deleted is False
+
+
+@pytest.mark.asyncio
+async def test_spoiler_report_failure_does_not_resurrect_the_message():
+    message = FakeMessage(attachments=[FakeAttachment()])
+
+    async def failing_report(_blocked):
+        raise RuntimeError("database is gone")
+
+    deleted = await run(message, classify=verdict(True), report=failing_report)
+
+    assert deleted is True
+    assert message.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_sfw_block_carries_the_verdict_score_not_a_label():
+    # SFW prevention runs where the channel isn't age-gated, so the tagger
+    # never ran and there is no label to report. The old mod-log line rendered
+    # `None` at 0.00 here.
+    message = FakeMessage(attachments=[FakeAttachment()], channel_id=OTHER_CHANNEL)
+
+    _, reports = await run_sfw(message)
+
+    assert reports[0].surface == SURFACE_SFW
+    assert reports[0].score == 0.9
+    assert reports[0].label is None

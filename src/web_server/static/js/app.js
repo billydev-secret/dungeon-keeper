@@ -106,6 +106,8 @@ const SECTIONS = [
         { id: "mod-whisper-audit", label: "Whisper Audit",    module: "./panels/mod-whisper-audit.js", adminOnly: true },
         { id: "confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js", adminOnly: true },
         { id: "anon-audit",        label: "Anonymous Features", module: "./panels/mod-anon-audit.js", adminOnly: true, keywords: "ama ffa hot takes fantasies clapback wyr would you rather compliment anonymous audit retention" },
+        { id: "nsfw-blocks",       label: "Blocked Images",   module: "./panels/nsfw-blocks-report.js", adminOnly: true, keywords: "nsfw explicit removed deleted spoiler sfw prevention false positive image guard", related: ["config-spoiler"] },
+        { id: "nsfw-tags",         label: "Image Tags",       module: "./panels/nsfw-tags-report.js", adminOnly: true, keywords: "nsfw nudity labels detections tags classifier metrics score distribution", related: ["config-spoiler"] },
         { id: "grant-audit",       label: "Grant Audit",      module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card" },
       ]},
     ],
