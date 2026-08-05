@@ -398,7 +398,8 @@ def upsert_bio(
         ON CONFLICT(user_id, guild_id) DO UPDATE SET
             message_id = excluded.message_id,
             channel_id = excluded.channel_id,
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = CURRENT_TIMESTAMP,
+            archived_at = NULL
         """,
         (user_id, guild_id, message_id, channel_id),
     )
@@ -448,13 +449,41 @@ def archive_user_bio(conn: sqlite3.Connection, guild_id: int, user_id: int) -> N
 
     Clears ``message_id`` / ``channel_id`` to 0 as a sentinel — the
     Discord embed has been deleted, but the snapshotted values and
-    answers stay so the bio can be resurrected on rejoin.
+    answers stay so the bio can be resurrected on rejoin. Stamps
+    ``archived_at`` so :func:`purge_stale_archived_bios` can permanently
+    remove the snapshot if the member never returns.
     """
     conn.execute(
         "UPDATE bios SET message_id = 0, channel_id = 0, "
-        "updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND guild_id = ?",
+        "updated_at = CURRENT_TIMESTAMP, archived_at = CURRENT_TIMESTAMP "
+        "WHERE user_id = ? AND guild_id = ?",
         (user_id, guild_id),
     )
+
+
+def purge_stale_archived_bios(
+    conn: sqlite3.Connection, *, older_than_seconds: int = 365 * 86400
+) -> int:
+    """Permanently delete bios archived for longer than the window.
+
+    A member who leaves gets their bio archived (snapshot kept for rejoin
+    resurrection); one who never returns shouldn't keep self-disclosed
+    content on file forever. Rows whose ``archived_at`` is older than
+    ``older_than_seconds`` (default 12 months) are removed outright —
+    bios row, field values, and answers — via :func:`delete_user_bio`.
+    Live bios (``archived_at`` NULL, or a non-zero message ref after a
+    resurrection) are never touched. Returns the number of bios purged.
+    """
+    rows = conn.execute(
+        "SELECT user_id, guild_id FROM bios "
+        "WHERE message_id = 0 AND channel_id = 0 "
+        "AND archived_at IS NOT NULL "
+        "AND archived_at <= datetime('now', ?)",
+        (f"-{int(older_than_seconds)} seconds",),
+    ).fetchall()
+    for row in rows:
+        delete_user_bio(conn, row["guild_id"], row["user_id"])
+    return len(rows)
 
 
 def update_bio_message_ref(
@@ -465,9 +494,14 @@ def update_bio_message_ref(
     message_id: int,
     channel_id: int,
 ) -> None:
-    """Used by the edit-mode 404 → repost path."""
+    """Used by the edit-mode 404 → repost path and by resurrection.
+
+    Clears ``archived_at`` — a bio pointing at a live message is not
+    archived, so the purge clock must stop.
+    """
     conn.execute(
-        "UPDATE bios SET message_id = ?, channel_id = ?, updated_at = CURRENT_TIMESTAMP "
+        "UPDATE bios SET message_id = ?, channel_id = ?, "
+        "updated_at = CURRENT_TIMESTAMP, archived_at = NULL "
         "WHERE user_id = ? AND guild_id = ?",
         (message_id, channel_id, user_id, guild_id),
     )
