@@ -48,6 +48,7 @@ from bot_modules.services.auto_delete_service import (
 )
 from bot_modules.services.nsfw_classifier_service import (
     CONFIG_BUCKET_SFW_EXEMPT,
+    CONFIG_KEY_OBSERVE,
     CONFIG_KEY_SFW_LOG_CHANNEL,
     CONFIG_KEY_SFW_MODE,
     CONFIG_KEY_SFW_THRESHOLD,
@@ -963,6 +964,7 @@ def _nsfw_classifier_section(conn, guild_id: int) -> dict:
             conn, CONFIG_KEY_SFW_LOG_CHANNEL, "0", guild_id
         ),
         "sfw_exempt_channels": _id_str_list(conn, CONFIG_BUCKET_SFW_EXEMPT, guild_id),
+        "observe_age_gated": _bool_val(conn, CONFIG_KEY_OBSERVE, False, guild_id),
     }
 
 
@@ -2848,6 +2850,7 @@ class NsfwClassifierUpdate(BaseModel):
     sfw_mode: str | None = None
     sfw_log_channel_id: str | None = None
     sfw_exempt_channels: list[str] | None = None
+    observe_age_gated: bool | None = None
 
 
 _NSFW_FIELDS = {
@@ -2858,6 +2861,7 @@ _NSFW_FIELDS = {
         CONFIG_KEY_SFW_LOG_CHANNEL,
         lambda v: str(int(v or 0)),
     ),
+    "observe_age_gated": (CONFIG_KEY_OBSERVE, _flag),
 }
 
 

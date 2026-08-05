@@ -101,6 +101,20 @@ It is a value object rather than a closure deliberately: it copies the handful o
 
 **Coverage and recording deliberately differ.** Classification runs on attachments in *every* channel, because SFW prevention needs a verdict everywhere. Classification rows are written **only for uploads in Discord-age-gated (`is_nsfw`) channels**, so no dataset is built out of general chat.
 
+### Observation
+
+Recording being scoped to age-gated channels says *where* a row may be written; it does not say a row **is** written. Each consumer asks for a verdict only where it might act on one, so for the first week in production the table held 31 rows against ~441 image posts in the same channels — and every one of those 31 came from spoiler enforcement, because the other two consumers were unconfigured. What it recorded was therefore not "what gets posted here" but "what somebody forgot to spoiler": the compliance failures, and nothing else. Threshold tuning, the score histogram and the tagger-disagreement counts were all being read off the one sample guaranteed to be unrepresentative of the channel.
+
+`observe_images` closes that gap. Where enabled it classifies **every** image attachment in an age-gated channel — spoilered or not, spoiler rule or not, whether or not any gate wanted an opinion — records the row, and then does nothing at all with the verdict.
+
+It is not a fourth consumer, and the distinction is load-bearing:
+
+- **It acts on nothing.** A spoilered image in a spoiler-required channel is *compliant*. The moment a verdict from this path can delete one, this stops being observation and becomes a gate that was never designed as one.
+- **It does not move the privacy boundary.** Scope is age-gated channels, matching the boundary recording already lived inside — the same `channel_is_nsfw` flag drives both the row and the tagger. It widens *which* images inside that boundary are seen, and a general-chat upload is no more visible to it than before.
+- **It is opt-in per guild** (`nsfw_observe_age_gated`, default off). What it does change is volume: `nsfw_detections` grows to cover ordinary compliant posts rather than only the ones a gate had to judge, and that table is the most sensitive thing this bot holds. Growing it is a decision a server makes, not a side effect of a deploy.
+
+Cost is near-free where a gate already classifies — `_shared_infer` dedupes the download and both model passes per attachment, so observation and spoiler enforcement on the same upload cost one of each. Where no gate runs it is a fresh download plus inference, which is why it runs **fire-and-forget** from `on_message`: nothing downstream reads its result, and awaiting it would put a download per attachment in front of enforcement, persistence and XP. It never raises; a failure is a missing metrics row.
+
 `nsfw_classifications` — one row per `(message_id, attachment_id)`: verdict, `marqo_score` (what the verdict was made from), the headline tag and its NudeNet confidence, model name, **the threshold that was applied**, inference milliseconds, and source byte size. Storing the threshold per row rather than reading config at query time is what keeps the data interpretable after a retune, and is what makes "what would 0.4 have changed?" answerable in hindsight.
 
 `marqo_score IS NULL` identifies rows written before the swap, whose verdict came from NudeNet labels instead; the reports exclude them rather than mix two meanings of "explicit" into one number.
@@ -126,7 +140,7 @@ Retention is indefinite for all three tables (a deliberate choice — see `docs/
 `nsfw_detections` is the most sensitive table this bot holds: effectively a labelled body-part inventory of members' uploads. It is derived metadata rather than message content, which fits the project's "derive at ingest, store minimal" rule, but three minimisations apply regardless:
 
 - **No `author_id` column** on `nsfw_classifications`/`nsfw_detections`. Authorship joins through `messages`.
-- **The tagger never runs outside age-gated channels**, so no body-part inventory of a general-chat upload exists to leak, recorded or not.
+- **The tagger never runs outside age-gated channels**, so no body-part inventory of a general-chat upload exists to leak, recorded or not. Observation does not relax this — it is scoped to the same channels and turned on per guild.
 - **Admin-gated on the dashboard.** These rows are never surfaced to non-admins in any view.
 
 ## Configuration
@@ -139,6 +153,7 @@ Stored in the shared `config` table, per guild:
 |---|---|---|
 | `nsfw_classifier_threshold` | `0.5` | probability at which an image counts as explicit |
 | `nsfw_classifier_sfw_threshold` | `0.75` | stricter bar used by SFW nudity prevention |
+| `nsfw_observe_age_gated` | `0` | classify and record *every* image in age-gated channels, not only the ones a gate had to judge. Changes nothing about what happens to an image |
 
 Both defaults are unchanged across the engine swap, and that is not laziness: the old values were detector confidences and the new ones are whole-image probabilities, but both live on the same 0–1 scale and 0.5/0.75 sit in a wide empty gap between the measured control scores (0.04–0.08) and the measured true positive (0.91).
 

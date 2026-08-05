@@ -99,6 +99,26 @@ export function mount(container) {
           </div>
 
           <div class="card">
+            <div class="section-label">Recording</div>
+            <div class="field">
+              <label style="display:flex; gap:6px; align-items:center;">
+                <input type="checkbox" data-field="observe_age_gated" ${n.observe_age_gated ? "checked" : ""} />
+                Check every image in age-gated channels
+              </label>
+              <div class="field-hint">Off by default, and it changes nothing about what
+                the bot <em>does</em> — no image is ever removed because of this. Normally
+                an image is only checked when a rule might act on it, which in a
+                spoiler-required channel means just the few posted without a spoiler tag,
+                and in an age-gated channel with no spoiler rule means none at all. So the
+                figures below describe the small unrepresentative slice that was about to
+                be judged, which is a poor basis for setting the thresholds above. Turn
+                this on to check the ordinary posts too and get a real picture. It records
+                more, including detected content labels, for every image posted in those
+                channels — so it is worth deciding on rather than leaving on by habit.</div>
+            </div>
+          </div>
+
+          <div class="card">
             <div class="section-label">Recent Activity</div>
             <div data-metrics><div class="empty">Loading…</div></div>
             <div class="field-hint">Images checked in age-gated channels over the last
@@ -186,6 +206,9 @@ export function mount(container) {
             sfw_mode: modeSelect.value,
             sfw_log_channel_id: logPicker.getValue() || "0",
             sfw_exempt_channels: exemptPicker.getValues(),
+            observe_age_gated: form.querySelector(
+              '[data-field="observe_age_gated"]',
+            ).checked,
           }),
         ]);
         showStatus(status, true);

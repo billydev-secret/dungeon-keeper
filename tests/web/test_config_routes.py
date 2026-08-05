@@ -441,6 +441,25 @@ def test_update_nsfw_classifier(authed_client, fake_ctx):
     assert policy.exempt_channel_ids == frozenset({1001})
 
 
+def test_update_nsfw_observe_toggle(authed_client, fake_ctx):
+    # The panel writes this alongside the thresholds; the service reads it on
+    # every age-gated image message, so a round trip through both is the test.
+    from bot_modules.services.nsfw_classifier_service import load_observe_policy
+
+    assert load_observe_policy(fake_ctx.db_path, fake_ctx.guild_id) is False
+
+    resp = authed_client.put(
+        "/api/config/nsfw-classifier", json={"observe_age_gated": True}
+    )
+    assert resp.status_code == 200
+    assert load_observe_policy(fake_ctx.db_path, fake_ctx.guild_id) is True
+
+    authed_client.put(
+        "/api/config/nsfw-classifier", json={"observe_age_gated": False}
+    )
+    assert load_observe_policy(fake_ctx.db_path, fake_ctx.guild_id) is False
+
+
 @pytest.mark.parametrize(
     "body",
     [
