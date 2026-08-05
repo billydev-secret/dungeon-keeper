@@ -11,7 +11,8 @@ A guess-the-member image game. A consenting submitter posts an image — **SFW o
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/guess submit <image>` | Slash | Guess role (required — errors if the role isn't configured, or if you don't hold it) | Submit an image (SFW or NSFW); runs the detection pipeline and opens the crop editor / post flow |
-| `/guess optin` | Slash | Everyone (errors if the Guess role isn't configured) | Grants you the consent role immediately — no confirmation step. Makes you eligible to submit and to be picked as an answer |
+| `/guess optin` | Slash | Everyone (errors if the Guess role isn't configured) | Opens a consent view disclosing what joining stores (cached originals, confession text + your id, stats) — the role is granted only on **Join the pool** |
+| `/guess optout` | Slash | Everyone | Self-service leave — removes the Guess role; open rounds where you're the answer flip `answer_optout`, past rounds and stats stay |
 | `/guess leaderboard` | Slash | Everyone | Posts the top 5 submitters (rounds posted/solved) and top 5 guessers (rounds solved) — fixed, no arguments or categories |
 | `/guess round <round_id>` | Slash | Mod (`manage_guild`; hidden from non-mods in the Discord UI via `default_permissions`) | Inspect a specific round (status, submitter, answer, crop, guess/unique-guesser counts, re-roll count) |
 | `/guess delete <round_id>` | Slash | Submitter or Mod (`manage_guild`; checked in code only — the command itself isn't permission-restricted client-side) | Soft-delete a round (message best-effort deleted, stats preserved) |
@@ -22,7 +23,7 @@ A guess-the-member image game. A consenting submitter posts an image — **SFW o
 | Web config panel | Web (dashboard) | Admin | Per-guild role, channel, cooldown, difficulty, image limits. Any channel may be chosen — age-gated or not. The API only checks the channel exists, and only when the bot can resolve the guild |
 | Web audit log | Web (dashboard) | Mod | Recent submit / delete / solve / guess-cap events |
 
-There is no `/guess optout` and no `/guess stats` command — neither exists in code.
+There is no `/guess stats` command — it doesn't exist in code.
 
 Bot perms required: **Send Messages**, **Embed Links**, **Attach Files**, **Read Message History** in the guess channel; **Manage Roles** to grant the consent role on `/guess optin`. The bot never removes the role itself — see "Consent and opt-in" below.
 
@@ -32,8 +33,8 @@ Bot perms required: **Send Messages**, **Embed Links**, **Attach Files**, **Read
 
 There's a configured **consent role** (`guess_role_id`). It gates submitting (`/guess submit` and the sticky-prompt URL modal), posting confessions (`/guess confess`), and being a pickable answer. Unlike some other guild features, this role has no "Everyone if unset" fallback: if it isn't configured, `/guess submit` and `/guess confess` both refuse with a message telling the user to ask an admin to configure it in the web dashboard.
 
-- `/guess optin` grants the role to the invoking member immediately — there is **no confirmation modal** and no explanation dialog. If the member already has the role, the bot just says so instead of re-adding it. The success message tells them "to leave, ask a mod to remove the role."
-- **There is no `/guess optout` command.** Opting out means a mod (or anyone with `Manage Roles`) removes the consent role from the member directly in Discord — the bot has no self-service removal path. When the bot observes a member losing that role (via an `on_member_update` listener), it flags any of that member's **open** rounds (where they're the answer) as `answer_optout` in the DB. The round itself is not deleted or hidden — its Guess button still works, but clicking it now replies "This round is no longer solvable — the answer opted out." This flag is permanent for that round; re-adding the role later does not clear it.
+- `/guess optin` (since 2026-08-06) opens an ephemeral **consent view** stating what joining stores — original submissions cached on disk until solve (unsolved rounds cleared after 90 days), confession text stored with the author's id and admin-visible, rounds/stats kept — and grants the role only on the **Join the pool** button. Already-holding members just get told so.
+- **`/guess optout`** (since 2026-08-06) removes the role self-service; a mod removing the role in Discord works identically. Either way the `on_member_update` listener flags any of that member's **open** rounds (where they're the answer) as `answer_optout` in the DB. The round itself is not deleted or hidden — its Guess button still works, but clicking it now replies "This round is no longer solvable — the answer opted out." This flag is permanent for that round; re-adding the role later does not clear it.
 
 ### `/guess submit` — the crop pipeline
 
@@ -126,4 +127,4 @@ Rounds (one row per submission with crop / answer / solver / counts), guesses (o
 
 Filesystem cache: original submissions live in a per-round file on disk **only until first correct solve**, at which point the file is deleted and the path cleared. Crops live on disk for the round's lifetime and are deleted on round deletion. The Discord CDN URL of the posted crop is the canonical reference if the local cache is missing.
 
-The original image is never reused for a future round and never published unspoilered. (Note: there is no opt-in confirmation modal in the current code — see "Consent and opt-in" — so this retention policy is not currently disclosed to the submitter at opt-in or submit time via any in-app text.)
+The original image is never reused for a future round and never published unspoilered. (Since 2026-08-06 this retention policy is disclosed in the `/guess optin` consent view, before the role is granted.)

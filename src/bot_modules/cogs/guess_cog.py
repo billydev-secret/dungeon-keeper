@@ -19,7 +19,7 @@ import discord
 
 from bot_modules.core.utils import disable_all_items
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
@@ -43,10 +43,12 @@ from bot_modules.services.guess_pipeline import (
 from bot_modules.services.guess_crop_renderer import render_crop, render_crop_editor, render_reveal
 from bot_modules.services.quote_renderer import render_quote
 from bot_modules.services.guess_repo import (
+    clear_round_original_path,
     count_guesses_for_round,
     count_unique_guessers_for_round,
     count_user_guesses_for_round,
     flag_user_open_rounds_optout,
+    list_stale_open_originals,
     get_last_guess_by_user_for_round,
     get_round,
     get_top_guessers,
@@ -1592,6 +1594,91 @@ class ConfessionPreviewView(discord.ui.View):
 
 # ── GuessCog ──────────────────────────────────────────────────────────────────
 
+# How long an unsolved round's original submission may sit in the on-disk
+# cache before the age-out sweep deletes the file (the round itself, and the
+# crop already posted to Discord, are untouched). Solved rounds delete their
+# original at solve time; this covers the rounds nobody ever solves.
+ORIGINAL_MAX_AGE_DAYS = 90
+
+# Shown before the consent role is granted. This is the disclosure moment, so
+# it states what joining stores and for how long — mirroring the Whisper
+# opt-in pattern (2026-08 review, guess U1). Plain facts, no hedging.
+GUESS_CONSENT_TEXT = (
+    "**Joining the Guess pool means:**\n"
+    "• You can submit images and post anonymous confessions, and **you become "
+    "a pickable answer** in other people's rounds.\n"
+    "• Your original submission is cached on the bot's disk until the round "
+    f"is solved (unsolved rounds are cleared after {ORIGINAL_MAX_AGE_DAYS} "
+    "days); the posted crop stays for the round's lifetime.\n"
+    "• Confession text is stored with your user id — anonymous to members, "
+    "visible to admins in the audit log, like every anonymous feature here.\n"
+    "• Rounds and win/solve stats are kept for the leaderboard.\n"
+    "• Leave anytime with `/guess optout` — your open rounds become "
+    "unsolvable and past rounds keep their stats.\n\n"
+    "Join the pool?"
+)
+
+
+def _do_age_out_originals(db_path: Path, *, now: float | None = None) -> int:
+    """Delete cached originals for open rounds older than the age-out window.
+
+    Returns the number of files cleared. Missing files (e.g. pre-rename
+    ``veil_cache`` paths) still get their DB reference cleared — path-missing
+    means already-clean."""
+    cutoff = (now if now is not None else time.time()) - ORIGINAL_MAX_AGE_DAYS * 86400
+    cleared = 0
+    with open_db(db_path) as conn:
+        for round_id, original_path in list_stale_open_originals(conn, older_than=cutoff):
+            try:
+                Path(original_path).unlink(missing_ok=True)
+            except OSError:
+                log.warning("guess: could not delete stale original %s", original_path)
+            clear_round_original_path(conn, round_id)
+            cleared += 1
+    return cleared
+
+
+class GuessOptinConsentView(discord.ui.View):
+    """Ephemeral consent view for /guess optin — the role is granted only
+    once the member explicitly clicks Join, never on command invocation."""
+
+    def __init__(self, member: discord.Member, role: discord.Role) -> None:
+        super().__init__(timeout=120)
+        self.member = member
+        self.role = role
+
+    @discord.ui.button(label="Join the pool", style=discord.ButtonStyle.success)
+    async def confirm(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # noqa: ARG002
+    ) -> None:
+        try:
+            await self.member.add_roles(self.role, reason="Guess opt-in (consented)")
+        except discord.Forbidden:
+            await interaction.response.edit_message(
+                content="❌ I don't have permission to add that role. "
+                "Ask an admin to check my role permissions and hierarchy.",
+                view=None,
+            )
+            return
+        await interaction.response.edit_message(
+            content="Welcome to the Guess pool. You can now submit images and "
+            "be guessed at. Leave anytime with `/guess optout`.",
+            view=None,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # noqa: ARG002
+    ) -> None:
+        await interaction.response.edit_message(
+            content="No problem — nothing was changed.", view=None
+        )
+
+
 class GuessCog(commands.Cog):
     guess = app_commands.Group(
         name="guess",
@@ -1622,12 +1709,25 @@ class GuessCog(commands.Cog):
         self.bot.add_view(GuessPromptView(self.bot))
         log.info("guess: re-registered %d persistent GameViews (cap %d)",
                  len(round_ids), _COG_LOAD_VIEW_CAP)
+        self._age_out_loop.start()
 
     async def cog_unload(self) -> None:
+        self._age_out_loop.cancel()
         for task in self._pending_prompt_reposts.values():
             if not task.done():
                 task.cancel()
         self._pending_prompt_reposts.clear()
+
+    @tasks.loop(hours=24)
+    async def _age_out_loop(self) -> None:
+        try:
+            cleared = await asyncio.to_thread(
+                _do_age_out_originals, self.bot.ctx.db_path
+            )
+            if cleared:
+                log.info("guess: aged out %d stale cached originals", cleared)
+        except Exception:
+            log.exception("guess: original age-out sweep failed")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -1920,22 +2020,64 @@ class GuessCog(commands.Cog):
             )
             return
 
-        try:
-            await member.add_roles(role, reason="Guess opt-in")
-        except discord.Forbidden:
+        # Consent gate: the role is granted by the view's Join button, not
+        # here — the member reads what joining stores before anything changes.
+        await interaction.followup.send(
+            GUESS_CONSENT_TEXT,
+            view=GuessOptinConsentView(member, role),
+            ephemeral=True,
+        )
+
+    @guess.command(
+        name="optout",
+        description="Leave the Guess pool — removes the Guess role from you.",
+    )
+    async def guess_optout(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        db_path = self.bot.ctx.db_path
+        config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
+
+        if config.guess_role_id == 0:
             await interaction.followup.send(
-                "❌ I don't have permission to add that role. "
-                "Ask an admin to check my role permissions and hierarchy.",
+                "❌ Guess role is not configured. Ask an admin to set it in the web dashboard.",
                 ephemeral=True,
             )
             return
 
+        role = interaction.guild.get_role(config.guess_role_id)
+        member = interaction.guild.get_member(interaction.user.id)
+        if member is None:
+            await interaction.followup.send(
+                "❌ Couldn't find you in this server.", ephemeral=True
+            )
+            return
+
+        if role is None or not _has_guess_role(member, config.guess_role_id):
+            await interaction.followup.send(
+                "❌ You're not in the Guess pool.", ephemeral=True
+            )
+            return
+
+        try:
+            await member.remove_roles(role, reason="Guess opt-out (self-service)")
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ I don't have permission to remove that role. "
+                "Ask a mod to remove it for you.",
+                ephemeral=True,
+            )
+            return
+
+        # The on_member_update listener sees the role removal and flags the
+        # member's open rounds answer_optout — no extra bookkeeping here.
         await interaction.followup.send(
-            f"Welcome to the Guess pool. You can now submit images and be guessed at. "
-            f"To leave, ask a mod to remove the {role.mention} role.",
+            "You've left the Guess pool. Any open rounds where you're the "
+            "answer are no longer solvable; your past rounds and stats stay. "
+            "Rejoin anytime with `/guess optin`.",
             ephemeral=True,
         )
-
 
     @guess.command(name="confess", description="Submit an anonymous text confession.")
     @app_commands.describe(text="Your anonymous confession.")

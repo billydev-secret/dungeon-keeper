@@ -714,7 +714,8 @@
       <thead><tr><th>Command</th><th>Permission</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><code>/guess submit image:&lt;attachment&gt;</code></td><td>Guess role</td><td>Open the crop editor for a new submission, SFW or NSFW — use the up / down / left / right / zoom buttons to position the reveal, or Auto for a centered crop. An image the detector finds nothing in (a pet, an object) still opens the editor for you to frame by hand. Post publishes the round; the full image is revealed (spoilered) on the first correct guess</td></tr>
-        <tr><td><code>/guess optin</code></td><td><span class="perm perm-all">Everyone</span></td><td>Join the Guess pool — grants the Guess role and adds you to the submitter / guesser autocomplete</td></tr>
+        <tr><td><code>/guess optin</code></td><td><span class="perm perm-all">Everyone</span></td><td>Join the Guess pool — shows what joining stores (cached submissions, confession text, stats) and grants the Guess role once you confirm</td></tr>
+        <tr><td><code>/guess optout</code></td><td><span class="perm perm-all">Everyone</span></td><td>Leave the Guess pool — removes the role; open rounds where you're the answer become unsolvable, past rounds and stats stay</td></tr>
         <tr><td><code>/guess confess text:...</code></td><td>Guess role</td><td>Submit an anonymous text confession to the Guess channel — preview, then Post; sender identity is logged for mods but hidden from members</td></tr>
         <tr><td><code>/guess leaderboard</code></td><td><span class="perm perm-all">Everyone</span></td><td>Top submitters and top guessers in this server</td></tr>
         <tr><td><code>/guess round round_id:&lt;n&gt;</code></td><td><span class="perm perm-mod">Mod — Manage Guild</span></td><td>Inspect a specific round: submitter, guesses, current state</td></tr>

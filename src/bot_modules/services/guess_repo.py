@@ -156,6 +156,33 @@ def set_round_original_path(
     )
 
 
+def list_stale_open_originals(
+    conn: sqlite3.Connection, *, older_than: float
+) -> list[tuple[int, str]]:
+    """Open (unsolved, undeleted) rounds created before *older_than* whose
+    original submission is still cached on disk.
+
+    Solved rounds delete their original at solve time; this is the age-out
+    for rounds nobody ever solves, so a member's uncropped submission
+    doesn't sit in ``guess_cache/`` forever (2026-08 review, guess G2)."""
+    rows = conn.execute(
+        """
+        SELECT id, original_path FROM guess_rounds
+         WHERE solved_at IS NULL AND deleted_at IS NULL
+           AND original_path IS NOT NULL AND original_path != ''
+           AND created_at < ?
+        """,
+        (older_than,),
+    ).fetchall()
+    return [(row["id"], row["original_path"]) for row in rows]
+
+
+def clear_round_original_path(conn: sqlite3.Connection, round_id: int) -> None:
+    conn.execute(
+        "UPDATE guess_rounds SET original_path = '' WHERE id = ?", (round_id,)
+    )
+
+
 def mark_round_solved(
     conn: sqlite3.Connection, round_id: int,
     *, solver_id: int, guesses_to_solve: int, unique_guessers_to_solve: int

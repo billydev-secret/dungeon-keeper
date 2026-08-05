@@ -214,3 +214,66 @@ def test_get_all_active_round_ids_excludes_deleted(sync_db_path):
         soft_delete_round(conn, rid)
         result = get_all_active_round_ids(conn)
     assert result == []
+
+
+# ── original age-out (2026-08 review, guess G2) ────────────────────────
+
+
+def test_list_stale_open_originals_selects_only_old_open_rounds(sync_db_path: Path):
+    from bot_modules.services.guess_repo import (
+        clear_round_original_path,
+        list_stale_open_originals,
+        set_round_original_path,
+    )
+
+    with open_db(sync_db_path) as conn:
+        old_open = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_A, difficulty="easy", candidate_count=1)
+        set_round_original_path(conn, old_open, "guess_cache/orig/old.jpg")
+        conn.execute("UPDATE guess_rounds SET created_at = 100.0 WHERE id = ?", (old_open,))
+
+        fresh = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_A, difficulty="easy", candidate_count=1)
+        set_round_original_path(conn, fresh, "guess_cache/orig/fresh.jpg")
+
+        old_solved = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_A, difficulty="easy", candidate_count=1)
+        set_round_original_path(conn, old_solved, "guess_cache/orig/solved.jpg")
+        conn.execute(
+            "UPDATE guess_rounds SET created_at = 100.0, solved_at = 200.0 WHERE id = ?",
+            (old_solved,),
+        )
+
+        old_no_file = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_A, difficulty="easy", candidate_count=1)
+        conn.execute("UPDATE guess_rounds SET created_at = 100.0 WHERE id = ?", (old_no_file,))
+
+        stale = list_stale_open_originals(conn, older_than=500.0)
+        assert stale == [(old_open, "guess_cache/orig/old.jpg")]
+
+        clear_round_original_path(conn, old_open)
+        assert list_stale_open_originals(conn, older_than=500.0) == []
+        # The round itself survives — only the cached file reference goes.
+        assert get_round(conn, old_open) is not None
+
+
+def test_do_age_out_originals_deletes_files_and_clears_paths(sync_db_path: Path, tmp_path: Path):
+    """The cog's sweep worker: file gone + reference cleared; a missing file
+    (pre-rename veil_cache path) still gets its reference cleared."""
+    from bot_modules.cogs.guess_cog import _do_age_out_originals
+    from bot_modules.services.guess_repo import set_round_original_path
+
+    real = tmp_path / "orig.jpg"
+    real.write_bytes(b"x")
+    with open_db(sync_db_path) as conn:
+        r1 = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_A, difficulty="easy", candidate_count=1)
+        set_round_original_path(conn, r1, str(real))
+        r2 = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_A, difficulty="easy", candidate_count=1)
+        set_round_original_path(conn, r2, str(tmp_path / "already-gone.jpg"))
+        conn.execute("UPDATE guess_rounds SET created_at = 100.0 WHERE id IN (?, ?)", (r1, r2))
+
+    cleared = _do_age_out_originals(sync_db_path, now=100.0 + 91 * 86400)
+
+    assert cleared == 2
+    assert not real.exists()
+    with open_db(sync_db_path) as conn:
+        paths = conn.execute(
+            "SELECT original_path FROM guess_rounds WHERE id IN (?, ?)", (r1, r2)
+        ).fetchall()
+    assert all(p["original_path"] == "" for p in paths)
