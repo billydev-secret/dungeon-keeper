@@ -105,16 +105,11 @@ export function mount(container) {
                 <input type="checkbox" data-field="observe_age_gated" ${n.observe_age_gated ? "checked" : ""} />
                 Check every image in age-gated channels
               </label>
-              <div class="field-hint">Off by default, and it changes nothing about what
-                the bot <em>does</em> — no image is ever removed because of this. Normally
-                an image is only checked when a rule might act on it, which in a
-                spoiler-required channel means just the few posted without a spoiler tag,
-                and in an age-gated channel with no spoiler rule means none at all. So the
-                figures below describe the small unrepresentative slice that was about to
-                be judged, which is a poor basis for setting the thresholds above. Turn
-                this on to check the ordinary posts too and get a real picture. It records
-                more, including detected content labels, for every image posted in those
-                channels — so it is worth deciding on rather than leaving on by habit.</div>
+              <div class="field-hint">Nothing is ever removed because of this. Normally an
+                image is only checked when a rule might act on it, so the figures below
+                cover a small, unrepresentative slice — a poor basis for the thresholds
+                above. Turn this on for a true picture; every image in those channels then
+                has a verdict and content labels recorded.</div>
             </div>
           </div>
 
