@@ -8,7 +8,9 @@ sweeps + loose-ends audit; per-bundle findings in the sibling
 
 ## Fix queue (deduped, priority order)
 
-### High — code
+### High — code — ALL SHIPPED 2026-08-06
+(6ac71558 erasure, 2b3094aa whisper, 1dfa8fea disclosure, 775d903d guess
+consent, 6639dbc0 aiohttp; mediums 49a02867; cat_catch dials 98395fdb)
 
 1. **Erasure-path hardening** (one work package, privacy-core A1/A2/A3 +
    gap rollup): chunk the `IN (…)` id list, one transaction, uniform
@@ -33,17 +35,21 @@ sweeps + loose-ends audit; per-bundle findings in the sibling
 
 ### High — policy (Ben decides, then a small commit documents)
 
-6. **Mod-assigned gender** (health G1): self-declared roles / transparency
-   line / drop the dimension — pick one; 377 members are tagged today.
+6. ~~Mod-assigned gender~~ — **owner decision 2026-08-06: accepted as
+   internal metrics, no change.** (Register row updated.)
 7. **Transparency package**: privacy-notice line naming Anthropic
-   (advisor questions) + Spotify (track queries); wire the two Image
-   Guard log channels (loose-ends §2 — enforcement currently trail-less).
+   (advisor questions) + Spotify (track queries). Image Guard log
+   channels: ~~wire them~~ — resolved; the web Blocked Images panel is
+   the trail of record (loose-ends §2 corrected), Discord fan-out
+   declined.
 
 ### Medium
 
 8. Perk-renewal notice DM, at least on price change (economy A2).
 9. `xp_events` 90-day retention + rollup (dbperf P1 — 1M rows, largest
-   table).
+   table). **Deferred with design note (2026-08-06):** xp_system has
+   unbounded all-time readers (leaderboards by source), so deletion needs
+   a rollup table the readers union — its own pass, not a quick sweep.
 10. `rules_events`: dismissed-event 180d sweep + spec preserve lines
     (ai-mod G1/G2).
 11. `games_external_messages` post-parse 30d sweep (batch-bc A1).

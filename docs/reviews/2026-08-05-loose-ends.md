@@ -23,17 +23,19 @@ git. Decisions marked **BEN** need a human call; nothing here was changed.
   code → make it a dial), quest faucet, participation. Rollback files remain
   valid until this verdict is accepted.
 
-## 2. Image Guard / Marqo swap — merged, but flying blind
+## 2. Image Guard / Marqo swap — ✅ resolved 2026-08-06 (web panel IS the trail)
 
 - The swap **is merged** (`fe244a7f`, memory saying "unmerged branch" is
   stale).
-- Both log channels are still **0** while enforcement is on:
-  `nsfw_log_channel_id=0`, `nsfw_sfw_prevention_log_channel_id=0`,
-  `nsfw_sfw_prevention_mode='enforce'`, `nsfw_observe_age_gated=1`.
-  Deletions/blocks currently leave **no audit trail anywhere** (log.txt is
-  wiped every boot; Discord audit log only shows the bot deleting).
-- **BEN:** pick a log channel id for both keys (dashboard: Image Guard
-  settings). This is the cheapest fix on this list.
+- Correction to the original finding: the durable trail **already exists on
+  the web** — `nsfw_blocks` records every gate deletion and Moderation →
+  Blocked Images renders it. Verified 2026-08-06: the recording call is
+  wired on the enforcement path (events_cog:475 → record_block_safely,
+  covered by test_post_monitoring) and the table is empty only because no
+  gate has destroyed an image since the swap (43 observe-mode
+  classifications, all compliant). The `0` log-channel keys govern only the
+  optional Discord-side fan-out, which Ben declined 2026-08-06 — the web
+  panel is the audit surface of record. Closed.
 
 ## 3. External game host payouts — ✅ closed
 

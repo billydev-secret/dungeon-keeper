@@ -10,7 +10,7 @@ list. Columns: **Purge?** = is the table covered by the privacy purge path
 | messages + attachments/mentions/embeds/reactions/sentiment | Message archive | **full content** (prod level=`all`, 452k of 631k rows have text) | indefinite | YES (keep_messages flag) | — | disclosure understates this — privacy-core U1 |
 | processed_messages, known_users | Message archive | user_id dedup/roster | indefinite | YES | — | |
 | member_xp, xp_events, voice_sessions, member_activity, member_events | XP/activity | activity timestamps, voice presence | indefinite | YES | — | **xp_reaction_awards (40k rows) MISSING from purge — games-platform A2** |
-| member_gender | Gender service | **mod-assigned gender** (377 tagged by 3 mods) — sensitive | indefinite | YES | — | **HIGH: no subject involvement/notice — needs basis decision (health-analytics G1)** |
+| member_gender | Gender service | mod-assigned gender (377 tagged) | indefinite | YES | — | **owner decision 2026-08-06: accepted as internal metrics, no change** (health-analytics G1 closed) |
 | quality_score_leaves | Member quality | derived score | indefinite | YES | — | profiling — document logic |
 | usage_events | Telemetry | command/panel usage per user | indefinite (no pruning, by design) | YES | — | spec discloses |
 | anon_audit_log | Anon features | deanonymizing actor↔target map | 90d sweep (verified: 7 rows live) | YES — **DECIDED** | — | ✓ |
@@ -65,8 +65,8 @@ list. Columns: **Purge?** = is the table covered by the privacy purge path
 
 - `Discord Messages/` in repo root is Billy's personal Discord export, not
   bot data — flagged for relocation in `2026-08-05-loose-ends.md` §6.
-- Image Guard runs in `enforce` mode with no log channel — enforcement
-  actions on user content currently leave no audit trail (§2 there).
+- Image Guard: web Blocked Images panel is the audit trail of record
+  (verified wired 2026-08-06); Discord fan-out declined (§2 closed).
 
 ## Gap list (final, 2026-08-06 — see synthesis doc for the fix queue)
 
