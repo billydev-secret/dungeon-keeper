@@ -29,7 +29,12 @@ import discord
 from bot_modules.core.app_context import AppContext, Bot
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services import casino_service as svc
-from bot_modules.services import pools_charts, pools_logic, pools_service
+from bot_modules.services import (
+    pools_charts,
+    pools_logic,
+    pools_metrics,
+    pools_service,
+)
 from bot_modules.services.economy_service import load_econ_settings
 
 from . import embeds as E
@@ -163,7 +168,7 @@ class PoolsMixin:
         state = await asyncio.to_thread(self._read_pools_panel, guild.id)
         if state is None:
             return
-        rnd, econ, split, points, days = state
+        rnd, econ, split, points, days, spec = state
         channel = guild.get_channel(int(rnd["channel_id"]))
         if not isinstance(channel, discord.TextChannel):
             return
@@ -173,10 +178,12 @@ class PoolsMixin:
             pools_charts.render_live_chart, days, line, points,
             accent=pools_charts.accent_hex(accent),
             currency=econ.currency_plural,
+            chart_kind=spec.chart_kind,
+            value_label=spec.chart_label,
         )
         embed = E.build_pools_panel_embed(
             econ, line, split, float(rnd["closes_at"]), str(rnd["local_day"]),
-            accent, closed=float(rnd["closes_at"]) <= time.time(),
+            accent, spec=spec, closed=float(rnd["closes_at"]) <= time.time(),
         )
         self._pools_last_paint[guild.id] = time.time()
 
@@ -213,10 +220,16 @@ class PoolsMixin:
             rnd = svc.live_pools_round(conn, svc.pools_channel(settings))
             if rnd is None:
                 return None
+            spec = pools_metrics.spec_for(str(rnd["metric"]))
+            if spec is None:
+                # Unmeasurable metric — plan_tick will refund this round on
+                # the next day roll. Repainting it would be drawing a chart
+                # of nothing.
+                return None
             bets = [dict(b) for b in svc.pools_bets(conn, int(rnd["id"]))]
-            # The day series is a full ledger scan, but the panel repaints
-            # at most once per 20s and only when a stake lands — ~16 times
-            # a day at this server's volume, so it does not want a cache.
+            # The series is one read, but the panel repaints at most once
+            # per 20s and only when a stake lands — ~16 times a day at this
+            # server's volume, so it does not want a cache.
             return (
                 rnd,
                 load_econ_settings(conn, guild_id),
@@ -224,11 +237,13 @@ class PoolsMixin:
                 pools_logic.probability_series(
                     bets, float(rnd["opened_at"]), float(rnd["closes_at"])
                 ),
-                pools_service.daily_series(
+                spec.series(
                     conn, guild_id,
                     tz_offset_hours=get_tz_offset_hours(conn, guild_id),
+                    now=time.time(),
                     limit_days=_CHART_DAYS,
                 ),
+                spec,
             )
 
     def _save_pools_message(self, round_id: int, message_id: int) -> None:
@@ -255,11 +270,13 @@ class PoolsMixin:
         if plan is None:
             return
         tick, channel_id = plan
-        # plan_tick already built the series to decide this; handing the
-        # chart slice along saves settlement a second full ledger scan.
-        chart_days = (tick.series or [])[-_CHART_DAYS:]
         for job in tick.settle:
-            await self._settle_pools(guild, channel_id, job, chart_days)
+            # plan_tick already read this metric's series to decide the
+            # outcome; handing the chart slice along keeps the card's chart
+            # and its settlement value provably the same rows.
+            await self._settle_pools(
+                guild, channel_id, job, (job.series or [])[-_CHART_DAYS:]
+            )
         if tick.open is not None:
             opened = await asyncio.to_thread(
                 self._open_pools, guild.id, channel_id, tick.open
@@ -277,6 +294,7 @@ class PoolsMixin:
                 pools_service.plan_tick(
                     conn, guild_id, tz_offset_hours=tz,
                     close_hour=settings.pools_close_hour, now=time.time(),
+                    enabled_metrics=settings.pools_metrics,
                 ),
                 svc.pools_channel(settings),
             )
@@ -284,7 +302,8 @@ class PoolsMixin:
     def _open_pools(self, guild_id: int, channel_id: int, job) -> bool:
         with self.ctx.open_db() as conn:
             return svc.open_pools_round(
-                conn, guild_id, channel_id, job.day, job.line, job.closes_at
+                conn, guild_id, channel_id, job.day, job.line, job.closes_at,
+                metric=job.metric,
             ) is not None
 
     async def _settle_pools(
@@ -293,6 +312,13 @@ class PoolsMixin:
     ) -> None:
         def _run():
             with self.ctx.open_db() as conn:
+                if job.unsettleable:
+                    # No spec, no outcome — refund rather than invent one.
+                    refunds = svc.void_pools_round(conn, job.round_id)
+                    return (
+                        svc.PoolsResult(voided=True, refunds=refunds),
+                        load_econ_settings(conn, guild.id),
+                    )
                 return (
                     svc.settle_pools_round(conn, job.round_id, job.result),
                     load_econ_settings(conn, guild.id),
@@ -309,12 +335,16 @@ class PoolsMixin:
             if res.refunds:
                 await channel.send(
                     embed=E.build_pools_void_embed(
-                        job.day, sum(res.refunds.values()), accent
+                        job.day, sum(res.refunds.values()), accent,
+                        unmeasurable=job.unsettleable,
                     )
                 )
             return
         if res.bets is None:
             return  # someone else claimed it
+        spec = pools_metrics.spec_for(job.metric)
+        if spec is None:
+            return  # unreachable: an unsettleable job never gets this far
 
         payouts = sorted(
             (
@@ -332,13 +362,15 @@ class PoolsMixin:
                 pools_charts.render_instrument_chart, days, float(job.line),
                 accent=pools_charts.accent_hex(accent),
                 currency=econ.currency_plural,
+                chart_kind=spec.chart_kind,
+                value_label=spec.chart_label,
             )
             if days else None
         )
         embed = E.build_pools_result_embed(
             econ, job.day, job.result, float(job.line),
             pools_logic.winning_side(job.result, float(job.line)),
-            payouts, res.takeout, accent, chart=png is not None,
+            payouts, res.takeout, accent, spec=spec, chart=png is not None,
         )
         with contextlib.suppress(discord.HTTPException):
             await channel.send(

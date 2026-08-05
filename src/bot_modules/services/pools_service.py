@@ -3,6 +3,16 @@
 See docs/plans/casino-classics-and-prediction-market.md Stage 2. Money and
 persistence live here; the maths lives in ``pools_logic``.
 
+**One metric among several.** Everything below describes the economy
+metric, which this module owns because it is the one metric that is a
+property of the ledger. Since 2026-08-03 the market rotates through a
+roster (``pools_metrics``), drawing one metric per guild-local day, and
+``plan_tick`` settles each round against the metric its own row named. The
+rest of the roster is measured over the bot's activity tables and lives in
+that module; the reasoning about manipulation cost that shapes it is the
+same reasoning that produced the exclusion documented at the end of this
+docstring.
+
 **The metric.** A day's "net change in the economy" is the change in total
 Petals in circulation over that guild-local day. Circulation is exactly the
 running sum of ``econ_ledger.amount`` — verified against prod, where the
@@ -40,11 +50,13 @@ from __future__ import annotations
 import itertools
 import json
 import operator
+import random
 import sqlite3
+from collections.abc import Callable
 from typing import NamedTuple
 
 from bot_modules.economy.logic import local_day_bounds, local_day_for
-from bot_modules.services import pools_logic
+from bot_modules.services import pools_logic, pools_metrics
 from bot_modules.services.casino_service import (
     ALL_ROUND_TABLES,
     BLACKJACK_HANDS,
@@ -213,16 +225,35 @@ def daily_series(
 
 
 class SettleJob(NamedTuple):
+    """One overdue round to close out.
+
+    ``metric`` is the key the round row stored, never the one being drawn
+    today — settlement recomputes the outcome, and by the time it runs the
+    rotation has already moved on.
+
+    ``series`` is that metric's own day series, carried along so the result
+    card's chart is drawn from the same rows the settlement value came from
+    rather than a second read that could disagree.
+    """
+
     round_id: int
     day: str
     result: int
     line: float
+    metric: str = pools_metrics.ANCHOR
+    series: list[DayMetric] | None = None
+    # A round whose metric this build no longer defines cannot be settled:
+    # there is nothing left to recompute the outcome from. It is refunded
+    # instead, which is the same treatment a one-sided pool gets.
+    unsettleable: bool = False
 
 
 class OpenJob(NamedTuple):
     day: str
     line: float
     closes_at: float
+    metric: str = pools_metrics.ANCHOR
+    series: list[DayMetric] | None = None
 
 
 class Tick(NamedTuple):
@@ -233,15 +264,14 @@ class Tick(NamedTuple):
     first would compute it against a day that has not finished — and in the
     worst case against its own partial self.
 
-    ``series`` is the day series the decision was made from, or None when
-    the tick short-circuited without needing it. Settlement wants the same
-    rows for its chart, and recomputing them would be a second full scan of
-    the ledger for an answer already in hand.
+    Each job carries its own metric's ``series``, because under rotation
+    the round being settled and the round being opened are usually
+    measuring different things — there is no longer one series that
+    describes the whole tick.
     """
 
     settle: list[SettleJob]
     open: OpenJob | None
-    series: list[DayMetric] | None = None
 
     @property
     def idle(self) -> bool:
@@ -262,7 +292,7 @@ def closing_rounds(
     ``deadline``).
     """
     return conn.execute(
-        "SELECT id, guild_id, channel_id, message_id, line, "
+        "SELECT id, guild_id, channel_id, message_id, line, metric, "
         "       closes_at AS deadline "
         "FROM casino_pools_rounds "
         "WHERE status = 'open' AND message_id != 0 "
@@ -278,26 +308,32 @@ def plan_tick(
     tz_offset_hours: float,
     close_hour: int,
     now: float,
+    enabled_metrics: str = "",
+    rng: random.Random | None = None,
 ) -> Tick:
     """Decide the day roll's work.
 
     Settles every open round whose measured day is over — recomputed from
-    the ledger, so a round missed by hours or a whole restart lands on the
-    same answer it would have at midnight. Opens today's round if there is
-    not one, there is enough history for a line, and betting has not
-    already passed its close hour.
+    that round's own stored metric, so a round missed by hours or a whole
+    restart lands on the same answer it would have at midnight. Opens
+    today's round if there is not one, some metric has enough history for a
+    line, and betting has not already passed its close hour.
 
     **The two lookups come first, deliberately.** This runs from the cog's
     minute maintenance loop, and on all but one tick a day the answer is
     "nothing to do". Both queries below hit ``idx_casino_pools_guild_day``
     on a table that grows by one row a day, so the idle case costs
-    microseconds; only a tick with actual work pays for ``daily_series``,
-    which is a full scan of the ledger and grows with it forever. Computing
-    the series first made every idle minute pay that price.
+    microseconds; only a tick with actual work reads any metric series.
+    Computing them first made every idle minute pay that price.
+
+    A working tick now reads up to one series per enabled metric instead of
+    one ledger scan. Each count metric is a windowed, index-covered
+    aggregate measured in tens of milliseconds — cheaper than the ledger
+    scan the incumbent metric already needed — and this runs once a day.
     """
     today = _local_day(now, tz_offset_hours)
     overdue = conn.execute(
-        "SELECT id, local_day, line FROM casino_pools_rounds "
+        "SELECT id, local_day, line, metric FROM casino_pools_rounds "
         "WHERE guild_id = ? AND status = 'open' AND local_day < ?",
         (guild_id, today),
     ).fetchall()
@@ -311,26 +347,92 @@ def plan_tick(
     if not overdue and (has_today or now >= closes_at):
         return Tick([], None)
 
-    series = daily_series(conn, guild_id, tz_offset_hours=tz_offset_hours)
-    by_day = {m.day: m for m in series}
+    # One read per metric, reused across every job that names it: several
+    # overdue rounds on the same metric are one series, not three.
+    cache: dict[str, list[DayMetric] | None] = {}
 
-    settle = [
-        SettleJob(
-            int(r["id"]), str(r["local_day"]),
-            # A day with no ledger rows at all had a net change of zero.
-            by_day[str(r["local_day"])].net
-            if str(r["local_day"]) in by_day else 0,
-            float(r["line"]),
-        )
-        for r in overdue
-    ]
+    def series_for(key: str) -> list[DayMetric] | None:
+        if key not in cache:
+            spec = pools_metrics.spec_for(key)
+            cache[key] = None if spec is None else spec.series(
+                conn, guild_id, tz_offset_hours=tz_offset_hours, now=now
+            )
+        return cache[key]
+
+    settle: list[SettleJob] = []
+    for row in overdue:
+        key = str(row["metric"])
+        day = str(row["local_day"])
+        days = series_for(key)
+        if days is None:
+            # The metric is gone from this build — nothing to recompute
+            # against, so the round is refunded rather than guessed at.
+            settle.append(SettleJob(
+                int(row["id"]), day, 0, float(row["line"]),
+                metric=key, unsettleable=True,
+            ))
+            continue
+        by_day = {m.day: m for m in days}
+        settle.append(SettleJob(
+            int(row["id"]), day,
+            # A day the metric recorded nothing for measured zero.
+            by_day[day].net if day in by_day else 0,
+            float(row["line"]), metric=key, series=days,
+        ))
 
     opening: OpenJob | None = None
     if not has_today:
-        line = pools_logic.derive_line(
-            [m.net for m in series if m.day < today]
+        opening = _plan_open(
+            conn, guild_id, today, closes_at, series_for,
+            enabled_metrics=enabled_metrics,
+            rng=rng or random.Random(),
+        )
+
+    return Tick(settle, opening)
+
+
+def _plan_open(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    today: str,
+    closes_at: float,
+    series_for: Callable[[str], list[DayMetric] | None],
+    *,
+    enabled_metrics: str,
+    rng: random.Random,
+) -> OpenJob | None:
+    """Draw today's metric and derive its line, or None to open nothing.
+
+    Eligibility is decided per metric before the draw rather than after:
+    drawing first and discarding an ineligible pick would bias the roster
+    towards whichever metrics happen to be measurable, and could hand back
+    "no market today" while a perfectly good metric sat unexamined.
+    """
+    lines: dict[str, float] = {}
+    for key in pools_metrics.enabled_keys(enabled_metrics):
+        spec = pools_metrics.spec_for(key)
+        days = series_for(key)
+        if spec is None or days is None:
+            continue
+        line = pools_metrics.line_for(
+            spec, [m for m in days if m.day < today]
         )
         if line is not None:
-            opening = OpenJob(today, line, closes_at)
+            lines[key] = line
+    if not lines:
+        return None
 
-    return Tick(settle, opening, series)
+    previous = conn.execute(
+        "SELECT metric FROM casino_pools_rounds WHERE guild_id = ? "
+        "ORDER BY local_day DESC LIMIT 1",
+        (guild_id,),
+    ).fetchone()
+    chosen = pools_metrics.choose_metric(
+        sorted(lines), str(previous["metric"]) if previous else None, rng
+    )
+    if chosen is None:
+        return None
+    return OpenJob(
+        today, lines[chosen], closes_at,
+        metric=chosen, series=series_for(chosen),
+    )

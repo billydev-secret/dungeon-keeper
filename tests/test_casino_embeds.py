@@ -11,11 +11,15 @@ from bot_modules.cogs.casino.embeds import (
     build_derby_result_embed,
     build_derby_round_embed,
     build_help_embed,
+    build_pools_panel_embed,
+    build_pools_result_embed,
+    build_pools_void_embed,
     build_roulette_round_embed,
     build_slots_embed,
     build_slots_spin_embed,
 )
 from bot_modules.services import casino_logic as logic
+from bot_modules.services import pools_logic, pools_metrics
 from bot_modules.services.casino_service import CasinoSettings
 from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
@@ -467,3 +471,71 @@ def test_hub_embed_omits_standings_when_the_board_is_empty():
             _ECON, CasinoSettings(channel_id=1), None, standings=standings,
         )
         assert _standings_field(embed) is None
+
+
+# ── pools cards name their metric, and state their cap ─────────────────
+#
+# One wiring assertion each, not a re-test of pools_metrics: the roster
+# already pins that every metric HAS a question and a cap note. What is
+# only checkable here is that the card actually prints them — a cap that
+# exists in the registry but never reaches the panel is a promise members
+# cannot see, and the promise is the whole reason the metric is bettable.
+
+
+def _panel(key: str) -> discord.Embed:
+    return build_pools_panel_embed(
+        _ECON, 1186.5, pools_logic.PoolSplit(400, 250), 0.0, "2026-08-03",
+        None, spec=pools_metrics.SPECS[key],
+    )
+
+
+def test_panel_asks_the_drawn_metrics_question():
+    body = _panel("messages").description or ""
+    assert "1,186.5" in body
+    assert "messages today" in body
+    assert "2026-08-03" in body
+
+
+def test_panel_states_the_cap_where_members_bet():
+    fields = " ".join(f.value or "" for f in _panel("messages").fields)
+    assert "at most 30 messages per person" in fields
+
+
+def test_panel_names_the_metric_in_its_title():
+    """The market rotates daily; a card that just says "today's market"
+    tells a member nothing about what they are betting on."""
+    assert "Messages sent" in (_panel("messages").title or "")
+    assert "Economy net change" in (_panel("economy_net").title or "")
+
+
+def test_the_currency_placeholder_is_filled_in_not_printed():
+    body = _panel("economy_net").description or ""
+    assert "gems" in body
+    assert "{currency}" not in body
+
+
+def _result(key: str, value: int) -> discord.Embed:
+    return build_pools_result_embed(
+        _ECON, "2026-08-03", value, 1186.5, pools_logic.OVER, [], 19, None,
+        spec=pools_metrics.SPECS[key],
+    )
+
+
+def test_count_results_read_unsigned_and_economy_results_keep_their_sign():
+    """A count of "+1,204 messages" reads like a delta it is not; a net
+    change of "4,275" loses the direction that is its whole point."""
+    counted = _result("messages", 1204).description or ""
+    assert "**1,204** messages" in counted
+    assert "+1,204" not in counted
+    assert "**+4,275**" in (_result("economy_net", 4275).description or "")
+
+
+def test_void_card_distinguishes_the_two_refund_reasons():
+    """A member whose round was called off because the bot could no longer
+    measure it must not be told they all backed the same side."""
+    one_sided = build_pools_void_embed("2026-08-03", 250, None).description or ""
+    unmeasurable = build_pools_void_embed(
+        "2026-08-03", 250, None, unmeasurable=True
+    ).description or ""
+    assert "same side" in one_sided
+    assert "no longer measure" in unmeasurable

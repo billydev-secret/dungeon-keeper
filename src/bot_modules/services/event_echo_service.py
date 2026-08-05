@@ -87,6 +87,7 @@ from bot_modules.games.constants import GAME_NAMES
 from bot_modules.games_external import parser
 from bot_modules.services import economy_auction_service as auction_svc
 from bot_modules.services import economy_bounty_service as bounty_svc
+from bot_modules.services import pools_metrics
 from bot_modules.services import pools_service as pools_svc
 from bot_modules.services.economy_raffle_service import raffle_enabled
 from bot_modules.services.economy_service import load_econ_settings
@@ -543,6 +544,21 @@ class EchoCandidate:
     deadline: float | None = None
 
 
+def _pools_name(row) -> str:
+    """The closing market, named by what it counts.
+
+    Falls back to the bare line for a metric this build no longer defines:
+    the round is about to be refunded anyway, and a last call that says
+    less is better than one that crashes the sweep.
+    """
+    line = f"{float(row['line']):g}"
+    spec = pools_metrics.spec_for(str(row["metric"]))
+    return (
+        f"today's over/under on {spec.label.lower()} ({line})"
+        if spec else f"today's over/under ({line})"
+    )
+
+
 def _candidate(row, *, source: str, name: str) -> EchoCandidate:
     """A candidate from a row the owning service already aliased for us.
 
@@ -718,11 +734,14 @@ def econ_candidates(conn: sqlite3.Connection, guild_ids, now: float) -> list[Ech
         for row in auction_svc.closing_auctions(conn, now, CLOSING_LEAD_SECONDS)
     ]
     found += [
-        # A round has no title — its line is the thing you'd bet on.
+        # A round has no title — the metric and its line are the thing
+        # you'd bet on. Naming the metric is not decoration: the market
+        # rotates daily, so "today's over/under (1186.5)" on its own says
+        # nothing about what is being counted.
         _candidate(
             row,
             source=SOURCE_POOLS_CLOSING,
-            name=f"today's over/under ({float(row['line']):g})",
+            name=_pools_name(row),
         )
         for row in pools_svc.closing_rounds(conn, now, CLOSING_LEAD_SECONDS)
     ]

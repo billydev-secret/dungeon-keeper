@@ -326,3 +326,57 @@ def test_update_pools_rejects_a_garbage_channel(authed_client):
     assert authed_client.put(
         "/api/config/casino", json={"pools_channel_id": "not-a-snowflake"}
     ).status_code == 400
+
+
+# ── the metric roster (docs/plans/pools-metric-rotation.md) ────────────
+
+
+def test_config_exposes_the_metric_catalog_and_an_empty_roster(authed_client):
+    """The panel renders its checkboxes from the server's catalogue, so a
+    metric added in Python gets a checkbox with no JS change."""
+    casino = authed_client.get("/api/config").json()["casino"]
+    assert casino["pools_metrics"] == ""  # empty = the whole roster
+    catalog = casino["pools_metric_catalog"]
+    keys = [m["key"] for m in catalog]
+    assert "economy_net" in keys and "messages" in keys
+    assert all(m["label"] for m in catalog)
+
+
+def test_update_pools_metrics_roundtrips(authed_client, fake_ctx):
+    fake_ctx.bot = MagicMock()
+    resp = authed_client.put(
+        "/api/config/casino",
+        json={"pools_metrics": "messages,posters"},
+    )
+    assert resp.status_code == 200
+    with fake_ctx.open_db() as conn:
+        s = load_casino_settings(conn, fake_ctx.guild_id)
+    assert s.pools_metrics == "messages,posters"
+    assert authed_client.get("/api/config").json()["casino"][
+        "pools_metrics"
+    ] == "messages,posters"
+
+
+def test_update_pools_metrics_rejects_an_unknown_key(authed_client):
+    """A typo must not quietly shrink the roster — the guild would silently
+    run one metric, or none."""
+    resp = authed_client.put(
+        "/api/config/casino",
+        json={"pools_metrics": "messages,not_a_metric"},
+    )
+    assert resp.status_code == 400
+    assert "not_a_metric" in resp.json()["detail"]
+
+
+def test_an_empty_roster_means_all_not_none(authed_client, fake_ctx):
+    """Unticking every box must not silently stop the market; that is what
+    pools_enabled is for."""
+    fake_ctx.bot = MagicMock()
+    assert authed_client.put(
+        "/api/config/casino", json={"pools_metrics": ""}
+    ).status_code == 200
+    from bot_modules.services import pools_metrics
+
+    with fake_ctx.open_db() as conn:
+        stored = load_casino_settings(conn, fake_ctx.guild_id).pools_metrics
+    assert pools_metrics.enabled_keys(stored) == pools_metrics.ALL_KEYS

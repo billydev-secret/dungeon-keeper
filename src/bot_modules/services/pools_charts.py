@@ -134,8 +134,13 @@ def _draw_candles(ax, days, line, accent, currency) -> None:
     _style(ax, ylabel=f"{currency} in circulation")
 
 
-def _draw_net_change(ax, days, line, accent) -> None:
-    """The metric itself, with the rolling median and band."""
+def _draw_net_change(ax, days, line, accent, ylabel: str = "Net change") -> None:
+    """The metric itself, with the rolling median and band.
+
+    Shared by every metric, not just the economy's: a count metric's
+    ``DayMetric`` is filled so that ``body`` is the day's count, so this
+    draws the roster without a branch. Only the axis label changes.
+    """
     bodies = [d.body for d in days]
     med, sig = pools_logic.median_band(bodies)
     # The overlay is drawn only where it is defined. During the warmup week
@@ -161,19 +166,19 @@ def _draw_net_change(ax, days, line, accent) -> None:
     if line is not None:
         _marker(ax, line, f"LINE {pools_logic.format_line(line)}", accent)
     ax.axhline(0, color=_MUTED, lw=0.8, zorder=2)
-    _style(ax, ylabel="Net change")
+    _style(ax, ylabel=ylabel)
     if overlay:
         legend = ax.legend(loc="upper right", fontsize=7.5, frameon=False, ncol=2)
         for text in legend.get_texts():
             text.set_color(_MUTED)
 
 
-def _draw_volume(ax, days) -> None:
+def _draw_volume(ax, days, ylabel: str = "Volume") -> None:
     ax.bar(
         range(len(days)), [d.volume for d in days],
         color=_MUTED, alpha=0.55, width=0.56,
     )
-    _style(ax, ylabel="Volume")
+    _style(ax, ylabel=ylabel)
 
 
 def _draw_probability(ax, points, accent) -> None:
@@ -237,6 +242,13 @@ def _stack(ratios: list[float], height: float, *, shared: int | None = None):
     return fig, axes
 
 
+def _title(ax, headline: str, subject: str) -> None:
+    ax.set_title(
+        f"POOLS  ·  {headline}  ·  {subject}",
+        color=_TEXT, fontsize=12, fontweight="bold", loc="left", pad=12,
+    )
+
+
 def render_live_chart(
     days: list[DayMetric],
     line: float | None,
@@ -244,28 +256,40 @@ def render_live_chart(
     *,
     accent: str = _DEFAULT_ACCENT,
     currency: str = "Petals",
+    chart_kind: str = "candles",
+    value_label: str = "Net change",
 ) -> bytes:
     """The open market's chart: the instrument, then the market's opinion.
 
     Instrument on top, price below — the way a prediction-market page
     stacks it. Volume is dropped here in favour of the odds path: while
     betting is open, how the pool is moving is the live information, and
-    ledger-row counts are not. The result card keeps volume.
+    row counts are not. The result card keeps volume.
+
+    ``chart_kind`` is the metric's shape. Candlesticks are drawn only for a
+    cumulative *level* — the ledger's running total, where a day genuinely
+    has an open, a high, a low and a close. A count metric has none of
+    those: it is one number per day, so drawing it as a candle would invent
+    three readings the data does not contain. It gets the bar panel alone.
     """
     if not days:
         raise ValueError("render_live_chart needs at least one day")
-    # Only the two day-indexed panels share x; the odds path does not.
-    fig, (a1, a2, a3) = _stack([3, 1.25, 1.35], 6.8, shared=2)
-    _draw_candles(a1, days, line, accent, currency)
-    a1.set_title(
-        "POOLS  ·  today's market  ·  each body is one day's net change",
-        color=_TEXT, fontsize=12, fontweight="bold", loc="left", pad=12,
-    )
-    _draw_net_change(a2, days, line, accent)
-    _day_ticks(a2, days)
-    # a1 shares a2's axis, so a2's labels would otherwise print under both.
-    a1.tick_params(labelbottom=False)
-    a2.tick_params(labelbottom=True)
+    if chart_kind == "candles":
+        # Only the two day-indexed panels share x; the odds path does not.
+        fig, (a1, a2, a3) = _stack([3, 1.25, 1.35], 6.8, shared=2)
+        _draw_candles(a1, days, line, accent, currency)
+        _title(a1, "today's market", "each body is one day's net change")
+        _draw_net_change(a2, days, line, accent, value_label)
+        _day_ticks(a2, days)
+        # a1 shares a2's axis, so a2's labels would print under both.
+        a1.tick_params(labelbottom=False)
+        a2.tick_params(labelbottom=True)
+    else:
+        fig, (a2, a3) = _stack([3, 1.35], 5.6, shared=1)
+        _draw_net_change(a2, days, line, accent, value_label)
+        _title(a2, "today's market", f"each bar is one day's {value_label.lower()}")
+        _day_ticks(a2, days)
+        a2.tick_params(labelbottom=True)
     _draw_probability(a3, points, accent)
     a3.set_xticks([0, 1.0])
     a3.set_xticklabels(["open", "close"], fontsize=8)
@@ -279,25 +303,35 @@ def render_instrument_chart(
     *,
     accent: str = _DEFAULT_ACCENT,
     currency: str = "Petals",
+    chart_kind: str = "candles",
+    value_label: str = "Net change",
 ) -> bytes:
-    """The settled day's chart: candles, net change and volume.
+    """The settled day's chart: the metric, and who moved it.
 
-    ``line`` draws two markers when present: the net-change threshold on the
-    middle panel, and the circulation level the close had to beat on the
-    candles. None (during the 7-day warmup) simply omits them.
+    For the economy metric ``line`` draws two markers: the net-change
+    threshold on the middle panel, and the circulation level the close had
+    to beat on the candles. None (during the 7-day warmup) omits them.
+
+    The bottom panel is ledger-row volume for the economy metric and the
+    number of distinct members who contributed for every count metric —
+    which is the more honest reading of "volume" for a metric that counts
+    what members did.
     """
     if not days:
         raise ValueError("render_instrument_chart needs at least one day")
-    fig, (a1, a2, a3) = _stack([3, 1.35, 0.9], 6.4)
-    _draw_candles(a1, days, line, accent, currency)
-    a1.set_title(
-        "POOLS  ·  the day is in  ·  each body is one day's net change",
-        color=_TEXT, fontsize=12, fontweight="bold", loc="left", pad=12,
-    )
-    _draw_net_change(a2, days, line, accent)
-    _draw_volume(a3, days)
+    if chart_kind == "candles":
+        fig, (a1, a2, a3) = _stack([3, 1.35, 0.9], 6.4)
+        _draw_candles(a1, days, line, accent, currency)
+        _title(a1, "the day is in", "each body is one day's net change")
+        _draw_net_change(a2, days, line, accent, value_label)
+        _draw_volume(a3, days)
+        a1.tick_params(labelbottom=False)
+    else:
+        fig, (a2, a3) = _stack([3, 0.9], 5.2)
+        _draw_net_change(a2, days, line, accent, value_label)
+        _title(a2, "the day is in", f"each bar is one day's {value_label.lower()}")
+        _draw_volume(a3, days, "Members")
     _day_ticks(a3, days)
-    a1.tick_params(labelbottom=False)
     a2.tick_params(labelbottom=False)
     a3.tick_params(labelbottom=True)
     # No tight_layout: the shared-x stack already has its spacing from

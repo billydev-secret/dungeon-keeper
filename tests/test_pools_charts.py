@@ -138,3 +138,63 @@ def test_probability_series_clamps_a_late_bet_into_the_window():
 
 def test_probability_series_of_an_empty_round():
     assert L.probability_series([], 0.0, 1000.0) == []
+
+
+# ── count metrics draw as bars, not candles ────────────────────────────
+#
+# A count metric has one reading per day: no open, no high, no low, no
+# close. Drawing it as a candle would render three numbers the data does
+# not contain, so those metrics drop the candle panel entirely.
+
+
+def _count_week() -> list[DayMetric]:
+    """The shape pools_metrics builds for a count metric."""
+    return [
+        DayMetric(
+            day=f"2026-07-{i:02d}", mint=0, burn=0, hold=0, net=v,
+            open=0, high=v, low=0, close=v, volume=v // 10,
+        )
+        for i, v in enumerate([120, 90, 140, 175, 110, 95, 160, 130], start=1)
+    ]
+
+
+@pytest.mark.parametrize("line", [125.5, None], ids=["with-line", "warmup"])
+def test_bar_charts_render_for_count_metrics(line):
+    live = pc.render_live_chart(
+        _count_week(), line, [(0.2, 0.4), (0.9, 0.7)],
+        chart_kind="bars", value_label="Messages",
+    )
+    settled = pc.render_instrument_chart(
+        _count_week(), line, chart_kind="bars", value_label="Messages",
+    )
+    assert live.startswith(PNG_MAGIC)
+    assert settled.startswith(PNG_MAGIC)
+    assert not plt.get_fignums(), "a leaked figure leaks memory every repaint"
+
+
+def test_bar_charts_survive_a_single_day():
+    """The first day after a metric's feature ships has one bar."""
+    one = _count_week()[:1]
+    assert pc.render_live_chart(
+        one, None, [], chart_kind="bars", value_label="Cats caught"
+    ).startswith(PNG_MAGIC)
+    assert pc.render_instrument_chart(
+        one, None, chart_kind="bars", value_label="Cats caught"
+    ).startswith(PNG_MAGIC)
+    assert not plt.get_fignums()
+
+
+def test_bar_charts_survive_a_zero_day():
+    """Zero-filled interior gaps reach the renderer as real zero bars."""
+    days = _count_week()
+    days[3] = days[3]._replace(net=0, high=0, close=0, volume=0)
+    assert pc.render_instrument_chart(
+        days, 125.5, chart_kind="bars", value_label="Messages"
+    ).startswith(PNG_MAGIC)
+    assert not plt.get_fignums()
+
+
+def test_candles_remain_the_default_for_the_economy_metric():
+    """The incumbent metric is a cumulative level and keeps its OHLC."""
+    assert pc.render_instrument_chart(_week(), 200.5).startswith(PNG_MAGIC)
+    assert not plt.get_fignums()
