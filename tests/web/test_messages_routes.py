@@ -433,7 +433,11 @@ def test_export_filter_by_author_id(authed_client, fake_ctx):
 
 @pytest.mark.parametrize(
     "path",
-    ["/api/messages/search", "/api/messages/search/export"],
+    [
+        "/api/messages/search",
+        "/api/messages/search/export",
+        "/api/messages/context?message_id=1",
+    ],
 )
 def test_messages_routes_require_auth(fake_ctx, path):
     from fastapi.testclient import TestClient
@@ -501,3 +505,145 @@ def test_export_excludes_bots_by_default(authed_client, fake_ctx):
     payload = json.loads(resp.content)
     rows = payload["messages"] if isinstance(payload, dict) else payload
     assert len(rows) == 1
+
+
+# ── Deleted messages: badged, not hidden ─────────────────────────────
+
+
+def _seed_with_deleted(db_path, guild_id):
+    _seed(
+        db_path,
+        guild_id=guild_id,
+        messages=[
+            {"message_id": 1, "channel_id": 10, "author_id": 50, "content": "live", "ts": 100},
+            {"message_id": 2, "channel_id": 10, "author_id": 50, "content": "gone", "ts": 200},
+            {"message_id": 3, "channel_id": 10, "author_id": 50, "content": "swept", "ts": 300},
+        ],
+    )
+    with open_db(db_path) as conn:
+        conn.execute(
+            "UPDATE messages SET deleted_at = 999, deleted_source = 'discord' WHERE message_id = 2"
+        )
+        conn.execute(
+            "UPDATE messages SET deleted_at = 998, deleted_source = 'auto_delete' WHERE message_id = 3"
+        )
+
+
+def test_deleted_messages_appear_in_results_by_default(authed_client, fake_ctx):
+    """The archive keeps them; the panel badges them rather than hiding them."""
+    _seed_with_deleted(fake_ctx.db_path, fake_ctx.guild_id)
+    body = authed_client.get("/api/messages/search").json()
+    assert {m["content"] for m in body["messages"]} == {"live", "gone", "swept"}
+
+
+def test_search_exposes_deletion_state_and_suppresses_the_deep_link(authed_client, fake_ctx):
+    _seed_with_deleted(fake_ctx.db_path, fake_ctx.guild_id)
+    body = authed_client.get("/api/messages/search").json()
+    by_content = {m["content"]: m for m in body["messages"]}
+
+    assert by_content["live"]["deleted_at"] is None
+    assert by_content["live"]["discord_url"] == (
+        f"https://discord.com/channels/{fake_ctx.guild_id}/10/1"
+    )
+
+    assert by_content["gone"]["deleted_source"] == "discord"
+    assert by_content["gone"]["discord_url"] is None, "a deep link would land on nothing"
+    assert by_content["swept"]["deleted_source"] == "auto_delete"
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("only", {"gone", "swept"}),
+        ("live", {"live"}),
+        ("discord", {"gone"}),
+        ("auto_delete", {"swept"}),
+    ],
+)
+def test_deleted_filter_narrows_results(authed_client, fake_ctx, value, expected):
+    _seed_with_deleted(fake_ctx.db_path, fake_ctx.guild_id)
+    body = authed_client.get("/api/messages/search", params={"deleted": value}).json()
+    assert {m["content"] for m in body["messages"]} == expected
+
+
+def test_export_carries_the_deleted_filter(authed_client, fake_ctx):
+    _seed_with_deleted(fake_ctx.db_path, fake_ctx.guild_id)
+    resp = authed_client.get("/api/messages/search/export", params={"deleted": "only"})
+    payload = json.loads(resp.content)
+    assert {m["content"] for m in payload["messages"]} == {"gone", "swept"}
+
+
+# ── Context endpoint ─────────────────────────────────────────────────
+
+
+def _seed_conversation(db_path, guild_id, count=8):
+    _seed(
+        db_path,
+        guild_id=guild_id,
+        messages=[
+            {
+                "message_id": 100 + i,
+                "channel_id": 10,
+                "author_id": 50,
+                "content": f"msg {i}",
+                "ts": 1000 + i,
+            }
+            for i in range(count)
+        ],
+    )
+
+
+def test_context_returns_the_surrounding_conversation(authed_client, fake_ctx):
+    _seed_conversation(fake_ctx.db_path, fake_ctx.guild_id)
+    body = authed_client.get("/api/messages/context", params={"message_id": 104}).json()
+    contents = [m["content"] for m in body["messages"]]
+    assert contents == [f"msg {i}" for i in range(8)]  # window is wider than the corpus
+    assert body["message_id"] == "104"
+    assert body["has_older"] is False and body["has_newer"] is False
+
+
+def test_context_pages_outward(authed_client, fake_ctx):
+    _seed_conversation(fake_ctx.db_path, fake_ctx.guild_id)
+    body = authed_client.get(
+        "/api/messages/context", params={"message_id": 104, "direction": "older"}
+    ).json()
+    assert [m["content"] for m in body["messages"]] == ["msg 0", "msg 1", "msg 2", "msg 3"]
+
+
+def test_context_of_an_unknown_message_is_404(authed_client, fake_ctx):
+    _seed_conversation(fake_ctx.db_path, fake_ctx.guild_id)
+    assert authed_client.get("/api/messages/context", params={"message_id": 999}).status_code == 404
+
+
+def test_context_cannot_read_another_guild(authed_client, fake_ctx):
+    """Guild scoping is the one thing this endpoint must never get wrong."""
+    _seed(
+        fake_ctx.db_path,
+        guild_id=fake_ctx.guild_id + 1,
+        messages=[{"message_id": 700, "channel_id": 10, "author_id": 50, "content": "other", "ts": 1}],
+    )
+    assert authed_client.get("/api/messages/context", params={"message_id": 700}).status_code == 404
+
+
+def test_context_rejects_a_bogus_direction(authed_client, fake_ctx):
+    _seed_conversation(fake_ctx.db_path, fake_ctx.guild_id)
+    resp = authed_client.get(
+        "/api/messages/context", params={"message_id": 104, "direction": "sideways"}
+    )
+    assert resp.status_code == 400
+
+
+def test_context_includes_bots(authed_client, fake_ctx):
+    """Search hides bots; context must not — it reconstructs the exchange."""
+    _seed_conversation(fake_ctx.db_path, fake_ctx.guild_id, count=3)
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO known_users (guild_id, user_id, username, display_name, updated_at, is_bot)"
+            " VALUES (?, ?, 'botty', 'Botty', 1, 1)",
+            (fake_ctx.guild_id, 900),
+        )
+        conn.execute(
+            "UPDATE messages SET author_id = 900 WHERE message_id = 101",
+        )
+    body = authed_client.get("/api/messages/context", params={"message_id": 100}).json()
+    assert [m["author_id"] for m in body["messages"]] == ["50", "900", "50"]

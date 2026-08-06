@@ -1356,6 +1356,163 @@ textarea.field-input { resize: vertical; }
 }
 .msg-attachments a:hover { text-decoration: underline; }
 
+/* Search bar: regex box, + Filter, Search — the only always-visible controls.
+   Everything else is added on demand as a chip below. */
+.msg-searchbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 8px;
+  position: relative;
+}
+.msg-regex {
+  flex: 1 1 260px;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.msg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.msg-chips:empty { display: none; }
+
+.msg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: var(--bg-alt);
+  font-size: 12px;
+  max-width: 100%;
+}
+.msg-chip-label {
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.msg-chip-body {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.msg-chip-body input[type="number"] { width: 62px; }
+.msg-chip-body input[type="datetime-local"] { font-size: 12px; }
+.msg-chip-body select,
+.msg-chip-body input {
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.msg-chip-sep { color: var(--ink-mute); }
+.msg-chip-static { color: var(--ink); }
+.msg-chip-x {
+  border: 0;
+  background: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 50%;
+}
+.msg-chip-x:hover { color: var(--red-text); background: var(--red-soft); }
+
+.msg-filter-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 2px;
+  min-width: 280px;
+  max-width: 100%;
+  padding: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 40%);
+}
+.msg-filter-menu button {
+  text-align: left;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.msg-filter-menu button:hover:not(:disabled) { background: var(--hover); }
+.msg-filter-menu button:disabled {
+  color: var(--ink-mute);
+  cursor: default;
+}
+
+/* A deleted message stays in results, badged, with no deep link offered. */
+.msg-deleted {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--red-soft);
+  color: var(--red-text);
+  white-space: nowrap;
+}
+.msg-entry-deleted .msg-content { opacity: 0.75; }
+
+.msg-jump {
+  color: var(--ink-mute);
+  text-decoration: none;
+  font-size: 12px;
+  padding: 0 2px;
+}
+.msg-jump:hover { color: var(--gold-solid); }
+
+.msg-entry-main { cursor: pointer; }
+.msg-entry-main:focus-visible {
+  outline: 2px solid var(--gold-solid);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* Inline context: a fixed-height scroller, one open at a time. */
+.msg-context {
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 6px 0 4px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg-alt);
+}
+.msg-ctx-row {
+  padding: 6px 10px;
+  border-left: 3px solid transparent;
+}
+.msg-ctx-hit {
+  background: var(--gold-soft);
+  border-left-color: var(--gold-solid);
+}
+.msg-ctx-deleted .msg-content { opacity: 0.75; }
+.msg-ctx-end {
+  display: flex;
+  justify-content: center;
+  padding: 4px;
+}
+.msg-ctx-end:empty { display: none; }
+
+.msg-content-empty {
+  color: var(--ink-mute);
+  font-style: italic;
+}
+
 .msg-pager {
   display: flex;
   align-items: center;
@@ -2872,6 +3029,12 @@ textarea.field-input { resize: vertical; }
     min-height: 0;
     overflow-y: visible;
   }
+
+  /* Chips wrap to full width on a phone rather than squeezing their control. */
+  .msg-chip { max-width: 100%; }
+  .msg-chip-body { flex-wrap: wrap; }
+  .msg-filter-menu { min-width: 0; width: 100%; }
+  .msg-context { max-height: 260px; }
 }
 
 /* ── Scrollable tables inside report cards ────────────────────────── */

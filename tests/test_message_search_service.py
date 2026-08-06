@@ -417,3 +417,176 @@ def test_hydrate_renders_null_content_as_empty_string(conn):
 
 def test_hydrate_of_no_rows_is_empty(conn):
     assert hydrate_rows(conn, GUILD, []) == []
+
+
+# ── Deleted filter, badging and deep links ────────────────────────────
+
+
+def _mark(conn, message_id, source="discord", ts=1_700_000_000):
+    from bot_modules.services.message_store import mark_messages_deleted
+
+    mark_messages_deleted(conn, GUILD, {message_id}, source, ts)
+
+
+def test_deleted_messages_are_included_by_default(conn):
+    """The archive keeps them and the panel shows them, badged."""
+    _store(conn, 1)
+    _store(conn, 2)
+    _mark(conn, 2)
+    assert sorted(_run(conn, MessageFilters(include_bots=True))) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("any", [1, 2, 3]),
+        ("only", [2, 3]),
+        ("live", [1]),
+        ("discord", [2]),
+        ("auto_delete", [3]),
+        ("nonsense", [1, 2, 3]),  # unrecognized falls back to "any"
+    ],
+)
+def test_deleted_filter(conn, value, expected):
+    _store(conn, 1)
+    _store(conn, 2)
+    _store(conn, 3)
+    _mark(conn, 2, "discord")
+    _mark(conn, 3, "auto_delete")
+    ids = sorted(_run(conn, MessageFilters(deleted=value, include_bots=True)))
+    assert ids == expected
+
+
+def test_hydrate_exposes_the_deletion_state(conn):
+    _store(conn, 1)
+    _mark(conn, 1, "auto_delete", ts=1_700_000_123)
+    out = hydrate_rows(conn, GUILD, _rows(conn))[0]
+    assert out["deleted_at"] == 1_700_000_123
+    assert out["deleted_source"] == "auto_delete"
+
+
+def test_a_live_message_gets_a_discord_deep_link(conn):
+    _store(conn, 111, channel_id=222)
+    out = hydrate_rows(conn, GUILD, _rows(conn))[0]
+    assert out["discord_url"] == f"https://discord.com/channels/{GUILD}/222/111"
+
+
+def test_a_deleted_message_gets_no_deep_link(conn):
+    """The link would render fine and land on nothing, so it isn't offered."""
+    _store(conn, 111, channel_id=222)
+    _mark(conn, 111)
+    out = hydrate_rows(conn, GUILD, _rows(conn))[0]
+    assert out["discord_url"] is None
+
+
+# ── Context window ────────────────────────────────────────────────────
+
+
+def _seed_channel(conn, count=10, channel_id=10, start=1000):
+    for i in range(count):
+        _store(conn, 100 + i, channel_id=channel_id, ts=start + i)
+
+
+def test_context_window_centres_on_the_hit(conn):
+    from bot_modules.services.message_search_service import fetch_context_window
+
+    _seed_channel(conn, count=10)
+    win = fetch_context_window(conn, GUILD, 105, before=2, after=2)
+    assert [r[0] for r in win["rows"]] == [103, 104, 105, 106, 107]
+    assert win["message_id"] == "105"
+    assert win["channel_id"] == "10"
+
+
+def test_context_window_stays_in_its_channel(conn):
+    from bot_modules.services.message_search_service import fetch_context_window
+
+    _seed_channel(conn, count=4, channel_id=10, start=1000)
+    _seed_channel(conn, count=4, channel_id=11, start=1000)  # same timestamps
+    win = fetch_context_window(conn, GUILD, 101, before=5, after=5)
+    channels = {
+        conn.execute(
+            "SELECT channel_id FROM messages WHERE message_id = ?", (r[0],)
+        ).fetchone()[0]
+        for r in win["rows"]
+    }
+    assert channels == {10}
+
+
+def test_context_window_includes_bots_and_deleted(conn):
+    """Context reconstructs a conversation — dropping either misrepresents it."""
+    from bot_modules.services.message_search_service import fetch_context_window
+
+    upsert_known_user(conn, GUILD, 900, "botty", "Botty", 1.0, is_bot=True)
+    _store(conn, 100, ts=1000)
+    _store(conn, 101, ts=1001, author_id=900)  # a bot reply
+    _store(conn, 102, ts=1002)
+    _mark(conn, 102)
+    win = fetch_context_window(conn, GUILD, 100, before=5, after=5)
+    assert [r[0] for r in win["rows"]] == [100, 101, 102]
+
+
+def test_context_window_reports_whether_more_exists(conn):
+    from bot_modules.services.message_search_service import fetch_context_window
+
+    _seed_channel(conn, count=10)
+    middle = fetch_context_window(conn, GUILD, 105, before=2, after=2)
+    assert middle["has_older"] and middle["has_newer"]
+    oldest = fetch_context_window(conn, GUILD, 100, before=2, after=2)
+    assert not oldest["has_older"]
+    newest = fetch_context_window(conn, GUILD, 109, before=2, after=2)
+    assert not newest["has_newer"]
+
+
+def test_context_window_of_an_unknown_message_is_none(conn):
+    from bot_modules.services.message_search_service import fetch_context_window
+
+    assert fetch_context_window(conn, GUILD, 999) is None
+
+
+def test_context_window_is_guild_scoped(conn):
+    from bot_modules.services.message_search_service import fetch_context_window
+
+    _store(conn, 1, guild_id=OTHER_GUILD)
+    assert fetch_context_window(conn, GUILD, 1) is None
+
+
+def test_context_ties_break_on_id_not_arbitrarily(conn):
+    """Stored timestamps are whole seconds; a burst inside one second must
+    still come back in post order."""
+    from bot_modules.services.message_search_service import fetch_context_window
+
+    for mid in (105, 101, 103, 102, 104):
+        _store(conn, mid, ts=5000)  # all identical timestamps
+    win = fetch_context_window(conn, GUILD, 103, before=5, after=5)
+    assert [r[0] for r in win["rows"]] == [101, 102, 103, 104, 105]
+
+
+@pytest.mark.parametrize(
+    "direction,from_id,expected",
+    [
+        ("older", 105, [102, 103, 104]),
+        ("newer", 105, [106, 107, 108]),
+    ],
+)
+def test_context_paging_walks_outward_without_overlap(conn, direction, from_id, expected):
+    from bot_modules.services.message_search_service import fetch_context_page
+
+    _seed_channel(conn, count=10)
+    page = fetch_context_page(conn, GUILD, from_id, direction, limit=3)
+    assert [r[0] for r in page["rows"]] == expected  # always oldest-first
+    assert page["has_more"] is True
+
+
+def test_context_paging_reports_the_end(conn):
+    from bot_modules.services.message_search_service import fetch_context_page
+
+    _seed_channel(conn, count=10)
+    page = fetch_context_page(conn, GUILD, 101, "older", limit=5)
+    assert [r[0] for r in page["rows"]] == [100]
+    assert page["has_more"] is False
+
+
+def test_context_paging_of_an_unknown_message_is_none(conn):
+    from bot_modules.services.message_search_service import fetch_context_page
+
+    assert fetch_context_page(conn, GUILD, 999, "older") is None

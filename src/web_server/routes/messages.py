@@ -12,9 +12,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from bot_modules.services.message_search_service import (
     BASE_COLUMNS,
+    DELETED_ANY,
     SORT_ORDERS,
     MessageFilters,
     build_where,
+    fetch_context_page,
+    fetch_context_window,
     hydrate_rows,
     reaction_join,
     reaction_select,
@@ -280,6 +283,10 @@ async def search_messages(
     max_length: int | None = Query(None, ge=0, description="Maximum content length"),
     sort: SORT_OPTIONS = "newest",
     include_bots: bool = Query(False),
+    deleted: str = Query(
+        DELETED_ANY,
+        description="any (default), only, live, or a source name (discord, auto_delete)",
+    ),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
 ):
@@ -305,6 +312,7 @@ async def search_messages(
         max_length=max_length,
         include_bots=include_bots,
         sort=sort,
+        deleted=deleted,
     )
 
     def _q():
@@ -404,6 +412,7 @@ async def export_messages(
     max_length: int | None = Query(None, ge=0),
     sort: SORT_OPTIONS = "newest",
     include_bots: bool = Query(False),
+    deleted: str = Query(DELETED_ANY),
 ):
     """Export all matching messages as a downloadable JSON file (capped at 5000 rows)."""
     ctx = get_ctx(request)
@@ -427,6 +436,7 @@ async def export_messages(
         max_length=max_length,
         include_bots=include_bots,
         sort=sort,
+        deleted=deleted,
     )
 
     def _q():
@@ -467,3 +477,53 @@ async def export_messages(
     )
 
 
+CONTEXT_WINDOW = 25  # messages shown on each side of a hit when it expands
+CONTEXT_PAGE = 25  # messages added per load-older / load-newer click
+
+
+@router.get("/messages/context")
+async def message_context(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+    message_id: int = Query(..., description="The message to read around"),
+    direction: str | None = Query(
+        None, description="Omit for the initial window; 'older' or 'newer' to page"
+    ),
+):
+    """Stored messages surrounding one hit, for the panel's inline context view.
+
+    Reads the local archive rather than Discord: that is the point — it shows
+    what the bot has, including messages Discord no longer holds.
+    """
+    if direction is not None and direction not in ("older", "newer"):
+        raise HTTPException(status_code=400, detail="direction must be 'older' or 'newer'")
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            guild = ctx.bot.get_guild(guild_id) if ctx.bot else None
+            if direction is None:
+                window = fetch_context_window(
+                    conn,
+                    guild_id,
+                    message_id,
+                    before=CONTEXT_WINDOW,
+                    after=CONTEXT_WINDOW,
+                )
+            else:
+                window = fetch_context_page(
+                    conn, guild_id, message_id, direction, CONTEXT_PAGE
+                )
+            if window is None:
+                return None
+            rows = window.pop("rows")
+            return {**window, "messages": hydrate_rows(conn, guild_id, rows, guild)}
+
+    result = await run_query(_q)
+    if result is None:
+        # The archive has no row for it — from before the bot joined, from a
+        # guild at storage level "none", or already hard-erased on request.
+        raise HTTPException(status_code=404, detail="That message isn't in the archive.")
+    return result

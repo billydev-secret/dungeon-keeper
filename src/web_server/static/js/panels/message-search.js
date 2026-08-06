@@ -21,6 +21,70 @@ function emotionBadge(val) {
   return `<span class="msg-emotion">${esc(val)}</span>`;
 }
 
+/** How each deletion source reads to a moderator. */
+const DELETED_LABELS = {
+  auto_delete: { text: "auto-deleted", title: "Removed by an auto-delete rule" },
+  discord: { text: "deleted", title: "Deleted on Discord" },
+};
+
+function deletedBadge(m) {
+  if (m.deleted_at == null) return "";
+  const kind = DELETED_LABELS[m.deleted_source] || DELETED_LABELS.discord;
+  const when = fmtTs(m.deleted_at);
+  return `<span class="msg-deleted" title="${esc(kind.title)} — ${esc(when)}">${esc(kind.text)}</span>`;
+}
+
+/**
+ * "Open in Discord" for a message that still exists there. The server decides:
+ * it sends discord_url = null for anything flagged deleted, so a link that
+ * would land on nothing is never rendered.
+ */
+function discordLink(m) {
+  if (!m.discord_url) return "";
+  return `<a class="msg-jump" href="${esc(m.discord_url)}" target="_blank" rel="noopener" title="Open in Discord">↗</a>`;
+}
+
+// ── The filter catalogue ──────────────────────────────────────────────
+//
+// Every filter beyond the regex box lives here and is added on demand, so an
+// unused filter costs no screen space. `render` builds the chip's own control;
+// `summarize` turns its current value into the chip's visible text; `apply`
+// writes it into the outgoing query. A filter whose value is empty is simply
+// not sent, so a half-filled chip narrows nothing rather than erroring.
+
+const EMOTIONS = ["joy", "playful", "anger", "frustration", "neutral"];
+
+const SORTS = [
+  ["newest", "Newest first"],
+  ["oldest", "Oldest first"],
+  ["most_reacted", "Most reacted"],
+  ["longest", "Longest first"],
+  ["most_positive", "Most positive"],
+  ["most_negative", "Most negative"],
+];
+
+const DELETED_OPTIONS = [
+  ["any", "Any"],
+  ["only", "Deleted only"],
+  ["live", "Not deleted"],
+  ["discord", "Deleted on Discord"],
+  ["auto_delete", "Auto-deleted"],
+];
+
+function selectHtml(field, options, selected) {
+  const opts = options
+    .map(([v, label]) =>
+      `<option value="${esc(v)}"${v === selected ? " selected" : ""}>${esc(label)}</option>`
+    )
+    .join("");
+  return `<select data-field="${esc(field)}">${opts}</select>`;
+}
+
+function labelFor(options, value) {
+  const hit = options.find(([v]) => v === value);
+  return hit ? hit[1] : value;
+}
+
 export function mount(container) {
   container.innerHTML = `
     <div class="panel" style="overflow-y:auto;">
@@ -28,125 +92,288 @@ export function mount(container) {
         <h2>Message Search</h2>
         <div class="subtitle">Search and read back stored messages</div>
       </header>
-      <div class="controls msg-search-controls">
-        <span class="ctrl-field">Author<span data-slot="author"></span></span>
-        <span class="ctrl-field">Mentions<span data-slot="mentions"></span></span>
-        <span class="ctrl-field">Reply To<span data-slot="reply_to"></span></span>
-        <span class="ctrl-field">Channel<span data-slot="channel"></span></span>
-        <label>Regex
-          <input type="text" data-field="regex" placeholder="PCRE pattern" />
-        </label>
-        <label>Emotion
-          <select data-field="emotion">
-            <option value="">Any</option>
-            <option value="joy">Joy</option>
-            <option value="playful">Playful</option>
-            <option value="anger">Anger</option>
-            <option value="frustration">Frustration</option>
-            <option value="neutral">Neutral</option>
-          </select>
-        </label>
-        <label>Sentiment
-          <div style="display:flex;gap:4px;align-items:center;">
-            <input type="number" data-field="sentiment_min" min="-1" max="1" step="0.1" placeholder="Min" style="width:60px" />
-            <span>to</span>
-            <input type="number" data-field="sentiment_max" min="-1" max="1" step="0.1" placeholder="Max" style="width:60px" />
-          </div>
-        </label>
-        <label>Attachments
-          <select data-field="has_attachments">
-            <option value="">Any</option>
-            <option value="true">Has Attachments</option>
-            <option value="false">No Attachments</option>
-          </select>
-        </label>
-        <label>Reactions
-          <select data-field="has_reactions">
-            <option value="">Any</option>
-            <option value="true">Has Reactions</option>
-            <option value="false">No Reactions</option>
-          </select>
-        </label>
-        <label style="flex-direction:row;align-items:center;gap:6px;">
-          <input type="checkbox" data-field="include_bots" />
-          Show Bots
-        </label>
-        <label>Min Length
-          <input type="number" data-field="min_length" min="0" placeholder="chars" style="width:70px" />
-        </label>
-        <label>Max Length
-          <input type="number" data-field="max_length" min="0" placeholder="chars" style="width:70px" />
-        </label>
-        <label>After
-          <input type="datetime-local" data-field="after_dt" />
-        </label>
-        <label>Before
-          <input type="datetime-local" data-field="before_dt" />
-        </label>
-        <label>Sort
-          <select data-field="sort">
-            <option value="newest">Newest First</option>
-            <option value="oldest">Oldest First</option>
-            <option value="most_reacted">Most Reacted</option>
-            <option value="longest">Longest First</option>
-            <option value="most_positive">Most Positive</option>
-            <option value="most_negative">Most Negative</option>
-          </select>
-        </label>
-        <label>&nbsp;
-          <button data-search class="btn btn-primary">Search</button>
-        </label>
-        <label>&nbsp;
-          <button data-download class="btn" style="display:none">Download JSON</button>
-        </label>
+      <div class="msg-searchbar">
+        <input type="text" data-field="regex" class="msg-regex"
+               placeholder="Regex pattern — leave blank to match everything"
+               aria-label="Regex pattern" />
+        <button data-add-filter class="btn" aria-haspopup="true" aria-expanded="false">+ Filter</button>
+        <button data-search class="btn btn-primary">Search</button>
+        <button data-download class="btn" style="display:none">Download JSON</button>
       </div>
+      <div data-chips class="msg-chips"></div>
       <div data-results class="msg-results"></div>
       <div data-pager class="msg-pager"></div>
     </div>
   `;
 
   const regexInput = container.querySelector('[data-field="regex"]');
-  const sortSel = container.querySelector('[data-field="sort"]');
-  const emotionSel = container.querySelector('[data-field="emotion"]');
-  const sentMinInput = container.querySelector('[data-field="sentiment_min"]');
-  const sentMaxInput = container.querySelector('[data-field="sentiment_max"]');
-  const attachSel = container.querySelector('[data-field="has_attachments"]');
-  const reactionsSel = container.querySelector('[data-field="has_reactions"]');
-  const includeBotsEl = container.querySelector('[data-field="include_bots"]');
-  const minLenInput = container.querySelector('[data-field="min_length"]');
-  const maxLenInput = container.querySelector('[data-field="max_length"]');
-  const afterDtInput = container.querySelector('[data-field="after_dt"]');
-  const beforeDtInput = container.querySelector('[data-field="before_dt"]');
+  const chipsEl = container.querySelector("[data-chips]");
   const resultsEl = container.querySelector("[data-results]");
   const pagerEl = container.querySelector("[data-pager]");
   const searchBtn = container.querySelector("[data-search]");
   const downloadBtn = container.querySelector("[data-download]");
+  const addFilterBtn = container.querySelector("[data-add-filter]");
 
-  // Placeholder filter-selects (replaced once members/channels load)
+  // Member/channel pickers are built once and re-parented into their chip when
+  // the filter is added, so the options loaded below survive add/remove cycles.
+  //
   // The three member filters get `search`: /api/meta/members only prefetches a
   // bounded page, and searching an archive for a member who has since left is
   // one of the main things this panel is for.
   const authorFS = multiFilterSelect("Type to filter…", [],
     { label: "Author", search: memberSearch() });
+  const channelFS = multiFilterSelect("Type to filter…", [], { label: "Channel" });
   const mentionsFS = filterSelect("Type to filter…", [],
     { label: "Mentions", emptyLabel: "(anyone)", search: memberSearch() });
   const replyFS = filterSelect("Type to filter…", [],
     { label: "Reply to", emptyLabel: "(anyone)", search: memberSearch() });
-  const channelFS = multiFilterSelect("Type to filter…", [], { label: "Channel" });
 
-  container.querySelector('[data-slot="author"]').appendChild(authorFS.el);
-  container.querySelector('[data-slot="mentions"]').appendChild(mentionsFS.el);
-  container.querySelector('[data-slot="reply_to"]').appendChild(replyFS.el);
-  container.querySelector('[data-slot="channel"]').appendChild(channelFS.el);
-
-  // Enter anywhere in a picker runs the search.
-  for (const fs of [authorFS, mentionsFS, replyFS, channelFS]) {
+  for (const fs of [authorFS, channelFS, mentionsFS, replyFS]) {
     fs.getInput().addEventListener("keydown", (e) => {
       if (e.key === "Enter") doSearch(1);
     });
   }
 
-  // Load members, channels, and AI models in parallel
+  const FILTERS = {
+    author: {
+      label: "Author",
+      picker: authorFS,
+      summarize: () => authorFS.getValues().map(labelOfMember).join(", "),
+      apply: (p) => authorFS.getValues().forEach((id) => p.append("author", id)),
+    },
+    channel: {
+      label: "Channel",
+      picker: channelFS,
+      summarize: () => channelFS.getValues().map(labelOfChannel).join(", "),
+      apply: (p) => channelFS.getValues().forEach((id) => p.append("channel", id)),
+    },
+    mentions: {
+      label: "Mentions",
+      picker: mentionsFS,
+      summarize: () => labelOfMember(mentionsFS.getValue()),
+      apply: (p) => { if (mentionsFS.getValue()) p.set("mentions", mentionsFS.getValue()); },
+    },
+    reply_to: {
+      label: "Reply to",
+      picker: replyFS,
+      summarize: () => labelOfMember(replyFS.getValue()),
+      apply: (p) => { if (replyFS.getValue()) p.set("reply_to", replyFS.getValue()); },
+    },
+    deleted: {
+      label: "Deleted",
+      render: () => selectHtml("deleted", DELETED_OPTIONS, "only"),
+      summarize: (el) => labelFor(DELETED_OPTIONS, val(el, "deleted")),
+      apply: (p, el) => p.set("deleted", val(el, "deleted")),
+    },
+    emotion: {
+      label: "Emotion",
+      render: () =>
+        selectHtml("emotion", EMOTIONS.map((e) => [e, e[0].toUpperCase() + e.slice(1)]), "joy"),
+      summarize: (el) => val(el, "emotion"),
+      apply: (p, el) => p.set("emotion", val(el, "emotion")),
+    },
+    sentiment: {
+      label: "Sentiment",
+      render: () => `
+        <input type="number" data-field="sentiment_min" min="-1" max="1" step="0.1" placeholder="min" />
+        <span class="msg-chip-sep">to</span>
+        <input type="number" data-field="sentiment_max" min="-1" max="1" step="0.1" placeholder="max" />`,
+      summarize: (el) => {
+        const lo = val(el, "sentiment_min");
+        const hi = val(el, "sentiment_max");
+        if (lo && hi) return `${lo} to ${hi}`;
+        if (lo) return `≥ ${lo}`;
+        if (hi) return `≤ ${hi}`;
+        return "";
+      },
+      apply: (p, el) => {
+        if (val(el, "sentiment_min")) p.set("sentiment_min", val(el, "sentiment_min"));
+        if (val(el, "sentiment_max")) p.set("sentiment_max", val(el, "sentiment_max"));
+      },
+    },
+    length: {
+      label: "Length",
+      render: () => `
+        <input type="number" data-field="min_length" min="0" placeholder="min" />
+        <span class="msg-chip-sep">to</span>
+        <input type="number" data-field="max_length" min="0" placeholder="max" />`,
+      summarize: (el) => {
+        const lo = val(el, "min_length");
+        const hi = val(el, "max_length");
+        if (lo && hi) return `${lo}–${hi} chars`;
+        if (lo) return `≥ ${lo} chars`;
+        if (hi) return `≤ ${hi} chars`;
+        return "";
+      },
+      apply: (p, el) => {
+        if (val(el, "min_length")) p.set("min_length", val(el, "min_length"));
+        if (val(el, "max_length")) p.set("max_length", val(el, "max_length"));
+      },
+    },
+    attachments: {
+      label: "Attachments",
+      render: () => selectHtml("has_attachments", [["true", "Has attachments"], ["false", "No attachments"]], "true"),
+      summarize: (el) => (val(el, "has_attachments") === "true" ? "has" : "none"),
+      apply: (p, el) => p.set("has_attachments", val(el, "has_attachments")),
+    },
+    reactions: {
+      label: "Reactions",
+      render: () => selectHtml("has_reactions", [["true", "Has reactions"], ["false", "No reactions"]], "true"),
+      summarize: (el) => (val(el, "has_reactions") === "true" ? "has" : "none"),
+      apply: (p, el) => p.set("has_reactions", val(el, "has_reactions")),
+    },
+    after: {
+      label: "After",
+      render: () => `<input type="datetime-local" data-field="after_dt" />`,
+      summarize: (el) => val(el, "after_dt").replace("T", " "),
+      apply: (p, el) => {
+        const v = val(el, "after_dt");
+        if (v) p.set("after", String(Math.floor(new Date(v).getTime() / 1000)));
+      },
+    },
+    before: {
+      label: "Before",
+      render: () => `<input type="datetime-local" data-field="before_dt" />`,
+      summarize: (el) => val(el, "before_dt").replace("T", " "),
+      apply: (p, el) => {
+        const v = val(el, "before_dt");
+        if (v) p.set("before", String(Math.floor(new Date(v).getTime() / 1000)));
+      },
+    },
+    show_bots: {
+      label: "Show bots",
+      render: () => `<span class="msg-chip-static">included</span>`,
+      summarize: () => "included",
+      apply: (p) => p.set("include_bots", "true"),
+    },
+    sort: {
+      label: "Sort",
+      render: () => selectHtml("sort", SORTS, "newest"),
+      summarize: (el) => labelFor(SORTS, val(el, "sort")),
+      apply: (p, el) => p.set("sort", val(el, "sort")),
+    },
+  };
+
+  const val = (el, field) => {
+    const node = el.querySelector(`[data-field="${field}"]`);
+    return node ? node.value : "";
+  };
+
+  // Option label lookups, so a chip can say "Ben" rather than a raw snowflake.
+  let memberLabels = new Map();
+  let channelLabels = new Map();
+  const labelOfMember = (id) => (id ? memberLabels.get(String(id)) || String(id) : "");
+  const labelOfChannel = (id) => (id ? channelLabels.get(String(id)) || String(id) : "");
+
+  // ── Active chips ────────────────────────────────────────────────────
+
+  /** key -> chip element, in insertion order. */
+  const active = new Map();
+
+  function refreshChipSummary(key) {
+    const chip = active.get(key);
+    if (!chip) return;
+    const summary = FILTERS[key].summarize(chip) || "any";
+    chip.querySelector("[data-summary]").textContent = summary;
+  }
+
+  function addFilter(key) {
+    if (active.has(key)) {
+      // Already on screen — focus it rather than stacking a duplicate.
+      const existing = active.get(key);
+      const focusable = existing.querySelector("select, input");
+      if (focusable) focusable.focus();
+      return;
+    }
+    const spec = FILTERS[key];
+    const chip = document.createElement("span");
+    chip.className = "msg-chip";
+    chip.dataset.key = key;
+    chip.innerHTML = `
+      <span class="msg-chip-label">${esc(spec.label)}:</span>
+      <span class="msg-chip-body"></span>
+      <span class="msg-chip-summary" data-summary hidden></span>
+      <button class="msg-chip-x" data-remove aria-label="Remove ${esc(spec.label)} filter">✕</button>
+    `;
+    const body = chip.querySelector(".msg-chip-body");
+    if (spec.picker) {
+      body.appendChild(spec.picker.el);
+    } else {
+      body.innerHTML = spec.render();
+    }
+    chip.querySelector("[data-remove]").addEventListener("click", () => removeFilter(key));
+    chip.addEventListener("change", () => refreshChipSummary(key));
+    chipsEl.appendChild(chip);
+    active.set(key, chip);
+
+    const focusable = chip.querySelector("select, input");
+    if (focusable) focusable.focus();
+  }
+
+  function removeFilter(key) {
+    const chip = active.get(key);
+    if (!chip) return;
+    const spec = FILTERS[key];
+    if (spec.picker) {
+      // Clear the selection, then detach the shared picker before the chip is
+      // destroyed — it gets re-used if the filter is added again.
+      if (spec.picker.setValues) spec.picker.setValues([]);
+      else if (spec.picker.setValue) spec.picker.setValue(null);
+      spec.picker.el.remove();
+    }
+    chip.remove();
+    active.delete(key);
+  }
+
+  // ── The "+ Filter" menu ─────────────────────────────────────────────
+
+  let menuEl = null;
+
+  function closeMenu() {
+    if (menuEl) {
+      menuEl.remove();
+      menuEl = null;
+      addFilterBtn.setAttribute("aria-expanded", "false");
+    }
+  }
+
+  function openMenu() {
+    closeMenu();
+    menuEl = document.createElement("div");
+    menuEl.className = "msg-filter-menu";
+    menuEl.setAttribute("role", "menu");
+    menuEl.innerHTML = Object.entries(FILTERS)
+      .map(([key, spec]) =>
+        `<button role="menuitem" data-key="${esc(key)}"${active.has(key) ? " disabled" : ""}>${esc(spec.label)}</button>`
+      )
+      .join("");
+    menuEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-key]");
+      if (!btn) return;
+      addFilter(btn.dataset.key);
+      closeMenu();
+    });
+    addFilterBtn.parentElement.insertBefore(menuEl, addFilterBtn.nextSibling);
+    addFilterBtn.setAttribute("aria-expanded", "true");
+  }
+
+  addFilterBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (menuEl) closeMenu();
+    else openMenu();
+  });
+
+  const onDocClick = (e) => {
+    if (menuEl && !menuEl.contains(e.target) && e.target !== addFilterBtn) closeMenu();
+  };
+  const onDocKey = (e) => {
+    if (e.key === "Escape") closeMenu();
+  };
+  document.addEventListener("click", onDocClick);
+  document.addEventListener("keydown", onDocKey);
+
+  // ── Option loading ──────────────────────────────────────────────────
+
   (async () => {
     try {
       const [members, channels] = await Promise.all([
@@ -154,7 +381,6 @@ export function mount(container) {
         api("/api/meta/channels"),
       ]);
 
-      // Build member options
       const memberOpts = members.map((m) => ({
         id: m.id,
         label: m.display_name !== m.name ? `${m.display_name} (${m.name})` : m.name,
@@ -162,11 +388,13 @@ export function mount(container) {
       })).sort((a, b) => a.left - b.left || a.label.localeCompare(b.label));
       memberOpts.forEach((o) => { if (o.left) o.label += " (left)"; });
 
-      // Build channel options
       const channelOpts = channels.map((ch) => ({
         id: String(ch.id),
         label: `#${ch.name}`,
       }));
+
+      memberLabels = new Map(memberOpts.map((o) => [String(o.id), o.label]));
+      channelLabels = new Map(channelOpts.map((o) => [String(o.id), o.label]));
 
       authorFS.setOptions(memberOpts);
       channelFS.setOptions(channelOpts);
@@ -177,45 +405,25 @@ export function mount(container) {
     }
   })();
 
+  // ── Search ──────────────────────────────────────────────────────────
+
   function buildFilterParams() {
     const params = new URLSearchParams();
-    for (const id of authorFS.getValues()) params.append("author", id);
-    for (const id of channelFS.getValues()) params.append("channel", id);
-    const mentionsVal = mentionsFS.getValue();
-    if (mentionsVal) params.set("mentions", mentionsVal);
-    const replyVal = replyFS.getValue();
-    if (replyVal) params.set("reply_to", replyVal);
     const regexVal = regexInput.value.trim();
     if (regexVal) params.set("regex", regexVal);
-    const emotionVal = emotionSel.value;
-    if (emotionVal) params.set("emotion", emotionVal);
-    if (sentMinInput.value !== "") params.set("sentiment_min", sentMinInput.value);
-    if (sentMaxInput.value !== "") params.set("sentiment_max", sentMaxInput.value);
-    if (attachSel.value) params.set("has_attachments", attachSel.value);
-    if (reactionsSel.value) params.set("has_reactions", reactionsSel.value);
-    if (minLenInput.value !== "") params.set("min_length", minLenInput.value);
-    if (maxLenInput.value !== "") params.set("max_length", maxLenInput.value);
-    if (afterDtInput.value) {
-      params.set("after", String(Math.floor(new Date(afterDtInput.value).getTime() / 1000)));
-    }
-    if (beforeDtInput.value) {
-      params.set("before", String(Math.floor(new Date(beforeDtInput.value).getTime() / 1000)));
-    }
-    params.set("sort", sortSel.value);
-    // Bots are hidden by default. Searching for a specific author overrides
-    // this server-side, so a bot can still be looked up by id.
-    if (includeBotsEl.checked) params.set("include_bots", "true");
+    for (const [key, chip] of active) FILTERS[key].apply(params, chip);
     return params;
   }
 
-  // --- Search ---
   async function doSearch(page = 1) {
+    closeMenu();
     const params = buildFilterParams();
     params.set("page", String(page));
     params.set("per_page", "50");
 
     resultsEl.innerHTML = renderLoading("Searching messages…");
     pagerEl.innerHTML = "";
+    openContext = null;
 
     downloadBtn.style.display = "none";
     try {
@@ -227,6 +435,47 @@ export function mount(container) {
     }
   }
 
+  /** Markup shared by a search hit and a context row. */
+  function messageHtml(m, { isHit = false } = {}) {
+    const time = fmtTs(m.ts);
+    const author = m.author_name || m.author_id;
+    const channel = m.channel_name ? `#${m.channel_name}` : m.channel_id;
+
+    let replyHtml = "";
+    if (m.reply_to_id) {
+      const replyAuthor = m.reply_to_author_name || m.reply_to_author_id || "unknown";
+      replyHtml = `<div class="msg-reply">replying to <strong>${esc(replyAuthor)}</strong></div>`;
+    }
+
+    let attachHtml = "";
+    if (m.attachments && m.attachments.length) {
+      attachHtml = `<div class="msg-attachments">${m.attachments.map((u) =>
+        `<a href="${esc(u)}" target="_blank" rel="noopener">[attachment]</a>`
+      ).join(" ")}</div>`;
+    }
+
+    // A message stored under storage level "none" keeps its skeleton but no
+    // text. Say so, rather than rendering a blank row that reads as a bug.
+    const body = m.content
+      ? `<div class="msg-content">${esc(m.content)}</div>`
+      : `<div class="msg-content msg-content-empty">(no content stored)</div>`;
+
+    return `
+      <div class="msg-meta">
+        <span class="msg-author">${esc(author)}</span>
+        ${isHit ? `<span class="msg-channel">${esc(channel)}</span>` : ""}
+        ${deletedBadge(m)}
+        <span class="msg-time">${esc(time)}</span>
+        ${sentimentBadge(m.sentiment)}
+        ${emotionBadge(m.emotion)}
+        ${discordLink(m)}
+      </div>
+      ${replyHtml}
+      ${body}
+      ${attachHtml}
+    `;
+  }
+
   function renderResults(data) {
     if (!data.messages.length) {
       resultsEl.innerHTML = renderEmpty("No messages match these filters. Clear a filter, widen the date range, or check the regex pattern.");
@@ -234,73 +483,176 @@ export function mount(container) {
       return;
     }
 
-    const html = data.messages.map((m) => {
-      const time = fmtTs(m.ts);
-      const author = m.author_name || m.author_id;
-      const channel = m.channel_name ? `#${m.channel_name}` : m.channel_id;
-
-      let replyHtml = "";
-      if (m.reply_to_id) {
-        const replyAuthor = m.reply_to_author_name || m.reply_to_author_id || "unknown";
-        replyHtml = `<div class="msg-reply">replying to <strong>${esc(replyAuthor)}</strong></div>`;
-      }
-
-      let attachHtml = "";
-      if (m.attachments && m.attachments.length) {
-        attachHtml = `<div class="msg-attachments">${m.attachments.map((u) =>
-          `<a href="${esc(u)}" target="_blank" rel="noopener">[attachment]</a>`
-        ).join(" ")}</div>`;
-      }
-
-      return `
-        <div class="msg-entry">
-          <div class="msg-meta">
-            <span class="msg-author">${esc(author)}</span>
-            <span class="msg-channel">${esc(channel)}</span>
-            <span class="msg-time">${esc(time)}</span>
-            ${sentimentBadge(m.sentiment)}
-            ${emotionBadge(m.emotion)}
-          </div>
-          ${replyHtml}
-          <div class="msg-content">${esc(m.content)}</div>
-          ${attachHtml}
+    resultsEl.innerHTML = data.messages.map((m) => `
+      <div class="msg-entry${m.deleted_at != null ? " msg-entry-deleted" : ""}" data-message-id="${esc(m.message_id)}">
+        <div class="msg-entry-main" role="button" tabindex="0" aria-expanded="false">
+          ${messageHtml(m, { isHit: true })}
         </div>
-      `;
-    }).join("");
+        <div class="msg-context" hidden></div>
+      </div>
+    `).join("");
 
-    resultsEl.innerHTML = html;
+    for (const main of resultsEl.querySelectorAll(".msg-entry-main")) {
+      main.addEventListener("click", (e) => {
+        // Let the deep link and attachment links work without expanding.
+        if (e.target.closest("a")) return;
+        toggleContext(main.parentElement);
+      });
+      main.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggleContext(main.parentElement);
+        }
+      });
+    }
 
-    // Pager
+    if (data.truncated) {
+      pagerEl.innerHTML =
+        `<span class="msg-pager-info">Showing the first ${data.total} matches — the scan hit its limit, so there may be more. Narrow the channel, author, or date range.</span> `;
+    } else {
+      pagerEl.innerHTML = "";
+    }
+
     if (data.pages > 1) {
       let pagerHtml = `<span class="msg-pager-info">Page ${data.page} of ${data.pages} (${data.total} results)</span> `;
       if (data.page > 1) {
-        pagerHtml += `<button class="btn btn-sm" data-page="${data.page - 1}">\u25C0 Prev</button> `;
+        pagerHtml += `<button class="btn btn-sm" data-page="${data.page - 1}">◀ Prev</button> `;
       }
       if (data.page < data.pages) {
-        pagerHtml += `<button class="btn btn-sm" data-page="${data.page + 1}">Next \u25B6</button>`;
+        pagerHtml += `<button class="btn btn-sm" data-page="${data.page + 1}">Next ▶</button>`;
       }
-      pagerEl.innerHTML = pagerHtml;
+      pagerEl.innerHTML += pagerHtml;
       pagerEl.querySelectorAll("button[data-page]").forEach((btn) => {
         btn.addEventListener("click", () => doSearch(parseInt(btn.dataset.page)));
       });
-    } else {
+    } else if (!data.truncated) {
       pagerEl.innerHTML = `<span class="msg-pager-info">${data.total} result${data.total === 1 ? "" : "s"}</span>`;
     }
   }
 
+  // ── Inline context ──────────────────────────────────────────────────
+  //
+  // One open at a time: opening another collapses the previous one, so the
+  // results list never turns into a wall of nested scrollers.
+
+  let openContext = null;
+
+  function contextRowHtml(m, hitId) {
+    const isHit = String(m.message_id) === String(hitId);
+    return `
+      <div class="msg-ctx-row${isHit ? " msg-ctx-hit" : ""}${m.deleted_at != null ? " msg-ctx-deleted" : ""}"
+           data-message-id="${esc(m.message_id)}">
+        ${messageHtml(m)}
+      </div>
+    `;
+  }
+
+  function renderContext(box, data, hitId) {
+    const older = data.has_older
+      ? `<button class="btn btn-sm msg-ctx-more" data-load="older">Load older</button>`
+      : "";
+    const newer = data.has_newer
+      ? `<button class="btn btn-sm msg-ctx-more" data-load="newer">Load newer</button>`
+      : "";
+    box.innerHTML = `
+      <div class="msg-ctx-end">${older}</div>
+      <div class="msg-ctx-rows">${data.messages.map((m) => contextRowHtml(m, hitId)).join("")}</div>
+      <div class="msg-ctx-end">${newer}</div>
+    `;
+    wireContextButtons(box, hitId);
+    // Centre the hit in the scroll box rather than starting at the top.
+    const hit = box.querySelector(".msg-ctx-hit");
+    if (hit) box.scrollTop = Math.max(0, hit.offsetTop - box.clientHeight / 2);
+  }
+
+  function wireContextButtons(box, hitId) {
+    for (const btn of box.querySelectorAll("[data-load]")) {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const direction = btn.dataset.load;
+        const rows = box.querySelector(".msg-ctx-rows");
+        const edge = direction === "older" ? rows.firstElementChild : rows.lastElementChild;
+        if (!edge) return;
+        const fromId = edge.dataset.messageId;
+
+        btn.disabled = true;
+        btn.textContent = "Loading…";
+        try {
+          const data = await api(
+            `/api/messages/context?message_id=${encodeURIComponent(fromId)}&direction=${direction}`
+          );
+          const html = data.messages.map((m) => contextRowHtml(m, hitId)).join("");
+          // Anchor the scroll position when prepending, so the rows the reader
+          // is looking at don't jump off the top of the box.
+          const before = box.scrollHeight;
+          if (direction === "older") rows.insertAdjacentHTML("afterbegin", html);
+          else rows.insertAdjacentHTML("beforeend", html);
+          if (direction === "older") box.scrollTop += box.scrollHeight - before;
+
+          if (data.has_more) {
+            btn.disabled = false;
+            btn.textContent = direction === "older" ? "Load older" : "Load newer";
+          } else {
+            btn.remove();
+          }
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = "Retry";
+        }
+      });
+    }
+  }
+
+  async function toggleContext(entry) {
+    const box = entry.querySelector(".msg-context");
+    const main = entry.querySelector(".msg-entry-main");
+
+    if (openContext === entry) {
+      box.hidden = true;
+      box.innerHTML = "";
+      main.setAttribute("aria-expanded", "false");
+      openContext = null;
+      return;
+    }
+
+    if (openContext) {
+      const prev = openContext.querySelector(".msg-context");
+      prev.hidden = true;
+      prev.innerHTML = "";
+      openContext.querySelector(".msg-entry-main").setAttribute("aria-expanded", "false");
+    }
+
+    openContext = entry;
+    box.hidden = false;
+    main.setAttribute("aria-expanded", "true");
+    box.innerHTML = renderLoading("Loading context…");
+
+    const messageId = entry.dataset.messageId;
+    try {
+      const data = await api(`/api/messages/context?message_id=${encodeURIComponent(messageId)}`);
+      renderContext(box, data, messageId);
+    } catch (err) {
+      box.innerHTML = renderError(`Couldn't load the surrounding messages — ${err.message}.`);
+    }
+  }
+
+  // ── Wiring ──────────────────────────────────────────────────────────
+
   searchBtn.addEventListener("click", () => doSearch(1));
 
   downloadBtn.addEventListener("click", () => {
-    const params = buildFilterParams();
-    window.location = `/api/messages/search/export?${params}`;
+    window.location = `/api/messages/search/export?${buildFilterParams()}`;
   });
 
-  // Enter key on regex input
   regexInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") doSearch(1);
   });
 
-  // Nothing to tear down beyond the DOM the router replaces, but every other
-  // panel returns a handle — keep the contract uniform (W-D15).
-  return { unmount() {} };
+  return {
+    unmount() {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onDocKey);
+      for (const fs of [authorFS, channelFS, mentionsFS, replyFS]) fs.destroy();
+    },
+  };
 }

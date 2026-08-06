@@ -36,10 +36,21 @@ VALID_EMOTIONS = frozenset({"joy", "playful", "anger", "frustration", "neutral"}
 # Column list every message-reading endpoint selects, in a fixed order. The
 # order is load-bearing: the regex scanner indexes ``row[3]`` for content
 # rather than going through sqlite3.Row, so that it works against the plain
-# tuples its unit test feeds it. Append new columns, never insert.
+# tuples its unit test feeds it. Append new columns, never insert — the
+# optional ``total_reactions`` from reaction_select() always lands last.
 BASE_COLUMNS = (
     "m.message_id, m.channel_id, m.author_id, m.content, "
-    "m.reply_to_id, m.ts, m.sentiment, m.emotion"
+    "m.reply_to_id, m.ts, m.sentiment, m.emotion, "
+    "m.deleted_at, m.deleted_source"
+)
+
+# ``deleted`` filter values. The archive keeps deleted messages and the panel
+# shows them by default, badged — this narrows to one side or one source.
+DELETED_ANY = "any"
+DELETED_ONLY = "only"
+DELETED_LIVE = "live"
+DELETED_FILTERS = frozenset(
+    {DELETED_ANY, DELETED_ONLY, DELETED_LIVE, "discord", "auto_delete"}
 )
 
 SORT_ORDERS = {
@@ -85,6 +96,10 @@ class MessageFilters:
     max_length: int | None = None
     include_bots: bool = False
     sort: str = "newest"
+    # "any" (default — deleted messages appear, badged), "only", "live", or a
+    # specific source name. Anything unrecognized is treated as "any" rather
+    # than erroring, matching how an unknown emotion is ignored.
+    deleted: str = DELETED_ANY
 
 
 @dataclass
@@ -246,6 +261,16 @@ def build_where(
         clauses.append("LENGTH(m.content) <= ?")
         params.append(filters.max_length)
 
+    # Deleted messages are included by default and badged in the panel; this
+    # narrows to one side of the line, or to a single source.
+    if filters.deleted == DELETED_ONLY:
+        clauses.append("m.deleted_at IS NOT NULL")
+    elif filters.deleted == DELETED_LIVE:
+        clauses.append("m.deleted_at IS NULL")
+    elif filters.deleted in DELETED_FILTERS and filters.deleted != DELETED_ANY:
+        clauses.append("m.deleted_source = ?")
+        params.append(filters.deleted)
+
     # Bots are excluded from the browser by default, matching every other
     # message-volume surface. An explicit ``author`` filter is an override:
     # searching *for* a bot must still return its messages.
@@ -264,6 +289,117 @@ def reaction_join(sort: str) -> str:
 def reaction_select(sort: str) -> str:
     """Extra SELECT column pairing with :func:`reaction_join`."""
     return ", COALESCE(mr.total_reactions, 0) AS total_reactions" if sort == "most_reacted" else ""
+
+
+def fetch_context_window(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    message_id: int,
+    *,
+    before: int = 25,
+    after: int = 25,
+) -> dict[str, Any] | None:
+    """Read the stored messages surrounding one hit, in its own channel.
+
+    Returns ``None`` when the message isn't in the archive at all — the caller
+    turns that into a 404.
+
+    Bots are deliberately **not** excluded here even though search hides them by
+    default. This is conversation reconstruction, not a result set: dropping the
+    bot message someone was replying to would misrepresent the exchange.
+    Deleted messages are included for the same reason, badged by the panel.
+
+    Ordering is by ``(ts, message_id)`` rather than ``ts`` alone. Stored
+    timestamps are whole seconds, so a burst of messages inside one second
+    would otherwise come back in an arbitrary order — snowflake ids break the
+    tie in true post order.
+    """
+    anchor = conn.execute(
+        "SELECT channel_id, ts FROM messages WHERE message_id = ? AND guild_id = ?",
+        (message_id, guild_id),
+    ).fetchone()
+    if anchor is None:
+        return None
+    channel_id, anchor_ts = anchor["channel_id"], anchor["ts"]
+
+    older = conn.execute(
+        f"""
+        SELECT {BASE_COLUMNS} FROM messages m
+         WHERE m.guild_id = ? AND m.channel_id = ?
+           AND (m.ts, m.message_id) < (?, ?)
+         ORDER BY m.ts DESC, m.message_id DESC
+         LIMIT ?
+        """,
+        (guild_id, channel_id, anchor_ts, message_id, before),
+    ).fetchall()
+
+    newer = conn.execute(
+        f"""
+        SELECT {BASE_COLUMNS} FROM messages m
+         WHERE m.guild_id = ? AND m.channel_id = ?
+           AND (m.ts, m.message_id) >= (?, ?)
+         ORDER BY m.ts ASC, m.message_id ASC
+         LIMIT ?
+        """,
+        (guild_id, channel_id, anchor_ts, message_id, after + 1),
+    ).fetchall()
+
+    rows = list(reversed(older)) + list(newer)
+    return {
+        "channel_id": str(channel_id),
+        "message_id": str(message_id),
+        # Whether there is more to load in either direction, so the panel can
+        # hide a load-more button that would return nothing.
+        "has_older": len(older) == before,
+        "has_newer": len(newer) == after + 1,
+        "rows": rows,
+    }
+
+
+def fetch_context_page(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    from_message_id: int,
+    direction: str,
+    limit: int = 25,
+) -> dict[str, Any] | None:
+    """Read the next page of context above or below a row already on screen.
+
+    ``from_message_id`` is the oldest (for ``older``) or newest (for ``newer``)
+    row the panel currently holds; the page returned is strictly beyond it, so
+    repeated clicks walk outward without overlapping.
+    """
+    anchor = conn.execute(
+        "SELECT channel_id, ts FROM messages WHERE message_id = ? AND guild_id = ?",
+        (from_message_id, guild_id),
+    ).fetchone()
+    if anchor is None:
+        return None
+    channel_id, anchor_ts = anchor["channel_id"], anchor["ts"]
+
+    if direction == "older":
+        comparison, order = "<", "DESC"
+    else:
+        comparison, order = ">", "ASC"
+
+    rows = conn.execute(
+        f"""
+        SELECT {BASE_COLUMNS} FROM messages m
+         WHERE m.guild_id = ? AND m.channel_id = ?
+           AND (m.ts, m.message_id) {comparison} (?, ?)
+         ORDER BY m.ts {order}, m.message_id {order}
+         LIMIT ?
+        """,
+        (guild_id, channel_id, anchor_ts, from_message_id, limit),
+    ).fetchall()
+
+    # Always hand back oldest-first — the panel renders one continuous column.
+    ordered = list(reversed(rows)) if direction == "older" else list(rows)
+    return {
+        "channel_id": str(channel_id),
+        "has_more": len(rows) == limit,
+        "rows": ordered,
+    }
 
 
 def resolve_names(
@@ -359,6 +495,7 @@ def hydrate_rows(
     for r in rows:
         msg_id, ch_id, auth_id, content, reply_id, ts = r[0], r[1], r[2], r[3], r[4], r[5]
         reply_author_id = reply_authors.get(reply_id) if reply_id else None
+        deleted_at = r[8]
         results.append(
             {
                 "message_id": str(msg_id),
@@ -378,6 +515,14 @@ def hydrate_rows(
                 "ts": ts,
                 "sentiment": r[6],
                 "emotion": r[7],
+                "deleted_at": deleted_at,
+                "deleted_source": r[9],
+                # Built here rather than in the panel so the suppression rule
+                # has one home: a deep link to a deleted message renders fine
+                # and lands on nothing, so it is simply not offered.
+                "discord_url": None
+                if deleted_at is not None
+                else f"https://discord.com/channels/{guild_id}/{ch_id}/{msg_id}",
             }
         )
     return results
