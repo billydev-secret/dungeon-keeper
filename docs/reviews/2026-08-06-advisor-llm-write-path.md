@@ -1,5 +1,20 @@
 # Advisor LLM → config-write path — adversarial review (2026-08-06)
 
+> **Status: fixed 2026-08-06**, same day, except **A1** which needs a different
+> branch — see the handoff at the end of that section. A2–A8 are applied with
+> tests; the per-finding fix notes below record what landed.
+>
+> | # | Severity | State |
+> | --- | --- | --- |
+> | A1 privacy notice is false | High | **Open — handoff.** Partly mitigated: an accurate description now sits in `manual.html#ask-guide`. The wrong text lives on `review-fix-queue-round-2`; replacement copy is drafted below. |
+> | A2 no trust boundary on member text | Medium | Fixed — `<untrusted>` fencing + delimiter stripping + TRUST BOUNDARY rule + grant-tool provenance line |
+> | A3 Apply gate truncates at 80 chars | Medium | Fixed — full proposal disclosed as embed fields |
+> | A4 `admin_only` misses disclosure keys | Medium | Fixed — `whisper_log_channel_id`, `transcript_channel_id` now admin-only |
+> | A5 unsanitized `grant_message` | Medium | Fixed — mass mentions rejected at validate time |
+> | A6 `fetch_setup_gaps` fails open | Low | Fixed — fails closed |
+> | A7 no durable record of an applied write | Low | Fixed — `audit_log` row in the write's transaction |
+> | A8 pin snapshot scope | Info | Fixed — per-member private rooms excluded |
+
 Scope: `services/advisor_service.py`, `advisor_context.py`, `advisor_actions.py`,
 `advisor_gaps.py`, `settings_registry.py`, `cogs/advisor_cog.py`,
 `web_server/routes/advisor.py`. This is the only path in the repo where a
@@ -75,15 +90,46 @@ The pin path is the clear one: `_pin_text` reads `message.content` verbatim and
 falls back to `embeds[0].title + " " + description`. Any pinned member message in
 any non-NSFW channel the asker can see is shipped to Anthropic on every `/ask`.
 
-**Fix.** Rewrite both surfaces to describe the live-context block honestly.
-Concretely, the manual row should say: *when an admin has switched on
-Config → Billy-bot → "Use live server context", the assistant is also given the
-channels you can see (names and topics), pinned messages in them, server docs and
-recent announcements, and your nickname and roles; on the dashboard ask box, the
-conversation so far goes too.* Add the matching row to
-`docs/reviews/2026-08-05-gdpr-register.md`. Because the section lives on
-`review-fix-queue-round-2` and not main, this needs coordinating with that lane
-rather than being patched here.
+**Fix — partly applied, one handoff.**
+
+*Applied here:* `manual.html#ask-guide` now carries an accurate description of
+what live server context sends, and links to `#privacy`. That section does not
+exist on main yet, so until the other lane merges this paragraph **is** the
+member-facing disclosure. (It deliberately does not link `#processors`:
+`tests/web/test_help_links.py` fails on an anchor that isn't in the document,
+which is how I confirmed the section is still absent from main.)
+
+*Handoff — must land on `review-fix-queue-round-2`,* which owns the text. Two
+edits, drafted so they can be pasted:
+
+`docs/privacy_spec.md` § Processors, the first Anthropic row's "Data sent" cell:
+
+> The asker's question text and the public manual (prompt-cached). For an asker
+> who passes `_can_see_config`, a secret-filtered config summary
+> (`advisor_context.build_config_summary`), or the equivalent fetched on demand
+> as `get_server_settings` tool results. **When `advisor_server_context` is on —
+> it is, on both live guilds — also the live per-asker context block
+> (`advisor_context.build_asker_context`): the asker's display name and roles,
+> the names and topics of channels they can see, pinned message content in those
+> channels, server doc bodies, and sent announcement bodies. Pinned messages are
+> third-party member text.** The dashboard ask box additionally sends up to 8
+> prior turns of that conversation (`sanitize_history`). NSFW channels and
+> per-member private rooms are excluded at source; nothing is read from the
+> `messages` archive.
+
+`manual.html#processors`, the Ask Billy-bot row's "What leaves the server" cell:
+
+> Your question, plus this guide so the answer stays grounded. If an *admin* is
+> asking, a summary of the server's settings goes too (passwords and keys are
+> stripped). **If an admin has switched on live server context, the channels you
+> can see — names, topics, and the messages pinned in them — plus server docs,
+> recent announcements, and your nickname and roles go with it.** Nothing
+> age-gated, nothing from a channel you can't see, and no private per-member
+> rooms. On the dashboard box, the conversation so far goes too.
+
+Then add the row to `docs/reviews/2026-08-05-gdpr-register.md`, and drop the
+"Two features are the exception, and both only send what you typed into them"
+lead-in above the table — it is no longer true of the first row.
 
 *(Separately noted, not mine to report: prod has `message_storage_level = 'all'`
 on guild 1469491362444480666 while `privacy_spec.md` describes the `"none"`
@@ -246,14 +292,16 @@ only the benign prefix per **A3** → applied → every future `/grant nsfw` pin
 the whole server. Requires full `administrator` and an Apply click, which is why
 this is Medium rather than High.
 
-**Fix.** Strip `@everyone` / `@here` / `<@&…>` inside
-`validate_grant_role_change` — the template only needs its `{member}` /
-`{role}` / `{actor}` placeholders, so nothing legitimate is lost, and the
-dashboard-set `@here` on `denizen` is untouched. **Do not** unilaterally add
-`AllowedMentions` at `role_grant_commands.py:166`: that would break the live
-`denizen` behaviour, which looks deliberate. Worth asking whether the send-side
-default should change too, but that is a product call, not a fix to apply
-silently.
+**Fix — applied,** in `validate_grant_role_change`, but as a **rejection** rather
+than the silent strip I first proposed: a strip would quietly alter what the
+admin sees on the Apply field and confirms, which is the opposite of A3's point.
+The model gets a readable reason and can rewrite. The `denizen` grant's live
+`@here` is untouched, because the guard is about who wrote the text.
+
+The send side at `role_grant_commands.py:166` was deliberately **not** changed:
+adding `AllowedMentions` there would break that live `denizen` behaviour, which
+looks intentional. Whether the send-side default *should* change is a product
+call and is left open.
 
 ---
 
@@ -326,9 +374,17 @@ description is the configured intro message, with the two members' mentions in a
 The concern is the rule, not the state: "everything the bot can read, minus
 NSFW" widens silently the first time a private-channel feature pins member text.
 
-**Fix.** Invert it — snapshot only channels that pass an explicit inclusion test
-(e.g. visible to `@everyone`), or exclude the jail/ticket/pen-pal categories by
-id.
+**Fix — applied,** but not either option I first suggested. "Visible to
+`@everyone`" would have dropped staff channels, whose topics are wanted and
+tested for; excluding four category ids would have needed config reads in the
+snapshot loop and would miss the fifth such feature. Instead
+`is_private_room(channel, me)` keys off the structural difference: these
+features grant view to a **named member**, staff channels gate on a **role**.
+It fails closed — an unreadable overwrite map counts as private — because
+over-excluding costs context quality and under-excluding costs confidentiality.
+
+Known cost, accepted: a member loses their *own* room's pins from context too.
+That is the conservative direction.
 
 ---
 
@@ -411,16 +467,37 @@ string interpolation. A2's fix should land with the first such test.
 
 ---
 
-## Suggested order
+---
 
-1. **A1** — privacy notice (coordinate with `review-fix-queue-round-2`; it owns
-   the text).
-2. **A3** — render full proposals on the embed. Smallest change, biggest
-   improvement to the gate that everything else leans on.
-3. **A4** — two `admin_only=True` flags + docstring rule.
-4. **A5** — strip mentions in `validate_grant_role_change`.
-5. **A2** — fencing + the untrusted-text instruction + the grant-bullet
-   provenance line, with the first provenance test.
-6. **A6**, **A7**, **A8** as cleanup.
+## What landed (2026-08-06)
 
-Nothing here needs a migration.
+No migration. `docs/plans/help_bot_knowledge.md` gained a Stage 7 section
+recording the trust boundary, and `manual.html#ask-guide` gained the member-facing
+description of live server context and the Apply flow.
+
+| Area | Change |
+| --- | --- |
+| `advisor_context.py` | `_untrusted()` strips `<untrusted>` tags and `===` runs; `_fenced()` wraps topics, pins, docs and announcements; nicknames and role names neutralized inline; `is_private_room()` keeps per-member rooms out of the pin snapshot |
+| `advisor_service.py` | TRUST BOUNDARY rule naming the tags; provenance rule repeated in the grant bullet; the THIS SERVER header restates the boundary next to the data |
+| `advisor_actions.py` | mass mentions rejected in `grant_message`; `apply_config_change` takes `actor_id` and writes an `advisor_config_apply` audit row with before/after in the write's own transaction |
+| `advisor_gaps.py` | `fetch_setup_gaps` fails closed on an unresolved member |
+| `settings_registry.py` | `_ch()` accepts `admin_only`; `whisper_log_channel_id` and `transcript_channel_id` flagged; the tier's rule widened to cover disclosure |
+| `advisor_cog.py` | `_proposal_fields()` discloses every pending write in full; the clicker's id is threaded to the audit row |
+
+**The one contract to keep in step:** the `<untrusted>` tags are emitted by
+`advisor_context._fenced` and named by the TRUST BOUNDARY rule in
+`advisor_service._SYSTEM_INSTRUCTIONS_TEMPLATE`. Changing either without the
+other silently removes the defence — `test_instructions_carry_the_trust_boundary_rule`
+and `test_member_text_is_fenced_and_cannot_forge_a_prompt_section` are what
+catch that.
+
+**Tests.** 15 added across `test_advisor_context.py`, `test_advisor_actions.py`,
+`test_advisor_gaps.py`, `test_advisor_service.py`, and a new
+`test_advisor_cog.py` (the one place a cog assertion is warranted — the
+disclosure fields *are* a control, not glue). The fencing and mass-mention
+tests were confirmed to fail against the pre-fix code before being kept. The
+admin-only additions went in as `pytest.param` rows on the existing test rather
+than as new functions.
+
+**Still open:** A1's doc text, and the send-side `allowed_mentions` question in
+A5 — both need a decision or a branch that isn't this one.

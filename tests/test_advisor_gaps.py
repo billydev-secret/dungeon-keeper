@@ -272,6 +272,15 @@ def test_fetch_setup_gaps_requires_admin(tmp_path):
     assert "welcome_channel_id" not in out  # no reconnaissance leak
 
 
+def test_fetch_setup_gaps_fails_closed_on_an_unresolved_member(tmp_path):
+    """A gap list is reconnaissance. The default used to skip the check when
+    member was None, out of step with every other gate in the subsystem."""
+    path = _db_file(tmp_path, [])
+    out = ag.fetch_setup_gaps(path, 1, None)
+    assert "only server admins" in out
+    assert "welcome_channel_id" not in out
+
+
 def test_fetch_setup_gaps_allows_admin(tmp_path):
     path = _db_file(tmp_path, [])
     out = ag.fetch_setup_gaps(path, 1, FakeMember(administrator=True))

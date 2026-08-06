@@ -25,10 +25,15 @@ Two safety rules govern entries:
   and a config write, so widening what model output can propose is deliberate,
   never a default.
 * ``admin_only`` raises the bar for settings that grant access or moderation
-  authority (the jailed role, NSFW/veil access roles, who may mark Q&A answers).
-  These are proposable, but only for an asker with full ``administrator`` — not
-  merely ``manage_guild``, which is all the ordinary settings gate requires —
-  and the check is re-run against whoever clicks Apply, not just whoever asked.
+  authority (the jailed role, NSFW/veil access roles, who may mark Q&A answers),
+  **or that route confidential data to a channel** (the whisper mod log, which
+  names the sender behind an anonymous whisper; the jail/ticket transcript
+  archive). The second clause was added 2026-08-06: the tier used to be defined
+  by authority alone, which left two keys whose whole risk is disclosure sitting
+  at the ordinary ``manage_guild`` bar. These are proposable, but only for an
+  asker with full ``administrator`` — not merely ``manage_guild``, which is all
+  the ordinary settings gate requires — and the check is re-run against whoever
+  clicks Apply, not just whoever asked.
 * Keys that define the **top-level permission boundary** (``admin_role_ids``,
   ``mod_role_ids``) or a **privacy default** (``message_storage_level``) are
   never writable at any confirmation level. Handing out admin, or widening what
@@ -145,9 +150,9 @@ class Feature:
         return tuple(s for s in self.settings if s.required)
 
 
-def _ch(key, label, *, required=False, writable=True, help="") -> Setting:
+def _ch(key, label, *, required=False, writable=True, admin_only=False, help="") -> Setting:
     return Setting(key, label, "channel", required=required, writable=writable,
-                   default="0", help=help)
+                   admin_only=admin_only, default="0", help=help)
 
 
 def _role(key, label, *, required=False, writable=True, admin_only=False, help="") -> Setting:
@@ -313,7 +318,11 @@ FEATURES: tuple[Feature, ...] = (
             _ch("ticket_panel_channel_id", "Ticket panel channel", required=True),
             _num("ticket_category_id", "Ticket category", required=True, writable=False,
                  help="A category, not a text channel — set it from the panel."),
-            _ch("transcript_channel_id", "Transcript archive channel"),
+            _ch("transcript_channel_id", "Transcript archive channel",
+                admin_only=True,
+                help="Where closed tickets and jail transcripts are archived. "
+                     "Pointing it at a channel members can read publishes them "
+                     "— full admin only."),
             _flag("ticket_notify_on_create", "Notify staff on new tickets"),
         ),
     ),
@@ -336,7 +345,10 @@ FEATURES: tuple[Feature, ...] = (
         blurb="Lets members send anonymous notes through the bot, with a mod log.",
         settings=(
             _ch("whisper_channel_id", "Whisper channel", required=True),
-            _ch("whisper_log_channel_id", "Whisper mod log"),
+            _ch("whisper_log_channel_id", "Whisper mod log", admin_only=True,
+                help="This log names the sender behind each anonymous whisper. "
+                     "Pointing it at a channel members can read deanonymizes "
+                     "the feature — full admin only."),
             _role("whisper_role_id", "Role allowed to whisper", admin_only=True,
                   help="Gates who can send anonymous notes — full admin only."),
         ),

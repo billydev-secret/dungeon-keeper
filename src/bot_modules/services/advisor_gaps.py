@@ -183,11 +183,17 @@ def fetch_setup_gaps(db_path, guild_id: int, member=None) -> str:
     Admin-gated like the settings reads: knowing exactly which features a server
     hasn't set up is reconnaissance a regular member has no business getting.
     Returns model-readable text in every case, errors included.
+
+    Fails **closed** on an unresolved member: ``can_see_config(None)`` is False,
+    matching ``fetch_feature_settings`` and ``validate_config_change``'s
+    ``is_admin=False`` default. It used to skip the check entirely when
+    ``member`` was None — unreachable, since both surfaces build the tool only
+    for a resolved admin, but the wrong default for the one gate in this module.
     """
     from bot_modules.core.db_utils import open_db
     from bot_modules.services.advisor_context import can_see_config
 
-    if member is not None and not can_see_config(member):
+    if not can_see_config(member):
         return "Not available: only server admins can review setup gaps."
     try:
         with open_db(db_path) as conn:
