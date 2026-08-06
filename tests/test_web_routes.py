@@ -908,7 +908,9 @@ from web_server.server import _auto_detect_auth  # noqa: E402
 
 def test_auto_detect_auth_uses_oauth_when_configured(monkeypatch):
     monkeypatch.setenv("DISCORD_CLIENT_ID", "cid")
-    monkeypatch.setenv("SESSION_SECRET", "secret")
+    # Must clear the session-secret strength floor _auto_detect_auth enforces;
+    # the floor itself is covered by the session-secret tests.
+    monkeypatch.setenv("SESSION_SECRET", "x7Qp2vLm9RtWzB4nKcJdF6sYhE3aUgN8")
     monkeypatch.delenv("DASHBOARD_OPEN_AUTH", raising=False)
     assert isinstance(_auto_detect_auth(123), DiscordOAuthAuth)
 
