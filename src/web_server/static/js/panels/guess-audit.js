@@ -1,4 +1,5 @@
 import { api } from "../api.js";
+import { memberNames } from "../config-helpers.js";
 import { auditPanel, badge, tsColumn } from "../audit-helpers.js";
 
 const ACTION_LABELS = {
@@ -29,10 +30,8 @@ function fmtDetails(raw) {
 }
 
 export function mount(container) {
-  // The guess audit endpoint returns raw actor snowflakes only; resolve
-  // display names via the same /api/meta/members lookup other panels use.
-  let memberNames = null; // Map<id, display name>, loaded once per mount
-
+  // The guess audit endpoint returns raw actor snowflakes only; resolve display
+  // names via the same /api/meta/members lookup other panels use.
   return auditPanel(container, {
     title: "Guess Who Audit",
     subtitle: "Recent submit, delete, solve, and guess-cap events from Guess Who",
@@ -62,18 +61,16 @@ export function mount(container) {
       tsColumn("ts"),
     ],
     fetch: async (params) => {
-      if (!memberNames) {
-        try {
-          const members = await api("/api/meta/members");
-          memberNames = new Map(members.map((m) => [m.id, m.display_name || m.name]));
-        } catch (_) {
-          memberNames = new Map(); // fall back to raw IDs
-        }
-      }
       const data = await api("/api/guess/audit", params);
+      // Rows first, then names for exactly the actors on this page. The member
+      // list is a bounded page now, and an audit trail is precisely where the
+      // long-departed turn up — memberNames() looks up whoever the page missed
+      // instead of leaving a raw snowflake in the Actor column. Both halves are
+      // memoized in config-helpers, so paging costs no extra request.
+      const lookup = await memberNames(data.events.map((e) => e.actor_id));
       const rows = data.events.map((e) => ({
         ...e,
-        actor_name: memberNames.get(e.actor_id) || null,
+        actor_name: lookup(e.actor_id),
       }));
       return { rows }; // endpoint returns no total
     },

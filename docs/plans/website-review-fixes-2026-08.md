@@ -47,7 +47,14 @@ consumes.
 - **B-SEC4/5/6** drop the unused OAuth token from the cookie; real logout
   invalidation; escape the Spotify callback error.
 - **B-SEC10** Origin/Referer check on state-changing verbs.
-- **B-PERF7 (partial)** role_menus N+1, `/meta/members` unbounded.
+- **B-PERF7 (partial)** role_menus N+1, `/meta/members` unbounded. The
+  `/meta/members` half was deferred out of Stage 2 and landed later as its own
+  coordinated frontend change: capping the endpoint alone would have made every
+  member below the cap unselectable, because `loadMembers()` caches the whole
+  list and the pickers filter it client-side. Shape shipped: a bounded default
+  page (live roster first, departed users filling the rest), plus `?q=` search
+  and `?ids=` resolution, with `opts.search` on filter-select so a picker keeps
+  filtering locally *and* asks the server as the user types.
 
 ### Stage 3 — backend performance
 
@@ -56,7 +63,11 @@ consumes.
   the deferred retention/rollup work.
 - **B-PERF4** sentiment tile through the shared cache + an index/table-source
   fix for the scan.
-- **B-PERF5** advisor inline DB reads off the loop.
+- **B-PERF5** advisor inline DB reads off the loop. Two parts: the route's own
+  reads (`run_query`, shipped in b9b65c83) and the `AdvisorTools` callbacks,
+  which the route can't wrap because `advisor_service._run_tool` calls them from
+  inside the tool loop — that half needed `_run_tool` to become async and
+  dispatch through `to_thread` (see `plans/ai-advisor.md` → the config-tool loop).
 - **B-PERF6** health deep-dives through `get_cached` — cache key must include
   every parameter that changes the population, or it serves wrong data.
 - **B-PERF7 (partial)** games/economy_manager N+1s.

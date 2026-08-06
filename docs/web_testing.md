@@ -134,6 +134,23 @@ works within a guild. The app.js side of that wiring is a cheap source check in
 bug there was `panels/todo.js` writing `#/todo` for a page registered as
 `mod-todo`, so every render left a URL that reloads to "Page Not Available".
 
+The same file gates the **bounded member list**. `/api/meta/members` returns a
+page now (live roster first, departed users filling whatever budget is left)
+instead of every person who has ever joined, and that is only safe because
+`filterSelect` / `multiFilterSelect` take an `opts.search` callback: the widget
+keeps filtering its prefetch locally *and* asks the server as the user types.
+The tests stub the endpoint as a two-row page with a departed member behind it
+and run the same scenario twice — the `search: null` control is the regression a
+naive server cap would have shipped, where that member is not merely hard to
+find but impossible to select. Two more cover the other halves: a saved id the
+page didn't include still resolves to a name (`?ids=`), and a reply landing
+after the panel unmounts is dropped rather than rendered into a detached list.
+The source side — `memberSearch()` wired into both shared mount helpers, and no
+panel building member options without it — is swept in `test_frontend_wiring.py`
+alongside the `resetMetaCaches()` check, which now covers the `Map` memos too.
+The endpoint's own bound, search and id resolution are route tests in
+`test_meta_and_ai_routes.py`.
+
 `js/md-preview.js` put the link **text** in the `href` (`$1`, not `$2`), which
 also forfeited the https-only validation the pattern does on the URL: a
 `[javascript:alert(1)](https://ok)` link produced a real `javascript:` href,

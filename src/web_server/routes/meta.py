@@ -296,66 +296,195 @@ async def meta_bots(
     )
 
 
+# ── /meta/members: bounded, but nobody unreachable ───────────────────
+#
+# This used to return every current member PLUS every `known_users` row ever
+# recorded, unpaginated — a payload that grows monotonically with server churn
+# and is fetched on almost every config panel's mount. A naive cap was rejected
+# once already, and rightly: the dashboard's pickers filter a cached list
+# CLIENT-side, so anything the cap drops becomes silently unselectable.
+#
+# Three modes, which together bound the payload without losing anyone:
+#
+#   (no params)  The default page: current members first (alphabetical), then
+#                departed members to fill whatever budget is left. The live
+#                roster is bounded by guild size — it does not grow with churn —
+#                so a normal server still gets exactly the old payload, while
+#                the `known_users` tail that *does* grow forever is what the
+#                budget trims.
+#   ?q=…         Server-side search across BOTH populations (username, display
+#                name, and — for an all-digit query — the id). This is what
+#                makes the cap safe: the departed member 5,000 rows down is one
+#                keystroke away instead of unreachable.
+#   ?ids=a,b,c   Exact resolution. A config pointing at someone who left years
+#                ago still renders their name instead of a bare snowflake.
+#
+# The response shape is unchanged (a flat `list[MemberMeta]`, ids as strings),
+# so every existing consumer keeps working against the default page.
+MEMBER_PAGE_DEFAULT = 1000
+MEMBER_PAGE_MAX = 2000
+MEMBER_IDS_MAX = 200
+
+
+def _parse_member_ids(ids: str) -> list[str]:
+    """Digit-only, de-duplicated, capped id list from the `ids` query param."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in ids.split(","):
+        tok = raw.strip()
+        if not tok.isdigit() or tok in seen:
+            continue
+        seen.add(tok)
+        out.append(tok)
+        if len(out) >= MEMBER_IDS_MAX:
+            break
+    return out
+
+
+def _like_escape(needle: str) -> str:
+    """Neutralize LIKE wildcards so a search for "50%" isn't a match-all."""
+    return needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _known_user_filter(needle: str, want_ids: list[str]) -> tuple[str, list]:
+    """Extra WHERE fragment + params narrowing known_users to the request."""
+    if want_ids:
+        placeholders = ",".join("?" * len(want_ids))
+        return f" AND user_id IN ({placeholders})", [int(i) for i in want_ids]
+    if not needle:
+        return "", []
+    like = f"%{_like_escape(needle)}%"
+    clause = (
+        " AND (LOWER(username) LIKE ? ESCAPE '\\'"
+        " OR LOWER(display_name) LIKE ? ESCAPE '\\'"
+    )
+    params: list = [like, like]
+    if needle.isdigit():
+        clause += " OR CAST(user_id AS TEXT) LIKE ? ESCAPE '\\'"
+        params.append(like)
+    return clause + ")", params
+
+
+def _member_matches(member, needle: str, want_ids: list[str]) -> bool:
+    """Does a live guild member belong in this request's slice?"""
+    if want_ids:
+        return str(member.id) in want_ids
+    if not needle:
+        return True
+    if needle in (member.name or "").lower():
+        return True
+    if needle in (member.display_name or "").lower():
+        return True
+    return needle.isdigit() and needle in str(member.id)
+
+
+def _query_known_users(
+    ctx,
+    guild_id: int,
+    needle: str,
+    want_ids: list[str],
+    budget: int,
+    exclude_ids: set[str],
+    *,
+    mark_left: bool,
+) -> list[MemberMeta]:
+    """Up to `budget` known_users rows, skipping ids in `exclude_ids`."""
+    clause, params = _known_user_filter(needle, want_ids)
+    out: list[MemberMeta] = []
+    with ctx.open_db() as conn:
+        cursor = conn.execute(
+            "SELECT user_id, username, display_name FROM known_users"
+            f" WHERE guild_id = ?{clause}"
+            " ORDER BY display_name COLLATE NOCASE",
+            [guild_id, *params],
+        )
+        # Streamed, not fetchall(): rows that are still current members are
+        # dropped here, and excluding them in SQL would mean inlining every id
+        # in the guild. Stopping as soon as `budget` survivors are found keeps
+        # the work O(guild size + budget) rather than O(every user ever seen).
+        for row in cursor:
+            uid = str(row[0])
+            if uid in exclude_ids:
+                continue
+            out.append(
+                MemberMeta(
+                    id=uid,
+                    name=row[1] or uid,
+                    display_name=row[2] or row[1] or uid,
+                    left_server=mark_left,
+                )
+            )
+            if len(out) >= budget:
+                break
+    # SQLite's NOCASE collation folds ASCII only; re-sort the page the way the
+    # rest of the payload is sorted. Same rows either way — only their order.
+    return sorted(out, key=lambda m: m.display_name.lower())
+
+
 @router.get("/meta/members", response_model=list[MemberMeta])
 async def meta_members(
     request: Request,
+    q: str = "",
+    ids: str = "",
+    limit: int = MEMBER_PAGE_DEFAULT,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
+    needle = q.strip().lower()
+    want_ids = _parse_member_ids(ids)
+    budget = max(1, min(int(limit), MEMBER_PAGE_MAX))
+    if want_ids:
+        # An explicit id list is never trimmed below what was asked for: its
+        # whole job is rendering the ids a config already references.
+        budget = min(max(budget, len(want_ids)), MEMBER_PAGE_MAX)
+
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
     if guild is not None:
-        current_members = [
-            MemberMeta(
-                id=str(m.id),
-                name=m.name,
-                display_name=m.display_name,
-            )
-            for m in guild.members
-            if not m.bot
-        ]
-        current_ids = {m.id for m in current_members}
-
-        def _q_left():
-            with ctx.open_db() as conn:
-                rows = conn.execute(
-                    "SELECT user_id, username, display_name FROM known_users WHERE guild_id = ? ORDER BY display_name COLLATE NOCASE",
-                    (guild_id,),
-                ).fetchall()
-            return [
+        # Every human in the guild, filter or no filter — this is the exclusion
+        # set for the departed half, so it must not be narrowed by the search.
+        current_ids = {str(m.id) for m in guild.members if not m.bot}
+        current_members = sorted(
+            (
                 MemberMeta(
-                    id=str(r[0]),
-                    name=r[1] or str(r[0]),
-                    display_name=r[2] or r[1] or str(r[0]),
-                    left_server=True,
+                    id=str(m.id),
+                    name=m.name,
+                    display_name=m.display_name,
                 )
-                for r in rows
-                if str(r[0]) not in current_ids
-            ]
+                for m in guild.members
+                if not m.bot and _member_matches(m, needle, want_ids)
+            ),
+            key=lambda m: m.display_name.lower(),
+        )[:budget]
 
-        left_members = await run_query(_q_left)
-        return sorted(current_members, key=lambda m: m.display_name.lower()) + sorted(
-            left_members, key=lambda m: m.display_name.lower()
+        remaining = budget - len(current_members)
+        if remaining <= 0:
+            return current_members
+        left_members = await run_query(
+            _query_known_users,
+            ctx,
+            guild_id,
+            needle,
+            want_ids,
+            remaining,
+            current_ids,
+            mark_left=True,
         )
+        return current_members + left_members
 
-    # Fallback: known_users table
-    def _q():
-        with ctx.open_db() as conn:
-            rows = conn.execute(
-                "SELECT user_id, username, display_name FROM known_users WHERE guild_id = ? ORDER BY display_name COLLATE NOCASE",
-                (guild_id,),
-            ).fetchall()
-        return [
-            MemberMeta(
-                id=str(r[0]),
-                name=r[1] or str(r[0]),
-                display_name=r[2] or r[1] or str(r[0]),
-            )
-            for r in rows
-        ]
-
-    return await run_query(_q)
+    # Fallback: known_users table (no live gateway cache). Nobody can be marked
+    # as departed here — without the guild there is nothing to compare against.
+    return await run_query(
+        _query_known_users,
+        ctx,
+        guild_id,
+        needle,
+        want_ids,
+        budget,
+        set(),
+        mark_left=False,
+    )
 
 
 @router.get("/meta/channels", response_model=list[ChannelMeta])

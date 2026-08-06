@@ -86,6 +86,25 @@ it can't invent commands or promise unbuilt features.
   call. It is the tested unit.
 - Both surfaces are thin glue over `answer_advisor`.
 
+### The config-tool loop and the event loop
+
+For admin askers, `answer_advisor` runs a bounded tool loop (`MAX_TOOL_ROUNDS`;
+the last round forces a text answer) over the callbacks the surface wires up in
+`AdvisorTools`. Every one of those callbacks blocks — it opens the DB and walks
+the guild cache — and **the dashboard's uvicorn runs on the bot's own event
+loop**, so a blocking tool call stalls the Discord gateway, not just one request.
+
+The contract is therefore: **`AdvisorTools` callbacks are plain sync functions,
+and `_run_tool` (async) dispatches each one through `asyncio.to_thread`** — the
+same convention `web_server/deps.run_query` uses for route DB reads. The
+off-loop hop lives in one place instead of being re-implemented per surface, and
+a coroutine function passed in is a pyright error at the call site. Calls within
+a round are awaited **in order, never gathered**: the propose tools mutate the
+surface's shared proposal list (dedupe, then a `_MAX_PROPOSALS` cap), so
+ordering is part of the behaviour. Guarded by
+`test_every_db_backed_tool_runs_off_the_event_loop` (service) and
+`test_advisor_config_tools_run_off_the_event_loop` (route wiring).
+
 ## Follow-ups (not yet built)
 
 - **Token streaming** on the dashboard via the `logs.py` SSE precedent
@@ -93,5 +112,7 @@ it can't invent commands or promise unbuilt features.
 - **Member-scoped context on the web surface** currently resolves the asker via
   `guild.get_member(user_id)` and falls back to @everyone-public when the member
   isn't resolvable. Could tighten using the dashboard session's role set.
-- **Agentic mode** — tools to look up live member state ("what's my balance") or
-  take actions. Still pure grounded Q&A.
+- **Agentic mode** — partly shipped: admin askers get config tools
+  (`get_server_settings`, `find_setup_gaps`, and the propose-a-change pair
+  rendered as Apply buttons on Discord). Still missing are tools over live
+  *member* state ("what's my balance").

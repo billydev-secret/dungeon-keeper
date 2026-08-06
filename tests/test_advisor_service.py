@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from unittest.mock import AsyncMock, MagicMock
 
@@ -588,6 +589,133 @@ async def test_tool_loop_exhaustion_forces_text_on_last_round(monkeypatch):
     # Model misbehaved to the end → graceful error, not a crash.
     assert res.ok is False
     assert res.answer == adv._ERROR_MSG
+
+
+# ── tool callbacks run off the event loop ──────────────────────────────────
+#
+# Every AdvisorTools callback opens the DB and walks the guild cache, and both
+# surfaces answer from an event loop — the dashboard's uvicorn runs on the
+# *bot's* loop, so a blocking tool call stalls the Discord gateway. The probe
+# below is the repo's established shape (tests/web/test_dashboard_perf_fixes.py):
+# a callback that asks for the running loop and must not find one.
+
+
+def _on_loop() -> bool:
+    """True when called from a thread that is running an asyncio event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+async def test_every_db_backed_tool_runs_off_the_event_loop(monkeypatch):
+    _mock_client_seq(monkeypatch, [
+        _resp(
+            _tool_block("get_server_settings", {"feature": "general"}, bid="tu1"),
+            _tool_block("find_setup_gaps", {}, bid="tu2"),
+            _tool_block(
+                "propose_config_change",
+                {"key": "welcome_channel_id", "value": "#hi"},
+                bid="tu3",
+            ),
+            _tool_block(
+                "propose_grant_role_change",
+                {"grant_name": "nsfw", "field": "role_id", "value": "@Adults"},
+                bid="tu4",
+            ),
+            stop_reason="tool_use",
+        ),
+        _resp(TextBlock(type="text", text="done")),
+    ])
+    seen: dict[str, bool] = {}
+
+    def _probe(label: str) -> str:
+        seen[label] = _on_loop()
+        return "ok"
+
+    tools = adv.AdvisorTools(
+        feature_keys=["general"],
+        fetch_settings=lambda f: _probe("fetch_settings"),
+        fetch_gaps=lambda: _probe("fetch_gaps"),
+        propose_change=lambda k, v: _probe("propose_change"),
+        propose_grant=lambda g, f, v: _probe("propose_grant"),
+        grant_names=["nsfw"],
+    )
+    res = await adv.answer_advisor("audit everything", tools=tools)
+    assert res.ok is True
+    assert seen == {
+        "fetch_settings": False,
+        "fetch_gaps": False,
+        "propose_change": False,
+        "propose_grant": False,
+    }, "an advisor tool callback ran on the event loop"
+
+
+async def test_tool_results_keep_the_models_call_order(monkeypatch):
+    """Off-loop dispatch is awaited one call at a time, not gathered: the
+    propose tools mutate the surface's shared proposal list, so order matters —
+    and the tool_result blocks must still line up with their tool_use ids."""
+    client = _mock_client_seq(monkeypatch, [
+        _resp(
+            _tool_block("propose_config_change", {"key": "k1", "value": "v1"}, bid="a"),
+            _tool_block("get_server_settings", {"feature": "economy"}, bid="b"),
+            _tool_block("find_setup_gaps", {}, bid="c"),
+            _tool_block("propose_config_change", {"key": "k2", "value": "v2"}, bid="d"),
+            stop_reason="tool_use",
+        ),
+        _resp(TextBlock(type="text", text="done")),
+    ])
+    order: list[str] = []
+
+    def _record(label: str, payload: str) -> str:
+        order.append(label)
+        return payload
+
+    tools = adv.AdvisorTools(
+        feature_keys=["general", "economy"],
+        fetch_settings=lambda f: _record(f"fetch:{f}", "SETTINGS"),
+        fetch_gaps=lambda: _record("gaps", "GAPS"),
+        propose_change=lambda k, v: _record(f"propose:{k}", f"Queued {k}={v}"),
+    )
+    res = await adv.answer_advisor("do four things", tools=tools)
+    assert res.ok is True
+    assert order == ["propose:k1", "fetch:economy", "gaps", "propose:k2"]
+    results = client.messages.create.call_args.kwargs["messages"][-1]["content"]
+    assert [r["tool_use_id"] for r in results] == ["a", "b", "c", "d"]
+    assert [r["content"] for r in results] == [
+        "Queued k1=v1", "SETTINGS", "GAPS", "Queued k2=v2",
+    ]
+    assert all(r["type"] == "tool_result" for r in results)
+
+
+async def test_a_raising_tool_still_becomes_readable_text(monkeypatch):
+    """The callback now raises inside a worker thread; the exception must still
+    surface to the model as _TOOL_ERROR and leave the loop running."""
+    client = _mock_client_seq(monkeypatch, [
+        _resp(
+            _tool_block("get_server_settings", {"feature": "general"}, bid="x"),
+            _tool_block("find_setup_gaps", {}, bid="y"),
+            stop_reason="tool_use",
+        ),
+        _resp(TextBlock(type="text", text="answered anyway")),
+    ])
+
+    def boom(_feature):
+        raise RuntimeError("db exploded")
+
+    tools = adv.AdvisorTools(
+        feature_keys=["general"],
+        fetch_settings=boom,
+        fetch_gaps=lambda: "- Q&A rewards — not set up at all",
+    )
+    res = await adv.answer_advisor("what's set up?", tools=tools)
+    assert res.ok is True
+    assert res.answer == "answered anyway"
+    results = client.messages.create.call_args.kwargs["messages"][-1]["content"]
+    # The raiser failed readably and the tool after it still ran.
+    assert results[0]["content"] == adv._TOOL_ERROR
+    assert results[1]["content"] == "- Q&A rewards — not set up at all"
 
 
 def test_advisor_tools_toggle_defaults_on():

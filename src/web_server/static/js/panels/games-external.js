@@ -88,7 +88,11 @@ export function mount(container) {
       const chSlot = container.querySelector("[data-new-channel]");
       const botSlot = container.querySelector("[data-new-bot]");
       const chPicker = mountChannelPicker(chSlot, channels, "0");
-      const botPicker = mountMemberPicker(botSlot, bots, "0");
+      // `search: null` opts out of the member picker's server-side lookup: the
+      // options here come from /api/meta/bots, and that lookup searches humans —
+      // it would offer a person as the bot being watched. The bot list is small
+      // and complete, so local filtering is all this picker needs.
+      const botPicker = mountMemberPicker(botSlot, bots, "0", { search: null });
 
       container.querySelector("[data-add]").addEventListener("click", async () => {
         const status = container.querySelector("[data-add-status]");

@@ -5,7 +5,7 @@
 import { api, apiPost, esc, fmtAge, fmtTs } from "../api.js";
 import {
   showStatus, loadMembers,
-  mountPicker, toMemberOptions,
+  mountMemberPicker,
   mountAsync,
 } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
@@ -255,10 +255,12 @@ async function refreshCommunity(container, members) {
 function wireGrant(container, members) {
   const form = container.querySelector("[data-form-grant]");
   const status = form.querySelector("[data-status-grant]");
-  const memberPicker = mountPicker(
+  // The member list is a bounded page; mountMemberPicker adds the server-side
+  // lookup so a grant can still be addressed to someone outside it.
+  const memberPicker = mountMemberPicker(
     form.querySelector('[data-picker="grant-member"]'),
-    toMemberOptions(members), "0",
-    { emptyValue: "0", emptyLabel: "(pick a member)" },
+    members, "0",
+    { emptyLabel: "(pick a member)" },
   );
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -301,10 +303,10 @@ function wireGrant(container, members) {
 let _ledgerMemberPicker = null;
 
 function wireLedger(container, members) {
-  _ledgerMemberPicker = mountPicker(
+  _ledgerMemberPicker = mountMemberPicker(
     container.querySelector('[data-picker="ledger-member"]'),
-    toMemberOptions(members), "0",
-    { emptyValue: "0", emptyLabel: "(all members)" },
+    members, "0",
+    { emptyLabel: "(all members)" },
   );
   container.querySelector("[data-ledger-refresh]").addEventListener("click", () => {
     refreshLedger(container, members);

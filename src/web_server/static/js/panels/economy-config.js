@@ -7,8 +7,7 @@ import {
   loadChannels,
   loadRoles,
   loadMembers,
-  toMemberOptions,
-  mountPicker,
+  mountMemberPicker,
   mountChannelPicker,
   mountRolePicker,
   mountAsync,
@@ -353,12 +352,15 @@ function render(container, cfg, channels, roles, members) {
     String(cfg.bounty_channel_id),
     { label: "Bounty Board Channel" },
   );
-  const hostPicker = mountPicker(
+  // mountMemberPicker rather than a bare mountPicker: /api/meta/members is a
+  // bounded page now, and this field holds a saved id. The helper wires the
+  // server-side search (so anyone is still pickable) and resolves a saved host
+  // who has since left, which would otherwise show as a bare snowflake.
+  const hostPicker = mountMemberPicker(
     form.querySelector('[data-picker="community_host_user_id"]'),
-    toMemberOptions(members),
+    members,
     String(cfg.community_host_user_id || "0"),
     {
-      emptyValue: "0",
       emptyLabel: "(server owner)",
       placeholder: "Search members…",
       label: "Community Weekly Host",

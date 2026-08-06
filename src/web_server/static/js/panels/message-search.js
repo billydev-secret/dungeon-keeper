@@ -1,5 +1,6 @@
 import { api, esc, fmtTs } from "../api.js";
 import { filterSelect, multiFilterSelect } from "../filter-select.js";
+import { memberSearch } from "../config-helpers.js";
 import { renderEmpty, renderError, renderLoading } from "../states.js";
 
 /** Format a sentiment score as a short label with emoji. */
@@ -122,9 +123,15 @@ export function mount(container) {
   const downloadBtn = container.querySelector("[data-download]");
 
   // Placeholder filter-selects (replaced once members/channels load)
-  const authorFS = multiFilterSelect("Type to filter…", [], { label: "Author" });
-  const mentionsFS = filterSelect("Type to filter…", [], { label: "Mentions", emptyLabel: "(anyone)" });
-  const replyFS = filterSelect("Type to filter…", [], { label: "Reply to", emptyLabel: "(anyone)" });
+  // The three member filters get `search`: /api/meta/members only prefetches a
+  // bounded page, and searching an archive for a member who has since left is
+  // one of the main things this panel is for.
+  const authorFS = multiFilterSelect("Type to filter…", [],
+    { label: "Author", search: memberSearch() });
+  const mentionsFS = filterSelect("Type to filter…", [],
+    { label: "Mentions", emptyLabel: "(anyone)", search: memberSearch() });
+  const replyFS = filterSelect("Type to filter…", [],
+    { label: "Reply to", emptyLabel: "(anyone)", search: memberSearch() });
   const channelFS = multiFilterSelect("Type to filter…", [], { label: "Channel" });
 
   container.querySelector('[data-slot="author"]').appendChild(authorFS.el);

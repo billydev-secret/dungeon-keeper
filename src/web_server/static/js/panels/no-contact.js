@@ -13,7 +13,7 @@
  */
 import { api, apiPost, apiDelete, esc, fmtTs } from "../api.js";
 import {
-  loadChannels, loadRoles, loadMembers,
+  loadChannels, loadRoles, loadMembers, memberNameLookup,
   mountChannelPicker, mountRolePicker, mountMemberPicker,
   showStatus,
 } from "../config-helpers.js";
@@ -25,16 +25,21 @@ const KIND_LABEL = {
   reply: "Reply",
 };
 
-// Built once per mount from the member list. A `.find()` per cell turned each
-// render into a full scan of every guild member — ~200 scans for a 100-row
-// event table alone, repeated on every refresh.
+// Built once per mount from the member list (memberNameLookup indexes it into a
+// Map). A `.find()` per cell turned each render into a full scan of every guild
+// member — ~200 scans for a 100-row event table alone, repeated on every
+// refresh.
+//
+// The shared helper also consults config-helpers' id index, which matters now
+// that /api/meta/members is a bounded page: a member added to a pair through the
+// picker's server-side search is not in `members`, and their row would otherwise
+// read "User 123456789" straight after being added.
 function nameLookup(members) {
-  const byId = new Map(
-    members.map((m) => [String(m.id), m.display_name || m.name]),
-  );
+  const lookup = memberNameLookup(members);
   return (id) => {
     if (!id) return "—";
-    return byId.get(String(id)) || `User ${id}`;
+    const name = lookup(id);
+    return name === String(id) ? `User ${id}` : name;
   };
 }
 

@@ -1,7 +1,7 @@
 import {
   loadConfig, loadMembers, loadChannels, apiPut, showStatus, clearStatus, guardForm,
   mountPicker, mountChannelPicker, mountExemptionList,
-  mountAsync, toSortedMemberOptions, memberNameLookup,
+  mountAsync, toSortedMemberOptions, memberNameLookup, memberSearch,
 } from "../config-helpers.js";
 import { esc, apiPost } from "../api.js";
 import { toast, confirmDialog } from "../ui.js";
@@ -186,6 +186,9 @@ export function mount(container) {
         emptyLabel: "(pick a member)",
         placeholder: "Search members…",
         label: "Member to never sweep",
+        // The prefetched page holds the live roster; typing reaches everyone
+        // else, so a member who left years ago is still exemptable.
+        search: memberSearch(toSortedMemberOptions),
       },
     );
 

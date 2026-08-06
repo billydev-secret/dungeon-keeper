@@ -151,16 +151,117 @@ export async function loadRoles() {
 let _members = null;
 let _bots = null;
 
+// ── The bounded member list ────────────────────────────────────────────
+//
+// /api/meta/members is paginated (routes/meta.py): it returns the live roster
+// first and only as much of the ever-growing departed-member tail as fits. That
+// is safe for pickers ONLY because two lookups reach past the page:
+//
+//   searchMembers(q)    — what a picker calls as the user types, so a member
+//                         5,000 rows down is one keystroke away, not missing;
+//   resolveMembers(ids) — exact ids, so a config pointing at someone who left
+//                         still renders their name instead of a snowflake.
+//
+// Both memoize, and both are scoped to the ACTIVE guild exactly like _members —
+// so both are cleared in resetMetaCaches() below.
+const _memberSearches = new Map(); // lowercased query -> MemberMeta[]
+const _membersById = new Map();    // id -> MemberMeta | null (null = looked up, absent)
+// Bounds a long typing session; queries are a prefix chain, so evicting the
+// oldest drops the ones the user has already typed past.
+const MEMBER_SEARCH_CACHE_MAX = 60;
+
+/** Index members by id so memberNameLookup and the pickers can find them later. */
+function _rememberMembers(members) {
+  for (const m of members) _membersById.set(String(m.id), m);
+  return members;
+}
+
 export async function loadMembers() {
   if (_members) return _members;
   try {
-    _members = await api("/api/meta/members");
+    _members = _rememberMembers(await api("/api/meta/members"));
     _metaFailed.delete("members");
   } catch (_) {
     _metaFailed.add("members");
     return [];
   }
   return _members;
+}
+
+/**
+ * Server-side member search — the half of a picker that reaches past the
+ * bounded first page. Matches username, display name, and (for an all-digit
+ * query) the id, across both current and departed members.
+ *
+ * Resolves to [] rather than rejecting: a failed lookup must leave the locally
+ * filtered options standing, because a blanked dropdown reads as "no such
+ * member" rather than "the search didn't answer".
+ */
+export async function searchMembers(q) {
+  const key = String(q || "").trim().toLowerCase();
+  if (!key) return [];
+  if (_memberSearches.has(key)) return _memberSearches.get(key);
+  let rows;
+  try {
+    rows = await api(`/api/meta/members?q=${encodeURIComponent(key)}`);
+  } catch (_) {
+    return []; // not cached — a retry on the next keystroke is the right move
+  }
+  if (_memberSearches.size >= MEMBER_SEARCH_CACHE_MAX) {
+    _memberSearches.delete(_memberSearches.keys().next().value);
+  }
+  _memberSearches.set(key, rows);
+  return _rememberMembers(rows);
+}
+
+/**
+ * Look up specific member ids the bounded first page may not include.
+ * Returns only the ids that resolved, in the order asked for; ids already
+ * known (from the page or an earlier search) cost no request at all.
+ */
+export async function resolveMembers(ids) {
+  const want = [...new Set((ids || []).map(String))].filter(
+    (id) => /^\d+$/.test(id) && id !== "0",
+  );
+  const missing = want.filter((id) => !_membersById.has(id));
+  if (missing.length) {
+    try {
+      _rememberMembers(await api(`/api/meta/members?ids=${missing.join(",")}`));
+    } catch (_) {
+      return want.map((id) => _membersById.get(id)).filter(Boolean);
+    }
+    // Remember the misses too, so a row full of genuinely unknown ids doesn't
+    // re-ask on every render.
+    for (const id of missing) {
+      if (!_membersById.has(id)) _membersById.set(id, null);
+    }
+  }
+  return want.map((id) => _membersById.get(id)).filter(Boolean);
+}
+
+/**
+ * Async counterpart to memberNameLookup(): `(id) => display name` over the
+ * bounded page PLUS whichever of `ids` the page didn't reach.
+ *
+ * Panels that render historical rows (audit logs, ledgers) want this — the
+ * people in those rows are exactly the ones most likely to have left.
+ */
+export async function memberNames(ids) {
+  const members = await loadMembers();
+  const known = new Set(members.map((m) => String(m.id)));
+  const extra = await resolveMembers(
+    (ids || []).map(String).filter((id) => !known.has(id)),
+  );
+  return memberNameLookup(members.concat(extra));
+}
+
+/**
+ * A picker's `search` callback (see filter-select.js): server-side member
+ * lookup, mapped through the same option builder the picker was seeded with so
+ * late arrivals are labelled identically to the prefetch.
+ */
+export function memberSearch(toOptions = toMemberOptions) {
+  return async (q) => toOptions(await searchMembers(q));
 }
 
 export async function loadBots() {
@@ -195,6 +296,8 @@ export function resetMetaCaches() {
   _roles = null;
   _members = null;
   _bots = null;
+  _memberSearches.clear();
+  _membersById.clear();
   _metaFailed.clear();
 }
 
@@ -424,12 +527,22 @@ export function toSortedMemberOptions(members) {
  * from unpicking the picker's "Display (username)" label — a member whose own
  * name has brackets ("Ana (EU)") loses them to that. Unknown ids (a member who
  * left between the config load and the click) answer with the id itself.
+ *
+ * Falls back to the module's id index before giving up: since /api/meta/members
+ * became bounded, the member a picker just found through searchMembers() is
+ * routinely NOT in the `members` page a panel was handed at mount, and a chip
+ * built from one of those was showing a bare snowflake.
  */
 export function memberNameLookup(members) {
   const byId = new Map(
     members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
   );
-  return (id) => byId.get(String(id)) || String(id);
+  return (id) => {
+    const key = String(id);
+    if (byId.has(key)) return byId.get(key);
+    const found = _membersById.get(key);
+    return (found && (found.display_name || found.name)) || key;
+  };
 }
 
 function _normalizeIds(values) {
@@ -494,12 +607,46 @@ export function mountChannelMultiPicker(slotEl, channels, values, opts = {}) {
 export function mountRoleMultiPicker(slotEl, roles, values, opts = {}) {
   return mountMultiPicker(slotEl, toRoleOptions(roles), values, opts);
 }
+
+/**
+ * Fill in the labels of saved ids the bounded member page didn't include.
+ *
+ * Without this a config referencing someone who left long ago would render as a
+ * bare snowflake wherever the departed tail was trimmed. The lookup runs after
+ * the picker is already on screen and hands it a widened option list;
+ * setOptions()/setValues() both re-derive their displayed labels, so the name
+ * simply appears a moment later.
+ *
+ * Bails when the widget has been detached — a panel unmounting mid-request must
+ * not write into a dead tree. A picker that was never attached keeps showing the
+ * raw id, which is exactly what it showed before.
+ */
+function _hydrateSavedMembers(fs, options, ids) {
+  const known = new Set(options.map((o) => String(o.id)));
+  const missing = ids
+    .map(String)
+    .filter((id) => /^\d+$/.test(id) && id !== "0" && !known.has(id));
+  if (!missing.length) return fs;
+  resolveMembers(missing)
+    .then((extra) => {
+      if (!extra.length || !fs.el.isConnected) return;
+      fs.setOptions(options.concat(toMemberOptions(extra)));
+    })
+    .catch(() => { /* the raw id stays on screen — no worse than before */ });
+  return fs;
+}
+
 export function mountMemberPicker(slotEl, members, value, opts = {}) {
-  return mountPicker(slotEl, toMemberOptions(members), value,
-    { emptyValue: "0", emptyLabel: "(none)", ...opts });
+  const options = toMemberOptions(members);
+  const fs = mountPicker(slotEl, options, value,
+    { emptyValue: "0", emptyLabel: "(none)", search: memberSearch(), ...opts });
+  return _hydrateSavedMembers(fs, options, [value]);
 }
 export function mountMemberMultiPicker(slotEl, members, values, opts = {}) {
-  return mountMultiPicker(slotEl, toMemberOptions(members), values, opts);
+  const options = toMemberOptions(members);
+  const fs = mountMultiPicker(slotEl, options, values,
+    { search: memberSearch(), ...opts });
+  return _hydrateSavedMembers(fs, options, _normalizeIds(values));
 }
 
 export function channelName(channels, id) {

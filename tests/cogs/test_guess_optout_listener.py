@@ -10,9 +10,11 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.guess_models import GuessConfig, GuessRound
 from bot_modules.services.guess_repo import (
     flag_user_open_rounds_optout,
+    get_guess_consent,
     get_round,
     insert_round,
     mark_round_solved,
+    record_guess_consent,
 )
 from tests.fakes import FakeMember, FakeRole, fake_interaction
 
@@ -63,21 +65,29 @@ def test_flag_user_open_rounds_scoped_per_guild(sync_db_path: Path) -> None:
 
 # ── on_member_update listener ────────────────────────────────────────────────
 
-def _make_cog():
+def _make_cog(db_path: Path | str = ":memory:"):
     from bot_modules.cogs.guess_cog import GuessCog
     bot = MagicMock()
-    bot.ctx.db_path = ":memory:"
+    bot.ctx.db_path = db_path
     return GuessCog(bot)
 
 
 @pytest.mark.asyncio
-async def test_member_update_flags_orphaned_rounds_when_role_removed():
-    """Removing the Guess role should flag the user's open rounds as answer_optout."""
+async def test_member_update_flags_orphaned_rounds_when_role_removed(sync_db_path: Path):
+    """Removing the Guess role should flag the user's open rounds as answer_optout.
+
+    Runs against a migrated database rather than a bare `:memory:` one because
+    losing the role now also withdraws the member's stored consent, and that
+    write needs the real schema.
+    """
     from bot_modules.cogs.guess_cog import GuessCog
 
-    cog = _make_cog()
+    cog = _make_cog(sync_db_path)
     guess_role = FakeRole(id=GUESS_ROLE_ID)
     other_role = FakeRole(id=8888)
+
+    with open_db(sync_db_path) as conn:
+        record_guess_consent(conn, guild_id=GUILD_ID, user_id=ANSWER_ID, consented_at=1000.0)
 
     # Before: had guess role + other.  After: only other (guess removed).
     before = FakeMember(id=ANSWER_ID, roles=[guess_role, other_role])
@@ -92,6 +102,12 @@ async def test_member_update_flags_orphaned_rounds_when_role_removed():
     flag_mock.assert_called_once()
     kwargs = flag_mock.call_args.kwargs
     assert kwargs.get("guild_id") == GUILD_ID or flag_mock.call_args.args[1:] == (GUILD_ID, ANSWER_ID)
+
+    # Losing the role withdraws consent too — stamped, not deleted.
+    with open_db(sync_db_path) as conn:
+        consent = get_guess_consent(conn, guild_id=GUILD_ID, user_id=ANSWER_ID)
+    assert consent is not None
+    assert consent["withdrawn_at"] is not None
 
 
 @pytest.mark.asyncio
