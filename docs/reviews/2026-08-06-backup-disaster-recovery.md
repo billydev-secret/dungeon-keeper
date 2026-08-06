@@ -346,18 +346,60 @@ guard the empty case — the runbook below assumes the latter and calls
 
 ## Summary
 
-| ID | Severity | Finding |
-|---|---|---|
-| B1 | **High** | No off-device backup; DB + all copies + `.env` on one disk |
-| B2 | **High** | Retention counted in files; restarts collapse the window (observed 18.3h, not 24h) |
-| B3 | Medium | Backup failure logs and is never surfaced to anyone |
-| B4 | Medium | A partial backup keeps the real filename and sorts newest |
-| B5 | Medium | Ad-hoc snapshots never prune → unbounded erasure exposure (extends G5) |
-| B6 | Low | Erasure runbook says "nightly"; backups are 6-hourly, window unnamed |
-| B7 | Low | DB-only restore orphans 9 media files; `.env`/units/tunnel unbacked |
-| B8 | Low | Docstring promises env configuration that does not exist |
-| B9 | Info | Prune leaves `-shm`/`-wal` orphans |
-| B10 | Info | `run_backup_now` unused; `retention_count=0` → `IndexError` |
+| ID | Severity | Finding | Status |
+|---|---|---|---|
+| B1 | **High** | No off-device backup; DB + all copies + `.env` on one disk | **Open — needs a destination decision** |
+| B2 | **High** | Retention counted in files; restarts collapse the window (observed 18.3h, not 24h) | Fixed |
+| B3 | Medium | Backup failure logs and is never surfaced to anyone | **Open — needs an alert-surface decision** |
+| B4 | Medium | A partial backup keeps the real filename and sorts newest | Fixed |
+| B5 | Medium | Ad-hoc snapshots never prune → unbounded erasure exposure (extends G5) | Documented; no auto-delete by design |
+| B6 | Low | Erasure runbook says "nightly"; backups are 6-hourly, window unnamed | Fixed |
+| B7 | Low | DB-only restore orphans 9 media files; `.env`/units/tunnel unbacked | Documented; rides with B1 |
+| B8 | Low | Docstring promises env configuration that does not exist | Fixed |
+| B9 | Info | Prune leaves `-shm`/`-wal` orphans | Fixed |
+| B10 | Info | `run_backup_now` unused; `retention_count=0` → `IndexError` | Fixed |
+
+### What was fixed here
+
+`db_backup.py`, covered by the new `tests/test_db_backup.py` (28 tests — the
+service previously had **none**):
+
+- **B2** — two guards. A backup is now *skipped* when the newest one is younger
+  than half the interval, so a restart burst no longer creates near-duplicates
+  at all (the root cause); and `_prune_old_backups` grew a `min_age_hours`
+  floor (default 48h) so nothing inside the intended window can be evicted
+  regardless of count. `run_backup_now` deliberately ignores the skip gap — a
+  manual backup is always taken.
+- **B4** — the copy is built as `<name>.db.partial` and `os.replace`d into
+  position only on success, so a failed copy can never occupy the real
+  filename. The source is now opened `mode=ro`, removing any possibility of
+  this path writing to the live database. Verified the defect empirically
+  against the pre-fix module before fixing: a failing copy left
+  `dungeonkeeper_20260806_091015.db` stranded at the real name as the newest
+  entry.
+- **B8** — `DB_BACKUP_INTERVAL_HOURS`, `DB_BACKUP_RETENTION`, and
+  `DB_BACKUP_MIN_AGE_HOURS` are now honoured, with non-numeric and
+  non-positive values logged and ignored rather than crashing the loop.
+- **B9** — `-wal`/`-shm` siblings are unlinked alongside the `.db`.
+- **B10** — `run_backup_now` returns a real path or raises, instead of
+  `IndexError`.
+
+**B5 deliberately got no code change.** Auto-deleting files the operator
+created by hand is the wrong default; the fix is the directory split plus the
+runbook guidance, both of which landed.
+
+### What still needs you
+
+- **B1** is the one that matters and it needs a decision I can't make: there is
+  one physical disk in this box, so "off-device" means picking a destination
+  (external drive, another host, or object storage). Once that exists it wants
+  a separate systemd timer running as `ben` — not the bot, whose
+  `ProtectHome=read-only` hardening should stay intact — copying `backups/`
+  plus `.env`, encrypted. **`.env` is the urgent half**: 4 KB, gitignored, and
+  its loss means re-issuing every credential.
+- **B3** needs a choice of surface. Cheapest useful version: record
+  `last_backup_ok_at` in `config` and have the health panel flag it when it is
+  older than 2× the interval.
 
 **Nothing found in WAL correctness** — the service uses the online backup API
 correctly, and the artifact it produces was proven restorable end-to-end.
