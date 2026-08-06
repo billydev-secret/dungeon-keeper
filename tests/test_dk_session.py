@@ -475,7 +475,8 @@ def _registry(tmp_path, pid, sid="s-1", cwd="/w", proc_start="1234", **extra):
     """Write one Claude Code registry file, the shape ~/.claude/sessions holds."""
     entry = {"pid": pid, "sessionId": sid, "cwd": cwd,
              "procStart": proc_start, "name": "n", **extra}
-    (tmp_path / f"{pid}.json").write_text(__import__("json").dumps(entry))
+    (tmp_path / f"{pid}.json").write_text(
+        __import__("json").dumps(entry), encoding="utf-8")
     return entry
 
 
@@ -515,7 +516,7 @@ def test_read_live_sessions_keeps_only_running_processes(tmp_path):
 )
 def test_read_live_sessions_ignores_unusable_files(tmp_path, payload):
     """A snapshot runs every minute; one bad file must not break it."""
-    (tmp_path / "1.json").write_text(payload)
+    (tmp_path / "1.json").write_text(payload, encoding="utf-8")
     assert dk_session.read_live_sessions(tmp_path, proc_start=lambda p: "1") == []
 
 
@@ -557,7 +558,7 @@ def test_manifest_round_trips(tmp_path):
 
 def test_load_manifest_survives_a_corrupt_file(tmp_path):
     path = tmp_path / "manifest.json"
-    path.write_text("{truncated")
+    path.write_text("{truncated", encoding="utf-8")
     assert dk_session.load_manifest(path) == {}
 
 
