@@ -51,9 +51,11 @@ from bot_modules.services.invite_tracker import (
 from bot_modules.services import intake_service as intake_svc
 from bot_modules.services import promotion_review_service as promo_review
 from bot_modules.services.message_store import (
+    DELETE_SOURCE_DISCORD,
     adjust_reaction_count,
     classify_media_kind,
     mark_member_left,
+    mark_messages_deleted,
     record_member_event,
     record_reaction,
     set_reaction_count,
@@ -1617,7 +1619,24 @@ class EventsCog(commands.Cog):
         )
         # The messages table itself is a permanent local archive — we never
         # remove rows when Discord deletes a message, so historical content
-        # (sentiment, XP audits, mod review) survives.
+        # (sentiment, XP audits, mod review) survives. We do record *that* it
+        # was deleted, so Message Search can badge it and suppress a deep link
+        # that would only 404. Discord's raw payload names no actor, so this is
+        # the unattributed source; our own delete paths stamp themselves first
+        # and the IS NULL guard in mark_messages_deleted leaves them alone.
+        guild_id, message_id = payload.guild_id, payload.message_id
+
+        def _flag_deleted():
+            with self.ctx.open_db() as conn:
+                mark_messages_deleted(
+                    conn,
+                    guild_id,
+                    {message_id},
+                    DELETE_SOURCE_DISCORD,
+                    int(time.time()),
+                )
+
+        await asyncio.to_thread(_flag_deleted)
 
     async def _dm_admin_permission_warning(
         self, guild: discord.Guild, message: str
@@ -2039,11 +2058,24 @@ class EventsCog(commands.Cog):
     ) -> None:
         if payload.guild_id is None:
             return
-        # Auto-delete tracking only — the messages table is a permanent
-        # archive (see on_raw_message_delete for the rationale).
+        # The messages table is a permanent archive (see on_raw_message_delete
+        # for the rationale) — clear the auto-delete queue, then flag the rows.
         remove_tracked_auto_delete_messages(
             self.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_ids
         )
+        guild_id, message_ids = payload.guild_id, set(payload.message_ids)
+
+        def _flag_deleted():
+            with self.ctx.open_db() as conn:
+                mark_messages_deleted(
+                    conn,
+                    guild_id,
+                    message_ids,
+                    DELETE_SOURCE_DISCORD,
+                    int(time.time()),
+                )
+
+        await asyncio.to_thread(_flag_deleted)
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction) -> None:
