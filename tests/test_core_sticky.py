@@ -410,10 +410,17 @@ async def test_cancel_all_stops_pending_resticks():
 @pytest.mark.asyncio
 async def test_non_text_channels_are_refused():
     """A stored id that now points at a voice channel or thread must not be
-    treated as postable."""
+    treated as postable — for a panel that did not opt into those kinds.
+
+    Resolution goes through ``get_channel_or_thread``; setting only
+    ``get_channel`` would leave this passing for the wrong reason (an unspec'd
+    auto-mock fails the isinstance check whatever the panel accepts).
+    """
     guild = MagicMock(spec=discord.Guild)
     guild.id = GUILD
-    guild.get_channel.return_value = MagicMock(spec=discord.VoiceChannel)
+    voice = MagicMock(spec=discord.VoiceChannel)
+    guild.get_channel.return_value = voice
+    guild.get_channel_or_thread.return_value = voice
     panel = _panel(_bot(guild), _Store(CHANNEL, MESSAGE))
     assert await panel.refresh(GUILD) is False
 
