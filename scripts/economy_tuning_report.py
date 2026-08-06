@@ -6,22 +6,33 @@ dials (raffle, voice lease, hoard tax, wager rake) and to judge whether the
 quest faucet needs shaving: balance percentiles, last-full-week income
 percentiles, faucet/sink mix, spender count, and the demurrage what-if grid.
 
-Casino money is **netted**, not double-counted: a stake is not a burn and a
-payout is not income, so the report books only the house hold (handle −
-payouts) as the casino's contribution to the sink, and shows the standing
-jackpot pot beside it — that pot is hold the house is holding for a future
-winner, not currency it destroyed.
+Money that only *moves* is **netted**, not double-counted:
+
+* Casino — a stake is not a burn and a payout is not income, so the report
+  books only the house hold (handle − payouts) as the casino's contribution
+  to the sink, and shows the standing jackpot pot beside it. That pot is hold
+  the house is keeping for a future winner, not currency it destroyed.
+* Escrow (auction bids, bounty contributions) — same shape. The stake leaves
+  the wallet and comes back unless it wins, so only the netted hold is booked.
+  Unlike the casino's, an escrow hold is an *upper bound* on the burn: money
+  sitting in an auction or bounty that has not resolved yet is inside it.
+
+Every window is bucketed by the **requested guild's own** ``tz_offset_hours``,
+not a fixed offset — guilds run in different timezones and bucketing one by
+another's date drops or doubles a day.
 
 Compare runs over time:
 
     python scripts/economy_tuning_report.py                 # human report
+    python scripts/economy_tuning_report.py --all-guilds    # every guild with a float
     python scripts/economy_tuning_report.py --days 3        # trailing window
     python scripts/economy_tuning_report.py --save-baseline docs/reviews/economy-baseline-YYYY-MM-DD.json
     python scripts/economy_tuning_report.py --baseline docs/reviews/economy-baseline-2026-07-20.json
 
 With --baseline, each headline number is printed alongside the baseline and
-its delta — the "did the dials move anything" view. The DB is opened with
-mode=ro so this can never touch production state.
+its delta — the "did the dials move anything" view. A baseline saved under
+--all-guilds is a list, and each guild is diffed against its own entry. The DB
+is opened with mode=ro so this can never touch production state.
 """
 
 from __future__ import annotations
@@ -42,15 +53,19 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from bot_modules.services.pools_logic import derive_line  # noqa: E402
 from bot_modules.services.pools_service import (  # noqa: E402
     BURN_KINDS_EXCLUDED,
+    ESCROW_PAIRS,
     NON_FAUCET_KINDS,
     daily_series,
 )
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "dungeonkeeper.db"
 MAIN_GUILD = 1469491362444480666
-# Guild-local day offset (hours from UTC). The main guild has no tz row and
-# inherits the global -7 — keep in sync with the tz_offset config.
-TZ_OFFSET_HOURS = -7.0
+# Fallback only, matching the guild_id=0 config row. Every window is bucketed
+# with the *requested guild's* own tz_offset_hours (see _tz_offset) — this
+# used to be a module constant, which silently mis-bucketed any guild that
+# wasn't the main one by the difference. Guild 1476525656115515484 runs at
+# +2.0, a nine-hour error. See docs/reviews/2026-08-06-economy-ledger-data-audit.md M3.
+DEFAULT_TZ_OFFSET_HOURS = -7.0
 
 DEMURRAGE_FLOORS = (300, 500, 750, 1000)
 DEMURRAGE_RATES = (2, 5, 10)
@@ -79,10 +94,30 @@ def _trailing_days(today: date, days: int) -> tuple[str, str]:
     return str(today - timedelta(days=days - 1)), str(today)
 
 
+def _tz_offset(conn: sqlite3.Connection, guild_id: int) -> float:
+    """The guild's own local-day offset, falling back to the global row.
+
+    Mirrors core.db_utils.get_tz_offset_hours without importing the bot's
+    db layer into an offline script.
+    """
+    for gid in (guild_id, 0):
+        row = conn.execute(
+            "SELECT value FROM config WHERE guild_id = ? AND key = 'tz_offset_hours'",
+            (gid,),
+        ).fetchone()
+        if row is not None:
+            try:
+                return float(row[0])
+            except (TypeError, ValueError):
+                break
+    return DEFAULT_TZ_OFFSET_HOURS
+
+
 def collect(
     conn: sqlite3.Connection, guild_id: int, today: date, days: int | None = None
 ) -> dict:
-    day_expr = f"date(created_at - {-TZ_OFFSET_HOURS}*3600, 'unixepoch')"
+    tz_offset = _tz_offset(conn, guild_id)
+    day_expr = f"date(created_at - {-tz_offset}*3600, 'unixepoch')"
     if days:
         week_start, week_end = _trailing_days(today, days)
     else:
@@ -187,6 +222,34 @@ def collect(
     ).fetchone()
     jackpot_pot = int(jackpot_row[0]) if jackpot_row else 0
 
+    # Auctions and bounties escrow: the stake leaves the wallet and comes
+    # back unless it wins. Only the residual (winning bid, bounty rake) is
+    # burned, so book that hold the way the casino's is instead of counting
+    # both legs as a sink and a faucet. A hold here is not all destroyed —
+    # money still sitting in an open auction/bounty is inside it — so it is
+    # reported separately rather than folded into the headline burn.
+    escrow_hold: dict[str, int] = {}
+    for stake_kind, return_kind in ESCROW_PAIRS:
+        staked, returned_ = conn.execute(
+            f"SELECT "
+            f"  COALESCE(SUM(CASE WHEN kind = ? THEN -amount END), 0), "
+            f"  COALESCE(SUM(CASE WHEN kind = ? THEN amount END), 0) "
+            f"FROM econ_ledger WHERE guild_id = ? AND {day_expr} BETWEEN ? AND ?",
+            (stake_kind, return_kind, guild_id, week_start, week_end),
+        ).fetchone()
+        if staked or returned_:
+            escrow_hold[stake_kind.split("_")[0]] = int(staked) - int(returned_)
+    if escrow_hold:
+        # Booked into the sink the same way casino_hold is. It is deliberately
+        # NOT split into "burned" and "still escrowed": the split depends on
+        # auctions/bounties that have not resolved yet, and a window total
+        # that changes retroactively as they close would make two runs of the
+        # same week disagree. Read it as an upper bound on the escrow burn.
+        for name, held in escrow_hold.items():
+            sink_mix[f"{name}_hold"] = held
+            burned_week += held
+        sink_mix = dict(sorted(sink_mix.items(), key=lambda kv: -kv[1]))
+
     demurrage_grid = []
     for floor in DEMURRAGE_FLOORS:
         row = conn.execute(
@@ -212,7 +275,7 @@ def collect(
         {"day": m.day, "net": m.net, "mint": m.mint, "burn": m.burn,
          "hold": m.hold, "close": m.close}
         for m in daily_series(
-            conn, guild_id, tz_offset_hours=TZ_OFFSET_HOURS, limit_days=14
+            conn, guild_id, tz_offset_hours=tz_offset, limit_days=14
         )
     ]
 
@@ -222,6 +285,7 @@ def collect(
         "pools_daily_net": pools_days,
         "generated": str(today),
         "guild_id": str(guild_id),
+        "tz_offset_hours": tz_offset,
         "week": f"{week_start}..{week_end}",
         # Window length, so a --days run is never silently diffed against a
         # full-week baseline.
@@ -242,6 +306,7 @@ def collect(
         "casino_returned": returned,
         "casino_hold": casino_hold,
         "jackpot_pot": jackpot_pot,
+        "escrow_hold": escrow_hold,
         "demurrage_grid": demurrage_grid,
         "hoard_weeks": (
             round(_percentiles(balances, {"p50": 0.5})["p50"] / income_pct["p50"], 1)
@@ -268,7 +333,12 @@ def print_report(stats: dict, baseline: dict | None) -> None:
 
     span = stats.get("window_days", 7)
     label = "week" if span == 7 else f"{span}d"
-    print(f"Economy tuning report — guild {stats['guild_id']}, {label} {stats['week']}")
+    tz = stats.get("tz_offset_hours")
+    tz_note = f" (UTC{tz:+g})" if tz is not None else ""
+    print(
+        f"Economy tuning report — guild {stats['guild_id']}{tz_note}, "
+        f"{label} {stats['week']}"
+    )
     if baseline:
         print(f"(deltas vs baseline {baseline.get('generated', '?')})")
         base_span = baseline.get("window_days", 7)
@@ -315,6 +385,11 @@ def print_report(stats: dict, baseline: dict | None) -> None:
                 f"  jackpot pot (standing)       {pot:,}"
                 "  — escrowed from past holds, re-minted when it is won"
             )
+    escrow = stats.get("escrow_hold") or {}
+    if escrow:
+        print("\nEscrow (netted: staked − returned; an open lot is still inside)")
+        for name, held in escrow.items():
+            print(f"  {name + ' hold':<28} {held:,}")
     days = stats.get("pools_daily_net") or []
     if days:
         print("\nPools metric — net change per guild-local day")
@@ -342,10 +417,32 @@ def print_report(stats: dict, baseline: dict | None) -> None:
         print(f"  {row['floor']:>6} {row['wallets_hit']:>4} {row['excess']:>8,} {cells}")
 
 
+def guilds_with_wallets(conn: sqlite3.Connection) -> list[int]:
+    """Every guild holding currency, biggest float first.
+
+    Backs ``--all-guilds``. The report defaulted to a single hardcoded guild
+    for its first month, which is how a second guild grew a larger float than
+    the main one without appearing in a single review.
+    """
+    return [
+        int(r[0])
+        for r in conn.execute(
+            "SELECT guild_id FROM econ_wallets GROUP BY guild_id "
+            "ORDER BY SUM(balance) DESC"
+        )
+    ]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
     ap.add_argument("--guild", type=int, default=MAIN_GUILD)
+    ap.add_argument(
+        "--all-guilds",
+        action="store_true",
+        help="report every guild holding currency, biggest float first, "
+             "instead of just --guild",
+    )
     ap.add_argument(
         "--days",
         type=int,
@@ -357,23 +454,41 @@ def main() -> None:
     ap.add_argument("--json", action="store_true", help="print machine-readable JSON")
     args = ap.parse_args()
 
-    today = datetime.now(timezone.utc).astimezone(
-        timezone(timedelta(hours=TZ_OFFSET_HOURS))
-    ).date()
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     try:
-        stats = collect(conn, args.guild, today, args.days)
+        guild_ids = guilds_with_wallets(conn) if args.all_guilds else [args.guild]
+        runs = []
+        for guild_id in guild_ids:
+            # "Today" is per guild: a guild nine hours east can already be on
+            # tomorrow's board, and bucketing its window by the main guild's
+            # date would drop or double a day.
+            today = datetime.now(timezone.utc).astimezone(
+                timezone(timedelta(hours=_tz_offset(conn, guild_id)))
+            ).date()
+            runs.append(collect(conn, guild_id, today, args.days))
     finally:
         conn.close()
 
     if args.save_baseline:
-        args.save_baseline.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
+        payload = runs if args.all_guilds else runs[0]
+        args.save_baseline.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(f"baseline written: {args.save_baseline}")
     baseline = json.loads(args.baseline.read_text(encoding="utf-8")) if args.baseline else None
     if args.json:
-        print(json.dumps(stats, indent=2))
-    else:
-        print_report(stats, baseline)
+        print(json.dumps(runs if args.all_guilds else runs[0], indent=2))
+        return
+    # A list baseline (saved by --all-guilds) is matched per guild, so a
+    # multi-guild run diffs each guild against its own history rather than
+    # against whichever one happened to be first.
+    by_guild = (
+        {str(b.get("guild_id")): b for b in baseline}
+        if isinstance(baseline, list) else None
+    )
+    for i, stats in enumerate(runs):
+        if i:
+            print("\n" + "=" * 72 + "\n")
+        base = by_guild.get(stats["guild_id"]) if by_guild is not None else baseline
+        print_report(stats, base)
 
 
 if __name__ == "__main__":

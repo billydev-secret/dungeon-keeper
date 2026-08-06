@@ -4,6 +4,18 @@ Lane: forensic, read-only. The 2026-08 economy reviews verified the *code*
 (`2026-08-05-economy-core.md` rated the wallet funnel the best code in the
 repo). This audits the *data*.
 
+> **Status 2026-08-06 (same night).** H2, M2 and M3 are **fixed in code**;
+> M1 and M4 are **corrected in the round-2 proposal**; H1 has a costed
+> proposal in `2026-08-06-economy-guild-b-reprice.md` (recommendation only,
+> per Ben). L1's cause is diagnosed and its fix is operational, not code.
+> L3 is a one-line prod cleanup, not applied. Per-finding notes inline.
+>
+> One correction from the fix pass: the M2 change turned out to carry **no**
+> risk to the live Pools market. `daily_series` accumulates `net` from every
+> ledger row and settlement reads only `net`, so `NON_FAUCET_KINDS` /
+> `BURN_KINDS_EXCLUDED` affect the report's `mint`/`burn` display and nothing
+> the market settles against. The original write-up implied otherwise.
+
 **Method.** Snapshot of the live DB taken 2026-08-05 22:22 local via the
 sqlite3 backup API (`sqlite3.connect('file:…?mode=ro', uri=True).backup(dst)`),
 never `cp`. All queries run against that snapshot. Prod was not written to and
@@ -88,19 +100,39 @@ to income** than in guild A. That, plus `econ_demurrage_rate_pct` 6 (vs 8) and
 1469491362444480666`, so every economy review to date — including the pending
 round-2 proposal — measured guild A only.
 
-**Fix.** Two parts, neither of which is a dial change I should make:
-1. Make the reporting multi-guild: iterate guilds with wallets rather than
-   defaulting to one, or at minimum have the round-2 checkpoint run
-   `--guild 1476525656115515484` as well (**but see M3 first — the tool
-   currently computes guild B's days 9 hours wrong**).
-2. Re-derive guild B's sink prices against its own income curve. Bringing
-   `price_role_icon`, `price_role_holographic`, `price_role_gradient` and
-   `price_voice_room` to the same ~15× multiple as its faucets would put them
-   at roughly 18,000 / 7,500 / 2,250 / 3,450. Recommendation only — not applied.
+**Fix.** Two parts:
+
+1. **Make the reporting multi-guild.** *Done 2026-08-06* — `--all-guilds`
+   iterates guilds with wallets, biggest float first, and M3's tz fix means
+   guild B's days are now bucketed at its own UTC+2.
+2. **Re-derive guild B's sink prices.** *Proposed, not applied* —
+   `2026-08-06-economy-guild-b-reprice.md`.
+
+> **Correction to this finding, 2026-08-06.** Re-measured with the fixed tool,
+> the framing above is wrong in an important way. I normalized by the *median
+> dial ratio* (15×); the **realized** rate from actual earnings is **≈ 8×**
+> (median 5-day income 48 vs 382; p90 511 vs 3,234). At 8×, guild B's
+> +19,046/day is ≈ +2,400 coin-equivalent — **less** than guild A's +3,992.
+> Guild B is not over-minting.
+>
+> What is real: its burn ratio is **3.1%** against guild A's 45.3%, its median
+> balance is *lower* (93 vs 199) while p90 is more than double, and its price
+> list is **inverted** — recurring high-value sinks (`price_voice_room` 200,
+> `price_text_room` 200, `price_streak_shield` 30) were never scaled at all,
+> while small impulse buys (`price_emoji` 41.7×, `price_quest_reroll` 40×) are
+> 5× too dear. Members have nothing mid-priced to buy. The severity stays High
+> — a 3.1% burn ratio invisible to every review is the finding — but the cause
+> is the sink ladder, not the faucet.
 
 ---
 
 ### H2 — `econ_cat_catch_daily_cap` is set in production and no code reads it (High)
+
+> **FIXED 2026-08-06.** The cap is enforced on main: `logic.cat_catch_payout`
+> clips the payout, `economy_service.cat_coins_earned_since` reads the day's
+> running total, and the field is on Economy → Income Sources. Ported from
+> `e65782b4` without that branch's superseded `cat_catch_pct` dial. The prod
+> config row now does what it says.
 
 **Severity: High.** CLAUDE.md: *"Never ship a preference or toggle that isn't
 enforced."* An operator set a faucet cap, the value is sitting in prod config,
@@ -162,22 +194,42 @@ generally.
 
 ### M1 — The round-2 proposal's `reward_game_participation` line is wrong by ~70× (Medium)
 
+> **CORRECTED 2026-08-06** in `2026-08-06-economy-retune-round2-proposal.md`:
+> the line is dropped and the already-applied `reward_cah_win_max` 50→15 cut
+> is credited against the baseline. No code change — the two-path design is
+> deliberate.
+
 **Severity: Medium.** The proposal (`2026-08-06-economy-retune-round2-proposal.md`)
 is awaiting sign-off; acting on it would produce a miss and a wasted checkpoint.
 
-**Evidence** (verified by reading `src/bot_modules/economy/game_rewards.py:362`
-and by query):
+**This is not a code bug — the code is behaving as designed.** The error is in
+the proposal (and in the 07-30 retune before it), which aimed at a dial that
+carries almost none of the traffic.
 
-`pay_score_rewards` pays score-proportional rewards for *all* score-based party
-games out of `cap = settings.reward_cah_win_max`, writing rows tagged
-`game_participation` / `game_win`. It never reads `reward_game_participation`
-or `reward_game_win`. Splitting guild A's 08-01..08-05 rows by whether meta
-carries `top_score`:
+**Evidence** (verified by reading `src/bot_modules/economy/game_rewards.py:277-404`
+and `cogs/games_external_cog.py:264,326,423,470`, and by query):
+
+There are two game-payout paths, and they use different dials:
+
+| Path | Function | Dial | Used by |
+|---|---|---|---|
+| Flat | `pay_game_rewards` → `award_game_reward` | `reward_game_participation` / `reward_game_win` | **native** party games, PvP duels, external games with a single win/lose outcome |
+| Score-proportional | `pay_cah_game_by_score` | `reward_cah_win_max` | **external Gamebot** games — CAH, Anagrams, Wordle, Co-ordle |
+
+Both write rows tagged `game_participation` / `game_win`, so the ledger kind
+alone does not tell you which dial produced a row. Meta does: the score path
+stamps `{"score", "top_score"}`. Splitting guild A's 08-01..08-05 rows that way:
 
 | Kind | Score path (`reward_cah_win_max`) | Flat path (`reward_game_*`) |
 |---|---:|---:|
 | `game_participation` | 4,933 (**99.2%**) — +987/day | 42 — +8/day |
 | `game_win` | 2,304 (**96.8%**) — +461/day | 76 — +15/day |
+
+The one-dial-for-external-games design is deliberate and documented at
+`game_rewards.py:305-311` (the point scales of 5 vs 900 vs 6 cancel because
+everything pays by score *ratio*). What the data shows is that **guild A's
+members play external Gamebot games and barely play native ones** — so the
+native dials the retunes keep cutting move ~23 coins/day between them.
 
 So the proposal's *"reward_game_participation 3 → 2, ≈ −210/day"* would in
 reality deliver about **−3/day**.
@@ -194,16 +246,24 @@ Two further consequences:
   the proposal does not account for — and it happened *after* the 08-05 data
   the proposal was measured on.
 
-**Fix.** Rewrite that proposal row to target `econ_reward_cah_win_max`, and
-re-baseline: the 50→15 cut lands most of what the participation line was
-supposed to buy. Separately, decide whether `reward_game_participation` /
-`reward_game_win` should still exist as dials at all — they currently move 23
-coins/day between them and the dashboard presents them as the game-payout
-controls, which is misleading.
+**Fix.** Rewrite that proposal row to target `econ_reward_cah_win_max` and
+re-baseline — the 50→15 cut already lands most of what the participation line
+was supposed to buy. No code change needed. The one thing worth considering is
+observability: nothing in the ledger kind, the dashboard, or the tuning report
+distinguishes external-game money from native-game money, which is exactly what
+let two consecutive retunes aim at the wrong dial. A distinct `kind` (or a
+`source` in meta read by the report) would prevent a third.
 
 ---
 
 ### M2 — `economy_tuning_report.py` books escrow round-trips as mint and burn (Medium)
+
+> **FIXED 2026-08-06.** `auction_bid`/`bounty_stake` joined
+> `BURN_KINDS_EXCLUDED` and their returns joined `NON_FAUCET_KINDS`; the
+> report books a netted `escrow_hold` per pair beside `casino_hold`.
+> Guild A's 5-day burn ratio reads 45.3% with the escrow booked as a hold
+> rather than a gross sink. **No market risk** — see the status note at the
+> top.
 
 **Severity: Medium.** It inflates the reported burn ratio, which is the number
 the retunes are being judged against.
@@ -235,6 +295,11 @@ care the casino netting comment at `economy_tuning_report.py:158-168` describes.
 
 ### M3 — `economy_tuning_report.py` hardcodes a timezone but exposes `--guild` (Medium)
 
+> **FIXED 2026-08-06.** `_tz_offset()` resolves the requested guild's own
+> `tz_offset_hours` (falling back to the `guild_id=0` row), `main()` derives
+> "today" per guild, and the offset is printed in the header and recorded in
+> the baseline JSON. `--all-guilds` added for H1.
+
 **Severity: Medium.** Latent, but it will fire the moment anyone acts on H1.
 
 **Evidence** (verified by reading `economy_tuning_report.py:51-56` and querying
@@ -265,6 +330,10 @@ buckets its days with a **9-hour offset**.
 ---
 
 ### M4 — Recomputed on today's data, the round-2 proposal undershoots its own target band (Medium)
+
+> **CORRECTED 2026-08-06.** The proposal now carries measured per-kind bases,
+> a corrected ≈ +3,300/day starting point, and the new `cat_catch_daily_cap`
+> line, landing ≈ +1,300/day.
 
 **Severity: Medium.** The proposal's success criterion is a numeric band; on
 current data it misses.
@@ -301,6 +370,14 @@ no dials changed.
 ---
 
 ### L1 — The raffle is switched on in both guilds and has never sold a ticket (Low)
+
+> **DIAGNOSED 2026-08-06 — operational fix, no code change.** The shop panel
+> is a posted Discord message whose buttons are baked in at post time. Guild
+> A's shop message was posted 2026-07-28 06:05 UTC (from the snowflake); the
+> raffle was enabled at the 07-30 retune, two days later, so the Tickets
+> button is not on the live message. **Re-post the shop panel** (Economy →
+> Settings → shop poster) in both guilds. This is a general trap: enabling
+> any shop-gated feature after the panel is posted needs a re-post.
 
 **Severity: Low.** A sink the 07-30 retune deliberately enabled is inert; no
 money is at risk.
@@ -371,7 +448,22 @@ Unlike H2 this is genuinely inert — gifting now works through the ordinary per
 kinds with `beneficiary_id != user_id`, and nothing reads the key.
 
 **Fix.** Delete the two rows, or leave them. No urgency; do not bundle with the
-H2 fix if that would confuse the rollback.
+H2 fix if that would confuse the rollback. Not applied — prod write:
+
+```sql
+-- Stale price for a perk kind retired in migration 091 (commit 5b5e7a07).
+-- No EconSettings field reads it; gifting now goes through the ordinary
+-- perk kinds with beneficiary_id != user_id.
+DELETE FROM config WHERE key = 'econ_price_gift_color';   -- 2 rows
+```
+
+Rollback, should it ever be wanted:
+
+```sql
+INSERT OR REPLACE INTO config (guild_id, key, value)
+VALUES (1469491362444480666, 'econ_price_gift_color', '50'),
+       (1476525656115515484, 'econ_price_gift_color', '50');
+```
 
 ---
 

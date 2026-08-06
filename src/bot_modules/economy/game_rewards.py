@@ -23,7 +23,7 @@ import discord
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
-from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.logic import cat_catch_payout, local_day_bounds, local_day_for
 from bot_modules.economy.quest_views import post_signoff_card
 from bot_modules.services.economy_quests_service import (
     fire_trigger_quests,
@@ -35,6 +35,7 @@ from bot_modules.services.economy_service import (
     apply_credit,
     award_game_reward,
     award_host_bounty,
+    cat_coins_earned_since,
     load_econ_settings,
     member_is_booster,
 )
@@ -232,6 +233,13 @@ async def pay_cat_catch(
     """Credit a Cat Bot catch: ``coins`` (rarity-tiered, blessed already folded)
     plus the ``cat_catch`` quest trigger.
 
+    ``coins`` is the value the guild's ``catcatch_coins_*`` dials produced;
+    ``cat_catch_daily_cap`` then clips it to the member's remaining allowance
+    for the guild-local day (see ``logic.cat_catch_payout``). A catch clipped
+    to nothing still fires the quest trigger — the cap limits the coin faucet,
+    not participation, and a member who has hit it should still see their
+    "catch N cats" quest tick.
+
     Same guarantees as the other faucets: no-op when the economy is off or the
     member is a bot/unresolvable, booster multiplier applied, failures logged
     not raised. Caller dedupes per catch (the payout ledger) — ``apply_credit``
@@ -259,8 +267,27 @@ async def pay_cat_catch(
 
         def _credit() -> None:
             with open_db(db_path) as conn:
+                # Only read the day's running total when a cap is actually set,
+                # so the uncapped default costs no extra query on a path that
+                # fires ~150 times a day.
+                earned_today = 0
+                if settings.cat_catch_daily_cap > 0:
+                    offset = get_tz_offset_hours(conn, guild_id)
+                    day_start, _ = local_day_bounds(
+                        local_day_for(time.time(), offset), offset
+                    )
+                    earned_today = cat_coins_earned_since(
+                        conn, guild_id, user_id, day_start
+                    )
+                payout = cat_catch_payout(
+                    coins,
+                    earned_today=earned_today,
+                    daily_cap=settings.cat_catch_daily_cap,
+                )
+                if payout < 1:
+                    return
                 apply_credit(
-                    conn, guild_id, user_id, coins, "cat_catch",
+                    conn, guild_id, user_id, payout, "cat_catch",
                     meta={"rarity": rarity, "doubled": doubled},
                     booster=booster, multiplier=settings.booster_multiplier,
                 )

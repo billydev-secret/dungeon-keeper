@@ -100,6 +100,13 @@ class EconSettings:
     catcatch_coins_epic: int = 35
     catcatch_coins_mythic: int = 102
     catcatch_coins_divine: int = 300
+    # Per-member, per-guild-local-day ceiling on cat coins; 0 = uncapped.
+    # The per-tier dials above scale everyone equally, which is the wrong
+    # shape for a volume faucet — this is the one that bites the farmer and
+    # leaves the casual catcher alone. Staged into prod config 2026-08-02;
+    # the enforcing code only reached main 2026-08-06 (see
+    # docs/reviews/2026-08-06-economy-ledger-data-audit.md H2).
+    cat_catch_daily_cap: int = 0
     # Host bounty: the member who *ran* a game earns per attendee who joined
     # (excluding themselves), capped at ``host_bounty_cap`` attendees so one
     # busy game can't dwarf other faucets. The point is recruiting hosts, so
@@ -1053,6 +1060,26 @@ def try_award_qotd(
             multiplier=settings.booster_multiplier,
         )
     return True
+
+
+def cat_coins_earned_since(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, since_ts: float
+) -> int:
+    """This member's credited ``cat_catch`` coins in one guild since ``since_ts``.
+
+    Feeds ``cat_catch_daily_cap`` (see ``logic.cat_catch_payout``). Scoped four
+    ways on purpose — guild, member, kind, and day start — because a cap that
+    silently summed the wrong axis would either never bite or bite everyone.
+
+    The total is post-booster, since it reads what was actually credited.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS t FROM econ_ledger "
+        "WHERE guild_id = ? AND user_id = ? AND kind = 'cat_catch' "
+        "AND created_at >= ?",
+        (guild_id, user_id, since_ts),
+    ).fetchone()
+    return int(row["t"])
 
 
 def award_game_reward(

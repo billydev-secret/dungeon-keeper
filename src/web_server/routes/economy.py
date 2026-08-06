@@ -88,6 +88,7 @@ class EconomyConfigUpdate(BaseModel):
     catcatch_coins_epic: int | None = Field(default=None, ge=0)
     catcatch_coins_mythic: int | None = Field(default=None, ge=0)
     catcatch_coins_divine: int | None = Field(default=None, ge=0)
+    cat_catch_daily_cap: int | None = Field(default=None, ge=0)
     reward_game_win: int | None = Field(default=None, ge=0)
     reward_cah_win_max: int | None = Field(default=None, ge=0)
     # Host bounty: per-attendee payout to a party game's host, capped at

@@ -13,6 +13,7 @@ import pytest
 
 from bot_modules.economy.logic import (
     LoginEval,
+    cat_catch_payout,
     convert_xp,
     evaluate_login,
     host_bounty_amount,
@@ -249,6 +250,45 @@ def test_login_amount(streak, base, cap, expected):
 )
 def test_host_bounty_amount(joiners, per, cap, expected):
     assert host_bounty_amount(joiners, per, cap) == expected
+
+
+# ── cat_catch_payout ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "base, earned_today, daily_cap, expected",
+    [
+        (11, 0, 0, 11),        # uncapped (the default) -> base, untouched
+        (11, 900, 0, 11),      # uncapped ignores the running total entirely
+        (11, 0, 150, 11),      # well under the cap
+        (11, 139, 150, 11),    # exactly reaches the cap
+        (11, 145, 150, 5),     # clipped to the remaining allowance
+        (11, 150, 150, 0),     # cap exactly met -> nothing more today
+        (11, 400, 150, 0),     # already over (booster overshoot) -> nothing
+        (300, 0, 150, 150),    # a divine catch cannot exceed the cap alone
+        (0, 0, 150, 0),        # defensive: no base pays nothing
+        (-5, 0, 150, 0),       # defensive: negative base never credits
+        (11, -20, 150, 11),    # defensive: negative earned clamped to 0
+        (11, 0, -1, 11),       # defensive: negative cap treated as uncapped
+    ],
+)
+def test_cat_catch_payout(base, earned_today, daily_cap, expected):
+    assert cat_catch_payout(
+        base, earned_today=earned_today, daily_cap=daily_cap
+    ) == expected
+
+
+def test_cat_catch_payout_converges_on_the_cap():
+    """Repeated catches sum to exactly the cap, then stop paying.
+
+    The property that matters for a rate limiter: no sequence of catches can
+    carry a member past the ceiling, and the last one is clipped rather than
+    dropped (a member two coins short still earns those two).
+    """
+    cap, earned = 150, 0
+    for _ in range(200):
+        earned += cat_catch_payout(11, earned_today=earned, daily_cap=cap)
+    assert earned == cap
 
 
 # ── milestone_amount ──────────────────────────────────────────────────
