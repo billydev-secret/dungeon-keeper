@@ -1,0 +1,383 @@
+"""Shared query machinery behind the Message Search surfaces.
+
+Three dashboard endpoints read the message archive with overlapping needs:
+``/messages/search`` (paged and filtered), ``/messages/search/export`` (the same
+filters, one capped page, JSON download) and ``/messages/context`` (a channel
+window around a single hit, with no filters at all). Filter-clause assembly is
+identical between the first two, and row hydration — resolving author and
+channel ids to names, attaching attachment URLs, naming reply targets — is
+identical between all three.
+
+Kept deliberately free of FastAPI. The caller owns HTTP concerns: regex
+validation and its 400 stay in the route, because that is where the rails on a
+moderator-supplied pattern belong. Everything here takes a connection and
+returns plain data, so it is tested directly rather than through a client.
+
+The ``guild`` argument threaded through several functions is a live
+``discord.Guild`` or None. It is only ever consulted as a *first* lookup for
+names, with the ``known_users``/``known_channels`` tables as the fallback, so
+every function here works with ``guild=None`` on a cold or offline bot.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass, field
+from typing import Any
+
+from bot_modules.core.bot_exclusion import bot_ids_subquery
+from bot_modules.services.message_store import (
+    get_known_channels_bulk,
+    get_known_users_bulk,
+)
+
+VALID_EMOTIONS = frozenset({"joy", "playful", "anger", "frustration", "neutral"})
+
+# Column list every message-reading endpoint selects, in a fixed order. The
+# order is load-bearing: the regex scanner indexes ``row[3]`` for content
+# rather than going through sqlite3.Row, so that it works against the plain
+# tuples its unit test feeds it. Append new columns, never insert.
+BASE_COLUMNS = (
+    "m.message_id, m.channel_id, m.author_id, m.content, "
+    "m.reply_to_id, m.ts, m.sentiment, m.emotion"
+)
+
+SORT_ORDERS = {
+    "newest": "m.ts DESC",
+    "oldest": "m.ts ASC",
+    "most_reacted": "COALESCE(mr.total_reactions, 0) DESC, m.ts DESC",
+    "longest": "LENGTH(m.content) DESC, m.ts DESC",
+    "most_positive": "m.sentiment DESC, m.ts DESC",
+    "most_negative": "m.sentiment ASC, m.ts DESC",
+}
+
+# Only ``most_reacted`` needs the aggregate, and it is expensive enough to be
+# worth omitting from the other five plans.
+_REACTION_JOIN = """
+                    LEFT JOIN (
+                        SELECT message_id, SUM(count) AS total_reactions
+                        FROM message_reactions GROUP BY message_id
+                    ) mr ON mr.message_id = m.message_id
+"""
+
+
+@dataclass
+class MessageFilters:
+    """The filter surface shared by search and export.
+
+    ``author``, ``mentions`` and ``reply_to`` arrive as free text — either a
+    numeric id or a partial name — and are resolved against the guild cache and
+    ``known_users`` by :func:`resolve_user`.
+    """
+
+    author: list[str] | None = None
+    mentions: str | None = None
+    reply_to: str | None = None
+    channel: list[str] | None = None
+    before: int | None = None
+    after: int | None = None
+    sentiment_min: float | None = None
+    sentiment_max: float | None = None
+    emotion: str | None = None
+    has_attachments: bool | None = None
+    has_reactions: bool | None = None
+    min_length: int | None = None
+    max_length: int | None = None
+    include_bots: bool = False
+    sort: str = "newest"
+
+
+@dataclass
+class WhereClause:
+    """Assembled SQL predicate plus its positional parameters.
+
+    ``impossible`` is the "this can never match" signal: a name filter that
+    resolved to zero users makes the whole query pointless, and the caller
+    should short-circuit to an empty result rather than run SQL that would
+    return everything (an empty ``IN ()`` list is a syntax error, and dropping
+    the clause silently would be worse).
+    """
+
+    sql: str = ""
+    params: list[Any] = field(default_factory=list)
+    impossible: bool = False
+
+
+def resolve_user(
+    conn: sqlite3.Connection,
+    value: str,
+    guild_id: int,
+    guild: Any | None = None,
+) -> list[int]:
+    """Resolve a user id or partial name to the ids it could mean.
+
+    A numeric string is taken at face value — a moderator pasting an id must
+    reach a user who has left, or who was never in the name cache. Otherwise the
+    live guild member list is searched first (it has current nicknames), falling
+    back to ``known_users``, which retains people who have since left.
+    """
+    try:
+        return [int(value)]
+    except ValueError:
+        pass
+
+    if guild is not None:
+        needle = value.lower()
+        matches = [
+            m.id
+            for m in guild.members
+            if needle in m.display_name.lower() or needle in m.name.lower()
+        ]
+        if matches:
+            return matches
+
+    rows = conn.execute(
+        "SELECT user_id FROM known_users WHERE guild_id = ? "
+        "AND (username LIKE ? OR display_name LIKE ?)",
+        (guild_id, f"%{value}%", f"%{value}%"),
+    ).fetchall()
+    return [r[0] for r in rows] if rows else []
+
+
+def _id_list_clause(column: str, ids: list[int]) -> tuple[str, list[Any]]:
+    """``col = ?`` for one id, ``col IN (?, ?)`` for several."""
+    if len(ids) == 1:
+        return f"{column} = ?", [ids[0]]
+    placeholders = ",".join("?" * len(ids))
+    return f"{column} IN ({placeholders})", list(ids)
+
+
+def build_where(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    filters: MessageFilters,
+    guild: Any | None = None,
+) -> WhereClause:
+    """Turn a :class:`MessageFilters` into a WHERE predicate over ``messages m``.
+
+    Always guild-scoped first, so no caller can accidentally build a query that
+    reads across guilds.
+    """
+    clauses = ["m.guild_id = ?"]
+    params: list[Any] = [guild_id]
+
+    if filters.author:
+        author_ids: list[int] = []
+        for a in filters.author:
+            author_ids.extend(resolve_user(conn, a, guild_id, guild))
+        author_ids = list(dict.fromkeys(author_ids))  # dedupe, keep order
+        if not author_ids:
+            return WhereClause(impossible=True)
+        sql, bind = _id_list_clause("m.author_id", author_ids)
+        clauses.append(sql)
+        params.extend(bind)
+
+    if filters.channel:
+        channel_ids = [int(c) for c in filters.channel]
+        sql, bind = _id_list_clause("m.channel_id", channel_ids)
+        clauses.append(sql)
+        params.extend(bind)
+
+    if filters.reply_to:
+        reply_to_ids = resolve_user(conn, filters.reply_to, guild_id, guild)
+        if not reply_to_ids:
+            return WhereClause(impossible=True)
+        placeholders = ",".join("?" * len(reply_to_ids))
+        clauses.append(f"""
+                    m.reply_to_id IN (
+                        SELECT message_id FROM messages
+                        WHERE author_id IN ({placeholders}) AND guild_id = ?
+                    )
+                """)
+        params.extend([*reply_to_ids, guild_id])
+
+    if filters.mentions:
+        mention_ids = resolve_user(conn, filters.mentions, guild_id, guild)
+        if not mention_ids:
+            return WhereClause(impossible=True)
+        placeholders = ",".join("?" * len(mention_ids))
+        clauses.append(f"""
+                    m.message_id IN (
+                        SELECT message_id FROM message_mentions
+                        WHERE user_id IN ({placeholders})
+                    )
+                """)
+        params.extend(mention_ids)
+
+    if filters.before:
+        clauses.append("m.ts <= ?")
+        params.append(filters.before)
+    if filters.after:
+        clauses.append("m.ts >= ?")
+        params.append(filters.after)
+    if filters.sentiment_min is not None:
+        clauses.append("m.sentiment >= ?")
+        params.append(filters.sentiment_min)
+    if filters.sentiment_max is not None:
+        clauses.append("m.sentiment <= ?")
+        params.append(filters.sentiment_max)
+
+    if filters.emotion:
+        emotions = [
+            e.strip() for e in filters.emotion.split(",") if e.strip() in VALID_EMOTIONS
+        ]
+        if emotions:
+            placeholders = ",".join("?" * len(emotions))
+            clauses.append(f"m.emotion IN ({placeholders})")
+            params.extend(emotions)
+
+    if filters.has_attachments is not None:
+        exists = "EXISTS" if filters.has_attachments else "NOT EXISTS"
+        clauses.append(
+            f"{exists} (SELECT 1 FROM message_attachments a "
+            "WHERE a.message_id = m.message_id)"
+        )
+    if filters.has_reactions is not None:
+        exists = "EXISTS" if filters.has_reactions else "NOT EXISTS"
+        clauses.append(
+            f"{exists} (SELECT 1 FROM message_reactions r "
+            "WHERE r.message_id = m.message_id)"
+        )
+
+    if filters.min_length is not None:
+        clauses.append("LENGTH(m.content) >= ?")
+        params.append(filters.min_length)
+    if filters.max_length is not None:
+        clauses.append("LENGTH(m.content) <= ?")
+        params.append(filters.max_length)
+
+    # Bots are excluded from the browser by default, matching every other
+    # message-volume surface. An explicit ``author`` filter is an override:
+    # searching *for* a bot must still return its messages.
+    if not filters.include_bots and not filters.author:
+        clauses.append(f"m.author_id NOT IN ({bot_ids_subquery()})")
+        params.append(guild_id)
+
+    return WhereClause(sql=" AND ".join(clauses), params=params)
+
+
+def reaction_join(sort: str) -> str:
+    """The aggregate join ``most_reacted`` needs, empty for every other sort."""
+    return _REACTION_JOIN if sort == "most_reacted" else ""
+
+
+def reaction_select(sort: str) -> str:
+    """Extra SELECT column pairing with :func:`reaction_join`."""
+    return ", COALESCE(mr.total_reactions, 0) AS total_reactions" if sort == "most_reacted" else ""
+
+
+def resolve_names(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_ids: set[int],
+    channel_ids: set[int],
+    guild: Any | None = None,
+) -> tuple[dict[int, str], dict[int, str]]:
+    """Resolve user and channel ids to display names.
+
+    Live guild objects win (current nicknames and channel names); the
+    ``known_*`` tables cover everyone and everything that has since left or been
+    deleted, which is most of what a search over an archive turns up.
+    """
+    user_names: dict[int, str] = {}
+    channel_names: dict[int, str] = {}
+
+    if guild is not None:
+        for uid in user_ids:
+            member = guild.get_member(uid)
+            if member:
+                user_names[uid] = member.display_name
+        for cid in channel_ids:
+            ch = guild.get_channel(cid)
+            if ch:
+                channel_names[cid] = ch.name
+
+    still_needed = user_ids - set(user_names)
+    if still_needed:
+        user_names.update(get_known_users_bulk(conn, guild_id, list(still_needed)))
+
+    still_needed_ch = channel_ids - set(channel_names)
+    if still_needed_ch:
+        channel_names.update(
+            get_known_channels_bulk(conn, guild_id, list(still_needed_ch))
+        )
+
+    return user_names, channel_names
+
+
+def hydrate_rows(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    rows: list[Any],
+    guild: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Turn raw :data:`BASE_COLUMNS` rows into the dashboard's message dicts.
+
+    Every id is stringified on the way out. Discord snowflakes exceed 2^53 and
+    would lose precision as JSON numbers — the dashboard's snowflake sweep
+    enforces this repo-wide.
+    """
+    user_ids: set[int] = set()
+    channel_ids: set[int] = set()
+    reply_msg_ids: list[int] = []
+
+    for r in rows:
+        user_ids.add(r[2])  # author_id
+        channel_ids.add(r[1])  # channel_id
+        if r[4]:  # reply_to_id
+            reply_msg_ids.append(r[4])
+
+    # Resolve reply targets to their authors, so a result can say who was being
+    # replied to even when the parent message isn't in the result set.
+    reply_authors: dict[int, int] = {}
+    if reply_msg_ids:
+        placeholders = ",".join("?" * len(reply_msg_ids))
+        for rr in conn.execute(
+            f"SELECT message_id, author_id FROM messages "
+            f"WHERE message_id IN ({placeholders})",
+            reply_msg_ids,
+        ).fetchall():
+            reply_authors[rr[0]] = rr[1]
+            user_ids.add(rr[1])
+
+    user_names, channel_names = resolve_names(
+        conn, guild_id, user_ids, channel_ids, guild
+    )
+
+    msg_ids = [r[0] for r in rows]
+    attachments: dict[int, list[str]] = {}
+    if msg_ids:
+        placeholders = ",".join("?" * len(msg_ids))
+        for ar in conn.execute(
+            f"SELECT message_id, url FROM message_attachments "
+            f"WHERE message_id IN ({placeholders})",
+            msg_ids,
+        ).fetchall():
+            attachments.setdefault(ar[0], []).append(ar[1])
+
+    results: list[dict[str, Any]] = []
+    for r in rows:
+        msg_id, ch_id, auth_id, content, reply_id, ts = r[0], r[1], r[2], r[3], r[4], r[5]
+        reply_author_id = reply_authors.get(reply_id) if reply_id else None
+        results.append(
+            {
+                "message_id": str(msg_id),
+                "channel_id": str(ch_id),
+                "channel_name": channel_names.get(ch_id) or f"channel {ch_id}",
+                "author_id": str(auth_id),
+                "author_name": user_names.get(auth_id) or f"User {auth_id}",
+                "content": content or "",
+                "reply_to_id": str(reply_id) if reply_id else None,
+                "reply_to_author_id": str(reply_author_id) if reply_author_id else None,
+                "reply_to_author_name": (
+                    user_names.get(reply_author_id) or f"User {reply_author_id}"
+                )
+                if reply_author_id
+                else None,
+                "attachments": attachments.get(msg_id, []),
+                "ts": ts,
+                "sentiment": r[6],
+                "emotion": r[7],
+            }
+        )
+    return results
