@@ -144,6 +144,12 @@ def purge_user_data(
         "usage_events",
         "known_users",
         "xp_events",
+        # The daily aggregate of xp_events (migration 184). Purged with its
+        # source rather than preserved: it is the same per-member XP, only
+        # summed, so leaving it would keep an erased member's activity
+        # readable through the readers that will union it
+        # (docs/plans/xp-events-retention-and-rollup.md).
+        "xp_daily",
         # Added by the 2026-08 review (previously missed — register rows):
         "xp_reaction_awards",
         "member_birthdays",

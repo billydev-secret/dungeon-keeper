@@ -1,9 +1,9 @@
 # xp_events retention — the rollup the readers can union
 
-**Status: design, 2026-08-06.** Closes the deferral on item 9 of
+**Status: Stage 1 built 2026-08-06; Stages 2–4 designed, not built.**
+Closes the deferral on item 9 of
 [../reviews/2026-08-06-review-synthesis.md](../reviews/2026-08-06-review-synthesis.md)
 (dbperf P1 in [../reviews/2026-08-06-sweep-reliability-dbperf.md](../reviews/2026-08-06-sweep-reliability-dbperf.md)).
-Nothing here is built yet. Stage 1 is safe to build and ship on its own;
 Stage 3 is the one that deletes rows and must not run until Stage 2 has
 been correct in prod for a while.
 
@@ -221,11 +221,26 @@ arm too, so decide whether it earns one before writing it.
 
 ## Stages
 
-**Stage 1 — the rollup, additive and inert.** Migration creating
-`xp_daily`; a `xp_rollup_service.py` that (re)builds a day's rows from
-raw events idempotently; a backfill for the whole history; a daily job
-that rolls up completed days. Nothing reads it, nothing is deleted. Ships
-on its own and can sit in prod for a week proving the numbers.
+**Stage 1 — the rollup, additive and inert. ✅ Built 2026-08-06.**
+Migration 184 creates `xp_daily`; `services/xp_rollup_service.py` rebuilds
+a day's buckets from raw events idempotently (delete-then-insert, never
+increment — which is what makes a re-run, a backfill and a post-bug
+repair the same operation, and what stops NULL-channel buckets
+duplicating, since SQLite's PK does not dedupe NULLs); a 24h loop on
+`XpCog` rolls up complete days 40 at a time and rebuilds the newest two
+every pass, because voice XP is credited when a session ends and can land
+in a day already rolled. Nothing reads it, nothing is deleted.
+
+Verified against a snapshot of the live DB before shipping: 180 days →
+86,772 buckets in 13.9s, and the aggregate is **exactly** equal to raw on
+total events (1,019,866), total XP (456,009.97), every per-source
+subtotal, the top-5 all-time text leaderboard for the main guild, and the
+inactive report's last-activity map for all 180 users in the busiest
+channel. `xp_daily` with its indexes is 20.1 MB against `xp_events`'
+144.6 MB.
+
+`xp_daily` joined `purge_user_data` in the same commit, with its register
+row — see Stage 4; it was not deferred.
 
 **Stage 2 — readers union.** Each of the six broken readers gains a
 rollup arm: raw events for `created_at >= boundary`, `xp_daily` for days
@@ -243,11 +258,12 @@ big prune (the erasure runbook's note applies — 526k deletions will not
 shrink the file on their own), and the `count_xp_events` debug line
 reworded so "XP event rows" is not mistaken for "XP events ever".
 
-**Stage 4 — GDPR.** `xp_daily` is per-user data and joins
-`purge_user_data` with the rest of the XP family, plus a register row in
-`../reviews/2026-08-05-gdpr-register.md`. Cheap, but it is the exact
-mistake the register exists to catch: a new per-user table that nobody
-decided about. Do not let Stage 1 land without at least the register row.
+**Stage 4 — GDPR. ✅ Done with Stage 1.** `xp_daily` is per-user data, so
+it joined `purge_user_data` with the rest of the XP family and got its
+register row in `../reviews/2026-08-05-gdpr-register.md` in the same
+commit that created it — rather than becoming the exact thing the
+register exists to catch, a new per-user table nobody decided about. A
+test asserts the purge covers it.
 
 ## Testing
 

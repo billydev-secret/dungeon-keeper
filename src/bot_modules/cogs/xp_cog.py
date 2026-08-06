@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import TYPE_CHECKING, Literal
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
+from bot_modules.services import xp_rollup_service
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
 from bot_modules.core.xp_system import (
@@ -29,6 +31,13 @@ from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
+
+log = logging.getLogger(__name__)
+
+# Days rolled up per pass. The first run after this ships has ~180 days of
+# history to cover; capping the pass keeps that one write from being long
+# enough to matter, and the loop catches up over the following days.
+_ROLLUP_DAYS_PER_PASS = 40
 
 
 async def _collect_backfill_channels(
@@ -176,6 +185,48 @@ class XpCog(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         super().__init__()
+
+    async def cog_load(self) -> None:
+        self._xp_rollup_loop.start()
+
+    async def cog_unload(self) -> None:
+        self._xp_rollup_loop.cancel()
+
+    # ── Daily xp_events → xp_daily rollup ────────────────────────────
+
+    @tasks.loop(hours=24)
+    async def _xp_rollup_loop(self) -> None:
+        """Aggregate complete days of xp_events into xp_daily.
+
+        Stage 1 of docs/plans/xp-events-retention-and-rollup.md — the rollup
+        is built and kept current, but nothing reads it and no raw event is
+        deleted yet. The first run backfills the whole history in chunks
+        (LIMIT below) so a fresh install doesn't hold one long write.
+        """
+        try:
+            def _roll() -> tuple[int, int, int]:
+                with self.bot.ctx.open_db() as conn:
+                    days, buckets = xp_rollup_service.rollup_pending_days(
+                        conn, limit=_ROLLUP_DAYS_PER_PASS
+                    )
+                    # Late-arriving events are real (voice XP lands when a
+                    # session ends), so the newest complete days are rebuilt
+                    # every pass rather than trusted from their first roll.
+                    _, refreshed = xp_rollup_service.refresh_recent_days(conn)
+                    return days, buckets, refreshed
+
+            days, buckets, refreshed = await asyncio.to_thread(_roll)
+            if days or refreshed:
+                log.info(
+                    "XP rollup: %d new day(s) → %d bucket(s); %d refreshed",
+                    days, buckets, refreshed,
+                )
+        except Exception:
+            log.exception("XP daily rollup failed")
+
+    @_xp_rollup_loop.before_loop
+    async def _before_xp_rollup(self) -> None:
+        await self.bot.wait_until_ready()
 
     @app_commands.command(
         name="xp_leaderboards",
