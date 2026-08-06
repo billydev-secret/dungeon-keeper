@@ -59,6 +59,80 @@ def fake_ctx(web_db) -> FakeCtx:
     return FakeCtx(web_db)
 
 
+class StubPermissions:
+    """discord.Permissions stand-in — only the four bits health.py reads."""
+
+    def __init__(self, *, mod: bool = False):
+        self.administrator = mod
+        self.manage_guild = mod
+        self.kick_members = mod
+        self.ban_members = mod
+
+
+class StubMember:
+    def __init__(
+        self,
+        member_id: int,
+        *,
+        bot: bool = False,
+        mod: bool = False,
+        joined_at=None,
+        display_name: str | None = None,
+    ):
+        self.id = member_id
+        self.bot = bot
+        self.guild_permissions = StubPermissions(mod=mod)
+        self.joined_at = joined_at
+        self.display_name = display_name or f"member-{member_id}"
+
+
+class StubGuild:
+    """Minimal ``discord.Guild`` stand-in for ``health._guild_extras``.
+
+    ``FakeCtx.bot`` is ``None`` by default, which the health routes read as
+    "the guild isn't available" — the degraded state. Tests that need the
+    non-degraded path attach one of these via the ``live_guild`` fixture.
+    """
+
+    def __init__(self, guild_id: int, members: list[StubMember] | None = None):
+        self.id = guild_id
+        self.members = members or []
+        self.member_count = len(self.members)
+        self.voice_channels: list = []
+        self.channels: list = []
+
+    def get_channel(self, channel_id: int):
+        return next((c for c in self.channels if c.id == channel_id), None)
+
+    def get_member(self, member_id: int):
+        return next((m for m in self.members if m.id == member_id), None)
+
+
+class StubBot:
+    def __init__(self, guild: StubGuild):
+        self._guild = guild
+
+    def get_guild(self, guild_id: int):
+        return self._guild if self._guild.id == guild_id else None
+
+
+@pytest.fixture
+def live_guild(fake_ctx):
+    """Attach a populated guild to ``fake_ctx`` and hand it back.
+
+    Routes resolve ``ctx.bot`` per request, so the returned guild can be
+    mutated (or ``fake_ctx.bot`` reset to ``None``) between requests inside a
+    single test to simulate the gateway cache going cold.
+    """
+
+    def _attach(members: list[StubMember] | None = None) -> StubGuild:
+        guild = StubGuild(fake_ctx.guild_id, members)
+        fake_ctx.bot = StubBot(guild)
+        return guild
+
+    return _attach
+
+
 @pytest.fixture
 def open_client(fake_ctx) -> Generator[TestClient, None, None]:
     """TestClient with no auth (OpenAuth mode)."""

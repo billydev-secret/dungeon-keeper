@@ -9,8 +9,12 @@ edge cases) called out in the task brief.
 
 from __future__ import annotations
 
+import datetime
+import warnings
+
 import pytest
 
+from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.core.db_utils import open_db
 from bot_modules.services import health_metrics as hm
 from tests.db_template import migrated_db
@@ -91,11 +95,24 @@ def _seed_reaction(
 def _seed_sentiment(
     conn, *, mid: int, cid: int, sentiment: float, emotion: str | None, ts_now: float
 ):
+    """Score a message the way production does — in *both* places.
+
+    ``events_cog`` (ingest) and ``sentiment_service`` (backfill) write the
+    ``messages.sentiment``/``.emotion`` columns and the ``message_sentiment``
+    side table together, so a fixture that seeds only one of them is not a
+    state the bot can actually produce. ``compute_sentiment`` reads
+    ``messages``; the side-table row is kept so the equivalence test below can
+    run the old join shape against the same data.
+    """
     conn.execute(
         "INSERT OR REPLACE INTO message_sentiment "
         "(message_id, guild_id, channel_id, sentiment, emotion, computed_at)"
         " VALUES (?, ?, ?, ?, ?, ?)",
         (mid, GUILD, cid, sentiment, emotion, ts_now),
+    )
+    conn.execute(
+        "UPDATE messages SET sentiment = ?, emotion = ? WHERE message_id = ?",
+        (sentiment, emotion, mid),
     )
 
 
@@ -369,6 +386,280 @@ def test_compute_sentiment_average_and_emotions(db_conn):
     # Two of three are positive
     assert out["pos_neg_ratio"] == 2.0
     assert "joy" in out["emotions"] and "anger" in out["emotions"]
+
+
+# ── compute_sentiment reads `messages`, not the side table ───────────
+#
+# The dashboard's tiles/feed/outlier queries moved to ``messages`` in
+# b9b65c83 after equivalence was verified read-only against prod (502,051 rows
+# on each side, zero orphans either direction, zero sentiment or emotion
+# mismatches, ``idx_messages_sentiment (guild_id, sentiment)`` present).
+# ``compute_sentiment`` was the last reader keeping ``message_sentiment`` on
+# the hot path. The property that matters is that the numbers did not move, so
+# the old query shape is kept verbatim below and asserted against.
+
+
+def _legacy_compute_sentiment(conn, guild_id, *, now, include_bots=False) -> dict:
+    """The pre-switch query shape: join ``message_sentiment`` to ``messages``.
+
+    Verbatim (modulo the ``conn``/params plumbing) so the assertion is
+    "identical figures", not "plausible figures".
+    """
+    thirty_days_ago = hm._ts(30, now=now)
+    bot_clause, bot_params = bot_filter_clause(
+        guild_id, column="m.author_id", include_bots=include_bots
+    )
+
+    row = conn.execute(
+        f"SELECT AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt "
+        f"FROM message_sentiment ms "
+        f"JOIN messages m ON ms.message_id = m.message_id "
+        f"WHERE ms.guild_id=? AND m.ts>=?{bot_clause}",
+        (guild_id, thirty_days_ago, *bot_params),
+    ).fetchone()
+    avg_sentiment = round(row["avg_s"], 3) if row["avg_s"] is not None else 0
+
+    emotion_rows = conn.execute(
+        f"SELECT ms.emotion, COUNT(*) AS cnt "
+        f"FROM message_sentiment ms "
+        f"JOIN messages m ON ms.message_id = m.message_id "
+        f"WHERE ms.guild_id=? AND m.ts>=? AND ms.emotion IS NOT NULL{bot_clause} "
+        f"GROUP BY ms.emotion",
+        (guild_id, thirty_days_ago, *bot_params),
+    ).fetchall()
+    emotions = {r["emotion"]: r["cnt"] for r in emotion_rows}
+    emotion_total = sum(emotions.values()) or 1
+
+    pos_count = conn.execute(
+        f"SELECT COUNT(*) FROM message_sentiment ms "
+        f"JOIN messages m ON ms.message_id = m.message_id "
+        f"WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment>0.05{bot_clause}",
+        (guild_id, thirty_days_ago, *bot_params),
+    ).fetchone()[0]
+    neg_count = conn.execute(
+        f"SELECT COUNT(*) FROM message_sentiment ms "
+        f"JOIN messages m ON ms.message_id = m.message_id "
+        f"WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment<-0.05{bot_clause}",
+        (guild_id, thirty_days_ago, *bot_params),
+    ).fetchone()[0]
+
+    sparkline = []
+    for d in range(29, -1, -1):
+        r = conn.execute(
+            f"SELECT AVG(ms.sentiment) AS avg_s "
+            f"FROM message_sentiment ms "
+            f"JOIN messages m ON ms.message_id = m.message_id "
+            f"WHERE ms.guild_id=? AND m.ts>=? AND m.ts<?{bot_clause}",
+            (guild_id, hm._ts(d + 1, now=now), hm._ts(d, now=now), *bot_params),
+        ).fetchone()
+        sparkline.append(round(r["avg_s"], 3) if r["avg_s"] is not None else 0)
+
+    spike_rows = conn.execute(
+        f"""SELECT CAST(m.ts / 300 AS INTEGER) * 300 AS window_start,
+                  AVG(ms.sentiment) AS avg_s,
+                  COUNT(*) AS cnt
+           FROM message_sentiment ms
+           JOIN messages m ON ms.message_id = m.message_id
+           WHERE ms.guild_id=? AND m.ts>=?{bot_clause}
+           GROUP BY CAST(m.ts / 300 AS INTEGER)
+           HAVING avg_s < -0.3 AND cnt >= 3
+           ORDER BY window_start DESC
+           LIMIT 20""",
+        (guild_id, hm._ts(7, now=now), *bot_params),
+    ).fetchall()
+
+    ch_rows = conn.execute(
+        f"""SELECT ms.channel_id, AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt
+           FROM message_sentiment ms
+           JOIN messages m ON ms.message_id = m.message_id
+           WHERE ms.guild_id=? AND m.ts>=?{bot_clause}
+           GROUP BY ms.channel_id
+           ORDER BY avg_s DESC""",
+        (guild_id, thirty_days_ago, *bot_params),
+    ).fetchall()
+
+    return {
+        "avg_sentiment": avg_sentiment,
+        "badge": hm._badge(
+            avg_sentiment,
+            [(-0.1, "critical"), (0.0, "needs_work"), (0.2, "healthy"), (1.0, "excellent")],
+        ),
+        "scored_count": row["cnt"],
+        "emotions": {
+            k: round(v / emotion_total * 100, 1) for k, v in emotions.items()
+        },
+        "pos_neg_ratio": round(pos_count / neg_count, 1) if neg_count else 0,
+        "sparkline": sparkline,
+        "spikes_7d": len(spike_rows),
+        "spike_log": [
+            {
+                "timestamp": r["window_start"],
+                "avg_sentiment": round(r["avg_s"], 3),
+                "msg_count": r["cnt"],
+            }
+            for r in spike_rows
+        ],
+        "per_channel": [
+            {
+                "channel_id": str(r["channel_id"]),
+                "avg_sentiment": round(r["avg_s"], 3),
+                "count": r["cnt"],
+            }
+            for r in ch_rows[:20]
+        ],
+    }
+
+
+def _seed_mixed_sentiment_corpus(conn, now: float) -> None:
+    """Scored + unscored traffic across two channels, plus a negative spike."""
+    recent = int(now) - 3600
+    for uid in (1, 2, 99):
+        _seed_known_user(conn, uid, is_bot=1 if uid == 99 else 0)
+
+    # Channel 100: a positive human, a negative human, a negative bot.
+    _seed_message(conn, mid=1, cid=100, aid=1, ts=recent)
+    _seed_sentiment(conn, mid=1, cid=100, sentiment=0.8, emotion="joy", ts_now=now)
+    _seed_message(conn, mid=2, cid=100, aid=2, ts=recent)
+    _seed_sentiment(conn, mid=2, cid=100, sentiment=-0.6, emotion="anger", ts_now=now)
+    _seed_message(conn, mid=3, cid=100, aid=99, ts=recent)
+    _seed_sentiment(conn, mid=3, cid=100, sentiment=-0.9, emotion="anger", ts_now=now)
+
+    # Channel 200: a neutral score and one with no emotion label.
+    _seed_message(conn, mid=4, cid=200, aid=1, ts=recent)
+    _seed_sentiment(conn, mid=4, cid=200, sentiment=0.02, emotion=None, ts_now=now)
+    _seed_message(conn, mid=5, cid=200, aid=2, ts=recent - 86400 * 3)
+    _seed_sentiment(conn, mid=5, cid=200, sentiment=0.4, emotion="joy", ts_now=now)
+
+    # A 5-minute window of three strongly negative messages — a spike.
+    for i, mid in enumerate((10, 11, 12)):
+        _seed_message(conn, mid=mid, cid=100, aid=1, ts=recent - 7200 + i)
+        _seed_sentiment(
+            conn, mid=mid, cid=100, sentiment=-0.7, emotion="anger", ts_now=now
+        )
+
+    # Unscored traffic: real messages that VADER never got to. These have no
+    # ``message_sentiment`` row, so the join excluded them implicitly; reading
+    # ``messages`` has to exclude them explicitly.
+    for mid in (20, 21, 22, 23):
+        _seed_message(conn, mid=mid, cid=100, aid=1, ts=recent)
+    conn.commit()
+
+
+@pytest.mark.parametrize("include_bots", [False, True])
+def test_compute_sentiment_matches_the_message_sentiment_join(db_conn, include_bots):
+    """Read-path swap, not a behaviour change: every figure must be identical."""
+    now = 1_700_000_000.0
+    _seed_mixed_sentiment_corpus(db_conn, now)
+
+    new = hm.compute_sentiment(db_conn, GUILD, now=now, include_bots=include_bots)
+    old = _legacy_compute_sentiment(
+        db_conn, GUILD, now=now, include_bots=include_bots
+    )
+    assert new == old
+
+
+def test_compute_sentiment_ignores_unscored_messages(db_conn):
+    """Without an explicit IS NOT NULL the four unscored rows join the counts.
+
+    ``AVG`` skips NULLs on its own, so the mean survives — but ``COUNT(*)``
+    does not, and ``scored_count`` / ``per_channel.count`` / the spike
+    ``HAVING cnt >= 3`` all ride on it.
+    """
+    now = 1_700_000_000.0
+    recent = int(now) - 3600
+    _seed_known_user(db_conn, 1)
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=recent)
+    _seed_sentiment(db_conn, mid=1, cid=100, sentiment=0.8, emotion="joy", ts_now=now)
+    for mid in (2, 3, 4, 5):
+        _seed_message(db_conn, mid=mid, cid=100, aid=1, ts=recent)
+    db_conn.commit()
+
+    out = hm.compute_sentiment(db_conn, GUILD, now=now)
+    assert out["scored_count"] == 1, "unscored messages were counted as scored"
+    assert out["avg_sentiment"] == 0.8
+    assert out["per_channel"] == [
+        {"channel_id": "100", "avg_sentiment": 0.8, "count": 1}
+    ]
+
+
+def test_compute_sentiment_reads_messages_without_the_side_table(db_conn):
+    """Rows only in ``messages``: under the old join this came back empty."""
+    now = 1_700_000_000.0
+    recent = int(now) - 3600
+    _seed_known_user(db_conn, 1)
+    for mid, score in ((1, 0.9), (2, 0.5)):
+        _seed_message(db_conn, mid=mid, cid=100, aid=1, ts=recent)
+        db_conn.execute(
+            "UPDATE messages SET sentiment = ?, emotion = 'joy' WHERE message_id = ?",
+            (score, mid),
+        )
+    db_conn.commit()
+
+    assert db_conn.execute("SELECT COUNT(*) FROM message_sentiment").fetchone()[0] == 0
+    out = hm.compute_sentiment(db_conn, GUILD, now=now)
+    assert out["scored_count"] == 2
+    assert out["avg_sentiment"] == 0.7
+    assert out["emotions"] == {"joy": 100.0}
+
+
+def test_compute_sentiment_does_not_query_the_side_table(db_conn):
+    """No statement it issues may name ``message_sentiment``."""
+    now = 1_700_000_000.0
+    _seed_mixed_sentiment_corpus(db_conn, now)
+
+    sink: list[str] = []
+    db_conn.set_trace_callback(sink.append)
+    try:
+        hm.compute_sentiment(db_conn, GUILD, now=now)
+    finally:
+        db_conn.set_trace_callback(None)
+    assert sink, "no SQL was traced"
+    assert not [s for s in sink if "message_sentiment" in s]
+
+
+# ── datetime: UTC semantics at the sites that dropped utcfromtimestamp ─
+
+
+def test_gini_history_labels_are_utc_and_unchanged(db_conn):
+    """``utcfromtimestamp`` -> aware ``fromtimestamp(ts, UTC)``.
+
+    The value is only ever strftime'd into a "Mon D" label, never compared
+    against another datetime, so the aware form must render byte-identically.
+    The label is UTC by design (it is not shifted by the guild's tz offset) —
+    that was true before the swap and stays true after it.
+    """
+    now = 1_700_000_000.0  # 2023-11-14 22:13:20 UTC
+    out = hm.compute_gini(db_conn, GUILD, now=now)
+
+    labels = [h["label"] for h in out["gini_history"]]
+    assert len(labels) == 12
+    expected = [
+        datetime.datetime.fromtimestamp(
+            hm._ts((w + 1) * 7, now=now), datetime.UTC
+        ).strftime("%b ")
+        + str(
+            datetime.datetime.fromtimestamp(
+                hm._ts((w + 1) * 7, now=now), datetime.UTC
+            ).day
+        )
+        for w in range(11, -1, -1)
+    ]
+    assert labels == expected
+    # Pinned literally so a silent tz shift can't move both sides together.
+    assert labels[0] == "Aug 22"
+    assert labels[-1] == "Nov 7"
+
+
+def test_compute_gini_emits_no_datetime_deprecation_warning(db_conn):
+    """``datetime.utcfromtimestamp`` is deprecated and slated for removal."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        hm.compute_gini(db_conn, GUILD, now=1_700_000_000.0)
+    offenders = [
+        w for w in caught if issubclass(w.category, DeprecationWarning)
+        and "utc" in str(w.message).lower()
+    ]
+    assert not offenders, [str(w.message) for w in offenders]
 
 
 # ── compute_newcomer_funnel ──────────────────────────────────────────
@@ -690,11 +981,8 @@ def test_sentiment_excludes_bot_authored_scores(db_conn):
     _seed_message(db_conn, mid=1, cid=100, aid=1, ts=recent)
     _seed_message(db_conn, mid=2, cid=100, aid=99, ts=recent)
     for mid, score in ((1, 1.0), (2, -1.0)):
-        db_conn.execute(
-            "INSERT INTO message_sentiment "
-            "(message_id, guild_id, channel_id, sentiment, emotion, computed_at)"
-            " VALUES (?,?,?,?,?,?)",
-            (mid, GUILD, 100, score, "joy", recent),
+        _seed_sentiment(
+            db_conn, mid=mid, cid=100, sentiment=score, emotion="joy", ts_now=recent
         )
 
     # Human-only: the single +1.0 message. With the bot: +1.0 and -1.0 average 0.

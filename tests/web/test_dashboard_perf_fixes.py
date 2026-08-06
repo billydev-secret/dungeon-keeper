@@ -23,6 +23,7 @@ import io
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -30,6 +31,7 @@ from fastapi import HTTPException
 from PIL import Image, ImageDraw
 
 from bot_modules.core.db_utils import open_db
+from tests.web.conftest import StubMember
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -219,18 +221,18 @@ def test_sentiment_feed_cache_does_not_bleed_across_include_bots(
     assert "sentiment_feed+bots" in keys
 
 
-def test_sentiment_feed_tile_never_touches_message_sentiment(open_client, fake_ctx):
-    """The route's own SQL is off the scanned table.
+@pytest.mark.parametrize("tile", ["sentiment_feed", "sentiment"])
+def test_sentiment_tiles_never_touch_message_sentiment(open_client, fake_ctx, tile):
+    """No sentiment read anywhere in the tiles path names the scanned table.
 
-    ``compute_sentiment`` in ``services/health_metrics.py`` still reads
-    ``message_sentiment`` for the tile's averages — out of scope for this
-    change — so the assertion is scoped to the feed tile, which is entirely the
-    route's own SQL.
+    ``compute_sentiment`` in ``services/health_metrics.py`` was the last reader
+    holding ``message_sentiment`` on the hot path; its own equivalence tests
+    live in ``tests/test_health_metrics.py``.
     """
     _seed_sentiment_messages(fake_ctx)
     sink: list[str] = []
     with sql_trace(fake_ctx, sink):
-        open_client.get("/api/health/tiles?tiles=sentiment_feed")
+        open_client.get(f"/api/health/tiles?tiles={tile}")
     assert not [s for s in sink if "message_sentiment" in s]
 
 
@@ -304,7 +306,12 @@ def test_deep_key_is_stable_regardless_of_kwarg_order():
         "/api/health/sentiment-feed",
     ],
 )
-def test_deep_dive_writes_a_namespaced_cache_entry(open_client, fake_ctx, path):
+def test_deep_dive_writes_a_namespaced_cache_entry(
+    open_client, fake_ctx, live_guild, path
+):
+    # A live guild is required: the mod/newcomer metrics deliberately skip the
+    # cache when the guild isn't available (see test_health_degraded_cache).
+    live_guild([StubMember(42, joined_at=datetime.now(timezone.utc))])
     assert open_client.get(path).status_code == 200
     assert any(k.startswith("deep:") for k in _cache_keys(fake_ctx)), path
 
@@ -330,7 +337,10 @@ def test_include_bots_deep_dives_get_separate_cache_entries(open_client, fake_ct
     assert deep == {"deep:gini", "deep:gini+bots"}
 
 
-def test_mod_engagement_days_get_separate_cache_entries(open_client, fake_ctx):
+def test_mod_engagement_days_get_separate_cache_entries(
+    open_client, fake_ctx, live_guild
+):
+    live_guild([StubMember(42, joined_at=datetime.now(timezone.utc))])
     open_client.get("/api/health/mod-engagement?days=7")
     open_client.get("/api/health/mod-engagement?days=30")
     deep = {k for k in _cache_keys(fake_ctx) if k.startswith("deep:mod_engagement")}

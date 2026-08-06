@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,7 +29,14 @@ class SessionCog(commands.Cog):
     async def session_recap(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
-        cutoff = (datetime.utcnow() - timedelta(minutes=30)).isoformat()
+        # Deliberately naive UTC: ``games_session_tracker.last_game_at`` holds
+        # naive ISO strings (written by ``update_session``, defaulted by
+        # SQLite's naive ``CURRENT_TIMESTAMP``) and this cutoff is compared
+        # against them as a *string* in SQL. An aware value would serialise
+        # with a "+00:00" suffix and stop matching.
+        cutoff = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=30)
+        ).isoformat()
         session_row = await self.db.fetchone(
             """
             SELECT session_id, started_at, last_game_at, game_ids, player_ids
