@@ -25,7 +25,7 @@ sweeps + loose-ends audit; per-bundle findings in the sibling
    casino per-member state; ledger deliberately preserved). Ship with a
    >32k-message failing test first.~~ — **shipped `6ac71558`**
    (`privacy_service.py:14,77,120-125,156-158,201`,
-   `economy_service.py:1304`, `docs/gdpr_erasure_runbook.md`).
+   `economy_service.py:1304`, `docs/gdpr_runbook.md`).
 2. ~~**Whisper cross-guild forget-me over-delete** (whisper A1) + two-guild
    repro test; tidy D1 spec drift and dead `decrement_guesses_left` in
    the same commit.~~ — **shipped `2b3094aa`**.

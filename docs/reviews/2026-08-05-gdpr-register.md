@@ -92,7 +92,7 @@ they land, not only in the synthesis header.
    ~~greeting_watch~~ `49a02867`. **Still open:** `xp_events` (deferred
    with a design note — needs a rollup table, see synthesis #9) and
    guess `confession_text`.
-7. ~~No erasure runbook~~ — `docs/gdpr_erasure_runbook.md` shipped with
+7. ~~No erasure runbook~~ — `docs/gdpr_runbook.md` shipped with
    `6ac71558` and is now listed in INDEX.md. **Still open:** no
    subject-access/export story (explicitly deferred).
 8. **OPEN** — backups retain erased users; document the retention window

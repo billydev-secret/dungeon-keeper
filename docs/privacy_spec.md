@@ -62,7 +62,7 @@ Per-message failures (permissions denied, transient HTTP errors) are counted as 
 ### Phase 3 — DB purge (retired; out-of-band erasure)
 **No longer runs from either command, in any mode** (since commit `e63e728`, 2026-07-16). Both commands stop after the Discord-side delete; no DB row is touched.
 
-The purge implementation, `purge_user_data` (`src/bot_modules/services/privacy_service.py`), is deliberately **unwired** rather than deleted. It is the out-of-band path for a genuine legal erasure request (e.g. GDPR): an operator runs it manually against the database — the procedure lives in [gdpr_erasure_runbook.md](gdpr_erasure_runbook.md). It removes the user's rows from XP (including reaction awards), voice sessions, member activity, quality-score history, gender, member events, birthdays, bios (row + snapshotted answers/fields), voice-master profiles and trust lists (both sides), watch lists and invite edges (both sides), the interaction graph (both directions), wellness state and counters, usage telemetry (`usage_events` — see [[usage-telemetry-spec]]; nothing prunes that table on a schedule, so this run is the only thing that ever clears it), audit-event tables, and — via `economy_service.econ_purge_user` — all per-member economy and casino state (`econ_ledger` is deliberately preserved: it is the pseudonymous double-entry record, and deleting one side of transfers would break audit sums). With `keep_messages=False` it also drops the `messages` archive and its children (attachments, mentions, embeds, reactions, sentiment, and the per-user dedup table), chunked in batches of 500 ids so a heavy poster can never blow SQLite's bound-variable cap mid-erasure. Every per-table delete tolerates schema drift (guild deployments vary by age) — a failed table logs a warning and the rest of the purge proceeds; the caller owns the transaction, so a hard failure rolls the whole erasure back rather than leaving partial state.
+The purge implementation, `purge_user_data` (`src/bot_modules/services/privacy_service.py`), is deliberately **unwired** rather than deleted. It is the out-of-band path for a genuine legal erasure request (e.g. GDPR): an operator runs it manually against the database — the procedure lives in [gdpr_runbook.md](gdpr_runbook.md). It removes the user's rows from XP (including reaction awards), voice sessions, member activity, quality-score history, gender, member events, birthdays, bios (row + snapshotted answers/fields), voice-master profiles and trust lists (both sides), watch lists and invite edges (both sides), the interaction graph (both directions), wellness state and counters, usage telemetry (`usage_events` — see [[usage-telemetry-spec]]; nothing prunes that table on a schedule, so this run is the only thing that ever clears it), audit-event tables, and — via `economy_service.econ_purge_user` — all per-member economy and casino state (`econ_ledger` is deliberately preserved: it is the pseudonymous double-entry record, and deleting one side of transfers would break audit sums). With `keep_messages=False` it also drops the `messages` archive and its children (attachments, mentions, embeds, reactions, sentiment, and the per-user dedup table), chunked in batches of 500 ids so a heavy poster can never blow SQLite's bound-variable cap mid-erasure. Every per-table delete tolerates schema drift (guild deployments vary by age) — a failed table logs a warning and the rest of the purge proceeds; the caller owns the transaction, so a hard failure rolls the whole erasure back rather than leaving partial state.
 
 A full legal erasure is therefore two runs: the slash command (or the same channel walker) for the Discord side, plus a manual `purge_user_data` call for the DB side.
 
@@ -80,6 +80,50 @@ Messages that couldn't be deleted (no access): **M**
 ```
 
 The copy is deliberately neutral (no "your") because `/delete_user` shows this summary to the acting mod, not to the subject.
+
+## Subject access export
+
+`export_user_data` (`src/bot_modules/services/privacy_service.py`) is the read
+half of the erasure path — the answer to an access request (GDPR Art 15) or a
+portability request (Art 20). Like the purge it is **unwired from any command**
+and run by an operator: `scripts/export_user_data.py --guild <gid> --user <uid>`,
+with `--summary` for a table/row-count view that discloses no content. The
+procedure is in [gdpr_runbook.md](gdpr_runbook.md) §1.
+
+**It finds tables by column discovery, not from a curated list.** Every table in
+`sqlite_master` whose columns intersect `SUBJECT_ID_COLUMNS` (72 conventional
+member-reference names — `user_id`, `author_id`, `reactor_id`, `winner_id`,
+`user_a`/`user_b`, …) is queried for the subject, guild-scoped where the table
+has a `guild_id`. A curated list is the thing that goes stale, and a stale
+access export is an incomplete answer to a statutory request; discovery means a
+new feature's table is covered the day it lands, provided it names its member
+column conventionally.
+
+**The export is deliberately a superset of the purge.** Categories the server
+keeps under Art 17(3) — `econ_ledger`, sanction history, consent audit,
+no-contact orders — are exported even though they are never deleted. Retention
+is not a disclosure exemption. `test_export_covers_every_table_the_purge_deletes`
+enforces the direction: any table the purge learns to delete must be reachable
+by the export, and the test reads both table lists off the source rather than
+restating them.
+
+Two limits the export reports rather than hides:
+
+- **Message children** (`message_attachments`, `_mentions`, `_embeds`,
+  `_reactions`, `_sentiment`) carry no member column — they are the subject's
+  data only by hanging off their message. Discovery cannot see them, so they
+  are reached by joining through the author's message ids, chunked at 500 like
+  the purge.
+- **List-valued columns** (`risky_pending_questions.participant_user_ids` and
+  five others) store member ids as JSON/CSV, which an equality match cannot
+  find. `LIST_VALUED_MEMBER_COLUMNS` names them and the export emits a note
+  telling the operator to grep them by hand.
+
+Tables in `THIRD_PARTY_TABLES` — whispers, guesses, no-contact orders, the
+interaction graph, moderation records — come back flagged in `review_required`.
+Art 15(4) says an access request must not adversely affect others' rights, so
+the counterparty decision is surfaced for a human rather than resolved by
+redacting (which corrupts the record) or dropping (which hides the tension).
 
 ## Permissions
 
@@ -109,7 +153,9 @@ The copy is deliberately neutral (no "your") because `/delete_user` shows this s
 - **No web dashboard.** Mods must run the slash command — the destructive scope and confirm-view UX don't translate cleanly.
 - **No cross-guild delete.** `/delete_me` clears one guild only; a user in three servers must run it in each.
 - **No DB deletion from the commands.** Neither command touches any server-side row — [[dm-perms-spec]] audit / consent rows included. DB erasure is the manual, out-of-band `purge_user_data` run (Phase 3 above), and even that deliberately preserves the consent/audit forensic record.
-- **No export.** Right-to-portability is intentionally deferred.
+- ~~**No export.** Right-to-portability is intentionally deferred.~~ **Shipped
+  2026-08-06** — see [Subject access export](#subject-access-export) below. It
+  is an operator script, not a command: same reasoning as the purge.
 - **No retry queue.** Failed deletions surface in the summary but don't reschedule. Re-running the command after fixing perms is the path.
 - **No notification to the target.** `/delete_user @alice` does not DM Alice; the action is silent except for the actor's ephemeral progress.
 

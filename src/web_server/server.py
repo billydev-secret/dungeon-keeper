@@ -168,6 +168,42 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+# A session forged from a guessed secret is a full admin session — the cookie
+# carries the permission bits the cache-miss path falls back on. 32 chars is
+# `secrets.token_urlsafe(24)`; the documented recipe in DEPLOYMENT.md produces
+# 43. The distinct-character floor catches the other failure shape: a long but
+# degenerate value ("changemechangeme…") that passes a length check.
+_MIN_SESSION_SECRET_LEN = 32
+_MIN_SESSION_SECRET_DISTINCT = 8
+
+
+def _require_strong_session_secret(secret: str) -> None:
+    """Refuse to start on a session secret weak enough to be forged.
+
+    Same failure direction as the rest of this function: the tunnel publishes
+    this dashboard, so a weak secret is not a warning-and-continue situation
+    (2026-08 review, Art 32 / web portal security).
+    """
+    problems = []
+    if len(secret) < _MIN_SESSION_SECRET_LEN:
+        problems.append(
+            f"it is {len(secret)} characters, minimum {_MIN_SESSION_SECRET_LEN}"
+        )
+    if len(set(secret)) < _MIN_SESSION_SECRET_DISTINCT:
+        problems.append(
+            f"it uses only {len(set(secret))} distinct characters, "
+            f"minimum {_MIN_SESSION_SECRET_DISTINCT}"
+        )
+    if problems:
+        raise RuntimeError(
+            "SESSION_SECRET is too weak: "
+            + "; ".join(problems)
+            + '. Generate one with: python -c "import secrets; '
+            'print(secrets.token_urlsafe(32))" — then restart. Anyone who '
+            "guesses this value can forge an admin session cookie."
+        )
+
+
 def _auto_detect_auth(guild_id: int) -> AuthBackend:
     """Pick an auth backend based on environment variables — failing *closed*.
 
@@ -182,6 +218,7 @@ def _auto_detect_auth(guild_id: int) -> AuthBackend:
     session_secret = os.getenv("SESSION_SECRET")
 
     if client_id and session_secret:
+        _require_strong_session_secret(session_secret)
         support_user_id = int(os.getenv("SUPPORT_USER_ID", "0") or "0")
         _log.info("Discord OAuth2 authentication enabled (client_id=%s)", client_id)
         return DiscordOAuthAuth(session_secret, guild_id, support_user_id=support_user_id)

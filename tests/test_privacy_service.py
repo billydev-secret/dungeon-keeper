@@ -6,7 +6,12 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from tests.db_template import migrated_db
-from bot_modules.services.privacy_service import purge_user_data
+from bot_modules.services.privacy_service import (
+    SUBJECT_ID_COLUMNS,
+    _MESSAGE_CHILD_TABLES,
+    export_user_data,
+    purge_user_data,
+)
 from bot_modules.services.usage_telemetry_service import (
     KIND_COMMAND,
     KIND_PANEL,
@@ -356,3 +361,145 @@ def test_purge_covers_economy_per_member_state(db):
         ).fetchone()[0]
     assert wallets == 0
     assert ledger == 1  # preserved on purpose
+
+
+# ── subject access export (GDPR Art 15 / Art 20) ───────────────────────
+
+
+def test_export_finds_rows_by_conventional_subject_column(db):
+    with open_db(db) as conn:
+        _insert_xp(conn, GUILD, USER)
+        _insert_known_user(conn, GUILD, USER)
+        data = export_user_data(conn, GUILD, USER)
+    assert data["counts"]["member_xp"] == 1
+    assert data["counts"]["known_users"] == 1
+    assert data["tables"]["member_xp"]["rows"][0]["total_xp"] == 100
+
+
+def test_export_excludes_other_users_and_other_guilds(db):
+    with open_db(db) as conn:
+        _insert_xp(conn, GUILD, USER)
+        _insert_xp(conn, GUILD, OTHER_USER)
+        _insert_xp(conn, GUILD + 1, USER)
+        data = export_user_data(conn, GUILD, USER)
+    rows = data["tables"]["member_xp"]["rows"]
+    assert len(rows) == 1
+    assert rows[0]["user_id"] == USER
+    assert rows[0]["guild_id"] == GUILD
+
+
+def test_export_is_empty_for_unknown_user(db):
+    with open_db(db) as conn:
+        _insert_xp(conn, GUILD, OTHER_USER)
+        data = export_user_data(conn, GUILD, USER)
+    assert data["counts"] == {}
+    assert data["tables"] == {}
+
+
+def test_export_includes_ledger_the_purge_deliberately_preserves(db):
+    """Art 17(3) retention is not an Art 15 exemption: rows the server keeps
+    are still the subject's data and must still be disclosable."""
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO econ_ledger (guild_id, user_id, amount, kind, created_at) "
+            "VALUES (?, ?, 100, 'test', 0)",
+            (GUILD, USER),
+        )
+        data = export_user_data(conn, GUILD, USER)
+    assert data["counts"]["econ_ledger"] == 1
+
+
+def test_export_reaches_message_children_through_the_author(db):
+    """message_sentiment has no subject column — it is only the subject's data
+    by virtue of hanging off their message, so column discovery cannot find it
+    and the message-id join must."""
+    with open_db(db) as conn:
+        mid = _insert_message(conn, GUILD, USER)
+        conn.execute(
+            "INSERT INTO message_sentiment "
+            "(message_id, guild_id, channel_id, sentiment, computed_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (mid, GUILD, 500, 0.5, 1000.0),
+        )
+        data = export_user_data(conn, GUILD, USER)
+    assert data["counts"]["messages"] == 1
+    assert data["counts"]["message_sentiment"] == 1
+
+
+def test_export_message_children_chunk_past_the_variable_cap(db):
+    """Same failure mode the purge had (A1): >32,766 ids inlined into one
+    IN (...) raises. The heaviest posters are the likeliest requesters."""
+    with open_db(db) as conn:
+        for i in range(33_000):
+            _insert_message(conn, GUILD, USER, message_id=9_000_000 + i)
+        conn.commit()
+        data = export_user_data(conn, GUILD, USER)
+    assert data["counts"]["messages"] == 33_000
+
+
+def test_export_flags_tables_naming_a_second_member(db):
+    """Art 15(4): the operator has to decide about the counterparty before
+    disclosure, so the export must surface those tables rather than bury them."""
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO invite_edges (guild_id, inviter_id, invitee_id, joined_at) "
+            "VALUES (?, ?, ?, 0)",
+            (GUILD, USER, OTHER_USER),
+        )
+        data = export_user_data(conn, GUILD, USER)
+    assert "invite_edges" in data["review_required"]
+
+
+def test_export_finds_the_subject_on_either_side_of_a_pair_table(db):
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO invite_edges (guild_id, inviter_id, invitee_id, joined_at) "
+            "VALUES (?, ?, ?, 0)",
+            (GUILD, OTHER_USER, USER),
+        )
+        data = export_user_data(conn, GUILD, USER)
+    assert data["counts"]["invite_edges"] == 1
+
+
+def test_export_covers_every_table_the_purge_deletes(db):
+    """The load-bearing property: an access export that misses a table the
+    erasure path knows about is an incomplete answer to a statutory request.
+    Seeds a row in each purge-covered table, then asserts the export sees it.
+    New tables joining the purge fail here until the export can reach them."""
+    with open_db(db) as conn:
+        purge_tables = _tables_touched_by_purge(conn)
+        missing = []
+        for table in sorted(purge_tables):
+            cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+            if not (cols & SUBJECT_ID_COLUMNS) and table not in _MESSAGE_CHILD_TABLES:
+                missing.append(table)
+    assert not missing, (
+        "purge-covered tables the export's column discovery cannot reach: "
+        f"{missing} — add the column to SUBJECT_ID_COLUMNS or reach the table "
+        "explicitly, as the message children are"
+    )
+
+
+def _tables_touched_by_purge(conn):
+    """Every table name purge_user_data (and econ_purge_user) writes to, read
+    off the source rather than restated — a second copy is how the two drift."""
+    import re
+    from pathlib import Path
+
+    import bot_modules.services.privacy_service as ps
+    import bot_modules.services.economy_service as es
+
+    names = set()
+    for mod in (ps, es):
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        names |= set(re.findall(r"DELETE FROM (\w+)", src))
+        names |= set(re.findall(r'DELETE FROM \{?"?(\w+)"?\}?', src))
+    real = {
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    names |= set(ps._MESSAGE_CHILD_TABLES)
+    names |= set(getattr(es, "_PURGE_USER_ID_TABLES", ()))
+    return {n for n in names if n in real}
