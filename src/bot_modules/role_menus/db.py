@@ -175,6 +175,34 @@ def list_options(conn: sqlite3.Connection, menu_id: int) -> list[dict]:
     return [_option_row(r) for r in rows]
 
 
+def list_options_bulk(
+    conn: sqlite3.Connection, menu_ids: list[int]
+) -> dict[int, list[dict]]:
+    """Options for many menus in one query, keyed by menu id.
+
+    Same row shaping and same per-menu ``ORDER BY position`` as
+    :func:`list_options` — ``list_options_bulk(conn, ids)[mid]`` equals
+    ``list_options(conn, mid)`` for every id. Every requested id gets an entry,
+    so a menu with no options maps to ``[]`` rather than dropping out of the
+    result (the dashboard list view renders it as an empty menu).
+
+    Exists so the Role Menus list endpoint can render a whole page of menus
+    without one options query per menu.
+    """
+    out: dict[int, list[dict]] = {mid: [] for mid in menu_ids}
+    if not out:
+        return out
+    placeholders = ",".join("?" * len(out))
+    rows = conn.execute(
+        f"SELECT * FROM role_menu_options WHERE menu_id IN ({placeholders})"
+        " ORDER BY menu_id, position",
+        list(out),
+    ).fetchall()
+    for r in rows:
+        out[r["menu_id"]].append(_option_row(r))
+    return out
+
+
 def get_option(conn: sqlite3.Connection, option_id: int) -> dict | None:
     r = conn.execute(
         "SELECT * FROM role_menu_options WHERE id = ?", (option_id,)

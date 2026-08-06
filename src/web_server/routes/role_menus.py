@@ -178,19 +178,8 @@ async def list_menus(request: Request, _: AuthenticatedUser = _MOD):
             menus = menus_db.list_menus(conn, guild_id)
             if not menus:
                 return []
-            placeholders = ",".join("?" * len(menus))
-            rows = conn.execute(
-                f"SELECT * FROM role_menu_options WHERE menu_id IN ({placeholders})"
-                " ORDER BY menu_id, position",
-                [m["id"] for m in menus],
-            ).fetchall()
-            by_menu: dict[int, list[dict]] = {}
-            for r in rows:
-                # Shared row-shaper so the list view and the single-menu view
-                # can't drift. (A ``list_options_bulk`` belongs in
-                # ``role_menus.db`` proper; kept here to stay in one file.)
-                by_menu.setdefault(r["menu_id"], []).append(menus_db._option_row(r))
-            return [(m, by_menu.get(m["id"], [])) for m in menus]
+            by_menu = menus_db.list_options_bulk(conn, [m["id"] for m in menus])
+            return [(m, by_menu[m["id"]]) for m in menus]
 
     rows = await run_query(_q)
     out = []
