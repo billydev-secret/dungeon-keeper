@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services import intake_service
+from bot_modules.services.moderation import write_audit
 from bot_modules.services.settings_registry import (
     Setting,
     coerce_value,
@@ -46,6 +47,14 @@ _SECRET_KEY_RE = re.compile(
 )
 _MAX_VALUE_CHARS = 200
 _CLEAR_WORDS = {"none", "off", "clear", "unset", "0"}
+
+# Grant announcements are sent as plain content with mentions enabled (see
+# ``role_grant_commands._execute_grant``), so a mass mention in the template
+# fires on every future grant. Text the *model* wrote must not be able to arm
+# that; a human setting one from the dashboard still can, which is why the guard
+# lives here and not on the send side (the live "denizen" grant deliberately
+# ends with an @here).
+_MASS_MENTION_RE = re.compile(r"@everyone|@here|<@&\d+>")
 
 
 @dataclass(frozen=True)
@@ -273,6 +282,12 @@ def validate_grant_role_change(
     elif kind == "channel":
         value, shown = _resolve_channel(guild, raw)
     else:
+        if _MASS_MENTION_RE.search(raw):
+            raise ValueError(
+                "I can't put @everyone, @here, or a role mention in a grant "
+                "message — it would ping on every future grant. Write it "
+                "without one, or set it from Config → Roles."
+            )
         value = shown = raw
 
     if not allow_noop and current == value:
@@ -304,8 +319,19 @@ def _apply_grant_role(conn, guild, proposal: ConfigProposal) -> None:
     upsert_grant_role(conn, guild.id, proposal.grant_name, **fields)
 
 
+def _grant_field_value(conn, guild_id: int, grant_name: str, field: str) -> str:
+    """One grant field's stored value, for the before/after audit record."""
+    from bot_modules.core.db_utils import get_grant_roles
+
+    row = get_grant_roles(conn, guild_id).get(grant_name)
+    # Raw, not the validator's "" -for-unset normalization: an audit row should
+    # record that the field held 0, not that it held nothing in particular.
+    return "" if row is None else str(row.get(field, ""))
+
+
 def apply_config_change(
-    db_path, guild, proposal: ConfigProposal, *, is_admin: bool = False
+    db_path, guild, proposal: ConfigProposal, *, is_admin: bool = False,
+    actor_id: int = 0,
 ) -> None:
     """Write one confirmed proposal.
 
@@ -313,6 +339,11 @@ def apply_config_change(
     sense (channel deleted, key removed) — and so ``admin_only`` is enforced
     against the person who actually clicked, which may not be the person who
     asked. Defaults to non-admin so a caller that forgets fails closed.
+
+    ``actor_id`` is whoever clicked Apply. It lands in ``audit_log`` alongside
+    the before/after values, in the same transaction as the write: this is the
+    one config path where a *model* chose the value, and ``log.txt`` is wiped on
+    every boot, so without the row an applied change leaves no history at all.
     """
     with open_db(db_path) as conn:
         if proposal.target == "grant_role":
@@ -320,13 +351,31 @@ def apply_config_change(
                 conn, guild, proposal.grant_name, proposal.key, proposal.value,
                 allow_noop=True, is_admin=is_admin,
             )
+            before = _grant_field_value(
+                conn, guild.id, checked.grant_name, checked.key
+            )
             _apply_grant_role(conn, guild, checked)
         else:
             checked = validate_config_change(
                 conn, guild, proposal.key, proposal.value,
                 allow_noop=True, is_admin=is_admin,
             )
+            before = _current_value(conn, guild.id, checked.key) or ""
             set_config_value(conn, checked.key, checked.value, guild.id)
+        write_audit(
+            conn,
+            guild_id=guild.id,
+            action="advisor_config_apply",
+            actor_id=actor_id,
+            extra={
+                "target": checked.target,
+                "grant_name": checked.grant_name,
+                "key": checked.key,
+                "old": before,
+                "new": checked.value,
+                "display": checked.display,
+            },
+        )
     log.info(
         "advisor applied %s change for guild %s: %s%s = %s",
         proposal.target, guild.id,

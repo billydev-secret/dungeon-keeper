@@ -466,6 +466,16 @@
     <h3 id="ask-guide">Ask Billy-bot (AI)</h3>
     <p>Run <code>/ask</code>, or use the <strong>Ask Billy-bot</strong> box above — a guide-grounded AI that won't invent commands. Admins get more from <em>Config → AI Assistant</em>: model per audience, live server context, a setup review, and Apply buttons for settings changes. Details in <a href="#config">Configuration</a>.</p>
 
+    <p><strong>Live server context</strong> is off until an admin switches it on. With it on, each question is answered using the channels <em>you</em> can see (names and topics), the pinned messages in them, server docs, recent announcements, and your nickname and roles — never a channel you can't see, and never an age-gated one. Private per-member rooms (jail, tickets, Pen&nbsp;Pals, the bios wizard) are left out entirely. That material goes to the AI along with your question — it is the one part of the bot that sends anything off the server, so see <a href="#privacy">Privacy &amp; Your Data</a>.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Billy-bot never changes a setting on its own</strong>
+        <p>When an admin asks it to set something up, it <em>proposes</em> the change: the reply lists each pending change in full — the setting, and the exact value it would write — and nothing happens until an admin presses <strong>Apply</strong>. Read the listed change rather than the button, which shortens to fit. Your permissions are checked again at the moment you press it, and settings that hand out access, or that route private material to a channel (the whisper mod log, ticket and jail transcripts), need a full server administrator. Billy-bot is deliberately not allowed to touch admin or mod roles, message retention, or to put an <code>@everyone</code> in a grant message.</p>
+      </div>
+    </div>
+
     <!-- ══════════════════════════════════════════════════════════
          2. FEATURE MAP
     ═══════════════════════════════════════════════════════════ -->

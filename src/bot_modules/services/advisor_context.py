@@ -57,6 +57,37 @@ _pins_refreshed_at: dict[int, float] = {}
 
 
 # ---------------------------------------------------------------------------
+# Trust boundary
+# ---------------------------------------------------------------------------
+
+# Everything this module gathers except the config summary is text a member
+# wrote. It goes into a *system* block, so without neutralizing the delimiters
+# the prompt itself uses, a pinned message could close the context section and
+# open something that reads like instructions. Strip the fence tags and any run
+# of '=' that could forge a "=== SECTION ===" header.
+_FENCE_RE = re.compile(r"</?untrusted[^>]*>|={3,}", re.I)
+
+
+def _untrusted(text: str | None) -> str:
+    """Neutralize prompt delimiters in one piece of member-written text.
+
+    Takes ``None`` because several callers pass a nullable DB column straight
+    in; the point is that no path can skip this by forgetting a coalesce.
+    """
+    return _FENCE_RE.sub(" ", str(text or ""))
+
+
+def _fenced(header: str, body: str) -> str:
+    """One context section, explicitly marked as member-written data.
+
+    The tags are what the system instructions' TRUST BOUNDARY rule points at
+    (``advisor_service._SYSTEM_INSTRUCTIONS_TEMPLATE``); changing them here
+    means changing them there.
+    """
+    return f"{header}\n<untrusted>\n{body}\n</untrusted>"
+
+
+# ---------------------------------------------------------------------------
 # Visibility gate
 # ---------------------------------------------------------------------------
 
@@ -437,7 +468,11 @@ def capability_summary(member: discord.Member | None) -> str:
         return "The person asking is a regular member (no special permissions)."
 
     p = member.guild_permissions
-    name = getattr(member, "display_name", None) or getattr(member, "name", "a member")
+    # Nickname and role names are member/admin-set text going into a system
+    # block; the sentence around them is ours, the values are not.
+    name = _untrusted(
+        getattr(member, "display_name", None) or getattr(member, "name", "a member")
+    )
     if p.administrator:
         powers = "is a server administrator (full control)"
     else:
@@ -454,7 +489,7 @@ def capability_summary(member: discord.Member | None) -> str:
             parts.append("take moderator actions on members")
         powers = "can " + ", ".join(parts) if parts else "is a regular member with no moderator or admin powers"
 
-    roles = [r.name for r in getattr(member, "roles", []) if getattr(r, "name", "") not in ("@everyone", "")]
+    roles = [_untrusted(r.name) for r in getattr(member, "roles", []) if getattr(r, "name", "") not in ("@everyone", "")]
     role_note = f" Roles: {', '.join(roles)}." if roles else ""
     return f"The person asking is {name} and {powers}.{role_note}"
 
@@ -475,15 +510,50 @@ def _pin_text(message: discord.Message) -> str | None:
     return body[:MAX_PIN_CHARS] if body else None
 
 
+def is_private_room(channel, me=None) -> bool:
+    """True if a *specific member* was granted view — a per-member private room.
+
+    Jail channels, tickets, Pen Pals rooms and the bios wizard all create a
+    channel and hand view access to one or two named members; staff channels
+    gate on a role instead. That difference is the only reliable signal we have
+    without hard-coding four category ids, and it fails closed: an unreadable
+    overwrite map counts as private, and over-excluding costs context quality,
+    never confidentiality.
+
+    ``me`` is the bot's own member, whose overwrite these features also set and
+    which must not make every one of them look private.
+    """
+    try:
+        overwrites = getattr(channel, "overwrites", None) or {}
+        my_id = getattr(me, "id", None)
+        for target, perms in overwrites.items():
+            if isinstance(target, discord.Role):
+                continue
+            if my_id is not None and getattr(target, "id", None) == my_id:
+                continue
+            if perms.view_channel:
+                return True
+    except Exception:
+        return True
+    return False
+
+
 async def refresh_guild_pins(guild: discord.Guild) -> dict[int, list[str]]:
-    """Fetch pins for every non-NSFW text channel the bot can read; cache them."""
+    """Snapshot pins for the guild's shared, non-NSFW text channels.
+
+    "Shared" excludes per-member private rooms (:func:`is_private_room`). The
+    snapshot is guild-wide and only filtered per asker at build time, so a
+    private room's pins would otherwise be readable by any admin who can view
+    it — a wider rule than "the bot can read it" should ever have implied.
+    """
     result: dict[int, list[str]] = {}
+    me = getattr(guild, "me", None)
     count = 0
     for ch in getattr(guild, "text_channels", []):
         if count >= MAX_CHANNELS:
             break
         try:
-            if ch.is_nsfw():
+            if ch.is_nsfw() or is_private_room(ch, me):
                 continue
             pins = await ch.pins()
         except (discord.Forbidden, discord.HTTPException):
@@ -544,12 +614,13 @@ def build_asker_context(
 
     # Channels the asker can see (name + <#id> mention + topic).
     topic_lines = [
-        f"#{ch.name} (<#{ch.id}>) — {ch.topic.strip()[:MAX_TOPIC_CHARS]}"
+        f"#{_untrusted(ch.name)} (<#{ch.id}>) — "
+        f"{_untrusted(ch.topic.strip()[:MAX_TOPIC_CHARS])}"
         for ch in visible
         if getattr(ch, "topic", None)
     ]
     if topic_lines:
-        sections.append("Channels you can see:\n" + "\n".join(topic_lines))
+        sections.append(_fenced("Channels you can see:", "\n".join(topic_lines)))
 
     # Pinned messages, from the snapshot, restricted to visible channels.
     guild_pins = _pins.get(getattr(guild, "id", 0), {})
@@ -557,9 +628,12 @@ def build_asker_context(
     for ch in visible:
         texts = guild_pins.get(ch.id)
         if texts:
-            pin_blocks.append(f"Pinned in #{ch.name} (<#{ch.id}>):\n- " + "\n- ".join(texts))
+            pin_blocks.append(
+                f"Pinned in #{_untrusted(ch.name)} (<#{ch.id}>):\n- "
+                + "\n- ".join(_untrusted(t) for t in texts)
+            )
     if pin_blocks:
-        sections.append("Pinned messages:\n" + "\n\n".join(pin_blocks))
+        sections.append(_fenced("Pinned messages:", "\n\n".join(pin_blocks)))
 
     # Server docs, announcements, and (for admins) core settings come from the DB.
     config_text = ""
@@ -581,9 +655,10 @@ def build_asker_context(
     for d in docs[:MAX_DOCS]:
         body = (d.get("body_md") or "").strip()[:MAX_DOC_CHARS]
         if body:
-            doc_lines.append(f"## {d.get('title') or d.get('doc_key')}\n{body}")
+            title = _untrusted(d.get("title") or d.get("doc_key"))
+            doc_lines.append(f"## {title}\n{_untrusted(body)}")
     if doc_lines:
-        sections.append("Server docs:\n" + "\n\n".join(doc_lines))
+        sections.append(_fenced("Server docs:", "\n\n".join(doc_lines)))
 
     # Recent *sent* announcements whose target channel the asker can see.
     ann_lines = []
@@ -593,14 +668,16 @@ def build_asker_context(
         ch_id = row["sent_channel_id"] or row["channel_id"]
         if ch_id and ch_id not in visible_ids:
             continue
-        title = (row["title"] or "").strip()
-        body = (row["body"] or "").strip()[:MAX_ANNOUNCEMENT_CHARS]
-        entry = (f"**{title}** — " if title else "") + body
+        title = _untrusted((row["title"] or "").strip())
+        body = _untrusted((row["body"] or "").strip()[:MAX_ANNOUNCEMENT_CHARS])
+        entry = (f"**{title}** — " if title.strip() else "") + body
         if entry.strip():
             ann_lines.append(entry.strip())
         if len(ann_lines) >= MAX_ANNOUNCEMENTS:
             break
     if ann_lines:
-        sections.append("Recent announcements:\n" + "\n".join(f"- {a}" for a in ann_lines))
+        sections.append(
+            _fenced("Recent announcements:", "\n".join(f"- {a}" for a in ann_lines))
+        )
 
     return "\n\n".join(sections)[:MAX_CONTEXT_CHARS]

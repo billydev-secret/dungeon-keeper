@@ -64,11 +64,18 @@ Three tiers, not two:
 - **ordinary** — proposable by any asker who passes the settings gate
   (`administrator` *or* `manage_guild`). Channels, flags, numbers, copy, and
   ping-only roles.
-- **`admin_only`** — proposable, but only for full `administrator`. Everything
-  that grants access or moderation authority: the jailed role, who may mark Q&A
-  answers, who may whisper, the greeter role, the role the inactivity sweep
-  applies in bulk. Re-checked against whoever *clicks* Apply, not just whoever
-  asked, since the two need not be the same person.
+- **`admin_only`** — proposable, but only for full `administrator`. Two classes
+  qualify. **Authority:** the jailed role, who may mark Q&A answers, who may
+  whisper, the greeter role, the role the inactivity sweep applies in bulk.
+  **Disclosure** (added 2026-08-06, from
+  `docs/reviews/2026-08-06-advisor-llm-write-path.md` A4): keys that route
+  confidential data to a channel — `whisper_log_channel_id`, which names the
+  sender behind each anonymous whisper, and `transcript_channel_id`, the jail
+  and ticket archive. Neither grants a permission, so the original
+  authority-only reading of the tier left both sitting at the `manage_guild`
+  bar, where an Apply click could have published them. Both classes are
+  re-checked against whoever *clicks* Apply, not just whoever asked, since the
+  two need not be the same person.
 - **`PRIVILEGE_KEYS`** — never writable at any permission level:
   `admin_role_ids`, `mod_role_ids`, `message_storage_level`. Handing out admin
   or widening message retention isn't a higher tier, it's off the table; a
@@ -143,6 +150,52 @@ role, NSFW included) and the tool is only offered when the asker is a full
 admin *and* the guild has grants, so an empty enum can never let an arbitrary
 name through. `upsert_grant_role` takes a whole row, so applying is a
 read-modify-write — tested to confirm untouched fields survive.
+
+`grant_message` is the one free-text field here, and it is sent to the announce
+channel as plain content **with mentions enabled** (`role_grant_commands`
+passes no `allowed_mentions`, unlike the log embed beside it). So a model-written
+`@everyone`/`@here`/role mention would fire on every future grant.
+`validate_grant_role_change` rejects one rather than stripping it, and the guard
+lives there rather than on the send side on purpose: the live `denizen` grant
+message deliberately ends with an `@here`, set by a human on the dashboard. The
+rule is about who wrote the text, not about the channel.
+
+### Stage 7 — trust boundary and disclosure (2026-08-06)
+
+From the adversarial review in
+`docs/reviews/2026-08-06-advisor-llm-write-path.md`. Three changes, all aimed at
+the same premise the Apply gate already assumed — that model output is untrusted:
+
+- **Context is fenced.** `advisor_context` wraps each member-written section
+  (channel topics, pins, docs, announcements) in `<untrusted>` tags and strips
+  those tags plus any `===` run from the text first, so a pinned message can no
+  longer close the context block and open something instruction-shaped. Nicknames
+  and role names get the same treatment inline. The system instructions carry a
+  matching TRUST BOUNDARY rule naming the tags — **the tags and the rule are one
+  contract; changing either means changing both.**
+- **Provenance covers both tools.** The "only propose what the asker themselves
+  asked for" rule used to sit only in the `propose_config_change` bullet. It is
+  now repeated in the `propose_grant_role_change` bullet, which is the
+  higher-privilege of the two.
+- **The proposal is disclosed in full.** The Apply button label truncates at 80
+  characters and the embed description is the model's own prose, so the cog now
+  appends one field per queued proposal carrying the complete validator-authored
+  `display`, the target, and the key. That field — not the button, not the prose
+  — is the authoritative account of what a click will write.
+
+Applying also writes an `audit_log` row (`advisor_config_apply`) in the same
+transaction as the config write, recording the clicker, the key, and the before
+and after values. `log.txt` is wiped on every boot, so without it the one config
+write a model chose the value for was the one with no durable history.
+
+The pin snapshot narrowed at the same time: `refresh_guild_pins` now skips
+per-member private rooms (`is_private_room` — a channel where a *named member*
+rather than a role was granted view: jail, tickets, Pen Pals, the bios wizard).
+The snapshot is guild-wide and only filtered per asker at build time, so the old
+"every channel the bot can read, minus NSFW" rule meant any admin could pull a
+private room's pins into a prompt. It fails closed: an unreadable overwrite map
+counts as private, because over-excluding costs context quality and
+under-excluding costs confidentiality.
 
 ### Stage 6 — per-feature fetch for KV-backed features (2026-07-25)
 

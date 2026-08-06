@@ -62,6 +62,30 @@ _MAX_DESC = 3900
 _MAX_PROPOSALS = 4  # buttons on one reply; also caps blast radius per ask
 
 
+def _proposal_fields(embed: discord.Embed, proposals: list[ConfigProposal]) -> None:
+    """Spell out every pending write, in text the model did not author.
+
+    The embed description is the assistant's own prose, so it can describe a
+    change one way and propose another; the button label truncates at 80 chars,
+    which for a text setting shows only the first ~50 characters of the value.
+    Since the human Apply click is *the* prompt-injection defence
+    (``advisor_actions`` docstring), the admin has to be able to read the whole
+    of what they're confirming. One field per proposal — Discord caps a field
+    value at 1024, comfortably above the 200-char value limit.
+    """
+    for i, prop in enumerate(proposals[:_MAX_PROPOSALS], start=1):
+        scope = (
+            f"{prop.grant_name} role grant"
+            if prop.target == "grant_role"
+            else "server setting"
+        )
+        embed.add_field(
+            name=f"Pending change {i} — press Apply to confirm",
+            value=f"{prop.display}\n-# {scope} · `{prop.key}`"[:1024],
+            inline=False,
+        )
+
+
 def _make_tools(
     guild: discord.Guild,
     member: discord.Member,
@@ -173,6 +197,7 @@ class _ApplyConfigView(discord.ui.View):
                 apply_config_change(
                     self._db_path, self._guild, prop,
                     is_admin=is_server_admin(member),
+                    actor_id=member.id,
                 )
             except ValueError as e:
                 btn.disabled = True
@@ -257,6 +282,8 @@ class AdvisorCog(commands.Cog):
         embed.set_footer(
             text=f"{assistant_name} • grounded in the server guide, not always perfect"
         )
+        if proposals and guild is not None:
+            _proposal_fields(embed, proposals)
         view = (
             _ApplyConfigView(self.ctx.db_path, guild, proposals)
             if proposals and guild is not None

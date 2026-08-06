@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
@@ -119,11 +120,25 @@ def test_intake_completion_code_clashing_with_a_step_code_is_rejected():
 # ── admin_only settings ─────────────────────────────────────────────────────
 
 
-def test_admin_only_setting_rejected_for_manage_guild_asker():
-    """Manage Server can change ordinary settings but not access-granting ones."""
-    conn = _conn([("jailed_role_id", "0")])
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        # Grants access or authority — the original definition of the tier.
+        pytest.param("jailed_role_id", str(ROLE_ID), id="authority-jailed-role"),
+        # Routes confidential data to a channel — added 2026-08-06. The whisper
+        # log names the sender behind an anonymous whisper, so pointing it at a
+        # readable channel deanonymizes the feature; transcripts are jail and
+        # ticket history. Neither grants a permission, so the authority-only
+        # reading of admin_only left both at the manage_guild bar.
+        pytest.param("whisper_log_channel_id", str(CH_ID), id="disclosure-whisper-log"),
+        pytest.param("transcript_channel_id", str(CH_ID), id="disclosure-transcripts"),
+    ],
+)
+def test_admin_only_setting_rejected_for_manage_guild_asker(key, value):
+    """Manage Server can change ordinary settings but not these."""
+    conn = _conn([(key, "0")])
     with pytest.raises(ValueError, match="full server administrator"):
-        aa.validate_config_change(conn, _guild(), "jailed_role_id", str(ROLE_ID))
+        aa.validate_config_change(conn, _guild(), key, value)
 
 
 def test_admin_only_setting_allowed_for_full_admin():
@@ -372,7 +387,57 @@ def test_grant_role_change_rejects_blank_and_overlong():
         )
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param("Welcome {member}! @everyone say hi", id="everyone"),
+        pytest.param("Welcome {member}! @here say hi", id="here"),
+        pytest.param(f"Welcome {{member}}! <@&{ROLE_ID}> say hi", id="role-mention"),
+        # The payload past the ~50 chars a button label shows — the case the
+        # truncation used to hide.
+        pytest.param(
+            "Welcome to the NSFW side {member}! Read the rules @everyone",
+            id="past-the-label-truncation",
+        ),
+    ],
+)
+def test_grant_message_mass_mention_rejected(message):
+    """The announce send passes no allowed_mentions, so a mention in the
+    template fires on every future grant. Model-written text must not arm it."""
+    conn = _grant_conn()
+    with pytest.raises(ValueError, match="@everyone"):
+        aa.validate_grant_role_change(
+            conn, _guild(), "nsfw", "grant_message", message, is_admin=True
+        )
+
+
+def test_grant_message_without_a_mention_is_fine():
+    conn = _grant_conn()
+    prop = aa.validate_grant_role_change(
+        conn, _guild(), "nsfw", "grant_message", "Welcome {member}!", is_admin=True
+    )
+    assert prop.value == "Welcome {member}!"
+
+
 # ── apply ───────────────────────────────────────────────────────────────────
+
+
+def _create_audit_log(conn):
+    """The real schema's audit_log — apply writes a row there in the same txn."""
+    conn.execute(
+        "CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "guild_id INTEGER NOT NULL, action TEXT NOT NULL, actor_id INTEGER NOT NULL, "
+        "target_id INTEGER, extra TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL)"
+    )
+
+
+def _audit_rows(path):
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM audit_log")]
+    finally:
+        conn.close()
 
 
 def _db_file(tmp_path, rows):
@@ -382,6 +447,7 @@ def _db_file(tmp_path, rows):
         "CREATE TABLE config (guild_id INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL, "
         "value TEXT NOT NULL, PRIMARY KEY (guild_id, key))"
     )
+    _create_audit_log(conn)
     conn.executemany("INSERT INTO config VALUES (1, ?, ?)", rows)
     conn.commit()
     conn.close()
@@ -448,6 +514,7 @@ def _grant_db_file(tmp_path, grants=(("nsfw", "NSFW"),)):
         " required_role_id INTEGER NOT NULL DEFAULT 0,"
         " PRIMARY KEY (guild_id, grant_name))"
     )
+    _create_audit_log(conn)
     conn.executemany(
         "INSERT INTO grant_roles (guild_id, grant_name, label) VALUES (1, ?, ?)",
         list(grants),
@@ -517,6 +584,50 @@ def test_apply_grant_role_refuses_a_grant_deleted_since_proposing(tmp_path):
     )
     with pytest.raises(ValueError, match="no 'nsfw' role grant"):
         aa.apply_config_change(path, _guild(), prop, is_admin=True)
+
+
+# ── apply: audit trail ──────────────────────────────────────────────────────
+
+
+def test_apply_records_an_audit_row_with_before_and_after(tmp_path):
+    """log.txt is wiped on every boot, so without this row an applied change —
+    the one config write a *model* chose the value for — leaves no history."""
+    path = _db_file(tmp_path, [(CHANNEL_KEY, "0")])
+    prop = aa.ConfigProposal(CHANNEL_KEY, str(CH_ID), "Welcome channel → #welcome")
+    aa.apply_config_change(path, _guild(), prop, actor_id=4242)
+
+    rows = _audit_rows(path)
+    assert len(rows) == 1
+    assert rows[0]["action"] == "advisor_config_apply"
+    assert rows[0]["actor_id"] == 4242
+    extra = json.loads(rows[0]["extra"])
+    assert extra["key"] == CHANNEL_KEY
+    assert extra["old"] == "0"
+    assert extra["new"] == str(CH_ID)
+    assert extra["target"] == "config"
+
+
+def test_apply_records_a_grant_role_change(tmp_path):
+    path = _grant_db_file(tmp_path)
+    prop = aa.ConfigProposal(
+        "role_id", str(ROLE_ID), "x", target="grant_role", grant_name="nsfw"
+    )
+    aa.apply_config_change(path, _guild(), prop, is_admin=True, actor_id=7)
+
+    extra = json.loads(_audit_rows(path)[0]["extra"])
+    assert extra["target"] == "grant_role"
+    assert extra["grant_name"] == "nsfw"
+    assert extra["old"] == "0"
+    assert extra["new"] == str(ROLE_ID)
+
+
+def test_a_refused_apply_writes_no_audit_row(tmp_path):
+    """The row and the write share a transaction, so a rejection leaves neither."""
+    path = _db_file(tmp_path, [("jailed_role_id", "0")])
+    prop = aa.ConfigProposal("jailed_role_id", str(ROLE_ID), "x")
+    with pytest.raises(ValueError):
+        aa.apply_config_change(path, _guild(), prop, is_admin=False, actor_id=1)
+    assert _audit_rows(path) == []
 
 
 def test_apply_rechecks_admin_only_against_the_clicker(tmp_path):
