@@ -97,6 +97,11 @@ class FakeGuild:
     def get_channel(self, cid: int):
         return self.channels.get(cid)
 
+    def get_channel_or_thread(self, cid: int):
+        """What ``core.sticky`` resolves panel ids through, so a panel that opts
+        into threads can find one. Same backing dict as ``get_channel``."""
+        return self.channels.get(cid)
+
     def get_role(self, rid: int):
         return self.roles.get(rid)
 

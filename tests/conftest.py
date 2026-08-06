@@ -16,6 +16,7 @@ if str(_ROOT) not in sys.path:
 import aiosqlite
 
 from bot_modules.core.config import Config
+from bot_modules.core.sticky import clear_placed_registry
 from tests.db_template import migrated_db, reap
 from tests.fakes import FakeGuild, FakeRole, FakeUser, fake_interaction as _fake_interaction
 
@@ -54,6 +55,22 @@ def _reset_shared_module_state():
     _clear()
     yield
     _clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_sticky_placement_registry():
+    """Forget which message ids ``core.sticky`` thinks a panel placed.
+
+    That registry is process-global on purpose (a panel has to recognise *any*
+    sticky panel's placement, not just its own), so it leaks across tests. Tests
+    pick small hand-written message ids, and a leaked id makes a panel silently
+    treat a member's message as another panel's repost and skip the restick —
+    a passing test proving nothing. Global rather than per-module so a future
+    test file cannot hit it unknowingly.
+    """
+    clear_placed_registry()
+    yield
+    clear_placed_registry()
 
 
 @pytest.fixture(autouse=True)

@@ -807,6 +807,14 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             return
         await self.hub_panel.place_or_refresh(guild, channel)
 
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _forget_deleted_hub_channel(
+        self, channel: discord.abc.GuildChannel
+    ) -> None:
+        """Clear the hub's stored ids if its channel was deleted."""
+        await self.hub_panel.on_channel_delete(channel)
+        self._casino_channels.pop(channel.guild.id, None)
+
     def _schedule_hub_repaint(self, guild_id: int) -> None:
         """Debounced hub-panel repaint: a burst of instant plays becomes
         one in-place edit refreshing the floor ticker (and the pot with

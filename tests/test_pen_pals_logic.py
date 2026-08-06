@@ -2127,3 +2127,67 @@ async def test_tick_never_nudges_when_the_dial_is_off(sync_db_path):
     await pp._tick(bot, sync_db_path)
 
     channel.send.assert_not_awaited()
+
+
+# ── the panel's failed-edit retry ────────────────────────────────────────────
+
+
+async def test_retry_failed_panel_edits_reapplies_a_queued_guild():
+    """``StickyPanel.refresh`` queues a guild when Discord rejects the edit and
+    leaves the signature stale, expecting an owner with a loop to drain it. This
+    cog calls ``refresh`` in two places and never drained the queue, so one 5xx
+    left the panel stale until something else happened to move it — and the
+    guild id piled up in a set nobody read (2026-08-06 review, F5).
+    """
+    cog = MagicMock()
+    cog.panel.take_retries = MagicMock(return_value={GUILD_ID})
+    cog.panel.refresh = AsyncMock()
+    bot = MagicMock()
+    bot.get_cog.return_value = cog
+
+    await pp._retry_failed_panel_edits(bot)
+
+    cog.panel.refresh.assert_awaited_once_with(GUILD_ID)
+
+
+async def test_retry_failed_panel_edits_does_nothing_when_nothing_failed():
+    cog = MagicMock()
+    cog.panel.take_retries = MagicMock(return_value=set())
+    cog.panel.refresh = AsyncMock()
+    bot = MagicMock()
+    bot.get_cog.return_value = cog
+
+    await pp._retry_failed_panel_edits(bot)
+
+    cog.panel.refresh.assert_not_awaited()
+
+
+async def test_retry_failed_panel_edits_survives_one_guild_failing():
+    """Two guilds queued, the first still broken: the second must still be
+    retried rather than the loop tick aborting."""
+    cog = MagicMock()
+    cog.panel.take_retries = MagicMock(return_value={GUILD_ID, GUILD_ID + 1})
+    cog.panel.refresh = AsyncMock(side_effect=[RuntimeError("boom"), None])
+    bot = MagicMock()
+    bot.get_cog.return_value = cog
+
+    await pp._retry_failed_panel_edits(bot)
+
+    assert cog.panel.refresh.await_count == 2
+
+
+async def test_channel_delete_forgets_the_panel_when_its_own_channel_goes(
+    sync_db_path,
+):
+    """The panel's ids used to outlive its channel, leaving the dashboard
+    reporting a panel that could not exist (2026-08-06 review, F10). Runs before
+    the session lookup so a deleted panel channel is cleared either way."""
+    cog = pp.PenPalsCog(MagicMock(), SimpleNamespace(db_path=sync_db_path))
+    cog.panel = MagicMock()
+    cog.panel.on_channel_delete = AsyncMock()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+
+    await cog._on_channel_delete(channel)
+
+    cog.panel.on_channel_delete.assert_awaited_once_with(channel)

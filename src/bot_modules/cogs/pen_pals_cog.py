@@ -1118,9 +1118,29 @@ async def _pen_pals_loop(bot: discord.Client, db_path: Path) -> None:
     while not bot.is_closed():
         try:
             await _tick(bot, db_path)
+            await _retry_failed_panel_edits(bot)
         except Exception:
             log.exception("pen_pals_loop tick failed")
         await asyncio.sleep(_TICK_SECS)
+
+
+async def _retry_failed_panel_edits(bot: discord.Client) -> None:
+    """Re-apply panel edits a transient Discord error dropped.
+
+    ``StickyPanel.refresh`` queues the guild on an HTTP failure and leaves the
+    signature stale, expecting an owner with a loop to drain it. This cog calls
+    ``refresh`` in two places but never drained the queue, so one 5xx left the
+    panel stale until something else happened to move it — and the guild id
+    piled up in a set nobody read (2026-08-06 review, F5). This is that loop.
+    """
+    cog = cast("PenPalsCog | None", cast("Bot", bot).get_cog("PenPalsCog"))
+    if cog is None:
+        return
+    for guild_id in sorted(cog.panel.take_retries()):
+        try:
+            await cog.panel.refresh(guild_id)
+        except Exception:
+            log.exception("pen_pals: panel retry failed for guild %s", guild_id)
 
 
 async def _tick(bot: discord.Client, db_path: Path) -> None:
@@ -1825,17 +1845,21 @@ class PenPalsCog(commands.Cog):
                 reason="member_left", departed_user_id=member.id, delete_channel=True,
             )
         elif was_pooled:
-            try:
-                await self.panel.refresh(guild_id)
-            except discord.HTTPException as exc:
-                log.warning("pen_pals: panel refresh after member leave failed in %d: %s", guild_id, exc)
+            # refresh() swallows HTTPException itself and queues the guild for
+            # _retry_failed_panel_edits, so there is nothing to catch here.
+            await self.panel.refresh(guild_id)
 
     @commands.Cog.listener("on_guild_channel_delete")
     async def _on_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
         """A pen pal channel was deleted (usually by a mod). Close the session
-        and return both members to the pool."""
+        and return both members to the pool.
+
+        Also forgets the sticky panel if *its* channel is what went away, so the
+        stored ids don't outlive the channel.
+        """
         if not isinstance(channel, discord.TextChannel):
             return
+        await self.panel.on_channel_delete(channel)
         db_path = self.ctx.db_path
 
         def _lookup():

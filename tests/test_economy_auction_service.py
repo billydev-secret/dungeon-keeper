@@ -26,6 +26,7 @@ from bot_modules.services.economy_auction_service import (
     place_bid,
     place_bid_now,
     settle_due_auctions,
+    bot_chasing_resident,
     sticky_panel_channels,
 )
 from bot_modules.services.economy_service import (
@@ -600,3 +601,59 @@ def test_sticky_panel_channels_is_empty_when_nothing_is_configured(db):
     """An unconfigured guild must not warn about channel 0."""
     with open_db(db) as conn:
         assert sticky_panel_channels(conn, GUILD) == {}
+
+
+def test_sticky_panel_channels_merges_two_residents_in_one_channel(db):
+    """This was built by comprehension, so a shared channel reported only
+    whichever panel came last in the table — a mod warned about a shared channel
+    was told about one of the two things they were sharing it with
+    (2026-08-06 review, F1)."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"shop_channel_id": 77})
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (GUILD, "casino_panel_channel_id", "77"),
+        )
+        found = sticky_panel_channels(conn, GUILD)
+    assert "the shop panel" in found[77].name
+    assert "the casino hub panel" in found[77].name
+    # restick_on_bot is the union: one bot-chaser in the channel is enough to
+    # bury an auction card reliably, so the block must still fire.
+    assert found[77].restick_on_bot is True
+
+
+# ── the two-bot-chasers collision ───────────────────────────────────────────
+
+
+def test_bot_chasing_resident_finds_the_other_opted_in_panel(db):
+    """Two panels that both chase bot posts in one channel take the bottom slot
+    from each other on every trigger, and before core.sticky learned to ignore
+    another panel's placement they re-posted forever with nobody typing. A live
+    guild had bounty_channel_id == casino_panel_channel_id (2026-08-06, F1)."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bounty_channel_id": 99})
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (GUILD, "casino_panel_channel_id", "99"),
+        )
+        assert bot_chasing_resident(
+            conn, GUILD, 99, excluding="bounty"
+        ) == "the casino hub panel"
+
+
+def test_bot_chasing_resident_excludes_the_asking_panel(db):
+    """The bounty hub lives in the bounty channel by definition, so without the
+    exclusion it would always find itself and never be postable at all."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bounty_channel_id": 99})
+        assert bot_chasing_resident(conn, GUILD, 99, excluding="bounty") is None
+
+
+def test_bot_chasing_resident_ignores_human_only_panels(db):
+    """The guide/leaderboard/shop panels only move under human messages, so they
+    trade places visibly rather than looping — that warns, it does not block."""
+    with open_db(db) as conn:
+        save_econ_settings(
+            conn, GUILD, {"bounty_channel_id": 99, "shop_channel_id": 99}
+        )
+        assert bot_chasing_resident(conn, GUILD, 99, excluding="bounty") is None

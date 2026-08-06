@@ -1196,6 +1196,14 @@ class DmPermsCog(commands.Cog):
 
     # ── Listeners ────────────────────────────────────────────────────────────
 
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _forget_deleted_panel_channel(
+        self, channel: discord.abc.GuildChannel
+    ) -> None:
+        """Clear the request panel's ids if its channel was deleted, so the
+        dashboard stops reporting a panel that cannot exist."""
+        await self.panel.on_channel_delete(channel)
+
     @commands.Cog.listener("on_message")
     async def _on_message_panel_bump(self, message: discord.Message) -> None:
         """Keep the panel at the bottom of its channel.

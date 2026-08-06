@@ -360,6 +360,9 @@ class VoiceMasterCog(commands.Cog):
         _del_guild_id = channel.guild.id
         _del_channel_id = channel.id
         self._host_quest_fired.discard(_del_channel_id)
+        # The control panel's own channel can be the one deleted; clear its ids
+        # so they don't outlive it.
+        await self.panel.on_channel_delete(channel)
 
         def _fetch_and_delete():
             with self.ctx.open_db() as conn:

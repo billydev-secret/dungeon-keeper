@@ -3129,6 +3129,93 @@ async def test_post_bounty_panel_places_it_in_the_board_channel(ctx, db):
     place.assert_awaited_once_with(guild, channel)
 
 
+@pytest.mark.asyncio
+async def test_post_bounty_panel_refuses_a_channel_the_casino_hub_holds(ctx, db):
+    """Two panels that both chase bot posts can't share a channel: one bottom
+    slot, taken from each other on every trigger, so whichever lost is buried.
+
+    Before core.sticky learned to ignore another panel's placement this
+    configuration re-posted forever with nobody typing (2026-08-06 review, F1) —
+    and prod guild 1476525656115515484 had bounty_channel_id ==
+    casino_panel_channel_id with the hub simply not posted yet, i.e. one
+    dashboard button-press away.
+    """
+    _enable(db, bounty_channel_id=5555)
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (GUILD_ID, "casino_panel_channel_id", "5555"),
+        )
+    cog = _make_cog(ctx)
+    guild = FakeGuild(id=GUILD_ID)
+
+    with pytest.raises(ValueError, match="casino hub panel"):
+        await cog.post_bounty_panel(guild, SimpleNamespace(id=5555))
+
+
+@pytest.mark.asyncio
+async def test_post_bounty_panel_allows_a_channel_a_human_only_panel_holds(ctx, db):
+    """The shop panel only moves under human messages, so the two trade places
+    visibly rather than looping. That is a warning's worth of bad, not a
+    refusal's — and refusing here would block a working setup."""
+    _enable(db, bounty_channel_id=5555, shop_channel_id=5555)
+    cog = _make_cog(ctx)
+    guild = FakeGuild(id=GUILD_ID)
+    channel = SimpleNamespace(id=5555)
+
+    with patch.object(
+        cog.bounty_panel, "place_or_refresh", new=AsyncMock(return_value="msg")
+    ):
+        assert await cog.post_bounty_panel(guild, channel) == "msg"
+
+
+# ── the listener's fast path ─────────────────────────────────────────────────
+
+
+def test_panel_guilds_lists_only_enabled_guilds_with_a_channel(ctx, db):
+    """set_known_guilds is what keeps the on_message listener a set lookup. The
+    economy cog was the only migrated cog that never published it, so all five
+    of its panels paid a cached id read per message in every guild, forever
+    (2026-08-06 review, F6)."""
+    _enable(db, guide_channel_id=11, bounty_channel_id=44)
+    cog = _make_cog(ctx)
+
+    by_kind = cog._panel_guilds()
+
+    assert by_kind["guide"] == {GUILD_ID}
+    assert by_kind["bounty"] == {GUILD_ID}
+    assert by_kind["leaderboard"] == set()  # no channel set
+    assert by_kind["shop"] == set()
+
+
+def test_panel_guilds_excludes_a_guild_with_the_economy_off(ctx, db):
+    """A disabled economy makes every panel read (0, 0), so the guild has no
+    business on the fast path either."""
+    with open_db(db) as conn:
+        save_econ_settings(
+            conn, GUILD_ID, {"enabled": False, "guide_channel_id": 11}
+        )
+    cog = _make_cog(ctx)
+
+    assert cog._panel_guilds()["guide"] == set()
+
+
+@pytest.mark.asyncio
+async def test_publishing_panel_guilds_leaves_the_auction_card_unpublished(ctx, db):
+    """The auction card is the one panel that comes and goes. It is posted
+    directly rather than through place() — so nothing calls _remember to add its
+    guild — and auction_views calls forget() right after posting, which would
+    *discard* the guild from a published set and leave the card un-sticky. Its
+    TTL cache is the gate."""
+    _enable(db, guide_channel_id=11)
+    cog = _make_cog(ctx)
+
+    await cog._publish_panel_guilds()
+
+    assert cog.guide_panel._known == {GUILD_ID}
+    assert cog.auction_panel._known is None
+
+
 def test_bounty_panel_ids_are_dark_until_the_board_is_configured(ctx, db):
     """(0, 0) reads as "unposted", so the restick is a no-op — the same
     condition bounty_enabled() gates the whole feature on."""

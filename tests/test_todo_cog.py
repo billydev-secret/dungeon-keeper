@@ -136,6 +136,9 @@ def _fake_guild(channel):
     guild = MagicMock(spec=discord.Guild)
     guild.id = 123
     guild.get_channel.return_value = channel
+    # core.sticky resolves panel ids through get_channel_or_thread so a panel
+    # can opt into threads (see target_types).
+    guild.get_channel_or_thread.return_value = channel
     guild.me = None
     return guild
 

@@ -1,15 +1,17 @@
 # Sticky-panel extraction — plan
 
-**Status:** Groups A and B **done** (2026-07-26). Group C stays out by design;
-one group-B site (guess) is still outstanding.
+**Status:** Groups A and B **done** — including `guess`, migrated 2026-08-06,
+which closes group B. Group C stays out by design. `whisper` and `confessions`
+remain unmigrated (they were never blocked on anything; they are simply behind).
 
 `bot_modules/core/sticky.py` now holds `StickyPanel` — the shared locks,
 debounce, id cache, post-before-delete placer, signature gate and listener —
 covered by `tests/test_core_sticky.py`. The economy guide / shop / leaderboard
 panels and the todo board all run on it.
 
-**Nine sites as of 2026-07-28**, the newest being the first that is not
-permanent — see "Group D" below.
+**Ten sites as of 2026-08-06.** The 2026-07-28 addition was the first that is
+not permanent (see "Group D"); the 2026-08-06 one was the last hand-rolled copy
+(see "What the 2026-08-06 cross-cutting review changed").
 
 ## The problem
 
@@ -66,11 +68,11 @@ into one that forwards to all three panels.
 | `confessions_cog` launcher | an `after_place` hook for its component-based duplicate sweep (already implemented on `StickyPanel`) | it has **no throttle at all** and costs ≥5 REST calls per repost, the worst in the codebase; its config reads are **synchronous sqlite on the event loop** |
 | `dm_perms_cog` panel | nothing, if a trailing-edge debounce may replace its leading-edge 2s cooldown — that is a **user-visible timing change** and needs a decision | drops a `history(limit=1)` probe; `set_panel_settings` currently runs sync on the event loop |
 | `pen_pals_cog` panel | nothing | fixes a real bug: `channel.send` is unguarded *after* the old panel is deleted, so a failed send permanently orphans the panel. Also has **no `cog_unload`**, leaking coroutines |
-| `guess_cog` prompt | **still outstanding** — `StickyPanel` would have to accept `VoiceChannel`/`Thread`, not just `TextChannel` | would gain the per-guild lock it currently lacks (manual reposts can race the debounced one) |
+| `guess_cog` prompt | **migrated 2026-08-06.** Needed `StickyPanel` to accept `VoiceChannel`/`Thread`, which it now does per-panel via `target_types` — global widening was wrong, because the auction card's channel warning relies on threads staying out of the default set | gained the per-guild lock, the TTL id cache, the known-guilds fast path, post-before-delete and the shielded placement. It was carrying **more** than the missing lock this row used to claim — see below |
 
-`pen_pals`, `dm_perms` and `voice_master` are migrated. `whisper` and
-`confessions` are not yet done and remain the two worst offenders on the hot
-path. `guess` is blocked on widening the channel type.
+`pen_pals`, `dm_perms`, `voice_master` and (since 2026-08-06) `guess` are
+migrated. `whisper` and `confessions` are not yet done and remain the two worst
+offenders on the hot path.
 
 **Behaviour changes that shipped with these:**
 
@@ -280,9 +282,139 @@ pure refactor** — worth verifying on the live server rather than trusting test
 alone. The same applies to every group-B site: see the behaviour-change list
 above.
 
-Nine of the twelve surveyed sites now share one implementation. `whisper` and
-`confessions` are the remaining migratable ones; `guess` needs the channel-type
-widening first.
+Ten of the twelve surveyed sites now share one implementation. `whisper` and
+`confessions` are the two remaining migratable ones.
+
+## What the 2026-08-06 cross-cutting review changed
+
+The staged review went feature-by-feature, so this module had never been read as
+a *mechanism* — each bundle saw only its own caller. Findings and evidence are in
+`docs/reviews/2026-08-06-sticky-panel-machinery.md`; what shipped:
+
+### No panel chases another panel's repost (the one High)
+
+Each panel had three guards against chasing its *own* repost, and all three only
+recognise its own message id. Two panels with `restick_on_bot` in one channel
+therefore re-posted **each other**, forever, with nobody typing — and since
+neither is ever at the bottom when its own debounce fires, the at-the-bottom
+guard that stopped the July storm never engaged. Reproduced at 26 sends across 40
+debounce periods (~6.5/min in prod terms, indefinitely); a single panel does 0.
+
+Reachable from config alone: the casino hub and the bounty board hub are the two
+opted-in panels, and prod guild `1476525656115515484` had
+`econ_bounty_channel_id == casino_panel_channel_id` with the hub simply not
+posted yet — one dashboard button-press away.
+
+`core/sticky.py` now keeps a **process-wide registry of message ids some panel
+placed** (`was_placed`). Shared state across panels is the point: "ignore my own
+repost" was never a strong enough rule. It is bounded (`_PLACED_HISTORY`) and only
+has to outlive one debounce; `clear_placed_registry()` is reset per test in
+`tests/conftest.py`.
+
+**Where it is consulted is the load-bearing detail, and the first cut got it
+wrong.** Checking it in `on_message` accomplishes almost nothing: `_note_placed`
+runs inside `_remember`, i.e. after `send()` returns, so it races the gateway in
+the same way `should_restick`'s id-skip does — and the awaited HTTP response is a
+yield that loses the race. Measured with only that check: still 29–30 sends. The
+decision therefore lives in `_delayed_restick` and `_place_locked`, a whole
+debounce later and under the lock, where the registry is reliably populated. The
+`on_message` check remains as a cheap way to skip a doomed debounce, and is
+documented as an optimisation so nobody mistakes it for the protection again.
+
+Yielding means **whoever placed last holds the slot** and the other stays above
+it. Someone has to lose a one-slot contest, and a deterministic loser beats the
+two alternating forever; the next genuine trigger re-opens the contest. This is
+the "let one panel yield to another" option the July notes rejected — rejected
+then because it read as coupling the cogs, which a shared registry is not.
+
+`post_bounty_panel` additionally **refuses** a channel another bot-chasing panel
+holds, which is the rule `_sticky_check` already applied to the auction card.
+With the core fix the pair can no longer storm, but they still trade the bottom
+slot on every trigger and one of them is always the buried one. The equivalent
+guard is *not* applied to the casino's own channel setting — that channel belongs
+to its feature, and refusing there could lock an admin out of a valid setup.
+
+`sticky_panel_channels` also **merges** residents rather than overwriting them: it
+was built by comprehension, so a shared channel reported only whichever panel
+came last in the table.
+
+### The last hand-rolled copy (`guess`)
+
+Note for the next migration: adding a "where is it actually" id key needs a
+**backfill plan**. `guess_prompt_channel_id` shipped without one, and every guild
+with an existing prompt had a message id and no channel id — which reads as
+"posted, in channel 0": the prompt stops re-sticking, and the first placement
+cannot resolve a channel to delete the old one through, so the channel ends up
+with two prompts and live buttons on the stale one. `_panel_ids` now falls back to
+`guess_channel_id` when there is a message id but no channel id, which is where
+every legacy prompt provably is.
+
+Migrating it needed `target_types`, and it turned out to be carrying both bugs
+the module exists to prevent, not just the missing lock the group-B table
+claimed: it **deleted the old prompt before posting the new one** (a failed send
+left the channel with no prompt and a stored id naming a deleted message), and
+its placement was **unshielded** while `on_message` cancel-and-rearmed on every
+message — the unrecorded-placement mechanism of the July storm, unfixed. Its
+`on_message` also opened a fresh DB connection for **every message in every
+guild** before it had even checked the channel. It now stores
+`guess_prompt_channel_id` so the delete aims at the prompt's real channel.
+
+### Failure handling that stops
+
+* **A failure ceiling.** A channel the bot has lost Send Messages in used to cost
+  one doomed REST call and one warning per burst of chat, forever, with nothing
+  surfaced to the admin. After `max_place_failures` consecutive failures the
+  panel stops arming resticks and logs once at `error`; `failing_guilds()` is
+  readable state a dashboard can show. An explicit `place`/`place_or_refresh`
+  always retries and clears the count, so re-posting is the recovery. The log
+  line now names the guild and carries the exception — it named neither, so a
+  403 and an over-length-embed 400 were indistinguishable.
+* **The replaced panel's delete** was one bare `pass` covering two different
+  things. `NotFound` is ordinary; anything else leaves a live orphan that keeps
+  *working* (persistent views route by `custom_id`) and can only be removed by
+  hand. It is now retried with backoff on a detached task — deliberately not a
+  queue an owner has to drain, because that is exactly what `take_retries` was
+  and only one caller in nine drained it.
+* **`take_retries` is now drained by pen pals too**, in its existing loop. It
+  called `refresh` in two places and never drained, so one 5xx left the panel
+  stale and the guild id piled up in a set nobody read.
+
+### Divergences collapsed
+
+* The economy cog now publishes `set_known_guilds` for its four permanent
+  panels. It was the only migrated cog that never did, despite this doc claiming
+  "every migrated cog now publishes it" — so all five of its panels paid a cached
+  id read per message in every guild. **The auction card stays unpublished on
+  purpose:** it is posted directly rather than through `place`, and
+  `auction_views` calls `forget` right after, which would *discard* the guild
+  from a published set and leave the card un-sticky.
+* `economy_loop.run_guild_leaderboard` was a second hand-rolled `refresh` —
+  `fetch_message` + `edit` (two REST calls), outside the placement lock. It now
+  calls `leaderboard_panel.refresh(..., repost_if_missing=False)`. That flag is
+  new and exists for this caller: for *this* panel a deleted message is how staff
+  retire it, so a 404 clears the ids rather than reposting (core's default heals).
+  The retire path **re-reads the ids before clearing** — `refresh` takes no lock,
+  so a restick can land between its read and its edit, and a 404 then means "it
+  moved", not "it is gone". Dropping that re-read in the first cut would have
+  retired live panels; it was the old hand-rolled code's one genuinely
+  load-bearing guard.
+* Every cog with a sticky panel now forwards `on_guild_channel_delete` to
+  `on_channel_delete`, so panel ids stop outliving their channel. Nothing broke
+  without it — a dead id resolves to None and the restick returns early — but the
+  dashboard went on reporting a panel that could not be there. It runs under the
+  per-guild lock (a shielded placement into a different channel can be in
+  flight), and `guess` forwards `on_thread_delete` as well, since Discord
+  dispatches that instead for threads — the case `target_types` exists for.
+
+### Deliberately opt-in, wired to nothing
+
+`max_burial` re-sticks once the panel has been buried that long even if the
+channel never falls quiet. The debounce is purely trailing-edge, so a
+conversation with no gap longer than `delay` leaves the panel buried for its
+whole duration — measured at **0 reposts across 15 debounce periods** of
+unbroken chat. It defaults to `None`, i.e. today's uncapped behaviour: a timing
+change across all ten live panels is not something a review pass should make
+silently. Turn it on per panel if the starvation is ever observed.
 
 ## Related, separately deferred
 

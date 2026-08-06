@@ -41,6 +41,12 @@ class GuessConfig:
     min_image_dimension_px: int = 400
     max_image_size_mb: int = 10
     prompt_message_id: int = 0
+    #: Where the prompt actually **is**, which is not always where it ought to
+    #: be: the sticky placer deletes the old prompt through this channel, so
+    #: pairing a stale message id with a repointed ``guess_channel_id`` would
+    #: aim the delete at the wrong channel and strand the old prompt, buttons
+    #: and all. Same reasoning as ``voice_master_panel_channel_id``.
+    prompt_channel_id: int = 0
     submit_max_per_window: int = 5
     submit_window_seconds: int = 3600
     max_guesses_per_round: int = 5

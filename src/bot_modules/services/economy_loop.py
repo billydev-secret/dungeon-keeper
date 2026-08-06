@@ -77,15 +77,10 @@ from pathlib import Path
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.core.sticky import StickyPanel
 from bot_modules.economy import live_signal, logic, quests
-from bot_modules.economy.leaderboard import (
-    build_leaderboard_embed,
-    collect_leaderboard_data,
-)
 from bot_modules.economy.perks import FEATURE_GATED
-from bot_modules.economy.quest_views import QuestBoardView
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -1476,77 +1471,41 @@ async def _dispatch_rental_effects(
 async def run_guild_leaderboard(
     bot: discord.Client, db_path: Path, guild_id: int, now_ts: float
 ) -> None:
-    """Hourly in-place refresh of the ``/bank post-leaderboard`` panel.
+    """Hourly in-place refresh of the leaderboard panel.
 
-    Skips guilds without a posted panel (or with the economy off). A deleted
-    panel message (404) clears the stored ids so the loop stops retrying —
-    deleting the message is how staff retire the panel; any other Discord
-    error leaves the ids for the next tick.
+    Delegates to the cog's ``StickyPanel``, which is the same object the sticky
+    repost places and the dashboard's panel poster edits — so there is one
+    renderer, one per-guild lock, and one REST call (``get_partial_message``)
+    instead of the ``fetch_message`` + ``edit`` pair this used to do.
+
+    ``repost_if_missing=False`` keeps the behaviour that made this a separate
+    implementation in the first place: for *this* panel a deleted message is how
+    staff retire it, so a 404 clears the stored ids rather than bringing the
+    panel back. Core does the "did it just move?" re-read under the placement
+    lock, which is stricter than the unlocked re-read this replaced.
+
+    Skips guilds with the economy off or no posted panel — ``load_ids`` returns
+    ``(0, 0)`` for both, and ``refresh`` no-ops on a falsy id. ``db_path`` and
+    ``now_ts`` are now unused (the panel's own ``build`` reads both for itself);
+    they stay in the signature because the loop calls every ``run_guild_*`` the
+    same way.
     """
-
-    def _load():
-        with open_db(db_path) as conn:
-            settings = load_econ_settings(conn, guild_id)
-            if not settings.enabled or not settings.leaderboard_message_id:
-                return settings, None, {}
-            data = collect_leaderboard_data(conn, guild_id, now_ts)
-            known = get_known_users_bulk(
-                conn, guild_id, [uid for uid, _ in data.top_earners]
-            )
-            return settings, data, known
-
-    settings, data, known = await asyncio.to_thread(_load)
-    if data is None:
+    del db_path, now_ts  # the panel's build callback sources both itself
+    panel = _leaderboard_panel(bot)
+    if panel is None:  # cog unloaded, or a harness without it
         return
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        return
-    channel = guild.get_channel(settings.leaderboard_channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        return
+    # No local error handling: refresh() swallows HTTPException itself (queueing
+    # the guild for retry), and both callers already wrap this in a per-guild
+    # except Exception with a log line.
+    await panel.refresh(guild_id, repost_if_missing=False)
 
-    def _name(uid: int) -> str:
-        member = guild.get_member(uid)
-        if member:
-            return member.display_name
-        return known.get(uid) or f"User {uid}"
 
-    accent = await resolve_accent_color(db_path, guild)
-    embed = build_leaderboard_embed(
-        settings, data, _name, now_ts=now_ts, color=accent
-    )
-    try:
-        message = await channel.fetch_message(settings.leaderboard_message_id)
-        await message.edit(embed=embed, view=QuestBoardView())
-    except discord.NotFound:
-        # The bottom-sticky repost deletes the old panel and posts a new one, so
-        # a 404 here may just mean it moved. Re-read the id: if it changed, the
-        # panel is alive under a new message — don't retire it.
-        def _current_id() -> int:
-            with open_db(db_path) as conn:
-                return load_econ_settings(conn, guild_id).leaderboard_message_id
-
-        if await asyncio.to_thread(_current_id) != settings.leaderboard_message_id:
-            return
-
-        def _clear() -> None:
-            with open_db(db_path) as conn:
-                save_econ_settings(
-                    conn,
-                    guild_id,
-                    {"leaderboard_channel_id": 0, "leaderboard_message_id": 0},
-                )
-
-        await asyncio.to_thread(_clear)
-        log.info(
-            "Economy loop: leaderboard panel for guild %s is gone — "
-            "cleared its ids.",
-            guild_id,
-        )
-    except discord.HTTPException:
-        log.warning(
-            "Economy loop: leaderboard refresh failed for guild %s.", guild_id
-        )
+def _leaderboard_panel(bot: discord.Client) -> StickyPanel | None:
+    """The economy cog's leaderboard panel, if the cog is loaded."""
+    get_cog = getattr(bot, "get_cog", None)
+    cog = get_cog("EconomyCog") if get_cog is not None else None
+    panel = getattr(cog, "leaderboard_panel", None)
+    return panel if isinstance(panel, StickyPanel) else None
 
 
 async def run_guild_register(
