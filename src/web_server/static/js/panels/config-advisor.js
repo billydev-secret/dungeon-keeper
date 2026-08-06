@@ -1,10 +1,10 @@
 import { api, esc } from "../api.js";
-import { apiPut, showStatus, guardForm } from "../config-helpers.js";
+import { apiPut, showStatus, guardForm, mountAsync } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     let cfg;
     try {
       cfg = await api("/api/config/advisor");
@@ -95,5 +95,5 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the advisor settings." });
 }

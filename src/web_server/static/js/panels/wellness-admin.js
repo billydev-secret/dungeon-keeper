@@ -1,12 +1,12 @@
 import { wGet, wPost, wDelete, esc, showStatus, enfLabel } from "../wellness-helpers.js";
-import { toast } from "../ui.js";
-import { guardForm } from "../config-helpers.js";
+import { confirmDialog, toast } from "../ui.js";
+import { guardForm, mountAsync } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading wellness settings…")}</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     let dash, defaults, users, exempt;
     try {
       [dash, defaults, users, exempt] = await Promise.all([
@@ -84,7 +84,7 @@ export function mount(container) {
           <div class="w-row">
             <div class="w-row-main">#${esc(ch.name)}</div>
             <div class="w-row-actions">
-              <button class="btn btn-sm btn-danger" data-unexempt="${ch.id}">Remove</button>
+              <button class="btn btn-sm btn-danger" data-unexempt="${ch.id}" data-unexempt-name="${esc(ch.name)}">Remove</button>
             </div>
           </div>
         `).join("")
@@ -154,6 +154,15 @@ export function mount(container) {
     // Exempt remove
     container.querySelectorAll("[data-unexempt]").forEach(btn => {
       btn.addEventListener("click", async () => {
+        // Every other destructive action on this page confirms first; this one
+        // used to fire on the click and immediately start counting messages in
+        // that channel against members' caps.
+        const name = btn.dataset.unexemptName || "this channel";
+        const ok = await confirmDialog(
+          `Messages in #${name} will start counting toward members’ wellness caps again.`,
+          { title: "Stop exempting this channel?", danger: true, confirmLabel: "Remove" },
+        );
+        if (!ok) return;
         try {
           await wDelete(`/api/wellness/admin/exempt/${btn.dataset.unexempt}`);
           btn.closest(".w-row").remove();
@@ -176,5 +185,5 @@ export function mount(container) {
         catch (err) { toast(`Couldn’t add that exempt channel — ${err.message}`, "error"); }
       });
     }
-  })();
+  }, { errorMsg: "Couldn’t load the wellness admin settings." });
 }

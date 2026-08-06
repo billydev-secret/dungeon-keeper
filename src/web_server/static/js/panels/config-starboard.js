@@ -8,6 +8,7 @@ import {
   mountChannelMultiPicker,
   guardForm,
   renderMetaWarning,
+  mountAsync,
 } from "../config-helpers.js";
 
 let _fieldSeq = 0;
@@ -85,7 +86,7 @@ export function mount(container) {
   clearChildren(container);
   appendLoading(container);
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const s = config.starboard || {};
 
@@ -262,5 +263,5 @@ export function mount(container) {
         showStatus(exStatus, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the starboard settings." });
 }

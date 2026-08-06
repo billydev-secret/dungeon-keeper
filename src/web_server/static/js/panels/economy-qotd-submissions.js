@@ -3,7 +3,7 @@
 // and a state filter for the history. Mirrors the bank-channel review card's
 // buttons. Gated by the economy manager role (or admin).
 import { api, apiPost, esc, fmtAge } from "../api.js";
-import { showStatus, loadMembers } from "../config-helpers.js";
+import { showStatus, loadMembers, mountAsync } from "../config-helpers.js";
 import { promptDialog } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
 
@@ -19,11 +19,10 @@ function nowSec() { return Date.now() / 1000; }
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading Sponsored QOTD…</div></div>`;
-  (async () => {
+  return mountAsync(container, async () => {
     const members = await loadMembers().catch(() => []);
     render(container, members);
-  })();
-  return null;
+  }, { errorMsg: "Couldn’t load the sponsored QOTD queue." });
 }
 
 function memberName(members, id) {

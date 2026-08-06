@@ -1,11 +1,11 @@
 import { wGet, wPost, esc, showStatus } from "../wellness-helpers.js";
-import { guardForm } from "../config-helpers.js";
+import { guardForm, mountAsync } from "../config-helpers.js";
 import { renderLoading, renderError } from "../states.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading your away message…")}</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     let d;
     try { d = await wGet("/api/wellness/away"); } catch (e) {
       container.querySelector(".panel").innerHTML =
@@ -70,5 +70,5 @@ export function mount(container) {
         showStatus(status, true);
       } catch (err) { showStatus(status, false, `Couldn’t save — ${err.message}`); }
     });
-  })();
+  }, { errorMsg: "Couldn’t load your away message." });
 }

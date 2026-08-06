@@ -2,6 +2,7 @@ import {
   loadConfig, loadChannels, loadRoles, loadMembers,
   mountChannelPicker, mountRolePicker, mountChannelMultiPicker, mountMemberMultiPicker,
   apiPut, showStatus, guardForm, renderMetaWarning, lockUnlessAdmin,
+  mountAsync,
 } from "../config-helpers.js";
 
 // Numeric fields, in save order. [name, visible label, min, max|null, integer?]
@@ -36,7 +37,7 @@ const LIST_FIELDS = [
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading XP settings…</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels, roles, members] = await Promise.all([
       loadConfig(), loadChannels(), loadRoles(), loadMembers(),
     ]);
@@ -272,5 +273,5 @@ export function mountSettings(container) {
         showStatus(status, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the XP settings." });
 }

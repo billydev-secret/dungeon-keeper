@@ -120,7 +120,14 @@ function attachPopover(input, list) {
 
   const position = SUPPORTS_POPOVER ? positionFixed : positionAnchored;
 
-  function reposition() { if (opened) position(); }
+  function reposition() {
+    // A panel can unmount while its popover is open (navigate away with the
+    // list showing): close() never runs, and the window/visualViewport
+    // listeners below outlive the widget — one leaked set per such visit.
+    // Detaching from the document is the signal; tear down on the next event.
+    if (!list.isConnected) { close(); return; }
+    if (opened) position();
+  }
 
   // visualViewport fires where document scroll doesn't: keyboard show/hide and
   // pinch-zoom on mobile. Without it the list stays put while the page moves.
@@ -162,6 +169,16 @@ function attachPopover(input, list) {
   }
 
   return { open, close, isOpen: () => opened };
+}
+
+// Announce a real value change on the widget's wrapper, bubbling so a
+// containing form hears it.
+//
+// The search input's own `input`/`change` events are noise — typing "gen" to
+// find #general edits nothing — and guardForm now ignores them (config-helpers).
+// This is the event that means the picker's VALUE moved.
+function announceChange(wrap) {
+  wrap.dispatchEvent(new CustomEvent("dk:change", { bubbles: true }));
 }
 
 /**
@@ -248,6 +265,7 @@ export function filterSelect(placeholder, options, opts = {}) {
 
   function selectItem(item) {
     const id = item.dataset.id;
+    const before = selectedId;
     if (id === emptyValue) {
       selectedId = emptyValue;
       selectedLabel = "";
@@ -258,6 +276,7 @@ export function filterSelect(placeholder, options, opts = {}) {
       input.value = selectedLabel;
     }
     popover.close();
+    if (selectedId !== before) announceChange(wrap);
   }
 
   input.addEventListener("focus", () => {
@@ -265,10 +284,14 @@ export function filterSelect(placeholder, options, opts = {}) {
     popover.open();
   });
   input.addEventListener("input", () => {
+    // Typing over a chosen option really does clear it, so that case is a value
+    // change; typing in an already-empty picker is just searching.
+    const cleared = selectedId !== emptyValue;
     selectedId = emptyValue;
     selectedLabel = "";
     render(input.value);
     popover.open();
+    if (cleared) announceChange(wrap);
   });
   list.addEventListener("mousedown", (e) => {
     // mousedown (not click) so it fires before the input's blur hides the list.
@@ -322,6 +345,10 @@ export function filterSelect(placeholder, options, opts = {}) {
     setOptions,
     setFilter,
     getInput: () => input,
+    // Deterministic teardown for a panel that unmounts with the list open.
+    // reposition() also self-heals on the next scroll/resize, but a panel
+    // holding the handle can just say so.
+    destroy: () => popover.close(),
   };
 }
 
@@ -436,6 +463,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     renderChips();
     renderList("");
     popover.open();
+    announceChange(wrap);
   }
 
   input.addEventListener("focus", () => {
@@ -459,6 +487,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     selected.delete(chip.dataset.id);
     renderChips();
     renderList(input.value);
+    announceChange(wrap);
   });
   input.addEventListener("blur", () => {
     setTimeout(() => { popover.close(); }, 150);
@@ -509,5 +538,6 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     setOptions,
     setFilter,
     getInput: () => input,
+    destroy: () => popover.close(),
   };
 }

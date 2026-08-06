@@ -8,12 +8,13 @@ import {
   renderMetaWarning,
   mountChannelPicker,
   mountRolePicker,
+  mountAsync,
 } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels, roles] = await Promise.all([
       loadConfig(),
       loadChannels(),
@@ -136,5 +137,5 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the whisper settings." });
 }

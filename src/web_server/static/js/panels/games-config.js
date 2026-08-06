@@ -10,6 +10,7 @@ import {
   apiPut,
   apiDelete,
   showStatus,
+  mountAsync,
 } from "../config-helpers.js";
 import { confirmDialog } from "../ui.js";
 
@@ -23,7 +24,7 @@ import { confirmDialog } from "../ui.js";
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [guildChannels, roles] = await Promise.all([loadChannelMeta(), loadRoleMeta()]);
 
     container.innerHTML = `
@@ -242,10 +243,18 @@ export function mount(container) {
     container.querySelector('[data-action="save-audit"]').addEventListener("click", async () => {
       const st = statusEl("audit");
       const cid = auditChannelPicker.getValue();
-      if (!cid || cid === "0") { showStatus(st, false, "Pick a channel first"); return; }
       try {
-        await apiPut("/api/games/config/audit", { channel_id: cid });
-        showStatus(st, true);
+        // "(none)" means stop recording. The hint above this control has always
+        // promised the audit channel can be left unset, but Save used to reject
+        // "(none)" with "Pick a channel first" — so once a channel was chosen
+        // there was no way back. DELETE clears it, same as the host role does.
+        if (!cid || cid === "0") {
+          await apiDelete("/api/games/config/audit");
+          showStatus(st, true, "Cleared — no record kept");
+        } else {
+          await apiPut("/api/games/config/audit", { channel_id: cid });
+          showStatus(st, true);
+        }
         loadAudit();
       } catch (err) { showStatus(st, false, err.message); }
     });
@@ -253,7 +262,5 @@ export function mount(container) {
     loadAllowedChannels();
     loadEditorRole();
     loadAudit();
-  })();
-
-  return { unmount() {} };
+  }, { errorMsg: "Couldn’t load the games global config." });
 }

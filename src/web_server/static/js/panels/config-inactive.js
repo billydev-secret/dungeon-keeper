@@ -1,6 +1,7 @@
 import {
   loadConfig, loadMembers, loadChannels, apiPut, showStatus, clearStatus, guardForm,
   mountPicker, mountChannelPicker, mountExemptionList,
+  mountAsync,
 } from "../config-helpers.js";
 import { esc, apiPost } from "../api.js";
 import { toast, confirmDialog } from "../ui.js";
@@ -14,7 +15,7 @@ function fmtDay(ts) {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, members, channels] = await Promise.all([
       loadConfig(), loadMembers(), loadChannels(),
     ]);
@@ -415,5 +416,5 @@ export function mount(container) {
     }
 
     previewBtn.addEventListener("click", runPreview);
-  })();
+  }, { errorMsg: "Couldn’t load the inactive sweep settings." });
 }

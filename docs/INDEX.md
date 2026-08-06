@@ -55,6 +55,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [promotion_review_spec.md](promotion_review_spec.md) | Promotion-review cards in the Level 5 Log Channel: Level 5 / pruned-return / sleeper triggers, each with a Grant-access button (dashboard-configured, no commands) |
 | [quote_renderer_spec.md](quote_renderer_spec.md) | Quote/banner card renderer (shared service: themes, fonts, slim/custom borders) |
 | [rename_spec.md](rename_spec.md) | `/rename` (moderator nickname change/reset) |
+| [dashboard_ia.md](dashboard_ia.md) | Dashboard information architecture: the nav sections and their gates, the "settings live with the data they produce" rule (which six features moved into their report/queue panels and which ~30 stay under Config), route-id/label naming conventions, and the panel-local URL-state convention |
 | [web_testing.md](web_testing.md) | Dashboard test suite overview: authz sweep, snowflake-precision sweep, manual broken-link check, plus the browser suite (layout + panel-load health); marker/tiers/where-each-runs |
 | [mobile_layout_testing.md](mobile_layout_testing.md) | Browser-driven responsive-layout gate: overflow/clip checks across every panel at phone/tablet/desktop; scoped per-commit, full nightly |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |

@@ -17,7 +17,7 @@ import {
   mountChannelPicker, mountRolePicker, mountMemberPicker,
   showStatus,
 } from "../config-helpers.js";
-import { confirmDialog } from "../ui.js";
+import { confirmDialog, toast } from "../ui.js";
 
 const KIND_LABEL = {
   attempt: "Blocked attempt",
@@ -298,7 +298,14 @@ export function mount(container) {
         { title: "Remove this no-contact entry?", confirmLabel: "Remove", danger: true },
       );
       if (!ok) return;
-      await apiDelete(`/api/no-contact/pairs/${btn.dataset.a}/${btn.dataset.b}`);
+      try {
+        await apiDelete(`/api/no-contact/pairs/${btn.dataset.a}/${btn.dataset.b}`);
+      } catch (err) {
+        // A failed delete used to be completely silent: the list re-rendered
+        // unchanged and nothing said the pair was still blocked.
+        toast(`Couldn't remove that entry — ${err.message}`, "error");
+        return;
+      }
       await refresh();
     });
   })().catch((err) => {

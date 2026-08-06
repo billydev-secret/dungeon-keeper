@@ -11,14 +11,30 @@
 // page whose anchor is missing from manual.html shows a "not found" error in
 // the panel, so drift is visible instead of silent.
 
+// The assistant's name is per-guild branding (Config → Branding). "Billy-bot"
+// is only the built-in default, so it must not be hardcoded into a label —
+// app.js (nav) and help.js (panel title) both re-label the `brand:"assistant"`
+// entry once /api/help/advisor/name resolves, and fall back to this default if
+// it doesn't.
+export const DEFAULT_ASSISTANT_NAME = "Billy-bot";
+
+/** Nav/panel label for the assistant's help page, for a given guild's name. */
+export function assistantHelpLabel(name) {
+  return `Ask ${name || DEFAULT_ASSISTANT_NAME} (AI)`;
+}
+
 export const HELP_GROUPS = [
   { heading: null, items: [
     // Nav items alphabetize within their group by default; `order` pins these
     // onboarding entries to a deliberate reading order (Getting Started first)
-    // since it wouldn't otherwise sort ahead of "Ask Billy-bot".
+    // since it wouldn't otherwise sort ahead of "Ask …".
     { page: "help-start",    anchor: "getting-started",   label: "Getting Started",       order: 1 },
     { page: "help-overview", anchor: "functional-blocks", label: "Feature Map",           order: 2 },
-    { page: "help-ask",      anchor: "ask-guide",         label: "Ask Billy-bot (AI)",    order: 3 },
+    // `label` here is the fallback only — see assistantHelpLabel above. It must
+    // keep matching the manual's own <h3 id="ask-guide"> text so help.js's
+    // dropDuplicateHeading still removes the duplicate title.
+    { page: "help-ask",      anchor: "ask-guide",         label: assistantHelpLabel(),    order: 3,
+      brand: "assistant", keywords: "ask ai assistant advisor billy billy-bot" },
   ]},
   // Groups run audience-first — members, then moderators, then admins —
   // mirroring the manual's section order.

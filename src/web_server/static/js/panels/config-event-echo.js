@@ -8,6 +8,7 @@ import {
   onPickerChange,
   guardForm,
   renderMetaWarning,
+  mountAsync,
 } from "../config-helpers.js";
 import { renderLoading } from "../states.js";
 
@@ -22,7 +23,7 @@ export function mount(container) {
   loading.innerHTML = renderLoading("Loading Event Echo…");
   container.appendChild(loading);
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const s = config.event_echo || {};
 
@@ -158,5 +159,5 @@ export function mount(container) {
         showStatus(saveStatus, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the event echo settings." });
 }

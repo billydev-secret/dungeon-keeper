@@ -25,6 +25,15 @@ export function mount(container) {
     </div>
   `;
 
-  mountTickets(container.querySelector('[data-region="tickets"]'));
+  // mountTickets arms a 45s refresh poll and hands back the handle that clears
+  // it. Dropping that handle left one poll per visit running forever — forward
+  // it, the way rules-watch-page.js does.
+  const tickets = mountTickets(container.querySelector('[data-region="tickets"]'));
   mountSettings(container.querySelector('[data-region="settings"]'));
+
+  return {
+    unmount() {
+      tickets?.unmount?.();
+    },
+  };
 }

@@ -1,0 +1,362 @@
+"""Browser gate for the shared frontend layer (js/table.js, js/config-helpers.js,
+js/md-preview.js).
+
+These three modules are imported by most of the ~130 panels, so a defect in any
+of them is a defect almost everywhere. The bugs guarded here all come from the
+2026-08-06 website deep review:
+
+  * **S1 — stored XSS through ``table.js``.** The table interpolated both the
+    raw cell value and any ``format()`` return straight into ``innerHTML``.
+    Six report panels feed it *raw Discord display names*, which are
+    member-controlled, so a nickname of ``<img src=x onerror=…>`` executed in
+    the moderator's session on every page view. Cells are text by default now,
+    with an explicit ``html: true`` per-column opt-in for the handful of
+    columns whose whole point is a colored ``<span>``.
+  * **S2 — cross-guild data bleed.** ``config-helpers.js`` memoizes
+    ``/api/config`` and every ``/api/meta/*`` list in module globals, but all
+    of it is scoped to the *active* guild and a guild switch re-mounts panels
+    without reloading the page. ``resetMetaCaches()`` is what app.js calls to
+    drop them.
+  * **md-preview link href.** ``[text](url)`` put the *text* in the ``href``,
+    which both produced the wrong link and forfeited the https-only validation
+    the pattern does on the URL.
+
+Everything is exercised against the shipped modules, mounted directly rather
+than through a panel, so no assertion depends on a panel's data (the test env
+runs no bot, so channel/role fetches would 503).
+
+Marked ``browser``. Auto-skips without Playwright / Chromium.
+"""
+
+from __future__ import annotations
+
+import socket
+import sys
+import time
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.browser
+
+playwright_sync = pytest.importorskip(
+    "playwright.sync_api",
+    reason="Playwright not installed (pip install playwright && playwright install chromium)",
+)
+
+_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from mobile_layout_scan import _goto_panel, serve  # noqa: E402
+
+from tests.db_template import migrated_db  # noqa: E402
+
+
+def _chromium_available() -> bool:
+    try:
+        with playwright_sync.sync_playwright() as pw:
+            path = pw.chromium.executable_path
+            return bool(path) and Path(path).exists()
+    except Exception:
+        return False
+
+
+if not _chromium_available():
+    pytest.skip(
+        "Chromium not installed — run `python -m playwright install chromium`",
+        allow_module_level=True,
+    )
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class _Server:
+    def __init__(self, tmp: Path):
+        db = tmp / "shared-js.db"
+        # Module-scoped, so the per-test reaper must not delete it mid-run.
+        migrated_db(db, reap=False)
+        self.port = _free_port()
+        self._server = serve(db, self.port)
+        self.base = f"http://127.0.0.1:{self.port}"
+
+    def stop(self) -> None:
+        self._server.should_exit = True
+
+
+@pytest.fixture(scope="module")
+def dashboard(tmp_path_factory) -> Iterator[_Server]:
+    srv = _Server(tmp_path_factory.mktemp("shared-js"))
+    for _ in range(50):
+        try:
+            with socket.create_connection(("127.0.0.1", srv.port), timeout=0.2):
+                break
+        except OSError:
+            time.sleep(0.1)
+    yield srv
+    srv.stop()
+
+
+@pytest.fixture(scope="module")
+def browser(dashboard) -> Iterator[object]:
+    with playwright_sync.sync_playwright() as pw:
+        b = pw.chromium.launch()
+        yield b
+        b.close()
+
+
+@pytest.fixture()
+def page(browser, dashboard):
+    context = browser.new_context(viewport={"width": 1100, "height": 800})
+    pg = context.new_page()
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(str(e)[:200]))
+    _goto_panel(pg, f"{dashboard.base}/")
+    pg.__dict__["_dk_errors"] = errors
+    yield pg
+    context.close()
+
+
+# ── table.js ─────────────────────────────────────────────────────────────
+
+# The nickname a member can actually set. 32 characters is plenty; `onerror`
+# on a broken image needs no user interaction at all, so merely *rendering*
+# the table is the whole exploit.
+_EVIL_NAME = '<img src=x onerror="window.__pwned = true">'
+
+_RENDER_TABLE = """
+async ({ rows, columns }) => {
+  document.body.innerHTML = '<div id="host"></div>';
+  window.__pwned = false;
+  const mod = await import('/static/js/table.js');
+  // Column specs cross the Playwright boundary as data, so `format` is sent as
+  // a source string and revived here.
+  const cols = columns.map((c) => ({
+    ...c,
+    format: c.format ? new Function('return ' + c.format)() : undefined,
+  }));
+  mod.renderSortableTable(document.getElementById('host'), {
+    columns: cols, data: rows, defaultSort: columns[0].key,
+  });
+  const td = document.querySelector('#host td');
+  return {
+    text: td.textContent,
+    html: td.innerHTML,
+    injectedImgs: document.querySelectorAll('#host img').length,
+    injectedSpans: document.querySelectorAll('#host span').length,
+    pwned: window.__pwned === true,
+  };
+}
+"""
+
+
+def test_table_escapes_a_malicious_display_name(page):
+    """A member-controlled nickname must render as TEXT, not as an element.
+
+    This is S1. It fails against the pre-fix table.js: the `<img>` lands in the
+    DOM, fires `onerror`, and sets the flag — stored XSS in a moderator's
+    session, triggered by nothing more than opening the report.
+    """
+    out = page.evaluate(
+        _RENDER_TABLE,
+        {
+            "rows": [{"user_name": _EVIL_NAME, "user_id": "123"}],
+            "columns": [
+                {
+                    "key": "user_name",
+                    "label": "Member",
+                    "format": "(v, r) => r.user_name || r.user_id",
+                },
+            ],
+        },
+    )
+    assert out["injectedImgs"] == 0, "format() output was parsed as HTML"
+    assert not out["pwned"], "injected onerror handler executed"
+    assert out["text"] == _EVIL_NAME, "the name must still be readable, verbatim"
+    assert "&lt;img" in out["html"]
+
+
+def test_table_escapes_the_unformatted_value_too(page):
+    """The `raw ?? ""` path is the other half of S1.
+
+    interaction-graph builds `pair_name` ("A ↔ B") out of two display names and
+    renders it with no `format` at all, so escaping only the format path would
+    have left that column exploitable.
+    """
+    out = page.evaluate(
+        _RENDER_TABLE,
+        {
+            "rows": [{"pair_name": f"{_EVIL_NAME} ↔ someone"}],
+            "columns": [{"key": "pair_name", "label": "Pair"}],
+        },
+    )
+    assert out["injectedImgs"] == 0
+    assert not out["pwned"]
+    assert out["text"].startswith(_EVIL_NAME)
+
+
+def test_table_escapes_a_column_label(page):
+    """Labels are developer constants — except interaction-graph's, which is
+    `% of ${userName}'s total`, i.e. the same untrusted display name."""
+    page.evaluate(
+        _RENDER_TABLE,
+        {
+            "rows": [{"n": 1}],
+            "columns": [{"key": "n", "label": f"% of {_EVIL_NAME}'s total"}],
+        },
+    )
+    assert page.evaluate("() => document.querySelectorAll('#host th img').length") == 0
+    assert page.evaluate("() => window.__pwned === true") is False
+
+
+def test_html_opt_in_still_renders_markup(page):
+    """The escape-by-default must not silently blank the columns that mean it.
+
+    `html: true` is what quality-score's colored score, retention's drop
+    percentages, xp-leaderboard's ± figure and channels' sentiment/trend spans
+    rely on — every one of them interpolates a computed number, never a name.
+    """
+    out = page.evaluate(
+        _RENDER_TABLE,
+        {
+            "rows": [{"score": 0.82}],
+            "columns": [
+                {
+                    "key": "score",
+                    "label": "Score",
+                    "html": True,
+                    "format": '(v) => `<span style="color:#7F8F3A">${(v * 100).toFixed(1)}</span>`',
+                },
+            ],
+        },
+    )
+    assert out["injectedSpans"] == 1, "html: true column was escaped to text"
+    assert out["text"] == "82.0"
+
+
+def test_html_opt_in_is_per_column_not_global(page):
+    """One opting-in column must not lift escaping off its neighbours."""
+    out = page.evaluate(
+        _RENDER_TABLE,
+        {
+            "rows": [{"user_name": _EVIL_NAME, "score": 0.5}],
+            "columns": [
+                {"key": "user_name", "label": "Member"},
+                {
+                    "key": "score",
+                    "label": "Score",
+                    "html": True,
+                    "format": "(v) => `<span>${v}</span>`",
+                },
+            ],
+        },
+    )
+    assert out["injectedImgs"] == 0
+    assert not out["pwned"]
+    assert out["injectedSpans"] == 1
+
+
+# ── config-helpers.js: the guild-switch cache reset (S2) ─────────────────
+
+# Stubs fetch so the two "guilds" are distinguishable without a bot, then walks
+# the sequence a guild switch produces: load guild A's channels, reset, load
+# again. The assertion is on what a *picker* offers, because that is the thing
+# that used to lie — and the thing a save then wrote to the wire.
+_GUILD_SWITCH = """
+async ({ reset }) => {
+  document.body.innerHTML = '<div id="host"><span data-slot></span></div>';
+  let guild = 'A';
+  const CHANNELS = {
+    A: [{ id: '1000000000000000001', name: 'alpha-general', type: 'text' }],
+    B: [{ id: '2000000000000000002', name: 'bravo-general', type: 'text' }],
+  };
+  window.fetch = async () => new Response(
+    JSON.stringify(CHANNELS[guild]),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  );
+
+  const cfg = await import('/static/js/config-helpers.js');
+  const first = await cfg.loadChannels();
+
+  guild = 'B';                       // the operator picks the other server
+  if (reset) cfg.resetMetaCaches();  // …which is what app.js's applyMeData does
+
+  const second = await cfg.loadChannels();
+
+  // What the panel would actually show, and save.
+  const slot = document.querySelector('[data-slot]');
+  const picker = cfg.mountChannelPicker(slot, second, '0', { label: 'Channel' });
+  picker.getInput().focus();
+  const labels = Array.from(document.querySelectorAll('.filter-select-item'))
+    .map((el) => el.textContent.trim());
+
+  return {
+    first: first.map((c) => c.name),
+    second: second.map((c) => c.name),
+    labels,
+  };
+}
+"""
+
+
+def test_meta_caches_survive_within_a_guild(page):
+    """Control: without a reset the memo is doing its job (one fetch, reused)."""
+    out = page.evaluate(_GUILD_SWITCH, {"reset": False})
+    assert out["first"] == ["alpha-general"]
+    assert out["second"] == ["alpha-general"]
+
+
+def test_guild_switch_reset_repopulates_the_picker(page):
+    """After resetMetaCaches() the picker offers the NEW guild's channels.
+
+    Before the fix the module globals outlived the switch, so every config
+    panel listed the previous guild's channels/roles/members and a save wrote a
+    foreign guild's snowflake into the new guild's config.
+    """
+    out = page.evaluate(_GUILD_SWITCH, {"reset": True})
+    assert out["second"] == ["bravo-general"]
+    assert any("bravo-general" in label for label in out["labels"]), out["labels"]
+    assert not any("alpha-general" in label for label in out["labels"]), out["labels"]
+
+
+# ── md-preview.js ────────────────────────────────────────────────────────
+
+_MD = """
+async ({ src }) => {
+  document.body.innerHTML = '<div id="host"></div>';
+  const mod = await import('/static/js/md-preview.js');
+  document.getElementById('host').innerHTML = mod.mdInline(src);
+  const a = document.querySelector('#host a');
+  return a ? { href: a.getAttribute('href'), text: a.textContent } : null;
+}
+"""
+
+
+def test_md_link_href_is_the_url_not_the_label(page):
+    """`$1` is the bracket text; the validated URL is `$2`."""
+    out = page.evaluate(
+        _MD, {"src": "see [the rules](https://example.com/rules) first"}
+    )
+    assert out == {"href": "https://example.com/rules", "text": "the rules"}
+
+
+def test_md_link_text_cannot_become_the_href(page):
+    """The https-only guard is on the URL, so it only guards anything if the
+    URL is what lands in the href.
+
+    With the label used as the href, `[javascript:…](https://ok)` produced a
+    real `javascript:` href — blocked only by an `onclick`, which a
+    middle-click or "open in new tab" walks straight past.
+    """
+    out = page.evaluate(_MD, {"src": "[javascript:alert(1)](https://example.com/safe)"})
+    assert out["href"] == "https://example.com/safe"
+    assert not out["href"].lower().startswith("javascript:")
+
+
+def test_md_link_rejects_a_non_http_scheme_outright(page):
+    """No match, no anchor — the text is left as escaped plain markdown."""
+    assert page.evaluate(_MD, {"src": "[click](javascript:alert(1))"}) is None

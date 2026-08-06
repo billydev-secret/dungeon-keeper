@@ -106,6 +106,39 @@ mobile report: copying an id out of Discord — the natural move when the name
 carries an emoji and a box separator — returned an empty list, which reads as
 "the bot can't see any channels".
 
+### Shared-layer safety — `test_shared_js_safety.py`
+Same reasoning as the picker gate, for the other three modules almost every
+panel imports. All three cases come from the 2026-08-06 deep review.
+
+`js/table.js` renders cells as **text by default**, with a per-column
+`html: true` opt-in. It used to interpolate the raw value *and* any `format()`
+return straight into `innerHTML`, and six report panels feed it raw Discord
+display names — so a nickname of `<img src=x onerror=…>` executed in a
+moderator's session on every page view (stored XSS). The tests render that
+nickname through the formatted path, the unformatted `raw ?? ""` path
+(interaction-graph's `pair_name`) and a column *label* (interaction-graph builds
+one out of a display name), and assert no element was injected and no handler
+fired. Two more assert the `html: true` columns still render their markup, and
+that opting one column in does not lift escaping off its neighbours — the way
+this fix would otherwise silently blank the colored score/trend cells.
+
+`js/config-helpers.js` memoizes `/api/config` and every `/api/meta/*` list in
+module globals, all of it scoped to the **active** guild, and a guild switch
+re-mounts panels without reloading the page. The test stubs `fetch` as two
+different guilds, walks load → `resetMetaCaches()` → load, and asserts on what a
+mounted channel *picker* offers — the surface that used to lie, and whose value
+a save then wrote to the wire. A control case (no reset) proves the memo still
+works within a guild. The app.js side of that wiring is a cheap source check in
+`tests/web/test_frontend_wiring.py`, which also sweeps every `syncHash()` /
+`history.replaceState("#/…")` id against the router's registered routes — the
+bug there was `panels/todo.js` writing `#/todo` for a page registered as
+`mod-todo`, so every render left a URL that reloads to "Page Not Available".
+
+`js/md-preview.js` put the link **text** in the `href` (`$1`, not `$2`), which
+also forfeited the https-only validation the pattern does on the URL: a
+`[javascript:alert(1)](https://ok)` link produced a real `javascript:` href,
+stopped only by an `onclick` a middle-click walks past.
+
 The two panel sweeps use a **fresh browser context per panel** and wait for the
 layout to settle before measuring — shared-context state bleed and mid-render
 snapshots otherwise make results flap between runs.

@@ -2,7 +2,7 @@
 // Settings, per-channel dials, the question bank, and the scoreboard, plus
 // the two Discord-side actions: "fire now" and posting the opt-in button.
 import { api, apiPost, apiPut, apiDelete, esc } from "../api.js";
-import { loadChannels, loadRoles, guardForm, metaLoadFailed } from "../config-helpers.js";
+import { loadChannels, loadRoles, guardForm, metaLoadFailed, mountAsync } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { confirmDialog, toast } from "../ui.js";
 
@@ -41,7 +41,7 @@ function flash(el, text, isError) {
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading Chat Revive…")}</div>`;
-  (async () => {
+  return mountAsync(container, async () => {
     [channels, roles] = await Promise.all([
       loadChannels().catch(() => []),
       loadRoles().catch(() => []),
@@ -50,8 +50,7 @@ export function mount(container) {
     if (metaLoadFailed()) {
       toast("Couldn’t load the channel or role list — reload before saving.", "error");
     }
-  })();
-  return null;
+  }, { errorMsg: "Couldn’t load the chat revive settings." });
 }
 
 function render(container) {
@@ -227,7 +226,11 @@ function renderChannels(container, rows) {
   const host = container.querySelector("[data-channels]");
   const configured = new Set(rows.map((c) => String(c.channel_id)));
   const addable = channels.filter((c) => !configured.has(String(c.id)));
+  // Eight columns of fixed-width inputs plus a four-button action cell do not
+  // fit a phone. Scroll the table inside its own box rather than pushing the
+  // whole page sideways — the wrapper the other wide tables here already use.
   host.innerHTML = `
+    <div style="overflow-x:auto;">
     <table class="data-table">
       <thead><tr>
         <th>Channel</th><th>On</th><th>Categories</th><th>Ping</th>
@@ -237,7 +240,8 @@ function renderChannels(container, rows) {
         ${rows.map(channelRow).join("") || `<tr><td colspan="8" class="empty">No channels yet. Pick one below and choose Enable Channel — Chat Revive never posts anywhere you haven’t listed here.</td></tr>`}
       </tbody>
     </table>
-    <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+    </div>
+    <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
       <select data-add-channel aria-label="Channel to enable Chat Revive in">${addable.map((c) => `<option value="${c.id}">#${esc(c.name)}</option>`).join("")}</select>
       <button class="btn" data-add>Enable Channel</button>
       <span data-channels-status></span>

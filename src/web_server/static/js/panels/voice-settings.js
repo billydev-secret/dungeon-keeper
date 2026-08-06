@@ -1,5 +1,5 @@
 import { api, apiPost, apiDelete, esc } from "../api.js";
-import { showStatus, guardForm, mountPicker, mountRolePicker, lockUnlessAdmin } from "../config-helpers.js";
+import { showStatus, guardForm, mountPicker, mountRolePicker, lockUnlessAdmin, mountAsync } from "../config-helpers.js";
 import { mountPanelPoster } from "../panel-post.js";
 import { toast } from "../ui.js";
 
@@ -20,18 +20,15 @@ const SAVEABLE_FIELDS = [
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading Voice Control configuration…</div>`;
 
-  (async () => {
-    let cfg, channels, roles;
-    try {
-      [cfg, channels, roles] = await Promise.all([
-        api("/api/voice-master/config"),
-        api("/api/meta/channels?types=text,voice,category"),
-        api("/api/meta/roles"),
-      ]);
-    } catch (err) {
-      container.innerHTML = `<div class="empty">Failed to load: ${esc(err.message)}</div>`;
-      return;
-    }
+  return mountAsync(container, async () => {
+    // No local catch: a failed load is an error, not an empty state, and
+    // mountAsync's rejection path renders exactly that — with a Try again
+    // button, which the `class="empty"` message here never offered.
+    const [cfg, channels, roles] = await Promise.all([
+      api("/api/voice-master/config"),
+      api("/api/meta/channels?types=text,voice,category"),
+      api("/api/meta/roles"),
+    ]);
 
     const numField = (name, label, value, hint, { min = 0, max = null } = {}) => `
       <div class="field">
@@ -322,5 +319,5 @@ export function mountSettings(container) {
 
     // Last, so the pickers' and blocklist rows' own controls are covered too.
     lockUnlessAdmin(container);
-  })();
+  }, { errorMsg: "Couldn’t load the voice settings." });
 }

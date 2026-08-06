@@ -1,6 +1,7 @@
 import {
   loadConfig, loadChannels, apiPut, apiDelete, showStatus, buildField,
   mountChannelPicker, guardForm, renderMetaWarning,
+  mountAsync,
 } from "../config-helpers.js";
 import { api, apiPost } from "../api.js";
 import { confirmDialog, toast } from "../ui.js";
@@ -70,7 +71,7 @@ export function mount(container) {
   loading.innerHTML = '<div class="empty">Loading confession settings…</div>';
   container.appendChild(loading);
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const c = config.confessions;
 
@@ -433,7 +434,7 @@ export function mount(container) {
         pbBtn.disabled = false;
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the confessions settings." });
 }
 
 function renderBlocked(container, users) {

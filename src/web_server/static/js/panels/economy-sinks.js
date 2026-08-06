@@ -1,5 +1,5 @@
 import { api, apiPut, apiPost, apiDelete, request, esc } from "../api.js";
-import { showStatus, guardForm } from "../config-helpers.js";
+import { showStatus, guardForm, mountAsync, loadMembers } from "../config-helpers.js";
 import { confirmDialog, promptDialog } from "../ui.js";
 
 // The perk-shop prices (the currency sinks). Moved here off the Settings page so
@@ -183,7 +183,7 @@ function iconRow(icon) {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading prices…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [cfg, metrics, icons] = await Promise.all([
       api("/api/economy/config"),
       api("/api/economy/metrics").catch(() => null),
@@ -193,7 +193,7 @@ export function mount(container) {
       ? { hints: metrics.hints, median: metrics.median_income }
       : null;
     render(container, cfg, pricing, icons);
-  })();
+  }, { errorMsg: "Couldn’t load the economy sinks." });
 }
 
 // The economy master switch lives on Economy Settings. With it off, nothing on
@@ -345,7 +345,7 @@ function render(container, cfg, pricing, icons) {
   wireEmojiQueue(container);
 }
 
-function emojiRow(sub) {
+function emojiRow(sub, memberName) {
   const kind = sub.animated ? "animated" : "static";
   return `
     <div class="card" data-sub-id="${sub.id}"
@@ -356,7 +356,7 @@ function emojiRow(sub) {
                   background:repeating-conic-gradient(#808080 0% 25%, #a0a0a0 0% 50%) 50% / 12px 12px" />
       <div>
         <div><code>:${esc(sub.name)}:</code> <span class="field-hint">(${kind}, ${sub.price}/wk)</span></div>
-        <div class="field-hint">from <span data-member-id="${esc(sub.user_id)}">${esc(sub.user_id)}</span></div>
+        <div class="field-hint">from <span data-member-id="${esc(sub.user_id)}">${esc(memberName(sub.user_id))}</span></div>
       </div>
       <div style="display:flex;gap:8px;margin-left:auto;">
         <button type="button" class="btn btn-primary" data-approve>Approve and Upload</button>
@@ -370,15 +370,29 @@ function wireEmojiQueue(container) {
   const listEl = container.querySelector("[data-emoji-queue]");
   const emptyEl = container.querySelector("[data-emoji-empty]");
 
+  // Every other moderator queue on the dashboard resolves people through
+  // loadMembers(); this one printed the raw snowflake, which tells a reviewer
+  // nothing about who is asking. Falls back to the id when the member list is
+  // unavailable, or the sponsor has left and isn't in it.
+  let nameById = new Map();
+  const memberName = (id) => nameById.get(String(id)) || String(id);
+
   async function refresh() {
     let subs = [];
     try {
-      subs = (await api("/api/economy/emoji-submissions?state=pending")).submissions;
+      const [members, data] = await Promise.all([
+        loadMembers().catch(() => []),
+        api("/api/economy/emoji-submissions?state=pending"),
+      ]);
+      nameById = new Map(
+        members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
+      );
+      subs = data.submissions;
     } catch (err) {
       listEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
       return;
     }
-    listEl.innerHTML = subs.map(emojiRow).join("");
+    listEl.innerHTML = subs.map((s) => emojiRow(s, memberName)).join("");
     emptyEl.style.display = subs.length ? "none" : "block";
   }
   refresh();

@@ -226,19 +226,26 @@ export function mount(container, initialParams) {
 
       renderSortableTable(tableWrap, {
         columns: [
+          // Every numeric format guards null: the comparison endpoint omits a
+          // metric a channel has no data for (a channel with no scored messages
+          // has no gini/sentiment/trend), and a bare v.toFixed() threw inside
+          // the table renderer, blanking the entire table rather than one cell.
           { key: "channel_name",  label: "Channel",   format: (v, r) => r.channel_name || r.channel_id },
-          { key: "message_count", label: "Messages",  format: (v) => v.toLocaleString() },
+          { key: "message_count", label: "Messages",  format: (v) => (v ?? 0).toLocaleString() },
           { key: "unique_authors",label: "Authors" },
-          { key: "total_xp",      label: "XP",        format: (v) => Math.round(v).toLocaleString() },
-          { key: "gini",          label: "Gini",       format: (v) => v.toFixed(3) },
-          { key: "avg_sentiment", label: "Sentiment", format: (v) => {
+          { key: "total_xp",      label: "XP",        format: (v) => Math.round(v ?? 0).toLocaleString() },
+          { key: "gini",          label: "Gini",       format: (v) => (v == null ? "—" : v.toFixed(3)) },
+          // html: colored figures only — the interpolated value is a number and
+          // the color a fixed literal (see table.js ESCAPING).
+          { key: "avg_sentiment", label: "Sentiment", html: true, format: (v) => {
             if (v == null) return "—";
             const color = v > 0.05 ? "#7F8F3A" : v < -0.05 ? "#9E3B2E" : "#dbdee1";
             return `<span style="color:${color}">${v.toFixed(3)}</span>`;
           }},
-          { key: "trend_pct",     label: "Trend",     format: (v) => {
+          { key: "trend_pct",     label: "Trend",     html: true, format: (v) => {
+            if (v == null) return "—";
             const color = v > 0 ? "#7F8F3A" : v < 0 ? "#9E3B2E" : "#dbdee1";
-            return `<span style="color:${color}">${v > 0 ? "+" : ""}${v}%</span>`;
+            return `<span style="color:${color}">${v > 0 ? "+" : ""}${Number(v)}%</span>`;
           }},
         ],
         data: data.channels,

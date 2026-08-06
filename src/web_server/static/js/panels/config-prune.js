@@ -1,9 +1,10 @@
 import {
-  loadConfig, loadRoles, loadMembers, apiPut, apiDelete, showStatus,
-  guardForm, renderMetaWarning, mountRolePicker, mountPicker,
+  loadConfig, loadRoles, loadMembers, apiPut, showStatus,
+  guardForm, renderMetaWarning, mountRolePicker, mountPicker, mountExemptionList,
+  mountAsync,
 } from "../config-helpers.js";
 import { esc, apiPost } from "../api.js";
-import { toast, confirmDialog } from "../ui.js";
+import { toast } from "../ui.js";
 
 function fmtTs(ts) {
   if (!ts) return "Never";
@@ -14,7 +15,7 @@ function fmtTs(ts) {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading inactivity settings…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, roles, members] = await Promise.all([
       loadConfig(),
       loadRoles(),
@@ -24,6 +25,9 @@ export function mount(container) {
 
     // Member options for the shared searchable picker: members who have left
     // sort last, and say so in their label.
+    // NOTE: byte-identical to config-inactive.js's memberOpts. Worth hoisting
+    // into config-helpers alongside toMemberOptions() (which doesn't sort or
+    // annotate departures) the next time either file is opened.
     const memberOpts = members
       .map((m) => ({
         id: String(m.id),
@@ -35,8 +39,13 @@ export function mount(container) {
       .sort((a, b) => a.left - b.left || a.label.localeCompare(b.label))
       .map((o) => (o.left ? { ...o, label: `${o.label} (left the server)` } : o));
 
-    // Local mutable state
-    let exemptions = (p.exemptions || []).slice();
+    // Chip labels come from the member record, not by unpicking the picker's
+    // "Display (username)" label — a member called "Ana (EU)" would lose the
+    // bracket to that.
+    const nameById = new Map(
+      members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
+    );
+    const memberName = (id) => nameById.get(String(id)) || String(id);
 
     container.innerHTML = `
       <div class="panel">
@@ -117,60 +126,25 @@ export function mount(container) {
         emptyLabel: "(pick a member)",
         placeholder: "Search members…",
         label: "Member to never remove",
-        filter: (o) => !excludedIds().has(String(o.id)),
       },
     );
 
     guardForm(form);
 
-    function excludedIds() {
-      return new Set(exemptions.map((e) => String(e.id)));
-    }
-
-    function renderExemptions() {
-      if (!exemptions.length) {
-        exemptListEl.innerHTML = `<div class="empty" style="padding:8px 0;">Nobody is exempt — every holder of the role can be removed.</div>`;
-        return;
-      }
-      exemptListEl.innerHTML = `<div class="exempt-chips">${exemptions
-        .map(
-          (e) =>
-            `<span class="exempt-chip"><span>${esc(e.name)}</span><button type="button" data-remove-exempt="${esc(e.id)}" aria-label="Stop exempting ${esc(e.name)}" title="Stop exempting ${esc(e.name)}">×</button></span>`
-        )
-        .join("")}</div>`;
-      exemptListEl.querySelectorAll("[data-remove-exempt]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const uid = btn.dataset.removeExempt;
-          const entry = exemptions.find((e) => String(e.id) === String(uid));
-          const ok = await confirmDialog(
-            `Stop exempting ${entry ? entry.name : "this member"}? They will lose the role like everyone else once they go quiet for too long.`,
-            { title: "Remove Exemption", danger: true, confirmLabel: "Remove Exemption" },
-          );
-          if (!ok) return;
-          try {
-            await apiDelete(`/api/config/prune/exemptions/${uid}`);
-            exemptions = exemptions.filter((e) => String(e.id) !== String(uid));
-            renderExemptions();
-          } catch (err) {
-            toast(err.message, "error");
-          }
-        });
-      });
-    }
-
-    async function addExemption(id, label) {
-      try {
-        // Member ids stay strings on the wire.
-        await apiPut(`/api/config/prune/exemptions/${id}`, {});
-        // Strip the trailing " (username)" / " (left the server)" for display.
-        const displayName = label.replace(/\s*\([^)]*\)\s*$/, "").trim() || label;
-        exemptions.push({ id: String(id), name: displayName });
-        exemptions.sort((a, b) => a.name.localeCompare(b.name));
-        renderExemptions();
-      } catch (err) {
-        toast(err.message, "error");
-      }
-    }
+    // The shared widget config-inactive already uses. It replaces ~60 lines of
+    // hand-rolled chips/confirm/DELETE that lived here, and brings the fix that
+    // matters: `add()` resolves to whether the write actually landed, so the
+    // preview row below is only dropped once the exemption really saved.
+    const exemptList = mountExemptionList(exemptListEl, {
+      endpoint: "/api/config/prune/exemptions",
+      picker: exemptPicker,
+      items: p.exemptions || [],
+      emptyText: "Nobody is exempt — every holder of the role can be removed.",
+      confirmTitle: "Remove Exemption",
+      confirmLabel: "Remove Exemption",
+      confirmText: (name) =>
+        `Stop exempting ${name}? They will lose the role like everyone else once they go quiet for too long.`,
+    });
 
     container.querySelector("[data-add-exempt]").addEventListener("click", async () => {
       const id = exemptPicker.getValue();
@@ -178,14 +152,9 @@ export function mount(container) {
         toast("Pick a member first.", "error");
         return;
       }
-      const opt = memberOpts.find((o) => o.id === String(id));
-      await addExemption(id, opt ? opt.label : String(id));
+      if (!(await exemptList.add(id, memberName(id)))) return;
       exemptPicker.setValue("0");
-      // Re-apply the filter so the member just added drops out of suggestions.
-      exemptPicker.setFilter((o) => !excludedIds().has(String(o.id)));
     });
-
-    renderExemptions();
 
     function readDays(statusEl) {
       const raw = String(new FormData(form).get("inactivity_days") ?? "").trim();
@@ -229,14 +198,18 @@ export function mount(container) {
         const data = await apiPost("/api/config/prune/preview", {
           role_id: roleId,
           inactivity_days: days,
-          exempt_user_ids: exemptions.map((e) => String(e.id)),
+          exempt_user_ids: [...exemptList.ids()],
         });
         previewStatusEl.textContent = `${data.candidates.length} of ${data.role_member_count || 0} members would lose the role (${data.considered_count || 0} checked after exemptions).`;
         if (!data.candidates.length) {
           previewEl.innerHTML = `<div class="empty">Nobody would lose the role with these settings.</div>`;
           return;
         }
+        // The action column pushes this past a phone's width, so the table gets
+        // its own horizontal scroller instead of pushing the page sideways —
+        // the wrapper config-inactive's identical preview already uses.
         previewEl.innerHTML = `
+          <div class="preview-table-scroll">
           <table class="prune-preview-table">
             <thead>
               <tr><th>Member</th><th style="text-align:right;">Days Quiet</th><th>Last Seen</th><th></th></tr>
@@ -254,13 +227,14 @@ export function mount(container) {
                 )
                 .join("")}
             </tbody>
-          </table>`;
+          </table>
+          </div>`;
         previewEl.querySelectorAll("[data-exempt-from-preview]").forEach((btn) => {
           btn.addEventListener("click", async () => {
             const uid = btn.dataset.exemptFromPreview;
-            const name = btn.dataset.exemptName;
-            await addExemption(uid, name);
-            exemptPicker.setFilter((o) => !excludedIds().has(String(o.id)));
+            // Only drop the row once the exemption actually saved — a failed
+            // write used to read as success while the member stayed removable.
+            if (!(await exemptList.add(uid, btn.dataset.exemptName))) return;
             btn.closest("tr").remove();
           });
         });
@@ -271,5 +245,5 @@ export function mount(container) {
     }
 
     previewBtn.addEventListener("click", runPreview);
-  })();
+  }, { errorMsg: "Couldn’t load the auto-remove role settings." });
 }

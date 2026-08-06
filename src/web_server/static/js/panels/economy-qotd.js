@@ -3,17 +3,15 @@
 // page is admin-gated like Economy Settings. The reward itself stays on
 // Income Sources with the other faucets; this page owns the ping.
 import { api } from "../api.js";
-import { apiPut, showStatus, loadRoles, mountRolePicker } from "../config-helpers.js";
+import { apiPut, showStatus, loadRoles, mountRolePicker, mountAsync } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading QOTD config…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [cfg, roles] = await Promise.all([api("/api/economy/config"), loadRoles()]);
     render(container, cfg, roles);
-  })();
-
-  return null;
+  }, { errorMsg: "Couldn’t load the QOTD settings." });
 }
 
 function render(container, cfg, roles) {

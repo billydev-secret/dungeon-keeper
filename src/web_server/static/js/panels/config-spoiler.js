@@ -8,6 +8,7 @@ import {
   renderMetaWarning,
   mountChannelMultiPicker,
   mountChannelPicker,
+  mountAsync,
 } from "../config-helpers.js";
 
 const MODE_HINTS = {
@@ -24,7 +25,7 @@ function labelText(label) {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const s = config.spoiler;
     const n = config.nsfw_classifier;
@@ -185,8 +186,26 @@ export function mount(container) {
       }
     })();
 
+    // Named-field validation, the pattern config-casino uses. Number("") is 0,
+    // so a blanked Confidence Threshold used to post 0 — which makes the
+    // classifier judge *everything* explicit. Refuse it and say which field.
+    function readThreshold(field, label) {
+      const raw = String(form.querySelector(`[data-field="${field}"]`).value ?? "").trim();
+      const v = Number(raw);
+      if (raw === "" || !Number.isFinite(v) || v < 0.05 || v > 1) {
+        showStatus(status, false, `${label} must be a number between 0.05 and 1.`);
+        form.querySelector(`[data-field="${field}"]`).focus();
+        return null;
+      }
+      return v;
+    }
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
+      const threshold = readThreshold("threshold", "Confidence Threshold");
+      if (threshold === null) return;
+      const sfwThreshold = readThreshold("sfw_threshold", "SFW Removal Threshold");
+      if (sfwThreshold === null) return;
       try {
         // Independent endpoints — no reason to pay two round trips in series.
         await Promise.all([
@@ -194,10 +213,8 @@ export function mount(container) {
             spoiler_required_channels: spoilerPicker.getValues(),
           }),
           apiPut("/api/config/nsfw-classifier", {
-            threshold: Number(form.querySelector('[data-field="threshold"]').value),
-            sfw_threshold: Number(
-              form.querySelector('[data-field="sfw_threshold"]').value,
-            ),
+            threshold,
+            sfw_threshold: sfwThreshold,
             sfw_mode: modeSelect.value,
             sfw_log_channel_id: logPicker.getValue() || "0",
             sfw_exempt_channels: exemptPicker.getValues(),
@@ -211,5 +228,5 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the Image Guard settings." });
 }

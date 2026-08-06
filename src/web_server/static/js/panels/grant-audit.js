@@ -81,7 +81,8 @@ export function mount(container, initialParams) {
       return;
     }
     const columns = [
-      { key: "display_name", label: "Member", format: (v, r) => esc(r.display_name || r.user_id) },
+      // table.js escapes cell text — no esc() here or it double-escapes.
+      { key: "display_name", label: "Member", format: (v, r) => r.display_name || r.user_id },
       { key: "level", label: "Level", format: (v) => (v == null ? "—" : v) },
     ];
     if (withPruned) {

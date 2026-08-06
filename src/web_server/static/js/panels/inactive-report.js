@@ -1,4 +1,4 @@
-import { api, esc } from "../api.js";
+import { api } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import { loadChannels, channelSelect, loadRoles, roleSelect, metaLoadFailed } from "../config-helpers.js";
 import { renderSortableTable } from "../table.js";
@@ -105,7 +105,8 @@ export function mount(container, initialParams) {
         + `Activity is tracked for ${data.tracking_coverage} of ${data.total_scoped}.`;
       renderSortableTable(tableWrap, {
         columns: [
-          { key: "display_name", label: "Member", format: (v, r) => esc(r.display_name || r.user_id) },
+          // table.js escapes cell text — no esc() here or it double-escapes.
+          { key: "display_name", label: "Member", format: (v, r) => r.display_name || r.user_id },
           { key: "days_since_last", label: "Days Idle", format: (v) => v == null ? "Never tracked" : v },
         ],
         data: data.members,

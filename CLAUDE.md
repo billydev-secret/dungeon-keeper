@@ -163,3 +163,15 @@ SQLite-backed. Tests in `tests/`.
   keep red/green/etc. only where the color is semantic. Fuller conventions
   for bot embeds/panels (section spacing, monospace tables, persistent views,
   ping allow-listing) live in `docs/embed_style_guide.md`.
+- **Dashboard route ids are the bare feature name** (`pen-pals`, `role-menus`)
+  — no `config-`/`games-`/`mod-` prefix. The prefixes on older ids are
+  historical, and **every existing id is frozen**: deep links, the nav `help:`
+  mappings, and usage telemetry all key off them. Regroup and relabel nav
+  entries freely; never rename an id. Nav taxonomy, where a feature's settings
+  live, and the URL-state convention are in `docs/dashboard_ia.md`.
+- **Shared dashboard widgets are safe by default**: `table.js` escapes every
+  cell (a column opts into markup with `html: true` and then owns its own
+  escaping), and config panels mount through `mountAsync` so a failed first
+  fetch renders an error with a retry, never a permanent spinner. Guild-scoped
+  caches in `config-helpers.js` must be cleared in `resetMetaCaches()` — a test
+  hard-fails if a new one isn't.

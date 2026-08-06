@@ -2,6 +2,7 @@ import { api } from "../api.js";
 import {
   loadConfig, loadChannels, mountChannelMultiPicker, apiPut, showStatus,
   guardForm, renderMetaWarning,
+  mountAsync,
 } from "../config-helpers.js";
 
 // Party games only run in the channels allow-listed on Games › Global Config.
@@ -31,11 +32,14 @@ const numField = (name, label, value, hint, { min, max, step = "1" }) => `
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels, banner] = await Promise.all([
       loadConfig(), loadChannels(), gameChannelsBanner(),
     ]);
-    const cfg = config.games_chicken;
+    // `|| {}`: a config payload missing this section (a fresh guild, a partial
+    // response) used to throw on the first cfg.<field> read, and the panel hung
+    // on "Loading configuration…" forever. Undefined fields render blank instead.
+    const cfg = config.games_chicken || {};
 
     container.innerHTML = `
       <div class="panel">
@@ -134,5 +138,5 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the Chicken settings." });
 }

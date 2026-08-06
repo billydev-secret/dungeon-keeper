@@ -6,6 +6,7 @@ import { api, apiPost, esc, fmtAge, fmtTs } from "../api.js";
 import {
   showStatus, loadMembers,
   mountPicker, toMemberOptions,
+  mountAsync,
 } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 
@@ -15,15 +16,18 @@ const LEDGER_KINDS = [
   "conversion", "grant", "transfer_in", "transfer_out", "rental",
 ];
 
+// How many ledger rows the audit stream pulls. Named so the fetch and the
+// "showing the N most recent" note below it can't drift apart.
+const LEDGER_LIMIT = 100;
+
 function nowSec() { return Date.now() / 1000; }
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading Operations…</div></div>`;
-  (async () => {
+  return mountAsync(container, async () => {
     const members = await loadMembers().catch(() => []);
     render(container, members);
-  })();
-  return null;
+  }, { errorMsg: "Couldn’t load the economy operations page." });
 }
 
 function memberName(members, id) {
@@ -259,15 +263,25 @@ function wireGrant(container, members) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const picked = memberPicker.getValue();
+    // `|| 0` used to swallow a blank or non-numeric field and post a grant of
+    // zero — a no-op that still wrote a ledger row and reported "Credited 0".
+    // Name the field and refuse instead.
+    const rawAmount = String(form.querySelector("[name=amount]").value ?? "").trim();
+    const amount = parseInt(rawAmount, 10);
     const body = {
       // Sent as a string: parseInt corrupts snowflakes past 2^53 (doubles are
       // spaced 256 apart there). The server coerces it to an int losslessly.
       member_id: picked || "0",
-      amount: parseInt(form.querySelector("[name=amount]").value, 10) || 0,
+      amount,
       reason: form.querySelector("[name=reason]").value,
     };
     if (body.member_id === "0" || !/^[1-9]\d*$/.test(body.member_id)) {
       showStatus(status, false, "Pick a member first");
+      return;
+    }
+    if (rawAmount === "" || !Number.isFinite(amount) || amount === 0) {
+      showStatus(status, false, "Amount must be a whole number other than zero.");
+      form.querySelector("[name=amount]").focus();
       return;
     }
     try {
@@ -319,7 +333,7 @@ async function refreshLedger(container, members) {
     entries = (await api("/api/economy/ledger", {
       user_id: userId || undefined,
       kind: kind || undefined,
-      limit: 100,
+      limit: LEDGER_LIMIT,
     })).entries;
   } catch (err) {
     host.innerHTML = `<div class="error">${esc(err.message)}</div>`;
@@ -342,11 +356,16 @@ async function refreshLedger(container, members) {
         <td>${memo ? esc(memo) : "—"}</td>
       </tr>`;
   }).join("");
+  // The fetch is capped, and a full page of rows means older entries exist that
+  // this view is silently hiding. Say so rather than reading as "all there is".
+  const capNote = entries.length >= LEDGER_LIMIT
+    ? `<div class="field-hint" style="padding:6px 2px;">Showing the ${LEDGER_LIMIT} most recent entries. Filter by member or kind to look further back.</div>`
+    : "";
   host.innerHTML = `
     <div style="overflow-x:auto;">
       <table class="data-table">
         <thead><tr><th>When</th><th>Member</th><th>Kind</th><th>Amount</th><th>By</th><th>Memo</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-    </div>`;
+    </div>${capNote}`;
 }

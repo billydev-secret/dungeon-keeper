@@ -7,6 +7,9 @@
  *     columns: [
  *       { key: "user_name", label: "Member", format: (v, row) => row.user_name || row.user_id },
  *       { key: "score",     label: "Score",  format: (v) => v.toFixed(1) },
+ *       // Opt in per column when the format() return is deliberately markup:
+ *       { key: "trend", label: "Trend", html: true,
+ *         format: (v) => `<span style="color:var(--green)">${v}%</span>` },
  *     ],
  *     data: entries,           // array of objects
  *     defaultSort: "score",    // initial sort key
@@ -18,7 +21,22 @@
  *     maxRows: 200,            // optional row cap; adds a "Showing first
  *                              // N of M rows." footer when data exceeds it
  *   });
+ *
+ * ESCAPING (S1) — cells are TEXT by default.
+ * ------------------------------------------
+ * Every cell — the plain `row[key]` value and anything a `format()` returns —
+ * is HTML-escaped before it reaches innerHTML. That default is not a nicety:
+ * six report panels feed this table raw Discord display names, which are
+ * member-controlled, so a nickname of `<img src=x onerror=…>` used to execute
+ * in the moderator's session on every page view (stored XSS).
+ *
+ * A column that legitimately renders markup — a colored `<span>`, a `<code>` —
+ * opts in with `html: true`, and then owns its own escaping of any value it
+ * interpolates. Keep those to computed values (numbers, fixed class names);
+ * never opt in a column that renders a name, a label, or anything else that
+ * came from a user.
  */
+import { esc } from "./api.js";
 import { renderEmpty } from "./states.js";
 
 // Panels that re-render on a filter change call this repeatedly against the
@@ -69,16 +87,22 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
     const headCells = columns.map((c) => {
       const sortCls = c.key === sortKey ? (sortAsc ? "sort-asc" : "sort-desc") : "";
       const cls = [sortCls, c.cls].filter(Boolean).join(" ");
-      return `<th data-sort="${c.key}" class="${cls}">${c.label}</th>`;
+      // Labels are escaped too: they read as developer constants, but
+      // interaction-graph builds one out of a member's display name
+      // (`% of ${userName}'s total`), which is the same untrusted input.
+      return `<th data-sort="${esc(c.key)}" class="${esc(cls)}">${esc(c.label)}</th>`;
     }).join("");
 
     const bodyRows = rows.map((row, idx) => {
       const cells = columns.map((c) => {
         const raw = row[c.key];
         const display = c.format ? c.format(raw, row, idx) : (raw ?? "");
+        // Text by default; `html: true` is the deliberate opt-out (see the
+        // ESCAPING note at the top of this file).
+        const cell = c.html ? display : esc(display);
         // `cls` lets a column carry .num (right-aligned tabular figures) —
         // otherwise numeric tables have to be hand-rolled to get it.
-        return c.cls ? `<td class="${c.cls}">${display}</td>` : `<td>${display}</td>`;
+        return c.cls ? `<td class="${esc(c.cls)}">${cell}</td>` : `<td>${cell}</td>`;
       }).join("");
       return `<tr>${cells}</tr>`;
     }).join("");

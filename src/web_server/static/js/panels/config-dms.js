@@ -2,6 +2,7 @@ import { apiPost } from "../api.js";
 import {
   loadConfig, loadChannels, loadRoles, apiPut, showStatus, buildField,
   mountRolePicker, mountChannelPicker, guardForm, renderMetaWarning,
+  mountAsync,
 } from "../config-helpers.js";
 
 let _fieldSeq = 0;
@@ -40,7 +41,7 @@ export function mount(container) {
   loadingPanel.appendChild(loadingMsg);
   container.appendChild(loadingPanel);
 
-  (async () => {
+  return mountAsync(container, async () => {
     let config, channels, roles;
     try {
       [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
@@ -223,5 +224,5 @@ export function mount(container) {
         pbBtn.disabled = false;
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the DM settings." });
 }

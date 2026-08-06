@@ -22,6 +22,8 @@ import {
   mountChannelPicker,
   mountChannelMultiPicker,
   renderMetaWarning,
+  mountAsync,
+  esc,
 } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 
@@ -130,7 +132,7 @@ function readDuration(fd, prefix, label, statusEl, form) {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading cleanup settings…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
 
     container.innerHTML = `
@@ -150,7 +152,7 @@ export function mount(container) {
       config.auto_delete || [],
       channels,
     );
-  })();
+  }, { errorMsg: "Couldn’t load the cleanup settings." });
 }
 
 // ── Section 1: server-wide bulk cleanup ─────────────────────────────────────
@@ -309,10 +311,14 @@ function renderSchedules(region, rules, channels) {
   function ruleRow(r) {
     const age = bestUnit(r.max_age_seconds);
     const interval = bestUnit(r.interval_seconds);
-    const chName = channelName(channels, r.channel_id);
+    // esc(): auto-delete schedules can target THREADS, whose names any member
+    // can set. This heading is innerHTML, so an unescaped name was stored XSS
+    // running in an admin's dashboard (F2). The channel id is escaped for the
+    // same reason it's quoted — it lands inside an attribute.
+    const chName = esc(channelName(channels, r.channel_id));
     const uid = `ad-${++seq}`;
     return `
-      <form class="form card" style="margin-bottom:16px;" data-channel="${r.channel_id}">
+      <form class="form card" style="margin-bottom:16px;" data-channel="${esc(r.channel_id)}">
         <div class="section-label">${chName}</div>
         <div class="field-row">
           <div class="field">
@@ -342,7 +348,7 @@ function renderSchedules(region, rules, channels) {
         <div class="field-hint">Last sweep: ${formatTs(r.last_run_ts)}</div>
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           <button type="submit" class="btn btn-primary">Save</button>
-          <button type="button" class="btn btn-danger" data-remove="${r.channel_id}">Remove</button>
+          <button type="button" class="btn btn-danger" data-remove="${esc(r.channel_id)}">Remove</button>
           <span data-status></span>
         </div>
       </form>`;
