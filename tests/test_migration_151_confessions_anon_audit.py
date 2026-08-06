@@ -1,4 +1,4 @@
-"""Migration 147: backfill `confession_threads` into `anon_audit_log`.
+"""Migration 151: backfill `confession_threads` into `anon_audit_log`.
 
 The Confessions audit panel moved off `confession_threads` (a seven-day
 operational cache) onto `anon_audit_log`, so without this backfill the panel
@@ -33,11 +33,11 @@ REPLY_MSG = 1533542557777137877
 ORPHAN_REPLY_MSG = 1533542557777137999
 
 
-def _apply_before_147(db_path, monkeypatch) -> None:
+def _apply_before_151(db_path, monkeypatch) -> None:
     real = migrations._migration_files()
     monkeypatch.setattr(
         migrations, "_migration_files",
-        lambda: [f for f in real if f.name < "147"],
+        lambda: [f for f in real if f.name < "151"],
     )
     migrations.apply_migrations_sync(db_path)
     monkeypatch.setattr(migrations, "_migration_files", lambda: real)
@@ -79,7 +79,7 @@ def _audit(db_path, guild_id: int = GUILD) -> dict[int, sqlite3.Row]:
 
 def test_root_and_reply_are_classified_apart(tmp_path, monkeypatch):
     db = tmp_path / "backfill.db"
-    _apply_before_147(db, monkeypatch)
+    _apply_before_151(db, monkeypatch)
     _seed_prod_shape(db)
     assert _audit(db) == {}
 
@@ -94,7 +94,7 @@ def test_root_and_reply_are_classified_apart(tmp_path, monkeypatch):
 
 def test_reply_target_resolves_to_the_root_author(tmp_path, monkeypatch):
     db = tmp_path / "target.db"
-    _apply_before_147(db, monkeypatch)
+    _apply_before_151(db, monkeypatch)
     _seed_prod_shape(db)
     migrations.apply_migrations_sync(db)
 
@@ -109,7 +109,7 @@ def test_reply_target_resolves_to_the_root_author(tmp_path, monkeypatch):
 def test_root_message_id_is_stored_as_a_string(tmp_path, monkeypatch):
     """A bare snowflake past 2^53 loses precision in the dashboard's JS."""
     db = tmp_path / "snowflake.db"
-    _apply_before_147(db, monkeypatch)
+    _apply_before_151(db, monkeypatch)
     _seed_prod_shape(db)
     migrations.apply_migrations_sync(db)
 
@@ -121,7 +121,7 @@ def test_root_message_id_is_stored_as_a_string(tmp_path, monkeypatch):
 def test_created_at_carries_across_for_the_retention_clock(tmp_path, monkeypatch):
     """Backfilled rows must expire on the same clock as new ones."""
     db = tmp_path / "clock.db"
-    _apply_before_147(db, monkeypatch)
+    _apply_before_151(db, monkeypatch)
     _seed_prod_shape(db)
     migrations.apply_migrations_sync(db)
 
@@ -130,7 +130,7 @@ def test_created_at_carries_across_for_the_retention_clock(tmp_path, monkeypatch
 
 def test_guilds_do_not_bleed(tmp_path, monkeypatch):
     db = tmp_path / "guilds.db"
-    _apply_before_147(db, monkeypatch)
+    _apply_before_151(db, monkeypatch)
     _seed_prod_shape(db)
     migrations.apply_migrations_sync(db)
 
@@ -141,12 +141,12 @@ def test_guilds_do_not_bleed(tmp_path, monkeypatch):
 def test_backfill_is_idempotent(tmp_path, monkeypatch):
     """The NOT EXISTS guard holds if the statement is ever re-applied."""
     db = tmp_path / "idem.db"
-    _apply_before_147(db, monkeypatch)
+    _apply_before_151(db, monkeypatch)
     _seed_prod_shape(db)
     migrations.apply_migrations_sync(db)
     once = len(_audit(db))
 
-    sql = (migrations._MIGRATIONS_DIR / "147_confessions_anon_audit.sql").read_text(
+    sql = (migrations._MIGRATIONS_DIR / "151_confessions_anon_audit.sql").read_text(
         encoding="utf-8"
     )
     conn = sqlite3.connect(db)

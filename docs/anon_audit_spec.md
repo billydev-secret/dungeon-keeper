@@ -32,7 +32,7 @@ history — so putting them under a retention purge would break them.
 Confessions was originally excluded for the same reason, and that reason still
 holds: `confession_threads` carries thread identity and reply routing, and is
 **not** migrated here. Instead confessions *also write* an audit row (migration
-`147`), which decouples the two lifetimes. This matters because
+`151`), which decouples the two lifetimes. This matters because
 `confession_threads` is purged at a seven-day operational TTL, so while the
 Confessions panel read it, the moderation record was a rolling week — tolerable
 only while a Discord mod-log channel held the permanent copy. That channel is

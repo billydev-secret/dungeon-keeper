@@ -1,4 +1,4 @@
--- Migration 147: seed `anon_audit_log` with the confessions still held in
+-- Migration 151: seed `anon_audit_log` with the confessions still held in
 -- `confession_threads`, now that the Confessions audit panel reads the audit
 -- table instead of the operational one.
 --
