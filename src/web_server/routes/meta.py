@@ -138,26 +138,38 @@ async def select_guild(
         if not member and not is_support:
             raise HTTPException(403, "You are not a member of that server")
 
-    new_cookie = auth.update_session_guild(cookie, guild_id)
-    if not new_cookie:
-        raise HTTPException(400, "Invalid guild selection")
-
-    # Build the response with updated user info for the new guild
+    # Re-capture permissions for the *target* guild before re-signing. The
+    # session's stored bits describe the guild they were captured in; carrying
+    # them across a switch would let a cache-miss fallback replay guild A's
+    # admin rights inside guild B (B-SEC1). When the member can't be resolved
+    # (bot offline / not a member) they are cleared, not inherited.
     from web_server.auth import resolve_discord_perms
 
     perms: list[str] = []
     role_ids: list[str] = []
     role_names: list[str] = []
     status: str | None = None
+    permission_bits = 0
     if target_guild:
         member = target_guild.get_member(user.user_id)
         if member:
-            perms = sorted(resolve_discord_perms(member.guild_permissions.value))
+            permission_bits = member.guild_permissions.value
+            perms = sorted(resolve_discord_perms(permission_bits))
             role_ids = [str(r.id) for r in member.roles if not r.is_default()]
             role_names = [r.name for r in member.roles if not r.is_default()]
             status = str(member.status)
     if is_support:
         perms = sorted({"admin", "moderator", "manage_server"})
+
+    new_cookie = auth.update_session_guild(
+        cookie,
+        guild_id,
+        permission_bits=permission_bits,
+        role_ids=[int(r) for r in role_ids],
+        role_names=list(role_names),
+    )
+    if not new_cookie:
+        raise HTTPException(400, "Invalid guild selection")
 
     games_editor_role_id, economy_manager_role_id, wellness_opted_in = await run_query(
         _me_extras, ctx, guild_id, user.user_id

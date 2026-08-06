@@ -254,6 +254,38 @@ configured one of two ways:
 > has no auth, and a tunnel (e.g. cloudflared) bridging the loopback bind to the
 > public internet would expose full admin to everyone.
 
+### What the session cookie holds, and what it doesn't
+
+`dk_session` is signed with `SESSION_SECRET` but **not encrypted** — anything
+inside it is readable by whoever holds the cookie. It carries the user id,
+display name, avatar URL, the mutual-guild list, the active guild, and a
+snapshot of the user's permission bits. It does **not** carry the Discord
+OAuth access token: nothing read it back, and a bearer token in a readable
+cookie is a liability with no upside.
+
+- **Permissions are re-resolved live** from the bot's guild-member cache on
+  every request, so a Discord demotion takes effect immediately. The stored
+  bits are only a fallback for when that cache can't answer — the startup
+  window, a guild the bot was kicked from, or standalone mode.
+- **Those stored bits are guild-scoped.** The session records which guild they
+  were captured in (`perms_guild_id`); the fallback applies them only while
+  that guild is the active one, and switching servers re-captures them for the
+  target guild (or clears them if the member can't be resolved). A cookie can
+  never carry one server's admin rights into another. Sessions minted before
+  this field existed are unqualified and get **no** permissions on the fallback
+  path — those users re-login once, which only matters in standalone mode.
+- **Logout is server-side.** `/logout` bumps a per-user session generation
+  (stored in `config` under `session_gen:<user_id>`, so it survives a restart)
+  and every cookie minted before that generation is refused. Deleting the
+  cookie alone would have left a captured copy valid for the full 30-day
+  `max_age`. Logging back in mints a cookie at the new generation.
+- **CSRF** rests on `SameSite=Lax` plus an `Origin`/`Referer` check on
+  `POST`/`PUT`/`PATCH`/`DELETE`. The check is deliberately permissive when
+  neither header is present (curl, scripts, the test client — none of which
+  carry an ambient cookie to forge with); a header that *is* present and points
+  at another host is a 403. `DASHBOARD_BASE_URL` and any
+  `DASHBOARD_RETURN_TO_URLS` hosts count as our own.
+
 ---
 
 ## 10. Optional — LLM backend (LAN GPU server)

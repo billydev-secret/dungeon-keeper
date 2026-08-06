@@ -9,6 +9,7 @@ there to mint access tokens on demand.
 from __future__ import annotations
 
 import base64
+import html
 import logging
 import os
 import secrets
@@ -98,8 +99,11 @@ async def spotify_callback(
     error = request.query_params.get("error")
     if error:
         _log.warning("Spotify authorize denied: %s", error)
+        # The value comes straight off the query string — escape it, or the
+        # page reflects whatever markup the URL carried (B-SEC6).
         return HTMLResponse(
-            f"<h1>Spotify authorization denied</h1><p>{error}</p>",
+            "<h1>Spotify authorization denied</h1>"
+            f"<p>{html.escape(error)}</p>",
             status_code=400,
         )
 
