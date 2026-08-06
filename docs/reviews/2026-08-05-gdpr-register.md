@@ -6,10 +6,10 @@ list. Columns: **Purge?** = is the table covered by the privacy purge path
 
 | Table / store | Feature | Data class | Retention | Purge? | Processor | Notes |
 |---|---|---|---|---|---|---|
-| econ_wallets, econ_ledger, econ_* (48 tables) | Economy | user_id + amounts + timestamps; meta sampled clean (no PII) | indefinite | recommendation: preserve ledger (audit integrity), purge per-member state via econ_purge_user helper (economy-core G1) | — | |
+| econ_wallets, econ_ledger, econ_* (48 tables) | Economy | user_id + amounts + timestamps; meta sampled clean (no PII) | indefinite | YES — **`econ_purge_user` shipped `6ac71558`** (`economy_service.py:1304`, called at `privacy_service.py:201`); `econ_ledger` deliberately preserved | — | G1 closed |
 | messages + attachments/mentions/embeds/reactions/sentiment | Message archive | **full content** (prod level=`all`, 452k of 631k rows have text) | indefinite | YES (keep_messages flag) | — | disclosure understates this — privacy-core U1 |
 | processed_messages, known_users | Message archive | user_id dedup/roster | indefinite | YES | — | |
-| member_xp, xp_events, voice_sessions, member_activity, member_events | XP/activity | activity timestamps, voice presence | indefinite | YES | — | **xp_reaction_awards (40k rows) MISSING from purge — games-platform A2** |
+| member_xp, xp_events, voice_sessions, member_activity, member_events | XP/activity | activity timestamps, voice presence | indefinite | YES | — | ~~xp_reaction_awards MISSING from purge~~ **added `6ac71558`** (`privacy_service.py:120`); 42,518 rows |
 | member_gender | Gender service | mod-assigned gender (377 tagged) | indefinite | YES | — | **owner decision 2026-08-06: accepted as internal metrics, no change** (health-analytics G1 closed) |
 | quality_score_leaves | Member quality | derived score | indefinite | YES | — | profiling — document logic |
 | usage_events | Telemetry | command/panel usage per user | indefinite (no pruning, by design) | YES | — | spec discloses |
@@ -19,23 +19,23 @@ list. Columns: **Purge?** = is the table covered by the privacy purge path
 | reaction_log | Reactions | reactor↔author pairs, 183k rows | indefinite | **NO** — attention-report evidence path; make preserve explicit (health G3) | — | biggest unpurged table |
 | whispers, whisper_replies, whisper_guesses, whisper_reports, whisper_reply_reports | Whisper | anon message content + **sender identity**, report reasons | indefinite (30d age-lock ≠ delete) | self-service `/whisper forget-me` + deliberate audit preserve — **DECIDED** | — | forget-me has cross-guild over-delete bug (whisper A1, high); reporter/guessed rows survive forget-me (whisper D1); dashboard audit exposes ids not content ✓ |
 | confession_threads, confession_emoji_assignments, confession_rate_limits | Confessions | deanonymizing author ids | **7-day TTL** (threads), verified live | **DECIDED** — TTL'd minimization, model pattern | — | best story in repo; propose same TTL for guess confession_text |
-| bios, bio_answers, bio_field_values | Bios | self-disclosed profile text | self-service delete ✓; archived-on-leave kept forever | add to purge (penpals-bios G3); archive TTL decision (G2) | — | |
+| bios, bio_answers, bio_field_values | Bios | self-disclosed profile text | self-service delete ✓; archived-on-leave **12-month TTL** (`9374c306`, migration 149) | YES — **added `6ac71558`** (`privacy_service.py:123-125`) | — | both G2 and G3 closed |
 | pen_pals_sessions, pen_pals_pool, pen_pals_blocks | Pen Pals | pairing metadata ONLY (no letter content ✓), protective blocks | pool pruned; sessions kept for no-repeat | **DECIDED — preserve** (matchmaking memory + protective blocks) | — | ✓ |
 | dm_audit_log, dm_consent_pairs, dm_requests | DM perms | consent records + transition audit | live map pruned on revoke; audit indefinite | **DECIDED** — forensic preserve (privacy_spec:111) | — | ✓ |
-| member_birthdays | Birthday | **month/day only, no year** ✓ + visibility pref | until removed | add to purge batch | — | minimized by design |
+| member_birthdays | Birthday | **month/day only, no year** ✓ + visibility pref | until removed | YES — **added `6ac71558`** (`privacy_service.py:121`) | — | minimized by design |
 | jails, warnings, tickets, ticket_participants, policy_tickets, role_grant audit | Mod actions | sanction history, mod-authored reasons (no transcripts ✓) | indefinite | **DECIDED — preserve** (canonical mod record) | — | ✓ |
-| watched_users | Mod watch | watcher↔watched pairs (2 rows) | until unwatched | **NO** — add to purge (ai-moderation G3) | LAN LLM screening | covert moderation, mods-only ✓ |
+| watched_users | Mod watch | watcher↔watched pairs (2 rows) | until unwatched | YES — **added `6ac71558`, both sides** (`privacy_service.py:156`) | LAN LLM screening | covert moderation, mods-only ✓ |
 | no_contact_pairs, no_contact_events | Mod safety | protective orders + attempt log (no text) | indefinite | **DECIDED** — deliberate preserve; add spec line (dmperms-nocontact G1) | — | ✓ |
-| rules_events, rules_labels | Rules watch | 240-char content excerpts + matched phrase; mod-verdict training labels | indefinite | **NO** — decision: preserve as evidence + 180d sweep for dismissed events (ai-moderation G1) | LAN llama-server only | excerpt escapes storage-level dial — document |
+| rules_events, rules_labels | Rules watch | 240-char content excerpts + matched phrase; mod-verdict training labels | preserve as evidence + **180d sweep for dismissed events** (`49a02867`, `rules_watch/ledger.py:442`) | **NO** — deliberate evidentiary preserve | LAN llama-server only | G1 closed; excerpt escapes storage-level dial — document |
 | nsfw_classifications, nsfw_detections, nsfw_blocks | Image Guard | body-part tags (age-gated only), block records w/ author_id | indefinite (deliberate, spec'd) | **DECIDED — preserve**; revisit TTL on nsfw_detections in 6mo | — (all inference local) | observe mode ON in prod; log channels 0 |
-| guess_rounds (+confession_text), guess_guesses, guess_audit_log, guess_cache/ files | Guess | intimate images on disk until solve; anon confession text + submitter id | unsolved rounds: indefinite | **UNDECIDED** — needs consent/opt-out package (review U1/G1/G2) | — (local) | consent below Whisper bar; no /guess optout |
-| casino_* (bets, daily, weekly, member_stats, hands) | Casino | wagering history (behavioral) | indefinite | fold into econ_purge_user (casino review) | — | money code = repo's best |
+| guess_rounds (+confession_text), guess_guesses, guess_audit_log, guess_cache/ files | Guess | intimate images on disk until solve; anon confession text + submitter id | originals of unsolved rounds: **90d age-out** (`775d903d`); rows themselves indefinite | **STILL NO** — no `guess_*` table is in `purge_user_data` (grepped 2026-08-06) | — (local) | consent view + `/guess optout` shipped `775d903d` (U1/G1/G2 closed). **Open:** purge coverage, and the confession-text TTL that was only ever a "consider" |
+| casino_* (bets, daily, weekly, member_stats, hands) | Casino | wagering history (behavioral) | indefinite | YES — folded into `econ_purge_user` (`6ac71558`) | — | money code = repo's best |
 | games_*, duels, hot_potato_*, pressure_*, quickdraw_*, mc_*, chicken_* | Games | participation, winners, nicks; anon games via anon_audit_log 90d | indefinite | **DECIDED** — anon family via audit sweep; per-user rows fold into econ_purge_user | — | ✓ |
 | voice_follow, voice_follow_log | Voice follow | who-follows-whom | indefinite | **NO** — attention-report evidence; preserve explicitly w/ reaction_log | — | |
-| voice_master_profiles, voice_master_trusted | Voice Master | member room prefs + trust lists | until changed | add to purge batch (modtools review) | — | |
-| games_external_messages | External games | **content + embeds_json** parse buffer | indefinite, never swept | add 30d post-parse sweep (batch-bc A1) | — | 11k rows |
+| voice_master_profiles, voice_master_trusted | Voice Master | member room prefs + trust lists | until changed | YES — **added `6ac71558`** (`privacy_service.py:122,157`; trusted both sides) | — | |
+| games_external_messages | External games | **content + embeds_json** parse buffer | **30d post-parse sweep** (`49a02867`, `games_external/logic.py:231`) | — (buffer, not a purge target) | — | 11,304 rows; oldest 2026-07-07, so the sweep has not had to bite yet |
 | intake_cards, intake_card_steps | Intake | newcomer progress, done_by greeter ids | indefinite (26 rows) | needs decision — low priority | — | intake-confessions G2 |
-| greeting_watch | Greeting watch | ids+timestamp ONLY, no text (by design ✓) | verdicted rows kept (327) | needs 30d GC — low priority | — | intake-confessions G1 |
+| greeting_watch | Greeting watch | ids+timestamp ONLY, no text (by design ✓) | **30d GC on verdicted rows** (`49a02867`, `greeting_watch_service.py:303`) | — | — | G1 closed. 352 resolved rows still present — the GC runs off the 60s loop, so it clears on the next bot restart |
 | audit_log, incident_events, role_events, role_prune_events | Mod/audit misc | actor/target ids | ? | role_events YES, others **NO** | — | |
 | voice_transcription_config | Voice transcription | config only — transcripts never stored | n/a | n/a | local faster-whisper | ✓ no personal data |
 | _(bundles append below)_ | | | | | | |
@@ -70,15 +70,33 @@ list. Columns: **Purge?** = is the table covered by the privacy purge path
 
 ## Gap list (final, 2026-08-06 — see synthesis doc for the fix queue)
 
-1. Erasure-path: placeholder blowout + missed tables (synthesis #1) — HIGH.
-2. Disclosure vs reality: content retention ON while copy hedges (U1) — HIGH.
-3. Undisclosed sensitive-attribute profiling: mod-assigned gender — HIGH policy.
-4. Guess: consent/opt-out/retention package — HIGH.
-5. Processors needing a privacy-notice line: Anthropic (advisor), Spotify.
-6. TTL/sweep debt: rules_events (dismissed), games_external_messages,
-   xp_events, bios archives, greeting_watch, guess confession_text.
-7. No erasure runbook; no subject-access/export story (explicitly deferred).
-8. Backups retain erased users — document retention window in runbook.
+Status re-verified against the code 2026-08-06
+(`2026-08-06-review-docs-accuracy-audit.md`). Strike items **here** when
+they land, not only in the synthesis header.
+
+1. ~~Erasure-path: placeholder blowout + missed tables (synthesis #1)~~ —
+   **shipped `6ac71558`**.
+2. ~~Disclosure vs reality: content retention ON while copy hedges (U1)~~ —
+   **shipped `1dfa8fea`**.
+3. ~~Undisclosed sensitive-attribute profiling: mod-assigned gender~~ —
+   **owner decision 2026-08-06: accepted, no change.**
+4. ~~Guess: consent/opt-out package~~ — **shipped `775d903d`**. Retention
+   half is partly open: 90d original age-out shipped, `guess_*` purge
+   coverage and the confession-text TTL did not.
+5. **OPEN** — processors needing a privacy-notice line: Anthropic
+   (advisor), Spotify. Neither name appears in any user-facing surface
+   (grepped `manual.html`, `privacy_spec.md`, `bot_modules/privacy/`).
+   This is the last unshipped High-tier item.
+6. TTL/sweep debt — ~~rules_events (dismissed)~~ `49a02867`,
+   ~~games_external_messages~~ `49a02867`, ~~bios archives~~ `9374c306`,
+   ~~greeting_watch~~ `49a02867`. **Still open:** `xp_events` (deferred
+   with a design note — needs a rollup table, see synthesis #9) and
+   guess `confession_text`.
+7. ~~No erasure runbook~~ — `docs/gdpr_erasure_runbook.md` shipped with
+   `6ac71558` and is now listed in INDEX.md. **Still open:** no
+   subject-access/export story (explicitly deferred).
+8. **OPEN** — backups retain erased users; document the retention window
+   in the runbook.
 
 Decided & healthy: whisper, wellness, confessions, dm-perms, no-contact,
 pen-pals, voice transcription, Image Guard, anon games family, sanctions,

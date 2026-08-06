@@ -37,7 +37,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [embed_style_guide.md](embed_style_guide.md) | Conventions for bot-generated embeds/panels + user-facing copy (accent color, card anatomy, Title Case ruling, error/❌ style, voice & terminology, dashboard copy) |
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |
-| [event_echo_spec.md](event_echo_spec.md) | Event Echo: mirrors into main chat, with a jump link, either something starting (party game / CAH lobby / live Discord event / new bounty) or a closing deadline (auction, prediction-market round). Silent by design (no ping, ever); per-type + global cooldowns are the feature, and deadline sources are exempt from them. Dashboard-configured (`event_echo_channel_id`), no commands. Bounty + pools sources are dormant until those features are switched on |
+| [event_echo_spec.md](event_echo_spec.md) | Event Echo: mirrors into main chat, with a jump link, either something starting (party game / CAH lobby / live Discord event / new bounty) or a closing deadline (auction, prediction-market round). Silent by design (no ping, ever); per-type + global cooldowns are the feature, and deadline sources are exempt from them. Dashboard-configured (`event_echo_channel_id`), no commands. ~~Bounty + pools sources are dormant~~ — **both live as of 2026-08-06**: `casino_pools_enabled=1` with 9 settled rounds, `econ_bounty_channel_id` set with 5 bounties, and `event_echo_log` shows `pools_closing` and `bounty` echoes have fired. The spec's own "three sources are dormant" bullet is dated 2026-07-28 and carries a correction |
 | [games_system_spec.md](games_system_spec.md) | Party games suite (`/games play <slug>`). Photo Challenge left this suite — it's now a standalone scheduled dashboard feature (own channel + schedule, `/api/photo-challenge`, panel `photo-challenge.js`) |
 | [gdpr_erasure_runbook.md](gdpr_erasure_runbook.md) | Operator runbook for a legal erasure request: `/delete_user` for Discord messages, then the manual `purge_user_data` DB run (deliberately no command), per-feature self-service paths, WAL checkpoint to reclaim bytes, backup caveat. Per-guild — one run per guild id |
 | [greeting_watch_spec.md](greeting_watch_spec.md) | Greeting Watch: DMs a member when a "good morning"/"hello" goes unanswered in a watched channel (dashboard-configured, no commands) |
@@ -163,10 +163,24 @@ These describe features or shapes of the system that don't match reality. They'r
 
 ## Audits
 
+> **Start here for anything from the 2026-08 review round:**
+> [reviews/2026-08-06-review-synthesis.md](reviews/2026-08-06-review-synthesis.md)
+> is the deduped fix queue and the only doc you need to read first. Fix-queue
+> items are struck through **in place** with their commit hash as they land —
+> if an item is not struck, it is genuinely open. Its per-bundle evidence lives
+> in the 25 sibling `reviews/2026-08-05-*` / `reviews/2026-08-06-sweep-*` docs
+> (one per feature bundle or horizontal sweep), which are deliberately not
+> listed row-by-row here.
+
 | Doc | What it covers |
 |---|---|
+| [reviews/2026-08-06-review-docs-accuracy-audit.md](reviews/2026-08-06-review-docs-accuracy-audit.md) | **Meta-audit of the reviews themselves (2026-08-06):** are the recorded fixes real, are the recorded open items still open, do the load-bearing claims still hold, is this INDEX still right. Verified every closed finding against code; found 10 fix-queue items shipped but still reading as open, and re-confirmed the economy and GDPR-register numbers against a read-only prod snapshot |
+| [reviews/2026-08-06-review-synthesis.md](reviews/2026-08-06-review-synthesis.md) | Staged-review synthesis (2026-08-06): the deduped, prioritized fix queue closing the 2026-08-05 staged review (21 feature bundles + 6 horizontal sweeps + loose ends). Also carries the house patterns and the standing exceptions that future reviews should stop re-flagging |
+| [reviews/2026-08-05-gdpr-register.md](reviews/2026-08-05-gdpr-register.md) | GDPR data register (2026-08-05/06): every per-user table with its data class, retention, purge coverage and processor. **Any new user-data table needs a row here plus a purge/preserve decision** |
+| [reviews/2026-08-05-loose-ends.md](reviews/2026-08-05-loose-ends.md) | Loose-ends / prod-drift audit (2026-08-05/06): the dangling items — economy retune round 2, unmerged branches, rollback SQL and the personal Discord export in the repo root. Items marked **BEN** are owner decisions |
+| [reviews/2026-08-06-economy-retune-round2-proposal.md](reviews/2026-08-06-economy-retune-round2-proposal.md) | Economy retune round 2 (2026-08-06): six proposed dial changes targeting +1,300..+1,900/day. **Not applied — awaiting sign-off** |
 | [reviews/2026-07-01-deep-review.md](reviews/2026-07-01-deep-review.md) | Full system audit (2026-07-01) |
-| [reviews/2026-07-23-novel-hunt.md](reviews/2026-07-23-novel-hunt.md) | Second-sweep hunt (2026-07-23): the attack angles the 07-22 review lacked — cross-guild IDOR, JS/API contract drift, Discord hard limits, restart state machines, time boundaries, injection, schema drift. 45 verified findings incl. **4 new S1s**; 2 fixed, 2 open |
+| [reviews/2026-07-23-novel-hunt.md](reviews/2026-07-23-novel-hunt.md) | Second-sweep hunt (2026-07-23): the attack angles the 07-22 review lacked — cross-guild IDOR, JS/API contract drift, Discord hard limits, restart state machines, time boundaries, injection, schema drift. 45 verified findings incl. **4 new S1s — all four now fixed** (re-verified in code 2026-08-06: confessions/whisper PUTs are admin-gated, the transcript route filters on guild id, `docs/sync.py` checks `channel.guild.id`, `/config/channels` emits string snowflakes). S2/S3 items remain open |
 | [reviews/2026-07-22-deep-review.md](reviews/2026-07-22-deep-review.md) | Full system audit (2026-07-22): backend methodology + UX, weighted to the 525 commits since 07-01 (economy/quests/casino + 8 never-reviewed features). 98 findings — 4 new S1s, 16 of 07-01's findings confirmed fixed. rules_watch excluded (own 07-20 deep-dive) |
 | [reviews/2026-07-01-rules-watch-followups.md](reviews/2026-07-01-rules-watch-followups.md) | Rules Watch follow-ups (audit follow-up) |
 | [reviews/2026-07-20-rules-watch-tuning.md](reviews/2026-07-20-rules-watch-tuning.md) | Rules Watch tuning investigation (2026-07-20): why the guard flagged 98.7% of everything, what the ban record shows, and three failed attempts at automated detection. Boundary-gate fix shipped (45.4→7.7 alerts/day); **detection unsolved, human reporting primary** |

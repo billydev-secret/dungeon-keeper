@@ -328,13 +328,22 @@ replaced it is silent like every other one.
   module constants.
 - **Casino and Cat Bot.** Out of scope by decision, not by omission — both fire
   far too often to echo.
-- **Three sources are dormant in prod** (as of 2026-07-28). `pools_enabled` is
+- **Three sources are dormant in prod** (as of 2026-07-28 — **no longer true,
+  see the correction under this bullet**). `pools_enabled` is
   unset, so the prediction market never opens a round; `econ_bounty_channel_id`
   is `0`, so bounty cards have nowhere to post and there have been zero
   bounties ever; and the raffle has 0 draws and 0 tickets, with rollout planned
   for the week of 2026-08-03. All three echoes are built and tested, but none
   can fire until those features are switched on. Auctions are live — 2 in the
   server's history.
+
+  **Correction, 2026-08-06** (read-only prod snapshot): two of the three have
+  since been switched on. `casino_pools_enabled=1` with a channel set and 9
+  settled rounds since 2026-07-28; `econ_bounty_channel_id` is a real channel
+  on the main guild with 5 bounties. `event_echo_log` confirms both fire —
+  one `pools_closing` and one `bounty` echo alongside one `party_game`. Only
+  the raffle is still dormant (2 draws, **0 tickets**). Read the bullet above
+  as a 2026-07-28 snapshot, not as current state.
 - **New auctions listed.** Only the closing echo was wanted; an "auction
   opened" echo is a `SOURCE_SPECS` row plus a query away if that changes.
 

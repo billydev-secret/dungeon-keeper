@@ -19,9 +19,17 @@ git. Decisions marked **BEN** need a human call; nothing here was changed.
     without a code change.
   - An 08-02 mini-retune happened (rollback file present: adds
     `econ_reward_cah_win_max`).
-- **BEN:** second retune round? The remaining levers are cat_catch (needs
-  code → make it a dial), quest faucet, participation. Rollback files remain
+- **BEN:** second retune round? The remaining levers are ~~cat_catch (needs
+  code → make it a dial)~~, quest faucet, participation. Rollback files remain
   valid until this verdict is accepted.
+- **Re-verified 2026-08-06** (read-only snapshot via the sqlite3 backup API,
+  `economy_tuning_report.py --days 5 --baseline economy-baseline-2026-07-30`):
+  the Pools line still reads **+4,993.5/day** and the last five guild-local
+  days run +4,275 / +4,993 / +2,708 / +4,997 / +3,905. Median balance 194
+  (was 186), burn ratio 45.6%. Nothing here has drifted — the finding stands
+  as written, and the round-2 proposal's estimates are still sized correctly.
+  cat_catch **is** now a dial (`98395fdb`), so every lever in the proposal is
+  reachable from the dashboard.
 
 ## 2. Image Guard / Marqo swap — ✅ resolved 2026-08-06 (web panel IS the trail)
 
@@ -42,14 +50,21 @@ git. Decisions marked **BEN** need a human call; nothing here was changed.
 `game_host` ledger entries run 2026-07-25 → today, 51 payouts / 7,270 total.
 The fix + backfill landed; continuous flow since. No action.
 
-## 4. Dev-session snapshot/restore — still unmerged, units correctly off
+## 4. Dev-session snapshot/restore — ✅ merged 2026-08-05; ⚠ linger still unrun
 
-Branch `investigate-a-control-…` (e88a4f9a) is **unmerged**; its systemd user
-units are installed but disabled (`dk-restore.service` disabled,
-`dk-snapshot.timer` disabled) and `Linger=no`. That's the agreed pre-merge
-state — but it's been parked since ~07-31.
-**BEN:** `/dk-ship` it (then `systemctl --user enable --now dk-snapshot.timer`
-+ `loginctl enable-linger ben`), or abandon and remove the units.
+**Superseded 2026-08-06.** The branch **merged** as `81035491`
+(`25ac6e32` Dev sessions: snapshot + restore), and the timer was enabled:
+
+| Unit / setting | State (verified 2026-08-06) |
+|---|---|
+| `dk-snapshot.timer` | **enabled** ✅ |
+| `dk-restore.service` | disabled — correct, it is oneshot-on-demand |
+| `loginctl show-user ben -p Linger` | **`Linger=no`** ⚠ |
+
+**Remaining action (BEN, one command):** `loginctl enable-linger ben`.
+Without linger the user manager stops when the last session ends, so the
+snapshot timer does not run across the reboot the feature exists to survive
+— the snapshot would be stale exactly when restore needs it.
 
 ## 5. Rollback SQL files in repo root — keep, but move somewhere git-clean-safe
 
@@ -70,13 +85,20 @@ a git repo root (same `git clean` hazard, plus accidental-commit risk).
 **Recommendation:** move to `~/discord-export-2026-08-04/` and add
 `Discord Messages/` to `.gitignore` if it must stay.
 
-## 7. Unmerged session branches — triage list
+## 7. Unmerged session branches — ✅ mostly cleared 2026-08-06
 
-Five worktree branches not merged to main (besides item 4's):
-confessions-log-channel-optional, jail-member-left, quest-ideas,
-pen-pals-reply-reminder, and the testing-cards-not-clearing worktree
-(no branch in --no-merged output; verify). **BEN:** ship or reap each;
-worktrees also pin their `.venv` copies (~disk).
+Four of the five shipped (`git branch --no-merged main`, 2026-08-06):
+
+| Branch | State |
+|---|---|
+| confessions-log-channel-optional | merged `78053cf4` |
+| jail-member-left | merged `cdb73a17` |
+| pen-pals-reply-reminder | merged `011c6a2f` |
+| testing-cards-not-clearing | gone — never had a branch |
+| **quest-ideas** (`i-m-trying-to-think-of-more-quests…`) | **still unmerged** |
+
+**BEN:** ship or reap quest-ideas — it is the last one, and its worktree
+still pins a `.venv` copy.
 
 ## 8. Wellness prod-DB hand-edits (07-30) — ✅ reconciled (see 2026-08-05-wellness.md)
 
