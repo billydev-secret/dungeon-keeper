@@ -12,10 +12,14 @@ Money that only *moves* is **netted**, not double-counted:
   books only the house hold (handle − payouts) as the casino's contribution
   to the sink, and shows the standing jackpot pot beside it. That pot is hold
   the house is keeping for a future winner, not currency it destroyed.
-* Escrow (auction bids, bounty contributions) — same shape. The stake leaves
-  the wallet and comes back unless it wins, so only the netted hold is booked.
-  Unlike the casino's, an escrow hold is an *upper bound* on the burn: money
-  sitting in an auction or bounty that has not resolved yet is inside it.
+* Escrow and transfers-with-a-rake (auction bids, bounty contributions,
+  reaction tips, sponsorships) — the debit leaves the wallet and a return
+  brings it back, so neither leg is booked. These are shown as a **memo of
+  both flows**, not netted: unlike a casino session, the legs straddle
+  windows, so netting a window would read a bid refunded this week (staked
+  last week) as a negative burn. The residual that really is destroyed —
+  winning bid, bounty/tip rake — is small and lives in resolution state, so
+  the headline burn understates slightly rather than overstating wildly.
 
 Every window is bucketed by the **requested guild's own** ``tz_offset_hours``,
 not a fixed offset — guilds run in different timezones and bucketing one by
@@ -60,12 +64,15 @@ from bot_modules.services.pools_service import (  # noqa: E402
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "dungeonkeeper.db"
 MAIN_GUILD = 1469491362444480666
-# Fallback only, matching the guild_id=0 config row. Every window is bucketed
-# with the *requested guild's* own tz_offset_hours (see _tz_offset) — this
-# used to be a module constant, which silently mis-bucketed any guild that
-# wasn't the main one by the difference. Guild 1476525656115515484 runs at
-# +2.0, a nine-hour error. See docs/reviews/2026-08-06-economy-ledger-data-audit.md M3.
-DEFAULT_TZ_OFFSET_HOURS = -7.0
+# Last-resort fallback for a guild with no tz row and no guild_id=0 row.
+# It is 0.0 to match core.db_utils.get_tz_offset_hours exactly: the report
+# must bucket days the way the bot does, and an unconfigured guild is
+# precisely what --all-guilds now walks into. Every window is otherwise
+# bucketed with the *requested guild's* own tz_offset_hours (see
+# _tz_offset) — this used to be a module constant of -7.0, which silently
+# mis-bucketed guild 1476525656115515484 (UTC+2) by nine hours.
+# See docs/reviews/2026-08-06-economy-ledger-data-audit.md M3.
+DEFAULT_TZ_OFFSET_HOURS = 0.0
 
 DEMURRAGE_FLOORS = (300, 500, 750, 1000)
 DEMURRAGE_RATES = (2, 5, 10)
@@ -97,8 +104,10 @@ def _trailing_days(today: date, days: int) -> tuple[str, str]:
 def _tz_offset(conn: sqlite3.Connection, guild_id: int) -> float:
     """The guild's own local-day offset, falling back to the global row.
 
-    Mirrors core.db_utils.get_tz_offset_hours without importing the bot's
-    db layer into an offline script.
+    Mirrors core.db_utils.get_tz_offset_hours — including its 0.0 default
+    and its treatment of a malformed value — without importing the bot's db
+    layer into an offline script. The two must agree: a report that buckets
+    days differently from the bot is the bug this function was added to fix.
     """
     for gid in (guild_id, 0):
         row = conn.execute(
@@ -222,33 +231,30 @@ def collect(
     ).fetchone()
     jackpot_pot = int(jackpot_row[0]) if jackpot_row else 0
 
-    # Auctions and bounties escrow: the stake leaves the wallet and comes
-    # back unless it wins. Only the residual (winning bid, bounty rake) is
-    # burned, so book that hold the way the casino's is instead of counting
-    # both legs as a sink and a faucet. A hold here is not all destroyed —
-    # money still sitting in an open auction/bounty is inside it — so it is
-    # reported separately rather than folded into the headline burn.
-    escrow_hold: dict[str, int] = {}
-    for stake_kind, return_kind in ESCROW_PAIRS:
+    # Escrow flows (auction bids, bounty contributions, tips, sponsorships):
+    # the debit leaves the wallet and a return brings it back, so neither leg
+    # is booked in mint/burn. They are reported as a **memo of the two flows**
+    # rather than netted into a burn, because the legs straddle windows: an
+    # auction bid staked last week and refunded this week would net negative
+    # here and drive the headline burn — and the burn ratio — below zero.
+    # The residual that really is destroyed (winning bid, bounty/tip rake) is
+    # small and knowable only from resolution state, so the headline burn
+    # slightly *understates* rather than wildly overstating it, which is the
+    # error worth having in an instrument used to set dials.
+    escrow_flows: dict[str, dict[str, int]] = {}
+    for stake_kind, return_kinds in ESCROW_PAIRS:
+        marks_r = ",".join("?" * len(return_kinds))
         staked, returned_ = conn.execute(
             f"SELECT "
             f"  COALESCE(SUM(CASE WHEN kind = ? THEN -amount END), 0), "
-            f"  COALESCE(SUM(CASE WHEN kind = ? THEN amount END), 0) "
+            f"  COALESCE(SUM(CASE WHEN kind IN ({marks_r}) THEN amount END), 0) "
             f"FROM econ_ledger WHERE guild_id = ? AND {day_expr} BETWEEN ? AND ?",
-            (stake_kind, return_kind, guild_id, week_start, week_end),
+            (stake_kind, *return_kinds, guild_id, week_start, week_end),
         ).fetchone()
         if staked or returned_:
-            escrow_hold[stake_kind.split("_")[0]] = int(staked) - int(returned_)
-    if escrow_hold:
-        # Booked into the sink the same way casino_hold is. It is deliberately
-        # NOT split into "burned" and "still escrowed": the split depends on
-        # auctions/bounties that have not resolved yet, and a window total
-        # that changes retroactively as they close would make two runs of the
-        # same week disagree. Read it as an upper bound on the escrow burn.
-        for name, held in escrow_hold.items():
-            sink_mix[f"{name}_hold"] = held
-            burned_week += held
-        sink_mix = dict(sorted(sink_mix.items(), key=lambda kv: -kv[1]))
+            escrow_flows[stake_kind] = {
+                "staked": int(staked), "returned": int(returned_)
+            }
 
     demurrage_grid = []
     for floor in DEMURRAGE_FLOORS:
@@ -306,7 +312,7 @@ def collect(
         "casino_returned": returned,
         "casino_hold": casino_hold,
         "jackpot_pot": jackpot_pot,
-        "escrow_hold": escrow_hold,
+        "escrow_flows": escrow_flows,
         "demurrage_grid": demurrage_grid,
         "hoard_weeks": (
             round(_percentiles(balances, {"p50": 0.5})["p50"] / income_pct["p50"], 1)
@@ -385,11 +391,15 @@ def print_report(stats: dict, baseline: dict | None) -> None:
                 f"  jackpot pot (standing)       {pot:,}"
                 "  — escrowed from past holds, re-minted when it is won"
             )
-    escrow = stats.get("escrow_hold") or {}
+    escrow = stats.get("escrow_flows") or {}
     if escrow:
-        print("\nEscrow (netted: staked − returned; an open lot is still inside)")
-        for name, held in escrow.items():
-            print(f"  {name + ' hold':<28} {held:,}")
+        print("\nEscrow flows (memo — neither leg is counted as mint or burn)")
+        print("  legs straddle windows, so these do NOT net to this window's burn")
+        for name, f in escrow.items():
+            print(
+                f"  {name:<28} staked {f['staked']:>9,}   "
+                f"returned {f['returned']:>9,}"
+            )
     days = stats.get("pools_daily_net") or []
     if days:
         print("\nPools metric — net change per guild-local day")
@@ -487,7 +497,19 @@ def main() -> None:
     for i, stats in enumerate(runs):
         if i:
             print("\n" + "=" * 72 + "\n")
-        base = by_guild.get(stats["guild_id"]) if by_guild is not None else baseline
+        if by_guild is not None:
+            base = by_guild.get(stats["guild_id"])
+        else:
+            # A single-guild baseline against a different guild is nonsense —
+            # its deltas would compare two separate economies. Silently
+            # dropping it beats printing "(was 48, +334)" across guilds.
+            base = baseline
+            if base is not None and str(base.get("guild_id")) != stats["guild_id"]:
+                print(
+                    f"  !! baseline is guild {base.get('guild_id')}, this run "
+                    f"{stats['guild_id']} — deltas omitted"
+                )
+                base = None
         print_report(stats, base)
 
 

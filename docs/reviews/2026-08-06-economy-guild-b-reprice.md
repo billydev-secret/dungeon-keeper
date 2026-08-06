@@ -6,7 +6,8 @@ someone else (grants there are issued by "The panda keeper"); this is a costed
 proposal to hand over, not a change to make.
 
 Source: `2026-08-06-economy-ledger-data-audit.md` H1, re-measured on live data
-2026-08-06 with the now-tz-correct multi-guild report.
+2026-08-06 with the now-tz-correct multi-guild report (window 08-02..08-06;
+prod is live, so a later run will drift slightly).
 
 ## The measurement
 
@@ -15,9 +16,9 @@ Source: `2026-08-06-economy-ledger-data-audit.md` H1, re-measured on live data
 | tz | UTC−7 | **UTC+2** |
 | wallets | 164 | 166 |
 | float | 108,626 | **143,337** |
-| minted, 5d | 33,831 | **90,515** |
-| burned, 5d | 15,321 | **2,817** |
-| **burn ratio** | **45.3%** | **3.1%** |
+| minted, 5d | 34,221 | **91,495** |
+| burned, 5d | 12,429 | **2,817** |
+| **burn ratio** | **36.3%** | **3.1%** |
 | median 5d income | 48 | 382 |
 | p90 5d income | 511 | 3,234 |
 | median balance | 199 | **93** |

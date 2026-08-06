@@ -64,36 +64,47 @@ from bot_modules.services.casino_service import (
     WAR_HANDS,
 )
 
+# Escrow and transfer-with-residual pairs: (debit kind, every return kind).
+# Currency leaves the wallet on the debit and comes back on a return, so
+# booking both legs makes a round trip look like a faucet *and* a sink.
+# Only the residual is really destroyed — the winning auction bid, the
+# bounty rake, the tip rake, an un-refunded sponsorship — and that residual
+# is not knowable from one window of rows, because the legs straddle
+# windows. The report therefore shows the flows as a memo and does not
+# guess a burn from them.
+# See docs/reviews/2026-08-06-economy-ledger-data-audit.md M2.
+#
+# EVERY return kind must be listed. bounty_refund was missed on the first
+# pass: cancel/expire credits it rather than bounty_payout
+# (economy_bounty_service.py:44), so a cancelled bounty booked a full
+# spurious mint with no offsetting burn.
+ESCROW_PAIRS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("auction_bid", ("auction_refund",)),
+    ("bounty_stake", ("bounty_payout", "bounty_refund")),
+    ("tip_out", ("tip_in",)),                       # transfer, rake burned
+    ("emoji_sponsor", ("emoji_sponsor_refund",)),
+    ("pin_sponsor", ("pin_sponsor_refund",)),
+)
+
 # Ledger kinds that move currency sideways rather than minting it. Casino
 # payouts belong here: a returned bet is the member's own stake coming
 # back. Canonical — scripts/economy_tuning_report.py imports these so the
 # offline report and the live line cannot diverge.
-#
-# Escrow returns (auction_refund, bounty_payout) joined 2026-08-06: an
-# auction bid or bounty contribution leaves the wallet when it is escrowed
-# and comes back when the auction is outbid or the bounty awarded. Counting
-# both legs made the round-trip look like a faucet and a sink. Only the
-# residual — the winning bid and the bounty rake — is really destroyed, and
-# the report books that as a hold the way it already does for the casino.
-# See docs/reviews/2026-08-06-economy-ledger-data-audit.md M2.
 NON_FAUCET_KINDS = (
     "transfer_in", "wager_payout", "wager_refund", "casino_payout",
-    "casino_refund", "auction_refund", "bounty_payout",
+    "casino_refund",
+    *(k for _, returns in ESCROW_PAIRS for k in returns),
 )
 # Kinds that don't actually destroy currency (transfers/wagers move it
 # sideways; most of a casino stake is handed straight back, so the real
-# casino burn is the hold, booked separately; auction bids and bounty
-# contributions are escrow, refunded unless they win).
+# casino burn is the hold, booked separately; escrow debits come back
+# unless they win). Derived from ESCROW_PAIRS rather than restated — a pair
+# added to one list and forgotten in the other is exactly the asymmetry
+# that made a cancelled bounty read as a mint.
 BURN_KINDS_EXCLUDED = (
     "transfer_out", "wager_stake", "casino_stake",
-    "auction_bid", "bounty_stake",
+    *(debit for debit, _ in ESCROW_PAIRS),
 )
-
-# Escrow pairs: (debit kind, credit kind). Stakes leave the wallet, returns
-# come back, and the difference is the burn — the same shape as casino
-# handle/payout/hold. Reported per pair rather than lumped so a bounty
-# sitting in escrow is never mistaken for currency destroyed.
-ESCROW_PAIRS = (("auction_bid", "auction_refund"), ("bounty_stake", "bounty_payout"))
 
 CASINO_KINDS = ("casino_stake", "casino_payout", "casino_refund")
 POOLS_GAME = POOLS_TABLES.game

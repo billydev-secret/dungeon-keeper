@@ -129,32 +129,39 @@ def test_auction_escrow_round_trip_is_not_a_sink(tmp_path):
         ("auction_refund", 900),
         ("rental", -50),
     ])
-    assert stats["escrow_hold"] == {"auction": 0}
+    assert stats["escrow_flows"]["auction_bid"] == {"staked": 900, "returned": 900}
     assert "auction_bid" not in stats["sink_mix"]
     assert "auction_refund" not in stats["faucet_mix"]
     assert stats["burned_week"] == 50   # the rental, and nothing else
 
 
-def test_bounty_escrow_books_only_the_residual(tmp_path):
-    """600 escrowed, 500 awarded — the 100 rake is the sink, not the 600."""
+def test_bounty_refund_is_a_return_leg_like_the_payout(tmp_path):
+    """cancel/expire credits bounty_refund, award credits bounty_payout —
+    both are returns, and missing either makes a cancel read as a mint."""
     stats = _collect(tmp_path, [
         ("bounty_stake", -600),
-        ("bounty_payout", 500),
+        ("bounty_refund", 600),
     ])
-    assert stats["escrow_hold"] == {"bounty": 100}
-    assert stats["sink_mix"]["bounty_hold"] == 100
-    assert stats["burned_week"] == 100
+    assert stats["escrow_flows"]["bounty_stake"] == {"staked": 600, "returned": 600}
+    assert "bounty_refund" not in stats["faucet_mix"]
+    assert stats["minted_week"] == 0
+    assert stats["burned_week"] == 0
 
 
-def test_unresolved_escrow_is_an_upper_bound_not_a_burn(tmp_path):
-    """An open bounty's escrow shows as hold; it is money held, not destroyed.
+def test_escrow_straddling_the_window_cannot_drive_burn_negative(tmp_path):
+    """A bid staked before the window and refunded inside it.
 
-    Documented as an upper bound rather than split, because the split moves
-    as bounties resolve and two runs of the same past week must agree.
+    Netting the two legs per-window would book a NEGATIVE burn here and flip
+    the burn ratio below zero — auctions run for days, so a --days 5 run over
+    an auction boundary hits this. The memo reports the flows instead.
     """
-    stats = _collect(tmp_path, [("bounty_stake", -600)])
-    assert stats["escrow_hold"] == {"bounty": 600}
-    assert stats["burned_week"] == 600
+    stats = _collect(tmp_path, [
+        ("auction_refund", 6_830),   # no matching stake in this window
+        ("rental", -50),
+    ])
+    assert stats["escrow_flows"]["auction_bid"] == {"staked": 0, "returned": 6_830}
+    assert stats["burned_week"] == 50
+    assert stats["burn_ratio_pct"] >= 0
 
 
 # ── per-guild timezone ────────────────────────────────────────────────
@@ -222,5 +229,26 @@ def test_guilds_with_wallets_ranks_by_float(tmp_path):
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         assert rpt.guilds_with_wallets(conn) == [22, 33, 11]
+    finally:
+        conn.close()
+
+
+def test_tz_fallback_matches_the_runtime_default(tmp_path):
+    """With no guild row and no guild_id=0 row, the report must bucket days
+    the way the bot does — get_tz_offset_hours defaults to 0.0.
+
+    This was -7.0, which meant --all-guilds bucketed an *unconfigured* guild
+    seven hours away from the bot: the exact class of mis-bucketing the
+    per-guild lookup was added to remove.
+    """
+    from bot_modules.core.db_utils import get_tz_offset_hours
+
+    path = tmp_path / "tznone.db"
+    migrated_db(path)
+    with open_db(path) as conn:
+        runtime = get_tz_offset_hours(conn, GUILD)
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        assert rpt._tz_offset(conn, GUILD) == runtime == 0.0
     finally:
         conn.close()

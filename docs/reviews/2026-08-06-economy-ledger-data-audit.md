@@ -115,7 +115,7 @@ round-2 proposal — measured guild A only.
 > +19,046/day is ≈ +2,400 coin-equivalent — **less** than guild A's +3,992.
 > Guild B is not over-minting.
 >
-> What is real: its burn ratio is **3.1%** against guild A's 45.3%, its median
+> What is real: its burn ratio is **3.1%** against guild A's 36.3%, its median
 > balance is *lower* (93 vs 199) while p90 is more than double, and its price
 > list is **inverted** — recurring high-value sinks (`price_voice_room` 200,
 > `price_text_room` 200, `price_streak_shield` 30) were never scaled at all,
@@ -258,12 +258,33 @@ let two consecutive retunes aim at the wrong dial. A distinct `kind` (or a
 
 ### M2 — `economy_tuning_report.py` books escrow round-trips as mint and burn (Medium)
 
-> **FIXED 2026-08-06.** `auction_bid`/`bounty_stake` joined
-> `BURN_KINDS_EXCLUDED` and their returns joined `NON_FAUCET_KINDS`; the
-> report books a netted `escrow_hold` per pair beside `casino_hold`.
-> Guild A's 5-day burn ratio reads 45.3% with the escrow booked as a hold
-> rather than a gross sink. **No market risk** — see the status note at the
-> top.
+> **FIXED 2026-08-06**, then **revised the same night after code review**.
+> Escrow debits joined `BURN_KINDS_EXCLUDED` and their returns joined
+> `NON_FAUCET_KINDS`, both now *derived* from a single `ESCROW_PAIRS` table
+> so the two lists cannot drift apart. **No market risk** — see the status
+> note at the top.
+>
+> Two defects in my first attempt, both caught by review, neither reachable
+> from prod data:
+> - **`bounty_refund` was omitted.** Cancel/expire credits that kind, not
+>   `bounty_payout` (`economy_bounty_service.py:44`), so a cancelled bounty
+>   would have booked a full spurious mint with no offsetting burn — the
+>   exact double-count this change existed to remove, in the one lifecycle
+>   prod has never exercised. `ESCROW_PAIRS` now maps a debit to *every*
+>   return kind, and a test asserts the pairing holds for all of them.
+> - **Netting per window could drive the burn negative.** The residual is
+>   only knowable from resolution state, and the legs straddle windows: an
+>   auction bid staked last week and refunded this week netted to −6,830 and
+>   flipped `burn_ratio_pct` below zero. Escrow is now reported as a **memo
+>   of both flows**, never folded into the headline burn. That understates
+>   the real burn by the residual (634 lifetime in prod) instead of
+>   overstating it by 4,073 — the better error for an instrument used to set
+>   dials.
+>
+> The same pass swept the remaining pairs: reaction tips (`tip_out`/`tip_in`
+> — a transfer with a rake, identical in shape to `transfer_out`/`transfer_in`
+> which were already excluded) and the emoji/pin sponsorship escrows. All
+> dormant in prod today; all were double-counting.
 
 **Severity: Medium.** It inflates the reported burn ratio, which is the number
 the retunes are being judged against.
@@ -280,7 +301,8 @@ For guild A, 08-01..08-05, the tool reports `burned (real sinks) = 16,761` with
 contributions, **zero are refunded** and 4,703 is still escrowed against three
 bounties in state `open` (ids 2, 4, 5). That is currency sitting in escrow, not
 destroyed. Excluding it puts real burn at ~12,688 and the burn ratio at ~35%,
-not the reported **45.6%**.
+not the reported **45.6%**. *(Confirmed after the fix: the same window now
+reports 12,429 burned and **36.3%**.)*
 
 The net float number is unaffected (the round-trip cancels) — this is a
 faucet/sink *mix* and burn-ratio error only.
@@ -299,6 +321,15 @@ care the casino netting comment at `economy_tuning_report.py:158-168` describes.
 > `tz_offset_hours` (falling back to the `guild_id=0` row), `main()` derives
 > "today" per guild, and the offset is printed in the header and recorded in
 > the baseline JSON. `--all-guilds` added for H1.
+>
+> Review caught that my last-resort fallback was `-7.0` while the runtime's
+> `get_tz_offset_hours` defaults to `0.0` — so a guild with no tz row at all
+> would have been bucketed seven hours from how the bot sees it, and
+> `--all-guilds` is exactly what walks into an unconfigured guild. Now `0.0`,
+> with a test asserting parity against the runtime function rather than
+> against a literal. Also fixed: a single-guild baseline passed to
+> `--all-guilds` was being diffed against *every* guild; it now warns and
+> omits the deltas.
 
 **Severity: Medium.** Latent, but it will fire the moment anyone acts on H1.
 
