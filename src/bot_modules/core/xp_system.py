@@ -1162,12 +1162,20 @@ def get_user_xp_by_source(
     Unions the rollup, so the mod profile still shows a long-standing
     member's full history once raw events past the retention boundary are
     pruned. Lifted out of jail_cog, where it was inline SQL.
+
+    Rounded to 2dp like every sibling reader. The rounding is not cosmetic
+    here: summing a day's events into a bucket and then summing buckets
+    associates the additions differently than summing every event at once,
+    so the two paths can disagree in the last bits of a float (observed on
+    prod: 13589.63 vs 13589.630000000001). Two decimals is the precision XP
+    is displayed at anyway, and it makes the union exactly equal to the raw
+    read instead of almost equal.
     """
     boundary = xp_rollup_service.read_boundary(conn)
 
     if boundary is None:
         rows = conn.execute(
-            "SELECT source, SUM(amount) FROM xp_events"
+            "SELECT source, ROUND(SUM(amount), 2) FROM xp_events"
             " WHERE guild_id = ? AND user_id = ? GROUP BY source",
             (guild_id, user_id),
         ).fetchall()
@@ -1176,7 +1184,7 @@ def get_user_xp_by_source(
     boundary_day, boundary_ts = boundary
     rows = conn.execute(
         """
-        SELECT source, SUM(xp) FROM (
+        SELECT source, ROUND(SUM(xp), 2) FROM (
             SELECT source, amount AS xp FROM xp_events
              WHERE guild_id = ? AND user_id = ? AND created_at >= ?
             UNION ALL

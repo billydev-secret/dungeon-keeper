@@ -210,6 +210,26 @@ def test_a_hole_in_the_rollup_holds_the_watermark_back(sync_db_path):
     assert watermark < gap_day
 
 
+def test_by_source_totals_are_rounded_so_the_two_paths_agree(sync_db_path):
+    """Summing per-day buckets associates the additions differently than
+    summing every event, so the paths can differ in a float's last bits —
+    seen on prod as 13589.63 vs 13589.630000000001. Both round to 2dp, the
+    precision XP is displayed at, which makes them exactly equal."""
+    with open_db(sync_db_path) as conn:
+        for i in range(40):
+            _event(conn, days_ago=150 + (i % 20), user=USER_A, amount=0.07)
+        for i in range(15):
+            _event(conn, days_ago=10 + (i % 5), user=USER_A, amount=0.03)
+        before = get_user_xp_by_source(conn, GUILD, USER_A)
+        _roll(conn)
+        after = get_user_xp_by_source(conn, GUILD, USER_A)
+        _prune(conn)
+        pruned = get_user_xp_by_source(conn, GUILD, USER_A)
+
+    assert before == after == pruned
+    assert after["text"] == round(40 * 0.07 + 15 * 0.03, 2)
+
+
 def test_null_channel_events_are_not_lost_by_the_union(sync_db_path):
     """USER_A's 120-day-old event has no channel; it must still count toward
     the all-time total even though it cannot appear in a channel report."""

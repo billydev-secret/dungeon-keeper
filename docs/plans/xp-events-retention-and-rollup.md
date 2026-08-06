@@ -162,12 +162,21 @@ SQLite lets NULLs coexist in a PRIMARY KEY, so the rollup writer must
 
 ### Expected saving
 
-After a 90-day retention: ~496k raw rows + 87k rollup rows against
-1,022,477 today, so roughly **43% fewer rows** and, since the two indexes
-scale with the table, something like **145 MB → ~85 MB**. Worth doing,
-but less than the "halves the largest object" the sweep estimated — that
-figure assumed events could be replaced by aggregates outright, and the
-360-day graphs are why they cannot.
+Measured, not estimated — the Stage 2a verification below actually runs
+the prune against a prod snapshot and VACUUMs:
+
+| | Before | After a 90-day prune |
+|---|---|---|
+| `xp_events` rows | 1,022,477 | 498,822 |
+| `xp_events` + its 2 indexes | 144.6 MB | 69.5 MB |
+| `xp_daily` + its 3 indexes | — | 18.7 MB |
+| **Total** | **144.6 MB** | **88.2 MB** |
+
+So **51% fewer raw rows** and **~56 MB back** (a 39% cut on the XP
+footprint, ~7.5% of the whole 746 MB database). Worth doing, but less
+than the "halves the largest object" the sweep estimated — that figure
+assumed events could be replaced by aggregates outright, and the 360-day
+graphs are why they cannot.
 
 ### The one thing a daily rollup cannot do exactly
 
@@ -271,6 +280,22 @@ everything, and it would have been refused. Until the rollup covers
 everything below the boundary the readers stay on raw, which is still
 complete because nothing is pruned — so Stage 2a is a provable no-op on
 today's data.
+
+Verified against a prod snapshot the same way Stage 1 was, but with the
+Stage 3 prune actually simulated: roll up 180 days, snapshot every
+converted reader's output across all 7 guilds (leaderboards and
+distributions for all 7 sources, standings for the top 10 users, XP by
+source for the top 25, last-activity maps for the 5 busiest channels),
+then delete the 523,655 raw events below the boundary and snapshot again.
+**Both comparisons are exactly equal** — rolling up changes nothing, and
+pruning changes nothing.
+
+That check earned its keep: the first run disagreed on one key, by
+1.8e-12. Not a logic error — summing a day into a bucket and then summing
+buckets associates the additions differently than summing every event at
+once. `get_user_xp_by_source` was the one reader not rounding to 2dp
+(inherited from the inline `jail_cog` query it replaced); rounding it
+like its siblings makes the paths exactly equal rather than almost equal.
 
 **Stage 2b — the bucketed readers.** Not built. `activity_graphs`' four
 XP queries at `month` resolution (the 360-day reach), and
