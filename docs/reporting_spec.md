@@ -21,6 +21,10 @@ Every report is admin-only, GET-only (cache clear is the single POST), and read 
 
 Day-bucketed charts roll over at the guild's local 6 am, not midnight. Names on every row are resolved live from the guild cache when the bot is online and fall back to the historical name archive when offline; some tiles (role listings, guild-wide inactivity) return a service-unavailable error when the bot is offline since they depend on live role membership.
 
+The **Community Health** panel (`/api/health/*`) has its own cache — the DB-backed `health_metrics_cache` table, 15-minute TTL, keyed by `(guild_id, metric_key)`. As of 2026-08 every surface uses it, not just the grid: the sentiment feed and the sentiment outliers joined their sibling tiles, and the deep-dive endpoints (dau-mau, heatmap, channel-health, gini, social-graph, sentiment, sentiment-feed, newcomer-funnel, cohort-retention, mod-workload, mod-engagement) now cache under a `deep:` key prefix — a deep dive returns a superset of its tile (per-channel breakdowns, full graphs, 50-row feeds), so the two shapes must never share a key. Every parameter that changes the population is part of the key (`+bots` for `include_bots`, `|days=N` for the mod-engagement window). **Deep dives are therefore up to 15 minutes stale**, where they used to recompute per click. Display names are the exception: they are resolved after the cache read and never stored, so a rename shows up on the next request rather than after the TTL. `clear_cache(conn, guild_id)` drops tile and deep-dive entries together.
+
+Sentiment reads go against the `messages` table's own `sentiment` / `emotion` columns (indexed `(guild_id, sentiment)`), not the `message_sentiment` side table — the two are written by the same code paths and carry identical data, but only `messages` is indexed for the queries the panel actually runs.
+
 **Bots are excluded from every metric by default** (2026-07). Bot traffic was ~21% of stored messages, so counting it made every message-volume number wrong by up to a fifth; the worst single case was a channel that was 99% one bot. `bot_filter_clause()` in `bot_modules/core/bot_exclusion.py` is the single source of truth — a `NOT IN (SELECT user_id FROM known_users WHERE guild_id=? AND is_bot=1)` fragment appended to a query's `WHERE`. Every affected route takes `include_bots: bool = False` to opt back in; the health cache namespaces bot-inclusive payloads under a separate key (`cache_key()`) so the two variants can't poison each other.
 
 `known_users` is the only source consulted. `/api/reports/activity` previously scanned live `guild.members` for `.bot` plus a `guild_config` allowlist — that missed bots which had left the server, and it is gone. Authors with no `known_users` row count as human: in prod all 40 such accounts are departed members (39 of 40 have XP rows, and no bot has ever earned XP). XP was already human-only, so XP totals are unaffected.
@@ -55,6 +59,15 @@ Each result row shows author + channel name, content (truncated), timestamp, sen
 Mods can also issue a **natural-language query** ("messages from alice or bob in #general about cake last week"); the AI parses it into author / channel / content / date filters and pre-populates the chips. The mod can tweak the chips and re-run.
 
 A separate **Export** button downloads the current result set as a CSV. Both the panel and the export are mod-gated; admin isn't required.
+
+**Regex search runs under rails.** A pattern can't be pushed into SQL, so it is matched row by row inside the bot's own process — and CPython's regex engine holds the GIL for the whole of a single match, so one catastrophic pattern would stall the Discord gateway, not just the request. Four limits apply, and each one that trips returns a 400 explaining which:
+
+- **Pattern shape.** A repeat nested inside a repeated group (`(a+)+`, `(x?)*`, `([a-z]+)*`) or a repeated group whose branches overlap (`(a|ab)*`) is refused outright — those are the exponential-backtracking shapes. So are patterns over 300 characters, more than 12 unbounded repeats, or a `{n,m}` bound above 200. Ordinary patterns (`(cat|dog)+`, `\d{3}-\d{4}`, `https?://\S+`) are unaffected.
+- **Match input** is capped at 4096 characters — Discord's own message ceiling, so nothing real is lost.
+- **Rows scanned** are capped at 50,000 and **matches retained** at 5,000. Results are streamed in batches and only matches are kept, rather than pulling every message in the guild into memory first.
+- **Wall clock** is capped at 5 seconds across the whole scan; blowing it returns "narrow your filters" instead of a partial answer.
+
+When a row or match cap stops the scan early the response carries `truncated: true`, so the reported total is a floor rather than the whole answer.
 
 ### Incident detection
 

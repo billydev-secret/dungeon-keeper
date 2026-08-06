@@ -14,6 +14,9 @@ import { confirmDialog, toast } from "../ui.js";
 
 const BASE = "/api/announcements";
 
+// How many already-posted announcements the history section renders.
+const HISTORY_LIMIT = 25;
+
 const BADGES = {
   draft: ["Draft", "ann-badge-draft"],
   scheduled: ["Scheduled", "ann-badge-scheduled"],
@@ -82,6 +85,17 @@ export function mount(container) {
     busy: false,             // a mutating request is in flight
   };
 
+  // Wired once against the wrapper, which outlives every open/close (only its
+  // innerHTML is replaced). openEditor used to add these on each open and never
+  // removed them, so the Nth edit of a session ran the preview debounce N times
+  // and marked the page dirty N times over.
+  guardForm(editorWrap);
+  editorWrap.addEventListener("input", (ev) => {
+    if (!state.editingId) return;
+    syncButtonField(ev.target);
+    schedulePreview();
+  });
+
   function tickClock() {
     clockEl.textContent =
       `Times are server-local (${offsetLabel(state.tz)}). Current server time: ` +
@@ -132,12 +146,19 @@ export function mount(container) {
         `)).join("")
       : renderEmpty("Nothing queued yet. Press New Announcement to write one.");
 
-    historyEl.innerHTML = sent.length
-      ? sent.map((i) => rowHtml(i, `
+    // "Already Posted" grows without bound — every announcement this server has
+    // ever sent, newest last. Show the most recent slice and say how much is
+    // behind it rather than rendering hundreds of rows into the page.
+    const shown = sent.slice(-HISTORY_LIMIT).reverse();
+    const moreNote = sent.length > shown.length
+      ? `<div class="field-hint" style="padding:6px 2px;">Showing the ${shown.length} most recent of ${sent.length} posted announcements.</div>`
+      : "";
+    historyEl.innerHTML = shown.length
+      ? shown.map((i) => rowHtml(i, `
           ${i.jump_url ? `<a class="act-btn ghost" href="${esc(i.jump_url)}" target="_blank" rel="noopener">Open in Discord</a>` : ""}
           <button class="act-btn ghost" data-action="clone" data-id="${i.id}">Copy</button>
           <button class="doc-x" data-action="delete" data-id="${i.id}" title="Delete">✕</button>
-        `)).join("")
+        `)).join("") + moreNote
       : renderEmpty("No announcements have been posted yet.");
   }
 
@@ -274,8 +295,6 @@ export function mount(container) {
     // Unsaved-edit protection: the editor is a div, not a <form>, and reports
     // through toast() rather than showStatus(), so the flag is cleared by hand
     // whenever the editor closes cleanly.
-    guardForm(editorWrap);
-
     // Buttons are edited through `state.buttons`, not read back off the DOM —
     // adding or removing a row re-mounts every role picker, which would drop
     // unsaved text otherwise.
@@ -287,10 +306,6 @@ export function mount(container) {
     }));
     renderButtonRows();
 
-    editorWrap.addEventListener("input", (ev) => {
-      syncButtonField(ev.target);
-      schedulePreview();
-    });
     field("[data-f-mention]").addEventListener("change", () => {
       field("[data-role-wrap]").style.display =
         field("[data-f-mention]").value === "role" ? "" : "none";

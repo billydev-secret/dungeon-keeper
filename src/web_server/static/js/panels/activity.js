@@ -1,9 +1,9 @@
-import { api, esc } from "../api.js";
+import { api } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import { makeBarChart, CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, ROLE_COLORS } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 import { renderEmpty, renderError } from "../states.js";
-import { filterSelect } from "../filter-select.js";
+import { filterSelect, multiFilterSelect } from "../filter-select.js";
 import { onPickerChange } from "../config-helpers.js";
 
 const RESOLUTIONS = [
@@ -60,18 +60,12 @@ export function mount(container, initialParams) {
         </label>
         <span class="ctrl-field">Member<span data-slot="user"></span></span>
         <span class="ctrl-field">Channel<span data-slot="channel"></span></span>
-        <label>Exclude Channels
-          <div class="filter-select" data-exclude-search>
-            <input class="filter-select-input" data-exclude-input type="text" placeholder="Add channel…" autocomplete="off" />
-            <div class="filter-select-list" data-exclude-list></div>
-          </div>
-        </label>
+        <span class="ctrl-field">Exclude Channels<span data-slot="exclude"></span></span>
         <label style="flex-direction:row;align-items:center;gap:6px;">
           <input type="checkbox" data-control="include-bots" />
           Show Bots
         </label>
       </div>
-      <div data-excluded-channels style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
       <div data-slider-wrap></div>
     </div>
@@ -80,9 +74,6 @@ export function mount(container, initialParams) {
   const resEl  = container.querySelector('[data-control="resolution"]');
   const modeEl = container.querySelector('[data-control="mode"]');
   const includeBotsEl = container.querySelector('[data-control="include-bots"]');
-  const excludeInput = container.querySelector("[data-exclude-input]");
-  const excludeList  = container.querySelector("[data-exclude-list]");
-  const excludePills = container.querySelector("[data-excluded-channels]");
 
   resEl.value  = initialParams.resolution || "day";
   modeEl.value = initialParams.mode || "xp";
@@ -94,57 +85,19 @@ export function mount(container, initialParams) {
   const sliderWrap = container.querySelector("[data-slider-wrap]");
   const userFS = filterSelect("Type to filter…", [], { label: "Member", emptyLabel: "(all members)" });
   const chanFS = filterSelect("Type to filter…", [], { label: "Channel", emptyLabel: "(all channels)" });
+  // Exclude Channels was a hand-rolled combobox: mousedown-to-pick plus a
+  // blur timeout, no keyboard handling and no ARIA, so it was unusable without
+  // a mouse — while the two filters beside it already used the shared widget.
+  // multiFilterSelect is that widget's multi-value form: it brings the chips,
+  // arrow-key navigation, Enter-to-pick, Escape, and the combobox roles, and it
+  // announces a genuine value change as a bubbling `dk:change`.
+  const excludeFS = multiFilterSelect("Add channel…", [], { label: "Exclude channels" });
   container.querySelector('[data-slot="user"]').appendChild(userFS.el);
   container.querySelector('[data-slot="channel"]').appendChild(chanFS.el);
+  container.querySelector('[data-slot="exclude"]').appendChild(excludeFS.el);
 
   let allChannels = [];
-  const excludedChannels = new Set();
-
-  function renderExcludeDropdown(filter) {
-    const q = filter.toLowerCase();
-    const matches = allChannels
-      .filter((ch) => !excludedChannels.has(ch.id) && (!q || ch.name.toLowerCase().includes(q)))
-      .slice(0, 40);
-    excludeList.innerHTML = matches
-      .map((ch) => `<div class="filter-select-item" data-id="${esc(ch.id)}">#${esc(ch.name)}</div>`)
-      .join("");
-    excludeList.style.display = matches.length ? "block" : "none";
-  }
-
-  function renderExcludedPills() {
-    excludePills.innerHTML = [...excludedChannels].map((id) => {
-      const ch = allChannels.find((c) => c.id === id);
-      const name = ch ? ch.name : id;
-      return `<button class="role-pill" data-id="${esc(id)}" style="
-        display:inline-flex;align-items:center;gap:4px;
-        background:var(--bg-alt);border:1px solid var(--rule);border-radius:14px;
-        padding:3px 10px;font-size:12px;color:var(--ink);cursor:pointer;
-      ">#${esc(name)} <span style="color:var(--ink-dim);font-weight:700;">&times;</span></button>`;
-    }).join("");
-  }
-
-  excludeInput.addEventListener("focus", () => renderExcludeDropdown(excludeInput.value));
-  excludeInput.addEventListener("input", () => renderExcludeDropdown(excludeInput.value));
-  excludeInput.addEventListener("blur", () => {
-    setTimeout(() => { excludeList.style.display = "none"; }, 150);
-  });
-  excludeList.addEventListener("mousedown", (e) => {
-    const item = e.target.closest(".filter-select-item");
-    if (!item) return;
-    e.preventDefault();
-    excludedChannels.add(item.dataset.id);
-    excludeInput.value = "";
-    excludeList.style.display = "none";
-    renderExcludedPills();
-    refresh();
-  });
-  excludePills.addEventListener("click", (e) => {
-    const pill = e.target.closest(".role-pill");
-    if (!pill) return;
-    excludedChannels.delete(pill.dataset.id);
-    renderExcludedPills();
-    refresh();
-  });
+  const excludedIds = () => excludeFS.getValues();
 
   async function loadDropdowns() {
     try {
@@ -171,17 +124,19 @@ export function mount(container, initialParams) {
       userFS.setOptions(memberOpts);
       if (initialParams.user_id) userFS.setValue(initialParams.user_id);
 
+      excludeFS.setOptions(channelOpts);
+      const initialExcluded = [];
       if (initialParams.exclude_channels === undefined) {
         for (const wanted of DEFAULT_EXCLUDED_CHANNEL_NAMES) {
           const match = allChannels.find((ch) => ch.name.toLowerCase() === wanted.toLowerCase());
-          if (match) excludedChannels.add(match.id);
+          if (match) initialExcluded.push(match.id);
         }
       } else if (initialParams.exclude_channels) {
         for (const id of initialParams.exclude_channels.split(",").map((s) => s.trim()).filter(Boolean)) {
-          excludedChannels.add(id);
+          initialExcluded.push(id);
         }
       }
-      renderExcludedPills();
+      excludeFS.setValues(initialExcluded);
     } catch (_) {
       // Meta lookups are optional garnish here — the chart still renders
       // unfiltered if the member/channel lists don't load.
@@ -190,6 +145,9 @@ export function mount(container, initialParams) {
     // doesn't count as a user change.
     onPickerChange(userFS, refresh);
     onPickerChange(chanFS, refresh);
+    // The multi-picker fires its own change event (setValues above does not),
+    // so it needs no focusout dance.
+    excludeFS.el.addEventListener("dk:change", refresh);
   }
 
   async function refresh() {
@@ -199,7 +157,7 @@ export function mount(container, initialParams) {
     };
     if (userFS.getValue()) params.user_id = userFS.getValue();
     if (chanFS.getValue()) params.channel_id = chanFS.getValue();
-    if (excludedChannels.size) params.exclude_channel_ids = [...excludedChannels].join(",");
+    if (excludedIds().length) params.exclude_channel_ids = excludedIds().join(",");
     if (includeBotsEl.checked) params.include_bots = "true";
 
     const qs = new URLSearchParams();
@@ -207,7 +165,7 @@ export function mount(container, initialParams) {
     qs.set("mode", modeEl.value);
     if (userFS.getValue()) qs.set("user_id", userFS.getValue());
     if (chanFS.getValue()) qs.set("channel_id", chanFS.getValue());
-    qs.set("exclude_channels", [...excludedChannels].join(","));
+    qs.set("exclude_channels", excludedIds().join(","));
     qs.set("include_bots", includeBotsEl.checked ? "1" : "0");
     history.replaceState(null, "", `#/activity?${qs}`);
 

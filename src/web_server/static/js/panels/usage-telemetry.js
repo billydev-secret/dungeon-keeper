@@ -13,11 +13,14 @@ import { allPageIds } from "../nav-registry.js";
 const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`);
 
 const CODE = (v) => `<code>${esc(v)}</code>`;
-const TS = (v) => esc(fmtTs(v));
+// table.js escapes cell text itself now; fmtTs output goes through as text.
+const TS = (v) => fmtTs(v);
 
 // Shared by the command and panel tables; the command one appends Errors.
+// `html: true` on the name column — CODE wraps the value in <code> and does its
+// own esc() of the interpolated name (see table.js ESCAPING).
 const nameColumns = (label) => [
-  { key: "name", label, format: CODE },
+  { key: "name", label, html: true, format: CODE },
   { key: "uses", label: "Uses", cls: "num" },
   { key: "users", label: "People", cls: "num" },
 ];
@@ -25,8 +28,8 @@ const nameColumns = (label) => [
 const COMMAND_COLUMNS = [
   ...nameColumns("Command"),
   {
-    key: "errors", label: "Errors", cls: "num",
-    format: (v) => `<span class="${v ? "num-err" : "num-dim"}">${v}</span>`,
+    key: "errors", label: "Errors", cls: "num", html: true,
+    format: (v) => `<span class="${v ? "num-err" : "num-dim"}">${Number(v) || 0}</span>`,
   },
   { key: "last_ts", label: "Last used", format: TS },
 ];
@@ -37,7 +40,7 @@ const PANEL_COLUMNS = [
 ];
 
 const userColumns = (unitLabel) => [
-  { key: "name", label: "Member", format: (v, row) => esc(v || `User ${row.user_id}`) },
+  { key: "name", label: "Member", format: (v, row) => v || `User ${row.user_id}` },
   { key: "uses", label: "Total", cls: "num" },
   { key: "distinct_names", label: unitLabel, cls: "num" },
   { key: "last_ts", label: "Last seen", format: TS },

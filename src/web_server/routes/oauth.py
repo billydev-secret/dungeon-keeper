@@ -263,17 +263,21 @@ async def callback(request: Request) -> RedirectResponse:
             }]
 
     # 4. Create session cookie
+    #
+    # The OAuth access token is deliberately not handed to the session: the
+    # cookie is signed, not encrypted, and nothing reads the token back.
     auth: DiscordOAuthAuth = request.app.state.auth  # type: ignore[assignment]
+    generation = await asyncio.to_thread(auth.current_generation, ctx, user_id)
     cookie_value = auth.create_session_cookie(
         user_id=user_id,
         username=username,
-        access_token=access_token,
         permission_bits=permission_bits,
         role_ids=role_ids,
         role_names=role_names,
         guild_id=active_guild_id,
         guilds=mutual_guilds,
         avatar_url=avatar_url,
+        generation=generation,
     )
 
     _log.info(
@@ -309,7 +313,22 @@ async def callback(request: Request) -> RedirectResponse:
 
 
 @router.get("/logout", include_in_schema=False)
-async def logout() -> RedirectResponse:
+async def logout(request: Request) -> RedirectResponse:
+    """Log out, server-side.
+
+    Dropping the cookie only clears *this* browser; a copy captured anywhere
+    else stayed valid for the full 30-day ``max_age``. Bumping the user's
+    session generation retires every cookie minted before now, this browser's
+    included.
+    """
+    auth = request.app.state.auth
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if isinstance(auth, DiscordOAuthAuth) and cookie:
+        session = auth.read_session(cookie)
+        if session and session.get("uid"):
+            ctx = request.app.state.ctx
+            await asyncio.to_thread(auth.revoke_sessions, ctx, int(session["uid"]))
+
     response = RedirectResponse("/login", status_code=302)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response

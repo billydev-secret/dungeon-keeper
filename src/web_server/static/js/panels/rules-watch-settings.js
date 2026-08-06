@@ -7,6 +7,7 @@ import {
   guardForm,
   renderMetaWarning,
   mountChannelPicker,
+  mountAsync,
 } from "../config-helpers.js";
 
 /**
@@ -17,7 +18,7 @@ import {
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading configuration…</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const rw = config.rules_watch || { enabled: false, channel_id: "0", guard_available: false };
 
@@ -26,7 +27,7 @@ export function mountSettings(container) {
       : `<span class="badge badge-warning">Not set up</span>`;
     const guardHint = rw.guard_available
       ? "The local guard model is set up, so flagged messages are recorded as soon as monitoring is on."
-      : "No local guard model is set up. Even with monitoring on, <strong>no messages will be flagged</strong> until you configure the model on the AI (Local LLM) page.";
+      : "No local guard model is set up. Even with monitoring on, <strong>no messages will be flagged</strong> until you configure the model on the AI Models page.";
 
     container.innerHTML = `
       <div>
@@ -101,5 +102,5 @@ export function mountSettings(container) {
 
     // After the channel picker mounts, so its inputs are covered too.
     lockUnlessAdmin(container);
-  })();
+  }, { errorMsg: "Couldn’t load the rules watch settings." });
 }

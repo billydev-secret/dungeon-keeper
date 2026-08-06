@@ -75,6 +75,32 @@ async def home_data(
     voice_channels: list[dict] = []
     presence: dict = {"online": 0, "idle": 0, "dnd": 0, "offline": 0}
 
+    # Channel visibility. Mods see every room; everyone else sees only the
+    # rooms Discord itself would show them. If the viewer isn't in the member
+    # cache (or the bot is offline) we can't evaluate their perms, so fail
+    # closed. Used by both the voice list and the top-channels board.
+    viewer = guild.get_member(user.user_id) if (guild and not is_mod) else None
+
+    def _viewer_can_see(channel) -> bool:
+        if is_mod:
+            return True
+        if viewer is None:
+            return False
+        try:
+            return bool(channel.permissions_for(viewer).view_channel)
+        except Exception:
+            return False
+
+    def _viewer_can_see_id(channel_id: int) -> bool:
+        if is_mod:
+            return True
+        if guild is None:
+            return False
+        channel = guild.get_channel_or_thread(channel_id)
+        if channel is None:
+            return False
+        return _viewer_can_see(channel)
+
     if guild:
         guild_info = {
             "name": guild.name,
@@ -87,21 +113,6 @@ async def home_data(
             status = str(m.status)
             if status in presence:
                 presence[status] += 1
-
-        # Voice channel population. Mods see every room; everyone else sees
-        # only the rooms Discord itself would show them. If the viewer isn't
-        # in the member cache we can't evaluate their perms, so fail closed.
-        viewer = guild.get_member(user.user_id) if not is_mod else None
-
-        def _viewer_can_see(channel) -> bool:
-            if is_mod:
-                return True
-            if viewer is None:
-                return False
-            try:
-                return bool(channel.permissions_for(viewer).view_channel)
-            except Exception:
-                return False
 
         for vc in guild.voice_channels:
             if not _viewer_can_see(vc):
@@ -645,6 +656,17 @@ async def home_data(
             return result
 
     db_data = await run_query(_q)
+
+    # The busiest-channels board is aggregate volume, but the *names* are not
+    # public: a non-mod would otherwise learn that #staff-only exists and how
+    # loud it is. Filter it to what the viewer can actually open in Discord —
+    # the same check the voice list above already applies (B-SEC7).
+    if not is_mod and "top_channels" in db_data:
+        db_data["top_channels"] = [
+            c
+            for c in db_data["top_channels"]
+            if _viewer_can_see_id(int(c["channel_id"]))
+        ]
 
     # Overlay live guild names where available
     unames = db_data.get("user_names", {})

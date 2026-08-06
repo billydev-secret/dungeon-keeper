@@ -173,9 +173,24 @@ async def list_menus(request: Request, _: AuthenticatedUser = _MOD):
     guild = _guild_or_none(ctx, guild_id)
 
     def _q():
+        # One options query for the whole page, not one per menu (B-PERF7).
         with ctx.open_db() as conn:
             menus = menus_db.list_menus(conn, guild_id)
-            return [(m, menus_db.list_options(conn, m["id"])) for m in menus]
+            if not menus:
+                return []
+            placeholders = ",".join("?" * len(menus))
+            rows = conn.execute(
+                f"SELECT * FROM role_menu_options WHERE menu_id IN ({placeholders})"
+                " ORDER BY menu_id, position",
+                [m["id"] for m in menus],
+            ).fetchall()
+            by_menu: dict[int, list[dict]] = {}
+            for r in rows:
+                # Shared row-shaper so the list view and the single-menu view
+                # can't drift. (A ``list_options_bulk`` belongs in
+                # ``role_menus.db`` proper; kept here to stay in one file.)
+                by_menu.setdefault(r["menu_id"], []).append(menus_db._option_row(r))
+            return [(m, by_menu.get(m["id"], [])) for m in menus]
 
     rows = await run_query(_q)
     out = []
@@ -274,6 +289,31 @@ def _validate_update(body: MenuUpdateBody) -> list[dict]:
     return options
 
 
+def _require_admin_for_dangerous(
+    user: AuthenticatedUser, elevated_used: list[dict]
+) -> None:
+    """A moderator may not hand out admin-permission roles (B-SEC3).
+
+    Every route here is moderator-gated, and the per-option ``elevated`` flag
+    is supplied by the same moderator making the request — so on its own it
+    audits the escalation rather than preventing it. Menus that only carry
+    plain roles stay fully moderator-editable; the moment one option points at
+    a role with dangerous permissions the *caller* must be an admin.
+    """
+    if not elevated_used:
+        return
+    if "admin" in user.perms:
+        return
+    names = ", ".join(f"“{u['name']}”" for u in elevated_used)
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"{names} carries elevated permissions — only an admin can put it in"
+            " a self-serve menu."
+        ),
+    )
+
+
 def _check_roles_against_guild(
     guild: discord.Guild, options: list[dict]
 ) -> list[dict]:
@@ -319,6 +359,7 @@ async def update_menu(
     options = _validate_update(body)
     guild = _require_guild(ctx, guild_id)
     elevated_used = _check_roles_against_guild(guild, options)
+    _require_admin_for_dangerous(user, elevated_used)
 
     try:
         required_role_id = int(body.required_role_id or 0)
@@ -418,7 +459,7 @@ async def publish_menu(
         raise HTTPException(
             status_code=400, detail="Add at least one choice before publishing."
         )
-    _check_roles_against_guild(guild, options)
+    _require_admin_for_dangerous(user, _check_roles_against_guild(guild, options))
 
     result = await menus_sync.publish_menu(ctx, guild, menu, options, channel_id)
     if result.status == "missing_channel":
@@ -448,6 +489,19 @@ async def set_menu_enabled(
     guild_id = get_active_guild_id(request)
     guild = _require_guild(ctx, guild_id)
     menu, options = await run_query(lambda: _load_menu(ctx, guild_id, menu_id))
+
+    # Switching a dangerous menu back *on* is the same escalation as publishing
+    # it, so it needs the same admin gate. Turning one off is always allowed —
+    # the safe direction shouldn't need a bigger key than the unsafe one.
+    if body.enabled:
+        _require_admin_for_dangerous(
+            user,
+            [
+                {"role_id": role.id, "name": role.name}
+                for role in (guild.get_role(o["role_id"]) for o in options)
+                if role is not None and is_dangerous(role)
+            ],
+        )
 
     result = await menus_sync.set_menu_live_state(ctx, guild, menu, options, body.enabled)
 

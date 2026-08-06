@@ -1,5 +1,5 @@
 import { api, apiPost, apiDelete } from "../api.js";
-import { showStatus, guardForm } from "../config-helpers.js";
+import { showStatus, guardForm, mountAsync } from "../config-helpers.js";
 import { confirmDialog } from "../ui.js";
 
 // Cache-buster so a freshly uploaded/removed border isn't served stale by the
@@ -46,7 +46,7 @@ async function copyToClipboard(text, btn) {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading quote tool…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     let meta = { exists: false };
     try {
       meta = await api("/api/config/quote-border");
@@ -208,5 +208,5 @@ export function mount(container) {
         removeBtn.disabled = false;
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the quote tool settings." });
 }

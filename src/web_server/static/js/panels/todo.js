@@ -2,7 +2,7 @@ import { api, apiPost, apiPut, apiDelete, esc, fmtTs, fmtAge } from "../api.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { syncHash } from "../report-helpers.js";
-import { guardForm, loadChannels, mountChannelPicker, showStatus } from "../config-helpers.js";
+import { guardForm, loadChannels, mountAsync, mountChannelPicker, showStatus } from "../config-helpers.js";
 import { confirmDialog, toast } from "../ui.js";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -301,7 +301,10 @@ export function mount(container, initialParams = {}) {
 
   /** Mirror the tab and selected task into the URL (W-D9). */
   function pushHash() {
-    syncHash("todo", {
+    // "mod-todo" is the id this page is registered under in app.js — "todo"
+    // rewrote the URL to a route that doesn't exist, so every render left a
+    // hash that reloads/bookmarks to "Page Not Available".
+    syncHash("mod-todo", {
       filter: state.filter === "pending" ? "" : state.filter,
       task: state.activeId || "",
     });
@@ -614,7 +617,10 @@ export function mount(container, initialParams = {}) {
     }
   });
 
-  (async () => {
+  // mountAsync, not a bare `(async () => {…})()`: without a rejection handler a
+  // failed first fetch left the "Loading…" state up forever plus an unhandled
+  // rejection in the console (F1). Now it renders a real error with a retry.
+  return mountAsync(container, async () => {
     // Channels first: the board card can't render its picker without them, and
     // a channel-load failure shouldn't block the task list from appearing.
     try {
@@ -627,7 +633,5 @@ export function mount(container, initialParams = {}) {
       state.channels = [];
     }
     await Promise.all([refresh(), refreshRecurring()]);
-  })();
-
-  return { unmount() {} };
+  }, { errorMsg: "Couldn't load the todo board." });
 }

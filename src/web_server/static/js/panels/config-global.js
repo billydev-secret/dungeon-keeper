@@ -9,6 +9,7 @@ import {
   renderMetaWarning,
   mountChannelPicker,
   mountRoleMultiPicker,
+  mountAsync,
 } from "../config-helpers.js";
 
 // A Discord user id is a snowflake: 17–20 digits, no other characters.
@@ -17,7 +18,7 @@ const SNOWFLAKE_RE = /^\d{17,20}$/;
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels, roles, supportResp] = await Promise.all([
       loadConfig(), loadChannels(), loadRoles(),
       api("/api/config/support-access").catch(() => ({ enabled: false })),
@@ -192,5 +193,5 @@ export function mount(container) {
         showStatus(supportStatus, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the global settings." });
 }

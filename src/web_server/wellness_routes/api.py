@@ -88,7 +88,10 @@ def _cap_to_dict(c) -> dict:
         "id": c.id,
         "label": c.label,
         "scope": c.scope,
-        "scope_target_id": c.scope_target_id,
+        # Snowflake-as-string: a channel/category id exceeds 2^53 and would
+        # lose its low digits once JSON.parse turns it into a JS number. The
+        # write side accepts either form (`int(...)` on the payload).
+        "scope_target_id": str(c.scope_target_id),
         "window": c.window,
         "limit": c.cap_limit,
         "exclude_exempt": c.exclude_exempt,

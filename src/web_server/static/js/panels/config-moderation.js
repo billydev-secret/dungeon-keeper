@@ -10,13 +10,14 @@ import {
   mountCategoryPicker,
   mountRolePicker,
   mountRoleMultiPicker,
+  mountAsync,
 } from "../config-helpers.js";
 import { confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels, categories, roles] = await Promise.all([loadConfig(), loadChannels(), loadCategories(), loadRoles()]);
     const m = config.moderation;
     let currentStorage = (config.privacy && config.privacy.message_storage_level) || "none";
@@ -195,5 +196,5 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the moderation settings." });
 }

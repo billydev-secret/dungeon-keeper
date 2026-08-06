@@ -2,16 +2,17 @@ import {
   loadConfig, loadChannels, loadRoles, roleName, apiPut, apiDelete, showStatus,
   guardForm, renderMetaWarning, mountRolePicker, mountChannelPicker, mountPicker,
   toRoleOptions, esc,
+  mountAsync, trackCard, clearCardDirty, hasDirtySibling, rerenderUnlessDirty,
 } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading role grants…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
     render(container, config.roles, channels, roles);
-  })();
+  }, { errorMsg: "Couldn’t load the role grant settings." });
 }
 
 function permLabel(perm, roles) {
@@ -251,6 +252,8 @@ function render(container, grants, channels, roles) {
     const form = container.querySelector(`[data-save-form="${CSS.escape(name)}"]`);
     const status = form.querySelector("[data-status]");
     guardForm(form);
+    // Tracked so the add/remove rebuilds below can see unsaved sibling edits (F4).
+    trackCard(form);
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -272,6 +275,7 @@ function render(container, grants, channels, roles) {
           permissions: g._perms || g.permissions || [],
         });
         showStatus(status, true);
+        clearCardDirty(form);
       } catch (err) {
         showStatus(status, false, err.message);
       }
@@ -292,6 +296,12 @@ function render(container, grants, channels, roles) {
       try {
         await apiDelete(`/api/config/roles/${key}`);
         const fresh = await loadConfig();
+        // The deleted grant's card has to go, so this rebuild can't be held
+        // back — but say so when it takes unsaved edits with it (F4).
+        const grantsRoot = container.querySelector("[data-grants]");
+        if (grantsRoot && hasDirtySibling(grantsRoot, btn.closest("[data-save-form]"))) {
+          toast("Grant deleted. Unsaved edits in the other grants were discarded.", "info");
+        }
         render(container, fresh.roles, channels, roles);
       } catch (err) {
         toast(err.message, "error");
@@ -337,7 +347,15 @@ function render(container, grants, channels, roles) {
         required_role_id: pickers.__new__.required_role_id.getValue() || "0",
       });
       const fresh = await loadConfig();
-      render(container, fresh.roles, channels, roles);
+      // Adding a grant used to rebuild every card and silently discard whatever
+      // was typed into an existing one (F4).
+      const grantsRoot = container.querySelector("[data-grants]");
+      const rerender = () => render(container, fresh.roles, channels, roles);
+      if (!grantsRoot) {
+        rerender();
+      } else if (!rerenderUnlessDirty(grantsRoot, null, rerender)) {
+        showStatus(addStatus, true, "Added — reload to see it listed above.");
+      }
     } catch (err) {
       showStatus(addStatus, false, err.message);
     }

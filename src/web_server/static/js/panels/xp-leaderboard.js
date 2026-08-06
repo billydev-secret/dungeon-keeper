@@ -149,7 +149,8 @@ export function mountLeaderboard(container, initialParams) {
             { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
             { key: "level", label: "Level" },
             { key: "total_xp", label: "Total XP", format: (v) => fmtXp(v) },
-            { key: "_diff", label: "vs Median", format: (v) => {
+            // html: colored ± figure, no user-supplied text (table.js ESCAPING).
+            { key: "_diff", label: "vs Median", html: true, format: (v) => {
               const s = v >= 0 ? "+" + fmtXp(v) : "\u2212" + fmtXp(Math.abs(v));
               const color = v >= 0 ? ROLE_COLORS[2] : ROLE_COLORS[3];
               return `<span style="color:${color}">${s}</span>`;

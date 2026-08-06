@@ -1,4 +1,4 @@
-import { loadConfig, apiPut, showStatus, guardForm, lockUnlessAdmin } from "../config-helpers.js";
+import { loadConfig, apiPut, showStatus, guardForm, lockUnlessAdmin, mountAsync } from "../config-helpers.js";
 
 /**
  * The settings half of the Policy Tickets page. Mounted into a region by
@@ -8,7 +8,7 @@ import { loadConfig, apiPut, showStatus, guardForm, lockUnlessAdmin } from "../c
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading configuration…</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const config = await loadConfig();
     const p = config.policy || {};
     const currentHours = Number.isInteger(p.vote_timeout_hours) ? p.vote_timeout_hours : 72;
@@ -63,5 +63,5 @@ export function mountSettings(container) {
     });
 
     lockUnlessAdmin(container);
-  })();
+  }, { errorMsg: "Couldn’t load the policy ticket settings." });
 }

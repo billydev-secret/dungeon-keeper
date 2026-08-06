@@ -3,7 +3,7 @@
 // settlement, grants, the ledger — lives on the Operations page. Gated by
 // the economy manager role (or admin).
 import { api, apiPost, apiPut, apiDelete, esc } from "../api.js";
-import { showStatus, guardForm, loadChannels, mountChannelPicker } from "../config-helpers.js";
+import { showStatus, guardForm, loadChannels, mountChannelPicker, mountAsync } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 import { KIND_LABELS, CHANNEL_SCOPED_KINDS } from "./economy-sources-shared.js";
 
@@ -43,7 +43,7 @@ function bandHint(qtype, reward) {
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading quests…</div></div>`;
-  (async () => {
+  return mountAsync(container, async () => {
     // All three loads are independent — fetch them together rather than one
     // after another (W-D11). The quest list is handed straight to the first
     // render so the library doesn't flash "Loading…" a second time.
@@ -60,8 +60,7 @@ export function mount(container) {
     const economyOff = boardCfg != null && !boardCfg.enabled;
     const prefetched = questsResult.status === "fulfilled" ? questsResult.value.quests : null;
     render(container, channels, boardCfg, economyOff, prefetched);
-  })();
-  return null;
+  }, { errorMsg: "Couldn’t load the quest settings." });
 }
 
 function boardSection(cfg) {

@@ -237,15 +237,28 @@ async def list_quests(
     def _q():
         with ctx.open_db() as conn:
             rows = quests_svc.list_quests(conn, guild_id)
+            # One progress read for the whole community set instead of one per
+            # community quest. Quest libraries are small, so the full table for
+            # this guild's quests is cheaper than N round trips.
+            community_ids = [
+                int(r["id"]) for r in rows if r["qtype"] == "community"
+            ]
+            progress: dict[int, sqlite3.Row] = {}
+            if community_ids:
+                placeholders = ",".join("?" * len(community_ids))
+                progress = {
+                    int(p["quest_id"]): p
+                    for p in conn.execute(
+                        "SELECT quest_id, current, completed_at, settled_at "
+                        f"FROM econ_community_progress WHERE quest_id IN ({placeholders})",
+                        community_ids,
+                    ).fetchall()
+                }
             out = []
             for row in rows:
                 quest = _quest_dict(row)
                 if row["qtype"] == "community":
-                    prog = conn.execute(
-                        "SELECT current, completed_at, settled_at "
-                        "FROM econ_community_progress WHERE quest_id = ?",
-                        (int(row["id"]),),
-                    ).fetchone()
+                    prog = progress.get(int(row["id"]))
                     quest["community_current"] = int(prog["current"]) if prog else 0
                     quest["community_completed_at"] = (
                         prog["completed_at"] if prog else None

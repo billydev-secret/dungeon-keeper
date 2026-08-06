@@ -10,6 +10,7 @@ import {
   mountChannelPicker,
   guardForm,
   renderMetaWarning,
+  mountAsync,
 } from "../config-helpers.js";
 
 export function mount(container) {
@@ -22,7 +23,7 @@ export function mount(container) {
   wrap.appendChild(loading);
   container.appendChild(wrap);
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const c = config.casino || {};
     // Name is edited on the Branding panel; this panel just wears it.
@@ -253,5 +254,5 @@ export function mount(container) {
     });
 
     container.appendChild(panel);
-  })();
+  }, { errorMsg: "Couldn’t load the casino settings." });
 }

@@ -3,7 +3,11 @@
 // admin), same as the Operations page. Everything is a single GET; the
 // Refresh button re-fetches.
 import { api, esc, fmtAge } from "../api.js";
-import { loadMembers } from "../config-helpers.js";
+import { loadMembers, mountAsync } from "../config-helpers.js";
+
+// Server-side cap on the member table (hard cap 500). Named so the "showing
+// top N of M" note and both fetch sites can't drift apart.
+const MEMBER_LIMIT = 100;
 import { renderEmpty, renderError, renderLoading } from "../states.js";
 import { ROLE_COLORS, CHART_ACCENT, CHART_BAR } from "../charts.js";
 
@@ -86,12 +90,12 @@ function fmtDur(secs) {
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading statistics…")}</div>`;
   let liveTimer = null;
-  (async () => {
+  const loading = mountAsync(container, async () => {
     // The member list, the stats blob, and the live pulse don't depend on each
     // other — fetch them together rather than in a waterfall (W-D11).
     const [members, stats] = await Promise.all([
       loadMembers().catch(() => []),
-      api("/api/economy/stats", { limit: 100 }).then(
+      api("/api/economy/stats", { limit: MEMBER_LIMIT }).then(
         (d) => ({ ok: true, data: d }),
         (err) => ({ ok: false, err }),
       ),
@@ -100,8 +104,13 @@ export function mount(container) {
     applyStats(container, members, stats);
     refreshLive(container);
     liveTimer = setInterval(() => refreshLive(container), LIVE_REFRESH_MS);
-  })();
-  return { unmount() { if (liveTimer) clearInterval(liveTimer); } };
+  }, { errorMsg: "Couldn’t load the economy statistics." });
+  return {
+    unmount() {
+      loading.unmount();
+      if (liveTimer) clearInterval(liveTimer);
+    },
+  };
 }
 
 // Every section that the stats fetch fills. Kept in one place so a failure can
@@ -130,7 +139,9 @@ function applyStats(container, members, stats) {
   renderAffordability(container, data.affordability);
   renderBurn(container, data.burn_top, members);
   renderTransfers(container, data.transfers_top, members);
-  renderMembers(container, data.members, members);
+  // supply.holders is the population the member table is capped out of — pass
+  // it through so the table can admit that it is a top-N slice.
+  renderMembers(container, data.members, members, data.supply?.holders);
 }
 
 function render(container, members) {
@@ -275,7 +286,7 @@ async function refreshLive(container) {
 
 async function refresh(container, members) {
   container.querySelector("[data-summary]").innerHTML = renderLoading("Refreshing…");
-  const stats = await api("/api/economy/stats", { limit: 100 }).then(
+  const stats = await api("/api/economy/stats", { limit: MEMBER_LIMIT }).then(
     (d) => ({ ok: true, data: d }),
     (err) => ({ ok: false, err }),
   );
@@ -535,7 +546,7 @@ function sortMembers(members, rows) {
   return sorted;
 }
 
-function renderMembers(container, rows, members) {
+function renderMembers(container, rows, members, holders) {
   const host = container.querySelector("[data-members]");
   const list = rows || [];
   if (!list.length) {
@@ -568,13 +579,20 @@ function renderMembers(container, rows, members) {
         <td class="num">${fmtNum(m.streak)}</td>
       </tr>`;
   }).join("");
+  // The endpoint caps this table at MEMBER_LIMIT holders by balance. Sorting by
+  // any other column re-orders that slice, not the server's whole population —
+  // so say what the slice is instead of letting it read as the full roster.
+  const capNote = holders && holders > list.length
+    ? `<div class="field-hint" style="padding:6px 2px;">Showing the top ${fmtNum(list.length)} of ${fmtNum(holders)} holders by balance. Sorting re-orders these ${fmtNum(list.length)}.</div>`
+    : "";
+
   host.innerHTML = `
     <div style="overflow-x:auto;">
       <table class="data-table">
         <thead><tr>${head}</tr></thead>
         <tbody>${body}</tbody>
       </table>
-    </div>`;
+    </div>${capNote}`;
 
   host.querySelectorAll("[data-sort-col]").forEach((th) => {
     th.addEventListener("click", () => {
@@ -586,7 +604,7 @@ function renderMembers(container, rows, members) {
         // Text columns default to ascending; numeric to descending.
         sortState.dir = (k === "name" || k === "top_faucet") ? "asc" : "desc";
       }
-      renderMembers(container, list, members);
+      renderMembers(container, list, members, holders);
     });
   });
 }

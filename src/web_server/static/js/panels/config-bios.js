@@ -11,6 +11,7 @@ import {
   renderMetaWarning,
   mountChannelPicker,
   mountCategoryPicker,
+  mountAsync,
 } from "../config-helpers.js";
 
 let _fieldSeq = 0;
@@ -76,6 +77,25 @@ export function mount(container) {
     fields: () => renderFieldsTab(panes.fields),
     questions: () => renderQuestionsTab(panes.questions),
   };
+  const loadErrors = {
+    config: "Couldn’t load the bios settings.",
+    fields: "Couldn’t load the profile questions.",
+    questions: "Couldn’t load the icebreaker questions.",
+  };
+
+  // Each tab loader is an un-awaited async call. A rejection used to be an
+  // unhandled promise rejection and left that pane on "Loading…" forever (F1);
+  // mountAsync turns it into an error state in the pane it belongs to. Retry
+  // re-runs just that loader — each one rebuilds its own pane from scratch, so
+  // the default whole-page remount isn't needed here.
+  const handles = {};
+  function openTab(name) {
+    handles[name]?.unmount?.();
+    handles[name] = mountAsync(panes[name], loaders[name], {
+      errorMsg: loadErrors[name],
+      retry: () => openTab(name),
+    });
+  }
 
   container.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -91,14 +111,20 @@ export function mount(container) {
       const name = btn.dataset.tab;
       if (!loaded[name]) {
         loaded[name] = true;
-        loaders[name]();
+        openTab(name);
       }
     });
   });
 
   // Initial tab
   loaded.config = true;
-  loaders.config();
+  openTab("config");
+
+  return {
+    unmount() {
+      for (const h of Object.values(handles)) h?.unmount?.();
+    },
+  };
 }
 
 // ── Config tab ──────────────────────────────────────────────────────

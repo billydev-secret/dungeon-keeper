@@ -8,6 +8,7 @@ import {
   guardForm,
   lockUnlessAdmin,
   renderMetaWarning,
+  mountAsync,
 } from "../config-helpers.js";
 
 const DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}";
@@ -151,7 +152,7 @@ export function mountSettings(container) {
   clearChildren(container);
   appendLoading(container);
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const b = config.birthday || {};
     const me = window.__dk_user || {};
@@ -261,5 +262,5 @@ export function mountSettings(container) {
         showStatus(saveStatus, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the birthday settings." });
 }

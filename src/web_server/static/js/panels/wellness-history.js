@@ -1,10 +1,11 @@
 import { wGet, esc } from "../wellness-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { mountAsync } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading your weekly reports…")}</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     let d;
     try { d = await wGet("/api/wellness/history"); } catch (e) {
       container.querySelector(".panel").innerHTML =
@@ -49,5 +50,5 @@ export function mount(container) {
       </header>
       <div class="w-list">${reportsHTML}</div>
     `;
-  })();
+  }, { errorMsg: "Couldn’t load your weekly reports." });
 }

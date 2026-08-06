@@ -1,12 +1,12 @@
 import { apiPost } from "../api.js";
-import { loadConfig, apiPut, showStatus, escapeHtml, guardForm } from "../config-helpers.js";
+import { loadConfig, apiPut, showStatus, escapeHtml, guardForm, mountAsync } from "../config-helpers.js";
 
 const DEFAULT_ACCENT = "#5865F2";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading branding…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const config = await loadConfig();
     const bi = config.bot_identity || { nick: "", avatar_url: "" };
     const br = config.branding || { accent_mode: "avatar", accent_hex: "" };
@@ -183,5 +183,5 @@ export function mount(container) {
         showStatus(accentStatus, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the branding settings." });
 }

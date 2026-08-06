@@ -1,12 +1,20 @@
 import { wGet, wPost, wPut, wDelete, esc, showStatus } from "../wellness-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
-import { guardForm } from "../config-helpers.js";
+import { guardForm, mountAsync } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading your activity caps…")}</div>`;
 
   let chart = null;
+  // One observer for the panel's lifetime, not one per load(). load() re-runs
+  // on every mode/lookback change and after every save; each run used to build
+  // a fresh ResizeObserver and never disconnect the previous one, so they piled
+  // up and then outlived the panel entirely (F3b). `alignTarget` is repointed
+  // at whatever element the current render produced.
+  let resizeObserver = null;
+  let alignSliders = () => {};
+  let firstLoad = true;
   let currentMode = "daily";
   let currentDays = 30;
   let bucketAvgs = [];
@@ -14,6 +22,9 @@ export function mount(container) {
   let existingHistoCap = null; // cap row with bucket_limits for current mode
 
   async function load() {
+    // Reloads (mode/lookback change, post-save refresh) keep the panel up and
+    // show the failure in place; the FIRST load runs under mountAsync below,
+    // which turns a rejection into a full error state with a retry (F1).
     let caps, histo;
     try {
       [caps, histo] = await Promise.all([
@@ -21,9 +32,12 @@ export function mount(container) {
         wGet(`/api/wellness/activity-histogram?mode=${currentMode}&days=${currentDays}`),
       ]);
     } catch (e) {
+      if (firstLoad) throw e;
       container.querySelector(".panel").innerHTML =
         renderError(`Couldn’t load your activity caps — try again. (${e.message})`);
       return;
+    } finally {
+      firstLoad = false;
     }
 
     bucketAvgs = histo.buckets.map(b => b.avg_messages);
@@ -285,17 +299,20 @@ export function mount(container) {
     canvas.addEventListener("touchend", () => { dragIdx = -1; });
 
     // ── Align slider row with chart area ─────────────────────────
-    function alignSliders() {
-      const area = chart.chartArea;
+    alignSliders = () => {
+      const area = chart?.chartArea;
       if (!area) return;
       const row = container.querySelector("[data-slider-row]");
+      if (!row) return;
       row.style.paddingLeft = area.left + "px";
       row.style.paddingRight = (canvas.parentElement.offsetWidth - area.right) + "px";
-    }
-    // Align after initial render and on resize
-    requestAnimationFrame(alignSliders);
-    const ro = new ResizeObserver(alignSliders);
-    ro.observe(canvas.parentElement);
+    };
+    // Align after initial render and on resize. The observer is created once
+    // and re-pointed at the current canvas — creating one per load() leaked.
+    requestAnimationFrame(() => alignSliders());
+    if (!resizeObserver) resizeObserver = new ResizeObserver(() => alignSliders());
+    resizeObserver.disconnect();
+    resizeObserver.observe(canvas.parentElement);
 
     // ── Slider interaction ───────────────────────────────────────
     container.querySelectorAll("[data-slider-idx]").forEach(slider => {
@@ -402,5 +419,17 @@ export function mount(container) {
     });
   }
 
-  load();
+  const loading = mountAsync(container, load, {
+    errorMsg: "Couldn’t load your activity caps.",
+  });
+
+  // Without this handle the last Chart.js instance and the ResizeObserver both
+  // survived navigation away from the panel.
+  return {
+    unmount() {
+      loading.unmount();
+      if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
+      if (chart) { chart.destroy(); chart = null; }
+    },
+  };
 }

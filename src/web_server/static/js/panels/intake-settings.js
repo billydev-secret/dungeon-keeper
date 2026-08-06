@@ -1,4 +1,4 @@
-import { esc, loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, apiPost, showStatus, lockUnlessAdmin } from "../config-helpers.js";
+import { esc, loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, apiPost, showStatus, lockUnlessAdmin, mountAsync } from "../config-helpers.js";
 
 // Auto-kind choices for a step. "" = manual (welcomers tick a button on the
 // card); the rest tick themselves from bot events.
@@ -17,7 +17,7 @@ const AUTO_KINDS = [
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading config…</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
     const c = config.intake || { enabled: false, channel_id: "0", completion_code: "", stale_hours: 24, steps: [] };
     // Working copy of the step list; rows re-render from this.
@@ -332,5 +332,5 @@ export function mountSettings(container) {
     // Last, so every control both forms built — including the dynamically
     // rendered step and block rows — is covered.
     lockUnlessAdmin(container);
-  })();
+  }, { errorMsg: "Couldn’t load the intake settings." });
 }

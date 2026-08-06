@@ -1,6 +1,7 @@
 // Shared helpers for config panels.
 import { api, apiDelete, apiPut, esc } from "./api.js";
 import { filterSelect, multiFilterSelect } from "./filter-select.js";
+import { renderError } from "./states.js";
 import { confirmDialog, toast } from "./ui.js";
 
 // Canonical escaping + write verbs live in api.js; re-exported here so the
@@ -38,9 +39,18 @@ window.addEventListener("beforeunload", (e) => {
  * chaining. See the contract comment above.
  */
 export function guardForm(form) {
-  const mark = () => { _dirty = true; };
+  const mark = (e) => {
+    // A searchable picker's SEARCH box is not a value. Typing "gen" to find
+    // #general changes nothing the save would send, yet it fired `input` (and
+    // `change` on blur, since it is a real text input) and left the panel
+    // claiming unsaved edits on the way out. The widget announces genuine value
+    // changes with a bubbling `dk:change` instead — see filter-select.js.
+    if (e?.target?.classList?.contains("filter-select-input")) return;
+    _dirty = true;
+  };
   form.addEventListener("input", mark);
   form.addEventListener("change", mark);
+  form.addEventListener("dk:change", mark);
   return form;
 }
 
@@ -163,6 +173,183 @@ export async function loadBots() {
     return [];
   }
   return _bots;
+}
+
+/**
+ * Drop every cached /api/config and /api/meta/* payload (S2).
+ *
+ * All of it is scoped to the ACTIVE guild server-side, but the caches above are
+ * module globals that outlive a guild switch — and switchGuild re-mounts panels
+ * without reloading the page. Left stale, every config panel listed the
+ * *previous* guild's channels / roles / members, and a save then wrote a
+ * foreign guild's snowflake into the new guild's config.
+ *
+ * Called by app.js's applyMeData() — on boot, and on every guild switch,
+ * alongside _resetPanelSpecCache(). Any new guild-scoped module cache added
+ * here must be cleared here too.
+ */
+export function resetMetaCaches() {
+  _configCache = null;
+  _channels = null;
+  _categories = null;
+  _roles = null;
+  _members = null;
+  _bots = null;
+  _metaFailed.clear();
+}
+
+// ── Async panel mount wrapper (F1) ─────────────────────────────────────
+//
+// The shape ~27 config panels are written in:
+//
+//     export function mount(container) {
+//       container.innerHTML = shell;          // "Loading configuration…"
+//       (async () => { const cfg = await loadConfig(); render(cfg); })();
+//     }
+//
+// There is no `.catch`. One failed fetch (503 while the bot reconnects, a
+// dropped wifi) leaves the spinner up forever plus an unhandled rejection in
+// the console, and the user has no way to tell a hung panel from a slow one.
+//
+// mountAsync runs the loader, renders a real error state with a Retry button
+// when it rejects, and returns the SYNCHRONOUS handle app.js expects
+// (`mod.mount()`'s return is used as-is — returning a promise from mount()
+// would give app.js a thenable with no unmount()).
+//
+// Usage:
+//     import { mountAsync } from "../config-helpers.js";
+//     export function mount(container, params) {
+//       container.innerHTML = shell;
+//       return mountAsync(container, async () => {
+//         const cfg = await loadConfig();
+//         render(cfg);
+//         return { unmount() { clearInterval(poll); } };  // optional
+//       }, { errorMsg: "Couldn't load the welcome settings." });
+//     }
+//
+// A panel that already returns its own handle merges the two:
+//
+//     const async_ = mountAsync(container, load, { errorMsg: "…" });
+//     return { unmount() { async_.unmount(); chart?.destroy(); } };
+//
+// @param {HTMLElement} container  the element the panel owns
+// @param {() => (any|Promise<any>)} loader  does the loading + rendering; may
+//        resolve to an inner handle ({ unmount() }) which is forwarded
+// @param {object} [opts]
+// @param {string} [opts.errorMsg]  human sentence shown above the retry button
+// @param {() => void} [opts.retry]  what "Try again" does. The default re-mounts
+//        the whole page through app.js's router, which is the only universally
+//        safe choice: the error state has replaced the shell the panel built,
+//        so simply re-running the loader would hand it a container whose
+//        elements and listeners are gone. Pass your own only if the loader
+//        rebuilds everything it needs.
+// @returns {{ unmount(): void, ready: Promise<void> }}
+export function mountAsync(container, loader, opts = {}) {
+  const errorMsg = opts.errorMsg || "Couldn't load this page.";
+  let inner = null;
+  let dead = false;
+
+  const retry = typeof opts.retry === "function"
+    ? opts.retry
+    : () => window.dispatchEvent(new HashChangeEvent("hashchange"));
+
+  function renderFailure(err) {
+    container.innerHTML =
+      // .panel-missing / .error / .btn are existing app.css classes — the error
+      // state needs no new CSS.
+      `<div class="panel-missing">${renderError(errorMsg)}` +
+      `<div class="field-hint" style="margin:6px 0 10px;">${esc(err?.message || String(err))}</div>` +
+      '<button type="button" class="btn" data-retry>Try again</button></div>';
+    container.querySelector("[data-retry]")?.addEventListener("click", retry);
+  }
+
+  function run() {
+    // Promise.resolve().then wraps a loader that throws SYNCHRONOUSLY too —
+    // a TypeError before the first await would otherwise escape past us and
+    // leave exactly the hung spinner this helper exists to prevent.
+    return Promise.resolve()
+      .then(() => loader(container))
+      .then((handle) => {
+        if (dead) { try { handle?.unmount?.(); } catch (_) { /* ignore */ } return; }
+        inner = handle || null;
+      })
+      .catch((err) => {
+        if (dead) return;
+        renderFailure(err);
+      });
+  }
+
+  const ready = run();
+
+  return {
+    ready,
+    unmount() {
+      dead = true;
+      try { inner?.unmount?.(); } catch (_) { /* teardown must not throw */ }
+      inner = null;
+    },
+  };
+}
+
+// ── Re-render-on-save without eating sibling edits (F4) ────────────────
+//
+// Multi-card panels (auto-react rules, role menus, cap lists…) re-fetch and
+// rebuild EVERY card after a successful save. Anything the user had typed into
+// a different card is silently discarded — and the unsaved-changes guard can't
+// warn them, because the save that just succeeded cleared the dirty flag.
+//
+// The mechanism is per-card dirt:
+//
+//     const card = trackCard(buildCard(rule));      // once, when the card is built
+//     ...
+//     await apiPut(...);                            // in the card's save handler
+//     showStatus(statusEl, true, "Saved");
+//     clearCardDirty(card);
+//     rerenderUnlessDirty(listEl, card, () => reloadAndRenderAllCards());
+//
+// When a sibling card has unsaved edits the rebuild is skipped: the saved card
+// already shows what the user typed, so the screen stays correct and their work
+// in the other card survives. The next navigation/refresh picks up the server
+// state as usual.
+
+/** Mark `card` as an edit-tracked card for rerenderUnlessDirty(). */
+export function trackCard(card) {
+  card.dataset.dkCard = "1";
+  const mark = (e) => {
+    if (e?.target?.classList?.contains("filter-select-input")) return;
+    card.dataset.dkDirty = "1";
+  };
+  card.addEventListener("input", mark);
+  card.addEventListener("change", mark);
+  card.addEventListener("dk:change", mark);
+  return card;
+}
+
+/** Forget the pending edits on `card` — call after its own save succeeds. */
+export function clearCardDirty(card) {
+  if (card) card.dataset.dkDirty = "";
+}
+
+/** True when a tracked card other than `except` still holds unsaved edits. */
+export function hasDirtySibling(root, except = null) {
+  return Array.from(root.querySelectorAll("[data-dk-card]")).some(
+    (c) => c !== except && c.dataset.dkDirty === "1",
+  );
+}
+
+/**
+ * Rebuild every card only when doing so can't destroy someone's work.
+ *
+ * @param {HTMLElement} root      container holding the tracked cards
+ * @param {HTMLElement|null} saved the card whose save just succeeded
+ * @param {() => void} rerender   rebuilds all cards from fresh data
+ * @returns {boolean} whether it actually re-rendered
+ */
+export function rerenderUnlessDirty(root, saved, rerender) {
+  clearCardDirty(saved);
+  if (hasDirtySibling(root, saved)) return false;
+  rerender();
+  return true;
 }
 
 // ── Searchable picker adapters ──────────────────────────────────────────

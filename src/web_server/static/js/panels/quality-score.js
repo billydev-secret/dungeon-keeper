@@ -157,7 +157,9 @@ export function mount(container, initialParams) {
       renderSortableTable(tableWrap, {
         columns: [
           { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
-          { key: "final_score", label: "Score", format: (v) => `<span style="color:${scoreColor(v)};font-weight:700">${(v * 100).toFixed(1)}</span>` },
+          // html: the markup is the point here, and the interpolated value is a
+          // computed number — never a name (see table.js's ESCAPING note).
+          { key: "final_score", label: "Score", html: true, format: (v) => `<span style="color:${scoreColor(v)};font-weight:700">${(v * 100).toFixed(1)}</span>` },
           { key: "engagement_given", label: "Engagement", format: (v) => (v * 100).toFixed(0) },
           { key: "consistency_recency", label: "Consistency", format: (v) => (v * 100).toFixed(0) },
           { key: "content_resonance", label: "Resonance", format: (v) => (v * 100).toFixed(0) },

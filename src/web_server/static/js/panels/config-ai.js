@@ -1,11 +1,11 @@
-import { apiPut, showStatus, guardForm } from "../config-helpers.js";
+import { apiPut, showStatus, guardForm, mountAsync } from "../config-helpers.js";
 import { api, esc, apiPost, apiDelete } from "../api.js";
 import { confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading AI config…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     let data;
     try {
       data = await api("/api/config/ai");
@@ -83,7 +83,7 @@ export function mount(container) {
     container.innerHTML = `
       <div class="panel">
         <header>
-          <h2>AI (Local LLM)</h2>
+          <h2>AI Models</h2>
           <div class="subtitle">The language model Dungeon Keeper runs on this machine, and the instructions each AI command gives it</div>
         </header>
 
@@ -388,5 +388,5 @@ export function mount(container) {
         }
       });
     }
-  })();
+  }, { errorMsg: "Couldn’t load the AI model settings." });
 }

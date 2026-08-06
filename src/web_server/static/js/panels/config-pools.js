@@ -25,6 +25,7 @@ import {
   mountChannelPicker,
   guardForm,
   renderMetaWarning,
+  mountAsync,
 } from "../config-helpers.js";
 import { renderLoading } from "../states.js";
 
@@ -35,7 +36,7 @@ export function mount(container) {
   wrap.innerHTML = renderLoading("Loading config…");
   container.appendChild(wrap);
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const c = config.casino || {};
 
@@ -199,5 +200,5 @@ export function mount(container) {
     });
 
     container.appendChild(panel);
-  })();
+  }, { errorMsg: "Couldn’t load the reaction pool settings." });
 }

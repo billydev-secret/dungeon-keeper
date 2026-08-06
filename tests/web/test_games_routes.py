@@ -1047,6 +1047,59 @@ def test_audit_update_replaces_channel(open_client, fake_ctx):
     assert data["channel_id"] == 222
 
 
+def test_audit_clear_unsets_the_channel(open_client):
+    """The dashboard documents "leave it unset to keep no record", but there was
+    no way back once a channel had been saved: the picker's "(none)" posts
+    channel_id 0 and the PUT rejects it. DELETE is the clear path, matching the
+    host-role control right above it on the same page."""
+    open_client.put(f"{BASE}/config/audit", json={"channel_id": "111"})
+    assert open_client.get(f"{BASE}/config/audit").json()["channel_id"] == 111
+
+    resp = open_client.delete(f"{BASE}/config/audit")
+    assert resp.status_code == 200
+    assert resp.json() == {}
+    assert open_client.get(f"{BASE}/config/audit").json() is None
+
+
+def test_audit_clear_when_already_unset_is_a_no_op(open_client):
+    """The panel calls DELETE whenever the picker reads "(none)", including on a
+    server that never set one — that must succeed, not 404."""
+    resp = open_client.delete(f"{BASE}/config/audit")
+    assert resp.status_code == 200
+    assert resp.json() == {}
+    assert open_client.get(f"{BASE}/config/audit").json() is None
+
+
+def test_audit_round_trips_set_clear_set(open_client):
+    """The whole cycle the panel now offers, in the order a user performs it."""
+    open_client.put(f"{BASE}/config/audit", json={"channel_id": "111"})
+    open_client.delete(f"{BASE}/config/audit")
+    open_client.put(f"{BASE}/config/audit", json={"channel_id": "333"})
+
+    data = open_client.get(f"{BASE}/config/audit").json()
+    assert data["channel_id"] == 333
+
+
+def test_audit_clear_is_gated_exactly_like_its_put_sibling():
+    """Permission parity, asserted on the dependency rather than a live call:
+    the authz sweep proves the route rejects an anonymous caller, but nothing
+    else would notice if DELETE were gated more loosely than the PUT it undoes.
+    """
+    import inspect
+
+    from web_server.routes import games
+
+    def _guard(fn):
+        return {
+            p.default.dependency
+            for p in inspect.signature(fn).parameters.values()
+            if hasattr(p.default, "dependency")
+        }
+
+    assert _guard(games.clear_audit_channel) == _guard(games.set_audit_channel)
+    assert _guard(games.clear_audit_channel), "the route lost its auth dependency"
+
+
 def test_channels_list_keeps_snowflake_precision(open_client):
     """Ids must survive as strings — the panel writes this value straight back.
 

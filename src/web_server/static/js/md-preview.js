@@ -10,7 +10,16 @@ export function mdInline(s) {
     .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>")
     .replace(/__([^_]+)__/g, "<b>$1</b>")
     .replace(/~~([^~]+)~~/g, "<s>$1</s>")
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$1" onclick="return false">$1</a>');
+    // $1 is the link TEXT, $2 the URL. Putting $1 in the href sent the browser
+    // to the label ("click here") AND threw away the https-only validation the
+    // pattern does on $2 — a `[javascript:alert(1)](https://ok)` link became a
+    // real javascript: href, stopped only by an onclick that a middle-click or
+    // "open in new tab" walks straight past. The href is $2, always, and the
+    // pattern still refuses to match anything but http(s).
+    .replace(
+      /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
+      (_m, text, url) => `<a href="${url}" rel="noopener noreferrer" onclick="return false">${text}</a>`,
+    );
 }
 
 export function mdToHtml(text) {

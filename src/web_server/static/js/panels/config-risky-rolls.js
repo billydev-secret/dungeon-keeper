@@ -6,12 +6,13 @@ import {
   guardForm,
   renderMetaWarning,
   mountRolePicker,
+  mountAsync,
 } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, roles] = await Promise.all([loadConfig(), loadRoles()]);
     const r = config.risky || {};
     // Stored in seconds, edited in minutes — the unit is in the field label.
@@ -102,5 +103,5 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the Risky Roller settings." });
 }

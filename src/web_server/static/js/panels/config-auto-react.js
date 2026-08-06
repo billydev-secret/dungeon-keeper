@@ -10,6 +10,9 @@ import {
   renderMetaWarning,
   mountChannelPicker,
   channelName,
+  mountAsync,
+  trackCard,
+  rerenderUnlessDirty,
 } from "../config-helpers.js";
 
 // Supplied by the server, derived from the rake constants — so this stays
@@ -86,7 +89,7 @@ function ruleCard(rule, channels, idx) {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const rules = config.auto_react || [];
     MIN_RUNG = config.nsfw_classifier?.min_rung ?? MIN_RUNG;
@@ -107,6 +110,8 @@ export function mount(container) {
         </div>
       `;
 
+      const cardsRoot = container.querySelector(".form-cards");
+
       container.querySelectorAll("[data-rule]").forEach((form) => {
         const status = form.querySelector("[data-status]");
         const picker = mountChannelPicker(
@@ -122,6 +127,7 @@ export function mount(container) {
         });
 
         guardForm(form);
+        trackCard(form);
 
         form.addEventListener("submit", async (e) => {
           e.preventDefault();
@@ -169,7 +175,12 @@ export function mount(container) {
             const fresh = await loadConfig();
             rules.length = 0;
             rules.push(...(fresh.auto_react || []));
-            render();
+            // Rebuilding every card threw away whatever the user had typed into
+            // a *different* rule — and the unsaved-changes guard couldn't warn
+            // them, because this save had just cleared the dirty flag (F4).
+            // Skip the rebuild while a sibling card holds edits; the saved card
+            // already shows the values that were written.
+            rerenderUnlessDirty(cardsRoot, form, render);
           } catch (err) {
             showStatus(status, false, err.message);
           }
@@ -201,5 +212,5 @@ export function mount(container) {
     };
 
     render();
-  })();
+  }, { errorMsg: "Couldn’t load the auto-react rules." });
 }

@@ -321,16 +321,38 @@ def test_intake_report_with_data(open_client, fake_ctx):
     assert skipped["sfw_questions"] == 1
 
 
-def test_intake_report_panel_escapes_member_controlled_columns():
-    """Source-scan guard (no Node in this repo): the intake-report panel must
-    esc() the member-controlled name columns and the step label — they are
-    interpolated into innerHTML by renderSortableTable (stored-XSS shape)."""
+def test_intake_report_panel_columns_are_not_rendered_as_html():
+    """Source-scan guard (no Node in this repo) on the panel's XSS contract.
+
+    The invariant is unchanged — the newcomer/welcomer names and the step label
+    are member- and admin-supplied, and must never reach innerHTML as markup —
+    but *who enforces it* moved. table.js escapes every cell by default now
+    (S1, 2026-08-06 website review), so these columns must simply not opt out
+    with `html: true`; the esc() wrappers they used to carry now double-escape,
+    rendering a member called "Tom & Jerry" as "Tom &amp; Jerry".
+
+    The general form of this check — every column of every table consumer, in
+    both directions — lives in tests/web/test_frontend_wiring.py. This keeps a
+    named guard on the panel whose columns are the most exposed.
+    """
     from pathlib import Path
 
-    src = Path("src/web_server/static/js/panels/intake-report.js").read_text(encoding="utf-8")
-    assert 'format: (v, r) => esc(v || r.user_id)' in src  # both name columns
-    assert src.count("esc(v || r.user_id)") == 2
-    assert '{ key: "label", label: "Step", format: (v) => esc(v) }' in src
+    src = Path("src/web_server/static/js/panels/intake-report.js").read_text(
+        encoding="utf-8"
+    )
+    for key in ('key: "user_name"', 'key: "label"', 'key: "pending"'):
+        assert key in src, f"{key} column disappeared — re-check this guard"
+        at = src.index(key)
+        spec = src[at : src.index("\n", at)]
+        assert "html: true" not in spec, (
+            f"{key} opted out of table.js escaping — it carries member-supplied "
+            "text, so that is stored XSS in a moderator's dashboard"
+        )
+        assert "esc(" not in spec, (
+            f"{key} escapes text that table.js already escapes (double-escaping)"
+        )
+
+
 # ── time-to-level-5 name resolution ───────────────────────────────────
 
 

@@ -1,14 +1,16 @@
 // Dashboard boot + hash-based panel router.
 import { api, apiPost, esc } from "./api.js";
 import { toast } from "./ui.js";
-import { HELP_GROUPS, HELP_EXTRA_PAGES } from "./panels/help-sections.js?v=25";
+import { HELP_GROUPS, HELP_EXTRA_PAGES, assistantHelpLabel } from "./panels/help-sections.js?v=25";
 import { setPageIds } from "./nav-registry.js";
 import { _resetPanelSpecCache } from "./panel-post.js";
+import { resetMetaCaches } from "./config-helpers.js";
 
 
 // The Help nav is generated from help-sections.js (single source shared with
 // the help panel) so nav entries can't drift from the manual's sections.
-const _helpNavItem = ({ page, label, order }) => ({ id: page, label, order, module: "./panels/help.js" });
+const _helpNavItem = ({ page, label, order, brand, keywords }) =>
+  ({ id: page, label, order, brand, keywords, module: "./panels/help.js" });
 const HELP_NAV_SECTION = {
   id: "help", label: "Help", perms: [], icon: "?",
   items: HELP_GROUPS.filter((g) => !g.heading).flatMap((g) => g.items.map(_helpNavItem)),
@@ -159,7 +161,11 @@ const SECTIONS = [
         { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
       ]},
       { heading: "AI & Maintenance", items: [
-        { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true, keywords: "models prompts llm", help: "help-ai" },
+        // "AI Models" (not "AI (Local LLM)"): this page and "AI Assistant" sit
+        // next to each other, and the old label only distinguished them for
+        // someone who already knew the architecture. The old wording stays as
+        // a search keyword.
+        { id: "config-ai",         label: "AI Models",         module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true, keywords: "models prompts llm local llm ai moderation", help: "help-ai" },
         // Neutral label: the assistant's name is per-guild branding now, and
         // the nav is built once from this static list. "Billy-bot" stays as a
         // search keyword so the old name still finds the page.
@@ -203,50 +209,67 @@ const SECTIONS = [
   },
   {
     // Section gate: admins OR configured game-host role holders — every Games
-    // endpoint is gated by require_game_host. Items carrying an explicit
-    // `perms` list (Guess Who / Whisper configs, moderator-level backends)
-    // stay visible to users who satisfy those perms even when the section
-    // gate fails, so moderators can still reach them.
+    // endpoint is gated by require_game_host. `games-external` carries an
+    // explicit `perms` list so it survives a failed section gate: external
+    // result tracking is a moderator job, and its backend is moderator-gated.
+    //
+    // Three subgroups (IA1, 2026-08). The flat list had grown to 23 entries
+    // mixing ops pages, per-game dials and question banks; the four social
+    // features that were parked here moved to their own Social section below.
     id: "games", label: "Games", perms: ["admin"], gameHostRole: true, icon: "⚄",
-    items: [
-      { id: "games-logs",         label: "Overview & Logs",   module: "./panels/games-logs.js", help: "help-games" },
-      { id: "games-scheduling",   label: "Scheduling",        module: "./panels/games-scheduling.js", help: "help-games" },
-      { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
-      { id: "games-config",       label: "Global Config",     module: "./panels/games-config.js", adminOnly: true, help: "help-games" },
-      { id: "games-external",     label: "External Tracking", module: "./panels/games-external.js", perms: ["moderator"], keywords: "track external bot results bank payout watch channel" },
-      // Single-page games flattened to direct items named after the game
-      // (subgroups below are only for games with two or more pages).
-      { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },
-      { id: "config-games-pressure", label: "Pressure Cooker", module: "./panels/config-games-pressure.js", adminOnly: true },
-      { id: "config-games-quickdraw", label: "Quickdraw", module: "./panels/config-games-quickdraw.js", adminOnly: true },
-      { id: "config-games-hotpotato", label: "Hot Potato", module: "./panels/config-games-hotpotato.js", adminOnly: true },
-      { id: "config-games-hotpotatogroup", label: "Hot Potato (Group)", module: "./panels/config-games-hotpotatogroup.js", adminOnly: true },
-      { id: "config-games-chicken", label: "Chicken", module: "./panels/config-games-chicken.js", adminOnly: true },
-      { id: "config-games-musicalchairs", label: "Musical Chairs", module: "./panels/config-games-musicalchairs.js", adminOnly: true },
-      // Question-bank games. Each was a two-page subgroup until the AI prompt
-      // studios were removed; with one page left they follow the same
-      // flattened convention as the games above.
-      { id: "games-wyr",      label: "Would You Rather",  module: "./panels/games-wyr.js" },
-      { id: "games-nhie",     label: "Never Have I Ever", module: "./panels/games-nhie.js" },
-      { id: "games-mlt",      label: "Most Likely To",    module: "./panels/games-mlt.js" },
-      { id: "games-rushmore", label: "Rushmore",          module: "./panels/games-rushmore.js" },
-      { id: "games-price",    label: "Price",             module: "./panels/games-price.js" },
-      { id: "games-clapback", label: "Clapback",          module: "./panels/games-clapback.js" },
-      { id: "games-ama",      label: "AMA",               module: "./panels/games-ama.js" },
-      { id: "games-ffa", label: "FFA / Truth or Dare", module: "./panels/games-ffa.js" },
-      { id: "games-traditional", label: "Traditional Truth or Dare", module: "./panels/games-traditional.js" },
-      { id: "config-guess", label: "Guess Who", module: "./panels/config-guess.js", perms: ["moderator"], help: "help-guess", keywords: "post panel submit prompt" },
-      { id: "config-whisper",    label: "Whisper",     module: "./panels/config-whisper.js", perms: ["moderator"], help: "help-whisper" },
-      { id: "pen-pals",          label: "Pen Pals",    module: "./panels/pen-pals.js", perms: ["moderator"], help: "help-pen-pals", keywords: "pen pals matching questions conversation starters" },
-      { id: "config-confessions",  label: "Confessions",     module: "./panels/config-confessions.js", adminOnly: true, help: "help-confessions" },
+    groups: [
+      { heading: "Operations", items: [
+        { id: "games-logs",         label: "Overview & Logs",   module: "./panels/games-logs.js", help: "help-games" },
+        { id: "games-scheduling",   label: "Scheduling",        module: "./panels/games-scheduling.js", help: "help-games" },
+        { id: "games-config",       label: "Global Config",     module: "./panels/games-config.js", adminOnly: true, help: "help-games" },
+        { id: "games-external",     label: "External Tracking", module: "./panels/games-external.js", perms: ["moderator"], keywords: "track external bot results bank payout watch channel" },
+      ]},
+      // One page per game: the dials for a game that runs live in a channel.
+      { heading: "Live Games", items: [
+        { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
+        { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },
+        { id: "config-games-pressure", label: "Pressure Cooker", module: "./panels/config-games-pressure.js", adminOnly: true },
+        { id: "config-games-quickdraw", label: "Quickdraw", module: "./panels/config-games-quickdraw.js", adminOnly: true },
+        { id: "config-games-hotpotato", label: "Hot Potato", module: "./panels/config-games-hotpotato.js", adminOnly: true },
+        { id: "config-games-hotpotatogroup", label: "Hot Potato (Group)", module: "./panels/config-games-hotpotatogroup.js", adminOnly: true },
+        { id: "config-games-chicken", label: "Chicken", module: "./panels/config-games-chicken.js", adminOnly: true },
+        { id: "config-games-musicalchairs", label: "Musical Chairs", module: "./panels/config-games-musicalchairs.js", adminOnly: true },
+        // Was its own one-item top-level section; the gate is identical
+        // (admins or the game-host role), so it folds in here rather than
+        // keeping a heading to itself.
+        { id: "photo-challenge",    label: "Photo Challenge",   module: "./panels/photo-challenge.js", help: "help-photo", keywords: "setup schedule photo theme" },
+      ]},
+      // Question-bank games: one page of prompts each, no live channel state.
+      { heading: "Question Banks", items: [
+        { id: "games-wyr",      label: "Would You Rather",  module: "./panels/games-wyr.js" },
+        { id: "games-nhie",     label: "Never Have I Ever", module: "./panels/games-nhie.js" },
+        { id: "games-mlt",      label: "Most Likely To",    module: "./panels/games-mlt.js" },
+        { id: "games-rushmore", label: "Rushmore",          module: "./panels/games-rushmore.js" },
+        { id: "games-price",    label: "Price",             module: "./panels/games-price.js" },
+        { id: "games-clapback", label: "Clapback",          module: "./panels/games-clapback.js" },
+        { id: "games-ama",      label: "AMA",               module: "./panels/games-ama.js" },
+        { id: "games-ffa", label: "FFA / Truth or Dare", module: "./panels/games-ffa.js" },
+        { id: "games-traditional", label: "Traditional Truth or Dare", module: "./panels/games-traditional.js" },
+      ]},
     ],
   },
   {
-    // Standalone feature — pulled out of the Games menu/scheduler. Same
-    // game-host/admin gating as Games (endpoints use require_game_host).
-    id: "photo-challenge", label: "Photo Challenge", perms: ["admin"], gameHostRole: true, icon: "◉",
+    // The anonymous / pairing features. They lived under Games because that's
+    // where they were built, but none of them is a game: each is an ongoing
+    // social surface a moderator runs, and Confessions' audit trail already
+    // lives under Moderation. A moderator section gate is their natural home —
+    // it also retires the per-item `perms: ["moderator"]` markers they needed
+    // purely to survive the Games host gate.
+    //
+    // Confessions keeps `adminOnly` (its endpoints require admin), so
+    // moderators get the standard locked entry rather than a page they can
+    // open — the same treatment Confessions Audit already gets next door.
+    id: "social", label: "Social", perms: ["moderator"], icon: "☺",
     items: [
-      { id: "photo-challenge",        label: "Setup & Schedule", module: "./panels/photo-challenge.js", help: "help-photo" },
+      { id: "config-guess", label: "Guess Who", module: "./panels/config-guess.js", help: "help-guess", keywords: "post panel submit prompt games" },
+      { id: "config-whisper",    label: "Whisper",     module: "./panels/config-whisper.js", help: "help-whisper", keywords: "anonymous message games" },
+      { id: "pen-pals",          label: "Pen Pals",    module: "./panels/pen-pals.js", help: "help-pen-pals", keywords: "pen pals matching questions conversation starters games" },
+      { id: "config-confessions",  label: "Confessions",     module: "./panels/config-confessions.js", adminOnly: true, help: "help-confessions", keywords: "anonymous confession games", related: ["confessions-audit"] },
     ],
   },
   HELP_NAV_SECTION,
@@ -411,6 +434,45 @@ const navFilterClearEl = document.querySelector("[data-nav-filter-clear]");
 const skipLinkEl = document.querySelector(".skip-link");
 
 let currentPanel = null;
+let currentPageId = null;
+
+// ── Dev-only unmount tripwire (F3) ──────────────────────────────────
+// Leaked polls and ResizeObservers keep coming back: a panel arms one, returns
+// no handle, and every visit adds another that runs forever. Counting the
+// registrations a panel makes while it is mounted and complaining at
+// navigation time — when we know whether it handed back an unmount() — catches
+// the whole family, including the ones armed inside an async load().
+//
+// Localhost only, so it can never add noise to a production console, and it
+// only ever warns.
+const DEV_HOST = ["localhost", "127.0.0.1", "[::1]", ""].includes(location.hostname);
+let _panelSideEffects = 0;
+
+if (DEV_HOST) {
+  const _setInterval = window.setInterval;
+  window.setInterval = function (...args) {
+    _panelSideEffects++;
+    return _setInterval.apply(this, args);
+  };
+  if (window.ResizeObserver) {
+    const _RO = window.ResizeObserver;
+    window.ResizeObserver = class extends _RO {
+      constructor(...args) { super(...args); _panelSideEffects++; }
+    };
+  }
+}
+
+function warnIfLeaky() {
+  if (!DEV_HOST) return;
+  if (_panelSideEffects > 0 && !currentPanel?.unmount) {
+    console.warn(
+      `[dk] panel "${currentPageId}" armed ${_panelSideEffects} timer(s)/observer(s) `
+      + "but returned no unmount() handle — they keep running after navigation. "
+      + "Return { unmount() { … } } from mount().",
+    );
+  }
+  _panelSideEffects = 0;
+}
 
 // ── Unsaved-changes guard ───────────────────────────────────────────
 // config-helpers.js publishes window.__dkDirty() → bool and
@@ -563,6 +625,249 @@ if (navFilterClearEl) {
     navFilterEl.focus();
   });
 }
+
+// ── Command palette (Ctrl/Cmd+K) ────────────────────────────────────
+//
+// Strictly additive to the sidebar filter above, which keeps working exactly as
+// it did. The difference is what it searches and how it answers: a flat ranked
+// list of "Section › Label" across the *whole* nav — no expanding groups, no
+// scrolling the tree — plus a second tier over the manual's headings, so
+// "how do I jail someone" lands on the guide as readily as on the page.
+//
+// It renders ALL_PAGES, which rebuildIndex() has already filtered to what this
+// viewer may open (locked admin-only entries are excluded), so the palette can
+// never surface a page the nav wouldn't.
+//
+// Combobox semantics (WAI-ARIA): focus stays in the input, results are options
+// referenced by aria-activedescendant, arrows move the selection, Enter opens,
+// Escape closes and returns focus where it came from.
+
+const PALETTE_TIER_LIMIT = 8;
+
+let paletteEl = null;
+let paletteInput = null;
+let paletteListEl = null;
+let paletteEmptyEl = null;
+let paletteResults = [];
+let paletteIndex = 0;
+let paletteReturnFocus = null;
+let paletteManual = null;   // cached manual headings, loaded on first query
+let paletteQueryToken = 0;
+
+function palettePageResults(tokens) {
+  const first = tokens[0];
+  const out = [];
+  for (const p of ALL_PAGES) {
+    const sec = PAGE_TO_SECTION[p.id];
+    const label = (p.label || "").toLowerCase();
+    const hay = `${sec ? sec.label : ""} ${p.label} ${p.keywords || ""}`.toLowerCase();
+    if (!tokens.every((t) => hay.includes(t))) continue;
+    out.push({
+      label: p.label,
+      context: sec ? sec.label : "",
+      href: `#/${p.id}`,
+      // A label that starts with what you typed is what you meant; a
+      // keyword-only hit is the long tail.
+      rank: label.startsWith(first) ? 0 : label.includes(first) ? 1 : 2,
+    });
+  }
+  out.sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
+  return out.slice(0, PALETTE_TIER_LIMIT);
+}
+
+async function paletteManualResults(tokens) {
+  if (!paletteManual) {
+    try {
+      // Same specifier the router uses, so this shares the panel's module
+      // instance (and its single parse of manual.html) rather than making a
+      // second copy.
+      const mod = await import("./panels/help.js?v=3");
+      paletteManual = await mod.manualHeadings();
+    } catch (_) {
+      paletteManual = [];
+    }
+  }
+  const visible = window.__dkVisiblePages;
+  const out = [];
+  for (const entry of paletteManual) {
+    if (visible && !visible.has(entry.page)) continue;
+    const hay = entry.path.toLowerCase();
+    if (!tokens.every((t) => hay.includes(t))) continue;
+    out.push({
+      label: entry.title,
+      context: `Guide — ${entry.path}`,
+      href: `#/${entry.page}?focus=${encodeURIComponent(entry.anchor)}`,
+      rank: entry.title.toLowerCase().startsWith(tokens[0]) ? 0 : 1,
+    });
+  }
+  out.sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
+  return out.slice(0, PALETTE_TIER_LIMIT);
+}
+
+function renderPaletteResults() {
+  paletteListEl.replaceChildren();
+  paletteEmptyEl.hidden = paletteResults.length > 0;
+  paletteEmptyEl.textContent = paletteInput.value.trim()
+    ? "No page or guide section matches — try a feature word, or an old name for it."
+    : "Type to search every page you can open, and the reference guide.";
+  paletteResults.forEach((r, i) => {
+    const opt = document.createElement("div");
+    opt.className = "dk-palette-option" + (i === paletteIndex ? " active" : "");
+    opt.id = `dk-palette-opt-${i}`;
+    opt.setAttribute("role", "option");
+    opt.setAttribute("aria-selected", i === paletteIndex ? "true" : "false");
+    opt.dataset.href = r.href;
+    opt.style.cssText =
+      "display:flex;flex-direction:column;gap:2px;padding:8px 12px;cursor:pointer;border-radius:var(--r-sm);"
+      + (i === paletteIndex ? "background:var(--active);" : "");
+    const label = document.createElement("span");
+    label.textContent = r.label;
+    label.style.cssText = "color:var(--ink-bright);";
+    const ctx = document.createElement("span");
+    ctx.textContent = r.context;
+    ctx.style.cssText = "color:var(--ink-mute);font-size:12px;";
+    opt.append(label, ctx);
+    opt.addEventListener("mousedown", (e) => {
+      e.preventDefault(); // keep focus in the input until we navigate
+      paletteIndex = i;
+      openPaletteSelection();
+    });
+    paletteListEl.appendChild(opt);
+  });
+  paletteInput.setAttribute(
+    "aria-activedescendant",
+    paletteResults.length ? `dk-palette-opt-${paletteIndex}` : ""
+  );
+  paletteListEl.querySelector(".dk-palette-option.active")?.scrollIntoView({ block: "nearest" });
+}
+
+async function runPaletteQuery() {
+  const token = ++paletteQueryToken;
+  const tokens = paletteInput.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!tokens.length) {
+    paletteResults = [];
+    paletteIndex = 0;
+    renderPaletteResults();
+    return;
+  }
+  paletteResults = palettePageResults(tokens);
+  paletteIndex = 0;
+  renderPaletteResults();
+  const manual = await paletteManualResults(tokens);
+  // The manual index loads asynchronously; a newer keystroke wins.
+  if (token !== paletteQueryToken || !paletteEl) return;
+  paletteResults = [...palettePageResults(tokens), ...manual];
+  if (paletteIndex >= paletteResults.length) paletteIndex = 0;
+  renderPaletteResults();
+}
+
+function openPaletteSelection() {
+  const target = paletteResults[paletteIndex];
+  if (!target) return;
+  closePalette();
+  // Assigning an identical hash fires no hashchange, so nudge the router.
+  if (window.location.hash === target.href) mountPanel();
+  else window.location.hash = target.href;
+}
+
+function closePalette() {
+  if (!paletteEl) return;
+  paletteEl.remove();
+  paletteEl = paletteInput = paletteListEl = paletteEmptyEl = null;
+  paletteResults = [];
+  const back = paletteReturnFocus;
+  paletteReturnFocus = null;
+  if (back && document.contains(back)) back.focus();
+}
+
+function openPalette() {
+  if (paletteEl) return;
+  paletteReturnFocus = document.activeElement;
+
+  paletteEl = document.createElement("div");
+  paletteEl.className = "dk-palette-backdrop";
+  paletteEl.style.cssText =
+    "position:fixed;inset:0;z-index:80;background:rgba(0,0,0,0.55);display:flex;"
+    + "align-items:flex-start;justify-content:center;padding:12vh 16px 16px;";
+
+  const box = document.createElement("div");
+  box.className = "dk-palette";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", "Search pages and the guide");
+  box.style.cssText =
+    "width:min(560px,100%);max-height:70vh;display:flex;flex-direction:column;overflow:hidden;"
+    + "background:var(--bg-card);border:1px solid var(--rule);border-radius:var(--r);"
+    + "box-shadow:0 16px 48px rgba(0,0,0,0.5);";
+
+  paletteInput = document.createElement("input");
+  paletteInput.type = "text";
+  paletteInput.className = "dk-palette-input";
+  paletteInput.placeholder = "Jump to a page or the guide…";
+  paletteInput.setAttribute("aria-label", "Search pages and the guide");
+  paletteInput.setAttribute("role", "combobox");
+  paletteInput.setAttribute("aria-expanded", "true");
+  paletteInput.setAttribute("aria-controls", "dk-palette-list");
+  paletteInput.setAttribute("aria-autocomplete", "list");
+  paletteInput.autocomplete = "off";
+  paletteInput.style.cssText =
+    "width:100%;padding:14px 16px;border:0;border-bottom:1px solid var(--rule);"
+    + "background:var(--bg-input);color:var(--ink-bright);font-size:15px;outline:none;";
+
+  paletteListEl = document.createElement("div");
+  paletteListEl.id = "dk-palette-list";
+  paletteListEl.setAttribute("role", "listbox");
+  paletteListEl.setAttribute("aria-label", "Results");
+  paletteListEl.style.cssText = "overflow-y:auto;padding:6px;";
+
+  paletteEmptyEl = document.createElement("div");
+  paletteEmptyEl.className = "dk-palette-empty";
+  paletteEmptyEl.textContent =
+    "Type to search every page you can open, and the reference guide.";
+  paletteEmptyEl.style.cssText = "padding:14px 16px;color:var(--ink-mute);font-size:13px;";
+
+  box.append(paletteInput, paletteListEl, paletteEmptyEl);
+  paletteEl.appendChild(box);
+
+  // Click outside closes; clicks inside must not bubble to the backdrop.
+  paletteEl.addEventListener("mousedown", (e) => {
+    if (e.target === paletteEl) closePalette();
+  });
+
+  paletteEl.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closePalette();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!paletteResults.length) return;
+      const next = paletteIndex + (e.key === "ArrowDown" ? 1 : -1);
+      paletteIndex = (next + paletteResults.length) % paletteResults.length;
+      renderPaletteResults();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      openPaletteSelection();
+    } else if (e.key === "Tab") {
+      // Focus trap: the dialog's only focusable control is the input, per the
+      // combobox pattern — results are reached with the arrow keys.
+      e.preventDefault();
+      paletteInput.focus();
+    }
+  });
+  paletteInput.addEventListener("input", runPaletteQuery);
+
+  document.body.appendChild(paletteEl);
+  paletteInput.focus();
+}
+
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "k" || e.key === "K")) {
+    e.preventDefault();
+    if (paletteEl) closePalette();
+    else openPalette();
+  }
+});
 
 // ── Hash parsing ────────────────────────────────────────────────────
 //
@@ -873,10 +1178,12 @@ async function mountPanel(evt) {
   const page =
     ALL_PAGES.find((p) => p.id === id) || EXTRA_ROUTES.find((p) => p.id === id);
 
+  warnIfLeaky();
   if (currentPanel && currentPanel.unmount) {
     try { currentPanel.unmount(); } catch (_) {}
   }
   currentPanel = null;
+  currentPageId = null;
 
   if (!page) {
     renderNav(id);
@@ -895,7 +1202,9 @@ async function mountPanel(evt) {
     // regex can't see) would stay immutable-cached forever and never pick up
     // changes to their module graph.
     const mod = await import(`${page.module}?v=3`);
+    _panelSideEffects = 0; // anything armed from here on belongs to this panel
     currentPanel = mod.mount(rootEl, params) || null;
+    currentPageId = page.id;
     renderPanelMeta(page);
     setDocTitle(page.label);
     recordPanelView(page.id);
@@ -933,9 +1242,48 @@ function applyMeData(me) {
   // guild's config, and switchGuild re-mounts panels without reloading the
   // page — so the cached /api/panels payload has to go with the old guild.
   _resetPanelSpecCache();
+  // Same reasoning, sharper consequence: /api/config and every /api/meta/*
+  // list is scoped to the active guild, and config-helpers memoizes them in
+  // module globals. Carried across a switch they made config panels list the
+  // *previous* guild's channels/roles/members, and a save wrote a foreign
+  // guild's snowflake into the new guild's config (S2).
+  resetMetaCaches();
 
   // Recompute visible nav (Config pages are filtered per primary/non-primary)
   rebuildIndex();
+  // Per-guild assistant branding for the Help nav (IA5). Deliberately not
+  // awaited: the nav renders immediately with the default name and re-labels
+  // itself if this guild calls the assistant something else.
+  applyAssistantBrand();
+}
+
+// The Help nav used to hardcode "Ask Billy-bot (AI)" while the Config side had
+// already been neutralised for per-guild branding. The nav is built once from a
+// static list, so the name is patched in after the fact — and again on every
+// guild switch, since branding is per guild.
+let _brandedAssistantName = null;
+
+async function applyAssistantBrand() {
+  let name;
+  try {
+    const res = await api("/api/help/advisor/name");
+    name = res && res.assistant_name;
+  } catch (_) {
+    return; // keep the default label; a nav label is never worth an error
+  }
+  if (!name || name === _brandedAssistantName) return;
+  _brandedAssistantName = name;
+  const label = assistantHelpLabel(name);
+  let changed = false;
+  for (const item of HELP_NAV_SECTION.items) {
+    if (item.brand === "assistant" && item.label !== label) {
+      item.label = label;
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  rebuildIndex();
+  renderNav(parseHash().id);
 }
 
 function populateGuildPicker(guilds, activeId) {

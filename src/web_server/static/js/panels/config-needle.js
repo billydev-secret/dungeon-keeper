@@ -1,6 +1,7 @@
 import {
   loadConfig, loadChannels, channelName, apiPut, apiDelete, showStatus,
   guardForm, renderMetaWarning, mountChannelPicker,
+  mountAsync, trackCard, clearCardDirty, hasDirtySibling, rerenderUnlessDirty,
 } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 import { esc } from "../api.js";
@@ -182,10 +183,10 @@ function globalSettingsCard(needle) {
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`;
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     render(container, config.needle || { channels: [], emoji_unanswered: "🔵", emoji_archived: "✅", emoji_locked: "🔒", default_reply: "" }, channels);
-  })();
+  }, { errorMsg: "Couldn’t load the auto-thread settings." });
 }
 
 function render(container, needle, channels) {
@@ -318,6 +319,9 @@ function wireExistingCards(container, cfgs) {
     if (!form) continue;
     const status = form.querySelector("[data-needle-status]");
     guardForm(form);
+    // Tracked so the add/remove rebuilds below can tell whether a sibling card
+    // still holds unsaved edits (F4).
+    trackCard(form);
     form.addEventListener("submit", async e => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -326,6 +330,7 @@ function wireExistingCards(container, cfgs) {
       try {
         await apiPut(`/api/config/needle/${r.channel_id}`, payload);
         showStatus(status, true);
+        clearCardDirty(form);
       } catch (err) {
         showStatus(status, false, err.message);
       }
@@ -347,6 +352,12 @@ function wireRemove(container, channels) {
       try {
         await apiDelete(`/api/config/needle/${btn.dataset.needleRemove}`);
         const fresh = await loadConfig();
+        // The removed card must go, so this rebuild can't be held back — but
+        // say so when it takes unsaved edits with it (F4).
+        const rules = container.querySelector("[data-needle-rules]");
+        if (rules && hasDirtySibling(rules, btn.closest("[data-needle-channel]"))) {
+          toast("Channel removed. Unsaved edits in the other channels were discarded.", "info");
+        }
         render(container, fresh.needle || {}, channels);
       } catch (err) {
         toast(err.message, "error");
@@ -380,7 +391,16 @@ function wireAdd(container, channels) {
     try {
       await apiPut(`/api/config/needle/${channelId}`, payload);
       const fresh = await loadConfig();
-      render(container, fresh.needle || {}, channels);
+      // Adding a channel used to rebuild every card and silently drop whatever
+      // was typed into an existing one (F4). Hold the rebuild while that's the
+      // case and point at the reload instead.
+      const rules = container.querySelector("[data-needle-rules]");
+      const rerender = () => render(container, fresh.needle || {}, channels);
+      if (!rules) {
+        rerender();
+      } else if (!rerenderUnlessDirty(rules, null, rerender)) {
+        showStatus(addStatus, true, "Added — reload to see it listed above.");
+      }
     } catch (err) {
       showStatus(addStatus, false, err.message);
     }

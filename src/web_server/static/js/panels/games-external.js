@@ -5,6 +5,7 @@ import {
   mountChannelPicker,
   mountMemberPicker,
   esc,
+  mountAsync,
 } from "../config-helpers.js";
 import { api } from "../api.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
@@ -20,7 +21,7 @@ import { toast } from "../ui.js";
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading external tracking…")}</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     let data, channels, bots;
     try {
       [data, channels, bots] = await Promise.all([
@@ -195,7 +196,7 @@ export function mount(container) {
     }
 
     render();
-  })();
+  }, { errorMsg: "Couldn’t load the external game tracking settings." });
 }
 
 function renderSample(messages) {

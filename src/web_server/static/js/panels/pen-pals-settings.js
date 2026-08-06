@@ -2,6 +2,7 @@ import {
   loadConfig, loadChannels, loadCategories, loadRoles, loadMembers,
   toMemberOptions, mountPicker, mountChannelPicker, mountRolePicker, mountCategoryPicker,
   apiPut, showStatus, esc, guardForm, renderMetaWarning,
+  mountAsync,
 } from "../config-helpers.js";
 import { confirmDialog } from "../ui.js";
 
@@ -24,7 +25,7 @@ const TIMER_FIELDS = [
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading Pen Pals settings…</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels, categories, roles, members] = await Promise.all([
       loadConfig(), loadChannels(), loadCategories(), loadRoles(), loadMembers(),
     ]);
@@ -375,5 +376,5 @@ export function mountSettings(container) {
     });
 
     renderSeps();
-  })();
+  }, { errorMsg: "Couldn’t load the Pen Pals settings." });
 }

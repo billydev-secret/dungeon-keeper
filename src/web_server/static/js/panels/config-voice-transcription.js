@@ -3,6 +3,7 @@ import {
   mountChannelMultiPicker,
   guardForm, renderMetaWarning,
   apiPost, apiPut, showStatus, esc,
+  mountAsync,
 } from "../config-helpers.js";
 
 const MODELS = [
@@ -51,7 +52,7 @@ function modelsWidget(models) {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const vt = config.voice_transcription || {};
 
@@ -166,5 +167,5 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
-  })();
+  }, { errorMsg: "Couldn’t load the voice transcription settings." });
 }

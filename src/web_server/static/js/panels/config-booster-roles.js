@@ -2,13 +2,14 @@ import { api, apiPost, esc } from "../api.js";
 import {
   loadConfig, loadRoles, loadChannels, apiPut, apiDelete, showStatus,
   guardForm, renderMetaWarning, mountRolePicker, mountChannelPicker,
+  mountAsync, trackCard, clearCardDirty, hasDirtySibling, rerenderUnlessDirty,
 } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading booster roles…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [config, roles, channels] = await Promise.all([
       loadConfig(),
       loadRoles(),
@@ -21,7 +22,7 @@ export function mount(container) {
       roles,
       channels,
     );
-  })();
+  }, { errorMsg: "Couldn’t load the booster role settings." });
 }
 
 function render(container, boosterRoles, panelChannelId, roles, channels) {
@@ -196,11 +197,27 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     };
   }
 
+  // Add/remove rebuild every color card from fresh config. trackCard marks the
+  // cards that hold edits so rerenderUnlessDirty can hold the rebuild back
+  // rather than silently discarding someone's half-typed color (F4).
+  const cardsRoot = container.querySelector("[data-roles]");
+  const reload = async () => {
+    const fresh = await loadConfig();
+    return () => render(
+      container,
+      fresh.booster_roles || [],
+      fresh.booster_panel_channel_id || "0",
+      roles,
+      channels,
+    );
+  };
+
   // Save handlers for existing roles
   for (const r of boosterRoles) {
     const form = container.querySelector(`[data-key="${CSS.escape(r.role_key)}"]`);
     const status = form.querySelector("[data-status]");
     guardForm(form);
+    trackCard(form);
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const payload = readColor(form, status, r.role_key);
@@ -208,6 +225,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
       try {
         await apiPut(`/api/config/booster-roles/${r.role_key}`, payload);
         showStatus(status, true);
+        clearCardDirty(form);
       } catch (err) {
         showStatus(status, false, err.message);
       }
@@ -227,14 +245,14 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
       if (!ok) return;
       try {
         await apiDelete(`/api/config/booster-roles/${key}`);
-        const fresh = await loadConfig();
-        render(
-          container,
-          fresh.booster_roles || [],
-          fresh.booster_panel_channel_id || "0",
-          roles,
-          channels,
-        );
+        const rerender = await reload();
+        // The deleted card has to go, so this rebuild can't be skipped — but
+        // say so when it takes unsaved work with it, instead of silently
+        // dropping it the way it used to.
+        if (hasDirtySibling(cardsRoot, btn.closest("[data-key]"))) {
+          toast("Color deleted. Unsaved edits in the other colors were discarded.", "info");
+        }
+        rerender();
       } catch (err) {
         toast(err.message, "error");
       }
@@ -268,14 +286,13 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     if (!payload) return;
     try {
       await apiPut(`/api/config/booster-roles/${key}`, payload);
-      const fresh = await loadConfig();
-      render(
-        container,
-        fresh.booster_roles || [],
-        fresh.booster_panel_channel_id || "0",
-        roles,
-        channels,
-      );
+      const rerender = await reload();
+      // Adding a color used to rebuild the list and wipe whatever was typed in
+      // an existing color's card (F4). Hold the rebuild while that's true and
+      // tell the user where the new color is, rather than eating their work.
+      if (!rerenderUnlessDirty(cardsRoot, null, rerender)) {
+        showStatus(addStatus, true, "Added — reload to see it listed above.");
+      }
     } catch (err) {
       showStatus(addStatus, false, err.message);
     }

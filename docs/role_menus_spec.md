@@ -85,7 +85,7 @@ A sortable list of rows, each defining one choice:
 
 - **Emoji** (optional) — typed in or picked from the guild's emoji via a picker
 - **Label** (required) — the button text / dropdown option name
-- **Role** — chosen from a dropdown that **only shows roles DK can actually manage**. Dangerous roles (admin, manage-server, etc.) are hidden unless an explicit "allow elevated roles" override is checked, which is logged loudly. This makes misconfiguration nearly impossible rather than merely handled.
+- **Role** — chosen from a dropdown that **only shows roles DK can actually manage**. Dangerous roles (admin, manage-server, etc.) are hidden unless an explicit "allow elevated roles" override is checked, which is logged loudly. This makes misconfiguration nearly impossible rather than merely handled. The override is an **admin** key, not a moderator one: the panel is moderator-gated, so saving, publishing, or re-enabling a menu that touches a dangerous role is refused (403) unless the caller holds Discord's Administrator permission. Otherwise a moderator could tick their own override, publish a button for the Staff role, and press it. Turning such a menu **off** stays moderator-editable — the safe direction shouldn't need the bigger key.
 - **Button color** (button style only) or **Description** (dropdown style only, short)
 - Drag to reorder; order controls layout.
 

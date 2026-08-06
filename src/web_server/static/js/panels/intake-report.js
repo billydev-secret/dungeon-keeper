@@ -1,6 +1,7 @@
-import { api, esc, fmtAge } from "../api.js";
+import { api, fmtAge } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
 import { renderSortableTable } from "../table.js";
+import { renderError } from "../states.js";
 
 /**
  * The queue half of the Intake page. Mounted into a region by panels/intake.js,
@@ -64,10 +65,11 @@ export function mountQueue(container, initialParams) {
       } else {
         renderSortableTable(openWrap, {
           columns: [
-            { key: "user_name", label: "Newcomer", format: (v, r) => esc(v || r.user_id) },
+            // table.js escapes every cell now — these formats return plain text.
+            { key: "user_name", label: "Newcomer", format: (v, r) => v || r.user_id },
             { key: "created_at", label: "Waiting", format: (v) => fmtAge(Date.now() / 1000 - v) },
             { key: "done", label: "Progress", format: (v, r) => bar(r.done, r.total) },
-            { key: "pending", label: "Still to do", format: (v) => esc((v || []).join(", ")) || "—" },
+            { key: "pending", label: "Still to do", format: (v) => (v || []).join(", ") || "—" },
             { key: "nudged", label: "Nudged", format: (v) => (v ? "yes" : "") },
           ],
           data: data.open_cards,
@@ -80,7 +82,7 @@ export function mountQueue(container, initialParams) {
       if (data.welcomers.length) {
         renderSortableTable(welcomersWrap, {
           columns: [
-            { key: "user_name", label: "Welcomer", format: (v, r) => esc(v || r.user_id) },
+            { key: "user_name", label: "Welcomer", format: (v, r) => v || r.user_id },
             { key: "completions", label: "Intakes completed" },
             { key: "ticks", label: "Steps ticked" },
           ],
@@ -96,7 +98,7 @@ export function mountQueue(container, initialParams) {
       if (skipped.length) {
         renderSortableTable(skippedWrap, {
           columns: [
-            { key: "label", label: "Step", format: (v) => esc(v) },
+            { key: "label", label: "Step" },
             { key: "appeared", label: "On completed cards" },
             { key: "skipped", label: "Skipped" },
             {
@@ -111,7 +113,9 @@ export function mountQueue(container, initialParams) {
         skippedWrap.innerHTML = `<div class="empty">Nothing to show yet.</div>`;
       }
     } catch (err) {
-      openWrap.innerHTML = `<div class="empty">Failed to load: ${esc(err.message)}</div>`;
+      // A failed fetch is an error, not an empty queue — .empty reads as
+      // "nothing to do here", which is the opposite of what happened.
+      openWrap.innerHTML = renderError(`Couldn't load the intake queue — try again. (${err.message})`);
     }
   }
 

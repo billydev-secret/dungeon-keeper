@@ -11,6 +11,7 @@ import {
   mountPicker,
   mountChannelPicker,
   mountRolePicker,
+  mountAsync,
 } from "../config-helpers.js";
 import { mountPanelPoster } from "../panel-post.js";
 
@@ -25,7 +26,7 @@ import { mountPanelPoster } from "../panel-post.js";
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     const [cfg, channels, roles, members] = await Promise.all([
       api("/api/economy/config"),
       loadChannels(),
@@ -33,7 +34,7 @@ export function mount(container) {
       loadMembers(),
     ]);
     render(container, cfg, channels, roles, members);
-  })();
+  }, { errorMsg: "Couldn’t load the economy settings." });
 }
 
 function render(container, cfg, channels, roles, members) {

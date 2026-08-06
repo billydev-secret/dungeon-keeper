@@ -1,11 +1,12 @@
 import { wGet, wPost, esc, showStatus, enfLabel, notifLabel } from "../wellness-helpers.js";
-import { guardForm } from "../config-helpers.js";
+import { guardForm, mountAsync } from "../config-helpers.js";
 import { renderLoading, renderError } from "../states.js";
+import { confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading your wellness dashboard…")}</div>`;
 
-  (async () => {
+  return mountAsync(container, async () => {
     let d;
     try { d = await wGet("/api/wellness/me"); } catch (e) {
       container.querySelector(".panel").innerHTML =
@@ -167,15 +168,18 @@ export function mount(container) {
     // Opt out
     const oStatus = container.querySelector("[data-optout-status]");
     container.querySelector("[data-optout-btn]").addEventListener("click", async () => {
-      if (!window.confirm(
-        "Leave the wellness program?\n\n" +
-        "All tracking, nudges and enforcement stop immediately and your wellness role is removed. " +
-        "Your caps, blackouts and settings are kept for 30 days in case you rejoin, then deleted."
-      )) return;
+      // confirmDialog, not window.confirm: the native dialog is unstyled,
+      // unfocusable by the panel, and the only one left in the dashboard.
+      const ok = await confirmDialog(
+        "All tracking, nudges and enforcement stop immediately and your wellness role is removed. "
+        + "Your caps, blackouts and settings are kept for 30 days in case you rejoin, then deleted.",
+        { title: "Leave the wellness program?", danger: true, confirmLabel: "Leave" },
+      );
+      if (!ok) return;
       try {
         await wPost("/api/wellness/optout", {});
         mount(container); // re-render — shows the not-opted-in notice
       } catch (err) { showStatus(oStatus, false, `Couldn’t leave — ${err.message}`); }
     });
-  })();
+  }, { errorMsg: "Couldn’t load your wellness settings." });
 }

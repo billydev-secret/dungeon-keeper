@@ -3,12 +3,12 @@
 // The page→anchor mapping lives in help-sections.js (shared with app.js's
 // nav so the sidebar can't drift from the manual).
 
-import { HELP_PAGES } from "./help-sections.js?v=24";
+import { HELP_PAGES, DEFAULT_ASSISTANT_NAME, assistantHelpLabel } from "./help-sections.js?v=24";
 import { api, apiPost, esc } from "../api.js";
 
 // The assistant's name is per-guild branding (Config → Branding); the built-in
-// default only shows if the lookup fails.
-const DEFAULT_ASSISTANT_NAME = "Billy-bot";
+// default (from help-sections.js, shared with the nav label) only shows if the
+// lookup fails.
 let _assistantName = null;
 
 async function assistantName() {
@@ -253,6 +253,22 @@ function buildSearchIndex(doc) {
   return _searchIndex;
 }
 
+/**
+ * The manual's sections as flat, routable entries:
+ * `{ title, path, page, anchor }`, where `path` reads "Section › Subsection".
+ *
+ * Exported for app.js's command palette, which searches manual headings as a
+ * second result tier. The manual is fetched and indexed once and cached in this
+ * module — the palette imports this file with the same `?v=` specifier the
+ * router uses for the panel, so both share one instance and one parse.
+ */
+export async function manualHeadings() {
+  const doc = await loadManual();
+  return buildSearchIndex(doc).map(({ title, path, page, anchor }) => ({
+    title, path, page, anchor,
+  }));
+}
+
 function searchManual(doc, query) {
   const q = query.toLowerCase();
   const results = [];
@@ -334,6 +350,13 @@ export async function mount(container, params = {}) {
   const titleBox = document.createElement("div");
   const h2 = document.createElement("h2");
   h2.textContent = meta.label;
+  // Same per-guild branding the nav applies (IA5): the static label is only a
+  // fallback, so the title picks up this guild's name for the assistant. The
+  // manual's own heading is still de-duplicated against the static label, which
+  // is what dropDuplicateHeading compares.
+  if (meta.brand === "assistant") {
+    assistantName().then((name) => { h2.textContent = assistantHelpLabel(name); });
+  }
   const subtitle = document.createElement("div");
   subtitle.className = "subtitle";
   subtitle.textContent = "Dungeon Keeper Reference Guide";
