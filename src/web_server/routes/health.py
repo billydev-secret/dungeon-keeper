@@ -116,6 +116,118 @@ def _resolve_channel_names(
 
 
 # ---------------------------------------------------------------------------
+# Sentiment reads
+#
+# ``messages`` carries duplicated ``sentiment``/``emotion`` columns alongside
+# the ``message_sentiment`` table, written by the same code paths (events_cog
+# on ingest, sentiment_service on backfill), and indexed as
+# ``idx_messages_sentiment (guild_id, sentiment)``. Reading ``messages``
+# directly therefore returns identical rows while dropping the join: prod at
+# the time of writing had 502,051 rows on both sides, zero rows present in one
+# and not the other, and zero value or emotion mismatches.
+#
+# The join form could only seek ``message_sentiment`` on ``guild_id`` (the
+# indexes there are ``(guild_id, computed_at)`` and ``(guild_id, channel_id)``),
+# so every query walked the whole guild's sentiment rows, did a rowid lookup
+# into ``messages`` per row, then sorted in a temp b-tree. Measured on prod:
+# feed 278 ms -> 0.1 ms, 24 h counts 247 ms -> 153 ms, stddev 254 ms -> 52 ms,
+# outliers 249 ms -> 0.1 ms.
+# ---------------------------------------------------------------------------
+
+
+def _sentiment_row(r) -> dict:
+    return {
+        "message_id": str(r["message_id"]),
+        "channel_id": str(r["channel_id"]),
+        "author_id": str(r["author_id"]),
+        "content": r["content"],
+        "sentiment": r["sentiment"],
+        "emotion": r["emotion"],
+        "ts": r["ts"],
+    }
+
+
+def _sentiment_feed_payload(
+    conn,
+    guild_id: int,
+    bot_clause: str,
+    bot_params: tuple,
+    *,
+    limit: int,
+    snippet: int | None,
+) -> dict:
+    """Strongly-positive/negative messages plus 24 h positive/negative counts."""
+    # Both interpolations are ints from this module's own call sites, never
+    # request input — they cannot be bound as parameters inside substr()/LIMIT
+    # without SQLite re-planning per call.
+    content_expr = (
+        "content" if snippet is None else f"substr(content, 1, {int(snippet)})"
+    )
+    rows = conn.execute(
+        f"""SELECT message_id, channel_id, author_id,
+                   {content_expr} AS content, sentiment, emotion, ts
+            FROM messages
+            WHERE guild_id = ?
+              AND (sentiment >= 0.5 OR sentiment <= -0.5)
+              {bot_clause}
+            ORDER BY ts DESC LIMIT {int(limit)}""",
+        (guild_id, *bot_params),
+    ).fetchall()
+    day_ago = time.time() - 86400
+    pos_count = conn.execute(
+        f"SELECT COUNT(*) FROM messages "
+        f"WHERE guild_id = ? AND sentiment >= 0.5 AND ts >= ?{bot_clause}",
+        (guild_id, day_ago, *bot_params),
+    ).fetchone()[0]
+    neg_count = conn.execute(
+        f"SELECT COUNT(*) FROM messages "
+        f"WHERE guild_id = ? AND sentiment <= -0.5 AND ts >= ?{bot_clause}",
+        (guild_id, day_ago, *bot_params),
+    ).fetchone()[0]
+    return {
+        "messages": [_sentiment_row(r) for r in rows],
+        "positive_24h": pos_count,
+        "negative_24h": neg_count,
+    }
+
+
+def _sentiment_outliers(
+    conn, guild_id: int, bot_clause: str, bot_params: tuple, *, avg: float
+) -> dict:
+    """The two most positive / most negative messages beyond 1 sigma of *avg*."""
+    # ``sentiment IS NOT NULL`` replaces what the join to message_sentiment used
+    # to do implicitly — without it, unscored messages would drag the mean.
+    std_row = conn.execute(
+        f"SELECT COALESCE(SQRT(AVG((sentiment - ?) * (sentiment - ?))), 0.3) AS sd "
+        f"FROM messages "
+        f"WHERE guild_id = ? AND ts >= ? AND sentiment IS NOT NULL{bot_clause}",
+        (avg, avg, guild_id, time.time() - 86400 * 30, *bot_params),
+    ).fetchone()
+    sd = max(std_row["sd"], 0.1)
+    top2 = conn.execute(
+        f"""SELECT message_id, channel_id, author_id,
+                   substr(content, 1, 100) AS content, sentiment, emotion, ts
+            FROM messages
+            WHERE guild_id = ? AND sentiment >= ?{bot_clause}
+            ORDER BY sentiment DESC, ts DESC LIMIT 2""",
+        (guild_id, avg + sd, *bot_params),
+    ).fetchall()
+    bot2 = conn.execute(
+        f"""SELECT message_id, channel_id, author_id,
+                   substr(content, 1, 100) AS content, sentiment, emotion, ts
+            FROM messages
+            WHERE guild_id = ? AND sentiment <= ?{bot_clause}
+            ORDER BY sentiment ASC, ts DESC LIMIT 2""",
+        (guild_id, avg - sd, *bot_params),
+    ).fetchall()
+    return {
+        "top": [_sentiment_row(r) for r in top2],
+        "bottom": [_sentiment_row(r) for r in bot2],
+        "threshold": round(sd, 3),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Grid endpoint — compact data for all tiles
 # ---------------------------------------------------------------------------
 
@@ -130,10 +242,6 @@ async def health_tiles(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
-    # Sentiment queries read message_sentiment joined to an aliased messages.
-    msg_bot_clause, msg_bot_params = bot_filter_clause(
-        guild_id, column="m.author_id", include_bots=include_bots
-    )
     ck = partial(cache_key, include_bots=include_bots)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
@@ -258,48 +366,18 @@ async def health_tiles(
                         }
 
                 if _want("sentiment_feed"):
-                    feed_rows = conn.execute(
-                        f"""SELECT ms.message_id, ms.channel_id, m.author_id,
-                                  substr(m.content, 1, 120) AS content,
-                                  ms.sentiment, ms.emotion, m.ts
-                           FROM message_sentiment ms
-                           JOIN messages m ON ms.message_id = m.message_id
-                           WHERE ms.guild_id = ?
-                             AND (ms.sentiment >= 0.5 OR ms.sentiment <= -0.5)
-                             {msg_bot_clause}
-                           ORDER BY m.ts DESC LIMIT 8""",
-                        (guild_id, *msg_bot_params),
-                    ).fetchall()
-                    pos_count = conn.execute(
-                        f"SELECT COUNT(*) FROM message_sentiment ms "
-                        f"JOIN messages m ON ms.message_id = m.message_id "
-                        f"WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 "
-                        f"AND m.ts >= ?{msg_bot_clause}",
-                        (guild_id, time.time() - 86400, *msg_bot_params),
-                    ).fetchone()[0]
-                    neg_count = conn.execute(
-                        f"SELECT COUNT(*) FROM message_sentiment ms "
-                        f"JOIN messages m ON ms.message_id = m.message_id "
-                        f"WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 "
-                        f"AND m.ts >= ?{msg_bot_clause}",
-                        (guild_id, time.time() - 86400, *msg_bot_params),
-                    ).fetchone()[0]
-                    tiles["sentiment_feed"] = {
-                        "messages": [
-                            {
-                                "message_id": str(r["message_id"]),
-                                "channel_id": str(r["channel_id"]),
-                                "author_id": str(r["author_id"]),
-                                "content": r["content"],
-                                "sentiment": r["sentiment"],
-                                "emotion": r["emotion"],
-                                "ts": r["ts"],
-                            }
-                            for r in feed_rows
-                        ],
-                        "positive_24h": pos_count,
-                        "negative_24h": neg_count,
-                    }
+                    cached = get_cached(conn, guild_id, ck("sentiment_feed"))
+                    if cached is None:
+                        cached = _sentiment_feed_payload(
+                            conn,
+                            guild_id,
+                            bot_clause,
+                            bot_params,
+                            limit=8,
+                            snippet=120,
+                        )
+                        set_cached(conn, guild_id, ck("sentiment_feed"), cached)
+                    tiles["sentiment_feed"] = cached
 
             # --- Admin-only tiles ---
             if is_admin:
@@ -343,55 +421,22 @@ async def health_tiles(
                         )
                         set_cached(conn, guild_id, ck("sentiment"), cached)
 
-                    # Outlier messages: 1 sigma above / below the mean
-                    _avg = cached["avg_sentiment"]
-                    _std_row = conn.execute(
-                        f"SELECT COALESCE(SQRT(AVG((ms.sentiment - ?) * (ms.sentiment - ?))), 0.3) AS sd "
-                        f"FROM message_sentiment ms "
-                        f"JOIN messages m ON ms.message_id = m.message_id "
-                        f"WHERE ms.guild_id = ? AND m.ts >= ?{msg_bot_clause}",
-                        (_avg, _avg, guild_id, time.time() - 86400 * 30, *msg_bot_params),
-                    ).fetchone()
-                    _sd = max(_std_row["sd"], 0.1)
-                    _hi = _avg + _sd
-                    _lo = _avg - _sd
-                    _top2 = conn.execute(
-                        f"""SELECT ms.message_id, ms.channel_id, m.author_id,
-                                  substr(m.content, 1, 100) AS content,
-                                  ms.sentiment, ms.emotion, m.ts
-                           FROM message_sentiment ms
-                           JOIN messages m ON ms.message_id = m.message_id
-                           WHERE ms.guild_id = ? AND ms.sentiment >= ?{msg_bot_clause}
-                           ORDER BY ms.sentiment DESC, m.ts DESC LIMIT 2""",
-                        (guild_id, _hi, *msg_bot_params),
-                    ).fetchall()
-                    _bot2 = conn.execute(
-                        f"""SELECT ms.message_id, ms.channel_id, m.author_id,
-                                  substr(m.content, 1, 100) AS content,
-                                  ms.sentiment, ms.emotion, m.ts
-                           FROM message_sentiment ms
-                           JOIN messages m ON ms.message_id = m.message_id
-                           WHERE ms.guild_id = ? AND ms.sentiment <= ?{msg_bot_clause}
-                           ORDER BY ms.sentiment ASC, m.ts DESC LIMIT 2""",
-                        (guild_id, _lo, *msg_bot_params),
-                    ).fetchall()
-
-                    def _outlier_row(r):
-                        return {
-                            "message_id": str(r["message_id"]),
-                            "channel_id": str(r["channel_id"]),
-                            "author_id": str(r["author_id"]),
-                            "content": r["content"],
-                            "sentiment": r["sentiment"],
-                            "emotion": r["emotion"],
-                            "ts": r["ts"],
-                        }
-
-                    _outliers = {
-                        "top": [_outlier_row(r) for r in _top2],
-                        "bottom": [_outlier_row(r) for r in _bot2],
-                        "threshold": round(_sd, 3),
-                    }
+                    # Outlier messages: 1 sigma above / below the mean. Cached
+                    # under their own key (compute_sentiment builds the tile
+                    # payload and doesn't know about them); same 15-min TTL, so
+                    # the mean they key off is at most one TTL out of step.
+                    _outliers = get_cached(conn, guild_id, ck("sentiment_outliers"))
+                    if _outliers is None:
+                        _outliers = _sentiment_outliers(
+                            conn,
+                            guild_id,
+                            bot_clause,
+                            bot_params,
+                            avg=cached["avg_sentiment"],
+                        )
+                        set_cached(
+                            conn, guild_id, ck("sentiment_outliers"), _outliers
+                        )
 
                     tiles["sentiment"] = {
                         "avg_sentiment": cached["avg_sentiment"],
@@ -551,7 +596,30 @@ async def health_tiles(
 
 # ---------------------------------------------------------------------------
 # Deep-dive endpoints
+#
+# Each returns a superset of its tile (per-channel breakdowns, full graphs,
+# 50-row feeds) and used to recompute from scratch on every request. They now
+# share the tiles' 15-minute ``health_metrics_cache``, under a ``deep:``
+# namespace so a deep-dive payload can never be served where a tile payload is
+# expected (the two have different shapes for the same metric).
+#
+# Display names are deliberately resolved *after* the cache read and are never
+# stored: ``set_cached`` serialises before the merge, so a nickname change shows
+# up on the next request rather than after the TTL.
 # ---------------------------------------------------------------------------
+
+
+def _deep_key(metric: str, *, include_bots: bool = False, **params: object) -> str:
+    """Cache key for a deep-dive payload.
+
+    Every request parameter that changes the result must be folded in — a
+    collision here would serve one population's numbers under another's
+    filters, which is worse than recomputing. ``include_bots`` rides on
+    ``cache_key``'s existing ``+bots`` suffix; anything else (``days``, ranges)
+    is appended as a sorted ``|name=value`` list.
+    """
+    suffix = "".join(f"|{k}={params[k]}" for k in sorted(params))
+    return f"deep:{cache_key(metric, include_bots=include_bots)}{suffix}"
 
 
 @router.get("/health/dau-mau")
@@ -565,16 +633,21 @@ async def health_dau_mau(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
+    key = _deep_key("dau_mau", include_bots=include_bots)
 
     def _q():
         with ctx.open_db() as conn:
-            return compute_dau_mau(
-                conn,
-                guild_id,
-                member_count=extras["member_count"],
-                voice_active_count=extras["voice_active"],
-                include_bots=include_bots,
-            )
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_dau_mau(
+                    conn,
+                    guild_id,
+                    member_count=extras["member_count"],
+                    voice_active_count=extras["voice_active"],
+                    include_bots=include_bots,
+                )
+                set_cached(conn, guild_id, key, data)
+            return data
 
     return await run_query(_q)
 
@@ -587,13 +660,17 @@ async def health_heatmap(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
+    key = _deep_key("heatmap", include_bots=include_bots)
 
     def _q():
         with ctx.open_db() as conn:
-            tz = get_tz_offset_hours(conn, guild_id)
-            data = compute_heatmap(
-                conn, guild_id, utc_offset_hours=tz, include_bots=include_bots
-            )
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                tz = get_tz_offset_hours(conn, guild_id)
+                data = compute_heatmap(
+                    conn, guild_id, utc_offset_hours=tz, include_bots=include_bots
+                )
+                set_cached(conn, guild_id, key, data)
             # Resolve channel names
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
             bot = getattr(ctx, "bot", None)
@@ -620,14 +697,19 @@ async def health_channel_health(
         [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)] if guild else []
     )
 
+    key = _deep_key("channel_health", include_bots=include_bots)
+
     def _q():
         with ctx.open_db() as conn:
-            data = compute_channel_health(
-                conn,
-                guild_id,
-                nsfw_channel_ids=nsfw_ids,
-                include_bots=include_bots,
-            )
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_channel_health(
+                    conn,
+                    guild_id,
+                    nsfw_channel_ids=nsfw_ids,
+                    include_bots=include_bots,
+                )
+                set_cached(conn, guild_id, key, data)
             ch_ids = {int(ch["channel_id"]) for ch in data["channels"]}
             ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["channels"]:
@@ -648,9 +730,14 @@ async def health_gini(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
 
+    key = _deep_key("gini", include_bots=include_bots)
+
     def _q():
         with ctx.open_db() as conn:
-            data = compute_gini(conn, guild_id, include_bots=include_bots)
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_gini(conn, guild_id, include_bots=include_bots)
+                set_cached(conn, guild_id, key, data)
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
             ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["per_channel"]:
@@ -673,9 +760,14 @@ async def health_social_graph(
         [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)] if guild else []
     )
 
+    key = _deep_key("social_graph")
+
     def _q():
         with ctx.open_db() as conn:
-            data = compute_social_graph(conn, guild_id, nsfw_channel_ids=nsfw_ids)
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_social_graph(conn, guild_id, nsfw_channel_ids=nsfw_ids)
+                set_cached(conn, guild_id, key, data)
             # Resolve user names for bridge users and graph nodes
             user_ids = set()
             for b in data["bridge_users"]:
@@ -703,9 +795,14 @@ async def health_sentiment(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
 
+    key = _deep_key("sentiment", include_bots=include_bots)
+
     def _q():
         with ctx.open_db() as conn:
-            data = compute_sentiment(conn, guild_id, include_bots=include_bots)
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_sentiment(conn, guild_id, include_bots=include_bots)
+                set_cached(conn, guild_id, key, data)
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
             ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["per_channel"]:
@@ -725,49 +822,18 @@ async def health_sentiment_feed(
     guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
-    msg_bot_clause, msg_bot_params = bot_filter_clause(
-        guild_id, column="m.author_id", include_bots=include_bots
-    )
+    bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
+    key = _deep_key("sentiment_feed", include_bots=include_bots)
 
     def _q():
         with ctx.open_db() as conn:
-            rows = conn.execute(
-                f"""SELECT ms.message_id, ms.channel_id, m.author_id,
-                          m.content, ms.sentiment, ms.emotion, m.ts
-                   FROM message_sentiment ms
-                   JOIN messages m ON ms.message_id = m.message_id
-                   WHERE ms.guild_id = ?
-                     AND (ms.sentiment >= 0.5 OR ms.sentiment <= -0.5)
-                     {msg_bot_clause}
-                   ORDER BY m.ts DESC LIMIT 50""",
-                (guild_id, *msg_bot_params),
-            ).fetchall()
-            pos_count = conn.execute(
-                f"SELECT COUNT(*) FROM message_sentiment ms "
-                f"JOIN messages m ON ms.message_id = m.message_id "
-                f"WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 "
-                f"AND m.ts >= ?{msg_bot_clause}",
-                (guild_id, time.time() - 86400, *msg_bot_params),
-            ).fetchone()[0]
-            neg_count = conn.execute(
-                f"SELECT COUNT(*) FROM message_sentiment ms "
-                f"JOIN messages m ON ms.message_id = m.message_id "
-                f"WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 "
-                f"AND m.ts >= ?{msg_bot_clause}",
-                (guild_id, time.time() - 86400, *msg_bot_params),
-            ).fetchone()[0]
-            messages = [
-                {
-                    "message_id": str(r["message_id"]),
-                    "channel_id": str(r["channel_id"]),
-                    "author_id": str(r["author_id"]),
-                    "content": r["content"],
-                    "sentiment": r["sentiment"],
-                    "emotion": r["emotion"],
-                    "ts": r["ts"],
-                }
-                for r in rows
-            ]
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = _sentiment_feed_payload(
+                    conn, guild_id, bot_clause, bot_params, limit=50, snippet=None
+                )
+                set_cached(conn, guild_id, key, data)
+            messages = data["messages"]
             ch_ids = {int(m["channel_id"]) for m in messages}
             user_ids = {int(m["author_id"]) for m in messages}
             ch_names = (
@@ -783,11 +849,7 @@ async def health_sentiment_feed(
             for m in messages:
                 m["channel_name"] = ch_names.get(int(m["channel_id"]), "")
                 m["author_name"] = u_names.get(int(m["author_id"]), "")
-            return {
-                "messages": messages,
-                "positive_24h": pos_count,
-                "negative_24h": neg_count,
-            }
+            return data
 
     return await run_query(_q)
 
@@ -804,14 +866,20 @@ async def health_newcomer_funnel(
     guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
 
+    key = _deep_key("newcomer_funnel", include_bots=include_bots)
+
     def _q():
         with ctx.open_db() as conn:
-            return compute_newcomer_funnel(
-                conn,
-                guild_id,
-                recent_join_ids=extras["recent_joins"],
-                include_bots=include_bots,
-            )
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_newcomer_funnel(
+                    conn,
+                    guild_id,
+                    recent_join_ids=extras["recent_joins"],
+                    include_bots=include_bots,
+                )
+                set_cached(conn, guild_id, key, data)
+            return data
 
     return await run_query(_q)
 
@@ -828,14 +896,20 @@ async def health_cohort_retention(
     guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
 
+    key = _deep_key("cohort_retention", include_bots=include_bots)
+
     def _q():
         with ctx.open_db() as conn:
-            return compute_cohort_retention(
-                conn,
-                guild_id,
-                join_times=extras["recent_joins"],
-                include_bots=include_bots,
-            )
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_cohort_retention(
+                    conn,
+                    guild_id,
+                    join_times=extras["recent_joins"],
+                    include_bots=include_bots,
+                )
+                set_cached(conn, guild_id, key, data)
+            return data
 
     return await run_query(_q)
 
@@ -851,9 +925,14 @@ async def health_mod_workload(
     guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
 
+    key = _deep_key("mod_workload")
+
     def _q():
         with ctx.open_db() as conn:
-            data = compute_mod_workload(conn, guild_id, mod_ids=extras["mod_ids"])
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_mod_workload(conn, guild_id, mod_ids=extras["mod_ids"])
+                set_cached(conn, guild_id, key, data)
             user_ids = {int(m["user_id"]) for m in data["mod_actions"]}
             names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for m in data["mod_actions"]:
@@ -875,15 +954,21 @@ async def health_mod_engagement(
     guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
 
+    # ``days`` changes the population, so it must be part of the key.
+    key = _deep_key("mod_engagement", days=days)
+
     def _q():
         with ctx.open_db() as conn:
-            data = compute_mod_engagement(
-                conn,
-                guild_id,
-                mod_ids=extras["mod_ids"],
-                recent_joins=extras["recent_joins"],
-                days=days,
-            )
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_mod_engagement(
+                    conn,
+                    guild_id,
+                    mod_ids=extras["mod_ids"],
+                    recent_joins=extras["recent_joins"],
+                    days=days,
+                )
+                set_cached(conn, guild_id, key, data)
             user_ids = {int(m["user_id"]) for m in data["mods"]}
             names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for m in data["mods"]:

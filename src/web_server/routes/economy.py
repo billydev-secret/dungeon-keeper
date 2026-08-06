@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 from dataclasses import asdict
 from pathlib import Path
@@ -290,6 +291,10 @@ def _normalize_icon(content: bytes) -> bytes:
     Downscales to ``_ICON_MAX_DIM`` and rejects a result over Discord's 256KB
     role-icon limit — so what the dashboard stores is always what Discord will
     accept as a ``display_icon``.
+
+    Blocking (up to ~2 s of PIL CPU for an 8 MB source) and pure bytes-in /
+    bytes-out, so callers must run it via ``asyncio.to_thread``: the dashboard
+    shares the bot's event loop and this would otherwise stall the gateway.
     """
     if not content:
         raise HTTPException(400, "Empty file.")
@@ -370,7 +375,7 @@ async def create_icon_catalog(
     content = await image.read(_MAX_ICON_UPLOAD_BYTES + 1)
     if len(content) > _MAX_ICON_UPLOAD_BYTES:
         raise HTTPException(413, "Image must be 8 MB or smaller.")
-    png = _normalize_icon(content)
+    png = await asyncio.to_thread(_normalize_icon, content)
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import ipaddress
 import json
@@ -10,7 +11,7 @@ import re
 import socket
 import time
 from datetime import date, datetime, timedelta, timezone
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -3163,9 +3164,9 @@ async def list_booster_swatches(
     """List uploaded swatch files in this guild's managed folder."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    # Directory walk + a config read, so off the event loop. The upload and
-    # delete handlers below still call _swatch_listing inline (and upload
-    # writes up to 8 MB per file there too) — pre-existing, not fixed here.
+    # Directory walk + a config read, so off the event loop (as are the upload
+    # and delete handlers below — the dashboard shares the bot's event loop, so
+    # an 8 MB write on it stalls the Discord gateway).
     return await run_query(lambda: _swatch_listing(ctx.db_path, guild_id))
 
 
@@ -3191,10 +3192,12 @@ async def upload_booster_swatches(
         target = managed / name
         if target.resolve().parent != managed.resolve():
             raise HTTPException(400, "Invalid filename")
-        target.write_bytes(content)
+        # Up to 8 MB of disk write per file — off the loop.
+        await asyncio.to_thread(target.write_bytes, content)
         saved.append(name)
 
-    return {**_swatch_listing(ctx.db_path, guild_id), "saved": saved}
+    listing = await run_query(lambda: _swatch_listing(ctx.db_path, guild_id))
+    return {**listing, "saved": saved}
 
 
 @router.delete("/config/booster-roles/swatches/{filename}")
@@ -3213,8 +3216,12 @@ async def delete_booster_swatch(
         raise HTTPException(400, "Invalid filename")
     if not target.is_file():
         raise HTTPException(404, "File not found")
-    target.unlink()
-    return _swatch_listing(ctx.db_path, guild_id)
+
+    def _delete() -> dict:
+        target.unlink()
+        return _swatch_listing(ctx.db_path, guild_id)
+
+    return await run_query(_delete)
 
 
 # ── Quote card border (per-guild uploaded frame) ─────────────────────
@@ -3270,26 +3277,15 @@ async def get_quote_border_image(
     return FileResponse(path, media_type="image/png")
 
 
-@router.post("/config/quote-border")
-async def upload_quote_border(
-    request: Request,
-    file: UploadFile = File(...),
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    """Upload + normalize a per-guild quote-card border.
+def _install_quote_border(content: bytes, target) -> None:
+    """Decode, validate, downscale and install an uploaded border. Blocking.
 
-    Rejects opaque images (they would cover the whole card) and re-encodes to a
-    clean RGBA PNG so the renderer always gets a safe, alpha-carrying frame.
+    Pure bytes-in / file-out: 0.5–2 s of PIL CPU for an 8 MB source, so the
+    handler runs this in a worker thread — the dashboard shares the bot's event
+    loop and doing this inline stalls the Discord gateway for the duration.
+    Raises ``HTTPException`` for every rejection, which propagates unchanged out
+    of ``asyncio.to_thread``.
     """
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    content = await file.read(_MAX_QUOTE_BORDER_BYTES + 1)
-    if len(content) > _MAX_QUOTE_BORDER_BYTES:
-        raise HTTPException(413, "Border image must be 8 MB or smaller.")
-    if not content:
-        raise HTTPException(400, "Empty file.")
-
     from PIL import Image, UnidentifiedImageError  # noqa: PLC0415
 
     try:
@@ -3323,7 +3319,6 @@ async def upload_quote_border(
         (_QUOTE_BORDER_MAX_DIM, _QUOTE_BORDER_MAX_DIM), Image.Resampling.LANCZOS
     )
 
-    target = guild_border_path(ctx.db_path, guild_id)
     target.parent.mkdir(parents=True, exist_ok=True)
 
     # Write to a temp sibling and confirm the frame leaves a usable opening at the
@@ -3344,7 +3339,31 @@ async def upload_quote_border(
         )
     tmp.replace(target)
 
-    return _quote_border_meta(ctx.db_path, guild_id)
+
+@router.post("/config/quote-border")
+async def upload_quote_border(
+    request: Request,
+    file: UploadFile = File(...),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Upload + normalize a per-guild quote-card border.
+
+    Rejects opaque images (they would cover the whole card) and re-encodes to a
+    clean RGBA PNG so the renderer always gets a safe, alpha-carrying frame.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    content = await file.read(_MAX_QUOTE_BORDER_BYTES + 1)
+    if len(content) > _MAX_QUOTE_BORDER_BYTES:
+        raise HTTPException(413, "Border image must be 8 MB or smaller.")
+    if not content:
+        raise HTTPException(400, "Empty file.")
+
+    target = guild_border_path(ctx.db_path, guild_id)
+    await asyncio.to_thread(_install_quote_border, content, target)
+
+    return await run_query(lambda: _quote_border_meta(ctx.db_path, guild_id))
 
 
 @router.delete("/config/quote-border")
@@ -3356,9 +3375,14 @@ async def delete_quote_border(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     path = guild_border_path(ctx.db_path, guild_id)
-    if path.is_file():
-        path.unlink()
-    return _quote_border_meta(ctx.db_path, guild_id)
+
+    def _delete() -> dict:
+        if path.is_file():
+            path.unlink()
+        # Re-opens the (now absent) file with PIL — off the loop like the rest.
+        return _quote_border_meta(ctx.db_path, guild_id)
+
+    return await run_query(_delete)
 
 
 # ── Auto-delete schedules ────────────────────────────────────────────
@@ -4621,12 +4645,15 @@ _MAX_AVATAR_BYTES = 8 * 1024 * 1024
 _AVATAR_MAX_REDIRECTS = 5
 
 
-def _reject_unsafe_avatar_url(url: str) -> None:
+def _reject_unsafe_avatar_url(url: str) -> str:
     """Guard against SSRF: allow only http(s) to public hosts.
 
     Rejects non-http schemes (``file://`` etc.) and any host that resolves to a
     loopback / private / link-local / reserved / multicast / unspecified address
     (127.0.0.1, 169.254.169.254, 10.x, …). Raises HTTPException(400) on failure.
+
+    Returns the **validated address** so the caller can connect to exactly the
+    IP that was checked — see ``_download_avatar_bytes``.
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -4650,6 +4677,28 @@ def _reject_unsafe_avatar_url(url: str) -> None:
         or addr.is_unspecified
     ):
         raise HTTPException(400, "avatar_url resolves to a disallowed address")
+    return str(addr)
+
+
+def _authority(host: str, port: int | None) -> str:
+    """``host[:port]``, bracketing an IPv6 literal."""
+    bare = f"[{host}]" if ":" in host else host
+    return f"{bare}:{port}" if port else bare
+
+
+def _pin_url_to_ip(url: str, ip: str) -> tuple[str, str, str]:
+    """Rewrite *url* to dial *ip* directly.
+
+    Returns ``(connect_url, host_header, sni_hostname)``. The name stays in the
+    ``Host`` header (so virtual hosts still route) and in the TLS SNI /
+    certificate check (so HTTPS still verifies against the real hostname) —
+    only the address the socket connects to is frozen.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    authority = _authority(host, parsed.port)
+    connect = urlunparse(parsed._replace(netloc=_authority(ip, parsed.port)))
+    return connect, authority, host
 
 
 async def _download_avatar_bytes(url: str) -> bytes:
@@ -4658,18 +4707,36 @@ async def _download_avatar_bytes(url: str) -> bytes:
     Follows redirects manually, re-validating each hop against
     ``_reject_unsafe_avatar_url`` so a public URL can't 302 to an internal one,
     and streams the body with a hard 8 MB cap (parity with the file-upload paths).
+
+    Each hop is then **pinned to the address that was validated**. Validating a
+    hostname and handing the hostname to httpx leaves a DNS-rebinding TOCTOU:
+    httpx resolves the name a second time at connect, and an attacker-controlled
+    nameserver can answer the first lookup with a public IP and the second with
+    127.0.0.1 or 169.254.169.254. Connecting by IP with the original name in the
+    ``Host`` header and in TLS SNI closes that window while leaving virtual
+    hosting and certificate verification intact.
     """
     async with httpx.AsyncClient(follow_redirects=False, timeout=10.0) as client:
         current = url
         for _ in range(_AVATAR_MAX_REDIRECTS + 1):
-            _reject_unsafe_avatar_url(current)
+            # gethostbyname blocks, and the dashboard shares the bot's loop.
+            ip = await asyncio.to_thread(_reject_unsafe_avatar_url, current)
+            connect_url, host_header, sni = _pin_url_to_ip(current, ip)
             try:
-                async with client.stream("GET", current) as response:
+                async with client.stream(
+                    "GET",
+                    connect_url,
+                    headers={"Host": host_header},
+                    extensions={"sni_hostname": sni},
+                ) as response:
                     if response.is_redirect:
                         location = response.headers.get("location")
                         if not location:
                             raise HTTPException(400, "avatar_url redirect had no location")
-                        current = str(response.url.join(location))
+                        # Resolve against the logical URL, not the IP-pinned one,
+                        # so a relative Location keeps the hostname (and gets
+                        # re-validated + re-pinned on the next pass).
+                        current = str(httpx.URL(current).join(location))
                         continue
                     response.raise_for_status()
                     buf = bytearray()

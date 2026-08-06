@@ -104,33 +104,54 @@ async def help_advisor(
         # context to what THEY can see. Falls back to public (@everyone) when
         # they aren't a resolvable member.
         member = guild.get_member(user.user_id)
-        with ctx.open_db() as conn:
-            model = resolve_advisor_model(conn, guild_id, staff=is_staff(member))
-            assistant_name = resolve_assistant_name_conn(conn, guild_id)
-            context_on = get_advisor_context_enabled(conn, guild_id)
-            tools_on = get_advisor_tools_enabled(conn, guild_id)
-        if context_on:
-            # Admins get on-demand settings lookup instead of the inline dump.
-            # Read-only here: the dashboard edits settings in its own panels,
-            # and the confirm-button flow only exists on the Discord surface.
-            if tools_on and member is not None and can_see_config(member):
-                from bot_modules.services.advisor_gaps import fetch_setup_gaps
 
-                tools = AdvisorTools(
-                    feature_keys=FEATURE_KEYS,
-                    fetch_settings=lambda f, _m=member: fetch_feature_settings(
-                        guild, _m, ctx.db_path, f
-                    ),
-                    fetch_gaps=lambda _m=member: fetch_setup_gaps(
-                        ctx.db_path, guild_id, _m
-                    ),
+        def _prepare():
+            """Everything that touches the DB or walks the guild's permissions.
+
+            Four config reads, plus ``build_asker_context`` (which opens the DB
+            again internally) and a per-channel permission walk — all blocking,
+            and the dashboard runs on the bot's own event loop, so it goes off
+            the loop like every other DB read here.
+            """
+            with ctx.open_db() as conn:
+                _model = resolve_advisor_model(conn, guild_id, staff=is_staff(member))
+                _name = resolve_assistant_name_conn(conn, guild_id)
+                context_on = get_advisor_context_enabled(conn, guild_id)
+                tools_on = get_advisor_tools_enabled(conn, guild_id)
+            _tools = None
+            _context = None
+            _channels: dict[str, str] = {}
+            if context_on:
+                # Admins get on-demand settings lookup instead of the inline
+                # dump. Read-only here: the dashboard edits settings in its own
+                # panels, and the confirm-button flow only exists on Discord.
+                if tools_on and member is not None and can_see_config(member):
+                    from bot_modules.services.advisor_gaps import fetch_setup_gaps
+
+                    _tools = AdvisorTools(
+                        feature_keys=FEATURE_KEYS,
+                        fetch_settings=lambda f, _m=member: fetch_feature_settings(
+                            guild, _m, ctx.db_path, f
+                        ),
+                        fetch_gaps=lambda _m=member: fetch_setup_gaps(
+                            ctx.db_path, guild_id, _m
+                        ),
+                    )
+                _context = build_asker_context(
+                    guild, member, ctx.db_path, include_config=_tools is None
                 )
-            guild_context = build_asker_context(
-                guild, member, ctx.db_path, include_config=tools is None
-            )
-            # Only the asker's visible channels — used to turn <#id> mentions in
-            # the answer into links, and never a channel they can't see.
-            channels = {str(ch.id): ch.name for ch in visible_text_channels(guild, member)}
+                # Only the asker's visible channels — used to turn <#id>
+                # mentions in the answer into links, never a channel they can't
+                # see.
+                _channels = {
+                    str(ch.id): ch.name
+                    for ch in visible_text_channels(guild, member)
+                }
+            return _model, _name, _tools, _context, _channels
+
+        model, assistant_name, tools, guild_context, channels = await run_query(
+            _prepare
+        )
 
     result = await answer_advisor(
         body.question, body.history, model=model, guild_context=guild_context,

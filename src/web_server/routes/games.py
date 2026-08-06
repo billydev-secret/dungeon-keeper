@@ -774,9 +774,11 @@ async def list_ll_templates(
                 params.append(status)
 
             where = "WHERE " + " AND ".join(clauses)
+            # ``blanks`` rides along in the main SELECT — it used to be
+            # re-fetched with one extra query per row of the same table.
             rows = conn.execute(
                 f"""SELECT template_id, title, tier, status, tags,
-                           player_min, player_max, use_count, guild_id
+                           player_min, player_max, use_count, guild_id, blanks
                     FROM legitlibs_templates {where}
                     ORDER BY template_id DESC""",
                 params,
@@ -785,15 +787,10 @@ async def list_ll_templates(
             # Count blanks from the blanks JSON column
             templates = []
             for r in rows:
-                # Get the blanks column to count entries
-                blanks_row = conn.execute(
-                    "SELECT blanks FROM legitlibs_templates WHERE template_id = ?",
-                    (r[0],),
-                ).fetchone()
                 blanks_count = 0
-                if blanks_row and blanks_row[0]:
+                if r[9]:
                     try:
-                        b = json.loads(blanks_row[0])
+                        b = json.loads(r[9])
                         blanks_count = len(b) if isinstance(b, list) else 0
                     except (json.JSONDecodeError, TypeError):
                         pass
@@ -1536,6 +1533,32 @@ async def set_audit_channel(
                     "INSERT INTO games_audit_channel (guild_id, channel_id) VALUES (?, ?)",
                     (guild_id, body.channel_id),
                 )
+            conn.commit()
+            return {}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/audit")
+async def clear_audit_channel(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    """Stop recording game events.
+
+    The dashboard documents "leave it unset to keep no record", but once a
+    channel was saved there was no way back: the picker's "(none)" posts
+    channel_id 0, which the PUT rejects. The editor-role control already had
+    this DELETE; the audit channel now matches it.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            conn.execute(
+                "DELETE FROM games_audit_channel WHERE guild_id = ?", (guild_id,)
+            )
             conn.commit()
             return {}
 
