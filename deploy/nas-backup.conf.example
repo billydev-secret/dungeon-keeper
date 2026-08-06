@@ -1,0 +1,34 @@
+# Off-device backup config for scripts/backup_to_nas.sh
+#
+# Install to ~/.config/dk-backup/nas.conf and chmod 600.
+# Contains no secrets itself -- the GPG passphrase lives in its own file.
+
+# --- NAS target ------------------------------------------------------------
+NAS_HOST=192.168.174.3          # NaturewoodNAS
+NAS_USER=                       # <-- DSM account with SSH access
+                                #     (must be in the administrators group;
+                                #      DSM only permits SSH for admins)
+
+# Synology shared folders live under /volume1/<share-name>.
+NAS_DB_DIR=/volume1/            # <-- e.g. /volume1/backups/dungeon-keeper/db
+NAS_SECRET_DIR=/volume1/        # <-- e.g. /volume1/backups/dungeon-keeper/secrets
+                                #     created chmod 700 by the script
+
+# --- retention -------------------------------------------------------------
+# LOAD-BEARING: this is the number docs/gdpr_runbook.md states as the
+# point at which an erasure has propagated to every copy. Changing it here
+# without changing it there makes the runbook a lie.
+RETENTION_DAYS=14
+
+# --- encryption ------------------------------------------------------------
+# Passphrase for the AES256 secrets bundle (.env + systemd units).
+#
+# !! RECORD THIS PASSPHRASE IN YOUR PASSWORD MANAGER, NOT ONLY HERE. !!
+# This file lives on the machine the backup exists to survive. If the disk
+# dies and the passphrase died with it, the encrypted bundle on the NAS is
+# unrecoverable -- at exactly the moment you need it.
+GPG_PASSPHRASE_FILE=/home/ben/.config/dk-backup/env-passphrase
+
+# --- paths -----------------------------------------------------------------
+DK_ROOT=/home/ben/discord-bots/dungeon-keeper
+STATUS_FILE=/home/ben/.local/state/dk-backup/last-nas-sync

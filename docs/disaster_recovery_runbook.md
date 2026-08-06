@@ -17,10 +17,14 @@ for the drill and its timings.
 | | |
 |---|---|
 | Live DB | `/home/ben/discord-bots/dungeon-keeper/dungeonkeeper.db` |
-| Backups | `/home/ben/discord-bots/dungeon-keeper/backups/` (same disk — see B1) |
-| Schedule | every 6h, plus one on every bot start; newest 5 kept |
+| Local backups | `/home/ben/discord-bots/dungeon-keeper/backups/` — **same disk as the DB** |
+| Schedule | every 6h (skipped if one was taken in the last 3h); newest 5 kept, nothing younger than 48h pruned |
+| **Off-device backups** | NaturewoodNAS `192.168.174.3`, daily at 04:30, **14-day window** |
 | Service | `dungeon-keeper.service` (also serves the dashboard) |
 | Logs | `journalctl -u dungeon-keeper` (persistent). `log.txt` is **wiped on boot** — don't rely on it. |
+
+**Which copy do you need?** If the disk is alive, use `backups/` — it is local
+and newer. If the machine or disk is gone, everything comes from the NAS.
 
 ---
 
@@ -167,21 +171,47 @@ src = sqlite3.connect("file:dungeonkeeper.db?mode=ro", uri=True)
 src.backup(sqlite3.connect("snapshots/manual.db"))
 ```
 
-## What a DB restore does *not* bring back
+---
 
-The database is not the whole system. If the **machine** is lost rather than the
-database, these are gone too — none of them are in any backup today (finding B1/B7):
+## Total machine loss — rebuilding from the NAS
 
-| | Impact |
+When the disk or the whole box is gone. Everything below comes off
+NaturewoodNAS (`192.168.174.3`); nothing is needed from the dead machine.
+
+```bash
+# 1. Fresh box: clone the repo and install per deploy/README.md.
+git clone <repo> dungeon-keeper && cd dungeon-keeper
+
+# 2. Pull the newest database copy.
+scp <nas-user>@192.168.174.3:<NAS_DB_DIR>/dungeonkeeper_YYYYMMDD_HHMMSS.db \
+    dungeonkeeper.db
+sqlite3 "file:dungeonkeeper.db?mode=ro" "PRAGMA quick_check;"   # expect: ok
+
+# 3. Recover the secrets bundle — .env plus the systemd units.
+scp <nas-user>@192.168.174.3:<NAS_SECRET_DIR>/secrets-YYYYMMDD.tar.gz.gpg .
+gpg --decrypt --output secrets.tar.gz secrets-YYYYMMDD.tar.gz.gpg
+tar -xzf secrets.tar.gz          # -> .env, dungeon-keeper.service, cloudflared.service
+sudo cp dungeon-keeper.service cloudflared.service /etc/systemd/system/
+
+# 4. Bring the schema forward, then start (steps 4-6 above).
+```
+
+**The GPG passphrase is not on the NAS** — by design, and it was never on the
+dead machine's disk alone if you followed the install note. It is in your
+password manager. Without it the secrets bundle is unopenable and every
+credential must be re-issued by hand.
+
+### Still not backed up (deliberately)
+
+| | Why it's fine |
 |---|---|
-| `.env` | **Blocks recovery.** Bot token + all API keys. Must be re-issued from the Discord developer portal and each provider. |
-| `/etc/systemd/system/*.service` | Unit files for `dungeon-keeper`, `cloudflared`, `tod-mcp`. See `deploy/README.md` to rebuild. |
-| Cloudflare tunnel credentials | Dashboard stays unreachable until the tunnel is re-provisioned. |
-| `models/` (4.5 GB) | NSFW classifier, whisper, llama. Re-downloadable, slow. |
-| `lavalink/Lavalink.jar` + plugins | Music silently fails until re-fetched. |
-| `guess_cache/`, `econ_icon_catalog/`, `econ_role_icons/` | 9 live images orphaned; rows survive, images 404. |
+| `models/` (4.5 GB) | Re-downloads from HuggingFace on first boot. Slow, not lost. Note `TimeoutStartSec=180` may not cover the first run. |
+| `lavalink/Lavalink.jar` + plugins | Re-fetched per `deploy/README.md`. Music is silent until then. |
+| Cloudflare tunnel credentials | Held by cloudflared's own config; re-provision the tunnel in the Cloudflare dashboard. **This is the one remaining manual step** — worth moving into the secrets bundle. |
+| `assets/` | In git; recovers with the checkout. |
+| `Discord Messages/` | Export archive, re-exportable. |
 
-`assets/` is in git and recovers with the checkout.
-
-**Until off-device backups exist, a disk failure is not recoverable from
-anything on this machine.** That is the open High finding — see B1.
+`guess_cache/`, `econ_icon_catalog/` and `econ_role_icons/` **are** mirrored to
+the NAS, but as current state rather than versioned history — restoring a
+14-day-old database may leave a handful of image rows pointing at files the
+mirror no longer has. Rows survive; images 404. See finding B7.

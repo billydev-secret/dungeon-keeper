@@ -348,7 +348,7 @@ guard the empty case — the runbook below assumes the latter and calls
 
 | ID | Severity | Finding | Status |
 |---|---|---|---|
-| B1 | **High** | No off-device backup; DB + all copies + `.env` on one disk | **Open — needs a destination decision** |
+| B1 | **High** | No off-device backup; DB + all copies + `.env` on one disk | Built — **awaiting install** (needs NAS credentials) |
 | B2 | **High** | Retention counted in files; restarts collapse the window (observed 18.3h, not 24h) | Fixed |
 | B3 | Medium | Backup failure logs and is never surfaced to anyone | **Open — needs an alert-surface decision** |
 | B4 | Medium | A partial backup keeps the real filename and sorts newest | Fixed |
@@ -388,18 +388,56 @@ service previously had **none**):
 created by hand is the wrong default; the fix is the directory split plus the
 runbook guidance, both of which landed.
 
+### B1 — the off-device backup
+
+Destination chosen: the **Synology NAS on the LAN**, found at `192.168.174.3`
+("NaturewoodNAS", MAC OUI `90:09:d0` = Synology, DSM on 5000/5001, SSH + SMB +
+NFS open, rsync daemon closed). Transport is **rsync over SSH** — no fstab
+mount to go stale, no credentials in a file, and it survives the NAS being
+briefly unreachable.
+
+Built and committed, **not yet installed** — the one remaining step needs the
+DSM password, which only the operator can supply:
+
+- `scripts/backup_to_nas.sh` — verifies the newest local backup with
+  `quick_check` *before* shipping it (a corrupt copy overwriting a good one on
+  the NAS would be worse than no backup), rsyncs it, confirms the far-end size,
+  then syncs an AES256-encrypted bundle of `.env` + the systemd units, mirrors
+  the small media directories, and prunes past 14 days.
+- `deploy/dk-nas-backup.{service,timer}` — daily at 04:30, `Persistent=true` so
+  a run missed while the box was off happens at next boot. Runs as `ben` in its
+  own unit so the bot keeps `ProtectHome=read-only`.
+- `deploy/nas-backup.conf.example` — needs `NAS_USER` and the two share paths.
+
+Retention on the NAS is **14 days**, chosen deliberately against the G5
+trade-off: long enough to catch corruption nobody noticed for a fortnight,
+short enough to state in writing to an erasure requester. That number now
+appears in `gdpr_runbook.md` and in the config, and the two must move
+together.
+
+The GPG round-trip was tested end-to-end with a stand-in `.env` (encrypt → tar
+→ decrypt → compare) before shipping, because a secrets bundle that cannot be
+opened is worse than one that was never made. **The passphrase must live in a
+password manager, not only on the machine the backup exists to survive** — that
+warning is in the config template and the deploy README.
+
 ### What still needs you
 
-- **B1** is the one that matters and it needs a decision I can't make: there is
-  one physical disk in this box, so "off-device" means picking a destination
-  (external drive, another host, or object storage). Once that exists it wants
-  a separate systemd timer running as `ben` — not the bot, whose
-  `ProtectHome=read-only` hardening should stay intact — copying `backups/`
-  plus `.env`, encrypted. **`.env` is the urgent half**: 4 KB, gitignored, and
-  its loss means re-issuing every credential.
+- **Install B1** — two commands, one of which needs your DSM password. See
+  "Next steps" in the branch summary or `deploy/README.md`.
 - **B3** needs a choice of surface. Cheapest useful version: record
   `last_backup_ok_at` in `config` and have the health panel flag it when it is
-  older than 2× the interval.
+  older than 2× the interval. Note the NAS job *does* have failure visibility
+  already — it exits non-zero, so a failed run shows in `systemctl --failed`.
+- ~~**The Cloudflare tunnel credentials** are the one thing still outside the
+  backup.~~ **Checked 2026-08-07 — already covered.** There is no
+  `/etc/cloudflared/` and no `~/.cloudflared/` on this host: the tunnel is run
+  token-only, with the credential embedded as `--token <jwt>` in
+  `ExecStart` of `/etc/systemd/system/cloudflared.service`. That unit file is
+  already inside the encrypted secrets bundle, so the tunnel restores with it.
+  Nothing further to fold in — but note the consequence: **the secrets bundle
+  now holds the tunnel credential as well as the bot token**, which is exactly
+  why it is AES256'd before it leaves the machine.
 
 **Nothing found in WAL correctness** — the service uses the online backup API
 correctly, and the artifact it produces was proven restorable end-to-end.

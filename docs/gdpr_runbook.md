@@ -132,12 +132,27 @@ data and still has to be disclosed. Retention is not an access exemption.
    answer is that backups are erased on rotation, not on request — which is an
    accepted position provided the window is stated.
 
+   **Off-device copies on the NAS are kept for 14 days.** This is the binding
+   number: an erasure has propagated to *every* copy 14 days after the purge
+   runs. That is the figure to state to a requester. It is set by
+   `RETENTION_DAYS` in `~/.config/dk-backup/nas.conf` and must not be changed
+   without changing this sentence.
+
    **Also check `snapshots/` and any hand-made copy in `backups/`.** Ad-hoc
    snapshots are named outside the rotation's glob and are therefore *never*
    pruned — e.g. `dungeonkeeper-pre-tod-backfill-20260729.db`. Delete or
-   re-purge them by hand; they are the copies the retention window does not
-   reach. See [reviews/2026-08-06-backup-disaster-recovery.md](reviews/2026-08-06-backup-disaster-recovery.md)
+   re-purge them by hand; they are the copies no retention window reaches. See
+   [reviews/2026-08-06-backup-disaster-recovery.md](reviews/2026-08-06-backup-disaster-recovery.md)
    (B5) and [disaster_recovery_runbook.md](disaster_recovery_runbook.md).
+
+   **Summary of windows:**
+
+   | Copy | Window |
+   |---|---|
+   | `backups/` (local rotation) | ~24h, floor of 48h before anything is pruned |
+   | NAS `dungeonkeeper_*.db` | 14 days |
+   | NAS `secrets-*.tar.gz.gpg` | 14 days (no member data — `.env` + unit files) |
+   | Hand-made snapshots | **unbounded — delete by hand** |
 
 ### Multi-guild note
 
