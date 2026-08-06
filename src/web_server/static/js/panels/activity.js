@@ -4,7 +4,7 @@ import { makeBarChart, CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, ROLE_COL
 import { mountTimeSlider } from "../slider.js";
 import { renderEmpty, renderError } from "../states.js";
 import { filterSelect, multiFilterSelect } from "../filter-select.js";
-import { onPickerChange } from "../config-helpers.js";
+import { onPickerChange, memberSearch } from "../config-helpers.js";
 
 const RESOLUTIONS = [
   { value: "hour",        label: "Hourly (24h)" },
@@ -83,7 +83,10 @@ export function mount(container, initialParams) {
   let chart = null;
   let slider = null;
   const sliderWrap = container.querySelector("[data-slider-wrap]");
-  const userFS = filterSelect("Type to filter…", [], { label: "Member", emptyLabel: "(all members)" });
+  // `search` reaches past the bounded page setOptions() is seeded with below,
+  // so filtering the chart by a member who left long ago still works.
+  const userFS = filterSelect("Type to filter…", [],
+    { label: "Member", emptyLabel: "(all members)", search: memberSearch() });
   const chanFS = filterSelect("Type to filter…", [], { label: "Channel", emptyLabel: "(all channels)" });
   // Exclude Channels was a hand-rolled combobox: mousedown-to-pick plus a
   // blur timeout, no keyboard handling and no ARIA, so it was unusable without

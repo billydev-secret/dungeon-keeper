@@ -105,14 +105,74 @@ def test_apply_me_data_drops_guild_scoped_caches():
 
 
 def test_reset_meta_caches_clears_every_cache_it_owns():
-    """A cache added to config-helpers.js must be cleared on guild switch too."""
+    """A cache added to config-helpers.js must be cleared on guild switch too.
+
+    Two declaration shapes now: the `let _x = null` list memos, and the Map
+    memos the bounded member list brought (search results and the id index).
+    Both hold guild-scoped rows, so both have to be dropped on a switch.
+    """
     src = (_JS / "config-helpers.js").read_text(encoding="utf-8")
     reset = src.split("export function resetMetaCaches()", 1)[1].split("\n}", 1)[0]
-    declared = set(re.findall(r"^let (_[A-Za-z]+) = null;", src, re.M))
-    assert declared, "cache-declaration scrape looks broken"
-    missing = {name for name in declared if f"{name} = null" not in reset}
+
+    nulled = set(re.findall(r"^let (_[A-Za-z]+) = null;", src, re.M))
+    maps = set(re.findall(r"^const (_[A-Za-z]+) = new (?:Map|Set)\(\);", src, re.M))
+    assert nulled and maps, "cache-declaration scrape looks broken"
+
+    missing = {n for n in nulled if f"{n} = null" not in reset}
+    missing |= {n for n in maps if f"{n}.clear()" not in reset}
     assert not missing, (
         f"guild-scoped caches not cleared by resetMetaCaches(): {sorted(missing)}"
+    )
+
+
+# ── the bounded member list (2026-08 review residue) ───────────────────────
+#
+# /api/meta/members is paginated now. A picker that only filters the page it was
+# handed makes everyone below the cut unselectable — the exact regression that
+# kept the endpoint uncapped through the security pass. These two keep the
+# server-side lookup wired wherever member options are built.
+
+
+def test_shared_member_pickers_wire_the_server_search():
+    """The two mount helpers most panels go through carry it by default."""
+    src = (_JS / "config-helpers.js").read_text(encoding="utf-8")
+    for fn in ("mountMemberPicker", "mountMemberMultiPicker"):
+        body = src.split(f"export function {fn}(", 1)[1].split("\n}", 1)[0]
+        assert "search: memberSearch()" in body, (
+            f"{fn} no longer passes the server-side member lookup — every "
+            "member outside the bounded first page just became unselectable"
+        )
+        assert "_hydrateSavedMembers" in body, (
+            f"{fn} no longer resolves a saved id the page didn't include; a "
+            "config naming a departed member renders as a bare snowflake"
+        )
+    # …and the widget has to honour it.
+    fs = (_JS / "filter-select.js").read_text(encoding="utf-8")
+    assert "opts.search" in fs, "filter-select dropped remote search support"
+
+
+_MEMBER_OPTION_BUILDERS = ("toMemberOptions(", "toSortedMemberOptions(")
+
+
+def test_panels_building_member_options_wire_the_server_search():
+    """A panel assembling member options by hand owns the lookup itself.
+
+    Going through mountMemberPicker/mountMemberMultiPicker is the easy path and
+    needs nothing; a panel that reaches for the option builder directly (because
+    it wants a different ordering, say) has opted out of that wiring and has to
+    pass `search:` itself.
+    """
+    offenders = []
+    for path in _panel_files():
+        src = path.read_text(encoding="utf-8")
+        if not any(b in src for b in _MEMBER_OPTION_BUILDERS):
+            continue
+        if "memberSearch(" not in src:
+            offenders.append(path.name)
+    assert not offenders, (
+        "panels building member picker options without a server-side search: "
+        f"{offenders} — /api/meta/members is a bounded page, so anyone below "
+        "the cut can no longer be picked"
     )
 
 

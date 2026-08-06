@@ -1,6 +1,7 @@
 import {
   loadConfig, loadChannels, loadCategories, loadRoles, loadMembers,
-  toMemberOptions, mountPicker, mountChannelPicker, mountRolePicker, mountCategoryPicker,
+  mountMemberPicker, mountChannelPicker, mountRolePicker, mountCategoryPicker,
+  memberNameLookup,
   apiPut, showStatus, esc, guardForm, renderMetaWarning,
   mountAsync,
 } from "../config-helpers.js";
@@ -292,20 +293,26 @@ export function mountSettings(container) {
     });
 
     // ── Never-match separations ──────────────────────────────────────
+    // memberNameLookup falls back to config-helpers' module-level id index, so
+    // a member just picked through the pickers' server-side search — one who
+    // was never in the bounded page this panel loaded — still renders by name
+    // in the separations list instead of as "Member 123456789".
+    const lookupName = memberNameLookup(members);
     const memberName = (id) => {
-      const m = members.find((x) => String(x.id) === String(id));
-      if (!m) return `Member ${id}`;
-      return m.display_name && m.display_name !== m.name ? m.display_name : m.name;
+      const name = lookupName(id);
+      return name === String(id) ? `Member ${id}` : name;
     };
 
     let separations = (pp.separations || []).map((s) => ({
       user_a: String(s.user_a), user_b: String(s.user_b),
     }));
-    const memberOpts = toMemberOptions(members);
-    const pickerA = mountPicker(container.querySelector('[data-picker="sep_a"]'),
-      memberOpts, "0", { emptyValue: "0", emptyLabel: "(pick a member)", placeholder: "Search members…", label: "First Member" });
-    const pickerB = mountPicker(container.querySelector('[data-picker="sep_b"]'),
-      memberOpts, "0", { emptyValue: "0", emptyLabel: "(pick a member)", placeholder: "Search members…", label: "Second Member" });
+    // mountMemberPicker carries the server-side search these need: the member
+    // list is a bounded page, and a separation is often set up precisely for
+    // someone who is no longer around.
+    const pickerA = mountMemberPicker(container.querySelector('[data-picker="sep_a"]'),
+      members, "0", { emptyLabel: "(pick a member)", placeholder: "Search members…", label: "First Member" });
+    const pickerB = mountMemberPicker(container.querySelector('[data-picker="sep_b"]'),
+      members, "0", { emptyLabel: "(pick a member)", placeholder: "Search members…", label: "Second Member" });
     const sepList = container.querySelector("[data-sep-list]");
     const sepStatus = container.querySelector("[data-sep-status]");
 

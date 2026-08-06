@@ -181,6 +181,73 @@ function announceChange(wrap) {
   wrap.dispatchEvent(new CustomEvent("dk:change", { bubbles: true }));
 }
 
+// ── Remote search: the long tail behind a bounded prefetch ──────────────
+//
+// Some option lists can't be shipped whole. /api/meta/members returns a bounded
+// page (see routes/meta.py) because the departed-member tail grows forever with
+// server churn — but a picker that only ever filters its prefetch would make
+// everyone outside that page silently unselectable, which is exactly the bug a
+// naive server-side cap would have caused.
+//
+// `opts.search` — an async (query) => [{id, label}] — closes that gap. The
+// widget keeps filtering its prefetch locally on every keystroke, so typing
+// stays instant, and in parallel asks the server for anything it doesn't have.
+// Late arrivals are merged into a side pool and folded into the open list.
+//
+// Nothing about a picker without `opts.search` changes.
+const SEARCH_DEBOUNCE_MS = 200;
+// One character matches so much of any prefetch that a round trip adds nothing;
+// two is where a search starts to be about something the client may not hold.
+const SEARCH_MIN_LEN = 2;
+
+/**
+ * Debounced, staleness-guarded driver for `opts.search`.
+ *
+ * @param {HTMLElement} list  the dropdown, used as the liveness signal
+ * @param {Function|undefined} search  the caller's async lookup
+ * @param {(results: Array, query: string) => void} onResults
+ * @returns {{ query(text: string): void, cancel(): void }}
+ */
+function attachRemoteSearch(list, search, onResults) {
+  if (typeof search !== "function") {
+    return { query: () => {}, cancel: () => {} };
+  }
+  let timer = null;
+  let seq = 0;
+
+  function cancel() {
+    clearTimeout(timer);
+    timer = null;
+    seq++; // invalidates anything already in flight
+  }
+
+  function query(text) {
+    clearTimeout(timer);
+    const q = String(text || "").trim();
+    if (q.length < SEARCH_MIN_LEN) return;
+    const mine = ++seq;
+    timer = setTimeout(() => {
+      timer = null;
+      Promise.resolve()
+        .then(() => search(q))
+        .then((results) => {
+          // Two ways this result is no longer wanted, and both used to be the
+          // shape of bug the review kept finding: the user has typed past this
+          // query (mine !== seq), or the panel unmounted while the request was
+          // in flight — rendering then writes into a detached tree.
+          if (mine !== seq || !list.isConnected) return;
+          onResults(Array.isArray(results) ? results : [], q);
+        })
+        .catch(() => {
+          // A failed lookup leaves the local matches standing. Blanking the
+          // dropdown would read as "this member doesn't exist".
+        });
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  return { query, cancel };
+}
+
 /**
  * Searchable single-select.
  *
@@ -192,7 +259,9 @@ function announceChange(wrap) {
  * @param {string|number} [opts.emptyValue=""] value getValue() returns when empty
  * @param {string} [opts.label]  accessible name (aria-label) for the input —
  *   pass the visible field label so AT doesn't announce only the placeholder
- * @returns {{el, getValue, setValue, setOptions, setFilter, getInput}}
+ * @param {(query: string) => Promise<Array>} [opts.search]  optional server-side
+ *   lookup for options outside `options` — see attachRemoteSearch above
+ * @returns {{el, getValue, setValue, setOptions, setFilter, getInput, destroy}}
  */
 export function filterSelect(placeholder, options, opts = {}) {
   let predicate = typeof opts.filter === "function" ? opts.filter : null;
@@ -226,13 +295,27 @@ export function filterSelect(placeholder, options, opts = {}) {
   let selectedLabel = "";
   let hi = -1; // index of the keyboard-highlighted option
 
-  function visible() {
-    return predicate ? items.filter(predicate) : items;
+  // Options that arrived from opts.search, kept beside `items` rather than
+  // merged into it: the no-query list must stay the prefetch the caller chose,
+  // not accumulate every name typed at it this session.
+  const found = new Map();
+
+  /** Everything selectable right now — the prefetch plus search residue. */
+  function pool() {
+    if (!found.size) return items;
+    const known = new Set(items.map((o) => String(o.id)));
+    return items.concat(
+      Array.from(found.values()).filter((o) => !known.has(String(o.id))),
+    );
+  }
+
+  function visible(all) {
+    return predicate ? all.filter(predicate) : all;
   }
 
   function render(filter) {
     const lc = filter.toLowerCase();
-    const base = visible();
+    const base = visible(lc ? pool() : items);
     const matches = lc ? matchOptions(base, lc) : base;
     const show = lc ? matches : matches.slice(0, 300);
     const rows = [{ id: emptyValue, label: emptyLabel, empty: true }, ...show];
@@ -279,6 +362,18 @@ export function filterSelect(placeholder, options, opts = {}) {
     if (selectedId !== before) announceChange(wrap);
   }
 
+  const remote = attachRemoteSearch(list, opts.search, (results) => {
+    let added = false;
+    for (const o of results) {
+      const id = String(o.id);
+      if (!found.has(id)) { found.set(id, { ...o, id }); added = true; }
+    }
+    // Re-rendering resets the keyboard highlight, so leave the list alone while
+    // the user is arrow-keying through it — the new rows are in the pool and
+    // appear on their next keystroke.
+    if (added && hi < 0) render(input.value);
+  });
+
   input.addEventListener("focus", () => {
     render(input.value);
     popover.open();
@@ -291,6 +386,7 @@ export function filterSelect(placeholder, options, opts = {}) {
     selectedLabel = "";
     render(input.value);
     popover.open();
+    remote.query(input.value);
     if (cleared) announceChange(wrap);
   });
   list.addEventListener("mousedown", (e) => {
@@ -323,7 +419,7 @@ export function filterSelect(placeholder, options, opts = {}) {
       input.value = "";
       return;
     }
-    const match = items.find((o) => o.id === selectedId);
+    const match = pool().find((o) => String(o.id) === selectedId);
     selectedLabel = match ? match.label : selectedId;
     input.value = selectedLabel;
   }
@@ -347,8 +443,9 @@ export function filterSelect(placeholder, options, opts = {}) {
     getInput: () => input,
     // Deterministic teardown for a panel that unmounts with the list open.
     // reposition() also self-heals on the next scroll/resize, but a panel
-    // holding the handle can just say so.
-    destroy: () => popover.close(),
+    // holding the handle can just say so. Cancelling the search drops a pending
+    // debounce timer and orphans any reply still in flight.
+    destroy: () => { remote.cancel(); popover.close(); },
   };
 }
 
@@ -362,7 +459,9 @@ export function filterSelect(placeholder, options, opts = {}) {
  * @param {(option) => boolean} [opts.filter]  applied before the text filter
  * @param {string} [opts.label]  accessible name (aria-label) for the input —
  *   pass the visible field label so AT doesn't announce only the placeholder
- * @returns {{el, getValues, setValues, setOptions, setFilter, getInput}}
+ * @param {(query: string) => Promise<Array>} [opts.search]  optional server-side
+ *   lookup for options outside `options` — see attachRemoteSearch above
+ * @returns {{el, getValues, setValues, setOptions, setFilter, getInput, destroy}}
  */
 export function multiFilterSelect(placeholder, options, opts = {}) {
   let predicate = typeof opts.filter === "function" ? opts.filter : null;
@@ -414,13 +513,24 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     }
   }
 
-  function visible() {
-    return predicate ? items.filter(predicate) : items;
+  // See filterSelect: search results live beside the prefetch, not inside it.
+  const found = new Map();
+
+  function pool() {
+    if (!found.size) return items;
+    const known = new Set(items.map((o) => String(o.id)));
+    return items.concat(
+      Array.from(found.values()).filter((o) => !known.has(String(o.id))),
+    );
+  }
+
+  function visible(all) {
+    return predicate ? all.filter(predicate) : all;
   }
 
   function renderList(filter) {
     const lc = filter.toLowerCase();
-    const base = visible();
+    const base = visible(lc ? pool() : items);
     const matches = lc ? matchOptions(base, lc) : base;
     const show = lc ? matches : matches.slice(0, 300);
     while (list.firstChild) list.removeChild(list.firstChild);
@@ -457,7 +567,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
   function selectItem(item) {
     const id = item.dataset.id;
     if (!id || selected.has(id)) return;
-    const opt = items.find((o) => o.id === id);
+    const opt = pool().find((o) => String(o.id) === id);
     selected.set(id, opt ? opt.label : id);
     input.value = "";
     renderChips();
@@ -466,6 +576,15 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     announceChange(wrap);
   }
 
+  const remote = attachRemoteSearch(list, opts.search, (results) => {
+    let added = false;
+    for (const o of results) {
+      const id = String(o.id);
+      if (!found.has(id)) { found.set(id, { ...o, id }); added = true; }
+    }
+    if (added && hi < 0) renderList(input.value);
+  });
+
   input.addEventListener("focus", () => {
     renderList(input.value);
     popover.open();
@@ -473,6 +592,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
   input.addEventListener("input", () => {
     renderList(input.value);
     popover.open();
+    remote.query(input.value);
   });
   list.addEventListener("mousedown", (e) => {
     const item = e.target.closest(".filter-select-item");
@@ -508,9 +628,10 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
 
   function setValues(ids) {
     selected.clear();
+    const all = pool();
     for (const raw of ids || []) {
       const id = String(raw);
-      const opt = items.find((o) => o.id === id);
+      const opt = all.find((o) => String(o.id) === id);
       selected.set(id, opt ? opt.label : id);
     }
     renderChips();
@@ -518,9 +639,12 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
 
   function setOptions(next) {
     items = next.slice();
-    // Refresh chip labels for ids whose option text may have loaded/changed.
+    // Refresh chip labels for ids whose option text may have loaded/changed —
+    // including a saved member resolved after mount, whose chip was showing a
+    // bare snowflake until the lookup came back.
+    const all = pool();
     for (const [id] of selected) {
-      const opt = items.find((o) => o.id === id);
+      const opt = all.find((o) => String(o.id) === id);
       if (opt) selected.set(id, opt.label);
     }
     renderChips();
@@ -538,6 +662,6 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     setOptions,
     setFilter,
     getInput: () => input,
-    destroy: () => popover.close(),
+    destroy: () => { remote.cancel(); popover.close(); },
   };
 }

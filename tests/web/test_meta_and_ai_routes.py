@@ -8,6 +8,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.ai_config import list_prompts
+from web_server.routes.meta import MEMBER_PAGE_DEFAULT, MEMBER_PAGE_MAX
 
 
 # ── Shared mock helpers ──────────────────────────────────────────────
@@ -229,6 +230,176 @@ def test_meta_members_marks_left_members_when_bot_available(authed_client, fake_
     by_id = {m["id"]: m for m in body}
     assert by_id["101"].get("left_server") is not True  # current
     assert by_id["102"]["left_server"] is True  # left
+
+
+# ── /api/meta/members: bounded paging (2026-08 review residue) ────────
+#
+# The endpoint used to return every current member PLUS every known_users row
+# ever recorded, unpaginated — a payload that grows monotonically with churn.
+# A naive cap was rejected once because the dashboard's pickers filter a cached
+# list CLIENT-side, so anything the cap dropped became unselectable. The bound
+# is only safe alongside ?q= and ?ids=, and these tests are the pair: the page
+# IS trimmed, and nobody trimmed off it is out of reach.
+
+
+def _seed_known_users(fake_ctx, count, *, start=700000000000000000, prefix="ghost"):
+    """`count` departed members, named so they sort together alphabetically."""
+    with open_db(fake_ctx.db_path) as conn:
+        conn.executemany(
+            "INSERT INTO known_users (user_id, guild_id, username, display_name)"
+            " VALUES (?, ?, ?, ?)",
+            [
+                (
+                    start + i,
+                    fake_ctx.guild_id,
+                    f"{prefix}{i:05d}",
+                    f"{prefix.title()} {i:05d}",
+                )
+                for i in range(count)
+            ],
+        )
+
+
+def _live_member(user_id, username, display_name):
+    """`name` is a MagicMock constructor kwarg, so it has to be set after."""
+    m = MagicMock(bot=False)
+    m.id = user_id
+    m.name = username
+    m.display_name = display_name
+    return m
+
+
+def _add_known_user(fake_ctx, user_id, username, display_name):
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO known_users (user_id, guild_id, username, display_name)"
+            " VALUES (?, ?, ?, ?)",
+            (user_id, fake_ctx.guild_id, username, display_name),
+        )
+
+
+def test_meta_members_is_bounded_by_default(authed_client, fake_ctx):
+    """A corpus far larger than the page still answers with one page."""
+    _seed_known_users(fake_ctx, MEMBER_PAGE_DEFAULT + 250)
+    body = authed_client.get("/api/meta/members").json()
+    assert len(body) == MEMBER_PAGE_DEFAULT
+
+
+def test_meta_members_search_reaches_past_the_default_page(authed_client, fake_ctx):
+    """THE load-bearing case: the member a cap would have made unreachable.
+
+    "Zelda" sorts after every seeded ghost, so she is well off the end of the
+    default page — and typing her name has to find her anyway, because that is
+    the only thing that makes trimming the page safe.
+    """
+    _seed_known_users(fake_ctx, MEMBER_PAGE_DEFAULT + 250)
+    _add_known_user(fake_ctx, 800000000000000001, "zelda", "Zelda Farbottom")
+
+    page = authed_client.get("/api/meta/members").json()
+    assert "800000000000000001" not in {m["id"] for m in page}, (
+        "the fixture no longer puts Zelda off the default page"
+    )
+
+    found = authed_client.get("/api/meta/members", params={"q": "zelda"}).json()
+    assert [m["id"] for m in found] == ["800000000000000001"]
+    assert found[0]["display_name"] == "Zelda Farbottom"
+
+
+def test_meta_members_search_matches_a_pasted_id(authed_client, fake_ctx):
+    """Copying an id out of Discord is the mobile way to find someone."""
+    _add_known_user(fake_ctx, 800000000000000001, "zelda", "Zelda Farbottom")
+    found = authed_client.get(
+        "/api/meta/members", params={"q": "800000000000000001"}
+    ).json()
+    assert [m["id"] for m in found] == ["800000000000000001"]
+
+
+def test_meta_members_search_treats_like_wildcards_literally(authed_client, fake_ctx):
+    """An unescaped `%` in the needle would turn any search into match-all."""
+    _seed_known_users(fake_ctx, 5)
+    _add_known_user(fake_ctx, 800000000000000002, "ten%off", "Ten%Off")
+    assert [
+        m["id"] for m in authed_client.get(
+            "/api/meta/members", params={"q": "%"}
+        ).json()
+    ] == ["800000000000000002"]
+
+
+def test_meta_members_resolves_saved_ids_off_the_page(authed_client, fake_ctx):
+    """A config pointing at someone who left years ago still renders by name."""
+    _seed_known_users(fake_ctx, MEMBER_PAGE_DEFAULT + 250)
+    _add_known_user(fake_ctx, 800000000000000001, "zelda", "Zelda Farbottom")
+
+    body = authed_client.get(
+        "/api/meta/members", params={"ids": "800000000000000001,not-an-id"}
+    ).json()
+    assert [m["id"] for m in body] == ["800000000000000001"]
+    assert body[0]["display_name"] == "Zelda Farbottom"
+
+
+def test_meta_members_ids_beat_a_tiny_limit(authed_client, fake_ctx):
+    """`ids` exists to render a saved config; a stray limit must not trim it."""
+    _add_known_user(fake_ctx, 800000000000000001, "zelda", "Zelda")
+    _add_known_user(fake_ctx, 800000000000000002, "yuri", "Yuri")
+    body = authed_client.get(
+        "/api/meta/members",
+        params={"ids": "800000000000000001,800000000000000002", "limit": 1},
+    ).json()
+    assert {m["id"] for m in body} == {
+        "800000000000000001",
+        "800000000000000002",
+    }
+
+
+@pytest.mark.parametrize(
+    "limit,expected",
+    [(0, 1), (-5, 1), (3, 3), (MEMBER_PAGE_MAX + 500, MEMBER_PAGE_MAX)],
+)
+def test_meta_members_limit_is_clamped(authed_client, fake_ctx, limit, expected):
+    _seed_known_users(fake_ctx, MEMBER_PAGE_MAX + 10)
+    body = authed_client.get("/api/meta/members", params={"limit": limit}).json()
+    assert len(body) == expected
+
+
+def test_meta_members_page_spends_its_budget_on_current_members(
+    authed_client, fake_ctx
+):
+    """Current members are what a cold picker needs; departures fill the rest.
+
+    The live roster is bounded by guild size and does NOT grow with churn — the
+    known_users tail is the half that grows forever, so it is the half the
+    budget trims.
+    """
+    alice = _live_member(101, "alice", "Alice")
+    bob = _live_member(102, "bob", "Bob")
+    _attach_bot(fake_ctx, members=[alice, bob])
+    _add_known_user(fake_ctx, 999, "zed", "Zed")
+
+    # Budget of 2, and three humans are present (alice, bob, the auth user).
+    body = authed_client.get("/api/meta/members", params={"limit": 2}).json()
+    assert len(body) == 2
+    assert all(m.get("left_server") is not True for m in body)
+
+    # Zed is off the page, and still one search away — with the departure
+    # marking the shared option builder keys its "(left the server)" label on.
+    found = authed_client.get(
+        "/api/meta/members", params={"q": "zed", "limit": 2}
+    ).json()
+    assert [(m["id"], m["left_server"]) for m in found] == [("999", True)]
+
+
+def test_meta_members_ids_never_return_a_current_member_twice(
+    authed_client, fake_ctx
+):
+    """known_users keeps a row for people who are still here; the guild copy
+    wins, so an id present in both must not come back as two options."""
+    alice = _live_member(101, "alice", "Alice")
+    _attach_bot(fake_ctx, members=[alice])
+    _add_known_user(fake_ctx, 101, "alice", "Alice")
+
+    body = authed_client.get("/api/meta/members", params={"ids": "101"}).json()
+    assert [m["id"] for m in body] == ["101"]
+    assert body[0]["left_server"] is False
 
 
 # ── /api/meta/channels ────────────────────────────────────────────────

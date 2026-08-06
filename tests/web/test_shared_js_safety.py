@@ -422,6 +422,214 @@ def test_member_name_lookup_prefers_the_display_name(page):
     assert out == ["Zoe Zed", "aaron", "beth", "Ana (EU)", "700000000000000009"]
 
 
+# ── config-helpers.js + filter-select.js: the bounded member list ────────
+#
+# /api/meta/members returns a bounded page now (routes/meta.py): the payload
+# used to carry every current member PLUS every departed known_users row, and
+# grew forever with server churn. The security pass deliberately left it
+# uncapped, because the pickers filter their cached copy CLIENT-side and a
+# server cap would silently make everyone below it unselectable.
+#
+# What makes the bound safe is `opts.search` on the widget: the local filter
+# stays instant, and in parallel the server is asked for the long tail. These
+# run the same scenario with and without it — the "without" case is precisely
+# the regression a naive cap would have shipped.
+
+# A bounded first page (the live roster) and the tail behind it. Zephyr stands
+# in for the departed member 5,000 rows down an alphabetical list.
+_PICKER_ENV = """
+  const PAGE = [
+    { id: '700000000000000001', name: 'ana', display_name: 'Ana', left_server: false },
+    { id: '700000000000000002', name: 'bo', display_name: 'Bo', left_server: false },
+  ];
+  const TAIL = [
+    { id: '700000000000000009', name: 'zephyr', display_name: 'Zephyr Q',
+      left_server: true },
+  ];
+  const calls = [];
+  const respond = (body) => new Response(JSON.stringify(body),
+    { status: 200, headers: { 'Content-Type': 'application/json' } });
+  // Stands in for the endpoint: the bare path answers with the page only, and
+  // ?q= / ?ids= reach the tail — exactly the contract routes/meta.py keeps.
+  const serve = (url) => {
+    calls.push(String(url));
+    const u = new URL(String(url), location.origin);
+    const q = (u.searchParams.get('q') || '').toLowerCase();
+    const ids = u.searchParams.get('ids');
+    if (ids) {
+      const want = new Set(ids.split(','));
+      return PAGE.concat(TAIL).filter((m) => want.has(m.id));
+    }
+    if (q) {
+      return PAGE.concat(TAIL).filter(
+        (m) => m.name.includes(q) || m.display_name.toLowerCase().includes(q));
+    }
+    return PAGE;
+  };
+"""
+
+_PICKER_SEARCH = """
+async ({ withSearch }) => {
+  document.body.innerHTML = '<div id="host"><span data-slot></span></div>';
+""" + _PICKER_ENV + """
+  window.fetch = async (url) => respond(serve(url));
+
+  const cfg = await import('/static/js/config-helpers.js');
+  cfg.resetMetaCaches();
+  const members = await cfg.loadMembers();
+  const picker = cfg.mountMemberPicker(
+    document.querySelector('[data-slot]'), members, '0',
+    withSearch ? {} : { search: null },
+  );
+
+  const input = picker.getInput();
+  input.focus();
+  input.value = 'zephyr';
+  input.dispatchEvent(new Event('input'));
+  await new Promise((r) => setTimeout(r, 500));   // past the search debounce
+
+  const items = Array.from(document.querySelectorAll('.filter-select-item'));
+  const hit = items.find((el) => el.dataset.id === '700000000000000009');
+  if (hit) hit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+  return {
+    page: members.length,
+    rows: items.map((el) => el.textContent.trim()),
+    value: picker.getValue(),
+    searched: calls.some((c) => c.includes('q=zephyr')),
+  };
+}
+"""
+
+
+def test_member_picker_without_search_cannot_reach_the_tail(page):
+    """Control — and the bug a naive server cap would have caused.
+
+    Local filtering alone can only ever offer what the bounded page contained,
+    so the departed member is not merely hard to find: there is no sequence of
+    keystrokes that selects them.
+    """
+    out = page.evaluate(_PICKER_SEARCH, {"withSearch": False})
+    assert out["page"] == 2, "the stub is meant to serve a two-row page"
+    assert not any("Zephyr" in row for row in out["rows"]), out["rows"]
+    assert out["value"] == "0"     # nothing selectable, nothing selected
+    assert not out["searched"]
+
+
+def test_member_picker_reaches_a_member_outside_the_bounded_page(page):
+    """THE load-bearing test: typing finds someone the page never shipped.
+
+    Same picker, same two-row prefetch — the only difference is the server
+    lookup the shared mount helper now wires in. The member arrives, is
+    offered, and selects to their real snowflake.
+    """
+    out = page.evaluate(_PICKER_SEARCH, {"withSearch": True})
+    assert out["page"] == 2
+    assert out["searched"], "the widget never asked the server"
+    assert any("Zephyr" in row for row in out["rows"]), out["rows"]
+    # Departed members keep their annotation when they arrive by search.
+    assert any("(left)" in row for row in out["rows"]), out["rows"]
+    assert out["value"] == "700000000000000009"
+    # Snowflakes past 2^53 lose digits as JS numbers, and the id is what the
+    # save is addressed to.
+    assert isinstance(out["value"], str)
+
+
+_PICKER_SAVED_ID = """
+async () => {
+  document.body.innerHTML = '<div id="host"><span data-slot></span></div>';
+""" + _PICKER_ENV + """
+  window.fetch = async (url) => respond(serve(url));
+
+  const cfg = await import('/static/js/config-helpers.js');
+  cfg.resetMetaCaches();
+  const members = await cfg.loadMembers();
+  // A config that points at someone who left long ago — off the bounded page.
+  const picker = cfg.mountMemberPicker(
+    document.querySelector('[data-slot]'), members, '700000000000000009',
+    { label: 'Community Host' },
+  );
+  const before = picker.getInput().value;
+  await new Promise((r) => setTimeout(r, 300));
+  return {
+    before,
+    after: picker.getInput().value,
+    value: picker.getValue(),
+    resolved: calls.some((c) => c.includes('ids=700000000000000009')),
+  };
+}
+"""
+
+
+def test_picker_resolves_a_saved_member_the_page_did_not_include(page):
+    """A departed member a config references still renders as a person.
+
+    The value is never in doubt — it is the id the config holds, and it stays a
+    string throughout. What the lookup buys is the label: without it the field
+    reads as a bare snowflake, which tells an admin nothing about whether the
+    setting is still the one they meant.
+    """
+    out = page.evaluate(_PICKER_SAVED_ID)
+    assert out["before"] == "700000000000000009"     # pre-lookup fallback
+    assert out["resolved"], "the picker never asked to resolve the saved id"
+    assert "Zephyr" in out["after"], out["after"]
+    assert out["value"] == "700000000000000009"
+    assert isinstance(out["value"], str)
+
+
+_PICKER_UNMOUNT = """
+async () => {
+  document.body.innerHTML = '<div id="host"><span data-slot></span></div>';
+""" + _PICKER_ENV + """
+  // The search request hangs until the test lets it go, so the unmount is
+  // guaranteed to happen while it is genuinely in flight.
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  window.fetch = async (url) => {
+    const body = serve(url);
+    if (String(url).includes('q=')) await gate;
+    return respond(body);
+  };
+
+  const cfg = await import('/static/js/config-helpers.js');
+  cfg.resetMetaCaches();
+  const members = await cfg.loadMembers();
+  const picker = cfg.mountMemberPicker(
+    document.querySelector('[data-slot]'), members, '0');
+
+  const input = picker.getInput();
+  input.focus();
+  input.value = 'zephyr';
+  input.dispatchEvent(new Event('input'));
+  await new Promise((r) => setTimeout(r, 300));   // debounce fired; fetch open
+
+  document.getElementById('host').innerHTML = '';  // the panel unmounts
+  picker.destroy();
+  release();
+  await new Promise((r) => setTimeout(r, 300));
+
+  return {
+    connected: picker.el.isConnected,
+    rowsInDeadList: picker.el.querySelectorAll('.filter-select-item').length,
+  };
+}
+"""
+
+
+def test_search_result_landing_after_unmount_is_dropped(page):
+    """A panel that navigates away mid-request must not be written into.
+
+    The list holds one row at unmount — the "(none)" sentinel, since "zephyr"
+    matched nothing in the local page. If the late reply were rendered anyway
+    it would land as a second row in a detached tree, which is the leak class
+    the review kept finding around debounced fetches.
+    """
+    out = page.evaluate(_PICKER_UNMOUNT)
+    assert out["connected"] is False
+    assert out["rowsInDeadList"] == 1, out
+    assert not page.__dict__["_dk_errors"], page.__dict__["_dk_errors"]
+
+
 # ── md-preview.js ────────────────────────────────────────────────────────
 
 _MD = """

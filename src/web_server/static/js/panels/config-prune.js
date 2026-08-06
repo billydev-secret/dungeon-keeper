@@ -1,7 +1,7 @@
 import {
   loadConfig, loadRoles, loadMembers, apiPut, showStatus,
   guardForm, renderMetaWarning, mountRolePicker, mountPicker, mountExemptionList,
-  mountAsync, toSortedMemberOptions, memberNameLookup,
+  mountAsync, toSortedMemberOptions, memberNameLookup, memberSearch,
 } from "../config-helpers.js";
 import { esc, apiPost } from "../api.js";
 import { toast } from "../ui.js";
@@ -108,6 +108,10 @@ export function mount(container) {
         emptyLabel: "(pick a member)",
         placeholder: "Search members…",
         label: "Member to never remove",
+        // /api/meta/members is a bounded page now, so typing also asks the
+        // server — otherwise a long-departed member would be unexemptable.
+        // Same option builder as the prefetch, so the labels match.
+        search: memberSearch(toSortedMemberOptions),
       },
     );
 
