@@ -39,6 +39,15 @@ SQLite-backed. Tests in `tests/`.
   `static/js/panels/help-sections.js`/`help.js`). This is a different surface
   from `docs/` (dev specs) and drifts independently — don't let it lag while
   `docs/` stays current.
+- **New table holding per-user data ⇒ a row in `docs/data_register.md`** in the
+  same commit, with an explicit decision: does `purge_user_data` clear it, or is
+  it preserved — and if preserved, on what Art 17(3) ground (not just the
+  engineering reason). The register is the record of processing activities, and
+  a new personal-data store that isn't in it is invisible to an access or
+  erasure request. If the column naming the member isn't one of the conventional
+  names in `privacy_service.SUBJECT_ID_COLUMNS`, add it there too or the export
+  can't see the table. Member-facing data collection also needs a line in the
+  privacy notice (`manual.html` §Your Data & Privacy).
 - README.md is **not** part of that per-commit contract. It is a landing page
   for someone evaluating the bot, and its command table is a hand-picked
   highlights list, not a reference — `/help` and manual.html are the reference.

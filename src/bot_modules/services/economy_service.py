@@ -1253,7 +1253,7 @@ async def notify_member(
 # report. Round/draw history keyed by winner (drops, bounties, raffle draws,
 # auctions, qotd) is likewise kept as game history.
 #
-# Maintenance rule (docs/reviews/2026-08-05-gdpr-register.md): a new econ_*/
+# Maintenance rule (docs/data_register.md): a new econ_*/
 # casino_* table with per-member rows either joins this list or documents why
 # it is preserved.
 _PURGE_USER_ID_TABLES: tuple[str, ...] = (

@@ -1349,12 +1349,67 @@
       </div>
     </div>
 
+    <h3 id="your-data">Your Data &amp; Privacy</h3>
+
+    <p>The plain-English version of what this bot stores about you, why, and what you can do about it. If you only read one thing: <strong>the server keeps its own copy of your messages, including the text</strong>, and deleting your messages in Discord does not delete that copy. The rest is detail.</p>
+
+    <div class="callout callout-warn">
+      <span class="callout-icon">⚠️</span>
+      <div class="callout-body">
+        <strong>Message text is stored on this server</strong>
+        <p>Message archiving is a per-server setting with three levels. On <strong>this</strong> server it is set to store <strong>full message content</strong> — so the bot's database holds the text of what you post in channels it can read, not just a record that you posted. That copy is what powers message search, the mod desk, sentiment and activity analytics. It is kept indefinitely and is visible to admins and moderators through the dashboard.</p>
+      </div>
+    </div>
+
+    <h4>What gets collected</h4>
+    <table>
+      <thead><tr><th>What</th><th>Why</th><th>How long</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Your messages</strong> — text, attachments, embeds, who you mentioned, reactions, and an automatic sentiment/emotion score</td><td>Message search and the moderation desk; channel-health and activity analytics</td><td>Indefinitely</td></tr>
+        <tr><td><strong>Activity</strong> — XP, levels, voice-session times, when you were last active, join/leave events, invite chains</td><td>Levelling, leaderboards, the newcomer funnel, inactivity sweeps</td><td>Indefinitely</td></tr>
+        <tr><td><strong>Who you interact with</strong> — a graph of who talks to, replies to and reacts to whom</td><td>The attention and network reports mods use to spot people being ignored or pestered</td><td>Indefinitely</td></tr>
+        <tr><td><strong>Economy &amp; games</strong> — wallet, every ledger entry, quests, casino bets and hands, game results</td><td>Running the economy; the ledger is a double-entry record that has to balance</td><td>Indefinitely</td></tr>
+        <tr><td><strong>Things you chose to add</strong> — bio answers, birthday (day and month only, never the year), Wellness settings, Pen Pals participation, role picks</td><td>The feature you opted into</td><td>Until you remove it (archived bios of members who left are deleted after 12 months)</td></tr>
+        <tr><td><strong>Anonymous features</strong> — Whisper, Confessions, Guess, and the anonymous party games</td><td>See the box below — "anonymous" means anonymous to other members, not to moderators</td><td>Varies; see below</td></tr>
+        <tr><td><strong>Moderation records</strong> — warnings, jails, tickets and their transcripts, notes about rule-breaking, and flags raised by the automated Rules Watch</td><td>The record of moderation decisions, and the ability to justify one if challenged</td><td>Indefinitely</td></tr>
+        <tr><td><strong>Command and panel usage</strong> — which slash commands you run and which dashboard pages you open</td><td>Finding features nobody uses. See <a href="#usage-telemetry">Command &amp; Panel Usage</a></td><td>Indefinitely</td></tr>
+        <tr><td><strong>A gender label</strong>, applied by moderators rather than by you</td><td>Aggregate server demographics only. It is not shown to members and is not used to decide anything about you</td><td>Indefinitely — ask a mod to change or remove yours</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">🎭</span>
+      <div class="callout-body">
+        <strong>"Anonymous" means anonymous to other members</strong>
+        <p>Whispers, confessions, anonymous game submissions and Guess rounds are all recorded with your name attached in an audit trail only admins and moderators can see. This is deliberate — an anonymous channel with no accountability becomes a harassment tool. What it means for you is that anonymity protects you from <em>other members</em>, not from the mod team. Some of it expires: the link between a confession and its author self-destructs after <strong>7 days</strong>, and the anonymous-games audit trail is swept after <strong>90 days</strong>. Whisper and Guess records are kept until you remove them.</p>
+      </div>
+    </div>
+
+    <h4>Where your data goes</h4>
+    <p>Almost all processing happens on the machine the bot runs on. Image classification, voice transcription, sentiment scoring and the moderation model are all local — nothing is uploaded to a third-party service for any of them. Three exceptions leave the box:</p>
+    <ul>
+      <li><strong>Discord</strong> — inherent; they host everything the bot reads and writes.</li>
+      <li><strong>Anthropic (Claude)</strong> — when you ask the in-server AI assistant a question, your question text is sent to Anthropic's API to answer it. Your Discord identity is not sent with it. Don't put anything in a question you wouldn't want leaving the server.</li>
+      <li><strong>Spotify</strong> — when you queue music by name or link, the track query is sent to Spotify's API to resolve it. No member identity is attached.</li>
+    </ul>
+
+    <h4>What you can do</h4>
+    <ul>
+      <li><strong>Delete your messages</strong> — <code>/delete_me</code> removes your messages from Discord. Read the confirmation carefully: it tells you what the server keeps.</li>
+      <li><strong>Get a copy of everything</strong> — ask a mod. An admin can produce a full export of every record the bot holds on you, including the parts that are kept when data is erased.</li>
+      <li><strong>Have it all erased</strong> — ask a mod, and say you want a full erasure rather than just a message deletion. Most of it goes. A few things are deliberately kept: the economy ledger (deleting one side of a transfer would corrupt someone else's balance), moderation records, and any no-contact order protecting another member. Whoever runs the erasure will tell you what was kept.</li>
+      <li><strong>Correct something</strong> — bios and birthdays you can edit yourself; for anything else, ask a mod.</li>
+      <li><strong>Leave a feature</strong> — <code>/whisper forget-me</code>, <code>/guess optout</code>, and the opt-out controls inside <code>/bank shop</code> and Wellness all work without asking anyone.</li>
+    </ul>
+
+    <p class="muted">Questions about any of this go to the server owner or any admin — open a ticket and it will be answered.</p>
+
     <h3 id="privacy">Data Erasure</h3>
 
     <div class="cmd-block">
       <span class="cmd-name">/delete_me</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Permanently delete your <strong>Discord messages</strong> in this server. After confirmation, the bot scans every readable channel and deletes your messages (forum-OP messages are re-posted under the bot to keep threads alive). This removes messages only — the bot's server-side records (XP, activity, profile, wellness, and <a href="#usage-telemetry">command usage</a>) are retained, and if the server has message archiving enabled that includes the message text (the confirmation prompt tells you which applies here). Full erasure of the server-side records is a manual admin process, so open a ticket if you need it.</span>
+      <span class="cmd-desc">Permanently delete your <strong>Discord messages</strong> in this server. After confirmation, the bot scans every readable channel and deletes your messages (forum-OP messages are re-posted under the bot to keep threads alive). This removes messages only — the bot's server-side records (XP, activity, profile, wellness, and <a href="#usage-telemetry">command usage</a>) are retained, and if the server has message archiving enabled that includes the message text (the confirmation prompt tells you which applies here). Full erasure of the server-side records is a manual admin process, so open a ticket if you need it — and see <a href="#your-data">Your Data &amp; Privacy</a> for what is held, what an erasure keeps, and how to request a copy of everything.</span>
       <div class="cmd-params">
         <strong>mode</strong> — what to delete: <em>All my messages</em> (default), <em>Images &amp; files only</em>, or <em>Text messages only</em>.
       </div>

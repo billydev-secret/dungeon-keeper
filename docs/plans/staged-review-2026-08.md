@@ -2,7 +2,7 @@
 
 ## Progress (the running session updates this; state survives compaction)
 
-- [x] Wave 0 — register skeleton (`2026-08-05-gdpr-register.md`) + prior-review skim
+- [x] Wave 0 — register skeleton (`docs/data_register.md`) + prior-review skim
 - [x] Wave 2.5 — loose-ends audit → `2026-08-05-loose-ends.md` (3 closed, 5 need Ben)
 - [x] W1: Privacy core & data layer → `2026-08-05-privacy-core.md` (A1 purge blowout, U1 disclosure gap, G1 register)
 - [x] W1: Whisper → `2026-08-05-whisper.md` (A1 cross-guild forget-me bug — high; GDPR model feature otherwise)
@@ -76,7 +76,7 @@ Findings for dims 1, 3, 4, 5 go in **one file per bundle**:
 
 ## Wave 0 — setup (30 min, do first, one session)
 
-- Create `docs/reviews/2026-08-05-gdpr-register.md` skeleton: a table of
+- Create `docs/data_register.md` skeleton: a table of
   `table → feature → data class → retention → purge-covered? → processor`.
   Every bundle's GDPR pass appends rows; Wave 5 dedupes.
 - Skim `docs/INDEX.md` and open findings in `docs/reviews/` so lanes cite
@@ -196,7 +196,7 @@ UX dim; embed/ping allow-listing → UX dim (embed_style_guide.md).
 1. Merge per-bundle GDPR rows into the register; write the gap list
    (tables missing from purge, processors without documented flows).
 2. Dedupe architecture/UX findings across bundles into a single prioritized
-   fix queue appended to `docs/reviews/2026-08-05-gdpr-register.md`'s sibling,
+   fix queue appended to `docs/data_register.md`'s sibling,
    `2026-08-06-review-synthesis.md`.
 3. Docs dim output: one commit updating INDEX.md classifications + manual.html
    gaps found across all bundles.

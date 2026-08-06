@@ -1,8 +1,40 @@
-# GDPR data register — accumulating, 2026-08-05 staged review
+# Data register — record of processing activities
 
-Every bundle's GDPR pass appends rows here; Wave 5 dedupes and writes the gap
-list. Columns: **Purge?** = is the table covered by the privacy purge path
-(verify in code, cite file:line); **Processor** = data leaving the box.
+Every table holding personal data: what it is, how long it is kept, whether the
+erasure path clears it, and what leaves the box. Built by the 2026-08-05 staged
+review's per-bundle GDPR passes; **promoted out of `docs/reviews/` on 2026-08-06
+to a maintained document**, because a record of processing that is only a dated
+audit snapshot goes stale — this one had drifted within a day of being written.
+
+> **On the per-commit docs contract.** A new table holding per-user data needs a
+> row here in the same commit, with an explicit purge/preserve decision. See
+> `CLAUDE.md`. A preserved table must name the ground it is preserved on, not
+> just the engineering reason.
+
+**Related:** [gdpr_runbook.md](gdpr_runbook.md) is the operator procedure for
+access, erasure and breach. `scripts/export_user_data.py` answers "what do we
+hold on this person" from the live schema — run it rather than reading this
+table when the question is about one member.
+
+Columns: **Purge?** = is the table covered by `purge_user_data` (verify in code,
+cite `file:line`); where a table is deliberately preserved, name the **Art 17(3)
+ground**. **Processor** = data leaving the box.
+
+## Preserved categories and their grounds
+
+Erasure that quietly retains categories is worse than a documented partial
+erasure. These are the five the purge deliberately keeps:
+
+| Preserved | Art 17(3) ground | Strength |
+|---|---|---|
+| `econ_ledger` | (e) legal claims — and integrity of a double-entry record where deleting one side corrupts the counterparty's balance | Solid |
+| Sanctions: jails, warnings, tickets, policy tickets | (e) legal claims — the canonical record if a moderation decision is challenged | Solid |
+| `dm_audit_log`, `dm_consent_pairs` | (e) legal claims — the record exists precisely to answer "did they agree" | Solid |
+| `no_contact_pairs`, `no_contact_events` | (e) legal claims + the **other** party's rights — erasing a protective order at the request of the restrained party defeats it | Solid |
+| `reaction_log`, `voice_follow_log` | Attention-report evidence path | **Weak** — an internal-analytics rationale, not a clean statutory ground. Revisit if a request is contested |
+
+Everything preserved is still **exported** on an access request: Art 17(3)
+exempts deletion, not disclosure.
 
 | Table / store | Feature | Data class | Retention | Purge? | Processor | Notes |
 |---|---|---|---|---|---|---|

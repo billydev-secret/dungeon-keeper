@@ -4,7 +4,7 @@ Closes the 2026-08-05 staged review (plan:
 `docs/plans/staged-review-2026-08.md`). 21 feature bundles + 6 horizontal
 sweeps + loose-ends audit; per-bundle findings in the sibling
 `2026-08-05-*` / `2026-08-06-sweep-*` docs; data decisions in
-`2026-08-05-gdpr-register.md`.
+`docs/data_register.md`.
 
 ## Fix queue (deduped, priority order)
 

@@ -72,7 +72,7 @@ Bundle: `cogs/privacy_cog.py`, `privacy/logic.py`, `services/privacy_service.py`
   no_contact_pairs, games_*/duels, voice_follow_log, guess_*, rules_events….
   Spec names a handful as deliberately preserved (dm_perms consent, guess,
   whisper, jail, confessions audit) — the other ~35 features never decided.
-  **This register (2026-08-05-gdpr-register.md) is where each Wave-1/2
+  **This register (data_register.md) is where each Wave-1/2
   bundle records that decision**; Wave 5 turns undecided rows into either
   purge additions or documented-preserve lines in privacy_spec.
 - **G2 — no erasure runbook.** The out-of-band path is "an operator runs

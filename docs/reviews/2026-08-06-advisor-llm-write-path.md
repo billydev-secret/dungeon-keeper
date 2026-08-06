@@ -127,7 +127,7 @@ edits, drafted so they can be pasted:
 > age-gated, nothing from a channel you can't see, and no private per-member
 > rooms. On the dashboard box, the conversation so far goes too.
 
-Then add the row to `docs/reviews/2026-08-05-gdpr-register.md`, and drop the
+Then add the row to `docs/data_register.md`, and drop the
 "Two features are the exception, and both only send what you typed into them"
 lead-in above the table — it is no longer true of the first row.
 

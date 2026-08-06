@@ -273,7 +273,7 @@ ad-hoc query against the same table is a different metric, not a check.**
 | File | Change |
 |---|---|
 | `reviews/2026-08-06-review-synthesis.md` | All 10 shipped items struck through in place with commit hashes; item 7 marked as the last open High with its grep evidence; item 9 annotated with a fresh row count; loose-ends section rewritten against verified state; convention note added |
-| `reviews/2026-08-05-gdpr-register.md` | 10 table rows and 6 gap-list entries updated to shipped, each citing the commit and `file:line`; guess row split into what shipped and what is still open |
+| `data_register.md` | 10 table rows and 6 gap-list entries updated to shipped, each citing the commit and `file:line`; guess row split into what shipped and what is still open |
 | `reviews/2026-08-05-loose-ends.md` | §1 re-verified with fresh numbers; §4 rewritten (merged, timer enabled, linger outstanding); §7 rewritten (4 of 5 merged) |
 | `docs/INDEX.md` | novel-hunt row corrected (4/4 S1s fixed); event_echo row corrected; Audits table gains a "start here" callout and rows for the 2026-08 corpus |
 | `docs/event_echo_spec.md` | Dated correction under the "three sources are dormant" bullet |
