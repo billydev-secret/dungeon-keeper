@@ -565,7 +565,10 @@ def compute_gini(
             (guild_id, w_start, w_end, *bot_params),
         ).fetchall()
         h_vals = [r["cnt"] for r in h_rows]
-        dt = datetime.datetime.utcfromtimestamp(w_start)
+        # Aware UTC: this value is only ever strftime'd into a "Mon D" label,
+        # never compared against another datetime, so the tz-aware form renders
+        # identically to the deprecated naive ``utcfromtimestamp``.
+        dt = datetime.datetime.fromtimestamp(w_start, datetime.UTC)
         label = dt.strftime("%b ") + str(dt.day)
         gini_history.append({"label": label, "gini": round(_gini(h_vals), 3)})
 
@@ -741,11 +744,25 @@ def compute_sentiment(
     # Overall stats — use message timestamp (m.ts) so backfilled scores
     # are attributed to the day the message was actually sent, not the day
     # the VADER score was computed.
+    #
+    # Every query below reads ``messages`` directly rather than joining the
+    # ``message_sentiment`` side table. The two are written by the same code
+    # paths (events_cog on ingest, sentiment_service on backfill) and carry
+    # identical values — verified read-only against prod before the switch:
+    # 502,051 rows on each side, zero orphans in either direction, zero
+    # sentiment or emotion mismatches — but only ``messages`` is indexed for
+    # this query shape (``idx_messages_sentiment (guild_id, sentiment)``).
+    #
+    # The join used to supply ``sentiment IS NOT NULL`` implicitly, since a
+    # ``message_sentiment`` row only exists for a scored message and its
+    # ``sentiment`` column is NOT NULL. Reading ``messages`` has to state it:
+    # ``AVG`` skips NULLs on its own, but ``COUNT(*)`` does not, so without the
+    # predicate every unscored message would inflate the counts (and, via the
+    # spike/per-channel ``HAVING``/``count`` outputs, change the results).
     row = conn.execute(
-        f"SELECT AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt "
-        f"FROM message_sentiment ms "
-        f"JOIN messages m ON ms.message_id = m.message_id "
-        f"WHERE ms.guild_id=? AND m.ts>=?{bot_clause}",
+        f"SELECT AVG(m.sentiment) AS avg_s, COUNT(*) AS cnt "
+        f"FROM messages m "
+        f"WHERE m.guild_id=? AND m.ts>=? AND m.sentiment IS NOT NULL{bot_clause}",
         (guild_id, thirty_days_ago, *bot_params),
     ).fetchone()
     avg_sentiment = round(row["avg_s"], 3) if row["avg_s"] is not None else 0
@@ -753,11 +770,11 @@ def compute_sentiment(
 
     # Emotion category breakdown
     emotion_rows = conn.execute(
-        f"SELECT ms.emotion, COUNT(*) AS cnt "
-        f"FROM message_sentiment ms "
-        f"JOIN messages m ON ms.message_id = m.message_id "
-        f"WHERE ms.guild_id=? AND m.ts>=? AND ms.emotion IS NOT NULL{bot_clause} "
-        f"GROUP BY ms.emotion",
+        f"SELECT m.emotion, COUNT(*) AS cnt "
+        f"FROM messages m "
+        f"WHERE m.guild_id=? AND m.ts>=? AND m.sentiment IS NOT NULL "
+        f"AND m.emotion IS NOT NULL{bot_clause} "
+        f"GROUP BY m.emotion",
         (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
     emotions = {r["emotion"]: r["cnt"] for r in emotion_rows}
@@ -765,16 +782,16 @@ def compute_sentiment(
     emotion_pcts = {k: round(v / emotion_total * 100, 1) for k, v in emotions.items()}
 
     # Positive / negative ratio
+    # ``sentiment>0.05`` / ``<-0.05`` already exclude NULL on their own, so
+    # these two need no extra IS NOT NULL.
     pos_count = conn.execute(
-        f"SELECT COUNT(*) FROM message_sentiment ms "
-        f"JOIN messages m ON ms.message_id = m.message_id "
-        f"WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment>0.05{bot_clause}",
+        f"SELECT COUNT(*) FROM messages m "
+        f"WHERE m.guild_id=? AND m.ts>=? AND m.sentiment>0.05{bot_clause}",
         (guild_id, thirty_days_ago, *bot_params),
     ).fetchone()[0]
     neg_count = conn.execute(
-        f"SELECT COUNT(*) FROM message_sentiment ms "
-        f"JOIN messages m ON ms.message_id = m.message_id "
-        f"WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment<-0.05{bot_clause}",
+        f"SELECT COUNT(*) FROM messages m "
+        f"WHERE m.guild_id=? AND m.ts>=? AND m.sentiment<-0.05{bot_clause}",
         (guild_id, thirty_days_ago, *bot_params),
     ).fetchone()[0]
     pos_neg_ratio = round(pos_count / neg_count, 1) if neg_count else 0
@@ -785,10 +802,10 @@ def compute_sentiment(
         day_start = _ts(d + 1, now=now)
         day_end = _ts(d, now=now)
         r = conn.execute(
-            f"SELECT AVG(ms.sentiment) AS avg_s "
-            f"FROM message_sentiment ms "
-            f"JOIN messages m ON ms.message_id = m.message_id "
-            f"WHERE ms.guild_id=? AND m.ts>=? AND m.ts<?{bot_clause}",
+            f"SELECT AVG(m.sentiment) AS avg_s "
+            f"FROM messages m "
+            f"WHERE m.guild_id=? AND m.ts>=? AND m.ts<? "
+            f"AND m.sentiment IS NOT NULL{bot_clause}",
             (guild_id, day_start, day_end, *bot_params),
         ).fetchone()
         sparkline.append(round(r["avg_s"], 3) if r["avg_s"] is not None else 0)
@@ -796,11 +813,10 @@ def compute_sentiment(
     # Negative spikes: 5-minute windows where avg sentiment < -0.3
     spike_rows = conn.execute(
         f"""SELECT CAST(m.ts / 300 AS INTEGER) * 300 AS window_start,
-                  AVG(ms.sentiment) AS avg_s,
+                  AVG(m.sentiment) AS avg_s,
                   COUNT(*) AS cnt
-           FROM message_sentiment ms
-           JOIN messages m ON ms.message_id = m.message_id
-           WHERE ms.guild_id=? AND m.ts>=?{bot_clause}
+           FROM messages m
+           WHERE m.guild_id=? AND m.ts>=? AND m.sentiment IS NOT NULL{bot_clause}
            GROUP BY CAST(m.ts / 300 AS INTEGER)
            HAVING avg_s < -0.3 AND cnt >= 3
            ORDER BY window_start DESC
@@ -818,11 +834,10 @@ def compute_sentiment(
 
     # Per-channel sentiment
     ch_rows = conn.execute(
-        f"""SELECT ms.channel_id, AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt
-           FROM message_sentiment ms
-           JOIN messages m ON ms.message_id = m.message_id
-           WHERE ms.guild_id=? AND m.ts>=?{bot_clause}
-           GROUP BY ms.channel_id
+        f"""SELECT m.channel_id, AVG(m.sentiment) AS avg_s, COUNT(*) AS cnt
+           FROM messages m
+           WHERE m.guild_id=? AND m.ts>=? AND m.sentiment IS NOT NULL{bot_clause}
+           GROUP BY m.channel_id
            ORDER BY avg_s DESC""",
         (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()

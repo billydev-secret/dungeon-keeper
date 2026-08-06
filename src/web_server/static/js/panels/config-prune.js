@@ -1,7 +1,7 @@
 import {
   loadConfig, loadRoles, loadMembers, apiPut, showStatus,
   guardForm, renderMetaWarning, mountRolePicker, mountPicker, mountExemptionList,
-  mountAsync,
+  mountAsync, toSortedMemberOptions, memberNameLookup,
 } from "../config-helpers.js";
 import { esc, apiPost } from "../api.js";
 import { toast } from "../ui.js";
@@ -24,28 +24,10 @@ export function mount(container) {
     const p = config.prune;
 
     // Member options for the shared searchable picker: members who have left
-    // sort last, and say so in their label.
-    // NOTE: byte-identical to config-inactive.js's memberOpts. Worth hoisting
-    // into config-helpers alongside toMemberOptions() (which doesn't sort or
-    // annotate departures) the next time either file is opened.
-    const memberOpts = members
-      .map((m) => ({
-        id: String(m.id),
-        label: m.display_name && m.display_name !== m.name
-          ? `${m.display_name} (${m.name})`
-          : m.name,
-        left: !!m.left_server,
-      }))
-      .sort((a, b) => a.left - b.left || a.label.localeCompare(b.label))
-      .map((o) => (o.left ? { ...o, label: `${o.label} (left the server)` } : o));
-
-    // Chip labels come from the member record, not by unpicking the picker's
-    // "Display (username)" label — a member called "Ana (EU)" would lose the
-    // bracket to that.
-    const nameById = new Map(
-      members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
-    );
-    const memberName = (id) => nameById.get(String(id)) || String(id);
+    // sort last, and say so in their label. Shared with config-inactive, which
+    // needs the same ordering for the same reason.
+    const memberOpts = toSortedMemberOptions(members);
+    const memberName = memberNameLookup(members);
 
     container.innerHTML = `
       <div class="panel">

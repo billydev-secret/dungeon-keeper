@@ -66,6 +66,65 @@ def test_replace_options_orders_and_replaces(conn):
     assert [o["role_id"] for o in opts] == [22]
 
 
+def test_list_options_bulk_matches_the_per_menu_reads(conn):
+    """The bulk helper is a drop-in for a ``list_options`` loop.
+
+    Includes a menu with several options, one with a single option, and one
+    with none — the empty menu must still appear with ``[]`` (the dashboard
+    list view renders it, so dropping the key would hide the menu).
+    """
+    many = _mk_menu(conn, "Many")
+    one = _mk_menu(conn, "One")
+    none = _mk_menu(conn, "None")
+    menus_db.replace_options(conn, many, [
+        {"role_id": 11, "label": "Red", "emoji": "🔴", "button_color": "danger"},
+        {"role_id": 22, "label": "Blue", "description": "cool", "elevated": True},
+        {"role_id": 33, "label": "Green"},
+    ], now=1500.0)
+    menus_db.replace_options(conn, one, [{"role_id": 44, "label": "Solo"}], now=1500.0)
+
+    ids = [many, one, none]
+    bulk = menus_db.list_options_bulk(conn, ids)
+
+    assert list(bulk) == ids  # every requested menu, in the order asked for
+    assert bulk == {mid: menus_db.list_options(conn, mid) for mid in ids}
+    assert bulk[none] == []
+    # Ordering inside a menu is position order, not insertion/rowid order.
+    assert [o["role_id"] for o in bulk[many]] == [11, 22, 33]
+    assert [o["position"] for o in bulk[many]] == [0, 1, 2]
+    # Row shaping (incl. the bool coercion) comes from the same shaper.
+    assert bulk[many][1]["elevated"] is True and bulk[many][0]["elevated"] is False
+    # Snowflakes stay ints at the DB layer; the web layer stringifies them.
+    assert all(isinstance(o["role_id"], int) for o in bulk[many])
+
+
+def test_list_options_bulk_issues_a_single_query(conn):
+    """The whole point of the helper: one SELECT for N menus, not N."""
+    ids = [_mk_menu(conn, f"m{i}") for i in range(4)]
+    for mid in ids:
+        menus_db.replace_options(conn, mid, [{"role_id": 11, "label": "Red"}], now=1.0)
+
+    sql: list[str] = []
+    conn.set_trace_callback(sql.append)
+    try:
+        menus_db.list_options_bulk(conn, ids)
+    finally:
+        conn.set_trace_callback(None)
+
+    hits = [s for s in sql if "role_menu_options" in s]
+    assert len(hits) == 1, hits
+
+
+def test_list_options_bulk_with_no_menus_runs_no_query(conn):
+    sql: list[str] = []
+    conn.set_trace_callback(sql.append)
+    try:
+        assert menus_db.list_options_bulk(conn, []) == {}
+    finally:
+        conn.set_trace_callback(None)
+    assert sql == []
+
+
 def test_grants_history_survives_menu_deletion(conn):
     mid = _mk_menu(conn)
     menus_db.replace_options(conn, mid, [{"role_id": 11, "label": "Red"}], now=1.0)

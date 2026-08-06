@@ -41,12 +41,26 @@ router = APIRouter()
 
 
 def _guild_extras(ctx, guild):
-    """Extract live guild data needed by compute functions."""
+    """Extract live guild data needed by compute functions.
+
+    ``degraded`` reports that the live member list ``mod_ids`` /
+    ``recent_joins`` are derived from wasn't there to read: the bot is
+    mid-startup, the gateway's member cache hasn't been chunked yet, or the bot
+    isn't in this guild at all. Any guild that exists has at least its owner, so
+    "no non-bot member visible" is the cache being cold, not a real answer.
+
+    Metrics built from an empty member list come back zeroed. That payload is
+    still returned to the caller — a blank tile is better than an error — but it
+    must never be written into the 15-minute cache, or a few seconds of startup
+    get served as fact for the next quarter of an hour. See
+    ``_cache_unless_degraded``.
+    """
     member_count = guild.member_count if guild else 0
     voice_active = 0
     nsfw_ids: list[int] = []
     mod_ids: list[int] = []
     recent_joins: dict[int, float] = {}
+    humans_seen = 0
 
     if guild:
         for vc in guild.voice_channels:
@@ -55,6 +69,7 @@ def _guild_extras(ctx, guild):
         for m in guild.members:
             if m.bot:
                 continue
+            humans_seen += 1
             perms = m.guild_permissions
             if (
                 perms.administrator
@@ -74,7 +89,19 @@ def _guild_extras(ctx, guild):
         "nsfw_ids": nsfw_ids,
         "mod_ids": mod_ids,
         "recent_joins": recent_joins,
+        "degraded": guild is None or humans_seen == 0,
     }
+
+
+def _cache_unless_degraded(conn, guild_id: int, key: str, payload: dict, *, degraded: bool) -> None:
+    """Write *payload* to the 15-minute cache unless it was computed degraded.
+
+    Callers always read ``get_cached`` first, so an existing good value keeps
+    being served for the rest of its TTL; skipping the write just means a
+    degraded payload never *becomes* that value.
+    """
+    if not degraded:
+        set_cached(conn, guild_id, key, payload)
 
 
 def _resolve_user_names(conn, guild, guild_id, user_ids: set[int]) -> dict[int, str]:
@@ -343,7 +370,13 @@ async def health_tiles(
                             guild_id,
                             mod_ids=extras["mod_ids"],
                         )
-                        set_cached(conn, guild_id, ck("mod_workload"), cached)
+                        _cache_unless_degraded(
+                            conn,
+                            guild_id,
+                            ck("mod_workload"),
+                            cached,
+                            degraded=extras["degraded"],
+                        )
                     if is_admin:
                         tiles["mod_workload"] = {
                             "median_response_time": cached["median_response_time"],
@@ -457,7 +490,13 @@ async def health_tiles(
                             recent_join_ids=extras["recent_joins"],
                             include_bots=include_bots,
                         )
-                        set_cached(conn, guild_id, ck("newcomer_funnel"), cached)
+                        _cache_unless_degraded(
+                            conn,
+                            guild_id,
+                            ck("newcomer_funnel"),
+                            cached,
+                            degraded=extras["degraded"],
+                        )
                     tiles["newcomer_funnel"] = {
                         "activation_rate": cached["activation_rate"],
                         "badge": cached["badge"],
@@ -479,7 +518,13 @@ async def health_tiles(
                             join_times=extras["recent_joins"],
                             include_bots=include_bots,
                         )
-                        set_cached(conn, guild_id, ck("cohort_retention"), cached)
+                        _cache_unless_degraded(
+                            conn,
+                            guild_id,
+                            ck("cohort_retention"),
+                            cached,
+                            degraded=extras["degraded"],
+                        )
                     tiles["cohort_retention"] = {
                         "d7": cached["d7"],
                         "d30": cached["d30"],
@@ -491,7 +536,11 @@ async def health_tiles(
                 if _want("composite"):
                     # Composite depends on other tiles being cached — compute
                     # any missing dependencies first so get_cached finds them.
-                    composite_deps: list[tuple[str, Callable[..., Any], dict[str, Any]]] = [
+                    # The trailing bool is "this dep is built from the live
+                    # member list", i.e. it must not be cached while degraded.
+                    composite_deps: list[
+                        tuple[str, Callable[..., Any], dict[str, Any], bool]
+                    ] = [
                         (
                             "dau_mau",
                             compute_dau_mau,
@@ -500,17 +549,20 @@ async def health_tiles(
                                 "voice_active_count": extras["voice_active"],
                                 "include_bots": include_bots,
                             },
+                            False,
                         ),
-                        ("gini", compute_gini, {"include_bots": include_bots}),
+                        ("gini", compute_gini, {"include_bots": include_bots}, False),
                         (
                             "social_graph",
                             compute_social_graph,
                             {"nsfw_channel_ids": extras["nsfw_ids"]},
+                            False,
                         ),
                         (
                             "sentiment",
                             compute_sentiment,
                             {"include_bots": include_bots},
+                            False,
                         ),
                         (
                             "cohort_retention",
@@ -519,25 +571,41 @@ async def health_tiles(
                                 "join_times": extras["recent_joins"],
                                 "include_bots": include_bots,
                             },
+                            True,
                         ),
-                        ("heatmap", compute_heatmap, {"include_bots": include_bots}),
+                        (
+                            "heatmap",
+                            compute_heatmap,
+                            {"include_bots": include_bots},
+                            False,
+                        ),
                     ]
-                    for dep_key, dep_fn, dep_kw in composite_deps:
-                        if get_cached(conn, guild_id, ck(dep_key)) is None:
+                    dep_payloads: dict[str, Any] = {}
+                    for dep_key, dep_fn, dep_kw, needs_guild in composite_deps:
+                        dep_payloads[dep_key] = get_cached(conn, guild_id, ck(dep_key))
+                        if dep_payloads[dep_key] is None:
                             dep_result = dep_fn(conn, guild_id, **dep_kw)
-                            set_cached(conn, guild_id, ck(dep_key), dep_result)
+                            _cache_unless_degraded(
+                                conn,
+                                guild_id,
+                                ck(dep_key),
+                                dep_result,
+                                degraded=needs_guild and extras["degraded"],
+                            )
+                            dep_payloads[dep_key] = dep_result
 
+                    # Read the payloads collected above, not the cache: a
+                    # degraded dep is deliberately absent from the cache, and
+                    # re-reading would hand ``None`` to the composite.
                     composite = compute_composite_health(
                         conn,
                         guild_id,
-                        dau_mau_data=get_cached(conn, guild_id, ck("dau_mau")),
-                        gini_data=get_cached(conn, guild_id, ck("gini")),
-                        social_data=get_cached(conn, guild_id, ck("social_graph")),
-                        sentiment_data=get_cached(conn, guild_id, ck("sentiment")),
-                        retention_data=get_cached(
-                            conn, guild_id, ck("cohort_retention")
-                        ),
-                        heatmap_data=get_cached(conn, guild_id, ck("heatmap")),
+                        dau_mau_data=dep_payloads["dau_mau"],
+                        gini_data=dep_payloads["gini"],
+                        social_data=dep_payloads["social_graph"],
+                        sentiment_data=dep_payloads["sentiment"],
+                        retention_data=dep_payloads["cohort_retention"],
+                        heatmap_data=dep_payloads["heatmap"],
                     )
                     tiles["composite"] = {
                         "score": composite["score"],
@@ -878,7 +946,9 @@ async def health_newcomer_funnel(
                     recent_join_ids=extras["recent_joins"],
                     include_bots=include_bots,
                 )
-                set_cached(conn, guild_id, key, data)
+                _cache_unless_degraded(
+                    conn, guild_id, key, data, degraded=extras["degraded"]
+                )
             return data
 
     return await run_query(_q)
@@ -908,7 +978,9 @@ async def health_cohort_retention(
                     join_times=extras["recent_joins"],
                     include_bots=include_bots,
                 )
-                set_cached(conn, guild_id, key, data)
+                _cache_unless_degraded(
+                    conn, guild_id, key, data, degraded=extras["degraded"]
+                )
             return data
 
     return await run_query(_q)
@@ -932,7 +1004,9 @@ async def health_mod_workload(
             data = get_cached(conn, guild_id, key)
             if data is None:
                 data = compute_mod_workload(conn, guild_id, mod_ids=extras["mod_ids"])
-                set_cached(conn, guild_id, key, data)
+                _cache_unless_degraded(
+                    conn, guild_id, key, data, degraded=extras["degraded"]
+                )
             user_ids = {int(m["user_id"]) for m in data["mod_actions"]}
             names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for m in data["mod_actions"]:
@@ -968,7 +1042,9 @@ async def health_mod_engagement(
                     recent_joins=extras["recent_joins"],
                     days=days,
                 )
-                set_cached(conn, guild_id, key, data)
+                _cache_unless_degraded(
+                    conn, guild_id, key, data, degraded=extras["degraded"]
+                )
             user_ids = {int(m["user_id"]) for m in data["mods"]}
             names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for m in data["mods"]:

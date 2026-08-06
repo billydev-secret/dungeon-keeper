@@ -4,7 +4,7 @@ import uuid
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import discord
@@ -455,7 +455,6 @@ async def is_game_expired(db, game_id: str, max_seconds: int = 86400) -> bool:
     )
     if not row:
         return True
-    from datetime import timezone
     created_at = datetime.fromisoformat(str(row["created_at"]))
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
@@ -472,7 +471,15 @@ async def update_session(
     Append game_id and merge player IDs. Create new session if none found.
     Returns the session_id the game landed in.
     """
-    cutoff = datetime.utcnow() - timedelta(minutes=30)
+    # Deliberately naive UTC, both here and for ``now`` below.
+    # ``games_session_tracker.last_game_at`` / ``started_at`` are naive ISO
+    # strings — SQLite's ``CURRENT_TIMESTAMP`` default writes naive ones, the
+    # cutoff below is a *string* comparison in SQL, and
+    # ``games_session.logic.format_duration`` subtracts ``started_at`` from
+    # ``last_game_at`` directly. An aware value here would serialise with a
+    # "+00:00" suffix, break the string comparison, and make that subtraction
+    # raise TypeError against pre-existing naive rows.
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=30)
     row = await db.fetchone(
         """
         SELECT session_id, game_ids, player_ids FROM games_session_tracker
@@ -482,7 +489,7 @@ async def update_session(
         (channel_id, cutoff.isoformat()),
     )
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
     if row:
         existing_games = json.loads(row["game_ids"])

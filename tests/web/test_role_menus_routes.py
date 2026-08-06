@@ -71,6 +71,40 @@ def test_create_list_get_roundtrip(open_client):
     assert got["options"] == []
 
 
+def test_list_reads_every_menus_options_in_one_query(open_client, fake_ctx):
+    """B-PERF7: the list view bulk-loads options instead of one SELECT per menu.
+
+    The empty menu is the interesting case — it must still be listed, with an
+    empty ``options`` array, rather than dropping out of the bulk read.
+    """
+    from tests.web.test_dashboard_perf_fixes import sql_trace
+
+    from bot_modules.role_menus import db as menus_db
+
+    filled = _create(open_client, "Filled")["id"]
+    empty = _create(open_client, "Empty")["id"]
+    other = _create(open_client, "Other")["id"]
+    with fake_ctx.open_db() as conn:
+        menus_db.replace_options(conn, filled, [
+            {"role_id": 11, "label": "Red"},
+            {"role_id": 22, "label": "Blue"},
+        ], now=1.0)
+        menus_db.replace_options(conn, other, [{"role_id": 33, "label": "Green"}], now=1.0)
+
+    sink: list[str] = []
+    with sql_trace(fake_ctx, sink):
+        listed = open_client.get("/api/role-menus").json()["menus"]
+
+    by_id = {m["id"]: m for m in listed}
+    assert set(by_id) == {filled, empty, other}
+    assert [o["role_id"] for o in by_id[filled]["options"]] == ["11", "22"]
+    assert by_id[empty]["options"] == [] and by_id[empty]["option_count"] == 0
+    # ``list_menus``'s own statement mentions the table in its option_count
+    # subquery, so only row-fetching selects count here.
+    hits = [s for s in sink if "role_menu_options" in s and "COUNT(" not in s]
+    assert len(hits) == 1, hits
+
+
 def test_get_missing_menu_404s(open_client):
     assert open_client.get("/api/role-menus/9999").status_code == 404
 

@@ -9,7 +9,15 @@ spinning up Discord or a guild.
 
 from __future__ import annotations
 
+import json
+import sqlite3
+import warnings
+from datetime import datetime, timezone
+
+import pytest
+
 from bot_modules.games.constants import GAME_NAMES
+from bot_modules.games.utils import game_manager
 from bot_modules.games_session.embeds import build_session_recap_embed
 from bot_modules.games_session.logic import (
     build_game_highlight,
@@ -275,3 +283,97 @@ def test_build_session_recap_embed_has_footer_and_title():
     assert "Session Recap" in embed.title
     assert embed.footer.text is not None
     assert "Session Recap" in embed.footer.text
+
+
+# ── session timestamps stay naive UTC ────────────────────────────────
+#
+# ``update_session`` used to call the deprecated ``datetime.utcnow()``. Its
+# replacement has to stay *naive* rather than becoming tz-aware, because
+# ``games_session_tracker`` mixes two writers: Python writes ``last_game_at``
+# as an ISO string, while ``started_at`` defaults to SQLite's
+# ``CURRENT_TIMESTAMP`` (migration 019), which is naive. The two are compared
+# as strings in SQL and subtracted from each other in ``format_duration``, so
+# an aware value would both break the ``last_game_at >= ?`` window and raise
+# TypeError against every pre-existing row.
+
+
+class _FakeDB:
+    """Minimal async DB shim over an in-memory SQLite connection."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    async def fetchone(self, sql: str, params: tuple = ()):
+        return self.conn.execute(sql, params).fetchone()
+
+    async def execute(self, sql: str, params: tuple = ()):
+        self.conn.execute(sql, params)
+        self.conn.commit()
+
+
+@pytest.fixture
+def session_db():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """CREATE TABLE games_session_tracker (
+               session_id   TEXT PRIMARY KEY,
+               channel_id   INTEGER NOT NULL,
+               started_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               last_game_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               game_ids     TEXT NOT NULL DEFAULT '[]',
+               player_ids   TEXT NOT NULL DEFAULT '[]'
+           )"""
+    )
+    yield _FakeDB(conn)
+    conn.close()
+
+
+async def test_update_session_writes_a_naive_utc_timestamp(session_db):
+    await game_manager.update_session(session_db, channel_id=5, game_id="wyr",
+                                      player_ids=[1, 2])
+    row = session_db.conn.execute(
+        "SELECT started_at, last_game_at FROM games_session_tracker"
+    ).fetchone()
+
+    parsed = datetime.fromisoformat(row["last_game_at"])
+    assert parsed.tzinfo is None, "an aware value breaks the SQL string compare"
+    assert "+" not in row["last_game_at"] and "Z" not in row["last_game_at"]
+    # It is UTC, not local time: within a minute of "now" in UTC.
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    assert abs((now_utc - parsed).total_seconds()) < 60
+
+    # And it is still subtractable from SQLite's own naive default.
+    assert format_duration(row["started_at"], row["last_game_at"]) != "unknown"
+
+
+async def test_update_session_finds_the_row_it_just_wrote(session_db):
+    """The ``last_game_at >= ?`` window is a *string* comparison.
+
+    A "+00:00" suffix on either side would sort wrong and silently start a new
+    session for every game instead of appending to the open one.
+    """
+    first = await game_manager.update_session(session_db, channel_id=5,
+                                              game_id="wyr", player_ids=[1])
+    second = await game_manager.update_session(session_db, channel_id=5,
+                                               game_id="nhie", player_ids=[2])
+    assert first == second
+    row = session_db.conn.execute(
+        "SELECT game_ids, player_ids FROM games_session_tracker"
+    ).fetchone()
+    assert json.loads(row["game_ids"]) == ["wyr", "nhie"]
+    assert sorted(json.loads(row["player_ids"])) == [1, 2]
+
+
+async def test_update_session_emits_no_datetime_deprecation_warning(session_db):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        await game_manager.update_session(session_db, channel_id=5, game_id="wyr",
+                                          player_ids=[1])
+    offenders = [
+        w
+        for w in caught
+        if issubclass(w.category, DeprecationWarning)
+        and "utcnow" in str(w.message).lower()
+    ]
+    assert not offenders, [str(w.message) for w in offenders]

@@ -378,6 +378,60 @@ export function toMemberOptions(members) {
   });
 }
 
+/**
+ * Member options for a picker whose whole job is finding one person in a long
+ * roster (the exemption pickers on config-prune and config-inactive).
+ *
+ * Differs from toMemberOptions() in two ways, both about browsing rather than
+ * confirming a choice already made:
+ *   - members who have left sort to the BOTTOM, so the people an admin is
+ *     actually looking for are not interleaved with departures;
+ *   - the departure is spelled out — "(left the server)" rather than the terse
+ *     " (left)" — because here it is the difference between exempting a real
+ *     member and exempting a ghost.
+ * Everything still in the server is ordered by label with localeCompare, so
+ * "Zoe" and "zoe" sort together instead of by code point.
+ *
+ * Each option carries `left` alongside {id, label}; filterSelect ignores the
+ * extra key, and a caller can filter or style on it.
+ *
+ * Was a private copy in each of those two panels (byte-identical). Kept here so
+ * a change to the ordering or the departure wording lands in both at once.
+ */
+export function toSortedMemberOptions(members) {
+  return members
+    .map((m) => ({
+      id: String(m.id),
+      label: m.display_name && m.display_name !== m.name
+        ? `${m.display_name} (${m.name})`
+        : m.name,
+      left: !!m.left_server,
+    }))
+    // Sorted on the bare label, before the suffix below is appended — the
+    // annotation must not decide where a departed member lands among the rest.
+    .sort((a, b) => a.left - b.left || a.label.localeCompare(b.label))
+    .map((o) => (o.left ? { ...o, label: `${o.label} (left the server)` } : o));
+}
+
+/**
+ * Build `(id) => display name` over a /api/meta/members payload.
+ *
+ * A factory rather than a `memberName(members, id)` pair for channelName() and
+ * roleName() because the callers are chip lists: the Map is built once per
+ * mount and read on every add, where those two answer a single lookup.
+ *
+ * Panels need this because a chip's label must come from the member RECORD, not
+ * from unpicking the picker's "Display (username)" label — a member whose own
+ * name has brackets ("Ana (EU)") loses them to that. Unknown ids (a member who
+ * left between the config load and the click) answer with the id itself.
+ */
+export function memberNameLookup(members) {
+  const byId = new Map(
+    members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
+  );
+  return (id) => byId.get(String(id)) || String(id);
+}
+
 function _normalizeIds(values) {
   if (Array.isArray(values)) return values.map(String).filter(Boolean);
   return String(values || "").split(",").map((s) => s.trim()).filter(Boolean);

@@ -17,6 +17,10 @@ of them is a defect almost everywhere. The bugs guarded here all come from the
     of it is scoped to the *active* guild and a guild switch re-mounts panels
     without reloading the page. ``resetMetaCaches()`` is what app.js calls to
     drop them.
+  * **the shared member-picker options.** ``toSortedMemberOptions`` /
+    ``memberNameLookup`` were private copies inside config-prune and
+    config-inactive; now that one implementation feeds both exemption pickers,
+    its ordering and labelling are pinned here rather than in either panel.
   * **md-preview link href.** ``[text](url)`` put the *text* in the ``href``,
     which both produced the wrong link and forfeited the https-only validation
     the pattern does on the URL.
@@ -321,6 +325,101 @@ def test_guild_switch_reset_repopulates_the_picker(page):
     assert out["second"] == ["bravo-general"]
     assert any("bravo-general" in label for label in out["labels"]), out["labels"]
     assert not any("alpha-general" in label for label in out["labels"]), out["labels"]
+
+
+# ── config-helpers.js: the shared member-picker option builder ───────────
+#
+# config-prune and config-inactive each carried a byte-identical private
+# `memberOpts` (plus a private chip-name lookup). Hoisted to
+# toSortedMemberOptions() / memberNameLookup(); these pin the behaviour both
+# panels depend on so the shared version can't quietly change one of them.
+
+# Deliberately scrambled input order, and the departed member sorts FIRST
+# alphabetically — if `left` stopped leading the comparator the ghost would
+# head the list, which is the failure that matters on an exemption picker.
+_MEMBERS = [
+    {"id": "700000000000000003", "name": "zoe", "display_name": "Zoe Zed",
+     "left_server": False},
+    {"id": "700000000000000001", "name": "aaron", "display_name": "",
+     "left_server": True},
+    # no display_name key at all — a member who never set a nickname
+    {"id": "700000000000000002", "name": "beth", "left_server": False},
+    # display name identical to the username: not worth printing twice
+    {"id": "700000000000000004", "name": "carl", "display_name": "carl",
+     "left_server": False},
+]
+
+_MEMBER_OPTS = """
+async ({ members }) => {
+  const cfg = await import('/static/js/config-helpers.js');
+  return cfg.toSortedMemberOptions(members);
+}
+"""
+
+_MEMBER_NAMES = """
+async ({ members, ids }) => {
+  const cfg = await import('/static/js/config-helpers.js');
+  const lookup = cfg.memberNameLookup(members);
+  return ids.map((id) => lookup(id));
+}
+"""
+
+
+def test_sorted_member_options_put_departed_members_last(page):
+    """Ordering, label formatting and the departure annotation in one pass.
+
+    Sorting is on the bare label (localeCompare, so "Zoe" files with "zoe"
+    rather than ahead of every lowercase name by code point); the
+    "(left the server)" suffix is appended afterwards so it can't shift anyone.
+    """
+    opts = page.evaluate(_MEMBER_OPTS, {"members": _MEMBERS})
+    assert [o["label"] for o in opts] == [
+        "beth",
+        "carl",
+        "Zoe Zed (zoe)",
+        "aaron (left the server)",
+    ]
+    assert [o["id"] for o in opts] == [
+        "700000000000000002",
+        "700000000000000004",
+        "700000000000000003",
+        "700000000000000001",
+    ]
+    assert [o["left"] for o in opts] == [False, False, False, True]
+
+
+def test_sorted_member_options_keep_ids_as_strings(page):
+    """Snowflakes past 2^53 lose digits as JS numbers, and the id is what the
+    exemption PUT is addressed to."""
+    opts = page.evaluate(
+        _MEMBER_OPTS,
+        {"members": [{"id": "700000000000000001", "name": "n", "left_server": False}]},
+    )
+    assert opts[0]["id"] == "700000000000000001"
+    assert isinstance(opts[0]["id"], str)
+
+
+def test_member_name_lookup_prefers_the_display_name(page):
+    """Chip labels come from the member record, never from unpicking the
+    picker's "Display (username)" label — a member called "Ana (EU)" would lose
+    the bracket to that. An id nobody matches answers with the id itself."""
+    out = page.evaluate(
+        _MEMBER_NAMES,
+        {
+            "members": _MEMBERS + [
+                {"id": "700000000000000005", "name": "ana",
+                 "display_name": "Ana (EU)", "left_server": False},
+            ],
+            "ids": [
+                "700000000000000003",  # display name wins
+                "700000000000000001",  # blank display name → username
+                "700000000000000002",  # no display_name key → username
+                "700000000000000005",  # brackets survive verbatim
+                "700000000000000009",  # departed since the config load
+            ],
+        },
+    )
+    assert out == ["Zoe Zed", "aaron", "beth", "Ana (EU)", "700000000000000009"]
 
 
 # ── md-preview.js ────────────────────────────────────────────────────────
