@@ -200,6 +200,11 @@ saying out loud: the table is 145 MB and the disk is not full. The reason
 to build now rather than in six months is that the readers are easier to
 fix while the data still fits in one design's head.
 
+> **Owner decision 2026-08-06: (a), accept the bounded skew.** Stage 2
+> builds against this. The skew applies only to buckets older than the
+> retention boundary on the 360-day month-resolution graphs; every window
+> inside the boundary is still served from raw events and stays exact.
+
 ### Time-to-level
 
 The one reader that genuinely needs event ordering. It is also the one
@@ -242,14 +247,37 @@ channel. `xp_daily` with its indexes is 20.1 MB against `xp_events`'
 `xp_daily` joined `purge_user_data` in the same commit, with its register
 row — see Stage 4; it was not deferred.
 
-**Stage 2 — readers union.** Each of the six broken readers gains a
-rollup arm: raw events for `created_at >= boundary`, `xp_daily` for days
-strictly older, added together. Boundary is one setting, and it is *not*
-the retention cutoff — it is the same value so the union is seamless, but
-naming it separately is what lets Stage 3 change retention without
-touching read paths. Tests assert reader output is **identical** before
-and after the union with a full raw table (the rollup arm returns nothing
-when nothing is pruned, so equality is exact and testable).
+**Stage 2a — the sum/max readers. ✅ Built 2026-08-06.** Four of the six:
+the three per-source leaderboard readers (via one shared
+`_user_totals_query` that replaced three near-identical query builders),
+the `/xp` existence gate, the mod profile's all-time XP-by-source (lifted
+out of `jail_cog` into `xp_system.get_user_xp_by_source` — it was inline
+SQL in a cog), and the inactive report's last-activity map.
+
+The partition point is the **prune horizon** (`RAW_RETENTION_DAYS = 90`),
+not the rollup watermark. Partitioning at the watermark — which runs to
+yesterday — would push a 7-day leaderboard through the rollup and hand it
+day-granularity skew for a window whose raw events are all still present.
+The rollup is only worth reading where raw may be *missing*.
+
+Migration 185 stores the rollup's coverage, and it stores **two** facts
+because they answer different questions: `rolled_through_day` (end of the
+contiguous rolled prefix — Stage 3's interlock, never delete past it) and
+`first_gap_day` (oldest day with events and no rollup — what the readers
+check). Comparing the watermark to the boundary directly is the bug that
+was written first: a quiet guild whose newest event is months old has a
+watermark far behind the boundary and a rollup that nonetheless covers
+everything, and it would have been refused. Until the rollup covers
+everything below the boundary the readers stay on raw, which is still
+complete because nothing is pruned — so Stage 2a is a provable no-op on
+today's data.
+
+**Stage 2b — the bucketed readers.** Not built. `activity_graphs`' four
+XP queries at `month` resolution (the 360-day reach), and
+`get_time_to_level_details`. Both need bucket arithmetic against the
+rollup rather than a plain sum, and time-to-level needs its cumulative
+crossing resolved to a day. This is where the accepted skew actually
+lands.
 
 **Stage 3 — retention.** Only now does anything delete: raw rows older
 than the boundary, swept from the existing XP loop, with the rollup

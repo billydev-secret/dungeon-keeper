@@ -30,9 +30,20 @@ log = logging.getLogger(__name__)
 # of the current UTC day.
 _SECONDS_PER_DAY = 86400
 
+# How much raw history stays queryable. This is one number in two roles: the
+# horizon Stage 3 prunes behind, and the point where a unioning reader stops
+# trusting raw and reads the rollup instead. They must be the same number —
+# a reader that partitions later than the pruner deletes loses XP, and one
+# that partitions earlier double-counts it.
+RAW_RETENTION_DAYS = 90
 
-def _utc_day(ts: float) -> str:
+
+def utc_day(ts: float) -> str:
+    """The UTC 'YYYY-MM-DD' a timestamp falls in — the rollup's bucket key."""
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+
+
+_utc_day = utc_day  # internal alias, kept so the module reads uniformly
 
 
 def _day_bounds(day: str) -> tuple[float, float]:
@@ -127,6 +138,7 @@ def rollup_pending_days(
             "xp rollup: %d day(s) → %d bucket(s) (%s … %s)",
             len(pending), buckets, pending[0], pending[-1],
         )
+        recompute_watermark(conn)
     return len(pending), buckets
 
 
@@ -150,7 +162,97 @@ def refresh_recent_days(
     buckets = 0
     for day in targets:
         buckets += rollup_day(conn, day)
+    recompute_watermark(conn)
     return len(targets), buckets
+
+
+def recompute_watermark(conn: sqlite3.Connection) -> str | None:
+    """Store the rollup's coverage: how far it reaches, and where it first breaks.
+
+    ``rolled_through_day`` is the newest day D such that *every* day with raw
+    events up to and including D has a rollup — a contiguous prefix, not
+    merely the newest day present. A hole at day 5 holds it at day 4 even if
+    days 6..180 are all rolled, because Stage 3 must never delete past it.
+
+    ``first_gap_day`` is the oldest day that has events and no rollup, which
+    is the different question the readers ask. Returns the watermark.
+    """
+    raw_days = days_with_events(conn, before=current_utc_day())
+    done = rolled_up_days(conn)
+
+    watermark: str | None = None
+    gap: str | None = None
+    for day in raw_days:  # days_with_events returns them oldest-first
+        if day not in done:
+            gap = day
+            break
+        watermark = day
+
+    conn.execute(
+        "UPDATE xp_rollup_state SET rolled_through_day = ?, first_gap_day = ?,"
+        " updated_at = ? WHERE id = 1",
+        (watermark, gap, time.time()),
+    )
+    return watermark
+
+
+def get_watermark(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute(
+        "SELECT rolled_through_day FROM xp_rollup_state WHERE id = 1"
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0])
+
+
+def get_first_gap_day(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute(
+        "SELECT first_gap_day FROM xp_rollup_state WHERE id = 1"
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0])
+
+
+def read_boundary(
+    conn: sqlite3.Connection, *, now: float | None = None
+) -> tuple[str, float] | None:
+    """Where a unioning reader should stop trusting raw events.
+
+    Returns ``(boundary_day, boundary_ts)``: read ``xp_daily`` for
+    ``day < boundary_day`` and ``xp_events`` for ``created_at >= boundary_ts``.
+    ``None`` means read raw alone.
+
+    The boundary is the **prune horizon**, not the rollup watermark. The
+    watermark runs to yesterday, and partitioning there would push a 7-day
+    leaderboard through the rollup — inheriting the rollup's day-granularity
+    skew for a window whose raw events are all still present and exact. The
+    rollup is only worth reading where raw data may be *missing*, which is
+    precisely the range Stage 3 prunes.
+
+    The watermark's job here is the safety check: if the rollup has not
+    actually covered everything up to the boundary — the state during the
+    first backfill, or after a hole — this returns ``None`` and the reader
+    stays on raw, which is still complete because nothing has been pruned.
+    """
+    now_ts = time.time() if now is None else now
+    boundary_day = _utc_day(now_ts - RAW_RETENTION_DAYS * _SECONDS_PER_DAY)
+
+    # The test is "is any day below the boundary still unrolled", NOT "does
+    # the watermark reach the boundary". A quiet guild whose newest event is
+    # months old has a watermark far behind the boundary and a rollup that
+    # nonetheless covers everything there is — comparing against the
+    # watermark would refuse to read a complete rollup.
+    gap = get_first_gap_day(conn)
+    if gap is not None and gap < boundary_day:
+        return None
+    if get_watermark(conn) is None and gap is None:
+        # Nothing rolled and nothing to roll: no history at all. Reading the
+        # empty rollup is harmless, but so is raw — take raw, it is simpler.
+        return None
+
+    start, _ = _day_bounds(boundary_day)
+    return boundary_day, start
 
 
 def rollup_stats(conn: sqlite3.Connection) -> dict[str, object]:
