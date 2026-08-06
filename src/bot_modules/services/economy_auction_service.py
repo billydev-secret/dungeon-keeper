@@ -336,6 +336,50 @@ class StickyResident:
     restick_on_bot: bool
 
 
+#: The sticky panels a plain config read can find, as
+#: ``(key, name, restick_on_bot)`` against the channel each one occupies.
+#: ``key`` is stable so a caller can exclude *itself* when asking who else is in
+#: a channel (see ``bot_chasing_resident``).
+_STICKY_PANEL_KEYS = (
+    ("guide", "the economy guide panel", False),
+    ("leaderboard", "the leaderboard panel", False),
+    ("shop", "the shop panel", False),
+    # The bounty hub sits in the board channel itself, so that is the
+    # collision — not where the panel was last recorded as posted. It
+    # re-sticks under bot messages so it stays below its own cards, which
+    # also means it out-competes an auction card here.
+    ("bounty", "the bounty board panel", True),
+    ("casino", "the casino hub panel", True),
+)
+
+
+def _panel_channels(
+    conn: sqlite3.Connection, guild_id: int
+) -> dict[str, tuple[int, str, bool]]:
+    """``key -> (channel_id, name, restick_on_bot)`` for every configured panel."""
+    from bot_modules.services.casino_service import (  # noqa: PLC0415
+        load_casino_settings,
+    )
+    from bot_modules.services.economy_service import (  # noqa: PLC0415
+        load_econ_settings,
+    )
+
+    econ = load_econ_settings(conn, guild_id)
+    casino = load_casino_settings(conn, guild_id)
+    channel_for = {
+        "guide": int(econ.guide_channel_id or 0),
+        "leaderboard": int(econ.leaderboard_channel_id or 0),
+        "shop": int(econ.shop_channel_id or 0),
+        "bounty": int(econ.bounty_channel_id or 0),
+        "casino": int(casino.panel_channel_id or 0),
+    }
+    return {
+        key: (channel_for[key], name, on_bot)
+        for key, name, on_bot in _STICKY_PANEL_KEYS
+        if channel_for[key]
+    }
+
+
 def sticky_panel_channels(
     conn: sqlite3.Connection, guild_id: int
 ) -> dict[int, StickyResident]:
@@ -356,32 +400,44 @@ def sticky_panel_channels(
     panels (pen pals, DM perms, Voice Master, the todo board) keep their ids
     in their own tables and are not worth four cross-cog imports here —
     missing one costs a warning, never a working auction.
-    """
-    from bot_modules.services.casino_service import (  # noqa: PLC0415
-        load_casino_settings,
-    )
-    from bot_modules.services.economy_service import (  # noqa: PLC0415
-        load_econ_settings,
-    )
 
-    econ = load_econ_settings(conn, guild_id)
-    casino = load_casino_settings(conn, guild_id)
-    named = (
-        (int(econ.guide_channel_id or 0), "the economy guide panel", False),
-        (int(econ.leaderboard_channel_id or 0), "the leaderboard panel", False),
-        (int(econ.shop_channel_id or 0), "the shop panel", False),
-        # The bounty hub sits in the board channel itself, so that is the
-        # collision — not where the panel was last recorded as posted. It
-        # re-sticks under bot messages so it stays below its own cards, which
-        # also means it out-competes an auction card here.
-        (int(econ.bounty_channel_id or 0), "the bounty board panel", True),
-        (int(casino.panel_channel_id or 0), "the casino hub panel", True),
-    )
-    return {
-        cid: StickyResident(name=name, restick_on_bot=on_bot)
-        for cid, name, on_bot in named
-        if cid
-    }
+    **Residents in a shared channel are merged, not overwritten.** This used to
+    build the dict by comprehension, so a channel hosting two panels reported
+    only whichever came last in the table — a mod warned about a shared channel
+    was told about one of the two things they were sharing it with.
+    """
+    residents: dict[int, StickyResident] = {}
+    for channel_id, name, on_bot in _panel_channels(conn, guild_id).values():
+        prior = residents.get(channel_id)
+        if prior is None:
+            residents[channel_id] = StickyResident(name=name, restick_on_bot=on_bot)
+        else:
+            residents[channel_id] = StickyResident(
+                name=f"{prior.name} and {name}",
+                restick_on_bot=prior.restick_on_bot or on_bot,
+            )
+    return residents
+
+
+def bot_chasing_resident(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int, *, excluding: str
+) -> str | None:
+    """Name of *another* bot-chasing sticky panel already in ``channel_id``.
+
+    Two panels with ``restick_on_bot`` in one channel is the configuration that
+    made them re-post each other indefinitely (2026-08-06 review, F1).
+    ``core.sticky`` now refuses to chase another panel's placement so it can no
+    longer storm, but the two still trade the bottom slot on every trigger and
+    one of them is always the buried one — so the posting paths refuse it, the
+    same way ``_sticky_check`` already refuses an auction card here.
+
+    ``excluding`` is the asking panel's own key: the bounty hub lives in the
+    bounty channel by definition, so it would otherwise always find itself.
+    """
+    for key, (cid, name, on_bot) in _panel_channels(conn, guild_id).items():
+        if key != excluding and on_bot and cid == channel_id:
+            return name
+    return None
 
 
 # ── bid (the atomic heart) ──────────────────────────────────────────────────

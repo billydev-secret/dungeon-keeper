@@ -68,7 +68,9 @@ On a **correct first solve**, the bot edits the round's message: the original im
 
 `/guess round` shows a specific round to a mod: status (open / solved / deleted), submitter, answer, difficulty, guess and unique-guesser counts, re-roll count, and the crop image. For dispute resolution. `/guess delete` soft-deletes a round (message best-effort deleted, stats survive; already-deleted rounds are rejected with "Round #N is already deleted."). The web audit panel lists recent submit, delete, solve, and cap events for the guild.
 
-Config → Guess Who → Post Submit Prompt lets an admin force an immediate repost of the sticky Submit/Help prompt message in the configured channel (normally it reposts itself automatically ~2s after the last message in the channel, debounced). Useful if the sticky prompt gets buried or its message is deleted.
+Config → Guess Who → Post Submit Prompt lets an admin force an immediate repost of the sticky Submit/Help prompt message in the configured channel (normally it reposts itself automatically ~2s after the last message in the channel, debounced). Useful if the sticky prompt gets buried or its message is deleted. Re-running it when the prompt is already in that channel **edits it in place** rather than hopping it to the bottom, so a re-brand refresh doesn't move it.
+
+Since 2026-08-06 the prompt runs on the shared `core.sticky.StickyPanel` rather than its own copy of the placer — it was the last hand-rolled one, and it still posted *after* deleting the old prompt (a failed send left the channel with no prompt at all) and left placements unshielded (a cancel landing mid-send orphaned a prompt whose id was never recorded). The prompt is also the reason the shared placer grew a per-panel `target_types`: the Guess channel may be a thread or a voice channel's text view, which the placer previously refused. Behaviour a member sees is unchanged, including the ~2s debounce.
 
 ## Permissions
 
@@ -123,6 +125,7 @@ Config → Guess Who → Post Submit Prompt lets an admin force an immediate rep
 | `guess_min_image_dimension_px` | `400` | Reject submissions smaller than this on either axis |
 | `guess_max_image_size_mb` | `10` | Hard cap on upload size |
 | `guess_prompt_message_id` | unset | Persistent prompt message at the bottom of the channel |
+| `guess_prompt_channel_id` | unset | Where that message actually **is**. Added 2026-08-06 with the `core.sticky` migration: the placer deletes the old prompt through this channel, so pairing a stale message id with a repointed `guess_channel_id` would aim the delete at the wrong channel and strand the old prompt with its buttons live. Repointing the Guess channel therefore leaves the prompt where it is until the next round (or an explicit repost) moves it |
 
 ## Stored data
 

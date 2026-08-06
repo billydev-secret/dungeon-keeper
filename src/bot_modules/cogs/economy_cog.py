@@ -21,7 +21,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.db_utils import get_tz_offset_hours
+from bot_modules.core.db_utils import get_tz_offset_hours, parse_bool
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.economy.guide import (
     GuideView,
@@ -85,6 +85,7 @@ from bot_modules.economy.auction_views import (
 )
 from bot_modules.services.economy_auction_service import (
     attach_card_to_latest,
+    bot_chasing_resident,
     card_ids,
     open_auction_guild_ids,
 )
@@ -3804,10 +3805,31 @@ class EconomyCog(commands.Cog):
                 f"(<#{int(settings.bounty_channel_id)}>) — that's the channel "
                 "its cards post to."
             )
+        # Two panels that both chase bot posts can't share a channel: there is
+        # one bottom slot, they take it from each other on every trigger, and
+        # whichever lost is buried. Before core.sticky learned to ignore another
+        # panel's placement (2026-08-06) this configuration re-posted forever.
+        # Refusing mirrors what _sticky_check already does for an auction card.
+        rival = await asyncio.to_thread(
+            self._bot_chasing_rival, guild.id, int(channel.id)
+        )
+        if rival is not None:
+            raise ValueError(
+                f"<#{int(channel.id)}> already has {rival} stuck to its bottom, "
+                "and both panels follow the bot's own posts — they would take "
+                "the bottom slot from each other and one would always be "
+                "buried. Give the bounty board its own channel."
+            )
         # If the board was repointed, the hub still sitting in the old channel
         # has live buttons. Clear it out before placing the new one.
         await self._drop_stale_bounty_hub(guild)
         return await self.bounty_panel.place_or_refresh(guild, channel)
+
+    def _bot_chasing_rival(self, guild_id: int, channel_id: int) -> str | None:
+        with self.ctx.open_db() as conn:
+            return bot_chasing_resident(
+                conn, guild_id, channel_id, excluding="bounty"
+            )
 
     async def refresh_bounty_hub_panel(self, guild: discord.Guild) -> None:
         """Repaint the hub after a pot or the open list changed.
@@ -3951,14 +3973,31 @@ class EconomyCog(commands.Cog):
         them. Its re-renders are edits, which fire no MESSAGE_CREATE, so only a
         genuinely new card moves it — see the panel's declaration.
         """
-        for panel in (
+        for panel in self._panels:
+            await panel.on_message(message)
+
+    @property
+    def _panels(self) -> tuple[StickyPanel, ...]:
+        return (
             self.guide_panel,
             self.leaderboard_panel,
             self.shop_panel,
             self.auction_panel,
             self.bounty_panel,
-        ):
-            await panel.on_message(message)
+        )
+
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _forget_deleted_panel_channels(
+        self, channel: discord.abc.GuildChannel
+    ) -> None:
+        """Clear panel ids whose channel just stopped existing.
+
+        Nothing breaks without it — a dead channel id resolves to None and the
+        restick returns early — but the ids outlive the channel, so the dashboard
+        goes on reporting a panel that cannot be there.
+        """
+        for panel in self._panels:
+            await panel.on_channel_delete(channel)
 
     # ── auto-updating leaderboard panel ──────────────────────────────────
 
@@ -4002,7 +4041,70 @@ class EconomyCog(commands.Cog):
         self.bot.add_view(GuideView())
         self.bot.add_view(QuestBoardView())
         self.bot.add_view(ShopPanelView())
+        await self._publish_panel_guilds()
         self._auction_settle_loop.start()
+
+    # ── the listener's fast path ──────────────────────────────────────────
+
+    #: Which config key names the channel each permanent panel lives in. The
+    #: auction card is deliberately absent — see _publish_panel_guilds.
+    _PANEL_CHANNEL_KEYS = {
+        "guide": "econ_guide_channel_id",
+        "leaderboard": "econ_leaderboard_channel_id",
+        "shop": "econ_shop_channel_id",
+        "bounty": "econ_bounty_channel_id",
+    }
+
+    def _panel_guilds(self) -> dict[str, set[int]]:
+        """Guilds whose economy is on and which have each panel's channel set.
+
+        One query for all four rather than four ``load_econ_settings`` calls:
+        this exists to keep work *off* the message path, so paying five
+        settings loads to save five settings loads would be silly.
+        """
+        keys = ("econ_enabled", *self._PANEL_CHANNEL_KEYS.values())
+        with self.ctx.open_db() as conn:
+            rows = conn.execute(
+                "SELECT guild_id, key, value FROM config WHERE key IN "
+                f"({','.join('?' * len(keys))})",
+                keys,
+            ).fetchall()
+        stored: dict[int, dict[str, str]] = {}
+        for row in rows:
+            stored.setdefault(int(row["guild_id"]), {})[str(row["key"])] = str(
+                row["value"]
+            )
+        out: dict[str, set[int]] = {kind: set() for kind in self._PANEL_CHANNEL_KEYS}
+        for guild_id, values in stored.items():
+            if not parse_bool(values.get("econ_enabled", ""), False):
+                continue
+            for kind, key in self._PANEL_CHANNEL_KEYS.items():
+                if (values.get(key) or "0") not in ("", "0"):
+                    out[kind].add(guild_id)
+        return out
+
+    async def _publish_panel_guilds(self) -> None:
+        """Give the four permanent panels their known-guilds fast path.
+
+        Without this ``_known`` stays None and every message in every guild
+        costs a cached id lookup per panel — five sequential ones, since
+        ``_restick_panels`` forwards to each in turn — plus five separate
+        ``load_econ_settings`` reads whenever the TTL lapses. Every other
+        migrated cog published this from the start; this one never did (found
+        2026-08-06).
+
+        The **auction card is excluded on purpose.** It is the one panel that
+        comes and goes, it is posted directly rather than through ``place`` (so
+        nothing calls ``_remember`` to add its guild), and ``auction_views``
+        calls ``forget`` right after posting — which would *discard* the guild
+        from a published set and leave the card un-sticky. Its TTL cache is the
+        gate, and ``forget`` is what keeps it honest.
+        """
+        by_kind = await asyncio.to_thread(self._panel_guilds)
+        self.guide_panel.set_known_guilds(by_kind["guide"])
+        self.leaderboard_panel.set_known_guilds(by_kind["leaderboard"])
+        self.shop_panel.set_known_guilds(by_kind["shop"])
+        self.bounty_panel.set_known_guilds(by_kind["bounty"])
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:

@@ -349,6 +349,13 @@ class TodoCog(commands.Cog):
     async def _restick_board(self, message: discord.Message) -> None:
         await self.board.on_message(message)
 
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _forget_deleted_board_channel(
+        self, channel: discord.abc.GuildChannel
+    ) -> None:
+        """Clear the board's ids if its channel was deleted."""
+        await self.board.on_channel_delete(channel)
+
 
 def _tick(ctx) -> tuple[set[int], set[int]]:
     """One scheduler pass: spawn what is due, report what needs repainting.

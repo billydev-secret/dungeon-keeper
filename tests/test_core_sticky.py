@@ -16,6 +16,7 @@ import pytest
 from bot_modules.core.sticky import (
     PanelContent,
     StickyPanel,
+    clear_placed_registry,
     should_restick,
 )
 
@@ -42,8 +43,20 @@ def _channel(channel_id: int = CHANNEL, message_id: int = MESSAGE):
 def _guild(channel):
     guild = MagicMock(spec=discord.Guild)
     guild.id = GUILD
+    # _channel resolves through get_channel_or_thread so a panel can opt into
+    # threads (see target_types); get_channel is kept for the older assertions.
     guild.get_channel.return_value = channel
+    guild.get_channel_or_thread.return_value = channel
     return guild
+
+
+@pytest.fixture(autouse=True)
+def _forget_placements():
+    """The placed-message registry is module-level (shared across panels, which
+    is the point — see was_placed). Tests reuse message ids, so clear it."""
+    clear_placed_registry()
+    yield
+    clear_placed_registry()
 
 
 class _Store:
@@ -730,3 +743,370 @@ async def test_a_panel_posted_outside_place_is_invisible_until_forget():
     with patch.object(panel, "schedule_restick") as sched:
         await panel.on_message(_message())
     sched.assert_called_once_with(GUILD)
+
+
+# ── two panels in one channel ─────────────────────────────────────────
+#
+# Discord has one bottom slot per channel. Everything above tests a single
+# panel; these cover what the nine callers do to *each other*, which is where
+# the 2026-08-06 review found the one High.
+
+
+class _LiveChannel:
+    """A channel that behaves like the gateway does.
+
+    ``send`` assigns an increasing id, advances ``last_message_id`` and
+    dispatches MESSAGE_CREATE to every listener *as a task* — i.e. concurrently
+    with ``send`` returning, which is the ordering ``place`` documents and the
+    one the July 2026 storm depended on. Faking it any other way makes the
+    self-chase guards look stronger than they are.
+    """
+
+    def __init__(self):
+        self.mock = MagicMock(spec=discord.TextChannel)
+        self.mock.id = CHANNEL
+        self.mock.last_message_id = None
+        self.mock.send = self._send
+        self.mock.get_partial_message = self._partial
+        self._next = 1000
+        self.sends = 0
+        self.deletes = 0
+        self.listeners: list[StickyPanel] = []
+
+    async def _send(self, **_kwargs):
+        await asyncio.sleep(0)  # the HTTP round trip
+        self._next += 1
+        self.sends += 1
+        self.mock.last_message_id = self._next
+        message = MagicMock(spec=discord.Message)
+        message.id = self._next
+        for panel in self.listeners:
+            asyncio.create_task(panel.on_message(self._event(self._next, bot=True)))
+        return message
+
+    def _partial(self, message_id: int):
+        outer = self
+
+        class _Partial:
+            id = message_id
+
+            async def delete(self) -> None:
+                outer.deletes += 1
+
+            async def edit(self, **_kwargs) -> None:
+                pass
+
+        return _Partial()
+
+    def _event(self, message_id: int, *, bot: bool):
+        message = MagicMock(spec=discord.Message)
+        message.id = message_id
+        message.guild = MagicMock(spec=discord.Guild)
+        message.guild.id = GUILD
+        message.author = MagicMock(bot=bot)
+        message.channel = MagicMock(id=CHANNEL)
+        return message
+
+    async def member_says(self) -> None:
+        self._next += 1
+        self.mock.last_message_id = self._next
+        for panel in self.listeners:
+            await panel.on_message(self._event(self._next, bot=False))
+
+    def bot_says(self) -> int:
+        """A bot message no panel placed — a casino round result."""
+        self._next += 1
+        self.mock.last_message_id = self._next
+        return self._next
+
+
+def _live_bot(live: _LiveChannel):
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = GUILD
+    guild.get_channel.return_value = live.mock
+    guild.get_channel_or_thread.return_value = live.mock
+    bot = MagicMock()
+    bot.get_guild.return_value = guild
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_two_restick_on_bot_panels_in_one_channel_settle():
+    """The 2026-08-06 High: a repost storm needing no human at all.
+
+    Each panel's three self-chase guards only recognise its OWN message, so
+    before ``was_placed`` panel A chased B's repost, which buried B, which
+    chased A's, forever — and neither is ever at the bottom when its own
+    debounce fires, so the at-the-bottom guard never engages. Measured then:
+    26 sends across 40 debounce periods with nobody typing (~6.5/min in prod
+    terms, indefinitely). Reachable from config alone — the casino hub and the
+    bounty board hub are both opted in, and a live guild had both pointed at
+    one channel.
+    """
+    live = _LiveChannel()
+    bot = _live_bot(live)
+    a = _panel(bot, _Store(CHANNEL, 1), restick_on_bot=True, delay=0.02)
+    b = _panel(bot, _Store(CHANNEL, 2), restick_on_bot=True, delay=0.02)
+    live.mock.last_message_id = 2
+    live.listeners = [a, b]
+
+    await live.member_says()  # one message, then silence
+    await asyncio.sleep(0.02 * 40)
+    a.cancel_all()
+    b.cancel_all()
+
+    # One repost each for the two buried panels, then quiet.
+    assert live.sends <= 4, f"repost storm: {live.sends} sends with nobody typing"
+
+
+@pytest.mark.asyncio
+async def test_an_opted_in_panel_still_chases_a_real_bot_post():
+    """Guard on the fix above: ``was_placed`` must only skip *placements*.
+
+    The casino turned ``restick_on_bot`` on so a round settling with nobody
+    typing doesn't strand the hub above the result. Skipping bot messages
+    wholesale would silently undo that.
+    """
+    live = _LiveChannel()
+    bot = _live_bot(live)
+    panel = _panel(bot, _Store(CHANNEL, 1), restick_on_bot=True, delay=0.02)
+    live.mock.last_message_id = 1
+    live.listeners = [panel]
+
+    round_result = live.bot_says()
+    await panel.on_message(live._event(round_result, bot=True))
+    await asyncio.sleep(0.02 * 8)
+    panel.cancel_all()
+
+    assert live.sends == 1
+
+
+# ── failure ceiling ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_placement_stops_being_retried_after_repeated_failures():
+    """A channel the bot lost Send Messages in used to be retried forever: one
+    doomed REST call and one warning per burst of chat, with nothing surfaced."""
+    channel, _sent = _channel()
+    guild = _guild(channel)
+    channel.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "nope"))
+    panel = _panel(_bot(guild), _Store(CHANNEL, MESSAGE), max_place_failures=3)
+
+    for _ in range(3):
+        assert await panel.place(guild, channel) is None
+    assert channel.send.await_count == 3
+    assert panel.failing_guilds() == {GUILD}
+
+    # The restick no longer arms, so chat costs nothing.
+    with patch.object(panel, "_delayed_restick") as delayed:
+        panel.schedule_restick(GUILD)
+    delayed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_successful_repost_clears_the_failure_pause():
+    channel, sent = _channel()
+    guild = _guild(channel)
+    channel.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "nope"))
+    panel = _panel(_bot(guild), _Store(CHANNEL, MESSAGE), max_place_failures=2)
+    for _ in range(2):
+        await panel.place(guild, channel)
+    assert panel.failing_guilds() == {GUILD}
+
+    channel.send = AsyncMock(return_value=sent)
+    assert await panel.place(guild, channel) is not None
+    assert panel.failing_guilds() == set()
+
+
+@pytest.mark.asyncio
+async def test_an_operator_refresh_clears_the_failure_pause():
+    """place_or_refresh edits in place when the panel is already there, so it
+    never reaches the send that would clear the count."""
+    channel, _sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, MESSAGE)
+    panel = _panel(_bot(guild), store, max_place_failures=1)
+    channel.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "nope"))
+    await panel.place(guild, channel)
+    assert panel.failing_guilds() == {GUILD}
+
+    await panel.place_or_refresh(guild, channel)
+    assert panel.failing_guilds() == set()
+
+
+# ── the replaced panel's delete ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_transient_delete_failure_is_retried():
+    """The old panel's delete used to be one bare ``pass``. A live orphan keeps
+    working — persistent views route by custom_id — so it is worth retrying."""
+    channel, sent = _channel()
+    guild = _guild(channel)
+    old = channel.get_partial_message.return_value
+    old.delete = AsyncMock(
+        side_effect=[discord.HTTPException(MagicMock(), "503"), None]
+    )
+    panel = _panel(_bot(guild), _Store(CHANNEL, 999))
+
+    with patch("bot_modules.core.sticky.asyncio.sleep", new=AsyncMock()):
+        assert await panel.place(guild, channel) is sent
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+    assert old.delete.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_old_panel_is_not_retried():
+    """NotFound is the ordinary case (a member removed it by hand)."""
+    channel, sent = _channel()
+    guild = _guild(channel)
+    old = channel.get_partial_message.return_value
+    old.delete = AsyncMock(side_effect=discord.NotFound(MagicMock(), "gone"))
+    panel = _panel(_bot(guild), _Store(CHANNEL, 999))
+
+    assert await panel.place(guild, channel) is sent
+    assert old.delete.await_count == 1
+    assert not panel._orphan_tasks
+
+
+# ── channel deletion ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_on_channel_delete_clears_the_panel_ids():
+    channel, _sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, MESSAGE)
+    panel = _panel(_bot(guild), store)
+    panel.set_known_guilds({GUILD})
+
+    deleted = MagicMock(spec=discord.TextChannel)
+    deleted.id = CHANNEL
+    deleted.guild = guild
+    await panel.on_channel_delete(deleted)
+
+    assert store.ids == (0, 0)
+    assert panel._known == set()
+
+
+@pytest.mark.asyncio
+async def test_on_channel_delete_ignores_some_other_channel():
+    channel, _sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, MESSAGE)
+    panel = _panel(_bot(guild), store)
+
+    other = MagicMock(spec=discord.TextChannel)
+    other.id = 4242
+    other.guild = guild
+    await panel.on_channel_delete(other)
+
+    assert store.ids == (CHANNEL, MESSAGE)
+
+
+# ── refresh: repost vs retire ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_refresh_can_retire_a_deleted_panel_instead_of_reposting():
+    """What the economy leaderboard's hourly loop wants: deleting the message
+    is how staff retire that panel, so a 404 must clear the ids rather than
+    bring it back."""
+    channel, _sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, MESSAGE)
+    panel = _panel(_bot(guild), store)
+    channel.get_partial_message.return_value.edit = AsyncMock(
+        side_effect=discord.NotFound(MagicMock(), "gone")
+    )
+
+    assert await panel.refresh(GUILD, repost_if_missing=False) is False
+    assert store.ids == (0, 0)
+    assert channel.send.await_count == 0
+
+
+# ── burial ceiling ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_max_burial_reposts_even_if_the_channel_never_falls_quiet():
+    """The debounce is purely trailing-edge, so a conversation with no gap
+    longer than ``delay`` leaves the panel buried for its whole duration.
+    Off by default; this covers the opt-in ceiling."""
+    channel, sent = _channel()
+    guild = _guild(channel)
+    panel = _panel(
+        _bot(guild), _Store(CHANNEL, 111), delay=0.05, max_burial=0.05
+    )
+
+    async def _send(*_args, **_kwargs):
+        channel.last_message_id = MESSAGE
+        return sent
+
+    channel.send = AsyncMock(side_effect=_send)
+
+    # Chat that never pauses for the debounce: 12 messages at delay/4.
+    for message_id in range(5000, 5012):
+        channel.last_message_id = message_id
+        await panel.on_message(_message(message_id=message_id))
+        await asyncio.sleep(0.05 / 4)
+    await asyncio.sleep(0.15)
+    panel.cancel_all()
+
+    assert channel.send.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_without_max_burial_unbroken_chat_never_reposts():
+    """The default stays uncapped — a timing change for every live panel is not
+    something this pass gets to make silently."""
+    channel, sent = _channel()
+    guild = _guild(channel)
+    panel = _panel(_bot(guild), _Store(CHANNEL, 111), delay=0.05)
+    channel.send = AsyncMock(return_value=sent)
+
+    for message_id in range(5000, 5012):
+        channel.last_message_id = message_id
+        await panel.on_message(_message(message_id=message_id))
+        await asyncio.sleep(0.05 / 4)
+    panel.cancel_all()
+
+    assert channel.send.await_count == 0
+
+
+# ── target types ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_thread_is_refused_by_default():
+    """The auction card's channel warning relies on this: threads stay out of
+    the default set, so widening it for one feature can't change another's."""
+    thread = MagicMock(spec=discord.Thread)
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = GUILD
+    guild.get_channel_or_thread.return_value = thread
+    panel = _panel(_bot(guild), _Store(CHANNEL, MESSAGE))
+    assert await panel.refresh(GUILD) is False
+
+
+@pytest.mark.asyncio
+async def test_a_thread_is_accepted_when_the_panel_opts_in():
+    """What the guess prompt needs — its channel may be a thread or the text
+    view of a voice channel."""
+    thread = MagicMock(spec=discord.Thread)
+    thread.id = CHANNEL
+    edited = MagicMock()
+    edited.edit = AsyncMock()
+    thread.get_partial_message = MagicMock(return_value=edited)
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = GUILD
+    guild.get_channel_or_thread.return_value = thread
+    panel = _panel(
+        _bot(guild),
+        _Store(CHANNEL, MESSAGE),
+        target_types=(discord.TextChannel, discord.VoiceChannel, discord.Thread),
+    )
+    assert await panel.refresh(GUILD) is True
+    edited.edit.assert_awaited_once()

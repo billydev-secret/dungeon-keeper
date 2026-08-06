@@ -480,10 +480,6 @@ def _patch_accents():
             "bot_modules.cogs.economy_cog.resolve_accent_color",
             new=AsyncMock(return_value=discord.Color(0x123456)),
         ),
-        patch(
-            "bot_modules.services.economy_loop.resolve_accent_color",
-            new=AsyncMock(return_value=discord.Color(0x123456)),
-        ),
     ):
         yield
 
@@ -500,6 +496,12 @@ def _channel(channel_id: int) -> MagicMock:
     ch.mention = f"<#{channel_id}>"
     ch.send = AsyncMock(return_value=MagicMock(id=8888))
     ch.fetch_message = AsyncMock()
+    # core.sticky edits and deletes through a partial message — one REST call
+    # instead of fetch + edit.
+    partial = MagicMock()
+    partial.edit = AsyncMock()
+    partial.delete = AsyncMock()
+    ch.get_partial_message = MagicMock(return_value=partial)
     return ch
 
 
@@ -572,19 +574,24 @@ async def test_post_leaderboard_refreshes_in_place(ctx, db):
 # ── hourly loop refresh ─────────────────────────────────────────────────────
 
 
-def _loop_bot(guild) -> MagicMock:
+def _loop_world(ctx, guild):
+    """A bot whose ``get_cog`` returns a real EconomyCog.
+
+    ``run_guild_leaderboard`` delegates to that cog's ``StickyPanel`` now, so
+    there is one renderer and one per-guild lock shared with the sticky repost
+    and the dashboard poster — rather than the second hand-rolled ``refresh``
+    this used to be (2026-08-06 review, F9).
+    """
+    from bot_modules.cogs.economy_cog import EconomyCog
+
     bot = MagicMock()
     bot.get_guild = MagicMock(return_value=guild)
-    return bot
+    cog = EconomyCog(bot, ctx)
+    bot.get_cog = MagicMock(return_value=cog)
+    return bot, cog
 
 
-@pytest.mark.asyncio
-async def test_loop_refresh_edits_panel_in_place(db):
-    channel = _channel(CHANNEL_ID)
-    message = MagicMock()
-    message.edit = AsyncMock()
-    channel.fetch_message.return_value = message
-    guild = FakeGuild(id=GUILD_ID, channels={CHANNEL_ID: channel})
+def _seed_panel(db, *, message_id: int = 4444) -> None:
     with open_db(db) as conn:
         save_econ_settings(
             conn,
@@ -592,78 +599,87 @@ async def test_loop_refresh_edits_panel_in_place(db):
             {
                 "enabled": True,
                 "leaderboard_channel_id": CHANNEL_ID,
-                "leaderboard_message_id": 4444,
+                "leaderboard_message_id": message_id,
             },
         )
-        _credit(conn, 42, 30)
-
-    await run_guild_leaderboard(_loop_bot(guild), db, GUILD_ID, NOW)
-
-    embed = message.edit.await_args.kwargs["embed"]
-    top = next(f.value for f in embed.fields if "Top earners" in (f.name or ""))
-    assert top is not None and "30" in top
 
 
 @pytest.mark.asyncio
-async def test_loop_refresh_skips_without_panel(db):
+async def test_loop_refresh_edits_panel_in_place(db, ctx):
+    channel = _channel(CHANNEL_ID)
+    guild = FakeGuild(id=GUILD_ID, channels={CHANNEL_ID: channel})
+    _seed_panel(db)
+    with open_db(db) as conn:
+        _credit(conn, 42, 30)
+    bot, _cog = _loop_world(ctx, guild)
+
+    # The panel's build callback sources its own clock (which is why
+    # run_guild_leaderboard no longer takes now_ts seriously), so the ledger's
+    # week window has to be measured against the same one.
+    with patch("bot_modules.cogs.economy_cog.time.time", return_value=NOW):
+        await run_guild_leaderboard(bot, db, GUILD_ID, NOW)
+
+    partial = channel.get_partial_message.return_value
+    embed = partial.edit.await_args.kwargs["embed"]
+    top = next(f.value for f in embed.fields if "Top earners" in (f.name or ""))
+    assert top is not None and "30" in top
+    channel.send.assert_not_awaited()  # an edit never moves the panel
+
+
+@pytest.mark.asyncio
+async def test_loop_refresh_skips_without_panel(db, ctx):
     with open_db(db) as conn:
         save_econ_settings(conn, GUILD_ID, {"enabled": True})
-    bot = _loop_bot(FakeGuild(id=GUILD_ID))
+    channel = _channel(CHANNEL_ID)
+    guild = FakeGuild(id=GUILD_ID, channels={CHANNEL_ID: channel})
+    bot, _cog = _loop_world(ctx, guild)
 
     await run_guild_leaderboard(bot, db, GUILD_ID, NOW)
 
-    bot.get_guild.assert_not_called()  # bails before touching the gateway
+    # load_ids reports (0, 0) for an unposted panel, so nothing is issued.
+    channel.get_partial_message.assert_not_called()
+    channel.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_loop_refresh_clears_ids_when_panel_deleted(db):
+async def test_loop_refresh_clears_ids_when_panel_deleted(db, ctx):
+    """Deleting the message is how staff retire *this* panel, so a 404 must
+    clear the ids rather than repost — which is why the loop passes
+    ``repost_if_missing=False`` (core's default heals instead)."""
     channel = _channel(CHANNEL_ID)
-    channel.fetch_message.side_effect = discord.NotFound(
+    channel.get_partial_message.return_value.edit.side_effect = discord.NotFound(
         MagicMock(status=404), "gone"
     )
     guild = FakeGuild(id=GUILD_ID, channels={CHANNEL_ID: channel})
-    with open_db(db) as conn:
-        save_econ_settings(
-            conn,
-            GUILD_ID,
-            {
-                "enabled": True,
-                "leaderboard_channel_id": CHANNEL_ID,
-                "leaderboard_message_id": 4444,
-            },
-        )
+    _seed_panel(db)
+    bot, _cog = _loop_world(ctx, guild)
 
-    await run_guild_leaderboard(_loop_bot(guild), db, GUILD_ID, NOW)
+    await run_guild_leaderboard(bot, db, GUILD_ID, NOW)
 
     with open_db(db) as conn:
         settings = load_econ_settings(conn, GUILD_ID)
     assert settings.leaderboard_channel_id == 0
     assert settings.leaderboard_message_id == 0
+    channel.send.assert_not_awaited()  # retired, not resurrected
 
 
 @pytest.mark.asyncio
-async def test_loop_refresh_keeps_ids_on_transient_error(db):
+async def test_loop_refresh_keeps_ids_on_transient_error(db, ctx):
     channel = _channel(CHANNEL_ID)
-    channel.fetch_message.side_effect = discord.HTTPException(
-        MagicMock(status=500), "boom"
+    channel.get_partial_message.return_value.edit.side_effect = (
+        discord.HTTPException(MagicMock(status=500), "boom")
     )
     guild = FakeGuild(id=GUILD_ID, channels={CHANNEL_ID: channel})
-    with open_db(db) as conn:
-        save_econ_settings(
-            conn,
-            GUILD_ID,
-            {
-                "enabled": True,
-                "leaderboard_channel_id": CHANNEL_ID,
-                "leaderboard_message_id": 4444,
-            },
-        )
+    _seed_panel(db)
+    bot, cog = _loop_world(ctx, guild)
 
-    await run_guild_leaderboard(_loop_bot(guild), db, GUILD_ID, NOW)
+    await run_guild_leaderboard(bot, db, GUILD_ID, NOW)
 
     with open_db(db) as conn:
         settings = load_econ_settings(conn, GUILD_ID)
     assert settings.leaderboard_message_id == 4444  # untouched, retried next tick
+    # And the guild is queued, so a caller with a loop can re-apply the edit.
+    assert cog.leaderboard_panel.take_retries() == {GUILD_ID}
 
 
 def test_embed_auto_goal_tier_marker():
@@ -832,59 +848,42 @@ def test_dashboard_progress_edit_marks_guild_dirty(db):
 
 
 @pytest.mark.asyncio
-async def test_live_tick_refreshes_dirty_guild_with_debounce(db):
+async def test_live_tick_refreshes_dirty_guild_with_debounce(db, ctx):
     channel = _channel(CHANNEL_ID)
-    message = MagicMock()
-    message.edit = AsyncMock()
-    channel.fetch_message.return_value = message
     guild = FakeGuild(id=GUILD_ID, channels={CHANNEL_ID: channel})
-    bot = _loop_bot(guild)
-    with open_db(db) as conn:
-        save_econ_settings(
-            conn,
-            GUILD_ID,
-            {
-                "enabled": True,
-                "leaderboard_channel_id": CHANNEL_ID,
-                "leaderboard_message_id": 4444,
-            },
-        )
+    _seed_panel(db)
+    bot, _cog = _loop_world(ctx, guild)
+    edit = channel.get_partial_message.return_value.edit
     live_signal.reset()
 
     await run_live_tick(bot, db, NOW)  # nothing dirty → no edit
-    message.edit.assert_not_awaited()
+    edit.assert_not_awaited()
 
     live_signal.mark_dirty(GUILD_ID)
     await run_live_tick(bot, db, NOW)
-    message.edit.assert_awaited_once()
+    edit.assert_awaited_once()
 
     live_signal.mark_dirty(GUILD_ID)  # burst right after the repaint
     await run_live_tick(bot, db, NOW + 30)
-    message.edit.assert_awaited_once()  # debounce holds it back
+    edit.assert_awaited_once()  # debounce holds it back
 
     await run_live_tick(bot, db, NOW + 130)
-    assert message.edit.await_count == 2  # lands once the cooldown is up
+    assert edit.await_count == 2  # lands once the cooldown is up
 
 
 @pytest.mark.asyncio
-async def test_live_tick_survives_refresh_failure(db):
+async def test_live_tick_survives_refresh_failure(db, ctx):
     channel = _channel(CHANNEL_ID)
-    channel.fetch_message.side_effect = RuntimeError("gateway hiccup")
+    channel.get_partial_message.return_value.edit.side_effect = RuntimeError(
+        "gateway hiccup"
+    )
     guild = FakeGuild(id=GUILD_ID, channels={CHANNEL_ID: channel})
-    with open_db(db) as conn:
-        save_econ_settings(
-            conn,
-            GUILD_ID,
-            {
-                "enabled": True,
-                "leaderboard_channel_id": CHANNEL_ID,
-                "leaderboard_message_id": 4444,
-            },
-        )
+    _seed_panel(db)
+    bot, _cog = _loop_world(ctx, guild)
     live_signal.reset()
     live_signal.mark_dirty(GUILD_ID)
 
-    await run_live_tick(_loop_bot(guild), db, NOW)  # must not raise
+    await run_live_tick(bot, db, NOW)  # must not raise
 
     assert live_signal.pending_count() == 0  # consumed; hourly tick backstops
 

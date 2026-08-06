@@ -1,5 +1,13 @@
 # Sticky / persistent panel machinery — cross-cutting review (2026-08-06)
 
+> **All ten findings below were fixed the same day**, in the commit that follows
+> this doc. What shipped for each is recorded under its own heading, and the
+> mechanism-level summary is in
+> `docs/plans/sticky-panel-extraction.md` → "What the 2026-08-06 cross-cutting
+> review changed". The findings text is left as written so the evidence and the
+> reasoning survive the fix; F8 is the one whose fix ships **off by default**,
+> for the reason given there.
+
 **Lane:** `src/bot_modules/core/sticky.py` reviewed as a *mechanism*, plus its
 nine callers. The 2026-08 staged review went feature-by-feature, so each bundle
 saw only its own caller; this pass looks at what the callers do to each other.
@@ -161,6 +169,17 @@ when two panels share a channel it reports **only the last one** in its `named`
 tuple (the casino hub). A mod warned about a shared channel is told about one of
 the two residents.
 
+### Fixed
+
+`core/sticky.py` keeps a process-wide `was_placed` registry of ids some panel
+placed, and `on_message` drops them (fix 1 above, measured 26 -> 2 sends).
+`post_bounty_panel` refuses a channel another bot-chasing panel holds; not
+applied to the casino's own channel setting, which belongs to its feature.
+`sticky_panel_channels` merges residents instead of overwriting. Regression:
+`test_two_restick_on_bot_panels_in_one_channel_settle` — verified failing at 26
+sends with the registry check disabled, plus
+`test_an_opted_in_panel_still_chases_a_real_bot_post` as the over-fix guard.
+
 ### Test to land with it
 
 `tests/test_core_sticky.py` has 37 tests and no multi-panel scenario — every one
@@ -224,6 +243,18 @@ divergent copy.
 
 ---
 
+**Fixed** — migrated, not patched. `guess` now holds a `StickyPanel` with
+`target_types=(TextChannel, VoiceChannel, Thread)`, a **per-panel** widening:
+doing it globally would have invalidated the auction card's thread warning, which
+relies on threads staying out of the default set. New `guess_prompt_channel_id`
+stores where the prompt actually is, so the delete aims at its real channel
+rather than whatever the caller passed. `_repost_prompt` survives as a one-line
+delegate because four call sites and three test modules speak it. Cog tests
+shrank to the callbacks plus one forwarding assertion, per CLAUDE.md — the
+placement semantics are covered once in `test_core_sticky.py`.
+
+---
+
 <a name="f3"></a>
 ## F3 — `guess_cog.on_message` does an uncached DB read per message · Medium
 
@@ -245,6 +276,13 @@ belongs in the same sentence as those two.
 `guild_id → (expiry, channel_id)` TTL cache the economy cog uses for
 `_photo_opts` (`cogs/economy_cog.py:1297-1300`), and check
 `message.channel.id` against the cached value before touching the DB.
+
+---
+
+**Fixed** by the same migration: `on_message` is now one call into the shared
+panel, which has the 300 s TTL cache and the known-guilds fast path.
+`_prompt_guilds()` publishes the set at `cog_load`. Regression:
+`test_on_message_no_longer_reads_the_db_per_message`.
 
 ---
 
@@ -288,6 +326,16 @@ specific to the restick path.
 
 ---
 
+**Fixed** — all three points. `_note_failure` counts consecutive failures and
+logs with the guild id and `exc_info`; at `max_place_failures` (default 5) it
+logs once at `error` and `schedule_restick` stops arming. `failing_guilds()` is
+readable state for a dashboard, deliberately not a draining queue. An explicit
+`place`/`place_or_refresh` retries and clears the count, so re-posting from the
+dashboard is the recovery. Three tests cover the pause, the
+clear-on-successful-place, and the clear-on-operator-refresh.
+
+---
+
 <a name="f5"></a>
 ## F5 — `take_retries()` is drained by one caller in nine · Low
 
@@ -313,6 +361,13 @@ nobody drains.
 
 ---
 
+**Fixed** — `_pen_pals_loop` now calls `_retry_failed_panel_edits` each tick,
+and the dead `except discord.HTTPException` around `refresh` is gone (`refresh`
+catches it internally). Three tests, including one that a single failing guild
+does not abort the rest of the batch.
+
+---
+
 <a name="f6"></a>
 ## F6 — The economy cog never publishes `set_known_guilds` · Low
 
@@ -335,6 +390,17 @@ the doc claim should not be trusted as written.
 re-publish from `_save_panel_ids` / `_save_bounty_panel_ids` (the pattern
 `dm_perms._publish_panel_guilds` already uses). Optionally share one
 `load_econ_settings` result across the five `load_ids` callbacks.
+
+---
+
+**Fixed** — `_publish_panel_guilds()` at `cog_load`, one query for all four
+panels rather than five `load_econ_settings` calls. The **auction card stays
+unpublished on purpose**, which is the interesting part: it is posted directly
+rather than through `place`, so nothing calls `_remember` to add its guild, and
+`auction_views` calls `forget` right after posting — a published set would
+*discard* the guild and leave the card un-sticky. Pinned by
+`test_publishing_panel_guilds_leaves_the_auction_card_unpublished`. The plan
+doc's "every migrated cog now publishes it" claim is corrected.
 
 ---
 
@@ -373,6 +439,13 @@ indistinguishable.
 
 ---
 
+**Fixed** — `_delete_old` splits the two cases: `NotFound` returns quietly,
+anything else retries with backoff on a detached task and logs if it never
+succeeds. Deliberately **not** the queue the finding suggested: a queue an owner
+has to drain is what F5 was.
+
+---
+
 <a name="f8"></a>
 ## F8 — No starvation ceiling on the trailing-edge debounce · Info
 
@@ -391,6 +464,17 @@ user-visible timing change. Recorded here only because the trade has no cap: the
 worst case is unbounded, not `hold_max`-bounded like the `hold` hook is
 (`core/sticky.py:493-513`). If it ever bites, the fix is a "re-stick anyway after
 N seconds buried" ceiling mirroring `hold_max`.
+
+---
+
+**Fixed, off by default.** `max_burial` re-sticks once the panel has been
+buried that long regardless of whether the channel falls quiet — implemented in
+`schedule_restick`, which stops *re-arming* past the ceiling rather than letting
+`_delayed_restick` decide (the problem is that the task is cancelled before it
+ever runs). It defaults to `None`, i.e. exactly today's behaviour, and is wired
+to no caller: a timing change across all ten live panels is not a change a review
+pass should make silently. Both directions are tested. Say the word and it goes
+on for a specific panel.
 
 ---
 
@@ -431,6 +515,15 @@ than as a finding.
 
 ---
 
+**Fixed** — `refresh` gained `repost_if_missing`, and `run_guild_leaderboard` is
+now a delegate to `leaderboard_panel.refresh(guild_id, repost_if_missing=False)`.
+That preserves the retire-on-404 behaviour which justified the separate
+implementation, while picking up the single REST call and the placement lock;
+~70 lines of parallel renderer gone. The suspected-benign
+`refresh`-outside-the-lock note stands as written — it was not changed.
+
+---
+
 <a name="f10"></a>
 ## F10 — No sticky-id cleanup on channel delete or guild removal · Info
 
@@ -453,6 +546,13 @@ fresh, so it heals rather than duplicating.
 `forget(guild_id)` and `save_ids(guild_id, 0, 0)` when the deleted channel
 matches a panel's stored channel. Worth it mainly so the dashboard stops lying
 about panel state.
+
+---
+
+**Fixed** — `StickyPanel.on_channel_delete` clears the ids and cancels any
+pending restick, forwarded from `on_guild_channel_delete` in all six cogs that
+own a sticky panel (economy forwards to all five of its panels; voice master and
+pen pals fold it into their existing listeners).
 
 ---
 

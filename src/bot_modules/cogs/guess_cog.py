@@ -12,7 +12,7 @@ import time
 import urllib.request
 from pathlib import Path
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse, urlunparse
 
 import discord
@@ -23,6 +23,7 @@ from discord.ext import commands, tasks
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
+from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.duels.filters import contains_disallowed_content
 from bot_modules.services.guess_models import BoundingBox, GuessConfig, GuessGuess, GuessRound
 from bot_modules.services import no_contact_service
@@ -1454,34 +1455,30 @@ async def _repost_prompt(
     channel: discord.TextChannel | discord.VoiceChannel | discord.Thread,
     guild_id: int,
 ) -> None:
-    """Delete the previous prompt (if any), post a fresh one, persist its ID.
+    """Move the prompt to the bottom of ``channel``.
 
-    Best-effort: missing/forbidden prior messages are tolerated. Any failure
-    posting the new prompt logs and falls through — the channel just won't
-    have a prompt until the next attempt.
+    Delegates to the cog's ``StickyPanel``. Before that (2026-08-06) this was
+    the last hand-rolled copy of the sticky placer and it still carried both
+    bugs the shared module exists to prevent:
+
+    * it **deleted the old prompt before posting the new one**, so a failed
+      send left the channel with no prompt at all and the stored id naming a
+      message that no longer existed — gone until someone reposted by hand;
+    * the placement was **not shielded**, and ``on_message`` cancel-and-rearmed
+      on every message, so a cancel could land on the task parked in ``send()``.
+      Discord has accepted the message by then but the id is never recorded:
+      an orphaned prompt with live buttons, and a stored id frozen on the
+      already-deleted one. That is the mechanism of the 2026-07-26 casino storm,
+      fixed in ``6fb53e73`` for every migrated caller.
+
+    Kept as a module function because four call sites (and three test modules)
+    already speak it: after posting a round, after a confession, and from the
+    dashboard's panel poster.
     """
-    db_path = bot.ctx.db_path
-    config = await asyncio.to_thread(_load_config, db_path, guild_id)
-
-    if config.prompt_message_id:
-        try:
-            old = await channel.fetch_message(config.prompt_message_id)
-            await old.delete()
-        except (discord.NotFound, discord.Forbidden):
-            pass
-
-    accent = await resolve_accent_color(db_path, channel.guild)
-    try:
-        new_msg = await channel.send(
-            embed=_prompt_embed(color=accent), view=GuessPromptView(bot)
-        )
-    except discord.HTTPException:
-        log.exception("guess: failed to post channel prompt in guild %d", guild_id)
+    cog = cast("GuessCog | None", bot.get_cog("GuessCog"))
+    if cog is None:  # cog unloaded mid-flight
         return
-
-    await asyncio.to_thread(
-        _do_set_config, db_path, guild_id, "guess_prompt_message_id", str(new_msg.id)
-    )
+    await cog.prompt_panel.place(channel.guild, channel)
 
 
 class ConfessionPreviewView(discord.ui.View):
@@ -1731,9 +1728,72 @@ class GuessCog(commands.Cog):
 
     def __init__(self, bot: "Bot") -> None:
         self.bot = bot
-        # Per-guild debounce tasks for the sticky channel prompt re-poster.
-        self._pending_prompt_reposts: dict[int, asyncio.Task[None]] = {}
+        # The channel-bottom Submit/Help prompt, on the shared machinery in
+        # core.sticky (per-guild lock, TTL id cache, known-guilds fast path,
+        # post-before-delete, shielded placement). This cog only says where the
+        # ids live and what the prompt looks like.
+        #
+        # target_types is the reason this migration waited: the Guess channel is
+        # allowed to be a thread or a voice channel's text view, and the shared
+        # placer only accepted TextChannel. It is per-panel rather than global
+        # because the auction card's channel warning relies on threads staying
+        # out of the default set.
+        self.prompt_panel = StickyPanel(
+            "guess prompt",
+            bot,
+            load_ids=self._panel_ids,
+            save_ids=self._save_panel_ids,
+            build=self._build_prompt_panel,
+            # Preserves the hand-rolled debounce's timing exactly rather than
+            # quietly moving this panel to core's 6s default.
+            delay=PROMPT_REPOST_DELAY_SEC,
+            target_types=(
+                discord.TextChannel, discord.VoiceChannel, discord.Thread
+            ),
+        )
         super().__init__()
+
+    # ── the prompt's sticky callbacks (core.sticky) ───────────────────────
+
+    def _panel_ids(self, guild_id: int) -> tuple[int, int]:
+        """Where the prompt actually is, or (0, 0) for "not posted".
+
+        Reads the prompt's own channel rather than ``guess_channel_id`` so the
+        placer's delete aims at the message's real channel. An admin repointing
+        the Guess channel therefore leaves the prompt where it is until the next
+        round or an explicit repost moves it, instead of orphaning it.
+        """
+        with self.bot.ctx.open_db() as conn:
+            config = get_guess_config(conn, guild_id)
+        return config.prompt_channel_id, config.prompt_message_id
+
+    def _save_panel_ids(
+        self, guild_id: int, channel_id: int, message_id: int
+    ) -> None:
+        with self.bot.ctx.open_db() as conn:
+            set_guess_config_value(
+                conn, guild_id, "guess_prompt_channel_id", str(channel_id)
+            )
+            set_guess_config_value(
+                conn, guild_id, "guess_prompt_message_id", str(message_id)
+            )
+
+    async def _build_prompt_panel(self, guild: discord.Guild) -> PanelContent:
+        accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
+        return PanelContent(
+            embed=_prompt_embed(color=accent), view=GuessPromptView(self.bot)
+        )
+
+    def _prompt_guilds(self) -> set[int]:
+        """Guilds with a Guess channel set — the only ones whose messages can
+        move a prompt. Without this the listener paid a DB read for every
+        message in every guild (2026-08-06 review, F3)."""
+        with self.bot.ctx.open_db() as conn:
+            rows = conn.execute(
+                "SELECT guild_id FROM config WHERE key = 'guess_channel_id'"
+                " AND value NOT IN ('', '0')"
+            ).fetchall()
+        return {int(r[0]) for r in rows}
 
     async def cog_load(self) -> None:
         """Re-register persistent GameViews for unsolved rounds (capped) and
@@ -1750,16 +1810,18 @@ class GuessCog(commands.Cog):
                 GameView(self.bot, rid, solved=False, guess_count=count)
             )
         self.bot.add_view(GuessPromptView(self.bot))
+        # Publish the panel-guild set so the on_message listener rejects the
+        # overwhelming majority of messages with a set lookup, not a DB read.
+        self.prompt_panel.set_known_guilds(
+            await asyncio.to_thread(self._prompt_guilds)
+        )
         log.info("guess: re-registered %d persistent GameViews (cap %d)",
                  len(round_ids), _COG_LOAD_VIEW_CAP)
         self._age_out_loop.start()
 
     async def cog_unload(self) -> None:
         self._age_out_loop.cancel()
-        for task in self._pending_prompt_reposts.values():
-            if not task.done():
-                task.cancel()
-        self._pending_prompt_reposts.clear()
+        self.prompt_panel.cancel_all()
 
     @tasks.loop(hours=24)
     async def _age_out_loop(self) -> None:
@@ -1774,41 +1836,21 @@ class GuessCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        """Sticky-prompt re-poster: schedule a debounced repost when activity
-        lands in the configured guess channel. Bot's own messages and DMs are
-        ignored. The prompt itself is a bot message — ignoring those prevents
-        a feedback loop."""
-        if message.author.bot or message.guild is None:
-            return
-        db_path = self.bot.ctx.db_path
-        config = await asyncio.to_thread(_load_config, db_path, message.guild.id)
-        if config.guess_channel_id == 0 or message.channel.id != config.guess_channel_id:
-            return
-        if not isinstance(
-            message.channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
-        ):
-            return
+        """Keep the prompt at the bottom of the Guess channel.
 
-        existing = self._pending_prompt_reposts.get(message.guild.id)
-        if existing and not existing.done():
-            existing.cancel()
-        self._pending_prompt_reposts[message.guild.id] = asyncio.create_task(
-            self._delayed_repost_prompt(message.guild.id, message.channel)
-        )
+        One line now: the debounce, the per-guild lock, the id cache and the
+        known-guilds fast path all live in ``core.sticky``. This used to open a
+        fresh DB connection for every message in every guild before it had even
+        checked the channel.
+        """
+        await self.prompt_panel.on_message(message)
 
-    async def _delayed_repost_prompt(
-        self,
-        guild_id: int,
-        channel: discord.TextChannel | discord.VoiceChannel | discord.Thread,
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _forget_deleted_prompt_channel(
+        self, channel: discord.abc.GuildChannel
     ) -> None:
-        try:
-            await asyncio.sleep(PROMPT_REPOST_DELAY_SEC)
-        except asyncio.CancelledError:
-            return
-        try:
-            await _repost_prompt(self.bot, channel, guild_id)
-        except Exception:
-            log.exception("guess: sticky prompt repost failed for guild %d", guild_id)
+        """Clear the prompt's ids if its channel was deleted."""
+        await self.prompt_panel.on_channel_delete(channel)
 
     @commands.Cog.listener()
     async def on_member_update(
@@ -2232,12 +2274,14 @@ class GuessCog(commands.Cog):
         config = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, guild.id)
         if config.guess_channel_id == 0:
             return None
-        target = guild.get_channel(config.guess_channel_id)
+        target = guild.get_channel_or_thread(config.guess_channel_id)
         if not isinstance(
             target, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
         ):
             return None
-        await _repost_prompt(self.bot, target, guild.id)
+        # place_or_refresh, not place: re-running this after a re-brand should
+        # repaint the prompt where it is rather than hop it to the bottom.
+        await self.prompt_panel.place_or_refresh(guild, target)
         return target
 
 
