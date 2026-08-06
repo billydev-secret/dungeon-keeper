@@ -103,9 +103,13 @@ Re-checked 2026-08-06:
   snapshot/restore branch **merged** as `81035491`, and three of the four
   other branches merged too (jail `cdb73a17`, pen-pals `011c6a2f`,
   confessions `78053cf4`). Only the quest-ideas branch is still unmerged.
-- **Rollback SQL + `Discord Messages/` relocation** — still open; all
-  four `.sql` files and the export dir are still untracked in the
-  production checkout root.
+- ~~**Rollback SQL + `Discord Messages/` relocation**~~ — **done
+  2026-08-06.** Both moved out of the production checkout root to
+  `/home/ben/discord-bots/archive/` (`db-rollbacks/` for the four `.sql`
+  files, `discord-export-billy/` for the 100 MB export), so the root is
+  clean and `git status` is empty. Moved rather than deleted: the
+  rollback scripts are still the only undo path for the July economy
+  retune, which is why they were kept on disk in the first place.
 
 ## House patterns (cite these in future reviews)
 
