@@ -129,6 +129,9 @@ def purge_user_data(
         "bios",
         "bio_answers",
         "bio_field_values",
+        # Guess consent evidence. Kept through an optout (the record that
+        # consent was held is the point), but a full erasure clears it.
+        "guess_consents",
     ):
         _delete(
             conn,

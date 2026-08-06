@@ -209,3 +209,49 @@ async def test_optout_handles_forbidden():
 
     sent = interaction.followup.send.call_args.args[0]
     assert "permission" in sent.lower()
+
+
+@pytest.mark.asyncio
+async def test_consent_confirm_writes_the_evidence_row(sync_db_path):
+    """The one wiring assertion: the view must actually persist the Art 7(1)
+    record. Repo-level behaviour is covered in tests/unit/test_guess_repo.py —
+    what can only break here is the view not calling it at all."""
+    from bot_modules.cogs.guess_cog import GuessOptinConsentView
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.guess_repo import get_guess_consent
+
+    role = FakeRole(id=GUESS_ROLE_ID)
+    member = FakeMember(id=1001, roles=[])
+    view = GuessOptinConsentView(member, role, sync_db_path)
+    interaction = MagicMock()
+    interaction.guild_id = GUILD_ID
+    interaction.response.edit_message = AsyncMock()
+
+    await view.confirm.callback(interaction)
+
+    with open_db(sync_db_path) as conn:
+        row = get_guess_consent(conn, guild_id=GUILD_ID, user_id=1001)
+    assert row is not None, "consent view granted the role but recorded nothing"
+    assert row["withdrawn_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_no_consent_row_when_the_role_grant_fails(sync_db_path):
+    """A consent record for someone who never got the role would misrepresent
+    what happened — the write is deliberately after the grant succeeds."""
+    from bot_modules.cogs.guess_cog import GuessOptinConsentView
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.guess_repo import get_guess_consent
+
+    role = FakeRole(id=GUESS_ROLE_ID)
+    member = FakeMember(id=1001, roles=[])
+    member.add_roles = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "no"))
+    view = GuessOptinConsentView(member, role, sync_db_path)
+    interaction = MagicMock()
+    interaction.guild_id = GUILD_ID
+    interaction.response.edit_message = AsyncMock()
+
+    await view.confirm.callback(interaction)
+
+    with open_db(sync_db_path) as conn:
+        assert get_guess_consent(conn, guild_id=GUILD_ID, user_id=1001) is None

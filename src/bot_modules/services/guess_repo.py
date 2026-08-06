@@ -468,3 +468,67 @@ def flag_user_open_rounds_optout(
         (guild_id, user_id),
     )
     return cur.rowcount or 0
+
+
+# Bump when the Guess consent disclosure changes materially (what is stored,
+# for how long, or who can see it). Rows carrying an older version recorded
+# agreement to wording the member never saw — which is the whole point of
+# storing it, and is not reconstructable after the fact.
+GUESS_DISCLOSURE_VERSION = 1
+
+
+def record_guess_consent(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: int,
+    user_id: int,
+    consented_at: float,
+    disclosure_version: int = GUESS_DISCLOSURE_VERSION,
+) -> None:
+    """Record that *user_id* agreed to the Guess disclosure (GDPR Art 7(1)).
+
+    Art 7(1) puts the burden on the controller to *demonstrate* consent. The
+    role alone shows only that someone holds it — not what they were shown or
+    when — so the evidence has to be written at the moment of the click.
+    """
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO guess_consents
+            (guild_id, user_id, consented_at, disclosure_version, withdrawn_at)
+        VALUES (?, ?, ?, ?, NULL)
+        """,
+        (guild_id, user_id, consented_at, disclosure_version),
+    )
+
+
+def withdraw_guess_consent(
+    conn: sqlite3.Connection, *, guild_id: int, user_id: int, withdrawn_at: float
+) -> int:
+    """Stamp the member's outstanding consent rows as withdrawn.
+
+    The rows are stamped, not deleted: Art 7(3) makes withdrawal as easy as
+    giving consent, but the record that consent *was* held — and for how long —
+    is what makes past processing defensible. A full erasure removes them.
+    """
+    cur = conn.execute(
+        """
+        UPDATE guess_consents SET withdrawn_at = ?
+        WHERE guild_id = ? AND user_id = ? AND withdrawn_at IS NULL
+        """,
+        (withdrawn_at, guild_id, user_id),
+    )
+    return cur.rowcount or 0
+
+
+def get_guess_consent(
+    conn: sqlite3.Connection, *, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    """Most recent consent row for the member, withdrawn or not."""
+    return conn.execute(
+        """
+        SELECT * FROM guess_consents
+        WHERE guild_id = ? AND user_id = ?
+        ORDER BY consented_at DESC LIMIT 1
+        """,
+        (guild_id, user_id),
+    ).fetchone()
