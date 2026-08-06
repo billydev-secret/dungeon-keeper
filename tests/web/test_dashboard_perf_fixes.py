@@ -499,6 +499,80 @@ def test_advisor_builds_its_context_off_the_event_loop(
     assert seen == [False], "advisor context was built on the event loop"
 
 
+def test_advisor_config_tools_run_off_the_event_loop(open_client, fake_ctx, monkeypatch):
+    """The residue of B-PERF5: the route's ``fetch_settings``/``fetch_gaps``
+    lambdas are handed to the service and called back from inside the tool
+    loop, so wrapping them at the route was impossible — ``_run_tool`` is what
+    had to become awaitable. Proves the whole wiring, not just the service."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from anthropic.types import TextBlock, ToolUseBlock
+
+    from bot_modules.services import advisor_context, advisor_gaps, advisor_service
+
+    with fake_ctx.open_db() as conn:
+        advisor_service.set_advisor_context_enabled(conn, True, fake_ctx.guild_id)
+
+    guild = MagicMock()
+    guild.get_member.return_value = MagicMock()  # a resolvable member
+    bot = MagicMock()
+    bot.get_guild.return_value = guild
+    fake_ctx.bot = bot
+
+    seen: dict[str, bool] = {}
+
+    monkeypatch.setattr(advisor_context, "can_see_config", lambda _m: True)
+    monkeypatch.setattr(advisor_context, "is_staff", lambda _m: False)
+    monkeypatch.setattr(advisor_context, "visible_text_channels", lambda *_a: [])
+    monkeypatch.setattr(
+        advisor_context, "build_asker_context", lambda *_a, **_kw: "server context"
+    )
+    def _probe(label: str, payload: str) -> str:
+        seen[label] = _on_loop()
+        return payload
+
+    monkeypatch.setattr(
+        advisor_context,
+        "fetch_feature_settings",
+        lambda *_a: _probe("fetch_settings", "daily_reward = 100"),
+    )
+    monkeypatch.setattr(
+        advisor_gaps, "fetch_setup_gaps", lambda *_a: _probe("fetch_gaps", "- no gaps")
+    )
+
+    def _resp(*blocks, stop_reason="end_turn"):
+        r = MagicMock()
+        r.content = list(blocks)
+        r.stop_reason = stop_reason
+        return r
+
+    client = MagicMock()
+    client.messages.create = AsyncMock(side_effect=[
+        _resp(
+            ToolUseBlock(
+                type="tool_use", id="t1", name="get_server_settings",
+                input={"feature": "economy"},
+            ),
+            ToolUseBlock(type="tool_use", id="t2", name="find_setup_gaps", input={}),
+            stop_reason="tool_use",
+        ),
+        _resp(TextBlock(type="text", text="Daily reward is 100.")),
+    ])
+    monkeypatch.setattr(advisor_service, "get_client", lambda: client)
+    monkeypatch.setattr(advisor_service, "load_manual_text", lambda *a, **k: "GUIDE")
+
+    try:
+        resp = open_client.post("/api/help/advisor", json={"question": "what's set up?"})
+    finally:
+        fake_ctx.bot = None
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["answer"] == "Daily reward is 100."
+    assert seen == {"fetch_settings": False, "fetch_gaps": False}, (
+        "an advisor config tool ran on the event loop"
+    )
+
+
 # ── B-SEC9 — avatar fetch is pinned to the validated address ─────────────
 #
 # Validating a hostname and then handing the *hostname* to httpx leaves a

@@ -21,6 +21,7 @@ rejects non-default ``temperature``/``top_p``/``top_k``).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -423,6 +424,16 @@ class AdvisorTools:
     ``propose_change(key, value)``, when present, validates + queues a change
     for human confirmation and returns the outcome as text; the surface owns
     the queued proposals and renders the Apply buttons.
+
+    **Contract: every callback is a plain (non-async) function.** All of them
+    open the DB and walk the guild cache, i.e. they block — and both surfaces
+    call the advisor from an event loop (the dashboard's uvicorn runs on the
+    *bot's* loop, so a blocking tool call stalls the Discord gateway).
+    ``_run_tool`` therefore dispatches each one through ``asyncio.to_thread``,
+    the same convention ``web_server/deps.run_query`` uses for route DB reads.
+    Keeping them sync means the off-loop hop lives in exactly one place instead
+    of being re-implemented by each surface; a coroutine function passed here is
+    a type error (the annotations below are sync-only, and pyright rejects it).
     """
 
     feature_keys: list[str]
@@ -555,19 +566,31 @@ def build_tools(tools: AdvisorTools) -> list[dict]:
     return defs
 
 
-def _run_tool(tools: AdvisorTools, name: str, tool_input: dict) -> str:
-    """Dispatch one tool call; every failure becomes model-readable text."""
+async def _run_tool(tools: AdvisorTools, name: str, tool_input: dict) -> str:
+    """Dispatch one tool call; every failure becomes model-readable text.
+
+    Every callback blocks (DB open + guild-cache walk), so each runs in a worker
+    thread via ``asyncio.to_thread`` — see ``AdvisorTools``. Awaited one at a
+    time by ``answer_advisor``, never gathered: the propose tools mutate the
+    surface's shared proposal list (dedupe, then a cap), so call order is part
+    of the behaviour.
+    """
     try:
         if name == "get_server_settings":
-            return tools.fetch_settings(str(tool_input.get("feature", "")))
+            return await asyncio.to_thread(
+                tools.fetch_settings, str(tool_input.get("feature", ""))
+            )
         if name == "find_setup_gaps" and tools.fetch_gaps is not None:
-            return tools.fetch_gaps()
+            return await asyncio.to_thread(tools.fetch_gaps)
         if name == "propose_config_change" and tools.propose_change is not None:
-            return tools.propose_change(
-                str(tool_input.get("key", "")), str(tool_input.get("value", ""))
+            return await asyncio.to_thread(
+                tools.propose_change,
+                str(tool_input.get("key", "")),
+                str(tool_input.get("value", "")),
             )
         if name == "propose_grant_role_change" and tools.propose_grant is not None:
-            return tools.propose_grant(
+            return await asyncio.to_thread(
+                tools.propose_grant,
                 str(tool_input.get("grant_name", "")),
                 str(tool_input.get("field", "")),
                 str(tool_input.get("value", "")),
@@ -642,17 +665,16 @@ async def answer_advisor(
             if not calls:
                 break
             messages.append({"role": "assistant", "content": resp.content})
-            messages.append({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": b.id,
-                        "content": _run_tool(tools, b.name, dict(b.input or {})),
-                    }
-                    for b in calls
-                ],
-            })
+            # Sequential, in the order the model asked for them — the propose
+            # tools have order-dependent side effects (see ``_run_tool``).
+            results: list[dict] = []
+            for b in calls:
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": b.id,
+                    "content": await _run_tool(tools, b.name, dict(b.input or {})),
+                })
+            messages.append({"role": "user", "content": results})
         text = "".join(
             b.text for b in (resp.content if resp else []) if isinstance(b, TextBlock)
         ).strip()
