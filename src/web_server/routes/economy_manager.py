@@ -498,6 +498,7 @@ async def list_income_sources(
                     "catcatch_coins_epic": settings.catcatch_coins_epic,
                     "catcatch_coins_mythic": settings.catcatch_coins_mythic,
                     "catcatch_coins_divine": settings.catcatch_coins_divine,
+                    "cat_catch_daily_cap": settings.cat_catch_daily_cap,
                     "xp_per_coin": settings.xp_per_coin,
                     "conversion_daily_cap": settings.conversion_daily_cap,
                 },

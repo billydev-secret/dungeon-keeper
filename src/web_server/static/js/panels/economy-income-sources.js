@@ -31,6 +31,7 @@ const FAUCET_FIELDS = [
   ["catcatch_coins_epic", "Cat Bot catch — epic tier (superior/trash/legendary)", 1000000],
   ["catcatch_coins_mythic", "Cat Bot catch — mythic tier (mythic/8bit/corrupt/professor)", 1000000],
   ["catcatch_coins_divine", "Cat Bot catch — divine tier (divine/real/ultimate/egirl)", 1000000],
+  ["cat_catch_daily_cap", "Cat Bot catch — per-member daily cap (0 = uncapped)", 1000000],
   ["xp_per_coin", "XP needed to earn one coin", 100000],
   ["conversion_daily_cap", "Most one member's XP can earn per day (0 = no limit)", 1000000],
 ];

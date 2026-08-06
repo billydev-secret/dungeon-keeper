@@ -96,6 +96,72 @@ def test_net_is_the_circulation_delta_and_the_candle_body(db):
     assert s.burn == 120
 
 
+def test_escrow_round_trip_is_neither_mint_nor_burn(db):
+    """An auction bid that is outbid and refunded must not read as a sink.
+
+    Both legs move real currency, so ``net`` still tracks them — that is what
+    Pools settles against and it must keep following the wallet. But counting
+    the stake as a burn and the refund as a faucet made a bidding war look
+    like economic activity that never happened; two consecutive retunes were
+    judged against a burn ratio inflated this way.
+    """
+    with open_db(db) as conn:
+        _ledger(conn, -400, "auction_bid", NOON)
+        _ledger(conn, 400, "auction_refund", NOON + 60)
+        s = _series(conn)[DAY]
+    assert (s.mint, s.burn) == (0, 0)
+    assert s.net == 0
+
+
+def test_cancelled_bounty_refund_is_not_a_mint(db):
+    """The cancel leg uses bounty_refund, not bounty_payout.
+
+    Missed on the first pass at the escrow netting: bounty_stake was excluded
+    from burn while bounty_refund stayed a faucet, so a cancelled bounty
+    booked a full spurious mint with nothing against it. Prod has never
+    cancelled one, so only a test catches this before it happens.
+    """
+    with open_db(db) as conn:
+        _ledger(conn, -600, "bounty_stake", NOON)
+        _ledger(conn, 600, "bounty_refund", NOON + 60)
+        s = _series(conn)[DAY]
+    assert (s.mint, s.burn) == (0, 0)
+    assert s.net == 0
+
+
+def test_every_escrow_return_kind_is_a_non_faucet(db):
+    """Guards the pairing itself: a debit excluded from burn whose return is
+    still a faucet is the asymmetry that produced the bug above."""
+    for debit, returns in ps.ESCROW_PAIRS:
+        assert debit in ps.BURN_KINDS_EXCLUDED, debit
+        for credit in returns:
+            assert credit in ps.NON_FAUCET_KINDS, credit
+
+
+def test_reaction_tip_is_a_transfer_not_a_mint_and_burn(db):
+    """A tip is a transfer with a rake — the same shape as transfer_in/out,
+    which have always been excluded. Only the rake leaves circulation."""
+    with open_db(db) as conn:
+        _ledger(conn, -100, "tip_out", NOON)
+        _ledger(conn, 95, "tip_in", NOON)
+        s = _series(conn)[DAY]
+    assert (s.mint, s.burn) == (0, 0)
+    assert s.net == -5      # the rake, and only the rake
+
+
+def test_escrow_that_never_comes_back_still_leaves_the_metric_honest(db):
+    """A winning bid is really destroyed, and ``net`` says so even though
+    neither leg is booked in mint/burn — the report books the residual as a
+    hold, the same way it does for the casino."""
+    with open_db(db) as conn:
+        _ledger(conn, -400, "bounty_stake", NOON)
+        _ledger(conn, 250, "bounty_payout", NOON + 60)
+        s = _series(conn)[DAY]
+    assert (s.mint, s.burn) == (0, 0)
+    assert s.net == -150
+    assert s.close - s.open == s.net
+
+
 def test_series_reconciles_to_the_wallet_total(db):
     """Circulation is exactly the running ledger sum — the property the
     whole candlestick chart rests on."""

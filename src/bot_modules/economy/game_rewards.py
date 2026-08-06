@@ -22,8 +22,12 @@ from typing import TYPE_CHECKING, Any
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.db_utils import get_tz_offset_hours, open_db
-from bot_modules.economy.logic import local_day_for
+from bot_modules.core.db_utils import (
+    get_tz_offset_hours,
+    open_db,
+    open_db_immediate,
+)
+from bot_modules.economy.logic import cat_catch_payout, local_day_bounds, local_day_for
 from bot_modules.economy.quest_views import post_signoff_card
 from bot_modules.services.economy_quests_service import (
     fire_trigger_quests,
@@ -35,6 +39,7 @@ from bot_modules.services.economy_service import (
     apply_credit,
     award_game_reward,
     award_host_bounty,
+    cat_coins_earned_since,
     load_econ_settings,
     member_is_booster,
 )
@@ -228,9 +233,18 @@ async def pay_cat_catch(
     rarity: str,
     doubled: bool,
     occurrence: str,
-) -> None:
+) -> int:
     """Credit a Cat Bot catch: ``coins`` (rarity-tiered, blessed already folded)
-    plus the ``cat_catch`` quest trigger.
+    plus the ``cat_catch`` quest trigger. Returns the coins **actually
+    credited**, which is what the caller should log — with a cap in play that
+    is not ``coins``.
+
+    ``coins`` is the value the guild's ``catcatch_coins_*`` dials produced;
+    ``cat_catch_daily_cap`` then clips it to the member's remaining allowance
+    for the guild-local day (see ``logic.cat_catch_payout``). A catch clipped
+    to nothing still fires the quest trigger — the cap limits the coin faucet,
+    not participation, and a member who has hit it should still see their
+    "catch N cats" quest tick.
 
     Same guarantees as the other faucets: no-op when the economy is off or the
     member is a bot/unresolvable, booster multiplier applied, failures logged
@@ -240,10 +254,10 @@ async def pay_cat_catch(
     try:
         guild = bot.get_guild(guild_id)
         if guild is None:
-            return
+            return 0
         member = guild.get_member(int(user_id))
         if member is None or member.bot or coins < 1:
-            return
+            return 0
 
         db_path = bot.ctx.db_path
 
@@ -253,25 +267,52 @@ async def pay_cat_catch(
 
         settings = await asyncio.to_thread(_load)
         if not settings.enabled:
-            return
+            return 0
 
         booster = member_is_booster(bot, guild_id, user_id)
 
-        def _credit() -> None:
-            with open_db(db_path) as conn:
-                apply_credit(
-                    conn, guild_id, user_id, coins, "cat_catch",
+        def _credit() -> int:
+            # BEGIN IMMEDIATE: this reads the day's running total and then
+            # writes against it, and every catch is its own to_thread — on a
+            # plain DEFERRED transaction two concurrent catches could both
+            # read the same earned_today and both pay, overshooting the cap.
+            with open_db_immediate(db_path) as conn:
+                # Only read the day's running total when a cap is actually set,
+                # so the uncapped default costs no extra query on a path that
+                # fires ~150 times a day.
+                earned_today = 0
+                if settings.cat_catch_daily_cap > 0:
+                    offset = get_tz_offset_hours(conn, guild_id)
+                    day_start, _ = local_day_bounds(
+                        local_day_for(time.time(), offset), offset
+                    )
+                    earned_today = cat_coins_earned_since(
+                        conn, guild_id, user_id, day_start
+                    )
+                payout = cat_catch_payout(
+                    coins,
+                    earned_today=earned_today,
+                    daily_cap=settings.cat_catch_daily_cap,
+                )
+                if payout < 1:
+                    return 0
+                return apply_credit(
+                    conn, guild_id, user_id, payout, "cat_catch",
                     meta={"rarity": rarity, "doubled": doubled},
                     booster=booster, multiplier=settings.booster_multiplier,
                 )
 
-        await asyncio.to_thread(_credit)
+        credited = await asyncio.to_thread(_credit)
+        # Outside _credit, and outside its `payout < 1` return, so a catch
+        # clipped to nothing by the cap still advances a cat quest.
         await _fire_triggers(
             bot, guild, settings, "cat_catch", [user_id],
             {user_id: booster}, f"catbot:{occurrence}",
         )
+        return credited
     except Exception:
         log.exception("pay_cat_catch failed for guild %s", guild_id)
+        return 0
 
 
 async def pay_cah_game_by_score(

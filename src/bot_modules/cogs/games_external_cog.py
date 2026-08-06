@@ -368,15 +368,18 @@ class GamesExternalCog(commands.Cog):
             first = await logic.claim_payout(self.db, message.id, guild.id, "catbot")
             if not first:
                 return
-            await pay_cat_catch(
+            credited = await pay_cat_catch(
                 self.bot, guild.id, member.id,
                 coins=catch.coins, rarity=catch.rarity, doubled=catch.doubled,
                 occurrence=str(message.id),
             )
             await logic.mark_parsed(self.db, message.id, "ok")
+            # The credited amount, not catch.coins — the daily cap can clip a
+            # catch to nothing, and this log is the only per-catch trace
+            # outside the ledger.
             log.info(
                 "Cat catch payout: guild %s %s caught a %s cat (%d coins%s)",
-                guild.id, member.id, catch.rarity, catch.coins,
+                guild.id, member.id, catch.rarity, credited,
                 ", doubled" if catch.doubled else "",
             )
         except Exception:

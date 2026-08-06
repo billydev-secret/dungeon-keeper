@@ -229,6 +229,41 @@ def host_bounty_amount(joiners: int, per_joiner: int, cap: int) -> int:
     return per_joiner * min(joiners, cap)
 
 
+def cat_catch_payout(base: int, *, earned_today: int, daily_cap: int) -> int:
+    """What one Cat Bot catch pays after the member's daily ceiling.
+
+    ``base`` is the per-rarity value the guild's ``catcatch_coins_*`` dials
+    produced (blessed doubling already folded in by the parser).
+    ``daily_cap`` (0 = uncapped) clips it to what the member has left for the
+    guild-local day.
+
+    The cap exists because cat catches are a *volume* faucet — ~150 a day
+    spread fairly evenly across rarities — so trimming the per-tier dials taxes
+    the casual catcher exactly as hard as the member farming 600 coins a day.
+    A per-member ceiling only bites the latter. Measured 2026-08-06: nine
+    member-days over 150 coins, topping out at 653.
+
+    ``earned_today`` is the member's already-credited cat coins for the day,
+    which is post-booster, while the return value is pre-booster (the booster
+    multiplier is applied downstream by ``apply_credit``). A boosting member's
+    final catch of the day can therefore overshoot the cap by the booster
+    factor: this is a rate limiter on a faucet, not a ledger invariant, and
+    tracking a parallel pre-booster total to close a one-catch overshoot would
+    cost more than it buys.
+
+    Returns 0 when the cap is already met — ``apply_credit`` rejects amounts
+    under 1 anyway, so the caller can treat 0 as "credit nothing".
+    """
+    if base <= 0:
+        return 0
+    if daily_cap <= 0:
+        return base
+    remaining = daily_cap - max(0, earned_today)
+    if remaining <= 0:
+        return 0
+    return min(base, remaining)
+
+
 def convert_xp(xp: float, carry: float, xp_per_coin: float) -> tuple[int, float]:
     """Convert a day's XP (plus carried remainder) to whole coins.
 

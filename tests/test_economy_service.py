@@ -15,6 +15,7 @@ from bot_modules.services.economy_service import (
     DEFAULT_ECON_SETTINGS,
     ECON_PREFIX,
     award_host_bounty,
+    cat_coins_earned_since,
     top_up_voice_login,
     EconSettings,
     apply_credit,
@@ -1329,3 +1330,47 @@ def test_econ_purge_user_clears_member_state_but_keeps_ledger(tmp_path):
     assert wallets == 0
     assert ledger == 1  # deliberately preserved
     assert replies == 0
+
+
+# ── cat_coins_earned_since (feeds cat_catch_daily_cap) ────────────────
+
+
+def test_cat_coins_earned_since_scopes_all_four_axes(db):
+    """The cap's read must not leak across guild, member, kind, or day.
+
+    A cap summing the wrong axis fails silently in one of two directions —
+    never biting, or biting members who caught nothing — so each axis gets a
+    decoy row that must be excluded.
+    """
+    with open_db(db) as conn:
+        day_start = 1_000_000.0
+        # The only rows that should count: this member, this guild, this
+        # kind, at/after the day boundary.
+        apply_credit(conn, GUILD, USER, 11, "cat_catch")
+        apply_credit(conn, GUILD, USER, 35, "cat_catch")
+        conn.execute(
+            "UPDATE econ_ledger SET created_at = ? WHERE created_at > ?",
+            (day_start + 60, day_start),
+        )
+        # Decoys, one per axis.
+        apply_credit(conn, GUILD + 1, USER, 500, "cat_catch")   # other guild
+        apply_credit(conn, GUILD, OTHER, 500, "cat_catch")      # other member
+        apply_credit(conn, GUILD, USER, 500, "quest")           # other kind
+        conn.execute(
+            "UPDATE econ_ledger SET created_at = ? WHERE amount = 500",
+            (day_start + 120,),
+        )
+        # Yesterday's catch by the same member, just before the boundary.
+        apply_credit(conn, GUILD, USER, 500, "cat_catch")
+        conn.execute(
+            "UPDATE econ_ledger SET created_at = ? WHERE amount = 500 "
+            "AND kind = 'cat_catch' AND guild_id = ? AND user_id = ?",
+            (day_start - 1, GUILD, USER),
+        )
+
+        assert cat_coins_earned_since(conn, GUILD, USER, day_start) == 46
+
+
+def test_cat_coins_earned_since_zero_when_nothing_caught(db):
+    with open_db(db) as conn:
+        assert cat_coins_earned_since(conn, GUILD, USER, 0.0) == 0
