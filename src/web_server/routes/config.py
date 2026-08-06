@@ -1005,6 +1005,7 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "max_question_swaps": 3,
             "warn_seconds": 3600,
             "question_suppress_seconds": 7200,
+            "reply_reminder_seconds": 0,
             "separations": separations,
         }
     return {
@@ -1027,6 +1028,7 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "max_question_swaps": int(cfg["max_question_swaps"]),
         "warn_seconds": int(cfg["warn_seconds"]),
         "question_suppress_seconds": int(cfg["question_suppress_seconds"]),
+        "reply_reminder_seconds": int(cfg["reply_reminder_seconds"]),
         "separations": separations,
     }
 
@@ -3695,6 +3697,7 @@ class PenPalsTimersUpdate(BaseModel):
     max_question_swaps: int
     warn_seconds: int
     question_suppress_seconds: int
+    reply_reminder_seconds: int = 0
 
 
 @router.put("/config/pen-pals/timers")
@@ -3716,6 +3719,8 @@ async def update_pen_pals_timers(
         raise HTTPException(400, "warn_seconds cannot be negative")
     if body.question_suppress_seconds < 0:
         raise HTTPException(400, "question_suppress_seconds cannot be negative")
+    if body.reply_reminder_seconds < 0:
+        raise HTTPException(400, "reply_reminder_seconds cannot be negative")
 
     def _q():
         with ctx.open_db() as conn:
@@ -3727,6 +3732,7 @@ async def update_pen_pals_timers(
                 max_question_swaps=body.max_question_swaps,
                 warn_seconds=body.warn_seconds,
                 question_suppress_seconds=body.question_suppress_seconds,
+                reply_reminder_seconds=body.reply_reminder_seconds,
             )
         return {"ok": True}
 

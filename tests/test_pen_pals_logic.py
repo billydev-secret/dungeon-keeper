@@ -1882,3 +1882,248 @@ async def test_on_member_remove_drops_pooled_member(sync_db_path, monkeypatch):
 
     assert _pool_ids(sync_db_path) == []
     cog.panel.refresh.assert_awaited_once()
+
+
+# ── Reply reminders ───────────────────────────────────────────────────
+#
+# The rule under test: one member has said something, the other hasn't
+# answered for reply_reminder_seconds, so the quiet one gets pinged — once
+# per silence. The "once" is enforced by comparing the stamp against the
+# last member message rather than clearing it on reply, so the re-arm case
+# below is the one that matters most.
+
+_BASE_TS = 1_700_000_000.0
+_SIX_H = 6 * 3600
+_NOW = _BASE_TS + 7 * 3600  # 7h after the baseline: past a 6h threshold
+_BOT_ID = 999
+_ROOM_ID = 4242
+
+
+def _set_reply_reminder(db_path, seconds: int, guild_id: int = GUILD_ID) -> None:
+    with open_db(db_path) as conn:
+        pp._set_timers(
+            conn,
+            guild_id,
+            session_seconds=86400,
+            match_cooldown_seconds=_COOLDOWN,
+            max_question_swaps=3,
+            warn_seconds=3600,
+            question_suppress_seconds=7200,
+            reply_reminder_seconds=seconds,
+        )
+
+
+def _say(
+    db_path, author_id: int, offset: float, *, base: float = _BASE_TS,
+    channel_id: int = _ROOM_ID,
+) -> None:
+    """Record a message in the room's log, `offset` seconds after `base`."""
+    ts = base + offset
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO messages (message_id, guild_id, channel_id, author_id, ts) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (int(ts * 1000) + author_id, GUILD_ID, channel_id, author_id, int(ts)),
+        )
+
+
+def _session_for_reminder(
+    db_path, *, stamp: float | None = None, base: float = _BASE_TS
+) -> None:
+    with open_db(db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, _ROOM_ID, 1, 2, base)
+        if stamp is not None:
+            pp._set_reply_reminder_sent(conn, "s1", base + stamp)
+
+
+def _due(db_path, *, now: float = _NOW, seconds: int = _SIX_H) -> int | None:
+    with open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM pen_pals_sessions WHERE session_id = 's1'"
+        ).fetchone()
+        return pp._reply_reminder_due(conn, row, now, seconds)
+
+
+@pytest.mark.parametrize(
+    ("says", "stamp", "seconds", "expected"),
+    [
+        pytest.param([(1, 0)], None, _SIX_H, 2, id="quiet_partner_is_the_one_pinged"),
+        pytest.param([(2, 0)], None, _SIX_H, 1, id="either_side_can_be_the_quiet_one"),
+        pytest.param(
+            [(1, 0), (2, 60)], None, _SIX_H, 1, id="the_latest_speaker_decides_who_owes",
+        ),
+        pytest.param([(1, 3600)], None, _SIX_H, 2, id="fires_exactly_on_the_threshold"),
+        pytest.param([(1, 3660)], None, _SIX_H, None, id="still_inside_the_quiet_window"),
+        pytest.param([], None, _SIX_H, None, id="nobody_has_spoken_yet"),
+        pytest.param([(_BOT_ID, 0)], None, _SIX_H, None, id="a_bot_post_is_nobody_waiting"),
+        pytest.param([(1, 0)], 60, _SIX_H, None, id="this_silence_already_got_its_nudge"),
+        pytest.param(
+            [(1, 0), (2, 120), (1, 180)], 60, _SIX_H, 2, id="re_arms_after_they_reply",
+        ),
+        pytest.param([(1, 0)], None, 0, None, id="zero_disables_reminders"),
+    ],
+)
+def test_reply_reminder_due_cases(sync_db_path, says, stamp, seconds, expected):
+    _session_for_reminder(sync_db_path, stamp=stamp)
+    for author_id, offset in says:
+        _say(sync_db_path, author_id, offset)
+
+    assert _due(sync_db_path, seconds=seconds) == expected
+
+
+def test_reply_reminder_stops_once_the_closing_warning_is_out(sync_db_path):
+    """No "reply!" stacked on top of "this chat closes in an hour"."""
+    _session_for_reminder(sync_db_path)
+    _say(sync_db_path, 1, 0)
+    assert _due(sync_db_path) == 2
+
+    with open_db(sync_db_path) as conn:
+        pp._set_close_warning_sent(conn, "s1")
+
+    assert _due(sync_db_path) is None
+
+
+def test_reply_reminder_skips_a_pair_blocked_mid_session(sync_db_path):
+    """A block landing mid-chat doesn't end the session, so the nudge itself
+    has to stay quiet — pinging someone toward a partner they just blocked is
+    exactly what the blocklist exists to prevent."""
+    _session_for_reminder(sync_db_path)
+    _say(sync_db_path, 1, 0)
+
+    with open_db(sync_db_path) as conn:
+        pp._add_block(conn, GUILD_ID, 2, 1)
+
+    assert _due(sync_db_path) is None
+
+
+def test_reply_reminder_skips_a_no_contact_pair(sync_db_path):
+    """Same for a moderator-set no-contact entry (migration 146)."""
+    from bot_modules.services import no_contact_service
+
+    _session_for_reminder(sync_db_path)
+    _say(sync_db_path, 1, 0)
+    no_contact_service.add_pair(sync_db_path, GUILD_ID, 1, 2, created_by=5)
+
+    assert _due(sync_db_path) is None
+
+
+def test_reply_reminder_is_off_by_default_for_an_existing_guild(sync_db_path):
+    """Migration 147 defaults the dial to 0 — no guild starts nudging unasked."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        assert pp._get_config(conn, GUILD_ID)["reply_reminder_seconds"] == 0
+
+
+def test_set_timers_round_trips_the_reply_reminder(sync_db_path):
+    _set_reply_reminder(sync_db_path, 8 * 3600)
+    with open_db(sync_db_path) as conn:
+        assert pp._get_config(conn, GUILD_ID)["reply_reminder_seconds"] == 8 * 3600
+
+
+# ── _tick reply reminder ──────────────────────────────────────────────
+
+
+def _reminder_env(db_path, *, seconds: int = _SIX_H):
+    """A configured guild, one live session, a mocked room, and its baseline.
+
+    The session opened 7h ago in real time (``_tick`` reads the clock itself),
+    so a message posted at the baseline is already past a 6h threshold while
+    the room is nowhere near expiry.
+    """
+    base = time.time() - 7 * 3600
+    _configure(db_path)
+    _set_reply_reminder(db_path, seconds)
+    _session_for_reminder(db_path, base=base)
+
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = _ROOM_ID
+    channel.send = AsyncMock()
+    bot = MagicMock(spec=discord.Client)
+    bot.get_channel.return_value = channel
+    return bot, channel, base
+
+
+def _stamp_of(db_path, session_id: str = "s1") -> float:
+    with open_db(db_path) as conn:
+        return conn.execute(
+            "SELECT reply_reminder_sent_at FROM pen_pals_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+
+
+async def test_tick_nudges_only_the_member_who_owes_a_reply(sync_db_path):
+    bot, channel, base = _reminder_env(sync_db_path)
+    _say(sync_db_path, 1, 0, base=base)
+
+    await pp._tick(bot, sync_db_path)
+
+    text = channel.send.await_args.args[0]
+    assert "<@2>" in text and "<@1>" not in text
+    # Allow-listed to the quiet member alone: no @everyone, no roles, and the
+    # partner is referred to in prose rather than pinged.
+    mentions = channel.send.await_args.kwargs["allowed_mentions"]
+    assert [o.id for o in mentions.users] == [2]
+    assert mentions.everyone is False and mentions.roles is False
+    assert _stamp_of(sync_db_path) == pytest.approx(time.time(), abs=30)
+
+
+async def test_tick_does_not_nudge_twice_for_the_same_silence(sync_db_path):
+    bot, channel, base = _reminder_env(sync_db_path)
+    _say(sync_db_path, 1, 0, base=base)
+
+    await pp._tick(bot, sync_db_path)
+    await pp._tick(bot, sync_db_path)
+
+    assert channel.send.await_count == 1
+
+
+async def test_tick_stamps_even_when_the_nudge_fails_to_send(sync_db_path):
+    """A room we can't post in would otherwise re-qualify on every tick."""
+    bot, channel, base = _reminder_env(sync_db_path)
+    channel.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "nope"))
+    _say(sync_db_path, 1, 0, base=base)
+
+    await pp._tick(bot, sync_db_path)
+
+    assert _stamp_of(sync_db_path) == pytest.approx(time.time(), abs=30)
+
+
+async def test_tick_holds_the_nudge_in_a_tick_that_posts_a_question(sync_db_path):
+    """The auto-question already pings both members — one ping, not two."""
+    bot, channel, base = _reminder_env(sync_db_path)
+    _say(sync_db_path, 1, 0, base=base)
+    with open_db(sync_db_path) as conn:
+        pp._advance_next_question(conn, "s1", time.time() - 1)
+
+    await pp._tick(bot, sync_db_path)
+
+    assert channel.send.await_count == 1
+    assert "question" in channel.send.await_args.args[0].lower()
+    assert _stamp_of(sync_db_path) == 0  # still armed for the next tick
+
+
+async def test_tick_holds_the_nudge_in_a_tick_that_warns_of_closing(sync_db_path):
+    """The closing warning fires this very tick, so the row's flag is still
+    unset in the loop's copy — the nudge has to notice anyway."""
+    bot, channel, base = _reminder_env(sync_db_path)
+    _say(sync_db_path, 1, 0, base=base)
+    with open_db(sync_db_path) as conn:
+        conn.execute(
+            "UPDATE pen_pals_sessions SET expiry_at = ? WHERE session_id = 's1'",
+            (time.time() + 600,),  # inside the 1h warn window
+        )
+
+    await pp._tick(bot, sync_db_path)
+
+    assert channel.send.await_count == 1
+    assert "closes in" in channel.send.await_args.args[0]
+    assert _stamp_of(sync_db_path) == 0
+
+
+async def test_tick_never_nudges_when_the_dial_is_off(sync_db_path):
+    bot, channel, base = _reminder_env(sync_db_path, seconds=0)
+    _say(sync_db_path, 1, 0, base=base)
+
+    await pp._tick(bot, sync_db_path)
+
+    channel.send.assert_not_awaited()
