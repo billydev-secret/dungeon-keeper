@@ -17,10 +17,13 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.anon_audit_service import (
     DEFAULT_RETENTION_DAYS,
     FEATURE_AMA,
+    FEATURE_CONFESSIONS,
     FEATURE_WYR,
+    KNOWN_FEATURES,
     RETENTION_FOREVER,
     SECONDS_PER_DAY,
     count_events,
+    feature_label,
     get_retention_days,
     insert_event,
     list_events,
@@ -270,3 +273,48 @@ def test_purge_is_per_guild(sync_db_path):
     with open_db(sync_db_path) as conn:
         assert count_events(conn, GUILD) == 1
         assert count_events(conn, OTHER_GUILD) == 0
+
+
+# ── Feature labels ────────────────────────────────────────────────────
+#
+# Confessions is audited here but is not a game, so it has no GAME_NAMES entry.
+# The dashboard renders row labels and the filter dropdown from one lookup, so
+# a slug must not appear under two different names depending on the call site.
+
+
+def test_confessions_is_a_known_feature():
+    assert FEATURE_CONFESSIONS in KNOWN_FEATURES
+
+
+@pytest.mark.parametrize(
+    "slug,expected",
+    [
+        # Non-game surface: resolved from FEATURE_LABELS, not GAME_NAMES.
+        (FEATURE_CONFESSIONS, "Confessions"),
+        # Games still resolve through GAME_NAMES.
+        (FEATURE_WYR, "Would You Rather"),
+        # Unknown slugs fall through to themselves rather than blowing up.
+        ("not_a_feature", "not_a_feature"),
+    ],
+)
+def test_feature_label_resolution(slug, expected):
+    assert feature_label(slug) == expected
+
+
+def test_confessions_rows_obey_the_shared_retention_window(sync_db_path):
+    """Confessions is purged on the same guild-wide dial as the games."""
+    stale = time.time() - (DEFAULT_RETENTION_DAYS + 1) * SECONDS_PER_DAY
+    with open_db(sync_db_path) as conn:
+        insert_event(
+            conn, guild_id=GUILD, feature=FEATURE_CONFESSIONS,
+            event="confession_posted", actor_id=7001, created_at=stale,
+        )
+        insert_event(
+            conn, guild_id=GUILD, feature=FEATURE_AMA,
+            event="question_asked", actor_id=7001, created_at=stale,
+        )
+
+    purge_expired(sync_db_path)
+
+    with open_db(sync_db_path) as conn:
+        assert count_events(conn, GUILD) == 0

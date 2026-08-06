@@ -15,6 +15,7 @@ from bot_modules.confessions.logic import (
     HELP_TEXT,
     ButtonAction,
     ThreadRootInfo,
+    audit_channel_id,
     build_dm_notification_text,
     compute_confession_max_chars,
     compute_reply_cooldown,
@@ -388,3 +389,27 @@ def test_button_action_is_frozen():
     action = ButtonAction(kind="ignore")
     with pytest.raises(Exception):  # noqa: PT011 — dataclasses.FrozenInstanceError
         action.kind = "reply"  # type: ignore[misc]
+
+
+# ── Audit jump-link location ──────────────────────────────────────────
+#
+# The audit row records where a confession can be *linked to*, which is not
+# where `confession_threads` records it. That row keeps the parent channel
+# because it routes replies; a forum confession's starter message lives inside
+# its thread, and a forum channel holds no messages of its own, so addressing
+# it through the parent produces a link that looks right and goes nowhere.
+
+
+@pytest.mark.parametrize(
+    "is_forum,expected",
+    [
+        # Forum: the confession IS the thread's starter message.
+        (True, 555),
+        # Text channel: the message really is in the parent channel.
+        (False, 111),
+    ],
+)
+def test_audit_channel_id_picks_the_addressable_location(is_forum, expected):
+    assert audit_channel_id(
+        dest_channel_id=111, thread_id=555, is_forum=is_forum
+    ) == expected

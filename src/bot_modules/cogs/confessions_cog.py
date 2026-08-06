@@ -11,11 +11,18 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.anon_audit_service import (
+    EVENT_CONFESSION_POSTED,
+    EVENT_REPLY_POSTED,
+    FEATURE_CONFESSIONS,
+    record_event,
+)
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import SURFACE_CONFESSION_REPLY
 from bot_modules.confessions.logic import (
     HELP_TEXT,
+    audit_channel_id,
     build_dm_notification_text,
     compute_confession_max_chars,
     compute_reply_cooldown,
@@ -59,6 +66,48 @@ if TYPE_CHECKING:
     from bot_modules.services.confessions_service import GuildConfig
 
 log = logging.getLogger(__name__)
+
+
+async def _record_confession_audit(
+    db_path,
+    *,
+    guild_id: int,
+    author_id: int,
+    message_id: int,
+    channel_id: int,
+    root_message_id: int,
+    is_reply: bool = False,
+    replied_to_id: int = 0,
+) -> None:
+    """Write the moderator-facing audit row for a confession or a reply.
+
+    This is the record that outlives ``confession_threads``, which keeps only a
+    seven-day operational TTL for thread identity and reply routing. Since the
+    Discord mod-log channel became optional, this row is the durable trace of
+    who is behind an anonymous post, and it expires on the guild's own
+    anon-audit retention window instead.
+
+    Best-effort by contract — ``record_event`` swallows and logs DB errors, so
+    a locked table never costs a member the text they just typed.
+
+    ``root_message_id`` goes into ``extra`` as a **string**: ``extra`` is
+    serialised to JSON and read by the dashboard, where a bare snowflake past
+    2^53 would lose precision.
+    """
+    await asyncio.to_thread(
+        record_event,
+        db_path,
+        guild_id=guild_id,
+        feature=FEATURE_CONFESSIONS,
+        event=EVENT_REPLY_POSTED if is_reply else EVENT_CONFESSION_POSTED,
+        actor_id=author_id,
+        # The member being replied to. 0 means the root author is unknown
+        # (the thread row aged out), which is not the same as "nobody".
+        target_id=replied_to_id or None,
+        message_id=message_id,
+        channel_id=channel_id,
+        extra={"root_message_id": str(root_message_id)},
+    )
 
 
 async def _fire_confession_trigger(
@@ -195,6 +244,16 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
                 original_author_id=interaction.user.id,
                 notify_original_author=1 if ping_pref else 0,
             )
+            await _record_confession_audit(
+                db_path, guild_id=interaction.guild.id, author_id=interaction.user.id,
+                message_id=root_message_id,
+                channel_id=audit_channel_id(
+                    dest_channel_id=dest_channel.id,
+                    thread_id=forum_thread.id,
+                    is_forum=True,
+                ),
+                root_message_id=root_message_id,
+            )
             update_discord_thread_id(db_path, interaction.guild.id, root_message_id, forum_thread.id)
             try:
                 await forum_result.message.edit(view=ConfessionsCog.build_reply_button_view(root_message_id))
@@ -224,6 +283,14 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             channel_id=dest_channel.id, root_message_id=sent.id,
             original_author_id=interaction.user.id,
             notify_original_author=1 if ping_pref else 0,
+        )
+        await _record_confession_audit(
+            db_path, guild_id=interaction.guild.id, author_id=interaction.user.id,
+            message_id=sent.id,
+            channel_id=audit_channel_id(
+                dest_channel_id=dest_channel.id, thread_id=sent.id, is_forum=False
+            ),
+            root_message_id=sent.id,
         )
         try:
             thread = await sent.create_thread(name=thread_name_from_content(content), auto_archive_duration=10080)
@@ -402,6 +469,12 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                 channel_id=reply_channel.id, root_message_id=root_message_id,
                 original_author_id=interaction.user.id, notify_original_author=my_notify_pref,
             )
+            await _record_confession_audit(
+                db_path, guild_id=interaction.guild.id, author_id=interaction.user.id,
+                message_id=reply_msg.id, channel_id=reply_channel.id,
+                root_message_id=root_message_id, is_reply=True,
+                replied_to_id=parent_author_id,
+            )
             if should_notify_op(
                 parent_author_id=parent_author_id,
                 replier_id=interaction.user.id,
@@ -457,6 +530,12 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             db_path, guild_id=interaction.guild.id, message_id=reply_msg.id,
             channel_id=dest_channel.id, root_message_id=root_message_id,
             original_author_id=interaction.user.id, notify_original_author=my_notify_pref,
+        )
+        await _record_confession_audit(
+            db_path, guild_id=interaction.guild.id, author_id=interaction.user.id,
+            message_id=reply_msg.id, channel_id=dest_channel.id,
+            root_message_id=root_message_id, is_reply=True,
+            replied_to_id=parent_author_id,
         )
         if should_notify_op(
             parent_author_id=parent_author_id,

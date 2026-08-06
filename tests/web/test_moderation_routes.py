@@ -10,6 +10,13 @@ import discord
 import pytest
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.services.anon_audit_service import (
+    EVENT_CONFESSION_POSTED,
+    EVENT_REPLY_POSTED,
+    FEATURE_AMA,
+    FEATURE_CONFESSIONS,
+    insert_event,
+)
 from bot_modules.services.moderation import (
     close_ticket,
     create_jail,
@@ -990,19 +997,62 @@ def test_whisper_audit_reported_only_filters_to_reported(open_client, fake_ctx):
 
 
 def test_confessions_audit_returns_seeded_rows(open_client, fake_ctx):
+    """Reads `anon_audit_log`, filtered to the confessions slug."""
     with open_db(fake_ctx.db_path) as conn:
-        conn.execute(
-            "INSERT INTO confession_threads (guild_id, message_id, channel_id,"
-            " root_message_id, original_author_id, notify_original_author,"
-            " discord_thread_id, reply_button_message_id, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            # Schema models created_at as int; pass an integer timestamp.
-            (fake_ctx.guild_id, 1, 100, 1, 42, 1, 200, 300, int(time.time())),
+        insert_event(
+            conn, guild_id=fake_ctx.guild_id, feature=FEATURE_CONFESSIONS,
+            event=EVENT_CONFESSION_POSTED, actor_id=42,
+            message_id=1, channel_id=100,
+            extra={"root_message_id": "1"},
         )
 
     body = open_client.get("/api/moderation/confessions-audit").json()
     assert body["total"] == 1
-    assert body["entries"][0]["author_id"] == "42"
+    entry = body["entries"][0]
+    assert entry["author_id"] == "42"
+    assert entry["kind"] == "confession"
+    assert entry["root_message_id"] == "1"
+
+
+def test_confessions_audit_ignores_the_seven_day_operational_table(open_client, fake_ctx):
+    """A confession_threads row alone must not surface — that table is a
+    seven-day operational cache, and reading it made this panel a rolling week
+    rather than the durable moderation record it is now."""
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO confession_threads (guild_id, message_id, channel_id,"
+            " root_message_id, original_author_id, notify_original_author, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (fake_ctx.guild_id, 9, 100, 9, 42, 1, int(time.time())),
+        )
+
+    body = open_client.get("/api/moderation/confessions-audit").json()
+    assert body["total"] == 0
+
+
+def test_confessions_audit_labels_replies(open_client, fake_ctx):
+    with open_db(fake_ctx.db_path) as conn:
+        insert_event(
+            conn, guild_id=fake_ctx.guild_id, feature=FEATURE_CONFESSIONS,
+            event=EVENT_REPLY_POSTED, actor_id=77, target_id=42,
+            message_id=2, channel_id=100,
+            extra={"root_message_id": "1"},
+        )
+
+    entry = open_client.get("/api/moderation/confessions-audit").json()["entries"][0]
+    assert entry["kind"] == "reply"
+    assert entry["replied_to_id"] == "42"
+
+
+def test_confessions_audit_excludes_other_features(open_client, fake_ctx):
+    """The games surfaces share the table; they must not leak into this panel."""
+    with open_db(fake_ctx.db_path) as conn:
+        insert_event(
+            conn, guild_id=fake_ctx.guild_id, feature=FEATURE_AMA,
+            event="question_asked", actor_id=42, message_id=3, channel_id=100,
+        )
+
+    assert open_client.get("/api/moderation/confessions-audit").json()["total"] == 0
 
 
 # ── Auth guard ────────────────────────────────────────────────────────

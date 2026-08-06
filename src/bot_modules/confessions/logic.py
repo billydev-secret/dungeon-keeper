@@ -296,3 +296,22 @@ def is_stale_interaction_error_code(code: object) -> bool:
     handler.
     """
     return code in (40060, 10062)
+
+
+def audit_channel_id(*, dest_channel_id: int, thread_id: int, is_forum: bool) -> int:
+    """Which channel id addresses a posted confession, for a jump link.
+
+    Not the same answer as the one ``confession_threads`` stores. That row
+    keeps the *parent* channel because it routes replies; an audit row keeps
+    wherever the message can actually be linked to:
+
+    * forum destination — the confession IS the thread's starter message, so it
+      lives inside the thread. Addressing it through the forum channel resolves
+      to nothing, because a forum channel holds no messages of its own.
+    * text destination — the message really is in the parent channel, and the
+      thread spawned from it is a separate place.
+
+    Split out and named because getting it wrong produces a link that looks
+    plausible and silently goes nowhere.
+    """
+    return thread_id if is_forum else dest_channel_id

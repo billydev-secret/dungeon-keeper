@@ -23,6 +23,28 @@ export function badge(text, cls) {
   return el("span", { className: `badge ${cls || ""}`.trim() }, text);
 }
 
+// Discord deep link to a message, or to a channel/thread when messageId is
+// omitted. Uses the active guild id, which is the canonical form for a guild
+// message (help.js builds them the same way); "@me" is the DM namespace and
+// resolving a guild channel through it relies on client redirect behaviour
+// rather than being addressed properly. Falls back to "@me" only when the
+// guild id is genuinely unavailable.
+export function jumpLink(channelId, messageId) {
+  const guildId = (window.__dk_user || {}).guild_id || "@me";
+  const base = `https://discord.com/channels/${guildId}/${channelId}`;
+  return messageId ? `${base}/${messageId}` : base;
+}
+
+// Anchor to a Discord message/channel, or an em dash when there is nothing to
+// link to (a purged message, an event that never produced one).
+export function jumpAnchor(channelId, messageId, label) {
+  if (!channelId) return "—";
+  return el("a",
+    { href: jumpLink(channelId, messageId), target: "_blank", rel: "noopener noreferrer" },
+    label,
+  );
+}
+
 function fmtTs(ts) {
   if (!ts) return "—";
   const d = new Date(ts * 1000);

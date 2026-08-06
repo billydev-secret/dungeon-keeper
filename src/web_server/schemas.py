@@ -658,13 +658,23 @@ class WhisperAuditLogResponse(BaseModel):
 
 
 class ConfessionAuditEntry(BaseModel):
-    message_id: str
+    id: int
+    message_id: str | None = None
     author_id: str
     author_name: str = ""
-    channel_id: str
-    thread_id: str | None = None
+    channel_id: str | None = None
+    # "confession" for a root post, "reply" for an anonymous reply to one.
+    kind: str = "confession"
+    # The confession a reply belongs to; equal to message_id on a root post.
+    # A string because it is a snowflake — see migration 145.
+    root_message_id: str | None = None
+    # The member being replied to, where the root author was still known.
+    replied_to_id: str | None = None
+    replied_to_name: str = ""
+    # Joined from `messages`; null when the guild's storage level is 'none'.
+    # The audit table itself never stores content — see migration 145.
     content: str | None = None
-    created_at: int
+    created_at: float
 
 
 class ConfessionsAuditLogResponse(BaseModel):

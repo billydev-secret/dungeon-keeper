@@ -102,8 +102,9 @@ export function mount(container) {
       note.style.color = "var(--ink-dim)";
       note.style.marginBottom = "1rem";
       note.textContent =
-        "Confessions isn't set up yet. Choose where confessions appear and where "
-        + "moderators can review them, and it starts working right away.";
+        "Confessions isn't set up yet. Choose where confessions appear and it "
+        + "starts working right away. Moderators review who posted what on the "
+        + "Confessions Audit Log panel — no Discord channel needed.";
       panel.appendChild(note);
 
       const form = document.createElement("form");
@@ -120,16 +121,6 @@ export function mount(container) {
       ));
       const destPicker = mountChannelPicker(destSlot, channels, "0", {
         emptyValue: "0", emptyLabel: "(pick a channel)", label: "Confessions Channel",
-      });
-
-      const logSlot = document.createElement("span");
-      setupCard.appendChild(field(
-        "Moderator Log Channel",
-        logSlot,
-        "A private channel where each confession is recorded with its author, so your team can act if one crosses a line. Keep it staff-only.",
-      ));
-      const logPicker = mountChannelPicker(logSlot, channels, "0", {
-        emptyValue: "0", emptyLabel: "(pick a channel)", label: "Moderator Log Channel",
       });
 
       const row = document.createElement("div");
@@ -149,19 +140,15 @@ export function mount(container) {
         e.preventDefault();
         // Snowflakes stay strings.
         const dest = destPicker.getValue() || "0";
-        const log = logPicker.getValue() || "0";
         if (dest === "0") {
           showStatus(statusEl, false, "Pick a Confessions Channel first.");
           return;
         }
-        if (log === "0") {
-          showStatus(statusEl, false, "Pick a Moderator Log Channel first.");
-          return;
-        }
         try {
+          // No log_channel_id: the mod-log mirror is optional and starts off.
+          // Moderation happens on the audit panel, which needs no setup.
           await apiPut("/api/config/confessions", {
             dest_channel_id: dest,
-            log_channel_id: log,
           });
           showStatus(statusEl, true, "Saved — reloading…");
           setTimeout(() => mount(container), 1500);
@@ -203,13 +190,17 @@ export function mount(container) {
 
     const logSlot = document.createElement("span");
     channelCard.appendChild(field(
-      "Moderator Log Channel",
+      "Moderator Log Channel (optional)",
       logSlot,
-      "A private channel where each confession is recorded with its author, so your team can act if one crosses a line. Keep it staff-only.",
+      "Optional. Every confession and reply is already recorded with its real "
+      + "author on the Confessions Audit Log panel, which only admins can open. "
+      + "Set a channel here as well if your team prefers to see them in Discord "
+      + "— but anyone who can read it can de-anonymise every confession, so keep "
+      + "it staff-only. Leave it disabled to keep authorship on the dashboard.",
     ));
     const logPicker = mountChannelPicker(
       logSlot, channels, String(c.log_channel_id || "0"),
-      { emptyValue: "0", emptyLabel: "(disabled)", label: "Moderator Log Channel" },
+      { emptyValue: "0", emptyLabel: "(disabled — recommended)", label: "Moderator Log Channel" },
     );
 
     const limitsCard = card(form, "Limits");

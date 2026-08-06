@@ -8,12 +8,18 @@ a ``message_id`` pointer and the reader joins ``messages`` for the text, exactly
 as the Confessions audit panel does — so content follows the guild's existing
 message-storage level rather than being copied into a second place.
 
-Confessions, Whisper and Guess are not routed through here. All three already
-have DB-backed trails and admin panels of their own (``confession_threads``,
-``whispers``, ``guess_audit_log`` — the last one covering ``/guess confess``
-via ``guess_cog._do_audit``), and their tables are load-bearing for the
-features themselves, so putting them under this retention purge would break
-thread identity, whisper state and round history.
+Confessions **is** routed through here, as of the removal of its Discord mod-log
+channel. Migration 145 originally left it out on the grounds that its table is
+load-bearing, and that reasoning still holds — so ``confession_threads`` is not
+migrated onto this one. It keeps its own seven-day operational TTL for thread
+identity and reply routing, and confessions additionally *write* a row here.
+That decouples the two lifetimes: the operational metadata still expires in a
+week, while the moderator-facing trail lives for the guild's retention window.
+
+Whisper and Guess remain outside for migration 145's original reason: their
+panels read ``whispers`` and ``guess_audit_log`` directly, and both tables are
+load-bearing state rather than a pure trail, so a retention purge over them
+would break whisper state and round history.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.games.constants import GAME_NAMES
 
 log = logging.getLogger("dungeonkeeper.anon_audit")
 
@@ -45,6 +52,8 @@ FEATURE_FANTASIES = "fantasies"
 FEATURE_CLAPBACK = "clapback"
 FEATURE_WYR = "wyr"
 FEATURE_COMPLIMENT = "compliment"
+# Not a game, so it has no ``games.constants`` entry — see FEATURE_LABELS.
+FEATURE_CONFESSIONS = "confessions"
 
 KNOWN_FEATURES = (
     FEATURE_AMA,
@@ -54,7 +63,25 @@ KNOWN_FEATURES = (
     FEATURE_CLAPBACK,
     FEATURE_WYR,
     FEATURE_COMPLIMENT,
+    FEATURE_CONFESSIONS,
 )
+
+# Display names for slugs that are not games-suite entries. The dashboard looks
+# here first and falls back to ``games.constants.GAME_NAMES``, so a non-game
+# surface can be audited without polluting the games table with a fake game.
+FEATURE_LABELS = {
+    FEATURE_CONFESSIONS: "Confessions",
+}
+
+
+def feature_label(slug: str) -> str:
+    """Display name for a feature slug, non-game surfaces first.
+
+    One lookup order in one place: the dashboard renders row labels and the
+    filter dropdown from this, so a slug can never appear under two different
+    names depending on which call site produced it.
+    """
+    return FEATURE_LABELS.get(slug) or GAME_NAMES.get(slug, slug)
 
 # Event names. Constants rather than bare strings at the call sites, because
 # MOD_EVENTS below assigns them meaning — renaming one silently reclassifies
@@ -74,6 +101,9 @@ EVENT_ANSWER_SUBMITTED = "answer_submitted"
 EVENT_VOTE = "vote"
 EVENT_VOTERS_REVEALED = "voters_revealed"
 EVENT_PAIRINGS_GENERATED = "pairings_generated"
+# Confessions. A reply reuses EVENT_REPLY_POSTED above rather than minting a
+# confession-specific twin — the two mean the same thing to a reader.
+EVENT_CONFESSION_POSTED = "confession_posted"
 
 # Events where the actor is a moderator acting on someone else's anonymous
 # post, rather than a member posting anonymously. This is the most

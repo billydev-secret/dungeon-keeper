@@ -26,10 +26,12 @@ from bot_modules.services.moderation import (
 )
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
-from bot_modules.games.constants import GAME_NAMES
 from bot_modules.services.anon_audit_service import (
+    EVENT_REPLY_POSTED,
+    FEATURE_CONFESSIONS,
     KNOWN_FEATURES,
     count_events,
+    feature_label,
     get_retention_days,
     list_events,
     set_retention_days,
@@ -1292,60 +1294,79 @@ async def whisper_audit_log(
     return result
 
 
+# ── Confessions audit ─────────────────────────────────────────────────────────
+#
+# Reads `anon_audit_log`, NOT `confession_threads`. The operational table keeps
+# only a seven-day TTL (it is purged hourly so thread identity and reply routing
+# stay bounded), which made this panel a rolling seven-day window — fine while a
+# Discord mod-log channel held the permanent copy, wrong once that channel became
+# optional. The audit rows live for the guild's anon-audit retention window
+# instead, so the two lifetimes are independent.
+#
+# Content is LEFT JOINed from `messages` rather than stored, so it is present
+# only at guild storage level 'all'. See migration 145.
+
+
 @router.get("/moderation/confessions-audit", response_model=ConfessionsAuditLogResponse)
 async def confessions_audit_log(
     request: Request,
     limit: int = 50,
+    offset: int = 0,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
-    limit = min(limit, 200)
+    # Clamped at both ends: SQLite reads a negative LIMIT as "no limit", so an
+    # unclamped `?limit=-1` would dump every de-anonymising row in one response.
+    limit = max(1, min(limit, 200))
+    offset = max(offset, 0)
 
     def _q():
         with ctx.open_db() as conn:
-            total = conn.execute(
-                "SELECT COUNT(*) FROM confession_threads WHERE guild_id = ?",
-                (guild_id,),
-            ).fetchone()[0]
-            rows = conn.execute(
-                """
-                SELECT ct.message_id, ct.channel_id, ct.original_author_id,
-                       ct.discord_thread_id, ct.created_at,
-                       m.content
-                FROM confession_threads ct
-                LEFT JOIN messages m ON m.message_id = ct.message_id
-                WHERE ct.guild_id = ?
-                ORDER BY ct.created_at DESC
-                LIMIT ?
-                """,
-                (guild_id, limit),
-            ).fetchall()
+            total = count_events(conn, guild_id, feature=FEATURE_CONFESSIONS)
+            events = list_events(
+                conn, guild_id,
+                feature=FEATURE_CONFESSIONS,
+                limit=limit, offset=offset, with_content=True,
+            )
             entries = [
                 {
-                    "message_id": str(r["message_id"]),
-                    "author_id": str(r["original_author_id"]),
-                    "channel_id": str(r["channel_id"]),
-                    "thread_id": str(r["discord_thread_id"]) if r["discord_thread_id"] else None,
-                    "content": r["content"],
-                    "created_at": r["created_at"],
+                    "id": e.id,
+                    "message_id": str(e.message_id) if e.message_id else None,
+                    "author_id": str(e.actor_id),
+                    "channel_id": str(e.channel_id) if e.channel_id else None,
+                    # "confession" or "reply" — the panel labels rows with this
+                    # rather than calling every row a confession, which is what
+                    # it did while reading the undifferentiated thread table.
+                    "kind": "reply" if e.event == EVENT_REPLY_POSTED else "confession",
+                    # Already a string in `extra` (snowflake precision), so it
+                    # passes straight through.
+                    "root_message_id": e.extra.get("root_message_id"),
+                    "replied_to_id": str(e.target_id) if e.target_id else None,
+                    "content": e.content,
+                    "created_at": e.created_at,
                 }
-                for r in rows
+                for e in events
             ]
             return {"total": total, "entries": entries}
 
     result = await run_query(_q)
-    await _resolve_names(ctx, guild, result["entries"], ("author_id", "author_name"))
+    await _resolve_names(
+        ctx, guild, result["entries"],
+        ("author_id", "author_name"),
+        ("replied_to_id", "replied_to_name"),
+    )
     return result
 
 
 # ── Anonymous-features audit ──────────────────────────────────────────────────
 #
 # Covers the games-suite anonymous surfaces (AMA, FFA, Hot Takes, Fantasies,
-# Clapback, WYR, Compliment). Confessions, Whisper and Guess have their own
-# panels above/elsewhere — their trails live in their own operational tables.
+# Clapback, WYR, Compliment) plus Confessions, which has its own panel above
+# reading the same table filtered to its slug. Whisper and Guess stay out —
+# their panels read their own load-bearing tables.
 #
 # Content is LEFT JOINed from `messages` rather than stored, so it is present
 # only at guild storage level 'all' and absent for events that never produced a
@@ -1386,7 +1407,7 @@ async def anon_audit_log(
                     "feature": e.feature,
                     # Canonical display name, so this panel calls each game
                     # what the rest of the dashboard calls it.
-                    "feature_label": GAME_NAMES.get(e.feature, e.feature),
+                    "feature_label": feature_label(e.feature),
                     "event": e.event,
                     # Derived server-side from MOD_EVENTS: the panel styles on
                     # this flag rather than keeping its own copy of which
@@ -1407,7 +1428,7 @@ async def anon_audit_log(
             # table: SQLite has no loose index scan, so that query walked the
             # guild's whole partition on every page load to return ≤7 strings.
             features = [
-                {"value": f, "label": GAME_NAMES.get(f, f)}
+                {"value": f, "label": feature_label(f)}
                 for f in KNOWN_FEATURES
             ]
             return {"total": total, "entries": entries, "features": features}
