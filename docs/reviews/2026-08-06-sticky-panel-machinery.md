@@ -7,6 +7,11 @@
 > review changed". The findings text is left as written so the evidence and the
 > reasoning survive the fix; F8 is the one whose fix ships **off by default**,
 > for the reason given there.
+>
+> A follow-up code review then found the **F1 fix was in the wrong place** and
+> that F2's fix shipped a deploy bug — both corrected, and both recorded under
+> their own headings rather than quietly rewritten. One item is left open, under
+> F4.
 
 **Lane:** `src/bot_modules/core/sticky.py` reviewed as a *mechanism*, plus its
 nine callers. The 2026-08 staged review went feature-by-feature, so each bundle
@@ -169,16 +174,41 @@ when two panels share a channel it reports **only the last one** in its `named`
 tuple (the casino hub). A mod warned about a shared channel is told about one of
 the two residents.
 
-### Fixed
+### Fixed — and the first attempt was wrong
 
 `core/sticky.py` keeps a process-wide `was_placed` registry of ids some panel
-placed, and `on_message` drops them (fix 1 above, measured 26 -> 2 sends).
+placed. **Where it is consulted turned out to be the whole question**, and the
+fix sketched above got it wrong: putting the check in `on_message` does almost
+nothing, because `_note_placed` runs inside `_remember`, i.e. *after* `send()`
+returns — so it races the gateway in exactly the way this document already
+criticises `should_restick`'s id-skip for. Any yield between the frame being
+dispatched and `_remember` running loses that race, and the awaited HTTP response
+is one.
+
+Caught by a follow-up code review, then confirmed empirically: with only the
+`on_message` check, two opted-in panels still storm at **29–30 sends** across 40
+debounce periods. The first regression test missed it because its fake dispatched
+with `asyncio.create_task` — and since `_place_locked` has no await between
+`send()` returning and `_remember`, the registry always won in the harness. It
+reported 2 sends for a configuration that really does 29.
+
+The real fix is at the **decision points**, a whole debounce later, where the
+registry is reliably populated: `_delayed_restick` (and `_place_locked` under the
+lock) return early when `channel.last_message_id` is a message some panel placed.
+Whoever placed last holds the slot and the other yields rather than taking it
+back — someone has to lose a one-slot contest, and a deterministic loser beats
+the two of them alternating forever. The next genuine trigger re-opens it, so
+yielding is not permanent (`test_yielding_does_not_stop_the_next_genuine_trigger`).
+The `on_message` check stays as a cheap way to skip a doomed debounce, documented
+as an optimisation.
+
+The test fake now dispatches to listeners **before** `send()` returns, and the
+regression was re-verified failing at 30 sends with the decision-point checks
+removed and the `on_message` check left in.
+
 `post_bounty_panel` refuses a channel another bot-chasing panel holds; not
 applied to the casino's own channel setting, which belongs to its feature.
-`sticky_panel_channels` merges residents instead of overwriting. Regression:
-`test_two_restick_on_bot_panels_in_one_channel_settle` — verified failing at 26
-sends with the registry check disabled, plus
-`test_an_opted_in_panel_still_chases_a_real_bot_post` as the over-fix guard.
+`sticky_panel_channels` merges residents instead of overwriting.
 
 ### Test to land with it
 
@@ -243,7 +273,16 @@ divergent copy.
 
 ---
 
-**Fixed** — migrated, not patched. `guess` now holds a `StickyPanel` with
+**Fixed** — migrated, not patched, though the first cut shipped a deploy bug a
+follow-up review caught: `guess_prompt_channel_id` was added with no backfill, and
+prod has three guilds with a live prompt and **zero** rows for the new key
+(verified read-only). Those would have read `(0, live_id)` — the prompt stops
+re-sticking entirely, and the first placement cannot resolve a channel to delete
+the old prompt through, so the channel ends up with two, the stale one's buttons
+still live. `_panel_ids` now falls back to `guess_channel_id` when the prompt has
+a message id but no channel id, which is exactly where every legacy prompt is.
+
+`guess` now holds a `StickyPanel` with
 `target_types=(TextChannel, VoiceChannel, Thread)`, a **per-panel** widening:
 doing it globally would have invalidated the auction card's thread warning, which
 relies on threads staying out of the default set. New `guess_prompt_channel_id`
@@ -330,9 +369,14 @@ specific to the restick path.
 logs with the guild id and `exc_info`; at `max_place_failures` (default 5) it
 logs once at `error` and `schedule_restick` stops arming. `failing_guilds()` is
 readable state for a dashboard, deliberately not a draining queue. An explicit
-`place`/`place_or_refresh` retries and clears the count, so re-posting from the
-dashboard is the recovery. Three tests cover the pause, the
-clear-on-successful-place, and the clear-on-operator-refresh.
+`place`/`place_or_refresh` retries and clears the count, and — added after the
+follow-up review — so does any **successful in-place edit**, which is proof the
+channel works; without that a panel whose edits demonstrably succeed could stay
+paused on the strength of five old transient send failures.
+
+**Still open:** nothing in `src/web_server/` reads `failing_guilds()`, so the
+`error` line's advice to re-post from the dashboard has no surface prompting the
+admin to. The state is there; the panel that shows it is not built.
 
 ---
 
@@ -517,10 +561,18 @@ than as a finding.
 
 **Fixed** — `refresh` gained `repost_if_missing`, and `run_guild_leaderboard` is
 now a delegate to `leaderboard_panel.refresh(guild_id, repost_if_missing=False)`.
-That preserves the retire-on-404 behaviour which justified the separate
-implementation, while picking up the single REST call and the placement lock;
-~70 lines of parallel renderer gone. The suspected-benign
-`refresh`-outside-the-lock note stands as written — it was not changed.
+~70 lines of parallel renderer gone, and the single REST call with it.
+
+**The first cut dropped a guard it should have kept**, caught by the follow-up
+review: the old code re-read `leaderboard_message_id` on a 404 and bailed if it
+had changed, because a sticky repost deletes the old panel and posts a new one —
+so a 404 can mean "it moved", not "it is gone". `refresh` holds no lock (the
+suspected-benign note above), so a restick really can land between its id read
+and its edit; zeroing the ids there would retire a panel that is live in the
+channel with a working `QuestBoardView` and report it unposted on the dashboard.
+The retire path now re-reads and only clears when the ids are unchanged
+(`test_the_retire_path_does_not_zero_a_panel_that_only_moved`). My docstring had
+claimed core did this "under the placement lock", which was simply false.
 
 ---
 
@@ -552,7 +604,13 @@ about panel state.
 **Fixed** — `StickyPanel.on_channel_delete` clears the ids and cancels any
 pending restick, forwarded from `on_guild_channel_delete` in all six cogs that
 own a sticky panel (economy forwards to all five of its panels; voice master and
-pen pals fold it into their existing listeners).
+pen pals fold it into their existing listeners). Two corrections from the
+follow-up review: it now runs **under the per-guild lock**, because a shielded
+placement into a different channel can be in flight and a `(0, 0)` write landing
+after that placement's write would forget a panel that had just been posted; and
+`guess` also forwards `on_thread_delete`, since Discord dispatches that rather
+than `on_guild_channel_delete` for threads — which is precisely the case
+`target_types` was widened for.
 
 ---
 

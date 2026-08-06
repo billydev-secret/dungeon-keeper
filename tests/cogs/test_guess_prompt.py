@@ -333,3 +333,51 @@ async def test_post_prompt_panel_ignores_a_supplied_channel():
         await cog.post_prompt_panel(guild, other)
 
     cog.prompt_panel.place_or_refresh.assert_awaited_once_with(guild, configured)
+
+
+# ── the 2026-08-06 code-review follow-ups ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_panel_ids_fall_back_to_the_guess_channel_for_a_legacy_prompt():
+    """``guess_prompt_channel_id`` arrived with the core.sticky migration, so
+    every guild that already had a prompt has a message id and no channel id —
+    verified against prod: three guilds with a live prompt, zero rows for the new
+    key. Without this fallback those prompts read (0, live_id): should_restick
+    bails on a falsy channel so the prompt stops re-sticking altogether, and the
+    first placement cannot resolve a channel to delete the old one through,
+    leaving two prompts with the stale one's buttons live.
+    """
+    cog, _conn = _panel_cog(_config())
+    with patch(
+        "bot_modules.cogs.guess_cog.get_guess_config",
+        return_value=_config(prompt_id=555, prompt_channel_id=0),
+    ):
+        assert cog._panel_ids(GUILD_ID) == (GUESS_CHANNEL_ID, 555)
+
+
+@pytest.mark.asyncio
+async def test_panel_ids_do_not_invent_a_channel_when_nothing_is_posted():
+    """The fallback is for legacy rows only — a guild that never posted a prompt
+    must still read (0, 0) so the restick never creates one."""
+    cog, _conn = _panel_cog(_config())
+    with patch(
+        "bot_modules.cogs.guess_cog.get_guess_config",
+        return_value=_config(prompt_id=0, prompt_channel_id=0),
+    ):
+        assert cog._panel_ids(GUILD_ID) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_thread_also_clears_the_prompt_ids():
+    """The Guess channel may be a thread — that is what target_types was widened
+    for — and Discord dispatches on_thread_delete rather than
+    on_guild_channel_delete for those, so the panel needs both."""
+    cog = _make_cog()
+    cog.prompt_panel = MagicMock()
+    cog.prompt_panel.on_channel_delete = AsyncMock()
+    thread = MagicMock(spec=discord.Thread)
+
+    await cog._forget_deleted_prompt_thread(thread)
+
+    cog.prompt_panel.on_channel_delete.assert_awaited_once_with(thread)

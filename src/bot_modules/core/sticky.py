@@ -21,9 +21,10 @@ the best of them, so every caller now gets:
   panel without touching the database;
 * **placements atomic to cancellation**, so the debounce's cancel-and-rearm can
   never leave a posted panel unrecorded (see ``place``);
-* **no panel chases another panel's repost** — the placement registry below is
-  what stops two sticky panels sharing a channel from re-posting each other
-  forever (see ``was_placed``);
+* **no panel chases another panel's repost** — a panel whose bottom slot was
+  taken by *another* sticky panel yields instead of taking it back, which is what
+  stops two panels sharing a channel from re-posting each other forever (see
+  ``was_placed``);
 * a **failure ceiling**, so a channel the bot cannot post in stops being
   retried on every burst of chat forever (see ``failing_guilds``).
 
@@ -77,13 +78,13 @@ DEFAULT_MAX_PLACE_FAILURES = 5
 #: is orders of magnitude more than needed.
 _PLACED_HISTORY = 512
 
-# Message ids that some StickyPanel posted. Shared deliberately: a panel must
-# ignore *any* sticky panel's repost, not just its own. Two panels opted into
-# ``restick_on_bot`` in one channel would otherwise re-post each other forever
-# — each one's three self-chase guards only recognise its own message, and
-# neither is ever at the bottom when its own debounce fires, so the
-# at-the-bottom guard never engages. Measured before this existed: ~6.5 reposts
-# a minute in one channel, indefinitely, with nobody typing.
+# Message ids that some StickyPanel posted. Shared across panels deliberately: a
+# panel must recognise *any* sticky panel's placement, not just its own. Two
+# panels opted into ``restick_on_bot`` in one channel would otherwise re-post
+# each other forever — each one's self-chase guards only know its own message id,
+# and neither is ever at the bottom when its own debounce fires, so the
+# at-the-bottom guard never engages. Measured before this existed: ~6.5 reposts a
+# minute in one channel, indefinitely, with nobody typing.
 _placed_order: deque[int] = deque()
 _placed: set[int] = set()
 
@@ -101,10 +102,20 @@ def _note_placed(message_id: int) -> None:
 def was_placed(message_id: int) -> bool:
     """Whether this message is a sticky panel's own placement.
 
-    ``on_message`` uses it to drop a repost rather than chase it. Best-effort in
-    the same way ``_remember`` is — the gateway can deliver ``MESSAGE_CREATE``
-    before ``send()`` returns — so it narrows the window rather than closing it,
-    and the at-the-bottom guard in ``_delayed_restick`` still decides.
+    Consulted in two places, and only one of them decides:
+
+    * ``on_message`` — an **optimisation**, and an unreliable one. ``_note_placed``
+      runs inside ``_remember``, i.e. after ``send()`` returns, so this races the
+      gateway exactly as ``should_restick``'s id-skip does, and any yield between
+      the frame being dispatched and ``_remember`` running loses the race — which
+      the awaited HTTP response guarantees. It saves a doomed debounce when it
+      wins; it must never be the protection.
+    * ``_delayed_restick`` / ``_place_locked`` — where it **decides**. Those run a
+      whole debounce later, and under the placement lock, so the registry is
+      reliably populated by then.
+
+    Measured with only the ``on_message`` check: two opted-in panels in one
+    channel still storm (~29 sends across 40 debounce periods).
     """
     return message_id in _placed
 
@@ -396,9 +407,14 @@ class StickyPanel:
             # snapshot can be stale after a racing post, and deleting it would
             # orphan the live panel.
             old_channel_id, old_message_id = await self.ids(guild.id)
-            if only_if_buried and self._at_bottom(
-                target, old_channel_id, old_message_id
+            if only_if_buried and (
+                self._at_bottom(target, old_channel_id, old_message_id)
+                # Re-decided under the lock, so a restick that queued behind
+                # another panel's placement sees that placement rather than
+                # taking the slot back off it (see _delayed_restick).
+                or was_placed(target.last_message_id or 0)
             ):
+                self._buried_since.pop(guild.id, None)
                 return None
             content = await self._build(guild)
 
@@ -410,6 +426,10 @@ class StickyPanel:
                 message = await target.send(embed=content.embed, view=content.view)
             except discord.HTTPException:
                 self._note_failure(guild.id, target.id)
+                # Not popping this would make a set max_burial permanently
+                # overdue for the guild, degrading the debounce to
+                # "first arm wins" (nothing would cancel-and-rearm again).
+                self._buried_since.pop(guild.id, None)
                 return None
             self._failures.pop(guild.id, None)
 
@@ -586,6 +606,15 @@ class StickyPanel:
         except discord.NotFound:
             if repost_if_missing:
                 return await self.place(guild, channel) is not None
+            # Re-read before retiring. A sticky repost deletes the old panel and
+            # posts a new one, so a 404 here may only mean it *moved* — and this
+            # method holds no lock, so a restick can land between the id read
+            # above and this edit. Zeroing the ids then would retire a panel that
+            # is live in the channel with working buttons, and report it unposted
+            # on the dashboard. (The hand-rolled leaderboard refresh this
+            # replaced had exactly this guard; dropping it was a regression.)
+            if await self.ids(guild_id) != (channel_id, message_id):
+                return False
             self.forget(guild_id)
             await asyncio.to_thread(self._save_ids, guild_id, 0, 0)
             log.info(
@@ -598,6 +627,11 @@ class StickyPanel:
             # so a transient error doesn't strand the panel.
             self._retry.add(guild_id)
             return False
+        # A successful edit is proof the channel is usable, so it clears a
+        # panel paused by the placement-failure ceiling. Without this a panel
+        # whose edits demonstrably work could stay paused on the strength of
+        # five old transient send failures.
+        self._failures.pop(guild_id, None)
         if content.signature is not None:
             self._signatures[guild_id] = content.signature
         return True
@@ -615,8 +649,9 @@ class StickyPanel:
             if not self._restick_on_bot:
                 return
             if was_placed(message.id):
-                # Some sticky panel's own repost. Chasing it is what let two
-                # opted-in panels in one channel re-post each other forever.
+                # Some sticky panel's own repost — skip the doomed debounce.
+                # Only an optimisation: this loses the gateway race most of the
+                # time. The decision is in _delayed_restick. See was_placed.
                 return
         guild_id = message.guild.id
         if self._known is not None and guild_id not in self._known:
@@ -631,25 +666,35 @@ class StickyPanel:
             return
         self.schedule_restick(guild_id)
 
-    async def on_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
+    async def on_channel_delete(
+        self, channel: discord.abc.GuildChannel | discord.Thread
+    ) -> None:
         """Forget a panel whose channel was deleted.
 
         Nothing breaks without this — ``_channel`` returns None for a dead id
         and the restick returns early, so no loop and no retry — but the stored
         ids outlive the channel, which leaves the dashboard reporting a panel
-        that cannot exist. Call it from the cog's ``on_guild_channel_delete``.
+        that cannot exist. Call it from the cog's ``on_guild_channel_delete``
+        and, for a panel whose ``target_types`` include threads, from
+        ``on_thread_delete`` as well — Discord dispatches a different event for
+        those, so a thread-hosted panel is otherwise never cleaned up.
         """
         guild = getattr(channel, "guild", None)
         if guild is None:
             return
-        channel_id, message_id = await self.ids(guild.id)
-        if not channel_id or channel_id != channel.id:
-            return
-        pending = self._restick_tasks.pop(guild.id, None)
-        if pending is not None and not pending.done():
-            pending.cancel()
-        self.forget(guild.id)
-        await asyncio.to_thread(self._save_ids, guild.id, 0, 0)
+        # Under the placement lock: a shielded place() into a *different*
+        # channel may be in flight, and if our (0, 0) write landed after its
+        # write we would forget a panel that had just been posted — leaving it
+        # live in the channel and letting the next post duplicate it.
+        async with self._locks[guild.id]:
+            channel_id, _message_id = await self.ids(guild.id)
+            if not channel_id or channel_id != channel.id:
+                return
+            pending = self._restick_tasks.pop(guild.id, None)
+            if pending is not None and not pending.done():
+                pending.cancel()
+            self.forget(guild.id)
+            await asyncio.to_thread(self._save_ids, guild.id, 0, 0)
         log.info(
             "%s: channel %s was deleted in guild %s — cleared the panel ids",
             self.name, channel.id, guild.id,
@@ -705,6 +750,24 @@ class StickyPanel:
             # where a queued restick can also see a concurrent placement's
             # result.
             if channel.last_message_id == message_id:
+                self._buried_since.pop(guild_id, None)
+                return
+            # The thing below us is another sticky panel's placement → yield.
+            #
+            # This, not the check in on_message(), is what actually stops two
+            # opted-in panels re-posting each other. _note_placed runs inside
+            # _remember, i.e. *after* send() returns, so the on_message check
+            # races the gateway exactly as should_restick's id-skip does — and
+            # any yield between the frame being dispatched and _remember running
+            # loses it, which the awaited HTTP response guarantees. Here we are
+            # a whole debounce later, so the registry is reliably populated.
+            #
+            # Yielding means whoever placed last holds the slot and the other
+            # stays above it. Someone has to lose a one-slot contest; a
+            # deterministic loser beats the two of them alternating forever. The
+            # next genuine trigger re-opens it — exactly one of them takes the
+            # slot and the other yields again.
+            if was_placed(channel.last_message_id or 0):
                 self._buried_since.pop(guild_id, None)
                 return
             await self.place(guild, channel, only_if_buried=True)

@@ -1494,12 +1494,10 @@ async def run_guild_leaderboard(
     panel = _leaderboard_panel(bot)
     if panel is None:  # cog unloaded, or a harness without it
         return
-    try:
-        await panel.refresh(guild_id, repost_if_missing=False)
-    except discord.HTTPException:
-        log.warning(
-            "Economy loop: leaderboard refresh failed for guild %s.", guild_id
-        )
+    # No local error handling: refresh() swallows HTTPException itself (queueing
+    # the guild for retry), and both callers already wrap this in a per-guild
+    # except Exception with a log line.
+    await panel.refresh(guild_id, repost_if_missing=False)
 
 
 def _leaderboard_panel(bot: discord.Client) -> StickyPanel | None:

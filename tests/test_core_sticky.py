@@ -16,7 +16,6 @@ import pytest
 from bot_modules.core.sticky import (
     PanelContent,
     StickyPanel,
-    clear_placed_registry,
     should_restick,
 )
 
@@ -48,15 +47,6 @@ def _guild(channel):
     guild.get_channel.return_value = channel
     guild.get_channel_or_thread.return_value = channel
     return guild
-
-
-@pytest.fixture(autouse=True)
-def _forget_placements():
-    """The placed-message registry is module-level (shared across panels, which
-    is the point — see was_placed). Tests reuse message ids, so clear it."""
-    clear_placed_registry()
-    yield
-    clear_placed_registry()
 
 
 class _Store:
@@ -763,10 +753,17 @@ class _LiveChannel:
     """A channel that behaves like the gateway does.
 
     ``send`` assigns an increasing id, advances ``last_message_id`` and
-    dispatches MESSAGE_CREATE to every listener *as a task* — i.e. concurrently
-    with ``send`` returning, which is the ordering ``place`` documents and the
-    one the July 2026 storm depended on. Faking it any other way makes the
-    self-chase guards look stronger than they are.
+    dispatches MESSAGE_CREATE to every listener **before it returns** — which is
+    the ordering ``place`` documents ("the frame is dispatched while place() is
+    still awaiting the HTTP response") and the one the July 2026 storm depended
+    on.
+
+    That detail is the whole point of this fake. Dispatching with a bare
+    ``create_task`` instead lets ``_place_locked`` resume and run ``_remember``
+    *before* any listener does — because there is no await between ``send()``
+    returning and ``_remember`` — so the placement registry always wins and the
+    guards look far stronger than they are. An earlier version of this class did
+    exactly that and reported 2 sends for a configuration that really does 29.
     """
 
     def __init__(self):
@@ -781,14 +778,15 @@ class _LiveChannel:
         self.listeners: list[StickyPanel] = []
 
     async def _send(self, **_kwargs):
-        await asyncio.sleep(0)  # the HTTP round trip
         self._next += 1
         self.sends += 1
         self.mock.last_message_id = self._next
         message = MagicMock(spec=discord.Message)
         message.id = self._next
+        # Awaited, not create_task: the gateway wins the race with _remember.
         for panel in self.listeners:
-            asyncio.create_task(panel.on_message(self._event(self._next, bot=True)))
+            await panel.on_message(self._event(self._next, bot=True))
+        await asyncio.sleep(0)  # the rest of the HTTP round trip
         return message
 
     def _partial(self, message_id: int):
@@ -862,7 +860,8 @@ async def test_two_restick_on_bot_panels_in_one_channel_settle():
     a.cancel_all()
     b.cancel_all()
 
-    # One repost each for the two buried panels, then quiet.
+    # Whoever placed last holds the slot; the other yields rather than taking it
+    # back. So: at most one repost each, then quiet.
     assert live.sends <= 4, f"repost storm: {live.sends} sends with nobody typing"
 
 
@@ -1117,3 +1116,91 @@ async def test_a_thread_is_accepted_when_the_panel_opts_in():
     )
     assert await panel.refresh(GUILD) is True
     edited.edit.assert_awaited_once()
+
+
+# ── follow-ups from the 2026-08-06 code review ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_retire_path_does_not_zero_a_panel_that_only_moved():
+    """``refresh`` holds no lock, so a sticky repost can land between its id read
+    and its edit. The 404 that follows means "it moved", not "it is gone", and
+    zeroing the ids there would retire a panel that is live in the channel with
+    working buttons — and report it unposted on the dashboard. The hand-rolled
+    leaderboard refresh this replaced had exactly this guard.
+    """
+    channel, _sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, MESSAGE)
+    panel = _panel(_bot(guild), store)
+
+    def _moved(**_kwargs):
+        # The restick got there first: new id recorded, old message deleted.
+        store.ids = (CHANNEL, 4242)
+        raise discord.NotFound(MagicMock(status=404), "gone")
+
+    channel.get_partial_message.return_value.edit = AsyncMock(side_effect=_moved)
+
+    assert await panel.refresh(GUILD, repost_if_missing=False) is False
+    assert store.ids == (CHANNEL, 4242)  # left alone, not retired
+
+
+@pytest.mark.asyncio
+async def test_a_successful_edit_clears_the_failure_pause():
+    """Otherwise a panel whose in-place edits demonstrably work could stay
+    paused on the strength of five old transient send failures."""
+    channel, sent = _channel()
+    guild = _guild(channel)
+    channel.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "nope"))
+    panel = _panel(_bot(guild), _Store(CHANNEL, MESSAGE), max_place_failures=1)
+    await panel.place(guild, channel)
+    assert panel.failing_guilds() == {GUILD}
+
+    channel.send = AsyncMock(return_value=sent)
+    assert await panel.refresh(GUILD) is True
+    assert panel.failing_guilds() == set()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_placement_does_not_leave_the_burial_clock_running():
+    """A stale ``_buried_since`` makes a set ``max_burial`` permanently overdue,
+    so ``schedule_restick`` stops cancel-and-rearming and the debounce degrades
+    to "first arm wins" for that guild."""
+    channel, _sent = _channel()
+    guild = _guild(channel)
+    channel.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "nope"))
+    panel = _panel(
+        _bot(guild), _Store(CHANNEL, MESSAGE), delay=0.01, max_burial=0.01
+    )
+
+    panel.schedule_restick(GUILD)
+    assert GUILD in panel._buried_since
+    await panel.place(guild, channel)
+
+    assert GUILD not in panel._buried_since
+    panel.cancel_all()
+
+
+@pytest.mark.asyncio
+async def test_yielding_does_not_stop_the_next_genuine_trigger():
+    """Yielding the slot to another panel must not be permanent — the next
+    message that is not a placement re-opens the contest."""
+    live = _LiveChannel()
+    bot = _live_bot(live)
+    panel = _panel(bot, _Store(CHANNEL, 1), restick_on_bot=True, delay=0.02)
+    live.listeners = [panel]
+
+    # Another panel takes the bottom slot.
+    rival_id = live.bot_says()
+    from bot_modules.core.sticky import _note_placed
+
+    _note_placed(rival_id)
+    await panel.on_message(live._event(rival_id, bot=True))
+    await asyncio.sleep(0.02 * 6)
+    assert live.sends == 0, "should yield to another panel's placement"
+
+    # Now a member speaks: the panel is buried by something real again.
+    await live.member_says()
+    await asyncio.sleep(0.02 * 6)
+    panel.cancel_all()
+    assert live.sends == 1

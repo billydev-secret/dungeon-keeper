@@ -125,7 +125,7 @@ Since 2026-08-06 the prompt runs on the shared `core.sticky.StickyPanel` rather 
 | `guess_min_image_dimension_px` | `400` | Reject submissions smaller than this on either axis |
 | `guess_max_image_size_mb` | `10` | Hard cap on upload size |
 | `guess_prompt_message_id` | unset | Persistent prompt message at the bottom of the channel |
-| `guess_prompt_channel_id` | unset | Where that message actually **is**. Added 2026-08-06 with the `core.sticky` migration: the placer deletes the old prompt through this channel, so pairing a stale message id with a repointed `guess_channel_id` would aim the delete at the wrong channel and strand the old prompt with its buttons live. Repointing the Guess channel therefore leaves the prompt where it is until the next round (or an explicit repost) moves it |
+| `guess_prompt_channel_id` | unset | Where that message actually **is**. Added 2026-08-06 with the `core.sticky` migration: the placer deletes the old prompt through this channel, so pairing a stale message id with a repointed `guess_channel_id` would aim the delete at the wrong channel and strand the old prompt with its buttons live. Repointing the Guess channel therefore leaves the prompt where it is until the next round (or an explicit repost) moves it. **Legacy rows fall back to `guess_channel_id`**: guilds that already had a prompt when this key was added have a message id and no channel id, and before the key existed the prompt was always posted into `guess_channel_id` |
 
 ## Stored data
 

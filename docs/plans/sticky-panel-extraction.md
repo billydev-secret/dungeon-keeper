@@ -306,10 +306,26 @@ opted-in panels, and prod guild `1476525656115515484` had
 posted yet — one dashboard button-press away.
 
 `core/sticky.py` now keeps a **process-wide registry of message ids some panel
-placed** (`was_placed`), and `on_message` drops those instead of chasing them.
-Shared state across panels is the point: "ignore my own repost" was never a
-strong enough rule. It is bounded (`_PLACED_HISTORY`) and only has to outlive one
-debounce. `clear_placed_registry()` exists for tests, which reuse ids.
+placed** (`was_placed`). Shared state across panels is the point: "ignore my own
+repost" was never a strong enough rule. It is bounded (`_PLACED_HISTORY`) and only
+has to outlive one debounce; `clear_placed_registry()` is reset per test in
+`tests/conftest.py`.
+
+**Where it is consulted is the load-bearing detail, and the first cut got it
+wrong.** Checking it in `on_message` accomplishes almost nothing: `_note_placed`
+runs inside `_remember`, i.e. after `send()` returns, so it races the gateway in
+the same way `should_restick`'s id-skip does — and the awaited HTTP response is a
+yield that loses the race. Measured with only that check: still 29–30 sends. The
+decision therefore lives in `_delayed_restick` and `_place_locked`, a whole
+debounce later and under the lock, where the registry is reliably populated. The
+`on_message` check remains as a cheap way to skip a doomed debounce, and is
+documented as an optimisation so nobody mistakes it for the protection again.
+
+Yielding means **whoever placed last holds the slot** and the other stays above
+it. Someone has to lose a one-slot contest, and a deterministic loser beats the
+two alternating forever; the next genuine trigger re-opens the contest. This is
+the "let one panel yield to another" option the July notes rejected — rejected
+then because it read as coupling the cogs, which a shared registry is not.
 
 `post_bounty_panel` additionally **refuses** a channel another bot-chasing panel
 holds, which is the rule `_sticky_check` already applied to the auction card.
@@ -323,6 +339,15 @@ was built by comprehension, so a shared channel reported only whichever panel
 came last in the table.
 
 ### The last hand-rolled copy (`guess`)
+
+Note for the next migration: adding a "where is it actually" id key needs a
+**backfill plan**. `guess_prompt_channel_id` shipped without one, and every guild
+with an existing prompt had a message id and no channel id — which reads as
+"posted, in channel 0": the prompt stops re-sticking, and the first placement
+cannot resolve a channel to delete the old one through, so the channel ends up
+with two prompts and live buttons on the stale one. `_panel_ids` now falls back to
+`guess_channel_id` when there is a message id but no channel id, which is where
+every legacy prompt provably is.
 
 Migrating it needed `target_types`, and it turned out to be carrying both bugs
 the module exists to prevent, not just the missing lock the group-B table
@@ -368,10 +393,18 @@ guild** before it had even checked the channel. It now stores
   calls `leaderboard_panel.refresh(..., repost_if_missing=False)`. That flag is
   new and exists for this caller: for *this* panel a deleted message is how staff
   retire it, so a 404 clears the ids rather than reposting (core's default heals).
+  The retire path **re-reads the ids before clearing** — `refresh` takes no lock,
+  so a restick can land between its read and its edit, and a 404 then means "it
+  moved", not "it is gone". Dropping that re-read in the first cut would have
+  retired live panels; it was the old hand-rolled code's one genuinely
+  load-bearing guard.
 * Every cog with a sticky panel now forwards `on_guild_channel_delete` to
   `on_channel_delete`, so panel ids stop outliving their channel. Nothing broke
   without it — a dead id resolves to None and the restick returns early — but the
-  dashboard went on reporting a panel that could not be there.
+  dashboard went on reporting a panel that could not be there. It runs under the
+  per-guild lock (a shielded placement into a different channel can be in
+  flight), and `guess` forwards `on_thread_delete` as well, since Discord
+  dispatches that instead for threads — the case `target_types` exists for.
 
 ### Deliberately opt-in, wired to nothing
 

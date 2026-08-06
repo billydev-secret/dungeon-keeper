@@ -1762,10 +1762,23 @@ class GuessCog(commands.Cog):
         placer's delete aims at the message's real channel. An admin repointing
         the Guess channel therefore leaves the prompt where it is until the next
         round or an explicit repost moves it, instead of orphaning it.
+
+        **Legacy fallback.** ``guess_prompt_channel_id`` arrived with the
+        ``core.sticky`` migration, so every guild that already had a prompt has a
+        message id and no channel id. Without the fallback those prompts would
+        read ``(0, live_id)``: ``should_restick`` bails on a falsy channel so the
+        prompt would stop re-sticking altogether, and the first placement could
+        not resolve a channel to delete the old one through — leaving two
+        prompts, the stale one with live buttons. Before the key existed the
+        prompt was always posted into ``guess_channel_id``, so that is the right
+        answer for exactly those rows, and the next save records it properly.
         """
         with self.bot.ctx.open_db() as conn:
             config = get_guess_config(conn, guild_id)
-        return config.prompt_channel_id, config.prompt_message_id
+        channel_id = config.prompt_channel_id or (
+            config.guess_channel_id if config.prompt_message_id else 0
+        )
+        return channel_id, config.prompt_message_id
 
     def _save_panel_ids(
         self, guild_id: int, channel_id: int, message_id: int
@@ -1784,16 +1797,29 @@ class GuessCog(commands.Cog):
             embed=_prompt_embed(color=accent), view=GuessPromptView(self.bot)
         )
 
-    def _prompt_guilds(self) -> set[int]:
+    def _prompt_guilds(self) -> set[int] | None:
         """Guilds with a Guess channel set — the only ones whose messages can
         move a prompt. Without this the listener paid a DB read for every
-        message in every guild (2026-08-06 review, F3)."""
+        message in every guild (2026-08-06 review, F3).
+
+        Returns **None** when a legacy ``guild_id = 0`` row exists. This query
+        sees guild-scoped rows only, but ``get_guess_config`` reads through
+        ``get_config_value``, which falls back to that legacy row — so any guild
+        could be inheriting a Guess channel this query cannot enumerate, and
+        publishing an incomplete set would drop those guilds off the fast path
+        permanently (the restick is the only automatic path, so they would never
+        re-stick and never self-heal). None leaves ``_known`` unset and the TTL
+        cache carrying the load, which is slower and always correct.
+        """
         with self.bot.ctx.open_db() as conn:
             rows = conn.execute(
                 "SELECT guild_id FROM config WHERE key = 'guess_channel_id'"
                 " AND value NOT IN ('', '0')"
             ).fetchall()
-        return {int(r[0]) for r in rows}
+        guilds = {int(r[0]) for r in rows}
+        if 0 in guilds:
+            return None
+        return guilds
 
     async def cog_load(self) -> None:
         """Re-register persistent GameViews for unsolved rounds (capped) and
@@ -1812,9 +1838,10 @@ class GuessCog(commands.Cog):
         self.bot.add_view(GuessPromptView(self.bot))
         # Publish the panel-guild set so the on_message listener rejects the
         # overwhelming majority of messages with a set lookup, not a DB read.
-        self.prompt_panel.set_known_guilds(
-            await asyncio.to_thread(self._prompt_guilds)
-        )
+        # None means "cannot be computed exactly" — see _prompt_guilds.
+        prompt_guilds = await asyncio.to_thread(self._prompt_guilds)
+        if prompt_guilds is not None:
+            self.prompt_panel.set_known_guilds(prompt_guilds)
         log.info("guess: re-registered %d persistent GameViews (cap %d)",
                  len(round_ids), _COG_LOAD_VIEW_CAP)
         self._age_out_loop.start()
@@ -1851,6 +1878,12 @@ class GuessCog(commands.Cog):
     ) -> None:
         """Clear the prompt's ids if its channel was deleted."""
         await self.prompt_panel.on_channel_delete(channel)
+
+    @commands.Cog.listener("on_thread_delete")
+    async def _forget_deleted_prompt_thread(self, thread: discord.Thread) -> None:
+        """Same, for a thread — which is the case ``target_types`` was widened
+        for, and which ``on_guild_channel_delete`` is never dispatched for."""
+        await self.prompt_panel.on_channel_delete(thread)
 
     @commands.Cog.listener()
     async def on_member_update(
