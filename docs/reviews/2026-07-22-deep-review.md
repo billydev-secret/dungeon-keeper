@@ -9,6 +9,36 @@
 
 ---
 
+> ## ⚠ Status update — 2026-08-06 (read this before acting on anything below)
+>
+> This report is a **2026-07-22 snapshot**. A docs-accuracy pass re-checked its
+> headline findings against the code on 2026-08-06 and found several of them
+> quietly fixed since. Verify before you start work — the body below was not
+> rewritten.
+>
+> **Confirmed fixed since (code cited, re-read 2026-08-06):**
+>
+> | Was | Now |
+> |---|---|
+> | S1 #1 role_menus never re-validates role danger | fixed — `role_menus/views.py:390` calls `role_block_reason` on click |
+> | S1 #2 Truth-or-Dare has zero NSFW gate | fixed — `games_traditional_cog.py:170,258` gate on `channel_allows_nsfw()` |
+> | S1 #3 Grant Currency loses snowflake precision | fixed — `economy-bank-manager.js:263` sends the id as a string, with a comment naming the bug |
+> | S1 #4 AI Studio drops the NSFW tag on save | fixed — `games-panel-shared.js:447` posts `tags` |
+> | S2 #5 `/api/home` open to any member | fixed — still `require_perms(set())`, but `home.py:30,46,58,94` gate the mod/admin field groups per-field |
+> | S2 #7 gate.py exempts bare `logic.py`/`store.py` | fixed — `scripts/gate.py:130` `REQUIRE_TEST_NAMES` |
+> | S2 #8 merge-conflict markers in `economy_spec.md` | fixed — no markers remain |
+> | S2 #12 / 07-01 leftover: frontend lint `continue-on-error` | fixed — `.github/workflows/test.yml:46` is blocking, and CLAUDE.md documents it |
+> | S2 #13 QA Tracker rows not keyboard-reachable | fixed — `qa-tracker.js:172,239` `tabindex="0" role="button" aria-expanded`, plus a `keydown` handler |
+> | S2 #14 decorative "Enabled on this server" toggle | fixed — both cogs call `check_game_enabled` (`games_traditional_cog.py:384`, `games_ffa_cog.py:505`) |
+> | S2 #11 `config.py` god-module growing | partly — the `/simplify` pass landed (`plans/config-routes-simplify.md`, complete 2026-07-30). Still 5,001 lines, so the *finding* stands, but the trend reversed |
+>
+> **Spot-checked and still genuinely open:** the 07-01 leftovers
+> `role="tab"`/`makeTabStrip` (neither exists anywhere in `static/js/`) and
+> `/logout` as a CSRF-able plain GET (`routes/oauth.py:311`).
+>
+> Everything not listed here was **not** re-checked — treat it as unknown, not
+> as open.
+
 ## Severity tiers
 
 - **S1 — Safety / correctness:** user-facing safety gap, data corruption, or a security exposure.

@@ -245,6 +245,12 @@ configured one of two ways:
   `SESSION_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(32))"`),
   and `DASHBOARD_BASE_URL`, add the `/callback` redirect URI in the Developer
   Portal, and front it with a reverse proxy (nginx/Caddy) terminating TLS.
+  **`SESSION_SECRET` is strength-checked at boot** (since 2026-08-06): under 32
+  characters, or fewer than 8 distinct characters, and the server refuses to
+  start with a message naming the generator command. Forging a session cookie
+  yields a full admin session, so a guessable secret fails closed like a
+  missing one. The `token_urlsafe(32)` recipe above produces 43 characters and
+  passes.
 - **Open LAN mode (no login):** set `DASHBOARD_OPEN_AUTH=1`. This serves a
   **full-admin, no-auth** dashboard and is forced to a loopback bind. It must be
   an explicit choice — a missing OAuth secret no longer silently falls back to

@@ -23,6 +23,10 @@ from bot_modules.services.guess_repo import (
     set_round_reroll_count,
     set_guess_config_value,
     soft_delete_round,
+    GUESS_DISCLOSURE_VERSION,
+    get_guess_consent,
+    record_guess_consent,
+    withdraw_guess_consent,
     update_round_message,
 )
 
@@ -277,3 +281,63 @@ def test_do_age_out_originals_deletes_files_and_clears_paths(sync_db_path: Path,
             "SELECT original_path FROM guess_rounds WHERE id IN (?, ?)", (r1, r2)
         ).fetchall()
     assert all(p["original_path"] == "" for p in paths)
+
+# ── consent evidence (GDPR Art 7) ──────────────────────────────────────
+
+
+def test_records_consent_with_the_disclosure_version(sync_db_path: Path):
+    """Art 7(1): the controller must be able to demonstrate consent. The role
+    alone shows only that someone holds it, not what they agreed to or when."""
+    with open_db(sync_db_path) as conn:
+        record_guess_consent(conn, guild_id=GUILD, user_id=USER_A, consented_at=1000.0)
+        row = get_guess_consent(conn, guild_id=GUILD, user_id=USER_A)
+    assert row["consented_at"] == 1000.0
+    assert row["disclosure_version"] == GUESS_DISCLOSURE_VERSION
+    assert row["withdrawn_at"] is None
+
+
+def test_consent_is_scoped_per_guild(sync_db_path: Path):
+    with open_db(sync_db_path) as conn:
+        record_guess_consent(conn, guild_id=GUILD, user_id=USER_A, consented_at=1000.0)
+        other = get_guess_consent(conn, guild_id=GUILD + 1, user_id=USER_A)
+    assert other is None
+
+
+def test_withdrawal_stamps_rather_than_deletes(sync_db_path: Path):
+    """Art 7(3) makes withdrawal easy, but the record that consent *was* held —
+    and for how long — is what makes the processing done under it defensible."""
+    with open_db(sync_db_path) as conn:
+        record_guess_consent(conn, guild_id=GUILD, user_id=USER_A, consented_at=1000.0)
+        n = withdraw_guess_consent(
+            conn, guild_id=GUILD, user_id=USER_A, withdrawn_at=2000.0
+        )
+        row = get_guess_consent(conn, guild_id=GUILD, user_id=USER_A)
+    assert n == 1
+    assert row is not None
+    assert row["withdrawn_at"] == 2000.0
+
+
+def test_withdrawal_is_a_noop_without_consent(sync_db_path: Path):
+    with open_db(sync_db_path) as conn:
+        n = withdraw_guess_consent(
+            conn, guild_id=GUILD, user_id=USER_A, withdrawn_at=2000.0
+        )
+    assert n == 0
+
+
+def test_rejoining_records_fresh_consent_keeping_the_old_row(sync_db_path: Path):
+    """A member who leaves and rejoins consented twice; both moments matter."""
+    with open_db(sync_db_path) as conn:
+        record_guess_consent(conn, guild_id=GUILD, user_id=USER_A, consented_at=1000.0)
+        withdraw_guess_consent(
+            conn, guild_id=GUILD, user_id=USER_A, withdrawn_at=2000.0
+        )
+        record_guess_consent(conn, guild_id=GUILD, user_id=USER_A, consented_at=3000.0)
+        latest = get_guess_consent(conn, guild_id=GUILD, user_id=USER_A)
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM guess_consents WHERE guild_id = ? AND user_id = ?",
+            (GUILD, USER_A),
+        ).fetchone()[0]
+    assert latest["consented_at"] == 3000.0
+    assert latest["withdrawn_at"] is None
+    assert rows == 2

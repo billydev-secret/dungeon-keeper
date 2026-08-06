@@ -49,6 +49,8 @@ from bot_modules.services.guess_repo import (
     count_user_guesses_for_round,
     flag_user_open_rounds_optout,
     list_stale_open_originals,
+    record_guess_consent,
+    withdraw_guess_consent,
     get_last_guess_by_user_for_round,
     get_round,
     get_top_guessers,
@@ -273,6 +275,24 @@ def _do_flag_user_open_rounds_optout(
 ) -> int:
     with open_db(db_path) as conn:
         return flag_user_open_rounds_optout(conn, guild_id=guild_id, user_id=user_id)
+
+
+def _do_record_consent(
+    db_path: Path, guild_id: int, user_id: int, when: float
+) -> None:
+    with open_db(db_path) as conn:
+        record_guess_consent(
+            conn, guild_id=guild_id, user_id=user_id, consented_at=when
+        )
+
+
+def _do_withdraw_consent(
+    db_path: Path, guild_id: int, user_id: int, when: float
+) -> int:
+    with open_db(db_path) as conn:
+        return withdraw_guess_consent(
+            conn, guild_id=guild_id, user_id=user_id, withdrawn_at=when
+        )
 
 
 def _do_soft_delete_round(db_path: Path, round_id: int) -> None:
@@ -1642,10 +1662,16 @@ class GuessOptinConsentView(discord.ui.View):
     """Ephemeral consent view for /guess optin — the role is granted only
     once the member explicitly clicks Join, never on command invocation."""
 
-    def __init__(self, member: discord.Member, role: discord.Role) -> None:
+    def __init__(
+        self,
+        member: discord.Member,
+        role: discord.Role,
+        db_path: Path | None = None,
+    ) -> None:
         super().__init__(timeout=120)
         self.member = member
         self.role = role
+        self.db_path = db_path
 
     @discord.ui.button(label="Join the pool", style=discord.ButtonStyle.success)
     async def confirm(
@@ -1662,6 +1688,23 @@ class GuessOptinConsentView(discord.ui.View):
                 view=None,
             )
             return
+        # Record the evidence *after* the grant succeeds — a consent row for a
+        # member who never got the role would misrepresent what happened. A
+        # failure to write it must not cost the member their opt-in, so it is
+        # logged rather than raised (Art 7(1) evidence, 2026-08 GDPR pass).
+        if self.db_path is not None:
+            try:
+                await asyncio.to_thread(
+                    _do_record_consent,
+                    self.db_path,
+                    interaction.guild_id or 0,
+                    self.member.id,
+                    time.time(),
+                )
+            except Exception:
+                log.exception(
+                    "guess: could not record consent for %s", self.member.id
+                )
         await interaction.response.edit_message(
             content="Welcome to the Guess pool. You can now submit images and "
             "be guessed at. Leave anytime with `/guess optout`.",
@@ -1794,6 +1837,12 @@ class GuessCog(commands.Cog):
                 "guess: %d open rounds flagged answer_optout for user %d (role removed)",
                 flagged, after.id,
             )
+        # Losing the role is the one choke point both /guess optout and a mod
+        # removal pass through, so the consent record is stamped withdrawn here
+        # rather than in the command (Art 7(3)).
+        await asyncio.to_thread(
+            _do_withdraw_consent, db_path, after.guild.id, after.id, time.time()
+        )
 
     @guess.command(name="submit", description="Submit an image to start a Guess round.")
     @app_commands.describe(
@@ -2024,7 +2073,7 @@ class GuessCog(commands.Cog):
         # here — the member reads what joining stores before anything changes.
         await interaction.followup.send(
             GUESS_CONSENT_TEXT,
-            view=GuessOptinConsentView(member, role),
+            view=GuessOptinConsentView(member, role, self.bot.ctx.db_path),
             ephemeral=True,
         )
 

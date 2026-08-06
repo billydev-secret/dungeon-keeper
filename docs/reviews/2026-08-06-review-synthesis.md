@@ -4,69 +4,108 @@ Closes the 2026-08-05 staged review (plan:
 `docs/plans/staged-review-2026-08.md`). 21 feature bundles + 6 horizontal
 sweeps + loose-ends audit; per-bundle findings in the sibling
 `2026-08-05-*` / `2026-08-06-sweep-*` docs; data decisions in
-`2026-08-05-gdpr-register.md`.
+`docs/data_register.md`.
 
 ## Fix queue (deduped, priority order)
 
 ### High — code — ALL SHIPPED 2026-08-06
-(6ac71558 erasure, 2b3094aa whisper, 1dfa8fea disclosure, 775d903d guess
-consent, 6639dbc0 aiohttp; mediums 49a02867; cat_catch dials 98395fdb)
 
-1. **Erasure-path hardening** (one work package, privacy-core A1/A2/A3 +
+> Each item below is struck through with the commit that closed it, and every
+> one was re-verified against the code on 2026-08-06 (see
+> `2026-08-06-review-docs-accuracy-audit.md`). Strike an item **here**, in
+> place, when it lands — a shipped-status note in this header alone was read
+> as "still open" and nearly caused a re-implementation.
+
+1. ~~**Erasure-path hardening** (one work package, privacy-core A1/A2/A3 +
    gap rollup): chunk the `IN (…)` id list, one transaction, uniform
    schema tolerance, WAL-checkpoint note in a new erasure runbook; add
    the missed tables — `xp_reaction_awards`, `watched_users`, bios×3,
    `invite_edges` (both directions), voice-master prefs,
    `member_birthdays` — and a new `econ_purge_user` helper (economy +
    casino per-member state; ledger deliberately preserved). Ship with a
-   >32k-message failing test first.
-2. **Whisper cross-guild forget-me over-delete** (whisper A1) + two-guild
+   >32k-message failing test first.~~ — **shipped `6ac71558`**
+   (`privacy_service.py:14,77,120-125,156-158,201`,
+   `economy_service.py:1304`, `docs/gdpr_runbook.md`).
+2. ~~**Whisper cross-guild forget-me over-delete** (whisper A1) + two-guild
    repro test; tidy D1 spec drift and dead `decrement_guesses_left` in
-   the same commit.
-3. **`/delete_me` disclosure truth** (privacy U1): branch the confirm
+   the same commit.~~ — **shipped `2b3094aa`**.
+3. ~~**`/delete_me` disclosure truth** (privacy U1): branch the confirm
    prompt on `guild_retains_content` — prod stores full text for 452k
-   messages while the copy says "mostly metadata".
-4. **Guess consent package** (image-guard-guess U1/G1/G2): consent view
+   messages while the copy says "mostly metadata".~~ — **shipped
+   `1dfa8fea`** (`privacy/logic.py:188,218`, `privacy_cog.py:482,554`).
+   Prod re-checked 2026-08-06: `message_storage_level='all'`, 455,136 of
+   635,625 message rows carry text.
+4. ~~**Guess consent package** (image-guard-guess U1/G1/G2): consent view
    with retention disclosure, `/guess optout`, 90-day age-out for
-   unsolved originals; consider confession-text TTL (pattern exists in
-   confessions' 7-day purge).
-5. **aiohttp 3.14.1 → 3.14.3** (security D1): three published CVEs in
-   discord.py's HTTP layer; bump + recompile locks, CI proves it.
+   unsolved originals~~ — **shipped `775d903d`** (`guess_cog.py:1603,1642,
+   2032`). **Still open:** the guess confession-text TTL was only ever a
+   "consider", and no `guess_*` table is in `purge_user_data` — see the
+   register's row 31.
+5. ~~**aiohttp 3.14.1 → 3.14.3** (security D1): three published CVEs in
+   discord.py's HTTP layer; bump + recompile locks, CI proves it.~~ —
+   **shipped `6639dbc0`** (both locks pin `aiohttp==3.14.3`).
 
 ### High — policy (Ben decides, then a small commit documents)
 
 6. ~~Mod-assigned gender~~ — **owner decision 2026-08-06: accepted as
    internal metrics, no change.** (Register row updated.)
 7. **Transparency package**: privacy-notice line naming Anthropic
-   (advisor questions) + Spotify (track queries). Image Guard log
+   (advisor questions) + Spotify (track queries). **Still open, verified
+   2026-08-06** — neither name appears in `manual.html`,
+   `docs/privacy_spec.md`, or `src/bot_modules/privacy/`. This is the
+   only unshipped item left in the High tier. Image Guard log
    channels: ~~wire them~~ — resolved; the web Blocked Images panel is
    the trail of record (loose-ends §2 corrected), Discord fan-out
-   declined.
+   declined. The panel has since proved itself: `nsfw_blocks` holds 3
+   real gate removals (was empty when §2 was written), 82 classifications.
 
 ### Medium
 
-8. Perk-renewal notice DM, at least on price change (economy A2).
+8. ~~Perk-renewal notice DM, at least on price change (economy A2).~~ —
+   **shipped `49a02867`** (`BillingResult.previous_price`).
 9. `xp_events` 90-day retention + rollup (dbperf P1 — 1M rows, largest
    table). **Deferred with design note (2026-08-06):** xp_system has
    unbounded all-time readers (leaderboards by source), so deletion needs
    a rollup table the readers union — its own pass, not a quick sweep.
-10. `rules_events`: dismissed-event 180d sweep + spec preserve lines
-    (ai-mod G1/G2).
-11. `games_external_messages` post-parse 30d sweep (batch-bc A1).
-12. Bios archived-on-leave 12-month TTL decision (penpals-bios G2).
+   **Still open** — prod re-counted 2026-08-06: 1,022,853 rows, still the
+   largest table (next is `messages` at 635,625).
+10. ~~`rules_events`: dismissed-event 180d sweep + spec preserve lines
+    (ai-mod G1/G2).~~ — **shipped `49a02867`**
+    (`rules_watch/ledger.py:442` `purge_old_dismissed_events`).
+11. ~~`games_external_messages` post-parse 30d sweep (batch-bc A1).~~ —
+    **shipped `49a02867`** (`games_external/logic.py:231`
+    `sweep_old_buffer_rows`).
+12. ~~Bios archived-on-leave 12-month TTL decision (penpals-bios G2).~~ —
+    **decided + shipped `9374c306`** (migration `149_bios_archived_at.sql`,
+    applied in prod).
 
 ### Low / housekeeping
 
-13. Dead structure: `games_consent/` dir now; orphan table + guess reuse
-    columns in the next games migration. greeting_watch 30d GC; intake
-    purge decision; quotes-are-audited line in manual.html; journald
-    line in DEPLOYMENT.md; keep ollama prompt-log debug-only (comment).
+13. ~~Dead structure: `games_consent/` dir now; greeting_watch 30d GC;
+    quotes-are-audited line in manual.html; journald line in
+    DEPLOYMENT.md; keep ollama prompt-log debug-only (comment).~~ —
+    **shipped `49a02867` (dir + GC) and `bf02ce1f` (the four doc/comment
+    touches)**. **Still open:** the orphan `games_consent` table + guess
+    reuse columns still want dropping in the next games migration, and
+    the intake purge decision is still unmade.
 
 ### Loose ends still awaiting Ben (from `2026-08-05-loose-ends.md`)
 
-Economy retune round 2 (float still +5k/day; cat_catch needs to become a
-dial), snapshot/restore branch ship-or-reap (+3 more branches), rollback
-SQL + `Discord Messages/` relocation out of the repo root.
+Re-checked 2026-08-06:
+
+- **Economy retune round 2** — still awaiting sign-off, and the number
+  still holds: the Pools line reads **+4,993/day** on a fresh read-only
+  snapshot (`economy_tuning_report.py --days 5`), unchanged from the
+  figure loose-ends §1 quoted. ~~cat_catch needs to become a dial~~ —
+  done in `98395fdb`; the round-2 proposal is
+  `2026-08-06-economy-retune-round2-proposal.md`, **not applied**.
+- ~~Snapshot/restore branch ship-or-reap (+3 more branches)~~ — the
+  snapshot/restore branch **merged** as `81035491`, and three of the four
+  other branches merged too (jail `cdb73a17`, pen-pals `011c6a2f`,
+  confessions `78053cf4`). Only the quest-ideas branch is still unmerged.
+- **Rollback SQL + `Discord Messages/` relocation** — still open; all
+  four `.sql` files and the export dir are still untracked in the
+  production checkout root.
 
 ## House patterns (cite these in future reviews)
 
