@@ -13,6 +13,7 @@ followup, a JSON 200/400 response, etc.).
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
@@ -30,6 +31,9 @@ from bot_modules.services.moderation import (
     write_audit,
 )
 from bot_modules.services.embeds import MOD_JAIL as _CLR_JAIL
+from bot_modules.jail.logic import sanitize_channel_name
+
+log = logging.getLogger("dungeonkeeper.jail")
 
 
 # ── Result type ──────────────────────────────────────────────────────
@@ -123,6 +127,113 @@ def check_jail_preconditions(
             )
 
     return None
+
+
+# ── Jail channel creation ────────────────────────────────────────────
+
+
+async def create_jail_channel(
+    ctx: AppContext,
+    guild: discord.Guild,
+    target: discord.Member,
+    *,
+    jail_id: int,
+    jailed_role: discord.Role | None = None,
+) -> discord.TextChannel | None:
+    """Create ``target``'s private jail channel and record it on jail ``jail_id``.
+
+    Returns the new channel, or ``None`` if the bot lacks **Manage Channels**.
+    Callers degrade rather than raise: the ``jails`` row is authoritative with
+    or without a channel, so a jail without one is diminished, not broken.
+
+    Two callers share this:
+
+    - :func:`apply_jail`, creating the channel for a fresh hold.
+    - ``check_jail_rejoin``, rebuilding one for a returning member whose
+      channel was deleted while they were away — or never existed, because the
+      original jail hit this function's ``None`` path.
+
+    The channel is private by construction: ``@everyone`` and ``@Jailed`` are
+    denied view, and only the target, the bot, and configured mod roles are
+    granted it. ``jailed_role`` is denied explicitly so a member holding it
+    still can't see *other* people's jail channels — pass it when known.
+    """
+    guild_id = guild.id
+
+    def _get_cat_id():
+        with ctx.open_db() as conn:
+            return get_config_value(conn, "jail_category_id", "0", guild_id)
+
+    cat_id_raw = await asyncio.to_thread(_get_cat_id)
+    try:
+        cat_id = int(cat_id_raw or "0")
+    except ValueError:
+        cat_id = 0
+    category = guild.get_channel(cat_id) if cat_id else None
+    if not isinstance(category, discord.CategoryChannel):
+        category = None
+
+    ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
+    # Truncate first, then sanitize: slicing a sanitized name can leave a
+    # trailing hyphen, while sanitizing a slice strips it.
+    ch_name = f"jail-{sanitize_channel_name(target.name[:16])}-{ts}"
+
+    mod_role_ids = ctx.guild_config(guild_id).mod_role_ids
+
+    overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=False, send_messages=False
+        ),
+        target: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+            attach_files=True,
+        ),
+    }
+    if jailed_role is not None:
+        overwrites[jailed_role] = discord.PermissionOverwrite(view_channel=False)
+    if guild.me:
+        overwrites[guild.me] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            manage_channels=True,
+            manage_messages=True,
+            read_message_history=True,
+        )
+    for rid in mod_role_ids:
+        role = guild.get_role(rid)
+        if role:
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                manage_messages=True,
+            )
+
+    try:
+        jail_channel = await guild.create_text_channel(
+            ch_name, category=category, overwrites=overwrites,  # type: ignore[arg-type]
+        )
+    except discord.HTTPException:
+        # Forbidden (no Manage Channels) is the common case, but a guild at the
+        # 500-channel cap, a full category, or a 5xx all raise the plain
+        # HTTPException. Degrading to None covers every one of them: the caller
+        # keeps the jail row and reports the missing channel. This must not
+        # raise — ``check_jail_rejoin`` runs as the first statement of
+        # ``on_member_join``, so an exception here would abort the whole join
+        # pipeline (known-user upsert, intake card, welcome) for that member.
+        log.warning("Could not create jail channel for jail #%s", jail_id)
+        return None
+
+    jail_channel_id = jail_channel.id
+
+    def _set_channel():
+        with ctx.open_db() as conn:
+            set_jail_channel(conn, jail_id, jail_channel_id)
+
+    await asyncio.to_thread(_set_channel)
+    return jail_channel
 
 
 # ── Main entrypoint ──────────────────────────────────────────────────
@@ -302,65 +413,17 @@ async def apply_jail(
 
     jail_id = await asyncio.to_thread(_persist)
 
-    # ── Step 4: create private jail channel ─────────────────────────
-    def _get_cat_id():
-        with ctx.open_db() as conn:
-            return get_config_value(conn, "jail_category_id", "0", guild_id)
-
-    cat_id_raw = await asyncio.to_thread(_get_cat_id)
-    try:
-        cat_id = int(cat_id_raw or "0")
-    except ValueError:
-        cat_id = 0
-    category = guild.get_channel(cat_id) if cat_id else None
-    if not isinstance(category, discord.CategoryChannel):
-        category = None
-
-    ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
-    ch_name = f"jail-{target.name[:16]}-{ts}"
-
-    mod_role_ids = ctx.guild_config(guild.id).mod_role_ids
-
-    overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(
-            view_channel=False, send_messages=False
-        ),
-        jailed_role: discord.PermissionOverwrite(view_channel=False),
-        target: discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            read_message_history=True,
-            attach_files=True,
-        ),
-    }
-    if guild.me:
-        overwrites[guild.me] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            manage_channels=True,
-            manage_messages=True,
-            read_message_history=True,
-        )
-    for rid in mod_role_ids:
-        role = guild.get_role(rid)
-        if role:
-            overwrites[role] = discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True,
-                manage_messages=True,
-            )
-
-    try:
-        jail_channel = await guild.create_text_channel(
-            ch_name, category=category, overwrites=overwrites,  # type: ignore[arg-type]
-        )
-    except discord.Forbidden:
+    # ── Steps 4-5: create the jail channel + record it on the row ────
+    jail_channel = await create_jail_channel(
+        ctx, guild, target, jail_id=jail_id, jailed_role=jailed_role
+    )
+    if jail_channel is None:
         # The role swap already happened AND the jail row is persisted above
         # (with channel_id 0), so restoration and the auto-release loop still
         # work — the member is not stranded. We don't roll anything back:
         # better to leave the user jailed and have a moderator grant **Manage
         # Channels** than to silently un-strip their roles and abandon them.
+        # A later rejoin retries channel creation via ``check_jail_rejoin``.
         return JailOutcome(
             ok=False,
             jail_id=jail_id,
@@ -370,15 +433,6 @@ async def apply_jail(
                 "grant **Manage Channels** to finish setup."
             ),
         )
-
-    # ── Step 5: record the channel id on the jail row ───────────────
-    jail_channel_id = jail_channel.id
-
-    def _set_channel():
-        with ctx.open_db() as conn:
-            set_jail_channel(conn, jail_id, jail_channel_id)
-
-    await asyncio.to_thread(_set_channel)
 
     # ── Step 6: jail-channel welcome embed ───────────────────────────
     duration_text = (

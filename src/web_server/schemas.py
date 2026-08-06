@@ -468,6 +468,9 @@ class JailEntrySchema(BaseModel):
     released_at: float | None = None
     release_reason: str = ""
     channel_id: str = ""
+    # True/False when the bot can see the guild, None when it can't — the panel
+    # only warns about lost roles on a definite False.
+    in_guild: bool | None = None
 
 
 class JailsResponse(BaseModel):

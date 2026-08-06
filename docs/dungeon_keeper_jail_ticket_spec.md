@@ -9,7 +9,8 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/jail <user> [duration] [reason]` | Slash | Mod | Jail a member, optionally with a duration like `24h` or `7d` |
-| `/unjail <user> [reason]` | Slash | Mod | Release a jailed member |
+| `/unjail <user> [reason]` | Slash | Mod | Release a jailed member. Takes a *user*, not a member, so someone who left the server can be released by ID |
+| Release hold | Web (dashboard) | Mod | Moderation → Jails, Release button on an active hold; same flow as `/unjail`, and flags subjects who have left |
 | `Jail User` | User context menu | Mod | Modal for duration + reason, then runs the jail flow |
 | Support Ticket Panel | Web (dashboard) | Admin | Moderation → Tickets posts the persistent "Open Ticket" button into a chosen channel. Replaced `/ticket panel` 2026-07-28; moved there from the retired Channel Panels page 2026-07-28 |
 | `/ticket open [description]` | Slash | Everyone | Open a ticket directly from chat |
@@ -84,11 +85,23 @@ The jail record (with the role snapshot) is written to the database the instant 
 
 A background task checks once a minute for expired jails and runs the unjail flow automatically with reason "Jail duration expired." A 24-hour jail set at 11 pm Friday actually ends at 11 pm Saturday even if no mod is online.
 
-If a jailed user leaves and rejoins, they're re-jailed automatically: roles re-stripped, `@Jailed` re-assigned, channel access restored, with a note posted in the jail channel that they returned.
+### Leaving and returning
+
+Leaving the server is not an escape. The jail record survives, and if the user rejoins they're re-jailed automatically: roles re-stripped, `@Jailed` re-assigned, channel access restored, with a note posted in the jail channel that they returned. When a jailed member leaves, the bot posts a mod-log line and a note in their jail channel and writes a `jail_member_left` audit row — the hold is left standing and **the jail channel is deliberately kept**, because a returning member needs somewhere to appeal. `on_member_remove` also fires for kicks and bans, so the ban list is checked first: a banned member gets different copy (the hold is moot, they can't return) and a `banned: true` audit flag, rather than a promise of automatic re-jailing that could never happen.
+
+If the jail channel is gone when they return (deleted while they were away, or never created because the original jail hit a missing **Manage Channels**), it's recreated on rejoin and the new channel id is written back to the jail row. Without that the member is re-jailed into a server the `@Jailed` role hides completely, with no room and no notice. If recreation also fails on permissions, the hold still applies and a mod-log line reports the missing channel.
+
+`on_member_join` can't fire for someone who rejoins while the bot is offline, so a startup sweep reconciles active jails against present members and re-applies any lapsed hold. It acts only where the member demonstrably **rejoined after the hold was imposed** (`joined_at` later than the jail's `created_at`) and the hold hasn't expired in the meantime. Anything else — a member missing `@Jailed` with no fresh join — is left strictly alone with a mismatch notice for a human, because it most likely means a moderator released them by hand and re-jailing would strip every role they hold.
+
+Role count can't make that call, and an early version of this that tried it had the logic exactly backwards: jailing strips every non-managed role, so a hand-released member (mod removes `@Jailed`, nothing else) is indistinguishable by roles from a fresh rejoiner. Only the join timestamp separates the two.
+
+Re-applying a hold uses remove/add rather than a wholesale role set, for the same reason jailing does — a member holding an integration-managed role (Nitro Booster, which Discord re-grants automatically on rejoin) would otherwise 403. If the role application fails anyway, the bot says so in the mod log rather than posting "jail has been re-applied" over a hold that didn't stick.
 
 ### Unjail flow
 
 Restores every snapshotted role (logging any that were deleted in the meantime), removes `@Jailed`, generates a transcript of the jail channel, posts the transcript file to the transcript log channel, DMs the transcript to the member, then deletes the jail channel. The member's DM tells them they've been released and reattaches the transcript so they have the conversation record.
+
+**Releasing someone who has left** works through the same path — `/unjail` takes a user rather than a member, so a departed user resolves by ID, and the dashboard's Release button and the expiry loop both route through it. Role restoration is the only step skipped: there's no member to restore to, and because a later rejoin finds no active hold, the snapshotted roles are dropped for good. The command says so explicitly, and the dashboard warns before committing. Everything else still runs — transcript, channel cleanup, DM (delivered if the bot shares another server with them), and an audit row carrying `note: user_left_guild`. If Discord can't resolve the account at all, the row is closed out with `note: user_unresolvable` rather than left active forever.
 
 ### Ticket flow
 

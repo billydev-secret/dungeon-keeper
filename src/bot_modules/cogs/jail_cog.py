@@ -29,6 +29,7 @@ from bot_modules.jail.embeds import (
 from bot_modules.jail.logic import sanitize_channel_name
 
 from bot_modules.commands.jail_commands import (
+    CLR_JAIL,
     CLR_POLICY,
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
@@ -58,6 +59,7 @@ from bot_modules.commands.jail_commands import (
     _ts_str,
     jail_channel_deny_sweep,
     jail_expiry_loop,
+    jail_rejoin_reconcile_sweep,
     policy_vote_timeout_loop,
     stamp_channel_jail_deny,
     ticket_autodelete_loop,
@@ -384,6 +386,11 @@ class JailCog(commands.Cog):
         bot.startup_task_factories.append(
             lambda: jail_channel_deny_sweep(bot, ctx)
         )
+        # Re-apply holds for members who rejoined while the bot was offline —
+        # on_member_join never fired for them, so nothing else notices.
+        bot.startup_task_factories.append(
+            lambda: jail_rejoin_reconcile_sweep(bot, ctx)
+        )
 
     async def cog_unload(self) -> None:
         if hasattr(self, "_jail_context_menu"):
@@ -398,6 +405,104 @@ class JailCog(commands.Cog):
             self.bot.tree.remove_command(
                 "Warn User (Message)", type=discord.AppCommandType.message
             )
+
+    # ── Record a jailed member walking out ───────────────────────────────
+    @commands.Cog.listener("on_member_remove")
+    async def _note_jailed_member_left(self, member: discord.Member) -> None:
+        """Log it when someone leaves mid-hold, and leave the hold standing.
+
+        Leaving is not an escape: the ``jails`` row survives and
+        ``check_jail_rejoin`` re-applies the hold if they come back. But nothing
+        used to *say* so, which left mods to discover a departure only when
+        ``/unjail`` failed on them. The jail channel is deliberately kept — a
+        rejoin restores access to it, and deleting it here would strand a
+        returning member in a server they can't see with nowhere to appeal.
+        """
+        ctx = self.ctx
+        guild = member.guild
+        if guild is None or guild.id != ctx.guild_id:
+            return
+
+        def _fetch():
+            with ctx.open_db() as conn:
+                return get_active_jail(conn, guild.id, member.id)
+
+        try:
+            jail = await asyncio.to_thread(_fetch)
+        except Exception:
+            log.exception("jail leave-check failed for %s", member.id)
+            return
+        if not jail:
+            return
+
+        jail_id = jail["id"]
+
+        # on_member_remove fires for kicks and bans too. Promising "they'll be
+        # re-jailed if they rejoin" is false for a ban, so check the ban list
+        # before choosing the wording — one API call, and only ever on the rare
+        # occasion that a *jailed* member leaves.
+        banned = False
+        try:
+            await guild.fetch_ban(member)
+            banned = True
+        except discord.NotFound:
+            pass  # genuinely left, or was kicked
+        except discord.HTTPException:
+            # No Ban Members permission, or the API is unhappy. Fall back to the
+            # neutral wording rather than asserting either way.
+            log.debug("Could not check ban list for %s", member.id, exc_info=True)
+
+        def _audit():
+            with ctx.open_db() as conn:
+                write_audit(
+                    conn,
+                    guild_id=guild.id,
+                    action="jail_member_left",
+                    actor_id=0,
+                    target_id=member.id,
+                    extra={"jail_id": jail_id, "banned": banned},
+                )
+
+        await asyncio.to_thread(_audit)
+
+        if banned:
+            title = "🔨 Jailed member banned"
+            body = (
+                f"{member.mention} was banned while jailed (jail #{jail_id}).\n"
+                "The hold is now moot — they can't return. Use `/unjail` with "
+                f"their ID (`{member.id}`) to close the record out."
+            )
+            channel_note = (
+                f"🔨 {member.mention} was banned. The hold no longer applies."
+            )
+        else:
+            title = "🚪 Jailed member left"
+            body = (
+                f"{member.mention} left while jailed (jail #{jail_id}).\n"
+                "The hold stays active — they'll be re-jailed automatically if "
+                f"they rejoin. Use `/unjail` with their ID (`{member.id}`) to "
+                "close it out instead; their stored roles won't survive that."
+            )
+            channel_note = (
+                f"🚪 {member.mention} left the server. The hold is still "
+                "active — rejoining re-applies it."
+            )
+
+        await _post_audit(
+            ctx,
+            guild,
+            discord.Embed(title=title, description=body, color=CLR_JAIL),
+        )
+
+        jail_channel = guild.get_channel(jail["channel_id"])
+        if isinstance(jail_channel, discord.TextChannel):
+            try:
+                await jail_channel.send(
+                    channel_note,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                pass
 
     # ── Keep jailed members out of newly-created channels ────────────────
     @commands.Cog.listener("on_guild_channel_create")
@@ -457,13 +562,24 @@ class JailCog(commands.Cog):
         name="unjail", description="Release a jailed member and restore their roles."
     )
     @app_commands.default_permissions(moderate_members=True)
-    @app_commands.describe(user="Member to release", reason="Release reason")
+    @app_commands.describe(
+        user="Member to release (paste a user ID if they've left the server)",
+        reason="Release reason",
+    )
     async def unjail_cmd(
         self,
         interaction: discord.Interaction,
-        user: discord.Member,
+        user: discord.User,
         reason: str | None = None,
     ) -> None:
+        """Release a hold, whether or not the subject is still in the server.
+
+        Typed as ``discord.User`` rather than ``discord.Member`` on purpose: a
+        member who leaves while jailed keeps their active row (they're re-jailed
+        on return), and a Member-typed option can't resolve them at all, which
+        left departed users unreleasable from Discord entirely. Resolving the
+        member here keeps full role restoration for anyone still present.
+        """
         ctx = self.ctx
         member = interaction.user
         guild = interaction.guild
@@ -477,7 +593,8 @@ class JailCog(commands.Cog):
             )
             return
         await interaction.response.defer(ephemeral=True)
-        result = await _do_unjail(ctx, guild, user, reason=reason or "", actor=member)
+        target: discord.Member | discord.User = guild.get_member(user.id) or user
+        result = await _do_unjail(ctx, guild, target, reason=reason or "", actor=member)
         await interaction.followup.send(result, ephemeral=True)
 
     # ── /ticket ───────────────────────────────────────────────────────────

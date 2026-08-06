@@ -1,5 +1,6 @@
-import { api, esc } from "../api.js";
+import { api, apiPost, esc } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
+import { toast, promptDialog } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { syncHash } from "../report-helpers.js";
@@ -123,11 +124,17 @@ function renderList(jails, activeId, filter) {
 
 const ICON_DOC = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 11V3a1 1 0 011-1h6l4 4v5a1 1 0 01-1 1H2a1 1 0 01-1-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 2v4h4" stroke="currentColor" stroke-width="1.5"/></svg>`;
 
+const ICON_UNLOCK = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3.5 6.5h7a1 1 0 011 1v4a1 1 0 01-1 1h-7a1 1 0 01-1-1v-4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M4.5 6.5V4a2.5 2.5 0 015 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+
 function renderActions(j) {
   if (!j) return "";
+  const release = j.status === "active"
+    ? `<button class="act-btn" data-action="release" title="Release this hold">${ICON_UNLOCK}Release</button>`
+    : "";
   return `
     <div class="td-actions">
       <span class="act-spacer"></span>
+      ${release}
       <button class="act-btn" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
     </div>
   `;
@@ -141,11 +148,16 @@ function renderSubjectCard(j) {
     ? `<span style="color:var(--ink-mute);font-weight:500;font-family:var(--mono);font-size:11px">· ${esc(j.user_id)}</span>`
     : "";
   const jailedLine = `Jailed ${fmtTs(j.created_at)}`;
+  // in_guild is null when the bot can't see the guild — only flag a definite
+  // absence, so a disconnected bot doesn't label everyone as departed.
+  const leftChip = j.in_guild === false
+    ? ` <span class="t-chip closed">Left server</span>`
+    : "";
   return `
     <div class="user-card">
       <div class="av" style="background:${color}">${esc(init)}</div>
       <div class="info">
-        <div class="n">${esc(name)} ${idSuffix}</div>
+        <div class="n">${esc(name)} ${idSuffix}${leftChip}</div>
         <div class="m">${esc(jailedLine)}</div>
       </div>
     </div>
@@ -403,11 +415,43 @@ export function mount(container, initialParams = {}) {
     render();
   });
 
-  detailEl.addEventListener("click", (e) => {
+  detailEl.addEventListener("click", async (e) => {
     const btn = e.target.closest(".act-btn");
     if (!btn || btn.disabled) return;
-    if (btn.dataset.action === "transcript" && state.activeId) {
+    const action = btn.dataset.action;
+    if (action === "transcript" && state.activeId) {
       showTranscript("jail", state.activeId);
+      return;
+    }
+    if (action !== "release" || !state.activeId) return;
+
+    const j = state.jails.find((x) => x.id === state.activeId);
+    if (!j) return;
+    // Releasing someone who has left is not the same act as releasing a
+    // present member: their stored roles are dropped for good, since a later
+    // rejoin finds no active hold to restore from. Say so before they commit.
+    const warning = j.in_guild === false
+      ? " They've left the server, so their stored roles will not be restored if they return."
+      : "";
+    const reason = await promptDialog(
+      `Release jail #${j.id}?${warning} Reason (optional):`,
+      { title: "Release Hold", confirmLabel: "Release", danger: true },
+    );
+    if (reason === null) return;
+
+    btn.disabled = true;
+    try {
+      const res = await apiPost(
+        `/api/moderation/jails/${encodeURIComponent(j.id)}/release`,
+        { reason },
+      );
+      toast(res?.message || "Hold released");
+      await refresh();
+    } catch (err) {
+      console.error("Jail release failed:", err);
+      toast(err.message, "error");
+    } finally {
+      btn.disabled = false;
     }
   });
 

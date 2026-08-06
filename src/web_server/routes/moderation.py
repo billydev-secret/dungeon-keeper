@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from web_server.helpers import resolve_names as _resolve_names
 from bot_modules.jail.apply import apply_jail
-from bot_modules.commands.jail_commands import _do_unjail
+from bot_modules.commands.jail_commands import _do_unjail, resolve_release_target
 from bot_modules.services.moderation import (
     claim_ticket,
     close_ticket,
@@ -169,6 +169,16 @@ async def list_jails(
         ("user_id", "user_name"),
         ("moderator_id", "moderator_name"),
     )
+    # Presence is computed live rather than stored: a jailed member can leave
+    # and rejoin freely (the hold re-applies on return), so any column recording
+    # "they left" would be stale the moment they came back. The panel uses this
+    # to warn that releasing them drops their stored roles for good.
+    for j in result["jails"]:
+        j["in_guild"] = (
+            guild.get_member(int(j["user_id"])) is not None
+            if guild is not None
+            else None
+        )
     return result
 
 
@@ -182,9 +192,10 @@ async def jail_release_route(
     """Release a jail from the dashboard.
 
     Routes through the canonical :func:`_do_unjail` flow (role restore,
-    transcript, channel cleanup, DM, audit) — same behavior as the
-    ``/unjail`` slash command. If the member has already left the guild,
-    the DB record is released directly since there is no role to remove.
+    transcript, channel cleanup, DM, audit) — same behavior as the ``/unjail``
+    slash command, for departed members too. This used to close the row out
+    directly when the member had left, which skipped the transcript and left
+    their jail channel orphaned in the category.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -206,7 +217,7 @@ async def jail_release_route(
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
-    if guild is None:
+    if bot is None or guild is None:
         raise HTTPException(
             status_code=503,
             detail="Bot is not connected to this guild — cannot release jail.",
@@ -218,7 +229,7 @@ async def jail_release_route(
             detail="Your account isn't a member of this guild (cannot moderate).",
         )
 
-    target = guild.get_member(int(jail["user_id"]))
+    target = await resolve_release_target(bot, guild, int(jail["user_id"]))
     if target is not None:
         message = await _do_unjail(ctx, guild, target, reason=reason, actor=moderator)
 
@@ -234,13 +245,15 @@ async def jail_release_route(
             raise HTTPException(status_code=409, detail=message)
         return {"ok": True, "message": message}
 
-    # Member left the guild — there's no role to remove; close out the record.
+    # Discord has no such user at all (deleted account, or an id that never
+    # existed). Nothing to transcript or notify — close the row out so it stops
+    # showing as an active hold on someone unreachable.
     def _release_record():
         with ctx.open_db() as conn:
             release_jail(
                 conn,
                 jail_id,
-                reason=reason or "Released from dashboard (user left guild)",
+                reason=reason or "Released from dashboard (user unreachable)",
             )
             write_audit(
                 conn,
@@ -248,11 +261,18 @@ async def jail_release_route(
                 action="jail_release",
                 actor_id=user.user_id,
                 target_id=int(jail["user_id"]),
-                extra={"jail_id": jail_id, "reason": reason, "note": "user_left_guild"},
+                extra={
+                    "jail_id": jail_id,
+                    "reason": reason,
+                    "note": "user_unresolvable",
+                },
             )
 
     await run_query(_release_record)
-    return {"ok": True, "message": "User has left the server — jail record marked released."}
+    return {
+        "ok": True,
+        "message": "That account no longer exists on Discord — jail record marked released.",
+    }
 
 
 # ── Tickets ───────────────────────────────────────────────────────────────

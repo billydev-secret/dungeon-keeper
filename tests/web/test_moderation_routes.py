@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import time
+from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 
 from bot_modules.core.db_utils import open_db
@@ -175,6 +178,143 @@ def test_jails_filter_by_user_id(open_client, fake_ctx):
     _seed_jail(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=200)
     body = open_client.get("/api/moderation/jails?user_id=100").json()
     assert {j["user_id"] for j in body["jails"]} == {"100"}
+
+
+# ── GET /api/moderation/jails — in_guild presence flag ───────────────
+
+
+def test_jails_flags_a_subject_who_left_the_server(open_client, fake_ctx):
+    """The panel warns about lost roles, so absence has to be visible."""
+    _seed_jail(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=1001)
+    _seed_jail(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=1002)
+
+    present = MagicMock()
+    present.id = 1001
+    present.display_name = "still-here"
+    guild = MagicMock()
+    guild.id = fake_ctx.guild_id  # name resolution falls back to a DB lookup keyed on this
+    guild.get_member = MagicMock(side_effect=lambda uid: present if int(uid) == 1001 else None)
+    fake_ctx.bot = MagicMock()
+    fake_ctx.bot.get_guild = MagicMock(return_value=guild)
+
+    jails = {j["user_id"]: j for j in open_client.get("/api/moderation/jails").json()["jails"]}
+    assert jails["1001"]["in_guild"] is True
+    assert jails["1002"]["in_guild"] is False
+
+
+def test_jails_in_guild_is_null_when_bot_is_disconnected(open_client, fake_ctx):
+    """Unknown ≠ departed — a disconnected bot must not label everyone gone."""
+    _seed_jail(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=1001)
+    fake_ctx.bot = None
+
+    jails = open_client.get("/api/moderation/jails").json()["jails"]
+    assert jails[0]["in_guild"] is None
+
+
+# ── POST /api/moderation/jails/{id}/release ──────────────────────────
+
+
+def _release_ctx(fake_ctx, *, member_present: bool, user_exists: bool = True):
+    """Wire fake_ctx.bot with a guild whose member may or may not be present."""
+    guild = MagicMock()
+    guild.id = fake_ctx.guild_id
+    guild.name = "Test Guild"
+    guild.roles = []
+    # OpenAuth authenticates as user_id 0; the route resolves the actor as a
+    # guild member before it will act.
+    moderator = MagicMock()
+    moderator.id = 0
+    moderator.mention = "<@0>"
+    moderator.display_name = "mod"
+
+    target = MagicMock()
+    target.id = 1001
+    target.mention = "<@1001>"
+    target.roles = []
+    target.remove_roles = AsyncMock()
+    target.add_roles = AsyncMock()
+    target.send = AsyncMock()
+
+    def _get_member(uid):
+        uid = int(uid)
+        if uid == 1001:
+            return target if member_present else None
+        return moderator
+
+    guild.get_member = MagicMock(side_effect=_get_member)
+    guild.get_channel = MagicMock(return_value=None)
+    guild.get_role = MagicMock(return_value=None)
+
+    bot = MagicMock()
+    bot.get_guild = MagicMock(return_value=guild)
+    departed = MagicMock(spec=discord.User)
+    departed.id = 1001
+    departed.mention = "<@1001>"
+    departed.send = AsyncMock()
+    bot.get_user = MagicMock(return_value=departed if user_exists else None)
+    bot.fetch_user = AsyncMock(
+        side_effect=discord.NotFound(MagicMock(status=404), "gone")
+    )
+    fake_ctx.bot = bot
+    return bot
+
+
+def test_jail_release_for_departed_member_marks_row_released(open_client, fake_ctx):
+    """A member who left is releasable — the gap that started all this."""
+    jail_id = _seed_jail(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=1001)
+    _release_ctx(fake_ctx, member_present=False)
+
+    resp = open_client.post(
+        f"/api/moderation/jails/{jail_id}/release", json={"reason": "left, closing out"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute("SELECT * FROM jails WHERE id = ?", (jail_id,)).fetchone()
+    assert row["status"] == "released"
+
+
+def test_jail_release_for_present_member_still_works(open_client, fake_ctx):
+    jail_id = _seed_jail(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=1001)
+    _release_ctx(fake_ctx, member_present=True)
+
+    resp = open_client.post(
+        f"/api/moderation/jails/{jail_id}/release", json={"reason": "appeal granted"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute("SELECT * FROM jails WHERE id = ?", (jail_id,)).fetchone()
+    assert row["status"] == "released"
+
+
+def test_jail_release_closes_row_for_a_deleted_account(open_client, fake_ctx):
+    """Nobody to notify, but the row must not stay active forever."""
+    jail_id = _seed_jail(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=1001)
+    _release_ctx(fake_ctx, member_present=False, user_exists=False)
+
+    resp = open_client.post(f"/api/moderation/jails/{jail_id}/release", json={})
+
+    assert resp.status_code == 200, resp.text
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute("SELECT * FROM jails WHERE id = ?", (jail_id,)).fetchone()
+        audit = conn.execute(
+            "SELECT extra FROM audit_log WHERE action = 'jail_release'"
+            " ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row["status"] == "released"
+    assert json.loads(audit["extra"])["note"] == "user_unresolvable"
+
+
+def test_jail_release_rejects_an_already_released_jail(open_client, fake_ctx):
+    jail_id = _seed_jail(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=1001)
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute("UPDATE jails SET status = 'released' WHERE id = ?", (jail_id,))
+    _release_ctx(fake_ctx, member_present=False)
+
+    resp = open_client.post(f"/api/moderation/jails/{jail_id}/release", json={})
+
+    assert resp.status_code == 409
 
 
 # ── GET /api/moderation/tickets — filters ─────────────────────────────

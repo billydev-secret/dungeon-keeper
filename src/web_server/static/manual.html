@@ -1376,6 +1376,7 @@
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
       <span class="cmd-desc">Releases the member, restores their previous roles, and saves a full transcript of the jail conversation.</span>
       <div class="cmd-params">
+        <strong>user</strong> — paste a user ID here if they've already left the server; the picker only searches current members.<br>
         <strong>reason</strong> — optional; logged to the audit trail and stored in the transcript.
       </div>
     </div>
@@ -1385,6 +1386,15 @@
       <div class="callout-body">
         <strong>Automatic release</strong>
         <p>Timed jails expire automatically — you don't need to manually unjail after the duration. The bot checks every 30 seconds and releases with a logged reason.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">🚪</span>
+      <div class="callout-body">
+        <strong>If they leave while jailed</strong>
+        <p>Leaving doesn't clear the hold. The record stays, and if they rejoin they're re-jailed automatically — roles stripped again, jail channel restored (recreated if it was deleted meanwhile). You'll get a log entry the moment they leave.</p>
+        <p>You usually don't need to do anything. If you'd rather close the hold out, run <code>/unjail</code> with their user ID, or hit <strong>Release</strong> on the hold in Moderation → Jails on the dashboard, where anyone who has left is marked <em>Left server</em>. Be aware this is a real decision: <strong>their old roles are gone for good</strong>, since a release means a later rejoin has nothing to restore from. Leaving the hold active is the safer choice if you expect them back.</p>
       </div>
     </div>
 
