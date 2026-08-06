@@ -1,7 +1,7 @@
 import {
   loadConfig, loadMembers, loadChannels, apiPut, showStatus, clearStatus, guardForm,
   mountPicker, mountChannelPicker, mountExemptionList,
-  mountAsync,
+  mountAsync, toSortedMemberOptions, memberNameLookup,
 } from "../config-helpers.js";
 import { esc, apiPost } from "../api.js";
 import { toast, confirmDialog } from "../ui.js";
@@ -21,24 +21,10 @@ export function mount(container) {
     ]);
     const cfg = config.inactive;
 
-    const memberOpts = members
-      .map((m) => ({
-        id: String(m.id),
-        label: m.display_name && m.display_name !== m.name
-          ? `${m.display_name} (${m.name})`
-          : m.name,
-        left: !!m.left_server,
-      }))
-      .sort((a, b) => a.left - b.left || a.label.localeCompare(b.label))
-      .map((o) => (o.left ? { ...o, label: `${o.label} (left the server)` } : o));
-
-    // Chip labels come from the member record itself rather than by unpicking
-    // the picker's "Display (username)" label — a member whose own name has
-    // brackets ("Ana (EU)") would lose them to that.
-    const nameById = new Map(
-      members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
-    );
-    const memberName = (id) => nameById.get(String(id)) || String(id);
+    // Departed members sort last and say so; chip labels come from the member
+    // record rather than the picker's label. Both shared with config-prune.
+    const memberOpts = toSortedMemberOptions(members);
+    const memberName = memberNameLookup(members);
 
     container.innerHTML = `
       <div class="panel">

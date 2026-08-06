@@ -360,6 +360,64 @@ def test_converted_panels_pass_a_specific_error_message():
     assert not generic, f"panels with a non-specific mountAsync message: {generic}"
 
 
+# ── the shared member-picker option builder ────────────────────────────────
+#
+# config-prune and config-inactive each carried a byte-identical private
+# `memberOpts` (departed members sorted last, labelled "(left the server)") and
+# a private `nameById`/`memberName` pair. Both now live in config-helpers.js as
+# toSortedMemberOptions() and memberNameLookup(). The review found several
+# helper pairs that had drifted silently once copied, so these two checks keep
+# the shape in exactly one place rather than trusting nobody re-inlines it.
+
+
+_SHARED_MEMBER_HELPER_PANELS = ("config-prune.js", "config-inactive.js")
+
+
+@pytest.mark.parametrize("filename", _SHARED_MEMBER_HELPER_PANELS)
+def test_member_picker_panels_use_the_shared_helpers(filename):
+    """Neither panel may re-declare the private copies that were hoisted."""
+    src = (_PANELS / filename).read_text(encoding="utf-8")
+    assert "toSortedMemberOptions" in src, (
+        f"{filename} no longer imports the shared member-option builder"
+    )
+    assert "memberNameLookup" in src, (
+        f"{filename} no longer imports the shared chip-name lookup"
+    )
+    # Binding the shared call to a local `memberOpts` is fine; building one is
+    # not. A `nameById` Map is the private half of memberNameLookup and has no
+    # business back in a panel at all.
+    rebuilt = [
+        line.strip()[:70]
+        for line in src.splitlines()
+        if re.match(r"\s*(?:const|let)\s+(?:memberOpts|nameById)\s*=", line)
+        and "toSortedMemberOptions(" not in line
+    ]
+    assert not rebuilt, (
+        f"{filename} builds its own member options again: {rebuilt} — the "
+        "private copy this pair was hoisted out of is back, and the two panels "
+        "can drift apart again"
+    )
+
+
+def test_only_config_helpers_builds_the_departed_member_label():
+    """The wording is the tell: a panel spelling it out inline is a fresh copy.
+
+    (activity.js / message-search.js use the *terse* " (left)" from
+    toMemberOptions, which is a different, intentional label — not this one.)
+    """
+    offenders = [
+        path.name
+        for path in _panel_files()
+        if "(left the server)" in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        "panels rebuilding the sorted member-picker options inline instead of "
+        f"calling toSortedMemberOptions(): {offenders}"
+    )
+    helpers = (_JS / "config-helpers.js").read_text(encoding="utf-8")
+    assert "(left the server)" in helpers, "the shared builder lost its label"
+
+
 def test_mount_async_conversion_covered_the_config_family():
     """The F1 sweep's headline set — if one of these regresses to a bare IIFE
     the test above catches it, but this names the contract directly."""
