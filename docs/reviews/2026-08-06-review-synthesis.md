@@ -68,7 +68,15 @@ sweeps + loose-ends audit; per-bundle findings in the sibling
    unbounded all-time readers (leaderboards by source), so deletion needs
    a rollup table the readers union — its own pass, not a quick sweep.
    **Still open** — prod re-counted 2026-08-06: 1,022,853 rows, still the
-   largest table (next is `messages` at 635,625).
+   largest table (next is `messages` at 635,625). The pass is now scoped in
+   `docs/plans/xp-events-retention-and-rollup.md` (design only, nothing
+   built). It found **six** all-time readers, not one: the by-source
+   leaderboards, the 360-day activity graphs, time-to-level, the mod
+   profile's XP split, the `/xp` existence gate, and — the one most
+   opposed to retention — the inactive report's "last active in this
+   channel", which is an unfiltered `MAX(created_at)`. Saving is smaller
+   than the sweep estimated (~43% of rows, ~145 MB → ~85 MB, not half the
+   table) and there is one fidelity decision for Ben in the plan.
 10. ~~`rules_events`: dismissed-event 180d sweep + spec preserve lines
     (ai-mod G1/G2).~~ — **shipped `49a02867`**
     (`rules_watch/ledger.py:442` `purge_old_dismissed_events`).
