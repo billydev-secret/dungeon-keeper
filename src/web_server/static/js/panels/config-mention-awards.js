@@ -29,10 +29,10 @@ const KINDS = [
 ];
 const KIND_LABEL = Object.fromEntries(KINDS.map((k) => [k.kind, k.label]));
 
-function chipRow(cond, idx) {
+function chipRow(cond) {
   const isText = cond.kind === "contains_text";
   return `
-    <div class="card" data-chip data-kind="${esc(cond.kind)}" data-idx="${idx}"
+    <div class="card" data-chip data-kind="${esc(cond.kind)}"
          style="padding:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <span class="section-label" style="margin:0; min-width:8.5em;">
         ${esc(KIND_LABEL[cond.kind] || cond.kind)}</span>
@@ -53,7 +53,7 @@ function ruleCard(rule, channels, idx) {
   const name = rule.channel_id
     ? channelName(channels, rule.channel_id)
     : "New rule";
-  const chips = (rule.conditions || []).map((c, i) => chipRow(c, i)).join("");
+  const chips = (rule.conditions || []).map((c) => chipRow(c)).join("");
 
   return `
     <form class="card" data-rule data-id="${esc(rule.id || "")}"
@@ -125,10 +125,15 @@ export function mount(container) {
       return { getValue: () => picker.getValue(), getRegex: () => false };
     };
 
+    const refresh = async () => {
+      const fresh = await api("/api/mention-awards/rules");
+      rules.length = 0;
+      rules.push(...fresh);
+    };
+
     const render = () => {
-      const cards = [...rules, BLANK]
-        .map((r, i) => ruleCard(r, channels, i))
-        .join("");
+      const all = [...rules, BLANK];
+      const cards = all.map((r, i) => ruleCard(r, channels, i)).join("");
 
       container.innerHTML = `
         <div class="panel">
@@ -150,7 +155,7 @@ export function mount(container) {
 
       container.querySelectorAll("[data-rule]").forEach((form, formIdx) => {
         const status = form.querySelector("[data-status]");
-        const rule = [...rules, BLANK][formIdx];
+        const rule = all[formIdx];
         const chPicker = mountChannelPicker(
           form.querySelector('[data-picker="channel"]'),
           channels,
@@ -178,7 +183,7 @@ export function mount(container) {
           const kind = form.querySelector("[data-chip-kind]").value;
           const cond = { kind, value: "", regex: false };
           const tpl = document.createElement("template");
-          tpl.innerHTML = chipRow(cond, widgets.size).trim();
+          tpl.innerHTML = chipRow(cond).trim();
           const row = tpl.content.firstElementChild;
           chipsRoot.appendChild(row);
           widgets.set(row, mountChipWidget(row, cond));
@@ -194,12 +199,6 @@ export function mount(container) {
             value: widgets.get(row).getValue(),
             regex: widgets.get(row).getRegex(),
           }));
-
-        const refresh = async () => {
-          const fresh = await api("/api/mention-awards/rules");
-          rules.length = 0;
-          rules.push(...fresh);
-        };
 
         form.addEventListener("submit", async (e) => {
           e.preventDefault();

@@ -50,9 +50,25 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-CONDITION_KINDS = frozenset(
-    {"contains_text", "mentions_role", "from_user", "author_has_role"}
-)
+# The chip vocabulary: kind → the short label validation errors use. The
+# panel keeps its own richer list (it also needs picker types); Python-side
+# this dict is the single source — store.py derives its messages from it.
+CONDITION_KINDS: dict[str, str] = {
+    "contains_text": "text",
+    "mentions_role": "role ping",
+    "from_user": "author",
+    "author_has_role": "author role",
+}
+
+# The payout-ledger discriminator and the quest occurrence key. The cog, the
+# faucet, and the backfill must agree on these forever for dedupe to hold —
+# which is why they are defined once, here.
+PAYOUT_KIND = "mention_award"
+
+
+def quest_occurrence(message_id: int) -> str:
+    """The occurrence key an award's quest trigger dedupes on."""
+    return f"{PAYOUT_KIND}:{message_id}"
 
 
 @dataclass(frozen=True)
@@ -144,12 +160,33 @@ def condition_matches(
     return False
 
 
+def recipient_of(mentioned_user_ids: Iterable[int], author_id: int) -> int | None:
+    """The member a qualifying announcement pays, or ``None``.
+
+    Exactly one mention: a message tagging several people is a group shout,
+    and guessing which of them the trigger referred to would pay the wrong
+    member. Role pings don't count — raw user and role mentions are separate
+    — so "@Hot Seat your turn @turbodog8" has one user mention. Self-award is
+    the one farm the design is otherwise wide open to (post the trigger, ping
+    yourself, collect), blocked regardless of the chips.
+
+    Shared with the shape-matching backfill so the two paths can never drift
+    on who an announcement names.
+    """
+    mentioned = {int(u) for u in mentioned_user_ids}
+    if len(mentioned) != 1:
+        return None
+    member_id = next(iter(mentioned))
+    if member_id == author_id:
+        return None
+    return member_id
+
+
 def match_rule(
     rule: Rule,
     *,
     channel_id: int,
     author_id: int,
-    author_is_bot: bool,
     author_role_ids: Iterable[int],
     content: str,
     mentioned_user_ids: Iterable[int],
@@ -157,10 +194,10 @@ def match_rule(
 ) -> Award | None:
     """The award this message earns under ``rule``, or ``None``.
 
-    Bots never trigger an award: a webhook or another bot echoing the trigger
-    would otherwise be a free faucet. A rule with no chips matches nothing.
+    A rule with no chips matches nothing. Bot authors never reach this — the
+    cog returns before matching — so there is deliberately no bot flag here.
     """
-    if channel_id != rule.channel_id or author_is_bot:
+    if channel_id != rule.channel_id:
         return None
     if rule.amount < 1:
         return None
@@ -179,18 +216,8 @@ def match_rule(
         ):
             return None
 
-    mentioned = {int(u) for u in mentioned_user_ids}
-    # Exactly one. A message tagging several people is a group shout, and
-    # guessing which of them the chips referred to would pay the wrong member.
-    # Role pings don't count here — raw_mentions and raw_role_mentions are
-    # separate — so "@Hot Seat your turn @turbodog8" has one user mention.
-    if len(mentioned) != 1:
-        return None
-
-    member_id = next(iter(mentioned))
-    # Self-award is the one farm the design is otherwise wide open to: post
-    # the trigger, ping yourself, collect. Blocked regardless of the chips.
-    if member_id == author_id:
+    member_id = recipient_of(mentioned_user_ids, author_id)
+    if member_id is None:
         return None
 
     return Award(
@@ -206,7 +233,6 @@ def first_match(
     *,
     channel_id: int,
     author_id: int,
-    author_is_bot: bool,
     author_role_ids: Iterable[int],
     content: str,
     mentioned_user_ids: Iterable[int],
@@ -224,7 +250,6 @@ def first_match(
             rule,
             channel_id=channel_id,
             author_id=author_id,
-            author_is_bot=author_is_bot,
             author_role_ids=author_role_ids,
             content=content,
             mentioned_user_ids=mentioned_user_ids,

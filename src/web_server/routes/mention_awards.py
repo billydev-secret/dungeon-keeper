@@ -4,6 +4,11 @@ A rule is a channel, an amount, and a list of conditions ("chips") that must
 all match. The listener (``mention_awards_cog``) reads them; this is the only
 way they're written.
 
+Validation lives in one place — ``store.create_rule``/``update_rule`` raise
+``ValueError`` with a human-readable reason, translated to a 400 here. The
+pydantic models are deliberately shape-only so the store's messages are the
+ones an admin sees.
+
 Snowflakes go out as strings — a channel, role, or user id past 2^53 loses
 precision as a bare JSON number (see the dashboard's snowflake-precision
 sweep). Ids inside condition values are already strings in storage for the
@@ -13,7 +18,7 @@ same reason.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from bot_modules.mention_awards import store
 from bot_modules.mention_awards.logic import Condition
@@ -27,21 +32,14 @@ class ConditionBody(BaseModel):
     """One chip. ``value`` is text for contains_text, an id-string otherwise."""
 
     kind: str
-    value: str = Field(max_length=store.MAX_TEXT_LEN)
+    value: str
     regex: bool = False
 
 
 class RuleBody(BaseModel):
     channel_id: str
-    amount: int = Field(ge=0, le=store.MAX_AMOUNT)
-    conditions: list[ConditionBody] = Field(max_length=store.MAX_CONDITIONS)
-
-
-def _as_id(raw: str, field: str) -> int:
-    try:
-        return int(raw or 0)
-    except (TypeError, ValueError):
-        raise HTTPException(400, f"{field} must be a numeric id")
+    amount: int
+    conditions: list[ConditionBody]
 
 
 def _row(r) -> dict:
@@ -58,18 +56,18 @@ def _row(r) -> dict:
     }
 
 
-def _validated(body: RuleBody) -> tuple[int, list[Condition]]:
-    """(channel_id, conditions) after the shared validation gate."""
+def _parsed(body: RuleBody) -> tuple[int, list[Condition]]:
+    """(channel_id, conditions); full validation happens in the store."""
+    try:
+        channel_id = int(body.channel_id or 0)
+    except ValueError:
+        channel_id = 0
+    if not channel_id:
+        raise HTTPException(400, "Pick a channel for the rule to watch.")
     conditions = [
         Condition(kind=c.kind, value=c.value.strip(), regex=c.regex)
         for c in body.conditions
     ]
-    problem = store.validate(body.amount, conditions)
-    if problem:
-        raise HTTPException(400, problem)
-    channel_id = _as_id(body.channel_id, "channel_id")
-    if not channel_id:
-        raise HTTPException(400, "Pick a channel for the rule to watch.")
     return channel_id, conditions
 
 
@@ -94,16 +92,19 @@ async def create_rule(
     request: Request,
     user: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    channel_id, conditions = _validated(body)
+    channel_id, conditions = _parsed(body)
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
-            rule_id = store.create_rule(
-                conn, guild_id, channel_id=channel_id, amount=body.amount,
-                conditions=conditions, created_by=int(user.user_id),
-            )
+            try:
+                rule_id = store.create_rule(
+                    conn, guild_id, channel_id=channel_id, amount=body.amount,
+                    conditions=conditions, created_by=int(user.user_id),
+                )
+            except ValueError as e:
+                raise HTTPException(400, str(e))
             return {"id": rule_id}
 
     return await run_query(_q)
@@ -116,16 +117,20 @@ async def update_rule(
     request: Request,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    channel_id, conditions = _validated(body)
+    channel_id, conditions = _parsed(body)
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
-            if not store.update_rule(
-                conn, guild_id, rule_id, channel_id=channel_id,
-                amount=body.amount, conditions=conditions,
-            ):
+            try:
+                ok = store.update_rule(
+                    conn, guild_id, rule_id, channel_id=channel_id,
+                    amount=body.amount, conditions=conditions,
+                )
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            if not ok:
                 raise HTTPException(404, "No such rule.")
             return {"ok": True}
 

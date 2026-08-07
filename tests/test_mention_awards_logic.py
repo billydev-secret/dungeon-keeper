@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.games_external.logic import claim_payout_sync
 from bot_modules.mention_awards.logic import (
     Award,
     Condition,
@@ -21,6 +22,8 @@ from bot_modules.mention_awards.logic import (
     first_match,
     match_rule,
     phrase_matches,
+    quest_occurrence,
+    recipient_of,
     regex_matches,
 )
 from bot_modules.mention_awards.store import (
@@ -59,7 +62,6 @@ def _match(rule: Rule = RULE, **overrides):
     kwargs = {
         "channel_id": CHANNEL,
         "author_id": PANDA,
-        "author_is_bot": False,
         "author_role_ids": [HOST_ROLE],
         "content": CONTENT,
         "mentioned_user_ids": [TURBODOG],
@@ -148,7 +150,6 @@ def test_real_announcement_matches():
     "label,overrides",
     [
         ("wrong channel", {"channel_id": CHANNEL + 1}),
-        ("posted by a bot", {"author_is_bot": True}),
         ("trigger text absent", {"content": "good morning everyone"}),
         ("nobody mentioned", {"mentioned_user_ids": []}),
         ("group shout", {"mentioned_user_ids": [TURBODOG, PANDA + 5]}),
@@ -215,7 +216,7 @@ class TestFirstMatch:
         ]
         found = first_match(
             rules,
-            channel_id=CHANNEL, author_id=PANDA, author_is_bot=False,
+            channel_id=CHANNEL, author_id=PANDA,
             author_role_ids=[], content=CONTENT, mentioned_user_ids=[TURBODOG],
         )
         assert found is not None
@@ -223,7 +224,7 @@ class TestFirstMatch:
 
     def test_no_rules_matches_nothing(self):
         assert first_match(
-            [], channel_id=CHANNEL, author_id=PANDA, author_is_bot=False,
+            [], channel_id=CHANNEL, author_id=PANDA,
             author_role_ids=[], content=CONTENT, mentioned_user_ids=[TURBODOG],
         ) is None
 
@@ -319,3 +320,49 @@ class TestStore:
                         conditions=[Condition("contains_text", "b")])
             found = rules_for_channel(conn, GUILD, CHANNEL)
             assert [r.conditions[0].value for r in found] == ["a"]
+
+
+class TestSharedInvariants:
+    """Helpers shared between the live matcher and the backfill."""
+
+    @pytest.mark.parametrize(
+        "mentions,author,expected",
+        [
+            ([TURBODOG], PANDA, TURBODOG),
+            ([TURBODOG, TURBODOG], PANDA, TURBODOG),  # repeat = one mention
+            ([], PANDA, None),
+            ([TURBODOG, PANDA + 5], PANDA, None),      # group shout
+            ([PANDA], PANDA, None),                    # self-nomination
+        ],
+    )
+    def test_recipient_of(self, mentions, author, expected):
+        assert recipient_of(mentions, author) == expected
+
+    def test_quest_occurrence_format_is_pinned(self):
+        """Live path and backfill dedupe on this exact string — a format
+        change would double-pay every quest across the two paths."""
+        assert quest_occurrence(123) == "mention_award:123"
+
+
+def test_store_writes_reject_invalid_rules(sync_db_path):
+    """The bounds live with the data: a writer skipping validate() can't
+    store what validate() would refuse."""
+    with open_db(sync_db_path) as conn:
+        with pytest.raises(ValueError):
+            create_rule(conn, GUILD, channel_id=CHANNEL, amount=250, conditions=[])
+        with pytest.raises(ValueError):
+            create_rule(
+                conn, GUILD, channel_id=CHANNEL, amount=-1,
+                conditions=[PHRASE_CHIP],
+            )
+        assert list_rules(conn, GUILD) == []
+
+
+def test_payout_ledger_is_one_claim_per_message_globally(sync_db_path):
+    """The ledger PK is message_id alone — kind labels the claim, it does not
+    scope it. A message claimed under one kind can never claim under another;
+    today's kinds are structurally disjoint, and this pins the contract."""
+    with open_db(sync_db_path) as conn:
+        assert claim_payout_sync(conn, 555, GUILD, "mention_award")
+        assert not claim_payout_sync(conn, 555, GUILD, "mention_award")  # dupe
+        assert not claim_payout_sync(conn, 555, GUILD, "catbot")  # other kind

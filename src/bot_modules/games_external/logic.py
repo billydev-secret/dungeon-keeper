@@ -174,8 +174,29 @@ async def claim_payout(db, message_id: int, guild_id: int, kind: str) -> bool:
     Backs the "pay each external game exactly once" guarantee independently of
     ``parse_status`` (which edits reset). A second caller for the same message
     gets False and must not pay.
+
+    **The contract is one payout per message globally, not per kind**: the
+    table's primary key is ``message_id`` alone (migration 099), so a message
+    claimed under one kind can never be claimed under another — ``kind`` is a
+    label on the claim, not part of the key. Today's kinds are structurally
+    disjoint (each claims a different bot's messages; ``mention_award`` alone
+    claims human-authored ones), so this only matters to a future kind that
+    overlaps an existing one's messages.
     """
     cur = await db.execute(
+        "INSERT OR IGNORE INTO games_external_payouts (message_id, guild_id, kind) "
+        "VALUES (?, ?, ?)",
+        (message_id, guild_id, kind),
+    )
+    return cur.rowcount > 0
+
+
+def claim_payout_sync(conn, message_id: int, guild_id: int, kind: str) -> bool:
+    """Sync twin of ``claim_payout`` for scripts riding a sqlite3 connection.
+
+    Same contract (see above); the backfill scripts were inlining this SQL.
+    """
+    cur = conn.execute(
         "INSERT OR IGNORE INTO games_external_payouts (message_id, guild_id, kind) "
         "VALUES (?, ?, ?)",
         (message_id, guild_id, kind),

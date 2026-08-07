@@ -25,13 +25,6 @@ MAX_CONDITIONS = 10
 # against a typo'd extra zero opening a faucet nobody notices.
 MAX_AMOUNT = 100_000
 
-_KIND_LABELS = {
-    "contains_text": "text",
-    "mentions_role": "role ping",
-    "from_user": "author",
-    "author_has_role": "author role",
-}
-
 
 def conditions_to_json(conditions: Sequence[Condition]) -> str:
     return json.dumps(
@@ -65,21 +58,16 @@ def conditions_from_json(raw: str | None) -> tuple[Condition, ...]:
         return ()
 
 
-def rows_to_rules(rows: Sequence[Mapping[str, Any]]) -> list[Rule]:
-    """Adapt DB rows to the pure matcher's ``Rule``."""
-    return [
-        Rule(
-            id=int(r["id"]),
-            channel_id=int(r["channel_id"]),
-            amount=int(r["amount"]),
-            conditions=conditions_from_json(r["conditions"]),
-        )
-        for r in rows
-    ]
+def validate(amount: int, conditions: Sequence[Condition]) -> str | None:
+    """The reason this rule is invalid, or ``None`` if it's fine.
 
-
-def validate_conditions(conditions: Sequence[Condition]) -> str | None:
-    """The reason this chip list is invalid, or ``None`` if it's fine."""
+    Also enforced by ``create_rule``/``update_rule`` (raising ``ValueError``),
+    so a writer that skips this gate cannot store an invalid rule.
+    """
+    if amount < 0:
+        return "Amount can't be negative."
+    if amount > MAX_AMOUNT:
+        return f"Amount is limited to {MAX_AMOUNT:,}."
     if not conditions:
         return "Add at least one condition — a rule with none would never fire."
     if len(conditions) > MAX_CONDITIONS:
@@ -87,7 +75,6 @@ def validate_conditions(conditions: Sequence[Condition]) -> str | None:
     for cond in conditions:
         if cond.kind not in CONDITION_KINDS:
             return f"Unknown condition kind {cond.kind!r}."
-        label = _KIND_LABELS[cond.kind]
         if cond.kind == "contains_text":
             if not cond.value.strip():
                 return "A text condition can't be empty."
@@ -99,6 +86,7 @@ def validate_conditions(conditions: Sequence[Condition]) -> str | None:
                 except re.error as e:
                     return f"Invalid regex: {e}."
         else:
+            label = CONDITION_KINDS[cond.kind]
             try:
                 ok = int(cond.value) > 0
             except (TypeError, ValueError):
@@ -108,13 +96,10 @@ def validate_conditions(conditions: Sequence[Condition]) -> str | None:
     return None
 
 
-def validate(amount: int, conditions: Sequence[Condition]) -> str | None:
-    """The reason this rule is invalid, or ``None`` if it's fine."""
-    if amount < 0:
-        return "Amount can't be negative."
-    if amount > MAX_AMOUNT:
-        return f"Amount is limited to {MAX_AMOUNT:,}."
-    return validate_conditions(conditions)
+def _require_valid(amount: int, conditions: Sequence[Condition]) -> None:
+    problem = validate(amount, conditions)
+    if problem:
+        raise ValueError(problem)
 
 
 def list_rules(conn: sqlite3.Connection, guild_id: int) -> list[Mapping[str, Any]]:
@@ -137,7 +122,15 @@ def rules_for_channel(
         "ORDER BY id",
         (guild_id, channel_id),
     ).fetchall()
-    return rows_to_rules(rows)
+    return [
+        Rule(
+            id=int(r["id"]),
+            channel_id=int(r["channel_id"]),
+            amount=int(r["amount"]),
+            conditions=conditions_from_json(r["conditions"]),
+        )
+        for r in rows
+    ]
 
 
 def create_rule(
@@ -149,7 +142,12 @@ def create_rule(
     conditions: Sequence[Condition],
     created_by: int | None = None,
 ) -> int:
-    """Insert a rule, returning its id. Caller validates first."""
+    """Insert a rule, returning its id.
+
+    Raises ``ValueError`` on an invalid rule — the bounds live with the data
+    they protect, so no writer can store a rule ``validate`` would reject.
+    """
+    _require_valid(amount, conditions)
     cur = conn.execute(
         "INSERT INTO mention_award_rules "
         "(guild_id, channel_id, amount, conditions, created_by) "
@@ -171,8 +169,9 @@ def update_rule(
     """Overwrite the rule. False when it isn't this guild's.
 
     Scoped on ``guild_id`` as well as ``id`` so one guild's dashboard can
-    never edit another's rule by id.
+    never edit another's rule by id. Raises ``ValueError`` on an invalid rule.
     """
+    _require_valid(amount, conditions)
     cur = conn.execute(
         "UPDATE mention_award_rules SET channel_id = ?, amount = ?, "
         "conditions = ? WHERE id = ? AND guild_id = ?",

@@ -328,6 +328,10 @@ async def pay_mention_award(
     trigger. The ``pay_cat_catch`` shape — a game the bot does not host,
     detected by a watcher, paid directly with a quest hook on top.
 
+    ``occurrence`` is the ready-made quest occurrence key
+    (``mention_awards.logic.quest_occurrence``) — built by the caller so the
+    live path and the backfill can never drift on its format.
+
     Same guarantees as the other faucets: no-op when the economy is off or
     the member is a bot/unresolvable, booster multiplier applied, failures
     logged not raised. Caller dedupes per announcement (the payout ledger) —
@@ -365,7 +369,7 @@ async def pay_mention_award(
         await asyncio.to_thread(_credit)
         await _fire_triggers(
             bot, guild, settings, "mention_award", [user_id],
-            {user_id: booster}, f"mention_award:{occurrence}",
+            {user_id: booster}, occurrence,
         )
     except Exception:
         log.exception("pay_mention_award failed for guild %s", guild_id)
