@@ -218,8 +218,17 @@ def _check_regex_deadline(deadline: float) -> None:
         raise HTTPException(status_code=400, detail=_TOO_EXPENSIVE)
 
 
+def _row_content(row) -> str | None:
+    """Content of a row, by name. The default accessor for scan_regex_rows."""
+    return row["content"]
+
+
 def scan_regex_rows(
-    cursor, compiled: re.Pattern[str], deadline: float, max_matches: int
+    cursor,
+    compiled: re.Pattern[str],
+    deadline: float,
+    max_matches: int,
+    content_of=_row_content,
 ) -> tuple[list, int, bool]:
     """Stream a cursor, keeping only rows whose content matches.
 
@@ -231,6 +240,10 @@ def scan_regex_rows(
     cap stopped the scan early, so the result set is a prefix, not the whole
     answer. Blowing the wall-clock budget raises 400 instead — a search that
     can't finish should say so, not return a silently partial answer.
+
+    ``content_of`` exists so this imposes no column order on its caller: the
+    unit test feeds plain tuples and passes an indexing accessor, while every
+    production path reads by name.
     """
     matched: list = []
     scanned = 0
@@ -241,16 +254,16 @@ def scan_regex_rows(
         for row in chunk:
             scanned += 1
             _check_regex_deadline(deadline)
-            if compiled.search((row[3] or "")[:REGEX_MAX_CONTENT]):
+            if compiled.search((content_of(row) or "")[:REGEX_MAX_CONTENT]):
                 matched.append(row)
                 if len(matched) >= max_matches:
                     return matched, scanned, True
 
 
-@router.get("/messages/search")
-async def search_messages(
-    request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+DELETED_OPTIONS = Literal["any", "only", "live", "discord", "auto_delete"]
+
+
+def message_filters(
     author: list[str] | None = Query(None, description="Filter by author user ID(s)"),
     mentions: str | None = Query(
         None, description="Filter to messages that mention this user ID"
@@ -259,9 +272,6 @@ async def search_messages(
         None, description="Filter to messages that are replies to this user ID"
     ),
     channel: list[str] | None = Query(None, description="Filter by channel ID(s)"),
-    regex: str | None = Query(
-        None, description="PCRE-style regex to match against message content"
-    ),
     before: int | None = Query(
         None, description="Only messages before this unix timestamp"
     ),
@@ -275,28 +285,32 @@ async def search_messages(
         None, ge=-1.0, le=1.0, description="Maximum sentiment score"
     ),
     emotion: str | None = Query(
-        None, description="Comma-separated emotions: joy,playful,anger,frustration,neutral"
+        None,
+        description="Comma-separated emotions: joy,playful,anger,frustration,neutral",
     ),
-    has_attachments: bool | None = Query(None, description="Filter by attachment presence"),
+    has_attachments: bool | None = Query(
+        None, description="Filter by attachment presence"
+    ),
     has_reactions: bool | None = Query(None, description="Filter by reaction presence"),
     min_length: int | None = Query(None, ge=0, description="Minimum content length"),
     max_length: int | None = Query(None, ge=0, description="Maximum content length"),
     sort: SORT_OPTIONS = "newest",
     include_bots: bool = Query(False),
-    deleted: str = Query(
+    deleted: DELETED_OPTIONS = Query(
         DELETED_ANY,
-        description="any (default), only, live, or a source name (discord, auto_delete)",
+        description="any (default), only, live, or a source name",
     ),
-    page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=200),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
+) -> MessageFilters:
+    """The filter surface, declared once for every endpoint that takes it.
 
-    # Validate regex early so we return 400 before hitting the DB
-    compiled_re = compile_search_regex(regex) if regex else None
+    Search and export previously restated all seventeen parameters each; the
+    copies had already drifted apart on the day ``deleted`` was added. As a
+    dependency there is one place to add the eighteenth.
 
-    filters = MessageFilters(
+    ``regex`` is deliberately not here — only the endpoints that run it need the
+    ``compile_search_regex`` rails and their 400.
+    """
+    return MessageFilters(
         author=author,
         mentions=mentions,
         reply_to=reply_to,
@@ -315,6 +329,25 @@ async def search_messages(
         deleted=deleted,
     )
 
+
+@router.get("/messages/search")
+async def search_messages(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+    filters: MessageFilters = Depends(message_filters),
+    regex: str | None = Query(
+        None, description="PCRE-style regex to match against message content"
+    ),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    # Validate regex early so we return 400 before hitting the DB
+    compiled_re = compile_search_regex(regex) if regex else None
+
+
     def _q():
         with ctx.open_db() as conn:
             guild = ctx.bot.get_guild(guild_id) if ctx.bot else None
@@ -329,10 +362,14 @@ async def search_messages(
                     "pages": 1,
                 }
 
-            join = reaction_join(sort)
-            extra_select = reaction_select(sort)
-            order_clause = SORT_ORDERS[sort]
-            params = where.params
+            join = reaction_join(filters.sort)
+            base_sql = f"""
+                    SELECT {BASE_COLUMNS}{reaction_select(filters.sort)}
+                    FROM messages m
+                    {join}
+                    WHERE {where.sql}
+                    ORDER BY {SORT_ORDERS[filters.sort]}
+            """
 
             # Regex can't be pushed into SQL, so it is matched here — but under
             # a row cap, a match cap and a wall-clock deadline, streaming so
@@ -340,15 +377,9 @@ async def search_messages(
             regex_capped = False
             regex_scan_limited = False
             if compiled_re:
-                sql = f"""
-                    SELECT {BASE_COLUMNS}{extra_select}
-                    FROM messages m
-                    {join}
-                    WHERE {where.sql}
-                    ORDER BY {order_clause}
-                    LIMIT ?
-                """
-                cursor = conn.execute(sql, [*params, REGEX_SCAN_LIMIT])
+                cursor = conn.execute(
+                    base_sql + " LIMIT ?", [*where.params, REGEX_SCAN_LIMIT]
+                )
                 matched, scanned, regex_capped = scan_regex_rows(
                     cursor, compiled_re, _regex_deadline(), REGEX_MAX_MATCHES
                 )
@@ -358,21 +389,16 @@ async def search_messages(
                 offset = (page - 1) * per_page
                 page_rows = matched[offset : offset + per_page]
             else:
-                count_sql = (
-                    f"SELECT COUNT(*) FROM messages m {join} WHERE {where.sql}"
-                )
-                total = conn.execute(count_sql, params).fetchone()[0]
+                # No {join}: the reaction aggregate is a LEFT JOIN and cannot
+                # change the row count, but SQLite materializes it anyway —
+                # ~1.15 s versus ~110 ms on the production archive.
+                count_sql = f"SELECT COUNT(*) FROM messages m WHERE {where.sql}"
+                total = conn.execute(count_sql, where.params).fetchone()[0]
 
                 offset = (page - 1) * per_page
-                sql = f"""
-                    SELECT {BASE_COLUMNS}{extra_select}
-                    FROM messages m
-                    {join}
-                    WHERE {where.sql}
-                    ORDER BY {order_clause}
-                    LIMIT ? OFFSET ?
-                """
-                page_rows = conn.execute(sql, [*params, per_page, offset]).fetchall()
+                page_rows = conn.execute(
+                    base_sql + " LIMIT ? OFFSET ?", [*where.params, per_page, offset]
+                ).fetchall()
 
             payload = {
                 "messages": hydrate_rows(conn, guild_id, page_rows, guild),
@@ -396,23 +422,8 @@ async def search_messages(
 async def export_messages(
     request: Request,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
-    author: list[str] | None = Query(None),
-    mentions: str | None = Query(None),
-    reply_to: str | None = Query(None),
-    channel: list[str] | None = Query(None),
+    filters: MessageFilters = Depends(message_filters),
     regex: str | None = Query(None),
-    before: int | None = Query(None),
-    after: int | None = Query(None),
-    sentiment_min: float | None = Query(None, ge=-1.0, le=1.0),
-    sentiment_max: float | None = Query(None, ge=-1.0, le=1.0),
-    emotion: str | None = Query(None),
-    has_attachments: bool | None = Query(None),
-    has_reactions: bool | None = Query(None),
-    min_length: int | None = Query(None, ge=0),
-    max_length: int | None = Query(None, ge=0),
-    sort: SORT_OPTIONS = "newest",
-    include_bots: bool = Query(False),
-    deleted: str = Query(DELETED_ANY),
 ):
     """Export all matching messages as a downloadable JSON file (capped at 5000 rows)."""
     ctx = get_ctx(request)
@@ -420,24 +431,6 @@ async def export_messages(
 
     compiled_re = compile_search_regex(regex) if regex else None
 
-    filters = MessageFilters(
-        author=author,
-        mentions=mentions,
-        reply_to=reply_to,
-        channel=channel,
-        before=before,
-        after=after,
-        sentiment_min=sentiment_min,
-        sentiment_max=sentiment_max,
-        emotion=emotion,
-        has_attachments=has_attachments,
-        has_reactions=has_reactions,
-        min_length=min_length,
-        max_length=max_length,
-        include_bots=include_bots,
-        sort=sort,
-        deleted=deleted,
-    )
 
     def _q():
         with ctx.open_db() as conn:
@@ -447,11 +440,11 @@ async def export_messages(
                 return []
 
             sql = f"""
-                SELECT {BASE_COLUMNS}{reaction_select(sort)}
+                SELECT {BASE_COLUMNS}{reaction_select(filters.sort)}
                 FROM messages m
-                {reaction_join(sort)}
+                {reaction_join(filters.sort)}
                 WHERE {where.sql}
-                ORDER BY {SORT_ORDERS[sort]}
+                ORDER BY {SORT_ORDERS[filters.sort]}
                 LIMIT {EXPORT_ROW_LIMIT}
             """
             if compiled_re:

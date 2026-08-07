@@ -1,4 +1,5 @@
 import { api, esc, fmtTs } from "../api.js";
+import { toChannelOptions } from "../config-helpers.js";
 import { filterSelect, multiFilterSelect } from "../filter-select.js";
 import { memberSearch } from "../config-helpers.js";
 import { renderEmpty, renderError, renderLoading } from "../states.js";
@@ -31,7 +32,7 @@ function deletedBadge(m) {
   if (m.deleted_at == null) return "";
   const kind = DELETED_LABELS[m.deleted_source] || DELETED_LABELS.discord;
   const when = fmtTs(m.deleted_at);
-  return `<span class="msg-deleted" title="${esc(kind.title)} — ${esc(when)}">${esc(kind.text)}</span>`;
+  return `<span class="badge badge-danger msg-deleted" title="${esc(kind.title)} — ${esc(when)}">${esc(kind.text)}</span>`;
 }
 
 /**
@@ -47,10 +48,11 @@ function discordLink(m) {
 // ── The filter catalogue ──────────────────────────────────────────────
 //
 // Every filter beyond the regex box lives here and is added on demand, so an
-// unused filter costs no screen space. `render` builds the chip's own control;
-// `summarize` turns its current value into the chip's visible text; `apply`
-// writes it into the outgoing query. A filter whose value is empty is simply
-// not sent, so a half-filled chip narrows nothing rather than erroring.
+// unused filter costs no screen space. An entry supplies either a `picker` (a
+// shared filter-select reused across add/remove cycles) or a `render` that
+// builds its own control, plus an `apply` that writes it into the outgoing
+// query. A filter whose value is empty is simply not sent, so a half-filled
+// chip narrows nothing rather than erroring.
 
 const EMOTIONS = ["joy", "playful", "anger", "frustration", "neutral"];
 
@@ -78,11 +80,6 @@ function selectHtml(field, options, selected) {
     )
     .join("");
   return `<select data-field="${esc(field)}">${opts}</select>`;
-}
-
-function labelFor(options, value) {
-  const hit = options.find(([v]) => v === value);
-  return hit ? hit[1] : value;
 }
 
 export function mount(container) {
@@ -138,38 +135,32 @@ export function mount(container) {
     author: {
       label: "Author",
       picker: authorFS,
-      summarize: () => authorFS.getValues().map(labelOfMember).join(", "),
       apply: (p) => authorFS.getValues().forEach((id) => p.append("author", id)),
     },
     channel: {
       label: "Channel",
       picker: channelFS,
-      summarize: () => channelFS.getValues().map(labelOfChannel).join(", "),
       apply: (p) => channelFS.getValues().forEach((id) => p.append("channel", id)),
     },
     mentions: {
       label: "Mentions",
       picker: mentionsFS,
-      summarize: () => labelOfMember(mentionsFS.getValue()),
       apply: (p) => { if (mentionsFS.getValue()) p.set("mentions", mentionsFS.getValue()); },
     },
     reply_to: {
       label: "Reply to",
       picker: replyFS,
-      summarize: () => labelOfMember(replyFS.getValue()),
       apply: (p) => { if (replyFS.getValue()) p.set("reply_to", replyFS.getValue()); },
     },
     deleted: {
       label: "Deleted",
       render: () => selectHtml("deleted", DELETED_OPTIONS, "only"),
-      summarize: (el) => labelFor(DELETED_OPTIONS, val(el, "deleted")),
       apply: (p, el) => p.set("deleted", val(el, "deleted")),
     },
     emotion: {
       label: "Emotion",
       render: () =>
         selectHtml("emotion", EMOTIONS.map((e) => [e, e[0].toUpperCase() + e.slice(1)]), "joy"),
-      summarize: (el) => val(el, "emotion"),
       apply: (p, el) => p.set("emotion", val(el, "emotion")),
     },
     sentiment: {
@@ -178,14 +169,6 @@ export function mount(container) {
         <input type="number" data-field="sentiment_min" min="-1" max="1" step="0.1" placeholder="min" />
         <span class="msg-chip-sep">to</span>
         <input type="number" data-field="sentiment_max" min="-1" max="1" step="0.1" placeholder="max" />`,
-      summarize: (el) => {
-        const lo = val(el, "sentiment_min");
-        const hi = val(el, "sentiment_max");
-        if (lo && hi) return `${lo} to ${hi}`;
-        if (lo) return `≥ ${lo}`;
-        if (hi) return `≤ ${hi}`;
-        return "";
-      },
       apply: (p, el) => {
         if (val(el, "sentiment_min")) p.set("sentiment_min", val(el, "sentiment_min"));
         if (val(el, "sentiment_max")) p.set("sentiment_max", val(el, "sentiment_max"));
@@ -197,14 +180,6 @@ export function mount(container) {
         <input type="number" data-field="min_length" min="0" placeholder="min" />
         <span class="msg-chip-sep">to</span>
         <input type="number" data-field="max_length" min="0" placeholder="max" />`,
-      summarize: (el) => {
-        const lo = val(el, "min_length");
-        const hi = val(el, "max_length");
-        if (lo && hi) return `${lo}–${hi} chars`;
-        if (lo) return `≥ ${lo} chars`;
-        if (hi) return `≤ ${hi} chars`;
-        return "";
-      },
       apply: (p, el) => {
         if (val(el, "min_length")) p.set("min_length", val(el, "min_length"));
         if (val(el, "max_length")) p.set("max_length", val(el, "max_length"));
@@ -213,19 +188,16 @@ export function mount(container) {
     attachments: {
       label: "Attachments",
       render: () => selectHtml("has_attachments", [["true", "Has attachments"], ["false", "No attachments"]], "true"),
-      summarize: (el) => (val(el, "has_attachments") === "true" ? "has" : "none"),
       apply: (p, el) => p.set("has_attachments", val(el, "has_attachments")),
     },
     reactions: {
       label: "Reactions",
       render: () => selectHtml("has_reactions", [["true", "Has reactions"], ["false", "No reactions"]], "true"),
-      summarize: (el) => (val(el, "has_reactions") === "true" ? "has" : "none"),
       apply: (p, el) => p.set("has_reactions", val(el, "has_reactions")),
     },
     after: {
       label: "After",
       render: () => `<input type="datetime-local" data-field="after_dt" />`,
-      summarize: (el) => val(el, "after_dt").replace("T", " "),
       apply: (p, el) => {
         const v = val(el, "after_dt");
         if (v) p.set("after", String(Math.floor(new Date(v).getTime() / 1000)));
@@ -234,7 +206,6 @@ export function mount(container) {
     before: {
       label: "Before",
       render: () => `<input type="datetime-local" data-field="before_dt" />`,
-      summarize: (el) => val(el, "before_dt").replace("T", " "),
       apply: (p, el) => {
         const v = val(el, "before_dt");
         if (v) p.set("before", String(Math.floor(new Date(v).getTime() / 1000)));
@@ -243,13 +214,11 @@ export function mount(container) {
     show_bots: {
       label: "Show bots",
       render: () => `<span class="msg-chip-static">included</span>`,
-      summarize: () => "included",
       apply: (p) => p.set("include_bots", "true"),
     },
     sort: {
       label: "Sort",
       render: () => selectHtml("sort", SORTS, "newest"),
-      summarize: (el) => labelFor(SORTS, val(el, "sort")),
       apply: (p, el) => p.set("sort", val(el, "sort")),
     },
   };
@@ -259,23 +228,10 @@ export function mount(container) {
     return node ? node.value : "";
   };
 
-  // Option label lookups, so a chip can say "Ben" rather than a raw snowflake.
-  let memberLabels = new Map();
-  let channelLabels = new Map();
-  const labelOfMember = (id) => (id ? memberLabels.get(String(id)) || String(id) : "");
-  const labelOfChannel = (id) => (id ? channelLabels.get(String(id)) || String(id) : "");
-
   // ── Active chips ────────────────────────────────────────────────────
 
   /** key -> chip element, in insertion order. */
   const active = new Map();
-
-  function refreshChipSummary(key) {
-    const chip = active.get(key);
-    if (!chip) return;
-    const summary = FILTERS[key].summarize(chip) || "any";
-    chip.querySelector("[data-summary]").textContent = summary;
-  }
 
   function addFilter(key) {
     if (active.has(key)) {
@@ -288,11 +244,9 @@ export function mount(container) {
     const spec = FILTERS[key];
     const chip = document.createElement("span");
     chip.className = "msg-chip";
-    chip.dataset.key = key;
     chip.innerHTML = `
       <span class="msg-chip-label">${esc(spec.label)}:</span>
       <span class="msg-chip-body"></span>
-      <span class="msg-chip-summary" data-summary hidden></span>
       <button class="msg-chip-x" data-remove aria-label="Remove ${esc(spec.label)} filter">✕</button>
     `;
     const body = chip.querySelector(".msg-chip-body");
@@ -302,7 +256,6 @@ export function mount(container) {
       body.innerHTML = spec.render();
     }
     chip.querySelector("[data-remove]").addEventListener("click", () => removeFilter(key));
-    chip.addEventListener("change", () => refreshChipSummary(key));
     chipsEl.appendChild(chip);
     active.set(key, chip);
 
@@ -381,20 +334,20 @@ export function mount(container) {
         api("/api/meta/channels"),
       ]);
 
-      const memberOpts = members.map((m) => ({
-        id: m.id,
-        label: m.display_name !== m.name ? `${m.display_name} (${m.name})` : m.name,
-        left: !!m.left_server,
-      })).sort((a, b) => a.left - b.left || a.label.localeCompare(b.label));
-      memberOpts.forEach((o) => { if (o.left) o.label += " (left)"; });
-
-      const channelOpts = channels.map((ch) => ({
-        id: String(ch.id),
-        label: `#${ch.name}`,
-      }));
-
-      memberLabels = new Map(memberOpts.map((o) => [String(o.id), o.label]));
-      channelLabels = new Map(channelOpts.map((o) => [String(o.id), o.label]));
+      // Deliberately not toSortedMemberOptions(): that spells the departure out
+      // in full, and this panel is documented (test_frontend_wiring) as using
+      // the terse suffix. It is not toMemberOptions() either, which bakes the
+      // suffix in before any sort — departures have to sort to the bottom on
+      // the bare label. Sorted-plus-terse is this panel's own combination.
+      const memberOpts = members
+        .map((m) => ({
+          id: m.id,
+          label: m.display_name !== m.name ? `${m.display_name} (${m.name})` : m.name,
+          left: !!m.left_server,
+        }))
+        .sort((a, b) => a.left - b.left || a.label.localeCompare(b.label))
+        .map((o) => (o.left ? { ...o, label: `${o.label} (left)` } : o));
+      const channelOpts = toChannelOptions(channels);
 
       authorFS.setOptions(memberOpts);
       channelFS.setOptions(channelOpts);

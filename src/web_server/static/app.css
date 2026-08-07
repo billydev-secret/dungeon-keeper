@@ -1455,15 +1455,12 @@ textarea.field-input { resize: vertical; }
   cursor: default;
 }
 
-/* A deleted message stays in results, badged, with no deep link offered. */
+/* A deleted message stays in results, badged, with no deep link offered.
+   Colour and shape come from .badge/.badge-danger; this only tightens it to
+   sit inside a message's meta row. */
 .msg-deleted {
   font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--red-soft);
-  color: var(--red-text);
   white-space: nowrap;
 }
 .msg-entry-deleted .msg-content { opacity: 0.75; }
@@ -4246,6 +4243,7 @@ select:focus-visible {
     padding: 8px;
   }
   .filter-chip-x,
+  .msg-chip-x,
   .transcript-close {
     min-width: 44px;
     min-height: 44px;

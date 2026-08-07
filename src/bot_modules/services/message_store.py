@@ -160,10 +160,11 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
         "ON messages (guild_id, emotion)"
     )
     # Partial: nearly every row is live, and only the deleted minority is ever
-    # queried through this column.
+    # queried through this column. Keyed on ts rather than deleted_at so the
+    # sort reads off the index — see 155_messages_deleted.sql.
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_deleted "
-        "ON messages (guild_id, deleted_at) WHERE deleted_at IS NOT NULL"
+        "ON messages (guild_id, ts) WHERE deleted_at IS NOT NULL"
     )
 
     conn.execute(

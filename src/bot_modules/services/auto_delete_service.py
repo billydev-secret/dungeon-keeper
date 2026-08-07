@@ -24,7 +24,12 @@ from bot_modules.services.message_store import (
 GuildTextLike = discord.TextChannel | discord.Thread
 
 
-def _claim_deleted(db_path: Path, guild_id: int, message_ids: set[int]) -> None:
+log = logging.getLogger("dungeonkeeper.auto_delete")
+
+
+def _claim_deleted(
+    db_path: Path | None, guild_id: int | None, message_ids: set[int]
+) -> None:
     """Flag messages as auto-deleted *before* asking Discord to delete them.
 
     Order matters. The gateway's delete event arrives moments later carrying no
@@ -32,8 +37,12 @@ def _claim_deleted(db_path: Path, guild_id: int, message_ids: set[int]) -> None:
     beforehand is the only way this sweep's messages end up attributed to
     ``auto_delete`` rather than to the generic ``discord`` source. Paired with
     :func:`_release_deleted` for the case where the delete doesn't happen.
+
+    ``db_path``/``guild_id`` are optional because the history scan is also
+    called as a plain channel sweep with neither; marking is then skipped here
+    rather than at every call site.
     """
-    if not message_ids:
+    if db_path is None or guild_id is None or not message_ids:
         return
     try:
         with open_db(db_path) as conn:
@@ -50,9 +59,11 @@ def _claim_deleted(db_path: Path, guild_id: int, message_ids: set[int]) -> None:
         log.exception("auto-delete: failed to claim deletion marks")
 
 
-def _release_deleted(db_path: Path, guild_id: int, message_ids: set[int]) -> None:
+def _release_deleted(
+    db_path: Path | None, guild_id: int | None, message_ids: set[int]
+) -> None:
     """Roll back a claim for messages Discord refused to delete."""
-    if not message_ids:
+    if db_path is None or guild_id is None or not message_ids:
         return
     try:
         with open_db(db_path) as conn:
@@ -60,7 +71,7 @@ def _release_deleted(db_path: Path, guild_id: int, message_ids: set[int]) -> Non
     except Exception:
         log.exception("auto-delete: failed to release deletion marks")
 
-log = logging.getLogger("dungeonkeeper.auto_delete")
+
 
 
 def init_auto_delete_tables(conn: sqlite3.Connection) -> None:
@@ -462,8 +473,9 @@ async def delete_tracked_messages_older_than(
         abort = False
         for i in range(0, len(bulk_ids), _BULK_CHUNK):
             chunk_ids = bulk_ids[i : i + _BULK_CHUNK]
+            chunk_set = set(chunk_ids)
             partials = [channel.get_partial_message(mid) for mid in chunk_ids]
-            _claim_deleted(db_path, guild_id, set(chunk_ids))
+            _claim_deleted(db_path, guild_id, chunk_set)
             try:
                 await channel.delete_messages(partials, reason=reason)
                 total_deleted += len(chunk_ids)
@@ -471,7 +483,7 @@ async def delete_tracked_messages_older_than(
                     db_path, guild_id, channel.id, set(chunk_ids)
                 )
             except discord.Forbidden:
-                _release_deleted(db_path, guild_id, set(chunk_ids))
+                _release_deleted(db_path, guild_id, chunk_set)
                 total_failed += len(chunk_ids)
                 elapsed = time.monotonic() - start_time
                 log.info(
@@ -484,7 +496,7 @@ async def delete_tracked_messages_older_than(
                 )
                 return grand_total, total_deleted, total_failed
             except discord.HTTPException:
-                _release_deleted(db_path, guild_id, set(chunk_ids))
+                _release_deleted(db_path, guild_id, chunk_set)
                 total_failed += len(chunk_ids)
                 # Remove from tracking to avoid infinite retry
                 remove_tracked_auto_delete_messages(
@@ -714,20 +726,6 @@ async def _scan_and_delete_channel_history(
     old_batch: list[discord.PartialMessage] = []
     tracking_batch: list[tuple[int, float]] = []
 
-    def _claim(ids: set[int]) -> None:
-        """Claim ids for this sweep, when we have a db to claim them in.
-
-        ``db_path``/``guild_id`` are optional on the scan path (it is also
-        called as a plain channel sweep), so both marking helpers no-op rather
-        than the caller having to check at every site.
-        """
-        if db_path is not None and guild_id is not None:
-            _claim_deleted(db_path, guild_id, ids)
-
-    def _release(ids: set[int]) -> None:
-        if db_path is not None and guild_id is not None:
-            _release_deleted(db_path, guild_id, ids)
-
     async def _flush_bulk() -> bool:
         nonlocal deleted, failed
         if not bulk_batch:
@@ -735,16 +733,16 @@ async def _scan_and_delete_channel_history(
         chunk = bulk_batch[:]
         bulk_batch.clear()
         chunk_ids = {p.id for p in chunk}
-        _claim(chunk_ids)
+        _claim_deleted(db_path, guild_id, chunk_ids)
         try:
             await channel.delete_messages(chunk, reason=reason)
             deleted += len(chunk)
         except discord.Forbidden:
-            _release(chunk_ids)
+            _release_deleted(db_path, guild_id, chunk_ids)
             failed += len(chunk)
             return False
         except discord.HTTPException:
-            _release(chunk_ids)
+            _release_deleted(db_path, guild_id, chunk_ids)
             failed += len(chunk)
         await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
         return True
@@ -832,7 +830,7 @@ async def _scan_and_delete_channel_history(
         now_monotonic = time.monotonic()
         if now_monotonic < next_delete_at:
             await asyncio.sleep(next_delete_at - now_monotonic)
-        _claim({partial.id})
+        _claim_deleted(db_path, guild_id, {partial.id})
         try:
             delete_call = cast(Any, partial.delete)
             try:
@@ -846,11 +844,11 @@ async def _scan_and_delete_channel_history(
         except discord.NotFound:
             pass  # Already gone — the claim stands.
         except discord.Forbidden:
-            _release({partial.id})
+            _release_deleted(db_path, guild_id, {partial.id})
             failed += 1
             break
         except discord.HTTPException:
-            _release({partial.id})
+            _release_deleted(db_path, guild_id, {partial.id})
             failed += 1
         old_processed += 1
         if old_processed % 50 == 0:

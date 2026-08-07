@@ -26,18 +26,20 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from bot_modules.core.bot_exclusion import bot_ids_subquery
+from bot_modules.core.utils import jump_url
 from bot_modules.services.message_store import (
+    DELETE_SOURCES,
     get_known_channels_bulk,
     get_known_users_bulk,
 )
 
 VALID_EMOTIONS = frozenset({"joy", "playful", "anger", "frustration", "neutral"})
 
-# Column list every message-reading endpoint selects, in a fixed order. The
-# order is load-bearing: the regex scanner indexes ``row[3]`` for content
-# rather than going through sqlite3.Row, so that it works against the plain
-# tuples its unit test feeds it. Append new columns, never insert — the
-# optional ``total_reactions`` from reaction_select() always lands last.
+# Column list every message-reading endpoint selects. Everything downstream
+# reads rows by name (every connection sets ``row_factory = sqlite3.Row``), so
+# this is a plain list rather than a positional contract — the one exception is
+# ``scan_regex_rows``, which takes an explicit content accessor precisely so it
+# doesn't impose one.
 BASE_COLUMNS = (
     "m.message_id, m.channel_id, m.author_id, m.content, "
     "m.reply_to_id, m.ts, m.sentiment, m.emotion, "
@@ -49,9 +51,9 @@ BASE_COLUMNS = (
 DELETED_ANY = "any"
 DELETED_ONLY = "only"
 DELETED_LIVE = "live"
-DELETED_FILTERS = frozenset(
-    {DELETED_ANY, DELETED_ONLY, DELETED_LIVE, "discord", "auto_delete"}
-)
+# The source names come from message_store, which owns the vocabulary — a third
+# source added there must not need a second edit here.
+DELETED_FILTERS = frozenset({DELETED_ANY, DELETED_ONLY, DELETED_LIVE}) | DELETE_SOURCES
 
 SORT_ORDERS = {
     "newest": "m.ts DESC",
@@ -268,7 +270,11 @@ def build_where(
     elif filters.deleted == DELETED_LIVE:
         clauses.append("m.deleted_at IS NULL")
     elif filters.deleted in DELETED_FILTERS and filters.deleted != DELETED_ANY:
-        clauses.append("m.deleted_source = ?")
+        # The IS NOT NULL conjunct is redundant against the data but not against
+        # the planner: SQLite only uses a partial index when the query's WHERE
+        # *implies* the index's WHERE, so without it a source filter scans the
+        # whole guild instead of the deleted minority.
+        clauses.append("m.deleted_at IS NOT NULL AND m.deleted_source = ?")
         params.append(filters.deleted)
 
     # Bots are excluded from the browser by default, matching every other
@@ -291,6 +297,48 @@ def reaction_select(sort: str) -> str:
     return ", COALESCE(mr.total_reactions, 0) AS total_reactions" if sort == "most_reacted" else ""
 
 
+def _anchor_of(
+    conn: sqlite3.Connection, guild_id: int, message_id: int
+) -> tuple[int, int] | None:
+    """``(channel_id, ts)`` for a message, or None when it isn't archived."""
+    row = conn.execute(
+        "SELECT channel_id, ts FROM messages WHERE message_id = ? AND guild_id = ?",
+        (message_id, guild_id),
+    ).fetchone()
+    return (row["channel_id"], row["ts"]) if row else None
+
+
+def _context_side(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    anchor: tuple[int, int],
+    *,
+    comparison: str,
+    order: str,
+    limit: int,
+) -> list[Any]:
+    """One direction of a context read, walking away from ``anchor``.
+
+    Ordering is by ``(ts, message_id)`` rather than ``ts`` alone. Stored
+    timestamps are whole seconds, so a burst of messages inside one second would
+    otherwise come back in an arbitrary order — snowflake ids break the tie in
+    true post order. ``comparison`` and ``order`` are call-site literals, never
+    user input.
+    """
+    anchor_ts, anchor_id = anchor
+    return conn.execute(
+        f"""
+        SELECT {BASE_COLUMNS} FROM messages m
+         WHERE m.guild_id = ? AND m.channel_id = ?
+           AND (m.ts, m.message_id) {comparison} (?, ?)
+         ORDER BY m.ts {order}, m.message_id {order}
+         LIMIT ?
+        """,
+        (guild_id, channel_id, anchor_ts, anchor_id, limit),
+    ).fetchall()
+
+
 def fetch_context_window(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -308,43 +356,21 @@ def fetch_context_window(
     default. This is conversation reconstruction, not a result set: dropping the
     bot message someone was replying to would misrepresent the exchange.
     Deleted messages are included for the same reason, badged by the panel.
-
-    Ordering is by ``(ts, message_id)`` rather than ``ts`` alone. Stored
-    timestamps are whole seconds, so a burst of messages inside one second
-    would otherwise come back in an arbitrary order — snowflake ids break the
-    tie in true post order.
     """
-    anchor = conn.execute(
-        "SELECT channel_id, ts FROM messages WHERE message_id = ? AND guild_id = ?",
-        (message_id, guild_id),
-    ).fetchone()
-    if anchor is None:
+    found = _anchor_of(conn, guild_id, message_id)
+    if found is None:
         return None
-    channel_id, anchor_ts = anchor["channel_id"], anchor["ts"]
+    channel_id, anchor_ts = found
+    anchor = (anchor_ts, message_id)
 
-    older = conn.execute(
-        f"""
-        SELECT {BASE_COLUMNS} FROM messages m
-         WHERE m.guild_id = ? AND m.channel_id = ?
-           AND (m.ts, m.message_id) < (?, ?)
-         ORDER BY m.ts DESC, m.message_id DESC
-         LIMIT ?
-        """,
-        (guild_id, channel_id, anchor_ts, message_id, before),
-    ).fetchall()
+    older = _context_side(
+        conn, guild_id, channel_id, anchor, comparison="<", order="DESC", limit=before
+    )
+    # ``>=`` so the anchor itself leads the newer side.
+    newer = _context_side(
+        conn, guild_id, channel_id, anchor, comparison=">=", order="ASC", limit=after + 1
+    )
 
-    newer = conn.execute(
-        f"""
-        SELECT {BASE_COLUMNS} FROM messages m
-         WHERE m.guild_id = ? AND m.channel_id = ?
-           AND (m.ts, m.message_id) >= (?, ?)
-         ORDER BY m.ts ASC, m.message_id ASC
-         LIMIT ?
-        """,
-        (guild_id, channel_id, anchor_ts, message_id, after + 1),
-    ).fetchall()
-
-    rows = list(reversed(older)) + list(newer)
     return {
         "channel_id": str(channel_id),
         "message_id": str(message_id),
@@ -352,7 +378,7 @@ def fetch_context_window(
         # hide a load-more button that would return nothing.
         "has_older": len(older) == before,
         "has_newer": len(newer) == after + 1,
-        "rows": rows,
+        "rows": list(reversed(older)) + list(newer),
     }
 
 
@@ -369,36 +395,26 @@ def fetch_context_page(
     row the panel currently holds; the page returned is strictly beyond it, so
     repeated clicks walk outward without overlapping.
     """
-    anchor = conn.execute(
-        "SELECT channel_id, ts FROM messages WHERE message_id = ? AND guild_id = ?",
-        (from_message_id, guild_id),
-    ).fetchone()
-    if anchor is None:
+    found = _anchor_of(conn, guild_id, from_message_id)
+    if found is None:
         return None
-    channel_id, anchor_ts = anchor["channel_id"], anchor["ts"]
+    channel_id, anchor_ts = found
 
-    if direction == "older":
-        comparison, order = "<", "DESC"
-    else:
-        comparison, order = ">", "ASC"
-
-    rows = conn.execute(
-        f"""
-        SELECT {BASE_COLUMNS} FROM messages m
-         WHERE m.guild_id = ? AND m.channel_id = ?
-           AND (m.ts, m.message_id) {comparison} (?, ?)
-         ORDER BY m.ts {order}, m.message_id {order}
-         LIMIT ?
-        """,
-        (guild_id, channel_id, anchor_ts, from_message_id, limit),
-    ).fetchall()
-
-    # Always hand back oldest-first — the panel renders one continuous column.
-    ordered = list(reversed(rows)) if direction == "older" else list(rows)
+    older = direction == "older"
+    rows = _context_side(
+        conn,
+        guild_id,
+        channel_id,
+        (anchor_ts, from_message_id),
+        comparison="<" if older else ">",
+        order="DESC" if older else "ASC",
+        limit=limit,
+    )
     return {
         "channel_id": str(channel_id),
         "has_more": len(rows) == limit,
-        "rows": ordered,
+        # Always hand back oldest-first — the panel renders one continuous column.
+        "rows": list(reversed(rows)) if older else list(rows),
     }
 
 
@@ -455,23 +471,26 @@ def hydrate_rows(
     """
     user_ids: set[int] = set()
     channel_ids: set[int] = set()
-    reply_msg_ids: list[int] = []
+    # A set, not a list: 50 results replying to the same message would
+    # otherwise bind that id 50 times into the IN clause (5,000 on export).
+    reply_msg_ids: set[int] = set()
 
     for r in rows:
-        user_ids.add(r[2])  # author_id
-        channel_ids.add(r[1])  # channel_id
-        if r[4]:  # reply_to_id
-            reply_msg_ids.append(r[4])
+        user_ids.add(r["author_id"])
+        channel_ids.add(r["channel_id"])
+        if r["reply_to_id"]:
+            reply_msg_ids.add(r["reply_to_id"])
 
     # Resolve reply targets to their authors, so a result can say who was being
     # replied to even when the parent message isn't in the result set.
     reply_authors: dict[int, int] = {}
     if reply_msg_ids:
-        placeholders = ",".join("?" * len(reply_msg_ids))
+        reply_ids = list(reply_msg_ids)
+        placeholders = ",".join("?" * len(reply_ids))
         for rr in conn.execute(
             f"SELECT message_id, author_id FROM messages "
             f"WHERE message_id IN ({placeholders})",
-            reply_msg_ids,
+            reply_ids,
         ).fetchall():
             reply_authors[rr[0]] = rr[1]
             user_ids.add(rr[1])
@@ -480,7 +499,7 @@ def hydrate_rows(
         conn, guild_id, user_ids, channel_ids, guild
     )
 
-    msg_ids = [r[0] for r in rows]
+    msg_ids = [r["message_id"] for r in rows]
     attachments: dict[int, list[str]] = {}
     if msg_ids:
         placeholders = ",".join("?" * len(msg_ids))
@@ -493,9 +512,10 @@ def hydrate_rows(
 
     results: list[dict[str, Any]] = []
     for r in rows:
-        msg_id, ch_id, auth_id, content, reply_id, ts = r[0], r[1], r[2], r[3], r[4], r[5]
+        msg_id, ch_id, auth_id = r["message_id"], r["channel_id"], r["author_id"]
+        content, reply_id, ts = r["content"], r["reply_to_id"], r["ts"]
         reply_author_id = reply_authors.get(reply_id) if reply_id else None
-        deleted_at = r[8]
+        deleted_at = r["deleted_at"]
         results.append(
             {
                 "message_id": str(msg_id),
@@ -513,16 +533,16 @@ def hydrate_rows(
                 else None,
                 "attachments": attachments.get(msg_id, []),
                 "ts": ts,
-                "sentiment": r[6],
-                "emotion": r[7],
+                "sentiment": r["sentiment"],
+                "emotion": r["emotion"],
                 "deleted_at": deleted_at,
-                "deleted_source": r[9],
+                "deleted_source": r["deleted_source"],
                 # Built here rather than in the panel so the suppression rule
                 # has one home: a deep link to a deleted message renders fine
                 # and lands on nothing, so it is simply not offered.
                 "discord_url": None
                 if deleted_at is not None
-                else f"https://discord.com/channels/{guild_id}/{ch_id}/{msg_id}",
+                else jump_url(guild_id, ch_id, msg_id),
             }
         )
     return results
