@@ -549,6 +549,8 @@ def test_regex_scan_streams_and_keeps_only_matches():
         messages_routes.compile_search_regex("keep"),
         messages_routes._regex_deadline(),
         messages_routes.REGEX_MAX_MATCHES,
+        # Plain tuples, so index rather than the by-name production accessor.
+        content_of=lambda r: r[3],
     )
     assert scanned == 9
     assert capped is False

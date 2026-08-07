@@ -123,7 +123,9 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
             ts          INTEGER NOT NULL,
             sentiment   REAL,
             emotion     TEXT,
-            media_kind  TEXT
+            media_kind  TEXT,
+            deleted_at     INTEGER,
+            deleted_source TEXT
         )
         """
     )
@@ -133,6 +135,10 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE messages ADD COLUMN sentiment REAL")
     if "emotion" not in _cols:
         conn.execute("ALTER TABLE messages ADD COLUMN emotion TEXT")
+    if "deleted_at" not in _cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN deleted_at INTEGER")
+    if "deleted_source" not in _cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN deleted_source TEXT")
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_guild_ts ON messages (guild_id, ts)"
@@ -152,6 +158,13 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_emotion "
         "ON messages (guild_id, emotion)"
+    )
+    # Partial: nearly every row is live, and only the deleted minority is ever
+    # queried through this column. Keyed on ts rather than deleted_at so the
+    # sort reads off the index — see 155_messages_deleted.sql.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_deleted "
+        "ON messages (guild_id, ts) WHERE deleted_at IS NOT NULL"
     )
 
     conn.execute(
@@ -627,28 +640,101 @@ def purge_guild_message_content(conn: sqlite3.Connection, guild_id: int) -> int:
     return max(cur.rowcount, 0)
 
 
-def delete_message(conn: sqlite3.Connection, message_id: int) -> None:
-    """Remove a message and all its associated rows."""
-    conn.execute("DELETE FROM message_reactions WHERE message_id = ?", (message_id,))
-    conn.execute("DELETE FROM message_mentions WHERE message_id = ?", (message_id,))
-    conn.execute("DELETE FROM message_attachments WHERE message_id = ?", (message_id,))
-    conn.execute("DELETE FROM message_embeds WHERE message_id = ?", (message_id,))
-    conn.execute("DELETE FROM message_sentiment WHERE message_id = ?", (message_id,))
-    conn.execute("DELETE FROM messages WHERE message_id = ?", (message_id,))
+# ── Deletion marking ──────────────────────────────────────────────────
+#
+# The archive is permanent: a Discord deletion flags the row, it does not
+# remove it. The only hard erasure is ``privacy_service.purge_user_data`` — a
+# subject's Art 17 request must actually erase, and a flag would not.
+
+# A deletion we observed but cannot attribute — Discord's raw delete payload
+# names no actor. This covers a member deleting their own message, a mod
+# removing one, and a member's privacy-panel purge alike.
+DELETE_SOURCE_DISCORD = "discord"
+# Our own auto-delete sweep expiring a channel's messages on a timer. High
+# volume and routine, which is exactly why it is worth telling apart.
+DELETE_SOURCE_AUTO_DELETE = "auto_delete"
+
+# Deliberately only two. A member's privacy-panel purge is *not* distinguished:
+# ``privacy_cog._run_deletion`` is guaranteed — in a comment and in
+# test_privacy_modes.test_no_mode_touches_the_database — never to open the DB,
+# and stamping a source would break that guard. It would also mean the archive
+# recorded that a member had exercised a privacy control, which is a new kind
+# of data about them for a mod-visible surface. Their purge lands as
+# ``discord`` like any other deletion.
+DELETE_SOURCES = frozenset({DELETE_SOURCE_DISCORD, DELETE_SOURCE_AUTO_DELETE})
 
 
-def delete_messages_bulk(conn: sqlite3.Connection, message_ids: set[int]) -> None:
-    """Remove multiple messages and their associated rows."""
+def mark_messages_deleted(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    message_ids: set[int] | list[int],
+    source: str,
+    ts: int,
+) -> int:
+    """Flag messages as deleted. Returns how many rows this call newly flagged.
+
+    First writer wins: the ``deleted_at IS NULL`` guard makes the write both
+    idempotent (a redelivered gateway event is a no-op) and non-clobbering.
+    That guard is what makes attribution work at all — ``auto_delete_service``
+    and the privacy purge stamp their ids *before* calling the Discord API, so
+    the generic ``on_raw_message_delete`` that follows finds the row already
+    flagged and leaves the specific source in place. Without it, every
+    attributed deletion would be overwritten with ``discord`` moments later.
+
+    Messages we have no row for are silently skipped — the guild may have been
+    at storage level ``none``, or the message may predate the bot.
+    """
     if not message_ids:
-        return
-    ph = ",".join("?" * len(message_ids))
+        return 0
+    if source not in DELETE_SOURCES:
+        raise ValueError(f"unknown delete source: {source!r}")
     ids = list(message_ids)
-    conn.execute(f"DELETE FROM message_reactions   WHERE message_id IN ({ph})", ids)
-    conn.execute(f"DELETE FROM message_mentions    WHERE message_id IN ({ph})", ids)
-    conn.execute(f"DELETE FROM message_attachments WHERE message_id IN ({ph})", ids)
-    conn.execute(f"DELETE FROM message_embeds      WHERE message_id IN ({ph})", ids)
-    conn.execute(f"DELETE FROM message_sentiment   WHERE message_id IN ({ph})", ids)
-    conn.execute(f"DELETE FROM messages             WHERE message_id IN ({ph})", ids)
+    ph = ",".join("?" * len(ids))
+    cur = conn.execute(
+        f"""
+        UPDATE messages
+           SET deleted_at = ?, deleted_source = ?
+         WHERE message_id IN ({ph})
+           AND guild_id = ?
+           AND deleted_at IS NULL
+        """,
+        (ts, source, *ids, guild_id),
+    )
+    return max(cur.rowcount, 0)
+
+
+def clear_deleted_flag(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    message_ids: set[int] | list[int],
+    source: str,
+) -> int:
+    """Undo a claim for messages that were never actually deleted.
+
+    The claim-then-delete order guarantees attribution but is optimistic: if
+    Discord refuses the delete (lost permissions, a transient 5xx), the message
+    is still there and a "deleted" badge would be a lie — one that also
+    suppresses the deep link to a message a moderator could otherwise open.
+
+    Scoped to ``source`` so a rollback can only ever clear our own optimistic
+    claim. A row already flagged ``discord`` was deleted by someone else while
+    we were working, and must survive this.
+    """
+    if not message_ids:
+        return 0
+    ids = list(message_ids)
+    ph = ",".join("?" * len(ids))
+    cur = conn.execute(
+        f"""
+        UPDATE messages
+           SET deleted_at = NULL, deleted_source = NULL
+         WHERE message_id IN ({ph})
+           AND guild_id = ?
+           AND deleted_source = ?
+        """,
+        (*ids, guild_id, source),
+    )
+    return max(cur.rowcount, 0)
 
 
 # GIF / image-link patterns: Tenor, Giphy, Imgur GIFs, Discord CDN GIFs, bare .gif URLs

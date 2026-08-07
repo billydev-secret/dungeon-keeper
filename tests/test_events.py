@@ -311,11 +311,49 @@ async def test_no_guild_id_ignored_on_delete(mock_remove):
     mock_remove.assert_not_called()
 
 
-@patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_message")
-async def test_with_guild_id_clears_auto_delete_tracking(mock_remove):
-    """Auto-delete tracking is per-message bookkeeping and is cleared, but the
-    messages table itself is a permanent archive — see _archive_only test."""
+def _ctx_with_archive(monkeypatch, *, message_ids=(999,)):
+    """A ctx whose open_db yields a real archive holding ``message_ids``.
+
+    The delete listeners now write, so a MagicMock connection isn't enough —
+    the flag has to be readable back.
+    """
+    import contextlib
+    import sqlite3
+
+    from bot_modules.services.message_store import init_message_tables, store_message
+
+    # check_same_thread=False: the listeners do the write in asyncio.to_thread.
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    init_message_tables(conn)
+    for mid in message_ids:
+        store_message(
+            conn,
+            message_id=mid,
+            guild_id=1,
+            channel_id=10,
+            author_id=50,
+            content="archived text",
+            reply_to_id=None,
+            ts=1_000,
+            attachment_urls=[],
+            mention_ids=[],
+        )
+
     ctx = _make_ctx()
+
+    @contextlib.contextmanager
+    def _open_db():
+        yield conn
+
+    ctx.open_db = _open_db
+    return ctx, conn
+
+
+@patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_message")
+async def test_with_guild_id_clears_auto_delete_tracking(mock_remove, monkeypatch):
+    """Auto-delete tracking is per-message bookkeeping and is cleared."""
+    ctx, _conn = _ctx_with_archive(monkeypatch)
     cog = EventsCog(_make_bot(), ctx)
     payload = MagicMock(spec=discord.RawMessageDeleteEvent)
     payload.guild_id = 1
@@ -325,10 +363,13 @@ async def test_with_guild_id_clears_auto_delete_tracking(mock_remove):
     mock_remove.assert_called_once_with(ctx.db_path, 1, 10, 999)
 
 
-async def test_message_archive_is_permanent_on_delete():
-    """The messages table is never modified by on_raw_message_delete — the
-    archive is preserved even after Discord forgets the message."""
-    ctx = _make_ctx()
+async def test_delete_flags_the_row_but_keeps_the_archive(monkeypatch):
+    """The archive stays permanent — the row and its content survive a Discord
+    delete — but the deletion is now *recorded*, so Message Search can badge it
+    and stop offering a deep link to a message that is gone."""
+    from bot_modules.services.message_store import DELETE_SOURCE_DISCORD
+
+    ctx, conn = _ctx_with_archive(monkeypatch)
     cog = EventsCog(_make_bot(), ctx)
     payload = MagicMock(spec=discord.RawMessageDeleteEvent)
     payload.guild_id = 1
@@ -336,8 +377,14 @@ async def test_message_archive_is_permanent_on_delete():
     payload.message_id = 999
     with patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_message"):
         await cog.on_raw_message_delete(payload)
-    # No DB connection should be opened to mutate the messages table.
-    ctx.open_db.assert_not_called()
+
+    row = conn.execute(
+        "SELECT content, deleted_at, deleted_source FROM messages WHERE message_id = 999"
+    ).fetchone()
+    assert row["content"] == "archived text", "the archive must survive the deletion"
+    assert row["deleted_at"] is not None
+    # Discord's raw payload names no actor, so this is the unattributed source.
+    assert row["deleted_source"] == DELETE_SOURCE_DISCORD
 
 
 # ── on_raw_bulk_message_delete ────────────────────────────────────────
@@ -353,10 +400,12 @@ async def test_no_guild_id_ignored_on_bulk_delete(mock_remove):
 
 
 @patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_messages")
-async def test_with_guild_id_clears_bulk_auto_delete_tracking(mock_remove):
-    """Same as the single-delete case: clear tracking, but never touch the
-    messages table itself (the archive is permanent)."""
-    ctx = _make_ctx()
+async def test_with_guild_id_clears_bulk_auto_delete_tracking(mock_remove, monkeypatch):
+    """Same as the single-delete case: clear tracking, flag every row in the
+    batch, and leave the archived content intact."""
+    from bot_modules.services.message_store import DELETE_SOURCE_DISCORD
+
+    ctx, conn = _ctx_with_archive(monkeypatch, message_ids=(100, 101, 102))
     cog = EventsCog(_make_bot(), ctx)
     payload = MagicMock(spec=discord.RawBulkMessageDeleteEvent)
     payload.guild_id = 1
@@ -364,7 +413,12 @@ async def test_with_guild_id_clears_bulk_auto_delete_tracking(mock_remove):
     payload.message_ids = {100, 101, 102}
     await cog.on_raw_bulk_message_delete(payload)
     mock_remove.assert_called_once_with(ctx.db_path, 1, 10, {100, 101, 102})
-    ctx.open_db.assert_not_called()
+
+    rows = conn.execute(
+        "SELECT content, deleted_source FROM messages ORDER BY message_id"
+    ).fetchall()
+    assert [r["deleted_source"] for r in rows] == [DELETE_SOURCE_DISCORD] * 3
+    assert all(r["content"] == "archived text" for r in rows)
 
 
 # ── on_raw_reaction_add ───────────────────────────────────────────────

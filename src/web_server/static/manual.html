@@ -1367,6 +1367,7 @@
       <div class="callout-body">
         <strong>Message text is stored on this server</strong>
         <p>Message archiving is a per-server setting with three levels. On <strong>this</strong> server it is set to store <strong>full message content</strong> — so the bot's database holds the text of what you post in channels it can read, not just a record that you posted. That copy is what powers message search, the mod desk, sentiment and activity analytics. It is kept indefinitely and is visible to admins and moderators through the dashboard.</p>
+        <p>That includes messages you delete. Deleting a message in Discord removes it from Discord; the server's copy stays, and is now marked as deleted with the time it happened, so moderators can see that a message was removed rather than being shown a link to something that is no longer there. The text itself is still readable to them.</p>
       </div>
     </div>
 
@@ -1374,7 +1375,7 @@
     <table>
       <thead><tr><th>What</th><th>Why</th><th>How long</th></tr></thead>
       <tbody>
-        <tr><td><strong>Your messages</strong> — text, attachments, embeds, who you mentioned, reactions, and an automatic sentiment/emotion score</td><td>Message search and the moderation desk; channel-health and activity analytics</td><td>Indefinitely</td></tr>
+        <tr><td><strong>Your messages</strong> — text, attachments, embeds, who you mentioned, reactions, an automatic sentiment/emotion score, and — if a message is later deleted from Discord — the fact that it was deleted and when</td><td>Message search and the moderation desk; channel-health and activity analytics</td><td>Indefinitely</td></tr>
         <tr><td><strong>Activity</strong> — XP, levels, voice-session times, when you were last active, join/leave events, invite chains</td><td>Levelling, leaderboards, the newcomer funnel, inactivity sweeps</td><td>Indefinitely</td></tr>
         <tr><td><strong>Who you interact with</strong> — a graph of who talks to, replies to and reacts to whom</td><td>The attention and network reports mods use to spot people being ignored or pestered</td><td>Indefinitely</td></tr>
         <tr><td><strong>Economy &amp; games</strong> — wallet, every ledger entry, quests, casino bets and hands, game results</td><td>Running the economy; the ledger is a double-entry record that has to balance</td><td>Indefinitely</td></tr>
@@ -1443,6 +1444,9 @@
       <div class="callout-body">
         <strong>The mod desk lives on the <a href="/">web dashboard</a></strong>
         <p>Beyond the commands below, the dashboard is where review work happens: ticket, jail, and warning review with transcripts, message search, a live server log, and the audit feeds (DMs, whispers, confessions, quotes, Guess rounds, and <a href="/#/anon-audit">Anonymous Features</a> — who is really behind each anonymous submission in the party games).</p>
+        <p><strong>Message Search</strong> opens with just a regex box and a <em>+ Filter</em> button. Filters are added one at a time from that menu — author, channel, mentions, reply-to, emotion, sentiment range, length, attachments, reactions, dates, deleted state, show-bots, sort — and each becomes a small chip showing its value that you can remove with its ✕. Only the filters you are using take up space.</p>
+        <p><strong>Click a result to read around it.</strong> The hit expands in place into a scrollable box showing the stored messages before and after it in the same channel, with the hit highlighted, and <em>Load older</em> / <em>Load newer</em> at the ends. Opening another result closes the first. This reads the server's own archive rather than Discord, so it still works for messages Discord no longer has — and unlike search it includes bot messages, because leaving them out would misrepresent the conversation.</p>
+        <p><strong>Deleted messages stay searchable</strong>, badged <em>deleted</em> (or <em>auto-deleted</em> when an auto-delete rule removed them), with the time in the tooltip. The <em>Deleted</em> filter narrows to only those, or only live ones, or one source. Every message that still exists on Discord gets an ↗ link that opens it there; a deleted message doesn't, since the link would land on nothing.</p>
         <p><strong>Message Search's regex box has limits.</strong> A pattern that can run forever would freeze the bot itself, so a few shapes come back with an explanation instead of running: a repeat nested inside a repeated group (<code>(a+)+</code>, <code>([a-z]+)*</code>), a repeated group whose options overlap (<code>(a|ab)*</code>), patterns longer than 300 characters, and repeat counts above 200. Everyday patterns — <code>(cat|dog)+</code>, <code>\d{3}-\d{4}</code>, <code>https?://\S+</code> — are unaffected. A regex search also stops after 50,000 messages scanned or 5 seconds; if it does, you're told to narrow the channel, author, or date filters and try again.</p>
       </div>
     </div>

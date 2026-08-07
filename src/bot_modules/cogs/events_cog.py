@@ -51,9 +51,11 @@ from bot_modules.services.invite_tracker import (
 from bot_modules.services import intake_service as intake_svc
 from bot_modules.services import promotion_review_service as promo_review
 from bot_modules.services.message_store import (
+    DELETE_SOURCE_DISCORD,
     adjust_reaction_count,
     classify_media_kind,
     mark_member_left,
+    mark_messages_deleted,
     record_member_event,
     record_reaction,
     set_reaction_count,
@@ -1604,6 +1606,29 @@ class EventsCog(commands.Cog):
 
             await asyncio.to_thread(_record_reaction_remove)
 
+    async def _flag_messages_deleted(
+        self, guild_id: int, message_ids: set[int]
+    ) -> None:
+        """Record that Discord deleted these messages, keeping the archive.
+
+        The messages table is a permanent local archive — rows are never removed
+        when Discord deletes a message, so historical content (sentiment, XP
+        audits, mod review) survives. What is recorded is *that* it happened, so
+        Message Search can badge the message and stop offering a deep link that
+        would only 404.
+
+        Discord's raw payload names no actor, so this is the unattributed
+        source. Our own delete paths stamp themselves before calling the API and
+        the IS NULL guard in mark_messages_deleted leaves those alone.
+        """
+        def _write():
+            with self.ctx.open_db() as conn:
+                mark_messages_deleted(
+                    conn, guild_id, message_ids, DELETE_SOURCE_DISCORD, int(time.time())
+                )
+
+        await asyncio.to_thread(_write)
+
     @commands.Cog.listener()
     async def on_raw_message_delete(
         self, payload: discord.RawMessageDeleteEvent
@@ -1615,9 +1640,7 @@ class EventsCog(commands.Cog):
         remove_tracked_auto_delete_message(
             self.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
         )
-        # The messages table itself is a permanent local archive — we never
-        # remove rows when Discord deletes a message, so historical content
-        # (sentiment, XP audits, mod review) survives.
+        await self._flag_messages_deleted(payload.guild_id, {payload.message_id})
 
     async def _dm_admin_permission_warning(
         self, guild: discord.Guild, message: str
@@ -2039,11 +2062,12 @@ class EventsCog(commands.Cog):
     ) -> None:
         if payload.guild_id is None:
             return
-        # Auto-delete tracking only — the messages table is a permanent
-        # archive (see on_raw_message_delete for the rationale).
+        # The messages table is a permanent archive (see on_raw_message_delete
+        # for the rationale) — clear the auto-delete queue, then flag the rows.
         remove_tracked_auto_delete_messages(
             self.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_ids
         )
+        await self._flag_messages_deleted(payload.guild_id, set(payload.message_ids))
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction) -> None:

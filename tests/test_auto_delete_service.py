@@ -267,3 +267,83 @@ def test_media_only_column_migrated_onto_legacy_table(tmp_path):
     upsert_auto_delete_rule(db_path, 1, 100, 86400, 3600, media_only=True)
     rules = list_auto_delete_rules_for_guild(db_path, 1)
     assert bool(rules[0]["media_only"]) is True
+
+
+# ── deletion attribution ──────────────────────────────────────────────
+#
+# The sweep claims its message ids *before* calling the Discord API. That order
+# is the whole mechanism: the gateway delete event that follows names no actor,
+# and marking is first-writer-wins, so a claim made afterwards would race and
+# lose an arbitrary subset of the sweep to the generic ``discord`` source.
+
+
+@pytest.fixture
+def archive_db(tmp_path):
+    """A db with both the auto-delete tables and a small message archive."""
+    from bot_modules.services.message_store import init_message_tables, store_message
+
+    db_path = tmp_path / "archive.db"
+    with open_db(db_path) as conn:
+        init_auto_delete_tables(conn)
+        init_message_tables(conn)
+        for mid in (1, 2):
+            store_message(
+                conn,
+                message_id=mid,
+                guild_id=1,
+                channel_id=100,
+                author_id=50,
+                content="swept away",
+                reply_to_id=None,
+                ts=1_000,
+                attachment_urls=[],
+                mention_ids=[],
+            )
+    return db_path
+
+
+def _flags(db_path):
+    with open_db(db_path) as conn:
+        return {
+            r["message_id"]: (r["deleted_at"], r["deleted_source"])
+            for r in conn.execute(
+                "SELECT message_id, deleted_at, deleted_source FROM messages"
+            )
+        }
+
+
+def test_claim_attributes_the_sweep_and_survives_the_gateway_event(archive_db):
+    from bot_modules.services.auto_delete_service import _claim_deleted
+    from bot_modules.services.message_store import (
+        DELETE_SOURCE_AUTO_DELETE,
+        DELETE_SOURCE_DISCORD,
+        mark_messages_deleted,
+    )
+
+    _claim_deleted(archive_db, 1, {1, 2})
+    # The gateway event lands moments later carrying no actor.
+    with open_db(archive_db) as conn:
+        mark_messages_deleted(conn, 1, {1, 2}, DELETE_SOURCE_DISCORD, 99_999)
+
+    flags = _flags(archive_db)
+    assert [s for _ts, s in flags.values()] == [DELETE_SOURCE_AUTO_DELETE] * 2
+
+
+def test_release_rolls_back_a_delete_discord_refused(archive_db):
+    from bot_modules.services.auto_delete_service import _claim_deleted, _release_deleted
+
+    _claim_deleted(archive_db, 1, {1, 2})
+    _release_deleted(archive_db, 1, {1})
+
+    flags = _flags(archive_db)
+    assert flags[1] == (None, None), "a message still on Discord must not read as deleted"
+    assert flags[2][1] == "auto_delete"
+
+
+def test_claim_never_aborts_a_sweep(tmp_path):
+    """Bookkeeping failure must not stop messages from being deleted."""
+    from bot_modules.services.auto_delete_service import _claim_deleted, _release_deleted
+
+    missing = tmp_path / "nonexistent" / "no.db"
+    _claim_deleted(missing, 1, {1})  # must not raise
+    _release_deleted(missing, 1, {1})

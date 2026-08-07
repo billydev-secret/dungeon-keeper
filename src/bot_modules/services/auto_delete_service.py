@@ -15,10 +15,63 @@ import discord
 from bot_modules.core.db_utils import open_db
 from bot_modules.core.settings import AUTO_DELETE_KEYWORDS, AUTO_DELETE_SETTINGS
 from bot_modules.core.utils import format_guild_for_log
+from bot_modules.services.message_store import (
+    DELETE_SOURCE_AUTO_DELETE,
+    clear_deleted_flag,
+    mark_messages_deleted,
+)
 
 GuildTextLike = discord.TextChannel | discord.Thread
 
+
 log = logging.getLogger("dungeonkeeper.auto_delete")
+
+
+def _claim_deleted(
+    db_path: Path | None, guild_id: int | None, message_ids: set[int]
+) -> None:
+    """Flag messages as auto-deleted *before* asking Discord to delete them.
+
+    Order matters. The gateway's delete event arrives moments later carrying no
+    actor, and ``mark_messages_deleted`` is first-writer-wins — so claiming
+    beforehand is the only way this sweep's messages end up attributed to
+    ``auto_delete`` rather than to the generic ``discord`` source. Paired with
+    :func:`_release_deleted` for the case where the delete doesn't happen.
+
+    ``db_path``/``guild_id`` are optional because the history scan is also
+    called as a plain channel sweep with neither; marking is then skipped here
+    rather than at every call site.
+    """
+    if db_path is None or guild_id is None or not message_ids:
+        return
+    try:
+        with open_db(db_path) as conn:
+            mark_messages_deleted(
+                conn,
+                guild_id,
+                message_ids,
+                DELETE_SOURCE_AUTO_DELETE,
+                int(time.time()),
+            )
+    except Exception:
+        # Bookkeeping must never abort a sweep — a missing badge is a far
+        # smaller problem than messages that stop being deleted.
+        log.exception("auto-delete: failed to claim deletion marks")
+
+
+def _release_deleted(
+    db_path: Path | None, guild_id: int | None, message_ids: set[int]
+) -> None:
+    """Roll back a claim for messages Discord refused to delete."""
+    if db_path is None or guild_id is None or not message_ids:
+        return
+    try:
+        with open_db(db_path) as conn:
+            clear_deleted_flag(conn, guild_id, message_ids, DELETE_SOURCE_AUTO_DELETE)
+    except Exception:
+        log.exception("auto-delete: failed to release deletion marks")
+
+
 
 
 def init_auto_delete_tables(conn: sqlite3.Connection) -> None:
@@ -420,7 +473,9 @@ async def delete_tracked_messages_older_than(
         abort = False
         for i in range(0, len(bulk_ids), _BULK_CHUNK):
             chunk_ids = bulk_ids[i : i + _BULK_CHUNK]
+            chunk_set = set(chunk_ids)
             partials = [channel.get_partial_message(mid) for mid in chunk_ids]
+            _claim_deleted(db_path, guild_id, chunk_set)
             try:
                 await channel.delete_messages(partials, reason=reason)
                 total_deleted += len(chunk_ids)
@@ -428,6 +483,7 @@ async def delete_tracked_messages_older_than(
                     db_path, guild_id, channel.id, set(chunk_ids)
                 )
             except discord.Forbidden:
+                _release_deleted(db_path, guild_id, chunk_set)
                 total_failed += len(chunk_ids)
                 elapsed = time.monotonic() - start_time
                 log.info(
@@ -440,6 +496,7 @@ async def delete_tracked_messages_older_than(
                 )
                 return grand_total, total_deleted, total_failed
             except discord.HTTPException:
+                _release_deleted(db_path, guild_id, chunk_set)
                 total_failed += len(chunk_ids)
                 # Remove from tracking to avoid infinite retry
                 remove_tracked_auto_delete_messages(
@@ -457,6 +514,7 @@ async def delete_tracked_messages_older_than(
                 await asyncio.sleep(next_delete_at - now_monotonic)
 
             partial = channel.get_partial_message(mid)
+            _claim_deleted(db_path, guild_id, {mid})
             try:
                 delete_call = cast(Any, partial.delete)
                 try:
@@ -469,12 +527,15 @@ async def delete_tracked_messages_older_than(
                     time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
                 )
             except discord.NotFound:
+                # Already gone — the claim stands, it just wasn't us who did it.
                 remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
             except discord.Forbidden:
+                _release_deleted(db_path, guild_id, {mid})
                 total_failed += 1
                 abort = True
                 break
             except discord.HTTPException:
+                _release_deleted(db_path, guild_id, {mid})
                 total_failed += 1
                 remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
 
@@ -671,13 +732,17 @@ async def _scan_and_delete_channel_history(
             return True
         chunk = bulk_batch[:]
         bulk_batch.clear()
+        chunk_ids = {p.id for p in chunk}
+        _claim_deleted(db_path, guild_id, chunk_ids)
         try:
             await channel.delete_messages(chunk, reason=reason)
             deleted += len(chunk)
         except discord.Forbidden:
+            _release_deleted(db_path, guild_id, chunk_ids)
             failed += len(chunk)
             return False
         except discord.HTTPException:
+            _release_deleted(db_path, guild_id, chunk_ids)
             failed += len(chunk)
         await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
         return True
@@ -765,6 +830,7 @@ async def _scan_and_delete_channel_history(
         now_monotonic = time.monotonic()
         if now_monotonic < next_delete_at:
             await asyncio.sleep(next_delete_at - now_monotonic)
+        _claim_deleted(db_path, guild_id, {partial.id})
         try:
             delete_call = cast(Any, partial.delete)
             try:
@@ -776,11 +842,13 @@ async def _scan_and_delete_channel_history(
                 time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
             )
         except discord.NotFound:
-            pass
+            pass  # Already gone — the claim stands.
         except discord.Forbidden:
+            _release_deleted(db_path, guild_id, {partial.id})
             failed += 1
             break
         except discord.HTTPException:
+            _release_deleted(db_path, guild_id, {partial.id})
             failed += 1
         old_processed += 1
         if old_processed % 50 == 0:
