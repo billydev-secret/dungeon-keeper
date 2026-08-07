@@ -274,6 +274,7 @@ def main() -> None:
         "bot_modules.cogs.voice_transcription_cog",
         "bot_modules.cogs.games_dev_cog",
         "bot_modules.cogs.games_external_cog",
+        "bot_modules.cogs.mention_awards_cog",
     ]
 
     # ==============================

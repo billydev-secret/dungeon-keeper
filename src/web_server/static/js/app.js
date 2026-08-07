@@ -185,6 +185,7 @@ const SECTIONS = [
       { id: "economy-claims", label: "Claims", module: "./panels/economy-claims.js", help: "help-economy" },
       { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js", help: "help-economy" },
       { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", help: "help-economy" },
+      { id: "mention-awards", label: "Mention Awards", module: "./panels/config-mention-awards.js", adminOnly: true, keywords: "trigger phrase mention pay award hot seat member-run game host" },
       { id: "economy-sinks", label: "Sinks", module: "./panels/economy-sinks.js", adminOnly: true, keywords: "shop perks icons", help: "help-economy" },
       { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack", help: "help-casino", related: ["config-pools"] },
       // Keywords lean market-specific: "pools" alone also matches confession

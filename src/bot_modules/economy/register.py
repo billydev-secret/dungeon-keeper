@@ -96,6 +96,7 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "game_participation": ("🎲", "Game participation"),
     "game_win": ("🥇", "Game win"),
     "cat_catch": ("🐱", "Cat caught"),
+    "mention_award": ("🪑", "Mention award"),
     "grant": ("🎁", "Staff grant"),
     "quest_reroll": ("🔁", "Quest reroll"),
     "qa_reward": ("🧪", "QA testing reward"),

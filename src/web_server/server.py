@@ -273,6 +273,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     from web_server.routes import logs as logs_routes
     from web_server.routes import ai_routes
     from web_server.routes import messages as messages_routes
+    from web_server.routes import mention_awards as mention_awards_routes
     from web_server.routes import meta as meta_routes
     from web_server.routes import moderation as moderation_routes
     from web_server.routes import reports as reports_routes
@@ -293,6 +294,9 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])
     app.include_router(rules_watch_routes.router, prefix="/api", tags=["rules-watch"])
+    app.include_router(
+        mention_awards_routes.router, prefix="/api", tags=["mention-awards"]
+    )
 
     from web_server.routes import advisor as advisor_routes
 

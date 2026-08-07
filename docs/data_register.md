@@ -71,6 +71,7 @@ exempts deletion, not disclosure.
 | greeting_watch | Greeting watch | ids+timestamp ONLY, no text (by design ✓) | **30d GC on verdicted rows** (`49a02867`, `greeting_watch_service.py:303`) | — | — | G1 closed. 352 resolved rows still present — the GC runs off the 60s loop, so it clears on the next bot restart |
 | audit_log, incident_events, role_events, role_prune_events | Mod/audit misc | actor/target ids | ? | role_events YES, others **NO** | — | |
 | voice_transcription_config | Voice transcription | config only — transcripts never stored | n/a | n/a | local faster-whisper | ✓ no personal data |
+| mention_award_rules | Mention Awards | guild config (channel, phrase, amount, role) + `created_by` admin id | until deleted by an admin | **NO — preserved.** Art 17(3)(e): the id records who opened a currency faucet, the counterpart to the `econ_ledger` rows it produces. Not member data — an admin acting in an administrative capacity | — | Awards themselves land in `econ_ledger` (preserved, already registered) and dedupe via `games_external_payouts`. **Message content is never stored**: the phrase is matched live off the gateway and discarded |
 | _(bundles append below)_ | | | | | | |
 
 ## Cross-cutting questions each bundle must answer

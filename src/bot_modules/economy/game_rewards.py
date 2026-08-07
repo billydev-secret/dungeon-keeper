@@ -315,6 +315,62 @@ async def pay_cat_catch(
         return 0
 
 
+async def pay_mention_award(
+    bot: "Bot",
+    guild_id: int,
+    user_id: int,
+    *,
+    coins: int,
+    rule_id: int,
+    occurrence: str,
+) -> None:
+    """Credit a Mention Award: ``coins`` plus the ``mention_award`` quest
+    trigger. The ``pay_cat_catch`` shape — a game the bot does not host,
+    detected by a watcher, paid directly with a quest hook on top.
+
+    Same guarantees as the other faucets: no-op when the economy is off or
+    the member is a bot/unresolvable, booster multiplier applied, failures
+    logged not raised. Caller dedupes per announcement (the payout ledger) —
+    ``apply_credit`` is not occurrence-guarded, so this must fire at most
+    once per announcement.
+    """
+    try:
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            return
+        member = guild.get_member(int(user_id))
+        if member is None or member.bot or coins < 1:
+            return
+
+        db_path = bot.ctx.db_path
+
+        def _load() -> EconSettings:
+            with open_db(db_path) as conn:
+                return load_econ_settings(conn, guild_id)
+
+        settings = await asyncio.to_thread(_load)
+        if not settings.enabled:
+            return
+
+        booster = member_is_booster(bot, guild_id, user_id)
+
+        def _credit() -> None:
+            with open_db(db_path) as conn:
+                apply_credit(
+                    conn, guild_id, user_id, coins, "mention_award",
+                    meta={"rule_id": rule_id},
+                    booster=booster, multiplier=settings.booster_multiplier,
+                )
+
+        await asyncio.to_thread(_credit)
+        await _fire_triggers(
+            bot, guild, settings, "mention_award", [user_id],
+            {user_id: booster}, f"mention_award:{occurrence}",
+        )
+    except Exception:
+        log.exception("pay_mention_award failed for guild %s", guild_id)
+
+
 async def pay_cah_game_by_score(
     bot: "Bot",
     guild_id: int,
