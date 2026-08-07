@@ -33,18 +33,25 @@ function chipRow(cond) {
   const isText = cond.kind === "contains_text";
   return `
     <div class="card" data-chip data-kind="${esc(cond.kind)}"
-         style="padding:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-      <span class="section-label" style="margin:0; min-width:8.5em;">
-        ${esc(KIND_LABEL[cond.kind] || cond.kind)}</span>
+         style="padding:10px 12px; display:flex; flex-direction:column; gap:8px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span class="section-label" style="margin:0; flex:1;">
+          ${esc(KIND_LABEL[cond.kind] || cond.kind)}</span>
+        <button type="button" class="tag-remove" data-chip-remove
+                aria-label="Remove condition" title="Remove condition"
+                style="font-size:17px; padding:2px 8px;">&times;</button>
+      </div>
       ${isText
-        ? `<input type="text" data-chip-value maxlength="200" value="${esc(cond.value)}"
-                  placeholder="your turn" style="flex:1; min-width:12em;" />
-           <label style="display:flex; gap:6px; align-items:center; white-space:nowrap;">
-             <input type="checkbox" data-chip-regex${cond.regex ? " checked" : ""} /> regex
-           </label>`
-        : `<span data-chip-picker style="flex:1; min-width:12em;"></span>`}
-      <button type="button" class="btn btn-danger" data-chip-remove
-              aria-label="Remove condition">✕</button>
+        ? `<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+             <input type="text" class="field-input" data-chip-value maxlength="200"
+                    value="${esc(cond.value)}" placeholder="your turn"
+                    style="flex:1; min-width:12em;" />
+             <label style="display:flex; gap:6px; align-items:center; white-space:nowrap;
+                           font-size:12px; color:var(--ink-dim); cursor:pointer;">
+               <input type="checkbox" data-chip-regex${cond.regex ? " checked" : ""} /> regex
+             </label>
+           </div>`
+        : `<span data-chip-picker></span>`}
     </div>`;
 }
 
@@ -57,7 +64,8 @@ function ruleCard(rule, channels, idx) {
 
   return `
     <form class="card" data-rule data-id="${esc(rule.id || "")}"
-          data-channel="${esc(rule.channel_id || "")}">
+          data-channel="${esc(rule.channel_id || "")}"
+          style="display:flex; flex-direction:column; gap:10px;">
       <div class="section-label">${esc(name)}</div>
       <div class="field">
         <label>Channel</label>
@@ -75,7 +83,7 @@ function ruleCard(rule, channels, idx) {
         <label>Conditions</label>
         <div data-chips style="display:flex; flex-direction:column; gap:8px;">${chips}</div>
         <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
-          <select data-chip-kind>
+          <select data-chip-kind style="flex:1; min-width:10em; max-width:15em; padding:6px 26px 6px 9px;">
             ${KINDS.map((k) => `<option value="${k.kind}">${esc(k.label)}</option>`).join("")}
           </select>
           <button type="button" class="btn" data-chip-add>Add condition</button>
