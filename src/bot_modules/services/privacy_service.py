@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import sqlite3
 from itertools import islice
 
@@ -158,6 +159,47 @@ def purge_user_data(
         table="role_events",
     )
 
+    # Mention Awards: a `from_user` condition chip names the member inside the
+    # rule's conditions JSON — the list-column blind spot, so SUBJECT_ID_COLUMNS
+    # can't see it. Strip the member's chips; a rule left with no chips is
+    # deleted outright (an empty chip list is the matcher's fail-closed
+    # "matches nothing" state, and a husk that existed only because of the
+    # erased member serves nobody). Other chips, and other members' chips,
+    # survive. Tolerates schema drift like every other step.
+    try:
+        needle = str(user_id)
+        rows = conn.execute(
+            "SELECT id, conditions FROM mention_award_rules "
+            "WHERE guild_id = ? AND conditions LIKE ?",
+            (guild_id, f'%"{needle}"%'),
+        ).fetchall()
+        for rule_id, raw in rows:
+            try:
+                chips = json.loads(raw or "[]")
+            except json.JSONDecodeError:
+                continue
+            kept = [
+                c for c in chips
+                if not (
+                    isinstance(c, dict)
+                    and c.get("kind") == "from_user"
+                    and str(c.get("value", "")) == needle
+                )
+            ]
+            if len(kept) == len(chips):
+                continue
+            if kept:
+                conn.execute(
+                    "UPDATE mention_award_rules SET conditions = ? WHERE id = ?",
+                    (json.dumps(kept), rule_id),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM mention_award_rules WHERE id = ?", (rule_id,)
+                )
+    except sqlite3.Error as exc:
+        log.warning("Purge: failed on mention_award_rules (%s)", exc)
+
     # Pair tables: clear whichever side the erased user is on.
     for table, col_a, col_b in (
         ("user_interactions", "from_user_id", "to_user_id"),
@@ -250,6 +292,9 @@ SUBJECT_ID_COLUMNS = frozenset(
 # runbook tells the operator to grep them by hand.
 LIST_VALUED_MEMBER_COLUMNS = (
     ("confession_config", "blocked_user_ids"),
+    # from_user chip values live in the conditions JSON (purge strips them;
+    # export can only disclose the gap).
+    ("mention_award_rules", "conditions"),
     ("econ_demurrage_sweeps", "taxed_members"),
     ("revive_events", "follow_authors"),
     ("risky_active_rounds", "reroll_user_ids"),

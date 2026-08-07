@@ -204,6 +204,31 @@ def claim_payout_sync(conn, message_id: int, guild_id: int, kind: str) -> bool:
     return cur.rowcount > 0
 
 
+async def release_payout(db, message_id: int, kind: str) -> bool:
+    """Reopen a claim whose payout failed to credit. True if a row was freed.
+
+    The claim-first ordering means a payout that no-ops (economy off, member
+    unresolvable) has already burned the message's once-ever claim; without a
+    release, that member is silently unpaid forever. Scoped on ``kind`` so a
+    caller can only ever reopen its *own* claim — releasing another kind's
+    would let that kind double-pay.
+    """
+    cur = await db.execute(
+        "DELETE FROM games_external_payouts WHERE message_id = ? AND kind = ?",
+        (message_id, kind),
+    )
+    return cur.rowcount > 0
+
+
+def release_payout_sync(conn, message_id: int, kind: str) -> bool:
+    """Sync twin of ``release_payout``."""
+    cur = conn.execute(
+        "DELETE FROM games_external_payouts WHERE message_id = ? AND kind = ?",
+        (message_id, kind),
+    )
+    return cur.rowcount > 0
+
+
 async def recent_channel_messages(
     db, guild_id: int, channel_id: int, author_id: int, before_iso: str, limit: int = 300
 ) -> list[Mapping[str, Any]]:

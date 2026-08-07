@@ -85,8 +85,17 @@ def _announcements(conn: sqlite3.Connection, guild_id: int, channel_id: int):
     """Unpaid handoffs in one channel, oldest first: (message_id, ts, member, announcer).
 
     A message qualifies on shape alone: posted by a non-bot, carries a card
-    image, and @-mentions exactly one member who isn't the author.
+    image, and @-mentions exactly one member who isn't the author and isn't a
+    bot — recorded bots DO land in ``message_mentions``, and crediting one
+    would be a payout the live path's ``member.bot`` guard forecloses.
     """
+    bot_ids = {
+        int(r[0])
+        for r in conn.execute(
+            "SELECT user_id FROM known_users WHERE guild_id = ? AND is_bot = 1",
+            (guild_id,),
+        ).fetchall()
+    }
     rows = conn.execute(
         f"""
         SELECT m.message_id, m.ts, m.author_id
@@ -115,7 +124,7 @@ def _announcements(conn: sqlite3.Connection, guild_id: int, channel_id: int):
         # Same recipient rule as the live matcher (exactly one mention, no
         # self-nomination) — shared so the two paths can never drift.
         member_id = recipient_of(mentions, int(author_id))
-        if member_id is None:
+        if member_id is None or member_id in bot_ids:
             continue
         yield int(message_id), float(ts), member_id, int(author_id)
 

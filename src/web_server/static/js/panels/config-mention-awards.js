@@ -62,7 +62,7 @@ function ruleCard(rule, channels, idx) {
       <div class="field">
         <label>Channel</label>
         <span data-picker="channel"></span>
-        <div class="field-hint">Only messages in this channel can award.</div>
+        <div class="field-hint">Only messages in this channel can award — threads under it count too.</div>
       </div>
       <div class="field">
         <label for="${uid}-amount">Amount</label>
@@ -223,7 +223,11 @@ export function mount(container) {
             if (id) {
               await apiPut(`/api/mention-awards/rules/${id}`, body);
             } else {
-              await apiPost("/api/mention-awards/rules", body);
+              // Record the new id immediately: if the rebuild below is
+              // skipped (a sibling card holds unsaved edits), a second Save
+              // on this card must PUT, not POST a duplicate rule.
+              const created = await apiPost("/api/mention-awards/rules", body);
+              form.dataset.id = String(created.id);
             }
             showStatus(status, true);
             await refresh();
@@ -247,7 +251,10 @@ export function mount(container) {
             try {
               await apiDelete(`/api/mention-awards/rules/${removeBtn.dataset.remove}`);
               await refresh();
-              render();
+              // Remove just this card: a full re-render would wipe unsaved
+              // edits in sibling cards — the loss rerenderUnlessDirty exists
+              // to prevent on the save path.
+              form.remove();
             } catch (err) {
               showStatus(status, false, err.message);
             }

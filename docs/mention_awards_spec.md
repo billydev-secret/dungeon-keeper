@@ -48,7 +48,8 @@ rendered `@Hot Seat`. That is exactly what `mentions_role` is for.
 
 A message awards when **all** hold:
 
-1. It's in the rule's channel.
+1. It's in the rule's channel — **threads count toward their parent**, the
+   same convention as the photo-challenge trigger and trigger quests.
 2. The author is not a bot.
 3. The rule's amount is at least 1.
 4. The rule has at least one chip, and **every** chip matches.
@@ -76,7 +77,18 @@ banked messages have no content to re-match. The one-off backfill
 (`scripts/backfill_mention_awards.py`) therefore matches on message *shape*
 instead: `media_kind` plus the @-mention edges, both of which survive with
 content storage off. That seam is why the backfill is a script rather than a
-mode of the feature.
+mode of the feature. The backfill's mention *source* also differs from the
+live path's (`message_mentions` banks the gateway payload — reply pings
+included, self-mentions dropped — where the live matcher reads raw content
+mentions), so its 15/15 measured precision is per-channel evidence, not a
+guarantee; its docstring says to spot-check a new channel's dry run.
+
+**`from_user` chips hold a member's id** (as a string inside the conditions
+JSON — the export's "list-column blind spot"). On hard erasure,
+`purge_user_data` strips that member's `from_user` chips; a rule left with no
+chips is deleted outright (empty chips = the fail-closed "matches nothing"
+state). The column is registered in `LIST_VALUED_MEMBER_COLUMNS` so an access
+request's export discloses the gap for hand-review.
 
 Regex chips are admin-authored behind the admin gate and validated
 (`re.compile`) at save time; a pathological pattern is bounded by Discord's
@@ -89,11 +101,20 @@ credited directly, plus the `mention_award` quest trigger on top. Inherits
 every faucet guarantee: no-op when the economy is off or the member is a
 bot/unresolvable, booster multiplier applied, failures logged not raised.
 
-**Idempotency** reuses `games_external_payouts` (`message_id` PK, `kind`
-discriminator) rather than adding a second ledger — Hot Seat is an external
-game in the sense that matters: the bot doesn't host it, and each announcement
-pays exactly once. The claim is taken *before* the credit, so an edit
-re-firing the listener cannot double-pay.
+**Idempotency** reuses `games_external_payouts` (`message_id` PK — the
+contract is one payout per message across *all* kinds; `kind` labels a claim,
+it doesn't scope it) rather than adding a second ledger. The claim is taken
+*before* the credit, so an edit re-firing the listener cannot double-pay —
+and because `pay_mention_award` reports whether the credit actually landed,
+a claim whose payout no-ops (economy off, member unresolvable) is **released**
+so a retry (an edit, or the backfill) can pay it rather than the member being
+silently shorted forever.
+
+**Rule changes are live immediately.** The listener caches each channel's
+rules (60s TTL, negative results included, so unwatched channels cost no DB
+work), and every dashboard write invalidates that cache in-process (the
+games_external refresh pattern). The TTL is only the backstop for
+out-of-band DB edits or a mid-restart dashboard write.
 
 Dedupe is **per announcement only**. A member who takes the seat again later
 is paid again — the right reading of two genuine turns.

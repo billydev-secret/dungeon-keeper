@@ -71,6 +71,17 @@ def quest_occurrence(message_id: int) -> str:
     return f"{PAYOUT_KIND}:{message_id}"
 
 
+def effective_channel_id(channel_id: int, parent_id: int | None) -> int:
+    """The channel a message counts toward: its thread's parent, if any.
+
+    Rules are configured on channels (the panel's picker doesn't offer
+    threads), and the sibling features (photo-challenge trigger, trigger
+    quests) all match a thread's message on the parent — an announcement
+    posted in a thread under the watched channel must pay, not silently miss.
+    """
+    return parent_id or channel_id
+
+
 @dataclass(frozen=True)
 class Condition:
     """One chip. ``value`` is text for ``contains_text``, an id-string otherwise."""

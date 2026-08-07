@@ -10,6 +10,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.economy.game_rewards import (
     pay_cah_game_by_score,
     pay_game_rewards,
+    pay_mention_award,
     resolve_winners,
 )
 from bot_modules.games.utils.game_manager import (
@@ -717,3 +718,47 @@ async def test_force_end_survives_a_corrupt_payload(db_path):
 
     assert await get_active_game_by_id(db, gid) is None
     assert _bal(db_path, 2) == 0
+
+
+# ── pay_mention_award return contract ────────────────────────────────
+#
+# The cog burns the one-time payout claim BEFORE calling this faucet, so it
+# must be able to tell whether a credit actually landed — a silent no-op
+# (economy off, member unresolvable) would otherwise leave the claim row in
+# place and the member permanently unpaid (2026-08 review finding).
+
+
+async def test_mention_award_pays_and_reports_true(db_path):
+    _enable(db_path)
+    bot: Any = _Bot(db_path, [_member(1)])
+    paid = await pay_mention_award(
+        bot, GUILD, 1, coins=250, rule_id=7, occurrence="mention_award:1"
+    )
+    assert paid is True
+    assert _bal(db_path, 1) == 250
+
+
+async def test_mention_award_reports_false_when_disabled(db_path):
+    bot: Any = _Bot(db_path, [_member(1)])
+    paid = await pay_mention_award(
+        bot, GUILD, 1, coins=250, rule_id=7, occurrence="mention_award:1"
+    )
+    assert paid is False
+    assert _bal(db_path, 1) == 0
+
+
+async def test_mention_award_reports_false_for_unresolvable_member(db_path):
+    _enable(db_path)
+    bot: Any = _Bot(db_path, [_member(1)])
+    assert await pay_mention_award(
+        bot, GUILD, 999, coins=250, rule_id=7, occurrence="mention_award:2"
+    ) is False
+
+
+async def test_mention_award_reports_false_for_bot_member(db_path):
+    _enable(db_path)
+    bot: Any = _Bot(db_path, [_member(1, bot=True)])
+    assert await pay_mention_award(
+        bot, GUILD, 1, coins=250, rule_id=7, occurrence="mention_award:3"
+    ) is False
+    assert _bal(db_path, 1) == 0

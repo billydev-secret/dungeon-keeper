@@ -503,3 +503,43 @@ def _tables_touched_by_purge(conn):
     names |= set(ps._MESSAGE_CHILD_TABLES)
     names |= set(getattr(es, "_PURGE_USER_ID_TABLES", ()))
     return {n for n in names if n in real}
+
+
+def test_purge_strips_from_user_chips_from_mention_award_rules(db):
+    """A from_user chip names a member inside the conditions JSON — the
+    "list-column blind spot": invisible to SUBJECT_ID_COLUMNS. Erasure must
+    strip the chip; a rule left with no chips is deleted outright (an empty
+    chip list is the fail-closed "matches nothing" state, and keeping a husk
+    that exists only because of the erased member serves nobody).
+    """
+    from bot_modules.mention_awards.logic import Condition
+    from bot_modules.mention_awards.store import create_rule, list_rules
+
+    with open_db(db) as conn:
+        # Rule A: from_user chip on the erased member + a text chip — chip
+        # stripped, rule survives.
+        a = create_rule(
+            conn, GUILD, channel_id=42, amount=10,
+            conditions=[
+                Condition("from_user", str(USER)),
+                Condition("contains_text", "your turn"),
+            ],
+        )
+        # Rule B: ONLY a from_user chip on the erased member — rule deleted.
+        create_rule(
+            conn, GUILD, channel_id=43, amount=10,
+            conditions=[Condition("from_user", str(USER))],
+        )
+        # Rule C: someone else's from_user chip — untouched.
+        c = create_rule(
+            conn, GUILD, channel_id=44, amount=10,
+            conditions=[Condition("from_user", str(OTHER_USER))],
+        )
+
+        purge_user_data(conn, GUILD, USER)
+
+        rows = {int(r["id"]): r for r in list_rules(conn, GUILD)}
+        assert set(rows) == {a, c}
+        assert str(USER) not in rows[a]["conditions"]
+        assert "your turn" in rows[a]["conditions"]
+        assert str(OTHER_USER) in rows[c]["conditions"]

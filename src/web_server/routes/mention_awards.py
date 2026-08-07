@@ -28,6 +28,19 @@ from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_que
 router = APIRouter()
 
 
+def _reset_listener_cache(request: Request, guild_id: int) -> None:
+    """Poke the listener's rules cache so the write is live immediately.
+
+    The games_external ``_refresh_cog_cache`` pattern — same process. When the
+    bot isn't reachable (tests, mid-restart) the 60s TTL backstop delivers
+    the change instead, so this is best-effort by design.
+    """
+    bot = getattr(get_ctx(request), "bot", None)
+    cog = bot.get_cog("MentionAwardsCog") if bot else None
+    if cog is not None:
+        cog.reset_rules_cache(guild_id)
+
+
 class ConditionBody(BaseModel):
     """One chip. ``value`` is text for contains_text, an id-string otherwise."""
 
@@ -107,7 +120,9 @@ async def create_rule(
                 raise HTTPException(400, str(e))
             return {"id": rule_id}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    _reset_listener_cache(request, guild_id)
+    return result
 
 
 @router.put("/mention-awards/rules/{rule_id}")
@@ -134,7 +149,9 @@ async def update_rule(
                 raise HTTPException(404, "No such rule.")
             return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    _reset_listener_cache(request, guild_id)
+    return result
 
 
 @router.delete("/mention-awards/rules/{rule_id}")
@@ -152,4 +169,6 @@ async def delete_rule(
                 raise HTTPException(404, "No such rule.")
             return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    _reset_listener_cache(request, guild_id)
+    return result

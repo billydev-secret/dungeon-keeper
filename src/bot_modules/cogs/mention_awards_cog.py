@@ -27,6 +27,7 @@ from bot_modules.games_external import logic as external_logic
 from bot_modules.mention_awards.logic import (
     PAYOUT_KIND,
     Rule,
+    effective_channel_id,
     first_match,
     quest_occurrence,
 )
@@ -39,10 +40,18 @@ log = logging.getLogger(__name__)
 
 # Rules are dashboard-written and read on every mention-bearing message, so
 # they are cached with a short TTL rather than queried per message — the
-# economy cog's trigger-config pattern ("a dashboard edit takes effect within
-# 60s"). Most entries are empty lists: negative results are cached too, which
-# is what keeps unwatched channels off the DB.
+# economy cog's trigger-config pattern. Most entries are empty lists:
+# negative results are cached too, which is what keeps unwatched channels off
+# the DB. The dashboard routes invalidate through reset_rules_cache on every
+# write (the games_external refresh pattern), so the TTL is a backstop for
+# out-of-band DB edits, not the propagation path — without the write-through,
+# a rule created just after a message cached [] would silently drop the next
+# announcement (2026-08 review finding).
 _CACHE_TTL = 60.0
+# Every thread ever posted in leaves a (tiny) negative entry; a hard cap
+# bounds the pathological case. Clearing wholesale is fine — entries rebuild
+# on the next message at one query each.
+_CACHE_MAX_ENTRIES = 4096
 
 
 class MentionAwardsCog(commands.Cog):
@@ -57,6 +66,18 @@ class MentionAwardsCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
+    def reset_rules_cache(self, guild_id: int | None = None) -> None:
+        """Drop cached rules so a dashboard write is live immediately.
+
+        Called by the web routes after every create/update/delete (the
+        games_external ``refresh_watch_cache`` pattern — same process).
+        """
+        if guild_id is None:
+            self._rules_cache.clear()
+            return
+        for key in [k for k in self._rules_cache if k[0] == guild_id]:
+            del self._rules_cache[key]
+
     async def _channel_rules(self, guild_id: int, channel_id: int) -> list[Rule]:
         key = (guild_id, channel_id)
         hit = self._rules_cache.get(key)
@@ -69,6 +90,8 @@ class MentionAwardsCog(commands.Cog):
                 return rules_for_channel(conn, guild_id, channel_id)
 
         rules = await asyncio.to_thread(_load)
+        if len(self._rules_cache) >= _CACHE_MAX_ENTRIES:
+            self._rules_cache.clear()
         self._rules_cache[key] = (now + _CACHE_TTL, rules)
         return rules
 
@@ -85,14 +108,19 @@ class MentionAwardsCog(commands.Cog):
         if not message.raw_mentions:
             return
         try:
-            rules = await self._channel_rules(guild.id, message.channel.id)
+            # A thread's message counts toward its parent channel — the
+            # sibling convention (photo challenge, trigger quests).
+            channel_key = effective_channel_id(
+                message.channel.id, getattr(message.channel, "parent_id", None)
+            )
+            rules = await self._channel_rules(guild.id, channel_key)
             if not rules:
                 return
 
             author_roles = [r.id for r in getattr(message.author, "roles", [])]
             found = first_match(
                 rules,
-                channel_id=message.channel.id,
+                channel_id=channel_key,
                 author_id=message.author.id,
                 author_role_ids=author_roles,
                 content=message.content or "",
@@ -112,11 +140,24 @@ class MentionAwardsCog(commands.Cog):
             if not first:
                 return
 
-            await pay_mention_award(
+            paid = await pay_mention_award(
                 self.bot, guild.id, found.member_id,
                 coins=found.amount, rule_id=found.rule_id,
                 occurrence=quest_occurrence(message.id),
             )
+            if not paid:
+                # The credit didn't land (economy off, member unresolvable…).
+                # Release the claim so the announcement isn't burned forever —
+                # an edit of the message, or the backfill, can retry it.
+                await external_logic.release_payout(
+                    self.db, message.id, PAYOUT_KIND
+                )
+                log.warning(
+                    "Mention award: payout for message %s did not credit — "
+                    "claim released for retry",
+                    message.id,
+                )
+                return
             log.info(
                 "Mention award: guild %s rule %s — %s named by %s (%d coins)",
                 guild.id, found.rule_id, found.member_id,

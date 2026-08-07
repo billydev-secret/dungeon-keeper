@@ -50,6 +50,7 @@ export const KIND_LABELS = {
   welcome: "👋 Welcome a new member",
   intake_step: "📋 Tick a step on a newcomer's intake card",
   conversation_starter: "✨ Start a conversation that takes off",
+  mention_award: "🪑 Get named in a member-run game",
   cat_catch: "🐱 Catch a cat with Cat Bot",
   greeting_answered: "🙋 Answer someone's hello",
   birthday_wish: "🎉 Wish a member happy birthday",

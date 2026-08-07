@@ -13,12 +13,16 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.games_external.logic import claim_payout_sync
+from bot_modules.games_external.logic import (
+    claim_payout_sync,
+    release_payout_sync,
+)
 from bot_modules.mention_awards.logic import (
     Award,
     Condition,
     Rule,
     condition_matches,
+    effective_channel_id,
     first_match,
     match_rule,
     phrase_matches,
@@ -366,3 +370,90 @@ def test_payout_ledger_is_one_claim_per_message_globally(sync_db_path):
         assert claim_payout_sync(conn, 555, GUILD, "mention_award")
         assert not claim_payout_sync(conn, 555, GUILD, "mention_award")  # dupe
         assert not claim_payout_sync(conn, 555, GUILD, "catbot")  # other kind
+
+
+class TestEffectiveChannel:
+    """Threads count toward their parent channel — the sibling convention
+    (economy photo-challenge, trigger quests) this feature must follow."""
+
+    @pytest.mark.parametrize(
+        "channel_id,parent_id,expected",
+        [
+            (CHANNEL, None, CHANNEL),          # plain channel
+            (999, CHANNEL, CHANNEL),           # thread under the watched channel
+            (999, 0, 999),                     # zero parent = no parent
+        ],
+    )
+    def test_effective(self, channel_id, parent_id, expected):
+        assert effective_channel_id(channel_id, parent_id) == expected
+
+
+def test_release_payout_reopens_a_claim_only_for_its_own_kind(sync_db_path):
+    """A payout that failed to credit must release its claim so a retry (an
+    edit of the announcement) can pay — but never another kind's claim."""
+    with open_db(sync_db_path) as conn:
+        assert claim_payout_sync(conn, 777, GUILD, "mention_award")
+        # Wrong kind releases nothing.
+        assert not release_payout_sync(conn, 777, "catbot")
+        assert not claim_payout_sync(conn, 777, GUILD, "mention_award")
+        # Right kind reopens it.
+        assert release_payout_sync(conn, 777, "mention_award")
+        assert claim_payout_sync(conn, 777, GUILD, "mention_award")
+
+
+class TestBackfillShapeMatcher:
+    """The one-off backfill's stored-shape matcher. Its mention edges come
+    from message_mentions (gateway payload at ingest), NOT the live matcher's
+    raw-content mentions — a documented divergence — but the guards it can
+    enforce must match the live path: author not a bot, recipient not a bot,
+    exactly one mention, no self-nomination."""
+
+    def _seed(self, conn, *, message_id, author_id, mentions,
+              media_kind="media", author_bot=False):
+        conn.execute(
+            "INSERT INTO messages (message_id, guild_id, channel_id, "
+            "author_id, ts, media_kind) VALUES (?, ?, ?, ?, ?, ?)",
+            (message_id, GUILD, CHANNEL, author_id, 1000.0, media_kind),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO known_users (guild_id, user_id, username, "
+            "display_name, updated_at, is_bot) VALUES (?, ?, '', '', 0, ?)",
+            (GUILD, author_id, 1 if author_bot else 0),
+        )
+        for uid in mentions:
+            conn.execute(
+                "INSERT INTO message_mentions (message_id, user_id) VALUES (?, ?)",
+                (message_id, uid),
+            )
+
+    def test_bot_recipient_is_never_paid(self, sync_db_path):
+        """A recorded bot (recorded_bot_user_ids allowlist) IS stored in
+        message_mentions — 'look what @catbot found!' + image must not
+        credit the bot's wallet."""
+        from scripts.backfill_mention_awards import _announcements
+
+        catbot = 555000
+        with open_db(sync_db_path) as conn:
+            conn.execute(
+                "INSERT INTO known_users (guild_id, user_id, username, "
+                "display_name, updated_at, is_bot) VALUES (?, ?, 'catbot', '', 0, 1)",
+                (GUILD, catbot),
+            )
+            self._seed(conn, message_id=1, author_id=PANDA, mentions=[catbot])
+            self._seed(conn, message_id=2, author_id=PANDA, mentions=[TURBODOG])
+            found = list(_announcements(conn, GUILD, CHANNEL))
+        assert [(m, member) for m, _, member, _ in found] == [(2, TURBODOG)]
+
+    def test_shape_guards_match_the_live_rules(self, sync_db_path):
+        from scripts.backfill_mention_awards import _announcements
+
+        with open_db(sync_db_path) as conn:
+            self._seed(conn, message_id=1, author_id=PANDA, mentions=[TURBODOG])
+            self._seed(conn, message_id=2, author_id=PANDA, mentions=[PANDA])       # self
+            self._seed(conn, message_id=3, author_id=PANDA, mentions=[TURBODOG, 42])  # group
+            self._seed(conn, message_id=4, author_id=PANDA, mentions=[TURBODOG],
+                       media_kind=None)                                             # no card
+            self._seed(conn, message_id=5, author_id=888000, mentions=[TURBODOG],
+                       author_bot=True)                                             # bot author
+            found = list(_announcements(conn, GUILD, CHANNEL))
+        assert [m for m, *_ in found] == [1]

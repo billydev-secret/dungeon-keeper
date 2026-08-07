@@ -323,10 +323,18 @@ async def pay_mention_award(
     coins: int,
     rule_id: int,
     occurrence: str,
-) -> None:
+) -> bool:
     """Credit a Mention Award: ``coins`` plus the ``mention_award`` quest
     trigger. The ``pay_cat_catch`` shape — a game the bot does not host,
     detected by a watcher, paid directly with a quest hook on top.
+
+    Returns **whether the credit actually landed**. The caller burns the
+    announcement's once-ever payout claim before calling, so it must be able
+    to tell a paid announcement from a silent no-op (economy off, member
+    unresolvable) and release the claim for the latter — otherwise the member
+    is unpaid forever. True is decided by the credit alone: a failure firing
+    the quest trigger afterwards is logged, not surfaced, because releasing
+    the claim after a landed credit would double-pay on retry.
 
     ``occurrence`` is the ready-made quest occurrence key
     (``mention_awards.logic.quest_occurrence``) — built by the caller so the
@@ -341,10 +349,10 @@ async def pay_mention_award(
     try:
         guild = bot.get_guild(guild_id)
         if guild is None:
-            return
+            return False
         member = guild.get_member(int(user_id))
         if member is None or member.bot or coins < 1:
-            return
+            return False
 
         db_path = bot.ctx.db_path
 
@@ -354,7 +362,7 @@ async def pay_mention_award(
 
         settings = await asyncio.to_thread(_load)
         if not settings.enabled:
-            return
+            return False
 
         booster = member_is_booster(bot, guild_id, user_id)
 
@@ -367,12 +375,17 @@ async def pay_mention_award(
                 )
 
         await asyncio.to_thread(_credit)
+    except Exception:
+        log.exception("pay_mention_award failed for guild %s", guild_id)
+        return False
+    try:
         await _fire_triggers(
             bot, guild, settings, "mention_award", [user_id],
             {user_id: booster}, occurrence,
         )
     except Exception:
-        log.exception("pay_mention_award failed for guild %s", guild_id)
+        log.exception("mention_award trigger fire failed for guild %s", guild_id)
+    return True
 
 
 async def pay_cah_game_by_score(
