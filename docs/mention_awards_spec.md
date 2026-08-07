@@ -2,10 +2,10 @@
 
 **Reference spec** — matches current behavior.
 
-Pays currency to whoever gets @-mentioned alongside a configured trigger
-phrase. Built for games the bot **does not host**: where members run the game
-themselves, the announcement they already post is a clean, machine-readable
-payout event.
+Pays currency to whoever gets @-mentioned in a message that matches a rule's
+**conditions**. Built for games the bot **does not host**: where members run
+the game themselves, the announcement they already post is a clean,
+machine-readable payout event.
 
 ## Why it exists
 
@@ -19,21 +19,30 @@ one with a card image and a ping:
 Dungeon Keeper hosts none of it, so no game hook can pay the contestant. But
 the handoff is unambiguous, and the bot already sees it.
 
-Rather than hardcode Hot Seat, a rule is four levers. A second member-run game
-needs a second row, not a second feature.
+## Rule anatomy
 
-## The four levers
+A rule is a **channel**, an **amount**, and a list of **condition chips** that
+must *all* match (AND). A second member-run game needs a second rule, not a
+second feature. Configured at **Economy → Mention Awards** (`mention-awards`),
+admin-gated. Rules are matched in creation order; the first match wins,
+because the payout ledger is keyed on the message and one message can only pay
+once regardless.
 
-| Lever | Meaning |
-|---|---|
-| **Channel** | Only messages here can award. |
-| **Trigger phrase** | Case-insensitive substring of the message. Empty never matches. |
-| **Amount** | Coins paid to the member mentioned. `0` parks the rule without deleting it. |
-| **Who can award** | A role the announcer must hold. **Unset means anyone in the channel can hand out currency** — see Anti-farm. |
+| Chip | Matches when | Value |
+|---|---|---|
+| `contains_text` | Content contains the text (case-insensitive substring), or matches the pattern when the chip's `regex` flag is set (`re.search`, IGNORECASE) | free text / pattern, ≤200 chars |
+| `mentions_role` | The message pings that role | role id |
+| `from_user` | The author is that member | user id |
+| `author_has_role` | The author holds that role — the anti-farm chip (the old "who can award" lever) | role id |
 
-Configured at **Economy → Mention Awards** (`mention-awards`), admin-gated.
-Rules are matched in creation order; the first match wins, because the payout
-ledger is keyed on the message and one message can only pay once regardless.
+Chips are stored as a JSON array on the rule row (migration 157, which also
+converted the original phrase/announcer-role columns losslessly). Ids inside
+the JSON are strings — the panel reads it, and a snowflake past 2^53 loses
+precision in JavaScript.
+
+**Raw content caveat:** chips match against *raw* gateway content, where a
+role ping is `<@&id>` markup — `hot seat` as a *text* chip can never match the
+rendered `@Hot Seat`. That is exactly what `mentions_role` is for.
 
 ## What counts as an award
 
@@ -42,27 +51,36 @@ A message awards when **all** hold:
 1. It's in the rule's channel.
 2. The author is not a bot.
 3. The rule's amount is at least 1.
-4. The content contains the phrase (case-insensitive).
-5. The author holds the announcer role, if one is set.
-6. The message @-mentions **exactly one** member.
-7. That member is not the author.
+4. The rule has at least one chip, and **every** chip matches.
+5. The message @-mentions **exactly one** member (role pings ride separately
+   and don't count toward this).
+6. That member is not the author.
 
-Rule 6 is deliberate: a message tagging several people is a group shout, and
-guessing which of them the phrase referred to would pay the wrong member.
-Rule 7 closes the only farm the design is otherwise wide open to.
+Rule 5 is deliberate: a message tagging several people is a group shout, and
+guessing which of them the chips referred to would pay the wrong member.
+Rule 6 closes the only farm the design is otherwise wide open to.
+
+**Fail-closed everywhere:** an unknown chip kind never matches, a rule with no
+chips matches nothing, malformed conditions JSON parses to no chips, and a
+regex that breaks at match time doesn't match — a bad row can park a rule but
+can never open a faucet.
 
 ## Privacy: content is read, never stored
 
-The phrase is matched against `message.content` live off the gateway and
+Chips are matched against `message.content` live off the gateway and
 discarded. Nothing in this feature writes content, and the guild's
 message-storage level is untouched.
 
-The consequence is that **a phrase rule cannot be replayed over history** —
+The consequence is that **text chips cannot be replayed over history** —
 banked messages have no content to re-match. The one-off backfill
 (`scripts/backfill_mention_awards.py`) therefore matches on message *shape*
 instead: `media_kind` plus the @-mention edges, both of which survive with
 content storage off. That seam is why the backfill is a script rather than a
 mode of the feature.
+
+Regex chips are admin-authored behind the admin gate and validated
+(`re.compile`) at save time; a pathological pattern is bounded by Discord's
+message length and is the admin's own footgun, not member-reachable.
 
 ## Payout
 
@@ -82,12 +100,12 @@ is paid again — the right reading of two genuine turns.
 
 ## Anti-farm
 
-The honest summary: with **Who can award** unset, any member can pay any other
-member by typing the phrase and tagging them. That is the permissive setting,
-and it is the correct one for a baton-pass game (the outgoing contestant holds
-no special role, and gating on the game's owner would drop about a third of
-real announcements — measured on live traffic). Set the role when the game has
-fixed hosts.
+The honest summary: with no author chip (`author_has_role` / `from_user`),
+any member can pay any other member by posting a matching message. That is
+the permissive setting, and it is the correct one for a baton-pass game (the
+outgoing contestant holds no special role, and gating on the game's owner
+would drop about a third of real announcements — measured on live traffic).
+Add an author chip when the game has fixed hosts.
 
 What is always enforced: no self-awards, no bot authors, exactly one mention,
 one payout per message.
@@ -96,14 +114,14 @@ one payout per message.
 
 | Path | Role |
 |---|---|
-| `bot_modules/mention_awards/logic.py` | Pure matching — the whole safety surface |
-| `bot_modules/mention_awards/store.py` | Rule CRUD + validation |
+| `bot_modules/mention_awards/logic.py` | Pure chip matching — the whole safety surface |
+| `bot_modules/mention_awards/store.py` | Rule CRUD + validation + conditions JSON |
 | `bot_modules/cogs/mention_awards_cog.py` | Thin `on_message` listener |
 | `economy/game_rewards.py` | `pay_mention_award` |
 | `web_server/routes/mention_awards.py` | Admin-gated CRUD API |
-| `web_server/static/js/panels/config-mention-awards.js` | The panel |
+| `web_server/static/js/panels/config-mention-awards.js` | The chip-builder panel |
 | `scripts/backfill_mention_awards.py` | One-off shape-based replay |
-| `migrations/156_mention_awards.sql` | `mention_award_rules` |
+| `migrations/156_mention_awards.sql`, `157_mention_award_conditions.sql` | Table; chips conversion |
 | `tests/test_mention_awards_logic.py` | Matcher + store |
 
 ## Hot Seat backfill (2026-08-07)

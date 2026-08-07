@@ -57,7 +57,7 @@ class MentionAwardsCog(commands.Cog):
         if guild is None or message.author.bot:
             return
         # Cheapest possible bail-out for the overwhelming majority of
-        # messages: no mention, no award, no DB hit.
+        # messages: no user mention, no recipient, no DB hit.
         if not message.raw_mentions:
             return
         try:
@@ -78,6 +78,7 @@ class MentionAwardsCog(commands.Cog):
                 author_role_ids=author_roles,
                 content=message.content or "",
                 mentioned_user_ids=message.raw_mentions,
+                mentioned_role_ids=message.raw_role_mentions,
             )
             if found is None:
                 return

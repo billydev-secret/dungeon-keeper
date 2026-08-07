@@ -11,38 +11,58 @@ import {
   renderMetaWarning,
   mountChannelPicker,
   mountRolePicker,
+  mountMemberPicker,
   channelName,
   mountAsync,
   trackCard,
   rerenderUnlessDirty,
+  loadMembers,
 } from "../config-helpers.js";
 
-// One card per rule, plus a blank card at the end to add another. A rule with
-// no id has never been saved.
+// Chip kinds, in the order the "add condition" menu offers them. Labels are
+// the admin-facing names; the wire format uses `kind`.
+const KINDS = [
+  { kind: "contains_text", label: "Contains text" },
+  { kind: "mentions_role", label: "Mentions role" },
+  { kind: "from_user", label: "From user" },
+  { kind: "author_has_role", label: "Author has role" },
+];
+const KIND_LABEL = Object.fromEntries(KINDS.map((k) => [k.kind, k.label]));
+
+function chipRow(cond, idx) {
+  const isText = cond.kind === "contains_text";
+  return `
+    <div class="card" data-chip data-kind="${esc(cond.kind)}" data-idx="${idx}"
+         style="padding:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <span class="section-label" style="margin:0; min-width:8.5em;">
+        ${esc(KIND_LABEL[cond.kind] || cond.kind)}</span>
+      ${isText
+        ? `<input type="text" data-chip-value maxlength="200" value="${esc(cond.value)}"
+                  placeholder="your turn" style="flex:1; min-width:12em;" />
+           <label style="display:flex; gap:6px; align-items:center; white-space:nowrap;">
+             <input type="checkbox" data-chip-regex${cond.regex ? " checked" : ""} /> regex
+           </label>`
+        : `<span data-chip-picker style="flex:1; min-width:12em;"></span>`}
+      <button type="button" class="btn btn-danger" data-chip-remove
+              aria-label="Remove condition">✕</button>
+    </div>`;
+}
+
 function ruleCard(rule, channels, idx) {
   const uid = `ma-${idx}`;
   const name = rule.channel_id
     ? channelName(channels, rule.channel_id)
     : "New rule";
+  const chips = (rule.conditions || []).map((c, i) => chipRow(c, i)).join("");
 
   return `
     <form class="card" data-rule data-id="${esc(rule.id || "")}"
-          data-channel="${esc(rule.channel_id || "")}"
-          data-role="${esc(rule.announcer_role_id || "0")}">
+          data-channel="${esc(rule.channel_id || "")}">
       <div class="section-label">${esc(name)}</div>
       <div class="field">
         <label>Channel</label>
         <span data-picker="channel"></span>
         <div class="field-hint">Only messages in this channel can award.</div>
-      </div>
-      <div class="field">
-        <label for="${uid}-phrase">Trigger phrase</label>
-        <input type="text" name="phrase" id="${uid}-phrase" maxlength="200"
-               value="${esc(rule.phrase || "")}" placeholder="your turn" />
-        <div class="field-hint">Case-insensitive. The award fires when a message
-          contains this anywhere <em>and</em> @-mentions exactly one person — that
-          person gets paid. A message tagging several people is ignored, and you
-          can never award yourself.</div>
       </div>
       <div class="field">
         <label for="${uid}-amount">Amount</label>
@@ -52,12 +72,22 @@ function ruleCard(rule, channels, idx) {
           rule without deleting it.</div>
       </div>
       <div class="field">
-        <label>Who can award</label>
-        <span data-picker="role"></span>
-        <div class="field-hint">Leave unset and <strong>anyone</strong> in the
-          channel can hand out currency by typing the phrase. Set a role when the
-          game has fixed hosts. Leave it open when the game passes a baton — the
-          previous player announces the next one.</div>
+        <label>Conditions</label>
+        <div data-chips style="display:flex; flex-direction:column; gap:8px;">${chips}</div>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+          <select data-chip-kind>
+            ${KINDS.map((k) => `<option value="${k.kind}">${esc(k.label)}</option>`).join("")}
+          </select>
+          <button type="button" class="btn" data-chip-add>Add condition</button>
+        </div>
+        <div class="field-hint">Every condition must match for the award to fire
+          — and the message must @-mention <strong>exactly one</strong> person,
+          who gets paid. Tagging several people pays nobody; you can never award
+          yourself. <strong>With no author condition, anyone in the channel can
+          hand out currency</strong> — right for a game where the previous player
+          announces the next, wide open otherwise. Note: a role ping like
+          <code>@Hot Seat</code> is <em>not text</em> — use "Mentions role" for
+          it, not "Contains text".</div>
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <button type="submit" class="btn btn-primary">Save</button>
@@ -67,17 +97,33 @@ function ruleCard(rule, channels, idx) {
     </form>`;
 }
 
-const BLANK = { id: "", channel_id: "", phrase: "", amount: 0, announcer_role_id: "0" };
+const BLANK = { id: "", channel_id: "", amount: 0, conditions: [] };
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading rules…</div></div>`;
 
   return mountAsync(container, async () => {
-    const [rules, channels, roles] = await Promise.all([
+    const [rules, channels, roles, members] = await Promise.all([
       api("/api/mention-awards/rules"),
       loadChannels(),
       loadRoles(),
+      loadMembers(),
     ]);
+
+    // Mount the right value widget into one chip row; returns a getValue().
+    const mountChipWidget = (row, cond) => {
+      if (cond.kind === "contains_text") {
+        return {
+          getValue: () => row.querySelector("[data-chip-value]").value.trim(),
+          getRegex: () => row.querySelector("[data-chip-regex]").checked,
+        };
+      }
+      const slot = row.querySelector("[data-chip-picker]");
+      const picker = cond.kind === "from_user"
+        ? mountMemberPicker(slot, members, cond.value || "0", { label: "Member" })
+        : mountRolePicker(slot, roles, cond.value || "0", { label: "Role" });
+      return { getValue: () => picker.getValue(), getRegex: () => false };
+    };
 
     const render = () => {
       const cards = [...rules, BLANK]
@@ -88,36 +134,66 @@ export function mount(container) {
         <div class="panel">
           <header>
             <h2>Mention Awards</h2>
-            <div class="subtitle">Pay whoever gets @-mentioned alongside a trigger phrase</div>
+            <div class="subtitle">Pay whoever gets @-mentioned when a message matches your conditions</div>
           </header>
           ${renderMetaWarning()}
           <p class="field-hint" style="margin:0 0 12px;">For games the bot doesn't
-            run. When a member posts the phrase and tags someone — "@Hot Seat your
-            turn @someone!" — the person tagged is paid automatically. Each
-            announcement pays once, so editing a message can't pay twice.</p>
+            run. Build each rule from condition chips — contains text (or regex),
+            mentions a role, from a specific user, author holds a role. When a
+            message matches them all and tags someone, the person tagged is paid.
+            Each announcement pays once, so editing a message can't pay twice.</p>
           <div class="form form-cards">${cards}</div>
         </div>
       `;
 
       const cardsRoot = container.querySelector(".form-cards");
 
-      container.querySelectorAll("[data-rule]").forEach((form) => {
+      container.querySelectorAll("[data-rule]").forEach((form, formIdx) => {
         const status = form.querySelector("[data-status]");
+        const rule = [...rules, BLANK][formIdx];
         const chPicker = mountChannelPicker(
           form.querySelector('[data-picker="channel"]'),
           channels,
           form.dataset.channel || "0",
           { label: "Channel" },
         );
-        const rolePicker = mountRolePicker(
-          form.querySelector('[data-picker="role"]'),
-          roles,
-          form.dataset.role || "0",
-          { label: "Who can award" },
-        );
+
+        // Live chip state: widgets keyed by row element, so Save can collect
+        // without re-rendering (which would wipe sibling cards' edits).
+        const widgets = new Map();
+        const chipsRoot = form.querySelector("[data-chips]");
+        chipsRoot.querySelectorAll("[data-chip]").forEach((row, i) => {
+          widgets.set(row, mountChipWidget(row, rule.conditions[i]));
+        });
+
+        const wireRemove = (row) => {
+          row.querySelector("[data-chip-remove]").addEventListener("click", () => {
+            widgets.delete(row);
+            row.remove();
+          });
+        };
+        chipsRoot.querySelectorAll("[data-chip]").forEach(wireRemove);
+
+        form.querySelector("[data-chip-add]").addEventListener("click", () => {
+          const kind = form.querySelector("[data-chip-kind]").value;
+          const cond = { kind, value: "", regex: false };
+          const tpl = document.createElement("template");
+          tpl.innerHTML = chipRow(cond, widgets.size).trim();
+          const row = tpl.content.firstElementChild;
+          chipsRoot.appendChild(row);
+          widgets.set(row, mountChipWidget(row, cond));
+          wireRemove(row);
+        });
 
         guardForm(form);
         trackCard(form);
+
+        const collectChips = () =>
+          [...chipsRoot.querySelectorAll("[data-chip]")].map((row) => ({
+            kind: row.dataset.kind,
+            value: widgets.get(row).getValue(),
+            regex: widgets.get(row).getRegex(),
+          }));
 
         const refresh = async () => {
           const fresh = await api("/api/mention-awards/rules");
@@ -132,18 +208,15 @@ export function mount(container) {
             showStatus(status, false, "Pick a channel.");
             return;
           }
-          const phrase = form.querySelector('[name="phrase"]').value.trim();
-          if (!phrase) {
-            showStatus(status, false, "Add a trigger phrase.");
+          const conditions = collectChips();
+          if (!conditions.length) {
+            showStatus(status, false, "Add at least one condition.");
             return;
           }
-          const amount = Number(form.querySelector('[name="amount"]').value) || 0;
-
           const body = {
             channel_id: channelId,
-            phrase,
-            amount,
-            announcer_role_id: rolePicker.getValue() || "0",
+            amount: Number(form.querySelector('[name="amount"]').value) || 0,
+            conditions,
           };
 
           try {
@@ -168,7 +241,7 @@ export function mount(container) {
           removeBtn.addEventListener("click", async () => {
             const where = channelName(channels, form.dataset.channel);
             const ok = await confirmDialog(
-              `Remove this award rule in ${where}? The phrase stops paying immediately. Awards already paid are not reversed.`,
+              `Remove this award rule in ${where}? Its conditions stop paying immediately. Awards already paid are not reversed.`,
               { title: "Remove Rule", danger: true, confirmLabel: "Remove" },
             );
             if (!ok) return;

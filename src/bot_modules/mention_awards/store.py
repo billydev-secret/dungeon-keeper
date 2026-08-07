@@ -3,19 +3,66 @@
 Plain CRUD over guild configuration — the dashboard writes, the listener
 reads. Rule *matching* is pure and lives in ``logic.py``; nothing here decides
 who gets paid.
+
+Conditions ("chips") are stored as a JSON array on the row — see migration
+157 for the shape. Ids inside the JSON are strings, because the panel reads
+this JSON and a bare snowflake past 2^53 loses precision in JavaScript.
 """
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from typing import Any, Mapping, Sequence
 
-from bot_modules.mention_awards.logic import Rule
+from bot_modules.mention_awards.logic import CONDITION_KINDS, Condition, Rule
 
-# A phrase long enough to be a paragraph is a mis-paste, not a trigger.
-MAX_PHRASE_LEN = 200
+# A pattern or phrase long enough to be a paragraph is a mis-paste.
+MAX_TEXT_LEN = 200
+# Chips per rule. Well past any real use; a bound, not a policy.
+MAX_CONDITIONS = 10
 # Ceiling on a single award. Not a policy on what things are worth — a guard
 # against a typo'd extra zero opening a faucet nobody notices.
 MAX_AMOUNT = 100_000
+
+_KIND_LABELS = {
+    "contains_text": "text",
+    "mentions_role": "role ping",
+    "from_user": "author",
+    "author_has_role": "author role",
+}
+
+
+def conditions_to_json(conditions: Sequence[Condition]) -> str:
+    return json.dumps(
+        [
+            {"kind": c.kind, "value": c.value, "regex": bool(c.regex)}
+            for c in conditions
+        ]
+    )
+
+
+def conditions_from_json(raw: str | None) -> tuple[Condition, ...]:
+    """Parse a row's conditions JSON; anything malformed yields no chips.
+
+    No chips means the rule matches nothing (logic.py fails closed), so a
+    corrupted row parks its rule rather than opening a faucet.
+    """
+    try:
+        items = json.loads(raw or "[]")
+        if not isinstance(items, list):
+            return ()
+        return tuple(
+            Condition(
+                kind=str(item.get("kind", "")),
+                value=str(item.get("value", "")),
+                regex=bool(item.get("regex", False)),
+            )
+            for item in items
+            if isinstance(item, dict)
+        )
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return ()
 
 
 def rows_to_rules(rows: Sequence[Mapping[str, Any]]) -> list[Rule]:
@@ -24,31 +71,56 @@ def rows_to_rules(rows: Sequence[Mapping[str, Any]]) -> list[Rule]:
         Rule(
             id=int(r["id"]),
             channel_id=int(r["channel_id"]),
-            phrase=str(r["phrase"]),
             amount=int(r["amount"]),
-            announcer_role_id=int(r["announcer_role_id"] or 0),
+            conditions=conditions_from_json(r["conditions"]),
         )
         for r in rows
     ]
 
 
-def validate(phrase: str, amount: int) -> str | None:
+def validate_conditions(conditions: Sequence[Condition]) -> str | None:
+    """The reason this chip list is invalid, or ``None`` if it's fine."""
+    if not conditions:
+        return "Add at least one condition — a rule with none would never fire."
+    if len(conditions) > MAX_CONDITIONS:
+        return f"A rule is limited to {MAX_CONDITIONS} conditions."
+    for cond in conditions:
+        if cond.kind not in CONDITION_KINDS:
+            return f"Unknown condition kind {cond.kind!r}."
+        label = _KIND_LABELS[cond.kind]
+        if cond.kind == "contains_text":
+            if not cond.value.strip():
+                return "A text condition can't be empty."
+            if len(cond.value) > MAX_TEXT_LEN:
+                return f"Text conditions are limited to {MAX_TEXT_LEN} characters."
+            if cond.regex:
+                try:
+                    re.compile(cond.value)
+                except re.error as e:
+                    return f"Invalid regex: {e}."
+        else:
+            try:
+                ok = int(cond.value) > 0
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                return f"Pick a {label} for the {label} condition."
+    return None
+
+
+def validate(amount: int, conditions: Sequence[Condition]) -> str | None:
     """The reason this rule is invalid, or ``None`` if it's fine."""
-    if not phrase.strip():
-        return "Trigger phrase can't be empty."
-    if len(phrase) > MAX_PHRASE_LEN:
-        return f"Trigger phrase is limited to {MAX_PHRASE_LEN} characters."
     if amount < 0:
         return "Amount can't be negative."
     if amount > MAX_AMOUNT:
         return f"Amount is limited to {MAX_AMOUNT:,}."
-    return None
+    return validate_conditions(conditions)
 
 
 def list_rules(conn: sqlite3.Connection, guild_id: int) -> list[Mapping[str, Any]]:
     """Every rule for a guild, oldest first — the order the matcher tries."""
     return conn.execute(
-        "SELECT id, guild_id, channel_id, phrase, amount, announcer_role_id, "
+        "SELECT id, guild_id, channel_id, amount, conditions, "
         "created_by, created_at FROM mention_award_rules "
         "WHERE guild_id = ? ORDER BY id",
         (guild_id,),
@@ -60,7 +132,7 @@ def rules_for_channel(
 ) -> list[Rule]:
     """The listener's hot path — rules watching one channel, in match order."""
     rows = conn.execute(
-        "SELECT id, channel_id, phrase, amount, announcer_role_id "
+        "SELECT id, channel_id, amount, conditions "
         "FROM mention_award_rules WHERE guild_id = ? AND channel_id = ? "
         "ORDER BY id",
         (guild_id, channel_id),
@@ -73,17 +145,16 @@ def create_rule(
     guild_id: int,
     *,
     channel_id: int,
-    phrase: str,
     amount: int,
-    announcer_role_id: int = 0,
+    conditions: Sequence[Condition],
     created_by: int | None = None,
 ) -> int:
     """Insert a rule, returning its id. Caller validates first."""
     cur = conn.execute(
         "INSERT INTO mention_award_rules "
-        "(guild_id, channel_id, phrase, amount, announcer_role_id, created_by) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (guild_id, channel_id, phrase.strip(), amount, announcer_role_id, created_by),
+        "(guild_id, channel_id, amount, conditions, created_by) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (guild_id, channel_id, amount, conditions_to_json(conditions), created_by),
     )
     return int(cur.lastrowid or 0)
 
@@ -94,19 +165,18 @@ def update_rule(
     rule_id: int,
     *,
     channel_id: int,
-    phrase: str,
     amount: int,
-    announcer_role_id: int = 0,
+    conditions: Sequence[Condition],
 ) -> bool:
-    """Overwrite all four levers. False when the rule isn't this guild's.
+    """Overwrite the rule. False when it isn't this guild's.
 
     Scoped on ``guild_id`` as well as ``id`` so one guild's dashboard can
     never edit another's rule by id.
     """
     cur = conn.execute(
-        "UPDATE mention_award_rules SET channel_id = ?, phrase = ?, amount = ?, "
-        "announcer_role_id = ? WHERE id = ? AND guild_id = ?",
-        (channel_id, phrase.strip(), amount, announcer_role_id, rule_id, guild_id),
+        "UPDATE mention_award_rules SET channel_id = ?, amount = ?, "
+        "conditions = ? WHERE id = ? AND guild_id = ?",
+        (channel_id, amount, conditions_to_json(conditions), rule_id, guild_id),
     )
     return cur.rowcount > 0
 
