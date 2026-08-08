@@ -3611,6 +3611,31 @@ select option { background: var(--bg-input); color: var(--ink); }
   padding-right: 26px;
 }
 
+/* ── Text inputs ────────────────────────────────────────────────────
+   Same backstop for text-like <input>s: ad-hoc inputs that sit outside
+   a .field wrapper (condition chips, inline number rows) stay dark
+   instead of system-white. :where() keeps specificity at bare-element
+   level so every existing input rule still wins. Controls with native
+   chrome are skipped. */
+input:where(:not([type="checkbox"], [type="radio"], [type="range"],
+                 [type="color"], [type="file"], [type="submit"], [type="button"])) {
+  background-color: var(--bg-input);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 6px 9px;
+  font-family: inherit;
+  font-size: 13px;
+}
+input:where(:not([type="checkbox"], [type="radio"], [type="range"],
+                 [type="color"], [type="file"], [type="submit"], [type="button"])):focus {
+  outline: none;
+  border-color: var(--gold-solid);
+}
+/* Native toggles pick up the dashboard accent instead of OS blue. */
+input[type="checkbox"],
+input[type="radio"] { accent-color: var(--gold-solid); }
+
 /* ── Tab strip (config-bios, gender-admin) ─────────────────────────── */
 .tabs {
   display: flex;
