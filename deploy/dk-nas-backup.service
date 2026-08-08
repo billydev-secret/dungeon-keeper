@@ -1,0 +1,49 @@
+# Off-device backup of the Dungeon Keeper database to the Synology NAS.
+#
+# Deliberately a SEPARATE unit from dungeon-keeper.service: the bot runs with
+# ProtectHome=read-only and ReadWritePaths scoped to its own directory, and
+# that hardening should stay intact. This unit does the outbound copy instead.
+#
+# Install: see deploy/README.md ("Off-device backup").
+# Logs:    journalctl -u dk-nas-backup
+
+[Unit]
+Description=Dungeon Keeper off-device backup to NAS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ben
+Group=ben
+ExecStart=/home/ben/discord-bots/dungeon-keeper/scripts/backup_to_nas.sh
+
+# The script verifies the backup before shipping it (sqlite quick_check on
+# ~790 MB) and pipes it over SSH; give it room without hanging forever.
+# Measured 2026-08-07: 12s end to end on a gigabit LAN. The margin exists for a
+# slow quick_check against a cold page cache, not for the transfer.
+TimeoutStartSec=1800
+
+# Hardening. Needs: read of the repo, read of /etc/systemd/system for the unit
+# files it bundles, and write to ~/.local/state for the breadcrumb.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+
+# ProtectSystem=strict makes ALL of / read-only except the API VFS and (with
+# PrivateTmp) /tmp -- $HOME included. Everything the script writes outside /tmp
+# must therefore be listed here:
+#   * ~/.local/state/dk-backup  -- the last-sync breadcrumb
+#   * ~/.gnupg                  -- gpg rewrites random_seed on every invocation
+#                                  even for a --symmetric passphrase-file run,
+#                                  and dies "failed to create temporary file"
+#                                  if it cannot. Read-only is not enough.
+ReadWritePaths=/home/ben/.local/state/dk-backup
+ReadWritePaths=/home/ben/.gnupg
+
+[Install]
+WantedBy=multi-user.target

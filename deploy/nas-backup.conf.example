@@ -1,0 +1,40 @@
+# Off-device backup config for scripts/backup_to_nas.sh
+#
+# Install to ~/.config/dk-backup/nas.conf and chmod 600.
+# Contains no secrets itself -- the GPG passphrase lives in its own file.
+
+# --- NAS target ------------------------------------------------------------
+NAS_HOST=192.168.174.3          # NaturewoodNAS
+NAS_USER=admin                  # <-- DSM account with SSH access
+                                #     (must be in the administrators group;
+                                #      DSM only permits SSH for admins, and
+                                #      User Home service must be enabled or
+                                #      there is nowhere to put authorized_keys)
+
+# Synology shares live under /volume1/<share-name> on the SSH side. The path
+# DSM shows for SMB/NFS is NOT the filesystem path: a share advertised as
+# 192.168.174.3:/Storage/botbackups is /volume1/Storage/botbackups over SSH.
+# Confirm with:  ssh <user>@<host> 'ls -1 /volume1/ | grep -v "^@"'
+NAS_DB_DIR=/volume1/Storage/botbackups/db
+NAS_SECRET_DIR=/volume1/Storage/botbackups/secrets
+                                # both created chmod 700 by the script, and
+                                # every file it writes is chmod 600
+
+# --- retention -------------------------------------------------------------
+# LOAD-BEARING: this is the number docs/gdpr_runbook.md states as the
+# point at which an erasure has propagated to every copy. Changing it here
+# without changing it there makes the runbook a lie.
+RETENTION_DAYS=14
+
+# --- encryption ------------------------------------------------------------
+# Passphrase for the AES256 secrets bundle (.env + systemd units).
+#
+# !! RECORD THIS PASSPHRASE IN YOUR PASSWORD MANAGER, NOT ONLY HERE. !!
+# This file lives on the machine the backup exists to survive. If the disk
+# dies and the passphrase died with it, the encrypted bundle on the NAS is
+# unrecoverable -- at exactly the moment you need it.
+GPG_PASSPHRASE_FILE=/home/ben/.config/dk-backup/env-passphrase
+
+# --- paths -----------------------------------------------------------------
+DK_ROOT=/home/ben/discord-bots/dungeon-keeper
+STATUS_FILE=/home/ben/.local/state/dk-backup/last-nas-sync

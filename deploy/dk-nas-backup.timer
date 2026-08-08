@@ -1,0 +1,18 @@
+# Daily off-device backup to the NAS.
+#
+# Fires at 04:30 local, a quiet hour that sits between the bot's own 6-hourly
+# backups so the two never contend for disk. Persistent=true means a run missed
+# while the machine was off happens on the next boot instead of being skipped
+# -- a backup that silently stops is the failure mode finding B3 warns about.
+
+[Unit]
+Description=Daily off-device backup of Dungeon Keeper to the NAS
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=dk-nas-backup.service
+
+[Install]
+WantedBy=timers.target

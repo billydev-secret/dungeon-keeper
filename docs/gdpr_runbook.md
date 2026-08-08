@@ -123,12 +123,36 @@ data and still has to be disclosed. Retention is not an access exemption.
    sqlite3 dungeonkeeper.db "PRAGMA wal_checkpoint(TRUNCATE);"
    # optional, rewrites the file: sqlite3 dungeonkeeper.db "VACUUM;"
    ```
-6. **Backups** — nightly backups retain pre-erasure copies until they age out
-   of the retention window. Note the erasure date so an accidental restore can
-   be re-purged, and **do not restore past backups over an erasure** without
-   re-running step 2. If the requester asks, the honest answer is that backups
-   are erased on rotation, not on request — which is an accepted position
-   provided the window is stated.
+6. **Backups** — automated backups run **every 6 hours** (plus one on each bot
+   start) and the newest 5 are kept, so pre-erasure copies age out of
+   `backups/` in roughly 24 hours — **less** after a run of restarts, since
+   retention is counted in files rather than hours. Note the erasure date so an
+   accidental restore can be re-purged, and **do not restore past backups over
+   an erasure** without re-running step 2. If the requester asks, the honest
+   answer is that backups are erased on rotation, not on request — which is an
+   accepted position provided the window is stated.
+
+   **Off-device copies on the NAS are kept for 14 days.** This is the binding
+   number: an erasure has propagated to *every* copy 14 days after the purge
+   runs. That is the figure to state to a requester. It is set by
+   `RETENTION_DAYS` in `~/.config/dk-backup/nas.conf` and must not be changed
+   without changing this sentence.
+
+   **Also check `snapshots/` and any hand-made copy in `backups/`.** Ad-hoc
+   snapshots are named outside the rotation's glob and are therefore *never*
+   pruned — e.g. `dungeonkeeper-pre-tod-backfill-20260729.db`. Delete or
+   re-purge them by hand; they are the copies no retention window reaches. See
+   [reviews/2026-08-06-backup-disaster-recovery.md](reviews/2026-08-06-backup-disaster-recovery.md)
+   (B5) and [disaster_recovery_runbook.md](disaster_recovery_runbook.md).
+
+   **Summary of windows:**
+
+   | Copy | Window |
+   |---|---|
+   | `backups/` (local rotation) | ~24h, floor of 48h before anything is pruned |
+   | NAS `dungeonkeeper_*.db` | 14 days |
+   | NAS `secrets-*.tar.gz.gpg` | 14 days (no member data — `.env` + unit files) |
+   | Hand-made snapshots | **unbounded — delete by hand** |
 
 ### Multi-guild note
 
