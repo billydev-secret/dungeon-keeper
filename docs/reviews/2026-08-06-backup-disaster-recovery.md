@@ -348,7 +348,7 @@ guard the empty case — the runbook below assumes the latter and calls
 
 | ID | Severity | Finding | Status |
 |---|---|---|---|
-| B1 | **High** | No off-device backup; DB + all copies + `.env` on one disk | Built — **awaiting install** (needs NAS credentials) |
+| B1 | **High** | No off-device backup; DB + all copies + `.env` on one disk | **Fixed and live** — installed 2026-08-07, first copy verified on the NAS |
 | B2 | **High** | Retention counted in files; restarts collapse the window (observed 18.3h, not 24h) | Fixed |
 | B3 | Medium | Backup failure logs and is never surfaced to anyone | **Open — needs an alert-surface decision** |
 | B4 | Medium | A partial backup keeps the real filename and sorts newest | Fixed |
@@ -392,22 +392,59 @@ runbook guidance, both of which landed.
 
 Destination chosen: the **Synology NAS on the LAN**, found at `192.168.174.3`
 ("NaturewoodNAS", MAC OUI `90:09:d0` = Synology, DSM on 5000/5001, SSH + SMB +
-NFS open, rsync daemon closed). Transport is **rsync over SSH** — no fstab
-mount to go stale, no credentials in a file, and it survives the NAS being
-briefly unreachable.
+NFS open, rsync daemon closed). Destination `/volume1/Storage/botbackups`,
+21 TB free.
 
-Built and committed, **not yet installed** — the one remaining step needs the
-DSM password, which only the operator can supply:
+**Installed and verified 2026-08-07.** The plan said rsync over SSH; the NAS
+refused it, and the transport had to change. What was learned installing it is
+worth recording, because all three failures look like misconfiguration and are
+not:
+
+| Attempt | Result on the live NAS |
+|---|---|
+| `ssh-copy-id` | Password accepted, then `Could not chdir to home directory /var/services/homes/admin` → `mkdir: cannot create directory '.ssh': Permission denied`. **DSM's User Home service was off**, so no account had a home directory to hold `authorized_keys`. One DSM checkbox. |
+| `rsync` over SSH | `Permission denied, please try again.` from the far end. DSM ships a **setuid-root rsync that refuses `--server` mode for a non-root uid**; DSM 7 also disables root SSH, so there is no account to run it as. |
+| `scp` / `sftp` | `subsystem request failed on channel 0` — **DSM's sshd has no sftp subsystem**, and modern `scp` speaks SFTP. |
+| `ssh 'cat > file'` | **Works.** |
+
+So the transport is a plain SSH pipe. Both blocked options could be unblocked
+with DSM service checkboxes, but a DSM update that reset one would silently
+break the backup; the pipe depends on nothing but sshd. The cost is delta
+transfer and resume — neither of which matters much for a SQLite file that
+changes throughout, over a LAN that moves it in 8 seconds.
+
+What rsync *was* silently providing is end-to-end verification, so the script
+now does that explicitly, and more strongly than before:
 
 - `scripts/backup_to_nas.sh` — verifies the newest local backup with
   `quick_check` *before* shipping it (a corrupt copy overwriting a good one on
-  the NAS would be worse than no backup), rsyncs it, confirms the far-end size,
-  then syncs an AES256-encrypted bundle of `.env` + the systemd units, mirrors
-  the small media directories, and prunes past 14 days.
+  the NAS would be worse than no backup); pipes it to `<name>.partial`,
+  compares **sha256 on both ends**, and renames into place only on a match —
+  the same discipline B4 imposed locally, now applied to the far end. Then an
+  AES256 bundle of `.env` + the systemd units, a mirror of the small media
+  directories, a 14-day prune, and a sweep of stale `.partial` files (a run
+  killed mid-transfer would otherwise strand ~790 MB forever).
 - `deploy/dk-nas-backup.{service,timer}` — daily at 04:30, `Persistent=true` so
   a run missed while the box was off happens at next boot. Runs as `ben` in its
   own unit so the bot keeps `ProtectHome=read-only`.
-- `deploy/nas-backup.conf.example` — needs `NAS_USER` and the two share paths.
+- `deploy/nas-backup.conf.example` — now carries the verified values.
+
+**Measured first run: 12.4s end to end**, 790 MB at roughly 100 MB/s. The NAS
+copy was then checked *on the NAS* — `quick_check` → `ok`, 646,044 messages —
+and the secrets bundle pulled back and decrypted, yielding a byte-identical
+`.env` plus both unit files.
+
+**One thing the plan got wrong about privacy.** B1 said "encrypt whatever
+leaves the machine"; the script encrypts the secrets bundle but *not* the
+database. The share is world-writable by DSM default, so the first run landed
+755 MB holding 646k rows of member message content as `-rwxrwxrwx`. Both NAS
+directories are now `chmod 700` and every file written `600`, re-asserted on
+each run so an older copy heals rather than staying exposed. That is
+mode-based, not cryptographic: **anyone with the `admin` DSM account can still
+read the database.** Encrypting the DB at rest was not done — it would mean
+holding a second passphrase whose loss costs the whole backup, and the threat
+it addresses (another LAN account) is smaller than that risk. Recorded as a
+deliberate choice, not an oversight.
 
 Retention on the NAS is **14 days**, chosen deliberately against the G5
 trade-off: long enough to catch corruption nobody noticed for a fortnight,
@@ -423,8 +460,11 @@ warning is in the config template and the deploy README.
 
 ### What still needs you
 
-- **Install B1** — two commands, one of which needs your DSM password. See
-  "Next steps" in the branch summary or `deploy/README.md`.
+- ~~**Install B1**~~ — done 2026-08-07, verified end to end. The one thing only
+  you can do remains: **record the GPG passphrase**
+  (`~/.config/dk-backup/env-passphrase`) **in a password manager.** It exists
+  today only on the disk this backup exists to survive, which makes the secrets
+  bundle unopenable in precisely the disaster it was built for.
 - **B3** needs a choice of surface. Cheapest useful version: record
   `last_backup_ok_at` in `config` and have the health panel flag it when it is
   older than 2× the interval. Note the NAS job *does* have failure visibility

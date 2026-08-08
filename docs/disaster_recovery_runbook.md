@@ -178,22 +178,42 @@ src.backup(sqlite3.connect("snapshots/manual.db"))
 When the disk or the whole box is gone. Everything below comes off
 NaturewoodNAS (`192.168.174.3`); nothing is needed from the dead machine.
 
+> **`scp` does not work against this NAS.** DSM's sshd has no sftp subsystem
+> (`subsystem request failed on channel 0`), and modern `scp` speaks SFTP.
+> `rsync` fails too — DSM's setuid rsync refuses `--server` for a non-root uid.
+> Pull files with an `ssh 'cat …'` pipe, as below. Verified against the live
+> NAS 2026-08-07; do not "fix" these commands back to `scp`.
+
 ```bash
 # 1. Fresh box: clone the repo and install per deploy/README.md.
 git clone <repo> dungeon-keeper && cd dungeon-keeper
 
-# 2. Pull the newest database copy.
-scp <nas-user>@192.168.174.3:<NAS_DB_DIR>/dungeonkeeper_YYYYMMDD_HHMMSS.db \
-    dungeonkeeper.db
+# 2. See what is there, and pick a copy. (The db dir is chmod 700 — use the
+#    same DSM account the backup ran as.)
+ssh admin@192.168.174.3 'ls -la /volume1/Storage/botbackups/db'
+
+#    Check it BEFORE pulling 790 MB — the NAS has its own sqlite3.
+ssh admin@192.168.174.3 \
+  'sqlite3 "file:/volume1/Storage/botbackups/db/dungeonkeeper_YYYYMMDD_HHMMSS.db?mode=ro" \
+   "PRAGMA quick_check; SELECT COUNT(*) FROM messages;"'      # expect: ok
+
+# 3. Pull it down, then re-check locally (this catches a bad transfer, which
+#    the check in step 2 cannot).
+ssh admin@192.168.174.3 \
+  'cat /volume1/Storage/botbackups/db/dungeonkeeper_YYYYMMDD_HHMMSS.db' > dungeonkeeper.db
 sqlite3 "file:dungeonkeeper.db?mode=ro" "PRAGMA quick_check;"   # expect: ok
 
-# 3. Recover the secrets bundle — .env plus the systemd units.
-scp <nas-user>@192.168.174.3:<NAS_SECRET_DIR>/secrets-YYYYMMDD.tar.gz.gpg .
-gpg --decrypt --output secrets.tar.gz secrets-YYYYMMDD.tar.gz.gpg
+# 4. Recover the secrets bundle — .env plus the systemd units.
+ssh admin@192.168.174.3 \
+  'cat /volume1/Storage/botbackups/secrets/secrets-YYYYMMDD.tar.gz.gpg' > secrets.tar.gz.gpg
+gpg --decrypt --output secrets.tar.gz secrets.tar.gz.gpg
 tar -xzf secrets.tar.gz          # -> .env, dungeon-keeper.service, cloudflared.service
 sudo cp dungeon-keeper.service cloudflared.service /etc/systemd/system/
 
-# 4. Bring the schema forward, then start (steps 4-6 above).
+#    cloudflared.service carries the tunnel token in its ExecStart, so the
+#    dashboard tunnel comes back with this file — nothing to re-provision.
+
+# 5. Bring the schema forward, then start (steps 4-6 above).
 ```
 
 **The GPG passphrase is not on the NAS** — by design, and it was never on the
@@ -207,7 +227,7 @@ credential must be re-issued by hand.
 |---|---|
 | `models/` (4.5 GB) | Re-downloads from HuggingFace on first boot. Slow, not lost. Note `TimeoutStartSec=180` may not cover the first run. |
 | `lavalink/Lavalink.jar` + plugins | Re-fetched per `deploy/README.md`. Music is silent until then. |
-| Cloudflare tunnel credentials | Held by cloudflared's own config; re-provision the tunnel in the Cloudflare dashboard. **This is the one remaining manual step** — worth moving into the secrets bundle. |
+| ~~Cloudflare tunnel credentials~~ | **Covered — this row is obsolete.** Checked 2026-08-07: there is no `/etc/cloudflared/` and no `~/.cloudflared/`. The tunnel runs token-only, with the credential embedded as `--token <jwt>` in `ExecStart` of `cloudflared.service` — which the secrets bundle already carries. No re-provisioning needed; restoring the unit file restores the tunnel. |
 | `assets/` | In git; recovers with the checkout. |
 | `Discord Messages/` | Export archive, re-exportable. |
 

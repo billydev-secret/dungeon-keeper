@@ -19,7 +19,9 @@ Group=ben
 ExecStart=/home/ben/discord-bots/dungeon-keeper/scripts/backup_to_nas.sh
 
 # The script verifies the backup before shipping it (sqlite quick_check on
-# ~700 MB) and rsyncs over the LAN; give it room without hanging forever.
+# ~790 MB) and pipes it over SSH; give it room without hanging forever.
+# Measured 2026-08-07: 12s end to end on a gigabit LAN. The margin exists for a
+# slow quick_check against a cold page cache, not for the transfer.
 TimeoutStartSec=1800
 
 # Hardening. Needs: read of the repo, read of /etc/systemd/system for the unit
@@ -31,7 +33,17 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 LockPersonality=true
+
+# ProtectSystem=strict makes ALL of / read-only except the API VFS and (with
+# PrivateTmp) /tmp -- $HOME included. Everything the script writes outside /tmp
+# must therefore be listed here:
+#   * ~/.local/state/dk-backup  -- the last-sync breadcrumb
+#   * ~/.gnupg                  -- gpg rewrites random_seed on every invocation
+#                                  even for a --symmetric passphrase-file run,
+#                                  and dies "failed to create temporary file"
+#                                  if it cannot. Read-only is not enough.
 ReadWritePaths=/home/ben/.local/state/dk-backup
+ReadWritePaths=/home/ben/.gnupg
 
 [Install]
 WantedBy=multi-user.target

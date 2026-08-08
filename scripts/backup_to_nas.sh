@@ -5,7 +5,27 @@
 # Closes finding B1 from docs/reviews/2026-08-06-backup-disaster-recovery.md:
 # the bot's own backups land in <db-parent>/backups on the *same physical disk*
 # as the database, which defends against logical damage but not against disk
-# failure. This ships a verified copy to NaturewoodNAS over rsync-on-SSH.
+# failure. This ships a verified copy to NaturewoodNAS over SSH.
+#
+# TRANSPORT: a plain `ssh 'cat > file'` pipe, NOT rsync and NOT scp. That is
+# forced by DSM, and both alternatives were tried against the live NAS on
+# 2026-08-07:
+#   * rsync    -- DSM ships a setuid-root rsync that refuses --server mode for
+#                 a non-root uid ("Permission denied, please try again." from
+#                 the far end). DSM 7 also disables root SSH, so there is no
+#                 account to run it as.
+#   * scp/sftp -- DSM's sshd has no sftp subsystem enabled ("subsystem request
+#                 failed on channel 0"), and modern scp speaks SFTP.
+# Both could be unblocked by flipping DSM service checkboxes, but a DSM update
+# that reset one would silently break the backup. A pipe depends on nothing but
+# sshd being up.
+#
+# Losing rsync costs delta transfer and resume. Neither matters much here: the
+# SQLite file changes throughout, so a delta would be close to a full copy
+# anyway, and a dropped LAN transfer just re-runs next timer. What rsync *was*
+# providing that we must now provide ourselves is end-to-end verification --
+# hence the explicit sha256 compare in send_file(), which is strictly stronger
+# than the far-end size check this script previously relied on.
 #
 # Runs as `ben` from a systemd timer (deploy/dk-nas-backup.{service,timer}) --
 # deliberately NOT inside the bot, whose ProtectHome=read-only hardening should
@@ -40,6 +60,50 @@ ssh_nas() { ssh "${SSH_OPTS[@]}" "$NAS_USER@$NAS_HOST" "$@"; }
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 die() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] FATAL: $*" >&2; exit 1; }
 
+# send_file <local> <remote> -- copy over an SSH pipe and prove it arrived.
+#
+# Writes to <remote>.partial and renames only after the sha256 matches, so a
+# truncated transfer can never occupy the real filename on the NAS. That is
+# deliberately the same discipline finding B4 imposed on the local backup: the
+# newest-looking file must never be a partial one.
+#
+# Skips the transfer when the far end already holds a byte-identical copy,
+# which makes a same-day re-run cheap instead of another 790 MB.
+send_file() {
+    local src="$1" dest="$2"
+    local local_sum remote_sum remote_size local_size
+    local_size="$(stat -c%s "$src")"
+    local_sum="$(sha256sum "$src" | cut -d' ' -f1)"
+
+    remote_size="$(ssh_nas "stat -c%s '$dest' 2>/dev/null || echo 0")"
+    if [[ "$remote_size" == "$local_size" ]]; then
+        remote_sum="$(ssh_nas "sha256sum '$dest' 2>/dev/null | cut -d' ' -f1")"
+        if [[ "$remote_sum" == "$local_sum" ]]; then
+            # Re-assert the mode on the skip path too, so a copy left behind by
+            # an earlier version of this script (or by a share-wide permission
+            # change on the NAS) is corrected rather than kept forever at
+            # whatever it happens to be.
+            ssh_nas "chmod 600 '$dest'" || true
+            log "  already present and verified ($(basename "$dest"))"
+            return 0
+        fi
+    fi
+
+    ssh_nas "cat > '$dest.partial'" < "$src" \
+        || die "transfer failed: $(basename "$src")"
+
+    remote_sum="$(ssh_nas "sha256sum '$dest.partial' | cut -d' ' -f1")"
+    if [[ "$remote_sum" != "$local_sum" ]]; then
+        ssh_nas "rm -f '$dest.partial'" || true
+        die "checksum mismatch after transfer of $(basename "$src"): local=$local_sum remote=$remote_sum"
+    fi
+
+    # 600, not the share's inherited 777 -- see the chmod note at step 3.
+    ssh_nas "mv '$dest.partial' '$dest' && chmod 600 '$dest'" \
+        || die "could not finalise $dest"
+    log "  verified sha256 ${local_sum:0:16}… ($local_size bytes)"
+}
+
 # --- 1. reachability -------------------------------------------------------
 log "Checking $NAS_USER@$NAS_HOST ..."
 ssh_nas true || die "cannot reach the NAS over SSH (key not authorised, or NAS down)"
@@ -59,20 +123,18 @@ rows="$(sqlite3 "file:${newest}?mode=ro" 'SELECT COUNT(*) FROM messages;')"
 log "Integrity ok (messages=$rows, $(du -h "$newest" | cut -f1))"
 
 # --- 3. ship the database --------------------------------------------------
-ssh_nas "mkdir -p '$NAS_DB_DIR' '$NAS_SECRET_DIR' && chmod 700 '$NAS_SECRET_DIR'"
+# Both directories go 700, not just the secrets one. The share itself is
+# world-writable (drwxrwxrwx, DSM default), and a database copy inherits that:
+# the first run landed a 755 MB file holding 646k rows of member message
+# content as -rwxrwxrwx. The DB is not encrypted at rest on the NAS the way the
+# secrets bundle is, so directory mode is the only thing limiting who on the
+# LAN can read it.
+ssh_nas "mkdir -p '$NAS_DB_DIR' '$NAS_SECRET_DIR' \
+         && chmod 700 '$NAS_DB_DIR' '$NAS_SECRET_DIR'"
 
 log "Syncing $(basename "$newest") -> $NAS_HOST:$NAS_DB_DIR/"
-rsync -a --partial --inplace --no-perms --no-group \
-      -e "ssh ${SSH_OPTS[*]}" \
-      "$newest" "$NAS_USER@$NAS_HOST:$NAS_DB_DIR/"
-
-# Verify the far end matches, by size. (A full checksum re-reads 700 MB over
-# the wire; rsync already verifies its own transfer with a rolling checksum.)
-local_size="$(stat -c%s "$newest")"
-remote_size="$(ssh_nas "stat -c%s '$NAS_DB_DIR/$(basename "$newest")'")"
-[[ "$local_size" == "$remote_size" ]] \
-    || die "size mismatch after transfer: local=$local_size remote=$remote_size"
-log "Transfer verified ($local_size bytes)"
+send_file "$newest" "$NAS_DB_DIR/$(basename "$newest")"
+log "Transfer verified"
 
 # --- 4. ship the things a DB-only restore cannot rebuild -------------------
 # .env is the single highest-leverage file here (finding B7): 4 KB, gitignored,
@@ -95,24 +157,33 @@ gpg --batch --yes --quiet \
     --output "$staging/secrets.tar.gz.gpg" \
     "$staging/secrets.tar.gz"
 
-rsync -a --no-perms --no-group -e "ssh ${SSH_OPTS[*]}" \
-      "$staging/secrets.tar.gz.gpg" \
-      "$NAS_USER@$NAS_HOST:$NAS_SECRET_DIR/secrets-$(date +%Y%m%d).tar.gz.gpg"
+send_file "$staging/secrets.tar.gz.gpg" \
+          "$NAS_SECRET_DIR/secrets-$(date +%Y%m%d).tar.gz.gpg"
 log "Secrets bundle synced (AES256, passphrase from $GPG_PASSPHRASE_FILE)"
 
 # Small unbacked media that a restored DB still points at (finding B7).
 #
-# This is a MIRROR of current state, not a versioned backup: --delete means a
-# file removed locally (by the guess_repo cleanup, or by an erasure) is removed
-# here too. That keeps deletions propagating for GDPR, at the cost of not being
-# able to recover a file you deleted by mistake. The database copies are the
-# real backup; this is 5 MB of accompanying images.
+# This is a MIRROR of current state, not a versioned backup: a file removed
+# locally (by the guess_repo cleanup, or by an erasure) is removed here too.
+# That keeps deletions propagating for GDPR, at the cost of not being able to
+# recover a file you deleted by mistake. The database copies are the real
+# backup; this is 5 MB of accompanying images.
+#
+# Without rsync --delete, mirror semantics come from replacing the directory
+# wholesale: extract into a fresh <dir>.new, then swap it into place. The swap
+# is what keeps this safe -- the old copy is only removed once the new one has
+# been fully extracted, so a transfer that dies midway leaves the previous
+# mirror intact rather than a half-deleted one.
 NAS_MEDIA_DIR="${NAS_MEDIA_DIR:-$NAS_DB_DIR/media}"
 for dir in guess_cache econ_icon_catalog econ_role_icons; do
     [[ -d "$DK_ROOT/$dir" ]] || continue
-    ssh_nas "mkdir -p '$NAS_MEDIA_DIR/$dir'"
-    rsync -a --delete --no-perms --no-group -e "ssh ${SSH_OPTS[*]}" \
-          "$DK_ROOT/$dir/" "$NAS_USER@$NAS_HOST:$NAS_MEDIA_DIR/$dir/"
+    ssh_nas "rm -rf '$NAS_MEDIA_DIR/$dir.new' && mkdir -p '$NAS_MEDIA_DIR/$dir.new'"
+    tar -C "$DK_ROOT/$dir" -czf - . \
+        | ssh_nas "tar -C '$NAS_MEDIA_DIR/$dir.new' -xzf -" \
+        || die "media mirror failed for $dir"
+    ssh_nas "rm -rf '$NAS_MEDIA_DIR/$dir' \
+             && mv '$NAS_MEDIA_DIR/$dir.new' '$NAS_MEDIA_DIR/$dir'"
+    log "  mirrored $dir ($(find "$DK_ROOT/$dir" -type f | wc -l) files)"
 done
 log "Media directories mirrored"
 
@@ -139,6 +210,16 @@ log "Pruning NAS copies older than ${RETENTION_DAYS}d ..."
 pruned="$(prune_old "$NAS_DB_DIR" 'dungeonkeeper_*.db')"
 pruned_sec="$(prune_old "$NAS_SECRET_DIR" 'secrets-*.tar.gz.gpg')"
 log "Pruned $pruned database copies and $pruned_sec secrets bundles"
+
+# Stale .partial files. send_file removes its own on a checksum mismatch, but a
+# run killed mid-transfer (reboot, network drop, systemctl stop) leaves one
+# behind -- and at ~790 MB each they would accumulate silently and forever.
+# The +1 day floor guarantees this can never touch a transfer still in flight.
+for d in "$NAS_DB_DIR" "$NAS_SECRET_DIR"; do
+    stale="$(ssh_nas "find '$d' -maxdepth 1 -type f -name '*.partial' -mtime +1 -print0 \
+                      | xargs -0 -r rm -vf | wc -l")"
+    (( stale > 0 )) && log "Removed $stale stale .partial file(s) from $d"
+done
 
 kept="$(ssh_nas "ls -1 '$NAS_DB_DIR'/dungeonkeeper_*.db 2>/dev/null | wc -l")"
 log "NAS now holds $kept database copies (window: ${RETENTION_DAYS}d)"

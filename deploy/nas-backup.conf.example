@@ -5,14 +5,20 @@
 
 # --- NAS target ------------------------------------------------------------
 NAS_HOST=192.168.174.3          # NaturewoodNAS
-NAS_USER=                       # <-- DSM account with SSH access
+NAS_USER=admin                  # <-- DSM account with SSH access
                                 #     (must be in the administrators group;
-                                #      DSM only permits SSH for admins)
+                                #      DSM only permits SSH for admins, and
+                                #      User Home service must be enabled or
+                                #      there is nowhere to put authorized_keys)
 
-# Synology shared folders live under /volume1/<share-name>.
-NAS_DB_DIR=/volume1/            # <-- e.g. /volume1/backups/dungeon-keeper/db
-NAS_SECRET_DIR=/volume1/        # <-- e.g. /volume1/backups/dungeon-keeper/secrets
-                                #     created chmod 700 by the script
+# Synology shares live under /volume1/<share-name> on the SSH side. The path
+# DSM shows for SMB/NFS is NOT the filesystem path: a share advertised as
+# 192.168.174.3:/Storage/botbackups is /volume1/Storage/botbackups over SSH.
+# Confirm with:  ssh <user>@<host> 'ls -1 /volume1/ | grep -v "^@"'
+NAS_DB_DIR=/volume1/Storage/botbackups/db
+NAS_SECRET_DIR=/volume1/Storage/botbackups/secrets
+                                # both created chmod 700 by the script, and
+                                # every file it writes is chmod 600
 
 # --- retention -------------------------------------------------------------
 # LOAD-BEARING: this is the number docs/gdpr_runbook.md states as the
