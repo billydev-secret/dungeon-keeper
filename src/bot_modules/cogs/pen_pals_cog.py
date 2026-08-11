@@ -328,6 +328,15 @@ def _get_all_active_sessions(conn) -> list:
     ).fetchall()
 
 
+def _closed_session_channels(conn) -> list[tuple[str, int]]:
+    return [
+        (r["session_id"], int(r["channel_id"]))
+        for r in conn.execute(
+            "SELECT session_id, channel_id FROM pen_pals_sessions WHERE state = 'closed'"
+        )
+    ]
+
+
 def _create_session(
     conn, session_id: str, guild_id: int, channel_id: int,
     user1_id: int, user2_id: int, now: float,
@@ -1143,6 +1152,46 @@ async def _retry_failed_panel_edits(bot: discord.Client) -> None:
             log.exception("pen_pals: panel retry failed for guild %s", guild_id)
 
 
+async def _sweep_orphan_channels(bot: discord.Client, db_path: Path) -> None:
+    """Delete pen pal channels left behind by a closed session.
+
+    Every close path claims the session row before deleting its channel, so a
+    crash in between (or a delete that keeps failing) strands a live channel
+    behind a closed row — and the tick only walks *active* sessions, so
+    nothing else would ever revisit it. This is that second pass.
+
+    Deliberately unbounded in time. The hazard is a crash, and a crash is
+    exactly what can keep the bot down for days, so a "recent closes only"
+    window would go blind in the one case this exists for. Cost stays flat
+    anyway because the filtering happens against the channel cache: a channel
+    Discord already deleted isn't in it, so the steady state is one cheap id
+    scan and zero API calls. Channel ids are snowflakes and are never reused,
+    so a cache hit is always that session's own channel.
+    """
+    def _load():
+        with open_db(db_path) as conn:
+            return _closed_session_channels(conn)
+
+    for session_id, channel_id in await asyncio.to_thread(_load):
+        channel = bot.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            continue
+        try:
+            await channel.delete(reason="Pen Pals: channel outlived its closed session")
+        except discord.NotFound:
+            pass  # cache was stale — Discord had already dropped it
+        except discord.HTTPException as exc:
+            log.warning(
+                "pen_pals: failed to sweep orphan channel %d (session %s): %s",
+                channel_id, session_id, exc,
+            )
+        else:
+            log.info(
+                "pen_pals: swept orphan channel %d left by closed session %s",
+                channel_id, session_id,
+            )
+
+
 async def _tick(bot: discord.Client, db_path: Path) -> None:
     def _load_all():
         with open_db(db_path) as conn:
@@ -1195,14 +1244,20 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
 
         # Expiry
         if now >= expiry_at:
+            # Claim the close *before* deleting the channel. Our own delete
+            # fires on_guild_channel_delete, and if that lands while the row is
+            # still active the listener treats it as an abandoned session:
+            # both members get "your partner is no longer available" and are
+            # re-pooled. Closing first makes the listener's lookup miss.
+            def _close_exp(sid: str = session_id):
+                with open_db(db_path) as conn:
+                    return _claim_close(conn, sid, "expired")
+            if not await asyncio.to_thread(_close_exp):
+                continue  # another handler already closed it
             try:
                 await channel.delete(reason="Pen Pals session expired")
             except (discord.NotFound, discord.HTTPException):
                 pass
-            def _close_exp(sid: str = session_id):
-                with open_db(db_path) as conn:
-                    _close_session(conn, sid, "expired")
-            await asyncio.to_thread(_close_exp)
             log.info("pen_pals: session %s expired", session_id)
 
             # Quest hook: running the full 24h is "seeing it through" — both
@@ -1310,6 +1365,16 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
             continue
         pairs, left = await _do_round(bot, db_path, guild_id)
         log.info("pen_pals: swept guild %d — %d pairs, %d left over", guild_id, pairs, left)
+
+    # Maintenance goes last, and swallows everything. _pen_pals_loop catches
+    # per-tick failures, so a transport error raised here from anywhere but
+    # the caught HTTPException family would otherwise abort the tick — and
+    # the expiries, close warnings and reminders above it are the parts that
+    # can't wait five minutes for the next one.
+    try:
+        await _sweep_orphan_channels(bot, db_path)
+    except Exception:
+        log.exception("pen_pals: orphan-channel sweep failed")
 
 
 # ── Signup panel ──────────────────────────────────────────────────────────────
@@ -1706,19 +1771,20 @@ class _EndConfirmView(discord.ui.View):
                 ),
             )
 
-        # Delete the channel first, then close the session row. If the close
-        # doesn't happen (crash), the loop finds the channel missing and marks
-        # the session closed itself — the reverse order could orphan a live
-        # channel behind an already-closed session.
+        # Close the session row first, then delete the channel. Deleting first
+        # leaves a window where our own on_guild_channel_delete sees a live
+        # session and tears it down as abandoned. A crash between the two
+        # leaves a live channel behind a closed row; _sweep_orphan_channels
+        # picks that up on a later tick.
+        def _close(sid: str = self.session_id):
+            with open_db(self.db_path) as conn:
+                return _claim_close(conn, sid, "early")
+        await asyncio.to_thread(_close)
+
         try:
             await self.channel.delete(reason="Pen Pals ended early")
         except discord.HTTPException as exc:
             log.warning("pen_pals: failed to delete channel %d on early end: %s", self.channel.id, exc)
-
-        def _close(sid: str = self.session_id):
-            with open_db(self.db_path) as conn:
-                _close_session(conn, sid, "early")
-        await asyncio.to_thread(_close)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

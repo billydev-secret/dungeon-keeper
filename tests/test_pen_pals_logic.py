@@ -1864,6 +1864,162 @@ async def test_end_session_abnormally_second_call_is_noop(sync_db_path, monkeypa
     assert _pool_ids(sync_db_path) == [2]  # not re-queued twice
 
 
+# ── Close ordering vs. our own CHANNEL_DELETE ─────────────────────────
+#
+# Every normal close deletes the session's channel, and Discord hands that
+# delete straight back as CHANNEL_DELETE. While the row was still active at
+# that moment, _on_channel_delete read it as an *abandoned* session: both
+# members were DM'd "your partner is no longer available" and re-pooled on a
+# perfectly normal completion. Claiming the row first makes the listener's
+# lookup miss, so these tests fire the event from inside channel.delete().
+
+
+def _echo_channel_delete(bot, db_path, channel_id: int):
+    """A channel.delete() that dispatches _on_channel_delete's body, as Discord does."""
+    async def _fire(*_args, **_kwargs):
+        with open_db(db_path) as conn:
+            session = pp._get_session_by_channel(conn, channel_id)
+        if session is None:
+            return
+        await pp._end_session_abnormally(
+            bot, db_path, session,
+            reason="channel_deleted", departed_user_id=None, delete_channel=False,
+        )
+    return _fire
+
+
+async def test_tick_expiry_ignores_the_delete_event_it_causes(sync_db_path, monkeypatch):
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    fire = AsyncMock()
+    monkeypatch.setattr("bot_modules.economy.game_rewards.fire_member_trigger", fire)
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(
+            conn, "s1", GUILD_ID, 4242, 1, 2, time.time() - 10, session_seconds=0,
+        )
+
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+    channel.delete = AsyncMock(side_effect=_echo_channel_delete(bot, sync_db_path, 4242))
+    bot.get_channel.return_value = channel
+
+    await pp._tick(bot, sync_db_path)
+
+    assert _close_reason(sync_db_path, "s1") == "expired"
+    assert _pool_ids(sync_db_path) == []            # neither member re-queued
+    guild.get_member(1).send.assert_not_awaited()   # no "no longer available"
+    guild.get_member(2).send.assert_not_awaited()
+    assert fire.await_count == 2                    # the completion still counts
+
+
+async def test_end_early_ignores_the_delete_event_it_causes(sync_db_path, monkeypatch):
+    """/penpals end DMs the partner once — not again as an abandoned session."""
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, time.time())
+
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+    channel.guild = guild
+    channel.delete = AsyncMock(side_effect=_echo_channel_delete(bot, sync_db_path, 4242))
+
+    view = pp._EndConfirmView(sync_db_path, "s1", channel, other_user_id=2, invoker_id=1)
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.user = MagicMock(id=1)
+    interaction.response.edit_message = AsyncMock()
+
+    await view.confirm.callback(interaction)
+
+    assert _close_reason(sync_db_path, "s1") == "early"
+    assert _pool_ids(sync_db_path) == []
+    guild.get_member(2).send.assert_awaited_once()  # "ended early by your partner", once
+    guild.get_member(1).send.assert_not_awaited()
+
+
+# ── Orphan-channel sweep ──────────────────────────────────────────────
+#
+# The flip side of closing the row first: a crash (or a failed delete) between
+# the two leaves a live channel behind a closed row, and the tick only walks
+# *active* sessions. The sweep is what revisits it.
+
+
+def _sweep_env(db_path, *, close: bool):
+    with open_db(db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, time.time())
+        if close:
+            pp._claim_close(conn, "s1", "expired")
+
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.delete = AsyncMock()
+    bot = MagicMock(spec=discord.Client)
+    bot.get_channel.return_value = channel
+    return bot, channel
+
+
+async def test_sweep_deletes_a_channel_left_behind_by_a_closed_session(sync_db_path):
+    bot, channel = _sweep_env(sync_db_path, close=True)
+
+    await pp._sweep_orphan_channels(bot, sync_db_path)
+
+    channel.delete.assert_awaited_once()
+
+
+async def test_sweep_leaves_a_live_session_alone(sync_db_path):
+    bot, channel = _sweep_env(sync_db_path, close=False)
+
+    await pp._sweep_orphan_channels(bot, sync_db_path)
+
+    channel.delete.assert_not_awaited()
+
+
+async def test_sweep_still_finds_an_orphan_after_days_of_downtime(sync_db_path):
+    """The hazard is a crash, and a crash is what keeps the bot down for days.
+
+    A "recent closes only" window would go blind in exactly the case the sweep
+    exists for, so the scan is unbounded in time.
+    """
+    bot, channel = _sweep_env(sync_db_path, close=True)
+    with open_db(sync_db_path) as conn:  # closed a fortnight ago
+        conn.execute(
+            "UPDATE pen_pals_sessions SET closed_at = ? WHERE session_id = 's1'",
+            (time.time() - 14 * 86400,),
+        )
+
+    await pp._sweep_orphan_channels(bot, sync_db_path)
+
+    channel.delete.assert_awaited_once()
+
+
+async def test_sweep_ignores_a_channel_discord_already_dropped(sync_db_path):
+    """A stale cache entry is the benign case — not worth a warning per tick."""
+    bot, channel = _sweep_env(sync_db_path, close=True)
+    channel.delete = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "gone"))
+
+    await pp._sweep_orphan_channels(bot, sync_db_path)  # must not raise
+
+    channel.delete.assert_awaited_once()
+
+
+async def test_tick_survives_a_sweep_that_blows_up(sync_db_path, monkeypatch):
+    """Maintenance runs last and swallows everything.
+
+    channel.delete() can raise outside the HTTPException family (a transport
+    error), and _pen_pals_loop's own catch is per-tick — an escape here would
+    cost that cycle its expiries, close warnings and reminders.
+    """
+    _configure(sync_db_path)
+    boom = AsyncMock(side_effect=OSError("connection reset"))
+    monkeypatch.setattr(pp, "_sweep_orphan_channels", boom)
+
+    await pp._tick(MagicMock(), sync_db_path)  # must not raise
+
+    boom.assert_awaited_once()
+
+
 async def test_on_member_remove_drops_pooled_member(sync_db_path, monkeypatch):
     """A member who was only in the pool (no session) is removed on leave, and
     the panel is refreshed so its pool count is accurate."""
