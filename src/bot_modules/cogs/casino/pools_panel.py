@@ -71,7 +71,11 @@ class PoolsMixin:
         raise NotImplementedError
 
     async def _names(
-        self, guild: discord.Guild | None, user_ids: list[int]
+        self,
+        guild: discord.Guild | None,
+        user_ids: list[int],
+        *,
+        guild_id: int | None = None,
     ) -> NameFn:
         """Provided by CasinoCog; declared so this file type-checks alone."""
         raise NotImplementedError
@@ -390,9 +394,13 @@ class PoolsMixin:
                     )
                     if png else discord.utils.MISSING
                 ),
-                # Winners are pinged; nobody else is. Allow-listed to the
-                # exact ids so an @everyone can never ride in on a payout
-                # table built from user input.
+                # Nobody is pinged: the card is all embed, no content, and a
+                # mention inside an embed never notifies (it isn't even
+                # rendered as one — todo #90 — so the positions table names
+                # winners in plain text). The allow-list is kept as a standing
+                # guard rather than a live one: it is what stops an @everyone
+                # riding in on this payout table if a content= line is ever
+                # added above.
                 allowed_mentions=discord.AllowedMentions(
                     everyone=False, roles=False,
                     users=[discord.Object(id=u) for u in winners],

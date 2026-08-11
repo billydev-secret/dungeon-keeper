@@ -752,7 +752,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             return None
 
     async def _names(
-        self, guild: discord.Guild | None, user_ids: list[int]
+        self,
+        guild: discord.Guild | None,
+        user_ids: list[int],
+        *,
+        guild_id: int | None = None,
     ) -> NameFn:
         """The resolver every card renders players through (todo #90).
 
@@ -762,11 +766,21 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         the channel reads. Present members come from the member cache at no
         I/O cost; only the misses (players who have left) cost one batched
         read.
+
+        ``guild_id`` overrides the id taken from ``guild``, and callers that
+        can be handed ``guild=None`` must pass it: the ``known_users`` fallback
+        is keyed on ``(guild_id, user_id)``, so defaulting to 0 there would
+        match no rows and hand back the very ``<@id>`` this exists to remove —
+        exactly when an uncached guild makes the table the *only* source of a
+        name (see ``_auto_resolve_hand``).
         """
         return await build_name_fn(
             guild=guild,
             db_path=self.ctx.db_path,
-            guild_id=guild.id if guild is not None else 0,
+            guild_id=(
+                guild_id if guild_id is not None
+                else (guild.id if guild is not None else 0)
+            ),
             user_ids=user_ids,
         )
 
@@ -1450,7 +1464,12 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = self.bot.get_guild(int(row["guild_id"]))
         embed, make_view = render(
             row, step, econ, await self._accent(guild),
-            await self._names(guild, [int(row["user_id"])]),
+            # guild_id off the row, not off `guild`: get_guild can miss during
+            # a boot/outage window, and that is the case where known_users is
+            # the only thing that can name this player.
+            await self._names(
+                guild, [int(row["user_id"])], guild_id=int(row["guild_id"])
+            ),
         )
         embed.set_footer(text=footer)
         if handle is not None:
