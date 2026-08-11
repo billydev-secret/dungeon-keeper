@@ -1609,7 +1609,14 @@ def test_week_roll_draws_raffle_exactly_once(db):
         draw = raffle_svc.get_draw(conn, GUILD, "2026-W28")
         assert draw is not None
         assert draw["winner_id"] == USER and draw["tickets"] == 5
-        voucher = raffle_svc.live_voucher(conn, GUILD, USER)
+        # Read on the same simulated clock the draw was stamped with. The
+        # voucher expires VOUCHER_LIFETIME_DAYS (28) after the roll, so a
+        # wall-clock read here only passed while real "today" happened to
+        # still be inside that window — it went red on 2026-08-10 with
+        # nothing having changed.
+        voucher = raffle_svc.live_voucher(
+            conn, GUILD, USER, now=_ts("2026-07-13")
+        )
         assert voucher is not None
 
         # Replay the same roll: marks already advanced, and even a forced
