@@ -15,8 +15,12 @@ it back here in the same commit.**
 ## Install
 
 ```bash
-sudo cp deploy/dungeon-keeper.service deploy/discord-bots.target \
-        deploy/dungeon-keeper-watchdog.service /etc/systemd/system/
+# `install -t <dir>`, not `cp src... <dir>` -- see the note under "Off-device
+# backup" below. A cp whose trailing destination is lost to a truncated paste
+# overwrites one source unit with another instead of installing anything.
+sudo install -m 644 -t /etc/systemd/system/ \
+     deploy/dungeon-keeper.service deploy/discord-bots.target \
+     deploy/dungeon-keeper-watchdog.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now discord-bots.target dungeon-keeper-watchdog
 journalctl -u dungeon-keeper -f
@@ -154,10 +158,23 @@ chmod 600 ~/.config/dk-backup/env-passphrase
 ./scripts/backup_to_nas.sh
 
 # 4. Install the timer.
-sudo cp deploy/dk-nas-backup.service deploy/dk-nas-backup.timer /etc/systemd/system/
+#
+# `install -t <dir>` and not `cp a b <dir>`: with cp, the destination is the
+# LAST argument, so a command truncated on paste ("cp deploy/x.service
+# deploy/x.timer") silently copies the service OVER the timer instead of
+# installing either. That is not hypothetical -- it happened on 2026-08-11 and
+# produced "Unknown section 'Service'. Ignoring. / Timer unit lacks value
+# setting. Refusing." from a .timer that was byte-identical to the .service.
+# With -t the destination is named up front and truncation is harmless.
+sudo install -m 644 -t /etc/systemd/system/ \
+     deploy/dk-nas-backup.service deploy/dk-nas-backup.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now dk-nas-backup.timer
 systemctl list-timers dk-nas-backup.timer
+
+# If the timer ever loads as `bad-setting`, check the two files differ:
+#   diff deploy/dk-nas-backup.service deploy/dk-nas-backup.timer
+#   git checkout -- deploy/dk-nas-backup.timer    # restore if clobbered
 ```
 
 ### What it does
