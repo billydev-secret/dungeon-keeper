@@ -28,7 +28,25 @@ Every cog call runs under `asyncio.to_thread(...)` — rendering is CPU-bound
 ### `render_quote_card(...)` — pfp-as-background card
 
 The primary path. Returns **PNG bytes** with transparent rounded corners.
-Default canvas **900×500**.
+Canvas **900** wide by default, **height taken from the frame's own aspect
+ratio** (`card_size_for_border`) — see **Canvas shape** below. With the bundled
+Golden Poppy frame that lands at 900×507; a 3:2 frame renders 900×600.
+
+#### Canvas shape
+
+A frame is composited **full-bleed**, so a canvas of a different ratio stretches
+the artwork. The card therefore yields to the frame: `card_size_for_border`
+keeps the caller's `width` and derives `height` from the frame's native pixel
+ratio, before any layout is measured. Every layout constant is a fraction of
+`width`/`height`, so they follow the new canvas unchanged.
+
+The alternatives were both worse for a frame: cropping-to-cover would cut the
+frame's own edges off the card, and letterboxing would break the full bleed. If
+the frame can't be read, the requested canvas is used as-is.
+
+> This is why cards are no longer a fixed 900×500. The bundled Midnight Frame is
+> 1536×1024 and both live per-guild uploads are 3:2 — all three were being
+> squashed 20% horizontally by the old fixed canvas.
 
 **Pipeline (`_build_background` → foreground → border):**
 1. **Background** — the passed `avatar_bytes` is fit-covered to the canvas,
@@ -221,9 +239,23 @@ hand-tuned avatar/text layout is untouched) while making the decoration subtler,
 Tuning knobs live at module scope: `_SLIM_FRAME_GOLD`, `_SLIM_FLOWER_SCALE`,
 `_SLIM_FLOWER_CROP`.
 
-### Midnight (`midnight_frame`)
+### Midnight (`midnight_frame`, `mask_fit=True`)
 
-A real-alpha PNG composited as-is (no slim treatment, no luma key).
+A real-alpha PNG composited as-is (no slim treatment, no luma key), rendered at
+its native 3:2 on a 900×600 canvas.
+
+Unlike Golden Poppy — whose decoration sits in one corner — this frame's flowers
+climb the whole left side and reach ~45% across. The poppy-tuned layout pins the
+avatar at `0.18w` and the text column at `0.34w`, which buried the avatar under
+the flowers and ran the attribution through them, so this frame **fits its own
+opening** like an uploaded one.
+
+Its opening has **no room for an avatar disc at all** (511px wide at mid-height;
+an avatar with its ring plus a readable column needs ~600px — no disc fits at
+any row down to r=52px, well under the r=66px floor). `_fit_pfp` returns None,
+so Midnight quote cards render in the **banner layout**: `author_name` becomes
+the centered header, the quote centers under it, and the avatar survives only as
+the blurred background. That is the frame's geometry, not a fallback bug.
 
 ### Custom uploaded frames (`mask_fit=True`)
 
@@ -232,12 +264,15 @@ A guild can upload its own frame via the dashboard
 `db_path.parent/quote_borders/<guild_id>/border.png` (`guild_border_path`) and
 re-encoded to a real-alpha RGBA PNG, so `flip`/`luma_key` are both False.
 
-Unlike bundled frames, a custom frame **drives its own layout**: rather than a
+Like Midnight and unlike Golden Poppy, a custom frame **drives its own layout**:
+rather than a
 fixed text column, `analyze_border_opening` reads the frame's transparency and
 returns the see-through opening as per-row `[left, right]` spans plus a fitted
 avatar disc. `render_quote_card` then flows the avatar + auto-shrunk quote text
 inside that opening. Upload **rejects** a frame whose center has no usable
-opening (probed at 900×500), so rendering always has a valid hole to fit into.
+opening — probed at `card_size_for_border(900, 500, frame)`, i.e. the canvas the
+card will actually have, so the guard measures the real geometry rather than a
+stretched one — and rendering always has a valid hole to fit into.
 Openings are cached by `(path, mtime, size)`.
 
 > Because custom-frame layout derives from the alpha opening, the `slim_frame`

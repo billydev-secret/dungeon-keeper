@@ -91,6 +91,7 @@ from bot_modules.services.greeting_watch_service import (
 from bot_modules.services.quote_renderer import (
     BorderStyle,
     analyze_border_opening,
+    card_size_for_border,
     guild_border_path,
 )
 from bot_modules.services.inactivity_prune_service import (
@@ -3325,15 +3326,18 @@ def _install_quote_border(content: bytes, target) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
 
     # Write to a temp sibling and confirm the frame leaves a usable opening at the
-    # render canvas (900×500) before replacing any existing border — this is the
-    # real guard: the renderer fits the quote into this opening, so "no opening"
-    # is the failure mode, catching center-covered frames the opaque check misses.
+    # render canvas before replacing any existing border — this is the real guard:
+    # the renderer fits the quote into this opening, so "no opening" is the failure
+    # mode, catching center-covered frames the opaque check misses. The canvas is
+    # derived from the frame the same way the renderer derives it (the card takes
+    # the frame's aspect ratio), so the probe measures the geometry the card will
+    # actually have — probing a fixed 900×500 would test a stretched frame.
     tmp = target.with_name("border.tmp.png")
     img.save(tmp, format="PNG")
     probe = BorderStyle(
         name="pending", path=tmp, flip=False, luma_key=False, mask_fit=True
     )
-    if analyze_border_opening(probe, 900, 500) is None:
+    if analyze_border_opening(probe, *card_size_for_border(900, 500, probe)) is None:
         tmp.unlink(missing_ok=True)
         raise HTTPException(
             400,

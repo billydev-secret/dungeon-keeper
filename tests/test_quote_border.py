@@ -6,17 +6,21 @@ import io
 from pathlib import Path
 
 import matplotlib
+import pytest
 
 matplotlib.use("Agg")
 
 from PIL import Image, ImageDraw
 
 from bot_modules.services.quote_renderer import (
+    BORDERS,
     CUSTOM_BORDER_NAME,
     THEMES,
     BorderStyle,
     _MASK_CACHE,
     analyze_border_opening,
+    card_size_for_border,
+    square_crop_box,
     custom_border_style,
     guild_border_dir,
     guild_border_path,
@@ -170,3 +174,194 @@ def test_render_mask_border_confines_text_to_opening(tmp_path):
     assert op is not None
     # The detected right edge stays clear of the 200px opaque band.
     assert max(op.right[op.top:op.bot + 1]) <= W - 200
+
+
+# ── Frame aspect ratio (the card canvas follows the frame) ────────────
+#
+# Every frame used to be force-resized to the card canvas, so a frame whose
+# native ratio wasn't the canvas's 900x500 (1.80:1) rendered stretched — the
+# bundled Midnight Frame is 1536x1024 (1.50:1), a 20% horizontal stretch, and
+# both live per-guild uploads are 3:2 too. The canvas now takes its height from
+# the frame's own ratio so the art is neither distorted nor cropped.
+
+
+def _frame_of_size(tmp_path, name: str, w: int, h: int) -> BorderStyle:
+    """A hollow rectangular frame of a given pixel size (so, a given ratio)."""
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(im).rounded_rectangle(
+        [0, 0, w - 1, h - 1], radius=int(min(w, h) * 0.08),
+        outline=(40, 120, 200, 255), width=max(8, int(min(w, h) * 0.05)),
+    )
+    return _save_border(tmp_path, name, im)
+
+
+@pytest.mark.parametrize(
+    ("frame_w", "frame_h", "expected"),
+    [
+        pytest.param(1536, 1024, (900, 600), id="3:2-midnight-and-uploads"),
+        pytest.param(1000, 1000, (900, 900), id="square"),
+        pytest.param(1672, 941, (900, 507), id="golden-poppy-native"),
+        pytest.param(2400, 1000, (900, 375), id="ultra-wide"),
+    ],
+)
+def test_card_canvas_takes_the_frames_aspect_ratio(tmp_path, frame_w, frame_h, expected):
+    style = _frame_of_size(tmp_path, f"f{frame_w}x{frame_h}", frame_w, frame_h)
+    png = render_quote_card(
+        "A quote whose frame must not be stretched to fit the card.",
+        author_name="Ada", avatar_bytes=_avatar(),
+        theme=THEMES["golden_meadow"], font_style="inter", border_style=style,
+    )
+    out = Image.open(io.BytesIO(png))
+    assert out.size == expected
+    # The rendered ratio matches the source frame's to within a pixel of rounding.
+    assert out.width / out.height == pytest.approx(frame_w / frame_h, abs=0.005)
+
+
+def test_card_size_for_border_keeps_requested_size_when_frame_unreadable(tmp_path):
+    """A missing frame can't dictate a ratio — fall back to the requested canvas."""
+    missing = BorderStyle(
+        name="gone", path=tmp_path / "nope.png", flip=False, luma_key=False
+    )
+    assert card_size_for_border(W, H, missing) == (W, H)
+
+
+def test_card_size_for_border_is_the_size_render_uses(tmp_path):
+    """The helper the upload validator probes with agrees with the renderer."""
+    style = _frame_of_size(tmp_path, "agree", 1536, 1024)
+    size = card_size_for_border(W, H, style)
+    png = render_quote_card(
+        "Probe and render must agree on the canvas.",
+        author_name="Ada", avatar_bytes=_avatar(),
+        theme=THEMES["golden_meadow"], font_style="inter", border_style=style,
+    )
+    assert Image.open(io.BytesIO(png)).size == size
+
+
+def test_bundled_midnight_frame_renders_at_its_own_ratio():
+    style = BORDERS["midnight_frame"]
+    if not style.path.exists():
+        pytest.skip("bundled frame not resolvable from this CWD")
+    with Image.open(style.path) as src:
+        ratio = src.width / src.height
+    png = render_quote_card(
+        "The bundled Midnight Frame must not be stretched.",
+        author_name="Ada", avatar_bytes=_avatar(),
+        theme=THEMES["midnight"], font_style="inter", border_style=style,
+    )
+    out = Image.open(io.BytesIO(png))
+    assert out.width / out.height == pytest.approx(ratio, abs=0.005)
+
+
+def test_bundled_poppy_frame_renders_at_its_own_ratio():
+    style = BORDERS["golden_poppy"]
+    if not style.path.exists():
+        pytest.skip("bundled frame not resolvable from this CWD")
+    with Image.open(style.path) as src:
+        ratio = src.width / src.height
+    png = render_quote_card(
+        "The bundled Golden Poppy frame must not be stretched.",
+        author_name="Ada", avatar_bytes=_avatar(),
+        theme=THEMES["golden_meadow"], font_style="inter", border_style=style,
+    )
+    out = Image.open(io.BytesIO(png))
+    assert out.width / out.height == pytest.approx(ratio, abs=0.005)
+
+
+# ── Midnight Frame fits its own opening ───────────────────────────────
+#
+# Its art is left-heavy: laid out with the poppy-tuned constants the avatar disc
+# (pinned at 0.18w) sat buried under the frame's flowers and the attribution ran
+# under them. Like an uploaded frame, it now fits the transparency it actually
+# leaves — and that opening turns out to have no room for a disc at all, so the
+# card degrades to the banner layout rather than drawing over the artwork.
+
+
+def test_midnight_frame_is_mask_fit():
+    assert BORDERS["midnight_frame"].mask_fit is True
+
+
+def test_midnight_frame_declines_the_avatar_disc():
+    """No disc fits beside this frame's flowers, so the layout must not force one."""
+    style = BORDERS["midnight_frame"]
+    if not style.path.exists():
+        pytest.skip("bundled frame not resolvable from this CWD")
+    w, h = card_size_for_border(W, H, style)
+    op = analyze_border_opening(style, w, h)
+    assert op is not None  # there is a usable opening…
+    assert op.pfp is None  # …but not one an avatar fits in
+
+
+def test_midnight_frame_keeps_content_inside_its_opening():
+    """The quote is laid out against the frame's real opening, not the 0.18w anchor."""
+    style = BORDERS["midnight_frame"]
+    if not style.path.exists():
+        pytest.skip("bundled frame not resolvable from this CWD")
+    w, h = card_size_for_border(W, H, style)
+    op = analyze_border_opening(style, w, h)
+    assert op is not None
+    # The flowers push the opening's left edge well right of where the poppy-tuned
+    # layout pinned the avatar (0.18w) and the text column (0.34w) — which is
+    # exactly how both ended up drawn under the artwork.
+    assert min(op.left[op.top:op.bot + 1]) > int(w * 0.18)
+
+    png = render_quote_card(
+        "A Midnight quote must sit inside the frame, clear of the flowers.",
+        author_name="Ada", avatar_bytes=_avatar(),
+        theme=THEMES["midnight"], font_style="inter", border_style=style,
+    )
+    out = Image.open(io.BytesIO(png))
+    assert out.size == (w, h)
+
+
+# ── Foreground avatar keeps its own ratio ─────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        pytest.param((512, 512), (0, 0, 512, 512), id="square-is-identity"),
+        pytest.param((400, 200), (100, 0, 300, 200), id="wide"),
+        pytest.param((200, 400), (0, 100, 200, 300), id="tall"),
+        pytest.param((101, 100), (0, 0, 100, 100), id="odd-by-one"),
+    ],
+)
+def test_square_crop_box_centers_without_squashing(size, expected):
+    assert square_crop_box(*size) == expected
+
+
+def test_wide_avatar_is_cropped_not_squashed(tmp_path):
+    """A 2:1 source must not stretch into the disc — the drawn circle stays round."""
+    src = Image.new("RGB", (400, 200), (20, 20, 20))
+    # A circle inscribed in the center square: squashing 2:1 would flatten it into
+    # an ellipse, cropping keeps it circular. Saturated blue survives untouched in
+    # the foreground disc, while the background copy of the same avatar is
+    # desaturated and gold-blended into a gray the threshold below rejects.
+    ImageDraw.Draw(src).ellipse([100, 0, 299, 199], fill=(60, 60, 240))
+    buf = io.BytesIO()
+    src.save(buf, "PNG")
+
+    # A gold frame, so the blue threshold below picks up only the avatar.
+    frame = Image.new("RGBA", (900, 500), (0, 0, 0, 0))
+    ImageDraw.Draw(frame).rounded_rectangle(
+        [0, 0, 899, 499], radius=40, outline=(200, 150, 40, 255), width=26
+    )
+    style = _save_border(tmp_path, "wide-av", frame)
+    png = render_quote_card(
+        "A wide avatar must not be squashed into the disc.",
+        author_name="Ada", avatar_bytes=buf.getvalue(),
+        theme=THEMES["golden_meadow"], font_style="inter", border_style=style,
+    )
+    out = Image.open(io.BytesIO(png)).convert("RGB")
+
+    # Bounding box of the drawn disc, wherever the frame's opening placed it.
+    import numpy as np
+
+    arr = np.asarray(out, dtype=np.int16)
+    disc = (arr[:, :, 2] > 180) & (arr[:, :, 0] < 120)
+    ys, xs = np.nonzero(disc)
+    assert ys.size > 0, "the avatar didn't render"
+    box_w = int(xs.max() - xs.min()) + 1
+    box_h = int(ys.max() - ys.min()) + 1
+    # Round, not oval: squashing a 2:1 source would leave the box half as tall as
+    # it is wide. A few px of tolerance covers the ring's antialiasing.
+    assert abs(box_w - box_h) <= 4, f"avatar is {box_w}×{box_h}, not round"

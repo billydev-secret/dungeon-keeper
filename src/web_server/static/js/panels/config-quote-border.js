@@ -10,13 +10,15 @@ function imageUrl() {
 
 // Copy-paste starter prompt for generating a compatible border with any image
 // AI (ChatGPT/DALL·E, Midjourney, Stable Diffusion…). The must-haves — edges-only
-// decoration, a clear transparent center, wide 1.8:1 — are what the renderer needs
-// to fit the quote inside the opening. The style phrase is meant to be swapped.
+// decoration and a clear transparent center — are what the renderer needs to fit
+// the quote inside the opening. The frame's own proportions are no longer a
+// must-have (the card takes its shape from the frame), but a landscape frame
+// still suits a quote best. The style phrase is meant to be swapped.
 const GEN_PROMPT =
   "Ornate decorative border frame for a quote card, elegant golden art-nouveau " +
   "florals and filigree in the four corners and along the edges only, with a large " +
   "clear empty space in the center, on a fully transparent background (alpha), wide " +
-  "landscape 1.8:1 rectangle about 900x500 pixels, symmetrical, high detail, clean " +
+  "landscape rectangle, symmetrical, high detail, clean " +
   "cutout, no text, no letters, no watermark, no solid background fill.";
 
 // Negative prompt for tools that take one (Stable Diffusion et al.).
@@ -70,8 +72,10 @@ export function mount(container) {
             The file must be a <strong>PNG or WEBP with a see-through center</strong> —
             a frame with no clear opening is rejected. If the opening is too small for an
             avatar, the card falls back to a centered layout with the avatar as the
-            background and the name as a header. Cards are rendered at about
-            <strong>900 × 500 pixels</strong> (1.8:1), so match that shape for the best result.
+            background and the name as a header. Cards are rendered 900 pixels wide and
+            <strong>take their height from your frame's own proportions</strong>, so the
+            artwork is never stretched — a 3:2 frame renders a 900 × 600 card. Any shape
+            works; a landscape frame suits a quote best.
           </div>
 
           <div data-preview-wrap style="margin-bottom:1rem;display:none">

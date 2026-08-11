@@ -249,6 +249,12 @@ BORDERS: dict[str, BorderStyle] = {
         path=Path("assets") / "midnightbordertransparent.png",
         flip=False,
         luma_key=False,
+        # Unlike the poppy frame (decoration in one corner), this frame's flowers
+        # climb the whole left side and reach ~45% across. The poppy-tuned layout
+        # pins the avatar at 0.18w and the text at 0.34w, which buried the avatar
+        # under the flowers and ran the attribution through them — so this frame
+        # fits its own opening, the way an uploaded frame does.
+        mask_fit=True,
     ),
 }
 
@@ -256,6 +262,50 @@ BORDERS: dict[str, BorderStyle] = {
 # dict is global/bundled); the cog resolves it per-guild via ``custom_border_style``.
 CUSTOM_BORDER_KEY = "custom"
 CUSTOM_BORDER_NAME = "Custom (uploaded)"
+
+
+def square_crop_box(w: int, h: int) -> "tuple[int, int, int, int]":
+    """Centered square crop box for a ``w×h`` image — identity when it's square.
+
+    The foreground avatar is drawn into a square box, so a non-square source
+    resized straight into it comes out squashed. Every current caller passes a
+    Discord avatar (always square), which is why this has never shown; cropping
+    to the center square keeps that true for any other source, since squashing a
+    face is worse than trimming its edges.
+    """
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    return left, top, left + side, top + side
+
+
+def card_size_for_border(
+    width: int, height: int, border_style: "BorderStyle | None"
+) -> "tuple[int, int]":
+    """Card canvas sized to the frame's own aspect ratio, keeping ``width``.
+
+    A frame is composited full-bleed, so forcing it to a canvas of a different
+    ratio distorts the artwork — the bundled Midnight Frame is 1536×1024 and both
+    live per-guild uploads are 3:2, all stretched 20% horizontally by a fixed
+    900×500 canvas. Cropping to cover would cut the frame's own edges off the
+    card and letterboxing would break the full bleed, so the canvas yields
+    instead: width is what the caller asked for, height follows the frame.
+
+    Falls back to the requested size when there is no frame or it can't be read —
+    a card at the wrong ratio still beats no card.
+    """
+    if border_style is None or width <= 0 or height <= 0:
+        return width, height
+    try:
+        from PIL import Image  # noqa: PLC0415
+
+        with Image.open(border_style.path) as im:
+            fw, fh = im.size
+    except (OSError, ValueError):
+        return width, height
+    if fw <= 0 or fh <= 0:
+        return width, height
+    return width, max(1, round(width * fh / fw))
 
 
 def guild_border_dir(db_path: Path | str, guild_id: int) -> Path:
@@ -972,6 +1022,13 @@ def render_quote_card(
     if border_style is None:
         border_style = BORDERS["golden_poppy"]
 
+    # Take the canvas from the frame's own ratio before anything is measured: the
+    # frame is composited full-bleed, so a canvas of a different ratio stretched
+    # the artwork (the bundled Midnight Frame and both live uploads are 3:2, all
+    # squashed 20% wide by the old fixed 900×500). Every layout constant below is
+    # a fraction of width/height, so they follow the new canvas unchanged.
+    width, height = card_size_for_border(width, height, border_style)
+
     _mask = border_style.mask_fit
     _mask_opening = (
         analyze_border_opening(border_style, width, height)
@@ -1511,6 +1568,9 @@ def render_quote_card(
 
         # Pfp — unblurred avatar, circle-cropped or rounded-square per pfp_shape
         avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
+        # Crop to the center square first — resizing a non-square source straight
+        # into the square box squashes it (see square_crop_box).
+        avatar_img = avatar_img.crop(square_crop_box(*avatar_img.size))
         avatar_img = avatar_img.resize((pfp_d, pfp_d), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
         pfp_mask = Image.new("L", (pfp_d, pfp_d), 0)
         if _square:
