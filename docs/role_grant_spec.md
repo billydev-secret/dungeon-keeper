@@ -68,11 +68,11 @@ Migration `144_grant_permissions_seed_mods.sql` copies each guild's configured
 `mod_role_ids` into every grant it has, so the flip is behavior-neutral on the
 day it ships and narrowing a grant is a dashboard edit rather than an outage.
 
-Two `is_mod` checks inside `_execute_grant` are deliberately **unchanged** — they
-govern how a grant executes, not who may invoke it: the self-grant block
-(`role_grant_commands.py:62`) and the `required_role_id` bypass (`:81`). A
-non-mod keeper can therefore use their grant but still can't grant it to
-themselves.
+The self-grant block inside `_execute_grant` (`role_grant_commands.py:62`) is
+deliberately still `is_mod` — it governs how a grant executes, not who may
+invoke it. A non-mod keeper can therefore use their grant but still can't
+grant it to themselves. (The `required_role_id` gate was the other `is_mod`
+check; it moved to `is_admin` on 2026-08-11 — see **Prerequisite role**.)
 
 On success the bot adds the role (audit-log reason "Granted by {user} via slash command"), records a `role_events` row, and confirms to the invoker ephemerally.
 
@@ -80,7 +80,29 @@ On success the bot adds the role (audit-log reason "Granted by {user} via slash 
 
 **Audit log** — if the grant has a `log_channel_id`, a green embed ("{member} was granted {role} by {granter}.", mentions suppressed) is posted there.
 
-**Prerequisite role** — the shared grant executor supports a `required_role_id` (target must already hold it; mods bypass), and the dashboard can set it, but `/grant` currently does not pass it through, so it is **not enforced**.
+**Prerequisite role** — a grant may name a `required_role_id`: the target must
+already hold that role to receive this one. The decision is
+`role_grant_logic.prerequisite_gate`, a pure function so the matrix is a test
+table rather than Discord mocks.
+
+*Only administrators bypass it* — not moderators. A moderator is the person
+most likely to run `/grant` on a fresh arrival, so exempting them would leave
+the gate barely load-bearing; admins keep the override so a guild can't wedge
+itself behind a prerequisite it can no longer satisfy.
+
+A configured prerequisite whose role has been **deleted** fails *closed* (the
+grant is refused as misconfigured), because the alternative silently disables
+a safety gate the moment someone tidies up a role.
+
+History: settable since migration `021` and exposed on the dashboard as *Role
+Required First*, but `/grant` never passed it to the executor, so from `021`
+until **2026-08-11** the gate could not run at all. In production this meant
+the Member grant's prerequisite — the verification role
+(`intake_verified_role_id`) — was advisory, and members were granted Member
+without ever verifying. See `scripts/backfill_verified_role.py` for the
+companion remediation, which reads live Discord role state rather than
+`role_events` (that table only records role changes the bot observed, so a
+role gained during a downtime is invisible to it).
 
 ## User-visible errors
 
@@ -96,6 +118,8 @@ All ephemeral.
 | Grant has no `role_id` set | "This role is not configured yet." |
 | Configured role was deleted | "The configured role no longer exists." |
 | Target already has the role | "{member} already has {role}." |
+| Target lacks the prerequisite role (non-admin) | "{member} needs {required} before they can receive {role}." |
+| Prerequisite role was deleted (non-admin) | "This grant is misconfigured — the required role no longer exists. Contact an admin." |
 | Bot lacks Manage Roles | "I need the Manage Roles permission to do that." |
 | Role is above the bot's top role | "I can't grant {role} because it is above my highest role." |
 | Discord rejects the role add | "I couldn't grant {role}. Check my role hierarchy and permissions." |
@@ -114,7 +138,7 @@ Each grant role has:
 | `log_channel_id` | Optional audit-log channel (0 = off) |
 | `announce_channel_id` | Optional announcement channel (0 = off) |
 | `grant_message` | Announcement template (empty = no announcement) |
-| `required_role_id` | Prerequisite role (settable, currently unenforced — see Behavior) |
+| `required_role_id` | Prerequisite role — target must hold it first; admins bypass (see Behavior) |
 
 Plus an allowlist of `(entity_type, entity_id)` entries — individual users and/or roles — per grant.
 

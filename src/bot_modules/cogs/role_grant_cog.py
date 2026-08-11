@@ -72,6 +72,7 @@ class RoleGrantCog(commands.Cog):
             announce_channel_id=cfg["announce_channel_id"],
             grant_message=cfg["grant_message"],
             ctx=ctx,
+            required_role_id=cfg["required_role_id"],
         )
 
     async def post_audit_card(

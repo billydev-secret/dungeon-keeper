@@ -67,7 +67,7 @@ function render(container, grants, channels, roles) {
           <div class="field">
             <label>Role Required First</label>
             <span data-picker="required_role_id" data-grant="${esc(name)}"></span>
-            <div class="field-hint">A member cannot receive this grant unless they already have this role — useful for gating NSFW or veteran perks. "(none)" means anyone is eligible.</div>
+            <div class="field-hint">A member cannot receive this grant unless they already have this role — useful for gating Member behind verification, or NSFW and veteran perks. Moderators are held to this too; only admins can override. "(none)" means anyone is eligible.</div>
           </div>
           <div class="field">
             <label>Who Can Hand This Out</label>
@@ -140,7 +140,7 @@ function render(container, grants, channels, roles) {
         <div class="field">
           <label>Role Required First</label>
           <span data-picker="required_role_id" data-grant="__new__"></span>
-          <div class="field-hint">A member cannot receive this grant unless they already have this role. "(none)" means anyone is eligible.</div>
+          <div class="field-hint">A member cannot receive this grant unless they already have this role. Moderators are held to this too; only admins can override. "(none)" means anyone is eligible.</div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <button type="submit" class="btn btn-primary">Add Grant</button>

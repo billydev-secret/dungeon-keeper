@@ -39,6 +39,10 @@ def _make_interaction(*, user_id: int = 100, guild: Any = None, channel: Any = N
 def _make_ctx(**kwargs) -> MagicMock:
     ctx = MagicMock()
     ctx.is_mod = MagicMock(return_value=kwargs.get("is_mod", False))
+    # Explicit, not left to MagicMock's auto-attribute: a bare mock returns a
+    # truthy object, which would silently satisfy the prerequisite gate's
+    # admin bypass and make the gate tests pass without the gate running.
+    ctx.is_admin = MagicMock(return_value=kwargs.get("is_admin", False))
     ctx.can_grant_any_role = MagicMock(return_value=kwargs.get("can_grant_any_role", False))
     ctx.can_use_xp_grant = MagicMock(return_value=kwargs.get("can_use_xp_grant", False))
     actor = MagicMock()
@@ -97,6 +101,22 @@ def _make_member(*, bot: bool = False, user_id: int = 200, roles=None) -> MagicM
 def _guild_with_role(role):
     guild = MagicMock()
     guild.get_role = MagicMock(return_value=role)
+    guild.me = MagicMock()
+    guild.me.guild_permissions.manage_roles = True
+    guild.me.top_role = _MockRole(position=10)
+    return guild
+
+
+def _guild_with_roles(*roles):
+    """A guild whose ``get_role`` resolves by id (None for anything else).
+
+    The prerequisite gate looks up two different roles on the same guild, so
+    the single-role helper above can't express "the granted role exists but
+    the required one was deleted".
+    """
+    by_id = {r.id: r for r in roles}
+    guild = MagicMock()
+    guild.get_role = MagicMock(side_effect=lambda rid: by_id.get(rid))
     guild.me = MagicMock()
     guild.me.guild_permissions.manage_roles = True
     guild.me.top_role = _MockRole(position=10)
@@ -227,6 +247,112 @@ async def test_grant_success_posts_public_message(grant_setup):
     ix.response.defer.assert_awaited_once()
     ix.followup.send.assert_awaited_once()
     assert "granted" in ix.followup.send.call_args[0][0].lower()
+
+
+# ── prerequisite role gate ───────────────────────────────────────────────
+#
+# The guild shape these cover is the real one that filed the bug: the
+# "denizen" grant hands out Member, and its required_role_id is the
+# verification role (intake_verified_role_id). The gate existed in
+# _execute_grant from the start but the cog never passed required_role_id
+# through, so it never ran and unverified members were granted Member.
+
+PREREQ_ROLE_ID = 555
+
+
+@pytest.fixture
+def prereq_setup():
+    """/grant where the Member grant requires the verified role first."""
+    ctx = _make_ctx(can_grant_any_role=True, denizen_role_id=999)
+    ctx.grant_roles["denizen"]["required_role_id"] = PREREQ_ROLE_ID
+    cog = RoleGrantCog(MagicMock(), ctx)
+    cmd = RoleGrantCog.grant_cmd.callback
+
+    async def grant(interaction, member):
+        return await cmd(cog, interaction, "denizen", member)
+
+    return ctx, grant
+
+
+async def test_grant_blocked_when_prerequisite_missing(prereq_setup):
+    """The reported bug: verification absent, grant attempted, role handed out."""
+    _, grant = prereq_setup
+    member_role = _MockRole(position=1, role_id=999, name="Member")
+    verified_role = _MockRole(position=2, role_id=PREREQ_ROLE_ID, name="Verified")
+    ix = _make_interaction(guild=_guild_with_roles(member_role, verified_role))
+    member = _make_member(roles=[])
+
+    await grant(ix, member)
+
+    member.add_roles.assert_not_awaited()
+    text = ix.response.send_message.call_args[0][0]
+    assert verified_role.mention in text
+    assert ix.response.send_message.call_args[1]["ephemeral"] is True
+
+
+async def test_grant_allowed_when_prerequisite_held(prereq_setup):
+    _, grant = prereq_setup
+    member_role = _MockRole(position=1, role_id=999, name="Member")
+    verified_role = _MockRole(position=2, role_id=PREREQ_ROLE_ID, name="Verified")
+    ix = _make_interaction(guild=_guild_with_roles(member_role, verified_role))
+    member = _make_member(roles=[verified_role])
+
+    await grant(ix, member)
+
+    member.add_roles.assert_awaited_once()
+
+
+async def test_grant_blocked_when_prerequisite_role_deleted(prereq_setup):
+    """Fails closed: a prerequisite that no longer exists can't be satisfied."""
+    _, grant = prereq_setup
+    member_role = _MockRole(position=1, role_id=999, name="Member")
+    ix = _make_interaction(guild=_guild_with_roles(member_role))  # no 555
+    member = _make_member(roles=[])
+
+    await grant(ix, member)
+
+    member.add_roles.assert_not_awaited()
+    assert "misconfigured" in ix.response.send_message.call_args[0][0].lower()
+
+
+async def test_mod_does_not_bypass_prerequisite(prereq_setup):
+    """Mods are gated too — only admins override (see role_grant_spec.md)."""
+    ctx, grant = prereq_setup
+    ctx.is_mod.return_value = True
+    member_role = _MockRole(position=1, role_id=999, name="Member")
+    verified_role = _MockRole(position=2, role_id=PREREQ_ROLE_ID, name="Verified")
+    ix = _make_interaction(guild=_guild_with_roles(member_role, verified_role))
+    member = _make_member(roles=[])
+
+    await grant(ix, member)
+
+    member.add_roles.assert_not_awaited()
+
+
+async def test_admin_bypasses_prerequisite(prereq_setup):
+    """Admins keep the override so a guild can't lock itself out of its grants."""
+    ctx, grant = prereq_setup
+    ctx.is_admin.return_value = True
+    member_role = _MockRole(position=1, role_id=999, name="Member")
+    verified_role = _MockRole(position=2, role_id=PREREQ_ROLE_ID, name="Verified")
+    ix = _make_interaction(guild=_guild_with_roles(member_role, verified_role))
+    member = _make_member(roles=[])
+
+    await grant(ix, member)
+
+    member.add_roles.assert_awaited_once()
+
+
+async def test_unconfigured_prerequisite_grants_freely(grant_setup):
+    """required_role_id = 0 (the default) leaves every grant ungated."""
+    _, grant = grant_setup
+    denizen_role = _MockRole(position=1, role_id=999)
+    ix = _make_interaction(guild=_guild_with_role(denizen_role))
+    member = _make_member()
+
+    await grant(ix, member)
+
+    member.add_roles.assert_awaited_once()
 
 
 # ── /grant closes the prune ledger ───────────────────────────────────────
