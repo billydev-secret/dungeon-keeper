@@ -53,6 +53,7 @@ from bot_modules.cogs.casino.views import (
     KenoTierButton,
     PlayAgainButton,
     PoolsPanelView,
+    RoundResolveButton,
     RouletteBetButton,
     RouletteBetModal,
     RouletteNextView,
@@ -477,7 +478,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         self.bot.add_dynamic_items(
             BlackjackActionButton, RouletteBetButton, DerbyBetButton,
             BaccaratBetButton, DiceBetButton, KenoTierButton,
-            WarActionButton, PlayAgainButton,
+            WarActionButton, PlayAgainButton, RoundResolveButton,
         )
         self._boot_task = asyncio.create_task(self._boot())
         self.maintenance.start()
