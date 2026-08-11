@@ -1325,6 +1325,16 @@ _PURGE_USER_ID_TABLES: tuple[str, ...] = (
     "casino_baccarat_bets",
     "casino_dice_bets",
     "casino_pools_bets",
+    # Since migration 158 a round names the player who opened it, so the
+    # rounds tables identify a member the same way their bets do and have
+    # to be erased alongside them. Pools is absent on purpose: its round is
+    # a shared daily market with no owner (its per-member data is entirely
+    # in casino_pools_bets, above).
+    "casino_roulette_rounds",
+    "casino_race_rounds",
+    "casino_baccarat_rounds",
+    "casino_dice_rounds",
+    "casino_keno_rounds",
 )
 
 

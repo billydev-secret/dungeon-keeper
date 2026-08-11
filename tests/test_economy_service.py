@@ -1332,6 +1332,43 @@ def test_econ_purge_user_clears_member_state_but_keeps_ledger(tmp_path):
     assert replies == 0
 
 
+def test_econ_purge_user_clears_the_rounds_that_now_name_a_player(tmp_path):
+    """Migration 158 made a round belong to the player who opened it, so the
+    five `*_rounds` tables identify a member exactly like their bets do.
+
+    `_PURGE_USER_ID_TABLES` is hand-maintained, so a new per-member table
+    is invisible to erasure until someone adds it — this pins that they
+    were. Another member's round must survive, or the sweep is deleting
+    other people's data.
+    """
+    from bot_modules.services.economy_service import econ_purge_user
+
+    db_path = tmp_path / "rounds.db"
+    migrated_db(db_path)
+    guild, user, other = 123, 1001, 1002
+    tables = [
+        "casino_roulette_rounds", "casino_race_rounds",
+        "casino_baccarat_rounds", "casino_dice_rounds", "casino_keno_rounds",
+    ]
+    with open_db(db_path) as conn:
+        for table in tables:
+            for uid in (user, other):
+                conn.execute(
+                    f"INSERT INTO {table} "
+                    "(guild_id, channel_id, user_id, status, opened_at, closes_at) "
+                    "VALUES (?, 9100, ?, 'settled', 0, 0)",
+                    (guild, uid),
+                )
+        econ_purge_user(conn, guild, user)
+        for table in tables:
+            assert conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE user_id = ?", (user,)
+            ).fetchone()[0] == 0, table
+            assert conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE user_id = ?", (other,)
+            ).fetchone()[0] == 1, table
+
+
 # ── cat_coins_earned_since (feeds cat_catch_daily_cap) ────────────────
 
 

@@ -192,8 +192,12 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   old message is unreachable post-restart — the register feed's
   `casino_refund` entry is the player-facing notice, and stale buttons
   answer "already finished").
-- **Roulette** — European single zero. One open round per channel (partial
-  unique index). Any member opens a round from the hub; bets (red/black 2×,
+- **Roulette** — European single zero. One open round **per player** since
+  migration 158 (partial unique index on `(guild_id, user_id)`, replacing the
+  channel-scoped one) — the schema half of the move to private, player-paced
+  rounds; the cog still opens communal rounds until the flow switch lands, and
+  the narrative below describes that current flow. Any member opens a round
+  from the hub; bets (red/black 2×,
   dozens 3×, straight 0–36 36×) debit at placement via buttons
   (`casino_rl:{kind}:{round_id}`) + amount modal; the round embed updates
   as bets land. At `closes_at` the timer spins once and settles everyone

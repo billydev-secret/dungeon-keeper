@@ -91,6 +91,16 @@ class CasinoSettings:
     keno_window_seconds: int = 45
     # An untouched blackjack hand auto-stands after this long.
     blackjack_idle_seconds: int = 180
+    # An abandoned private round auto-resolves after this long. NOT a
+    # betting deadline — the player paces their own round and resolves it
+    # when ready; this is the safety net under a player who bets and walks
+    # away, since the stake is already debited and an ephemeral message
+    # cannot be repainted once Discord expires its webhook token at 15
+    # minutes. Kept comfortably under that so the auto-resolve can still
+    # show the player their own result rather than settling invisibly.
+    # One knob for all five games, the same way blackjack_idle_seconds
+    # covers both blackjack and war.
+    round_idle_seconds: int = 600
     # Progressive jackpot: a cut of every fully-lost stake feeds one pot;
     # slots triple-7️⃣ wins max(pot, the flat 120×), then the pot reseeds.
     # The cut is deliberately small (2026-07-25, down from 25): every coin
@@ -1246,6 +1256,23 @@ def _live_round(
     ).fetchone()
 
 
+def _live_player_round(
+    conn: sqlite3.Connection, t: RoundTables, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    """The player's own live round, if they have one.
+
+    The private-round sibling of ``_live_round``: a round belongs to one
+    player now, so "is there already one open" is a question about them,
+    not about the channel. Pools keeps the channel-scoped read — its
+    market is genuinely communal.
+    """
+    return conn.execute(
+        f"SELECT * FROM {t.rounds} "
+        "WHERE guild_id = ? AND user_id = ? AND status = 'open'",
+        (guild_id, user_id),
+    ).fetchone()
+
+
 def _get_round(
     conn: sqlite3.Connection, t: RoundTables, round_id: int
 ) -> sqlite3.Row | None:
@@ -1261,20 +1288,32 @@ def _open_round(
     channel_id: int,
     window_seconds: int,
     *,
+    user_id: int = 0,
     now: float | None = None,
 ) -> int | None:
-    """Open a betting window; None if the channel already has one live.
+    """Open a round; None if one is already live for the same owner.
 
-    The partial unique index makes the one-open-per-channel rule
-    race-proof; the pre-check keeps the common path exception-free.
+    The partial unique index makes the one-open-round rule race-proof; the
+    pre-check keeps the common path exception-free.
+
+    ``user_id`` names the player the round belongs to, and with it
+    ``window_seconds`` is the abandonment TTL rather than a betting
+    deadline (migration 158). The default of 0 is the pre-158 communal
+    shape — one anonymous round per guild — which is what the not-yet-
+    switched cog still opens, and which the index treats identically
+    because the casino is confined to one channel per guild.
     """
-    if _live_round(conn, t, channel_id) is not None:
+    if user_id:
+        if _live_player_round(conn, t, guild_id, user_id) is not None:
+            return None
+    elif _live_round(conn, t, channel_id) is not None:
         return None
     ts = time.time() if now is None else now
     cur = conn.execute(
         f"INSERT INTO {t.rounds} "
-        "(guild_id, channel_id, opened_at, closes_at) VALUES (?, ?, ?, ?)",
-        (guild_id, channel_id, ts, ts + window_seconds),
+        "(guild_id, channel_id, user_id, opened_at, closes_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (guild_id, channel_id, user_id, ts, ts + window_seconds),
     )
     return int(cur.lastrowid or 0)
 
@@ -1458,6 +1497,49 @@ def _open_rounds(conn: sqlite3.Connection, t: RoundTables) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+# The five private-round games. Pools is excluded on purpose: its market is
+# a day long and genuinely communal, so a restart must NOT hand every
+# bettor their stake back — it settles from the ledger as normal.
+PRIVATE_ROUND_TABLES = (
+    ROULETTE_TABLES, DERBY_TABLES, BACCARAT_TABLES, DICE_TABLES, KENO_TABLES,
+)
+
+
+def refund_live_rounds(
+    conn: sqlite3.Connection, *, now: float | None = None
+) -> dict[str, dict[int, int]]:
+    """Boot sweep: refund every unresolved private round (honest reset).
+
+    The blackjack/war sibling, and it exists for the same reason. A private
+    round renders in an ephemeral message, and a restart kills the webhook
+    token that message is editable through — so the round can never be
+    shown to its player again. Resolving it anyway would move money against
+    a result nobody can see; refunding is the honest reset, and the
+    register feed's casino_refund entry is the player-facing notice.
+
+    This also absorbs the migration-158 deploy edge: any round left open by
+    the pre-158 communal cog is owned by nobody (user_id 0), and gets
+    handed back here rather than stranding a stake behind an index it no
+    longer matches.
+
+    Returns {game: {user_id: refunded}}, games with nothing swept omitted.
+    Exactly-once per round via ``_void_round``'s status='open' claim, so
+    replaying the sweep is free.
+    """
+    out: dict[str, dict[int, int]] = {}
+    for t in PRIVATE_ROUND_TABLES:
+        totals: dict[int, int] = {}
+        for rnd in _open_rounds(conn, t):
+            refunded = _void_round(conn, t, int(rnd["id"]), now=now)
+            if not refunded:  # claim lost, or nothing was staked
+                continue
+            for uid, amount in refunded.items():
+                totals[uid] = totals.get(uid, 0) + amount
+        if totals:
+            out[t.game] = totals
+    return out
+
+
 # ── roulette rounds (thin wrappers over the shared machine) ────────────
 
 
@@ -1465,6 +1547,12 @@ def live_roulette_round(
     conn: sqlite3.Connection, channel_id: int
 ) -> sqlite3.Row | None:
     return _live_round(conn, ROULETTE_TABLES, channel_id)
+
+
+def live_roulette_player_round(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    return _live_player_round(conn, ROULETTE_TABLES, guild_id, user_id)
 
 
 def get_roulette_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
@@ -1477,10 +1565,12 @@ def open_roulette_round(
     channel_id: int,
     window_seconds: int,
     *,
+    user_id: int = 0,
     now: float | None = None,
 ) -> int | None:
     return _open_round(
-        conn, ROULETTE_TABLES, guild_id, channel_id, window_seconds, now=now
+        conn, ROULETTE_TABLES, guild_id, channel_id, window_seconds,
+        user_id=user_id, now=now,
     )
 
 
@@ -1550,6 +1640,12 @@ def live_race_round(
     return _live_round(conn, DERBY_TABLES, channel_id)
 
 
+def live_race_player_round(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    return _live_player_round(conn, DERBY_TABLES, guild_id, user_id)
+
+
 def get_race_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
     return _get_round(conn, DERBY_TABLES, round_id)
 
@@ -1560,10 +1656,12 @@ def open_race_round(
     channel_id: int,
     window_seconds: int,
     *,
+    user_id: int = 0,
     now: float | None = None,
 ) -> int | None:
     return _open_round(
-        conn, DERBY_TABLES, guild_id, channel_id, window_seconds, now=now
+        conn, DERBY_TABLES, guild_id, channel_id, window_seconds,
+        user_id=user_id, now=now,
     )
 
 
@@ -1632,6 +1730,12 @@ def live_baccarat_round(
     return _live_round(conn, BACCARAT_TABLES, channel_id)
 
 
+def live_baccarat_player_round(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    return _live_player_round(conn, BACCARAT_TABLES, guild_id, user_id)
+
+
 def get_baccarat_round(
     conn: sqlite3.Connection, round_id: int
 ) -> sqlite3.Row | None:
@@ -1644,10 +1748,12 @@ def open_baccarat_round(
     channel_id: int,
     window_seconds: int,
     *,
+    user_id: int = 0,
     now: float | None = None,
 ) -> int | None:
     return _open_round(
-        conn, BACCARAT_TABLES, guild_id, channel_id, window_seconds, now=now
+        conn, BACCARAT_TABLES, guild_id, channel_id, window_seconds,
+        user_id=user_id, now=now,
     )
 
 
@@ -1720,6 +1826,12 @@ def live_dice_round(
     return _live_round(conn, DICE_TABLES, channel_id)
 
 
+def live_dice_player_round(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    return _live_player_round(conn, DICE_TABLES, guild_id, user_id)
+
+
 def get_dice_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
     return _get_round(conn, DICE_TABLES, round_id)
 
@@ -1730,10 +1842,12 @@ def open_dice_round(
     channel_id: int,
     window_seconds: int,
     *,
+    user_id: int = 0,
     now: float | None = None,
 ) -> int | None:
     return _open_round(
-        conn, DICE_TABLES, guild_id, channel_id, window_seconds, now=now
+        conn, DICE_TABLES, guild_id, channel_id, window_seconds,
+        user_id=user_id, now=now,
     )
 
 
@@ -1804,6 +1918,12 @@ def live_keno_round(
     return _live_round(conn, KENO_TABLES, channel_id)
 
 
+def live_keno_player_round(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    return _live_player_round(conn, KENO_TABLES, guild_id, user_id)
+
+
 def get_keno_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
     return _get_round(conn, KENO_TABLES, round_id)
 
@@ -1814,10 +1934,12 @@ def open_keno_round(
     channel_id: int,
     window_seconds: int,
     *,
+    user_id: int = 0,
     now: float | None = None,
 ) -> int | None:
     return _open_round(
-        conn, KENO_TABLES, guild_id, channel_id, window_seconds, now=now
+        conn, KENO_TABLES, guild_id, channel_id, window_seconds,
+        user_id=user_id, now=now,
     )
 
 
