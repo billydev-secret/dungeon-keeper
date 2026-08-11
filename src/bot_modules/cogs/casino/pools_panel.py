@@ -36,6 +36,7 @@ from bot_modules.services import (
     pools_service,
 )
 from bot_modules.services.economy_service import load_econ_settings
+from bot_modules.services.name_resolver import NameFn
 
 from . import embeds as E
 from .views import PoolsBetModal, PoolsPanelView, safe_ephemeral
@@ -66,6 +67,12 @@ class PoolsMixin:
     async def _accent(
         self, guild: discord.Guild | None
     ) -> discord.Color | None:
+        """Provided by CasinoCog; declared so this file type-checks alone."""
+        raise NotImplementedError
+
+    async def _names(
+        self, guild: discord.Guild | None, user_ids: list[int]
+    ) -> NameFn:
         """Provided by CasinoCog; declared so this file type-checks alone."""
         raise NotImplementedError
 
@@ -371,6 +378,7 @@ class PoolsMixin:
             econ, job.day, job.result, float(job.line),
             pools_logic.winning_side(job.result, float(job.line)),
             payouts, res.takeout, accent, spec=spec, chart=png is not None,
+            name_fn=await self._names(guild, [uid for uid, _, _ in payouts]),
         )
         with contextlib.suppress(discord.HTTPException):
             await channel.send(

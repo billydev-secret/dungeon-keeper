@@ -79,6 +79,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     load_econ_settings,
 )
+from bot_modules.services.name_resolver import NameFn, build_name_fn
 
 log = logging.getLogger("dungeonkeeper.casino")
 
@@ -164,7 +165,7 @@ class _WindowUI(NamedTuple):
     running_note: Callable[..., str]
     build_view: Callable[[int], discord.ui.View]
     next_view: Callable[[], discord.ui.View]
-    # (econ, accent, result, bets, pot_after) → (frames, result embed)
+    # (econ, accent, result, bets, pot_after, name_fn=) → (frames, result embed)
     build_show: Callable[..., tuple[list[discord.Embed], discord.Embed]]
     frame_sleep: float
     # Result-time ticket line for games whose *draw* annotates the bet
@@ -181,6 +182,8 @@ def _roulette_show(
     result: int,
     bets: list[tuple[int, str, int, int]],
     pot_after: int,
+    *,
+    name_fn: NameFn,
 ) -> tuple[list[discord.Embed], discord.Embed]:
     frames = [
         casino_embeds.build_roulette_bounce_embed(
@@ -188,7 +191,7 @@ def _roulette_show(
         )
     ]
     return frames, casino_embeds.build_roulette_result_embed(
-        econ, result, bets, pot_after=pot_after
+        econ, result, bets, pot_after=pot_after, name_fn=name_fn
     )
 
 
@@ -198,6 +201,8 @@ def _derby_show(
     winner: int,
     bets: list[tuple[int, str, int, int]],
     pot_after: int,
+    *,
+    name_fn: NameFn,
 ) -> tuple[list[discord.Embed], discord.Embed]:
     race = logic.derby_frames(winner)
     frames = [
@@ -205,7 +210,7 @@ def _derby_show(
         for frame in race[:-1]
     ]
     return frames, casino_embeds.build_derby_result_embed(
-        econ, winner, race[-1], bets, pot_after=pot_after
+        econ, winner, race[-1], bets, pot_after=pot_after, name_fn=name_fn
     )
 
 
@@ -264,13 +269,15 @@ def _baccarat_show(
     coup: tuple[list[str], list[str]],
     bets: list[tuple[int, str, int, int]],
     pot_after: int,
+    *,
+    name_fn: NameFn,
 ) -> tuple[list[discord.Embed], discord.Embed]:
     player, banker = coup
     frames = [
         casino_embeds.build_baccarat_deal_embed(econ, player, banker, accent)
     ]
     return frames, casino_embeds.build_baccarat_result_embed(
-        econ, player, banker, bets, pot_after=pot_after
+        econ, player, banker, bets, pot_after=pot_after, name_fn=name_fn
     )
 
 
@@ -316,10 +323,12 @@ def _dice_show(
     dice: tuple[int, int, int],
     bets: list[tuple[int, str, int, int]],
     pot_after: int,
+    *,
+    name_fn: NameFn,
 ) -> tuple[list[discord.Embed], discord.Embed]:
     frames = [casino_embeds.build_dice_tumble_embed(econ, accent)]
     return frames, casino_embeds.build_dice_result_embed(
-        econ, dice, bets, pot_after=pot_after
+        econ, dice, bets, pot_after=pot_after, name_fn=name_fn
     )
 
 
@@ -352,10 +361,12 @@ def _keno_show(
     drawn: list[int],
     bets: list[tuple[int, str, int, int]],
     pot_after: int,
+    *,
+    name_fn: NameFn,
 ) -> tuple[list[discord.Embed], discord.Embed]:
     frames = [casino_embeds.build_keno_tumble_embed(econ, accent)]
     return frames, casino_embeds.build_keno_result_embed(
-        econ, drawn, bets, pot_after=pot_after
+        econ, drawn, bets, pot_after=pot_after, name_fn=name_fn
     )
 
 
@@ -700,10 +711,15 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         )
         if pot is not None:
             self._last_pot[guild.id] = pot
+        # The ticker and standings name past betters, who are exactly the
+        # players a reader's client is least likely to have cached.
+        named = [uid for uid, *_ in ticker]
+        named += [s[0] for s in standings if s is not None]
         return PanelContent(
             embed=casino_embeds.build_hub_embed(
                 econ, settings, await self._accent(guild), jackpot=pot,
                 ticker=ticker, standings=standings, casino_name=casino_name,
+                name_fn=await self._names(guild, named),
             ),
             # Per-guild copy of the hub view: disabled tables' buttons drop off
             # (the full view stays registered for stale-panel routing).
@@ -734,6 +750,25 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         except Exception:
             log.debug("casino accent resolve failed", exc_info=True)
             return None
+
+    async def _names(
+        self, guild: discord.Guild | None, user_ids: list[int]
+    ) -> NameFn:
+        """The resolver every card renders players through (todo #90).
+
+        A ``<@id>`` in an embed is resolved by the reading client from its own
+        cache, so it degrades to a bare id for anyone who hasn't seen that
+        player — the norm for the hub ticker and for result cards the rest of
+        the channel reads. Present members come from the member cache at no
+        I/O cost; only the misses (players who have left) cost one batched
+        read.
+        """
+        return await build_name_fn(
+            guild=guild,
+            db_path=self.ctx.db_path,
+            guild_id=guild.id if guild is not None else 0,
+            user_ids=user_ids,
+        )
 
     # ── hub panel upkeep ───────────────────────────────────────────────
 
@@ -1023,9 +1058,10 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await safe_ephemeral(interaction, f"❌ {err}")
             return
         self._last_bets[(guild.id, interaction.user.id, "coinflip")] = amount
+        name_fn = await self._names(guild, [interaction.user.id])
         final = casino_embeds.build_coinflip_embed(
             econ, interaction.user.id, side, landed, amount, result.payout,
-            streak=result.streak, pot_after=result.pot_after,
+            streak=result.streak, pot_after=result.pot_after, name_fn=name_fn,
         )
         try:
             if not logic.is_big_bet(amount, settings.max_bet):
@@ -1039,7 +1075,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                     interaction,
                     casino_embeds.build_coinflip_spin_embed(
                         econ, interaction.user.id, side, amount,
-                        await self._accent(guild),
+                        await self._accent(guild), name_fn=name_fn,
                     ),
                 )
                 await asyncio.sleep(1.2)
@@ -1092,11 +1128,13 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await safe_ephemeral(interaction, f"❌ {err}")
             return
         self._last_bets[(guild.id, interaction.user.id, "slots")] = amount
+        name_fn = await self._names(guild, [interaction.user.id])
         final = casino_embeds.build_slots_embed(
             econ, interaction.user.id, reels, amount, result.payout,
             result.label,
             jackpot_won=result.jackpot_won, streak=result.streak,
             pot_after=result.pot_after, casino_name=casino_name,
+            name_fn=name_fn,
         )
         try:
             if logic.is_big_bet(amount, settings.max_bet):
@@ -1106,7 +1144,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                     interaction,
                     casino_embeds.build_slots_spin_embed(
                         econ, interaction.user.id, amount, (None, None, None),
-                        accent, casino_name=casino_name,
+                        accent, casino_name=casino_name, name_fn=name_fn,
                     ),
                 )
                 for stop in (1, 2):
@@ -1119,7 +1157,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                     await interaction.edit_original_response(
                         embed=casino_embeds.build_slots_spin_embed(
                             econ, interaction.user.id, amount, revealed,
-                            accent, casino_name=casino_name,
+                            accent, casino_name=casino_name, name_fn=name_fn,
                         )
                     )
                 await asyncio.sleep(SLOTS_REEL_STOP_SECONDS)
@@ -1139,7 +1177,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                 await interaction.channel.send(
                     embed=casino_embeds.build_jackpot_celebration(
                         econ, interaction.user.id, result.jackpot_won,
-                        casino_name=casino_name,
+                        casino_name=casino_name, name_fn=name_fn,
                     ),
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -1247,6 +1285,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await self._accent(guild), outcome=result.outcome,
             payout=result.payout, streak=result.streak,
             pot_after=result.pot_after,
+            name_fn=await self._names(guild, [uid]),
         )
         view = (
             play_again_view("blackjack", amount)
@@ -1320,11 +1359,12 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await safe_ephemeral(interaction, f"❌ {step.err}")
             return step.err == "That hand is already finished."
         accent = await self._accent(guild)
+        name_fn = await self._names(guild, [uid])
         embed = casino_embeds.build_blackjack_embed(
             econ, uid, step.player or [], step.dealer or [],
             step.stake, accent,
             doubled=step.doubled, outcome=step.outcome, payout=step.payout,
-            streak=step.streak, pot_after=step.pot_after,
+            streak=step.streak, pot_after=step.pot_after, name_fn=name_fn,
         )
         base_stake = step.stake // 2 if step.doubled else step.stake
         view = (
@@ -1341,7 +1381,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                     embed=casino_embeds.build_blackjack_reveal_embed(
                         econ, uid, step.player or [],
                         (step.dealer or [])[:2], step.stake, accent,
-                        doubled=step.doubled,
+                        doubled=step.doubled, name_fn=name_fn,
                     ),
                     view=None,
                 )
@@ -1380,9 +1420,9 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
 
         ``resolve_idle`` returns None when the hand settled concurrently
         (a button press holding the claim), so this can never render an
-        outcome the settle didn't pay. ``render(row, step, econ, accent)``
-        returns the result embed and a Play-Again view factory (a fresh
-        view per message it lands on).
+        outcome the settle didn't pay. ``render(row, step, econ, accent,
+        name_fn)`` returns the result embed and a Play-Again view factory (a
+        fresh view per message it lands on).
         """
         lock = locks.setdefault(hand_id, asyncio.Lock())
         async with lock:
@@ -1408,7 +1448,10 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             return
         row, step, econ, settings = result
         guild = self.bot.get_guild(int(row["guild_id"]))
-        embed, make_view = render(row, step, econ, await self._accent(guild))
+        embed, make_view = render(
+            row, step, econ, await self._accent(guild),
+            await self._names(guild, [int(row["user_id"])]),
+        )
         embed.set_footer(text=footer)
         if handle is not None:
             # Best-effort: the hand's ephemeral message is reachable only
@@ -1447,13 +1490,14 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             step: svc.BlackjackStep,
             econ: EconSettings,
             accent: discord.Color | None,
+            name_fn: NameFn,
         ) -> tuple[discord.Embed, Callable[[], discord.ui.View]]:
             embed = casino_embeds.build_blackjack_embed(
                 econ, int(row["user_id"]), step.player or [],
                 step.dealer or [], step.stake, accent,
                 doubled=step.doubled, outcome=step.outcome,
                 payout=step.payout, streak=step.streak,
-                pot_after=step.pot_after,
+                pot_after=step.pot_after, name_fn=name_fn,
             )
             base_stake = step.stake // 2 if step.doubled else step.stake
             return embed, lambda: play_again_view("blackjack", base_stake)
@@ -1476,12 +1520,13 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         user_id: int,
         step: svc.WarStep,
         accent: discord.Color | None,
+        name_fn: NameFn,
     ) -> discord.Embed:
         return casino_embeds.build_war_embed(
             econ, user_id, step.player, step.dealer, step.stake, accent,
             war_player=step.war_player, war_dealer=step.war_dealer,
             outcome=step.outcome, payout=step.payout, streak=step.streak,
-            pot_after=step.pot_after,
+            pot_after=step.pot_after, name_fn=name_fn,
         )
 
     async def play_war(
@@ -1519,7 +1564,10 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await safe_ephemeral(interaction, f"❌ {step.err}")
             return
         self._last_bets[(guild.id, uid, "war")] = amount
-        embed = self._war_embed(econ, uid, step, await self._accent(guild))
+        embed = self._war_embed(
+            econ, uid, step, await self._accent(guild),
+            await self._names(guild, [uid]),
+        )
         if step.outcome is None:  # the tie standoff — buttons, not a verdict
             await self._respond_private(
                 interaction, embed, build_war_view(step.hand_id)
@@ -1589,7 +1637,10 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         if step.err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {step.err}")
             return step.err == "That hand is already finished."
-        embed = self._war_embed(econ, uid, step, await self._accent(guild))
+        embed = self._war_embed(
+            econ, uid, step, await self._accent(guild),
+            await self._names(guild, [uid]),
+        )
         try:
             await interaction.response.edit_message(
                 embed=embed, view=play_again_view("war", step.original)
@@ -1612,8 +1663,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             step: svc.WarStep,
             econ: EconSettings,
             accent: discord.Color | None,
+            name_fn: NameFn,
         ) -> tuple[discord.Embed, Callable[[], discord.ui.View]]:
-            embed = self._war_embed(econ, int(row["user_id"]), step, accent)
+            embed = self._war_embed(
+                econ, int(row["user_id"]), step, accent, name_fn
+            )
             return embed, lambda: play_again_view("war", step.original)
 
         await self._auto_resolve_hand(
@@ -1713,7 +1767,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         # (refunds) the round instead of stranding it headless until boot.
         self._arm_window_timer(ui, round_id, result.closes_at)
         embed = ui.round_embed(
-            result.econ, result.closes_at, [], await self._accent(guild)
+            result.econ, result.closes_at, [], await self._accent(guild),
+            name_fn=await self._names(guild, []),
         )
         try:
             await interaction.response.send_message(
@@ -1847,9 +1902,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                 return  # settled while we slept — the result edit owns it now
             channel = self.bot.get_channel(int(rnd["channel_id"]))
             if isinstance(channel, discord.TextChannel) and int(rnd["message_id"]):
+                bets = result.bets or []
                 embed = ui.round_embed(
-                    result.econ, float(rnd["closes_at"]), result.bets or [],
+                    result.econ, float(rnd["closes_at"]), bets,
                     await self._accent(guild),
+                    name_fn=await self._names(guild, [b[0] for b in bets]),
                 )
                 try:
                     await channel.get_partial_message(int(rnd["message_id"])).edit(
@@ -1938,7 +1995,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         if not isinstance(channel, discord.TextChannel):
             return
         frames, result_embed = ui.build_show(
-            econ, await self._accent(channel.guild), result, bets, pot_after
+            econ, await self._accent(channel.guild), result, bets, pot_after,
+            name_fn=await self._names(channel.guild, [b[0] for b in bets]),
         )
         if int(rnd["message_id"]):
             try:

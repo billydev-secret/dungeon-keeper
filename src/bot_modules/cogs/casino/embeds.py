@@ -12,6 +12,14 @@ the Branding panel (``casino_name``/``DEFAULT_CASINO_NAME``), so nothing
 here hardcodes "meadow"/"honeypot"/other Golden-Meadow-specific imagery —
 generic gambling terms ("the house", "the jackpot", "the pot") read right
 under any name.
+
+Players are rendered through an injected ``name_fn`` (``services.name_resolver``)
+rather than as ``<@id>``. An embed mention is resolved by the *reading* client
+from its own cache — Discord's servers do nothing to it — so it degrades to a
+bare numeric id for anyone who hasn't seen that player: routine for the hub's
+ticker of past betters, and for a result card read by the rest of the channel.
+The default is ``mention``, so a caller that hasn't been wired yet keeps its old
+output; ``tests/test_casino_embeds.py`` holds the contract that none of them do.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ from bot_modules.services.casino_service import CasinoSettings
 from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.branding_service import DEFAULT_CASINO_NAME
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED
+from bot_modules.services.name_resolver import NameFn, mention
 
 
 def casino_title(casino_name: str = DEFAULT_CASINO_NAME) -> str:
@@ -95,6 +104,7 @@ def _add_result_fields(
     *,
     paid_name: str = "Winners",
     keep_name: str = "The house keeps",
+    name_fn: NameFn = mention,
 ) -> None:
     """Every result card's shared tail: the paid board (💥 big-win prefix,
     char-capped under the 1024 field limit) and the house-keeps line with
@@ -103,7 +113,7 @@ def _add_result_fields(
     if paid:
         lines = [
             f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
+            f"{name_fn(uid)} — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
             for uid, d, amount, payout in paid
         ]
         embed.add_field(
@@ -131,8 +141,10 @@ def _running_note(
 _TICKER_EMOJI = {"coinflip": "🪙", "slots": "🎰", "blackjack": "🃏", "war": "⚔️"}
 
 
-def ticker_line(user_id: int, game: str, stake: int, payout: int) -> str:
-    """One compact floor-ticker entry (embed mentions never ping)."""
+def ticker_line(
+    user_id: int, game: str, stake: int, payout: int, *, name_fn: NameFn = mention
+) -> str:
+    """One compact floor-ticker entry, naming the player as plain text."""
     if payout > stake:
         result = f"**{payout:,}**"
     elif payout == stake and payout > 0:
@@ -141,7 +153,7 @@ def ticker_line(user_id: int, game: str, stake: int, payout: int) -> str:
         result = f"{payout:,} back"
     else:
         result = "the house"
-    return f"{_TICKER_EMOJI.get(game, '🎲')} <@{user_id}> · {stake:,} → {result}"
+    return f"{_TICKER_EMOJI.get(game, '🎲')} {name_fn(user_id)} · {stake:,} → {result}"
 
 
 def build_hub_embed(
@@ -154,6 +166,7 @@ def build_hub_embed(
     standings: tuple[tuple[int, int] | None, tuple[int, int] | None]
     | None = None,
     casino_name: str = DEFAULT_CASINO_NAME,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     open_lines = [
         line
@@ -187,7 +200,7 @@ def build_hub_embed(
         embed.add_field(
             name="📡 On the floor",
             value="\n".join(
-                ticker_line(uid, game, stake, payout)
+                ticker_line(uid, game, stake, payout, name_fn=name_fn)
                 for uid, game, stake, payout in ticker
             ) + "\n​",
             inline=False,
@@ -197,17 +210,15 @@ def build_hub_embed(
         rows = []
         if earner is not None:
             rows.append(
-                f"📈 Up most: <@{earner[0]}> · "
+                f"📈 Up most: {name_fn(earner[0])} · "
                 f"**+{earner[1]:,}** {econ.currency_plural}"
             )
         if loser is not None:
             rows.append(
-                f"📉 Down most: <@{loser[0]}> · "
+                f"📉 Down most: {name_fn(loser[0])} · "
                 f"**−{abs(loser[1]):,}** {econ.currency_plural}"
             )
         if rows:
-            # Embed mentions never ping (the panel is sent/edited with
-            # AllowedMentions.none()); names render, nobody's tagged.
             embed.add_field(
                 name="📊 Today at the tables",
                 value="\n".join(rows) + "\n​",
@@ -379,11 +390,12 @@ def build_coinflip_embed(
     *,
     streak: int = 0,
     pot_after: int = 0,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     won = payout > 0
     face = "🌞" if landed == "heads" else "🌙"
     desc = (
-        f"<@{user_id}> called **{call}** for {_coins(econ, stake)}.\n"
+        f"{name_fn(user_id)} called **{call}** for {_coins(econ, stake)}.\n"
         + (
             f"The coin agrees — they collect {_coins(econ, payout)}."
             if won
@@ -422,12 +434,13 @@ def build_slots_embed(
     streak: int = 0,
     pot_after: int = 0,
     casino_name: str = DEFAULT_CASINO_NAME,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     reel_line = _slot_cabinet(reels)
     title = f"🎰 {casino_name} Slots"
     if payout > 0:
         desc = (
-            f"{reel_line}\n\n{label} <@{user_id}> bet {_coins(econ, stake)} "
+            f"{reel_line}\n\n{label} {name_fn(user_id)} bet {_coins(econ, stake)} "
             f"and collects {_coins(econ, payout)}."
         )
         if jackpot_won:
@@ -438,7 +451,7 @@ def build_slots_embed(
         color = COLOR_GREEN
     else:
         desc = (
-            f"{reel_line}\n\n<@{user_id}>'s {_coins(econ, stake)} scatters "
+            f"{reel_line}\n\n{name_fn(user_id)}'s {_coins(econ, stake)} scatters "
             "into the house's take."
         )
         if pot_after > 0:
@@ -453,13 +466,13 @@ def build_slots_embed(
 
 def build_jackpot_celebration(
     econ: EconSettings, user_id: int, amount: int,
-    *, casino_name: str = DEFAULT_CASINO_NAME,
+    *, casino_name: str = DEFAULT_CASINO_NAME, name_fn: NameFn = mention,
 ) -> discord.Embed:
     """The standalone fanfare posted beside a jackpot result."""
     embed = discord.Embed(
         title=f"🏆 JACKPOT AT THE {casino_name.upper()} 🏆",
         description=(
-            f"💰 7️⃣ 7️⃣ 7️⃣ 💰\n\n<@{user_id}> just hit the progressive "
+            f"💰 7️⃣ 7️⃣ 7️⃣ 💰\n\n{name_fn(user_id)} just hit the progressive "
             f"jackpot for {_coins(econ, amount)}!\n"
             "The pot reseeds — every lost bet grows the next one."
         ),
@@ -474,12 +487,12 @@ def build_jackpot_celebration(
 
 def build_coinflip_spin_embed(
     econ: EconSettings, user_id: int, call: str, stake: int,
-    accent: discord.Color | None,
+    accent: discord.Color | None, *, name_fn: NameFn = mention,
 ) -> discord.Embed:
     embed = discord.Embed(
         title="🪙 Coinflip — it's in the air!",
         description=(
-            f"<@{user_id}> calls **{call}** for {_coins(econ, stake)}…\n"
+            f"{name_fn(user_id)} calls **{call}** for {_coins(econ, stake)}…\n"
             "The coin spins high in the air. 🪙"
         ),
         color=_accent(accent),
@@ -496,12 +509,13 @@ def build_slots_spin_embed(
     accent: discord.Color | None,
     *,
     casino_name: str = DEFAULT_CASINO_NAME,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     cells = tuple(sym if sym is not None else "🌀" for sym in revealed)
     embed = discord.Embed(
         title=f"🎰 {casino_name} Slots",
         description=(
-            f"{_slot_cabinet(cells)}\n\n<@{user_id}> bet "
+            f"{_slot_cabinet(cells)}\n\n{name_fn(user_id)} bet "
             f"{_coins(econ, stake)} — the reels are spinning…"
         ),
         color=_accent(accent),
@@ -519,11 +533,14 @@ def build_blackjack_reveal_embed(
     accent: discord.Color | None,
     *,
     doubled: bool = False,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     stake_note = f" (doubled to {stake:,})" if doubled else ""
     embed = discord.Embed(
         title="🃏 Blackjack",
-        description=f"<@{user_id}> is in for {_coins(econ, stake)}{stake_note}\n​",
+        description=(
+            f"{name_fn(user_id)} is in for {_coins(econ, stake)}{stake_note}\n​"
+        ),
         color=_accent(accent),
     )
     embed.add_field(
@@ -583,6 +600,7 @@ def build_blackjack_embed(
     payout: int = 0,
     streak: int = 0,
     pot_after: int = 0,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     live = outcome is None
     if live:
@@ -596,7 +614,9 @@ def build_blackjack_embed(
     stake_note = f" (doubled to {stake:,})" if doubled else ""
     embed = discord.Embed(
         title="🃏 Blackjack",
-        description=f"<@{user_id}> is in for {_coins(econ, stake)}{stake_note}\n​",
+        description=(
+            f"{name_fn(user_id)} is in for {_coins(econ, stake)}{stake_note}\n​"
+        ),
         color=color,
     )
     embed.add_field(
@@ -619,7 +639,11 @@ def build_blackjack_embed(
 
 
 def _add_bets_field(
-    embed: discord.Embed, econ: EconSettings, bets: list[tuple[int, str, int]]
+    embed: discord.Embed,
+    econ: EconSettings,
+    bets: list[tuple[int, str, int]],
+    *,
+    name_fn: NameFn = mention,
 ) -> None:
     """The live bets board, newest first, char-capped under the 1024 field
     limit — a long currency name or big stakes must never 400 the repaint
@@ -628,7 +652,7 @@ def _add_bets_field(
         embed.add_field(name="Bets", value="*No bets yet — be first.*", inline=False)
         return
     lines = [
-        f"<@{uid}> — {desc} · {_coins(econ, amount)}"
+        f"{name_fn(uid)} — {desc} · {_coins(econ, amount)}"
         for uid, desc, amount in reversed(bets)
     ]
     embed.add_field(
@@ -645,6 +669,8 @@ def build_roulette_round_embed(
     closes_at: float,
     bets: list[tuple[int, str, int]],
     accent: discord.Color | None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, bet description, amount), placement order."""
     embed = discord.Embed(
@@ -655,7 +681,7 @@ def build_roulette_round_embed(
         ),
         color=_accent(accent),
     )
-    _add_bets_field(embed, econ, bets)
+    _add_bets_field(embed, econ, bets, name_fn=name_fn)
     embed.set_footer(text=_FOOTER)
     return embed
 
@@ -669,6 +695,7 @@ def build_roulette_result_embed(
     bets: list[tuple[int, str, int, int]],
     *,
     pot_after: int = 0,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, bet description, amount, payout)."""
     color_name = logic.wheel_color(result)
@@ -687,7 +714,9 @@ def build_roulette_result_embed(
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
-    _add_result_fields(embed, econ, winners, losers_total, pot_after)
+    _add_result_fields(
+        embed, econ, winners, losers_total, pot_after, name_fn=name_fn
+    )
     embed.set_footer(text=_FOOTER)
     return embed
 
@@ -717,6 +746,8 @@ def build_derby_round_embed(
     closes_at: float,
     bets: list[tuple[int, str, int]],
     accent: discord.Color | None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, runner description, amount), placement order."""
     embed = discord.Embed(
@@ -728,7 +759,7 @@ def build_derby_round_embed(
         color=_accent(accent),
     )
     embed.add_field(name="The field", value=_odds_board() + "\n​", inline=False)
-    _add_bets_field(embed, econ, bets)
+    _add_bets_field(embed, econ, bets, name_fn=name_fn)
     embed.set_footer(text=_FOOTER)
     return embed
 
@@ -762,6 +793,7 @@ def build_derby_result_embed(
     bets: list[tuple[int, str, int, int]],
     *,
     pot_after: int = 0,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, runner description, amount, payout)."""
     winners = [b for b in bets if b[3] > 0]
@@ -779,7 +811,7 @@ def build_derby_result_embed(
     )
     _add_result_fields(
         embed, econ, winners, losers_total, pot_after,
-        keep_name="The meadow keeps",
+        keep_name="The meadow keeps", name_fn=name_fn,
     )
     embed.set_footer(text=_FOOTER)
     return embed
@@ -812,6 +844,8 @@ def build_baccarat_round_embed(
     closes_at: float,
     bets: list[tuple[int, str, int]],
     accent: discord.Color | None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, side description, amount), placement order."""
     embed = discord.Embed(
@@ -823,7 +857,7 @@ def build_baccarat_round_embed(
         ),
         color=_accent(accent),
     )
-    _add_bets_field(embed, econ, bets)
+    _add_bets_field(embed, econ, bets, name_fn=name_fn)
     embed.set_footer(text=_FOOTER)
     return embed
 
@@ -862,6 +896,7 @@ def build_baccarat_result_embed(
     bets: list[tuple[int, str, int, int]],
     *,
     pot_after: int = 0,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, side description, amount, payout)."""
     winner = logic.baccarat_winner(player, banker)
@@ -894,7 +929,7 @@ def build_baccarat_result_embed(
     )
     _add_result_fields(
         embed, econ, paid, losers_total, pot_after,
-        paid_name="Winners" if won else "Pushed",
+        paid_name="Winners" if won else "Pushed", name_fn=name_fn,
     )
     embed.set_footer(text=_FOOTER)
     return embed
@@ -918,6 +953,8 @@ def build_dice_round_embed(
     closes_at: float,
     bets: list[tuple[int, str, int]],
     accent: discord.Color | None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, bet description, amount), placement order."""
     embed = discord.Embed(
@@ -929,7 +966,7 @@ def build_dice_round_embed(
         ),
         color=_accent(accent),
     )
-    _add_bets_field(embed, econ, bets)
+    _add_bets_field(embed, econ, bets, name_fn=name_fn)
     embed.set_footer(text=_FOOTER)
     return embed
 
@@ -953,6 +990,7 @@ def build_dice_result_embed(
     bets: list[tuple[int, str, int, int]],
     *,
     pot_after: int = 0,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, bet description, amount, payout)."""
     total = sum(dice)
@@ -976,7 +1014,9 @@ def build_dice_result_embed(
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
-    _add_result_fields(embed, econ, winners, losers_total, pot_after)
+    _add_result_fields(
+        embed, econ, winners, losers_total, pot_after, name_fn=name_fn
+    )
     embed.set_footer(text=_FOOTER)
     return embed
 
@@ -999,6 +1039,8 @@ def build_keno_round_embed(
     closes_at: float,
     bets: list[tuple[int, str, int]],
     accent: discord.Color | None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, ticket description, amount), placement order."""
     embed = discord.Embed(
@@ -1010,7 +1052,7 @@ def build_keno_round_embed(
         ),
         color=_accent(accent),
     )
-    _add_bets_field(embed, econ, bets)
+    _add_bets_field(embed, econ, bets, name_fn=name_fn)
     embed.set_footer(text=_FOOTER)
     return embed
 
@@ -1042,6 +1084,7 @@ def build_keno_result_embed(
     bets: list[tuple[int, str, int, int]],
     *,
     pot_after: int = 0,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``bets`` = (user_id, ticket description, amount, payout)."""
     if bets:
@@ -1059,7 +1102,9 @@ def build_keno_result_embed(
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
-    _add_result_fields(embed, econ, winners, losers_total, pot_after)
+    _add_result_fields(
+        embed, econ, winners, losers_total, pot_after, name_fn=name_fn
+    )
     # Keno itemises its losers — every other game collapses them into the
     # house total, but there a loss is self-evident (your number didn't
     # come up). Here a ticket that caught 3 of 10 looks identical to a
@@ -1068,7 +1113,7 @@ def build_keno_result_embed(
     # just appended, so the money line stays last.
     if losers:
         lines = [
-            f"<@{uid}> — {d} · {_coins(econ, amount)}"
+            f"{name_fn(uid)} — {d} · {_coins(econ, amount)}"
             for uid, d, amount, _ in losers
         ]
         embed.insert_field_at(
@@ -1117,6 +1162,7 @@ def build_war_embed(
     payout: int = 0,
     streak: int = 0,
     pot_after: int = 0,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """One war play — instant verdict, the tie standoff, or its resolution.
 
@@ -1131,7 +1177,7 @@ def build_war_embed(
     else:
         color = COLOR_RED
     lines = [
-        f"<@{user_id}> is in for {_coins(econ, stake)}",
+        f"{name_fn(user_id)} is in for {_coins(econ, stake)}",
         f"Their card `{player}` · Dealer `{dealer}`",
     ]
     if war_player is not None and war_dealer is not None:
@@ -1319,6 +1365,7 @@ def build_pools_result_embed(
     *,
     spec,
     chart: bool = True,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """``payouts`` = (user_id, stake, payout), biggest return first.
 
@@ -1340,8 +1387,8 @@ def build_pools_result_embed(
     )
     if payouts:
         rows = [
-            f"<@{user_id}> +{payout - stake:,} (staked {stake:,})"
-            if payout else f"<@{user_id}> −{stake:,}"
+            f"{name_fn(user_id)} +{payout - stake:,} (staked {stake:,})"
+            if payout else f"{name_fn(user_id)} −{stake:,}"
             for user_id, stake, payout in payouts
         ]
         embed.add_field(
