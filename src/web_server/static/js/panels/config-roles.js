@@ -152,11 +152,16 @@ function render(container, grants, channels, roles) {
   // ── Searchable pickers replace the old plain <select>s (W-C4). ────────
   const pickers = {}; // pickers[grantName][fieldName]
   function mountRow(grantName, source) {
+    // A grant whose prerequisite is its own role can never be handed out by
+    // anyone but an admin ("@user needs @Denizen before they can receive
+    // @Denizen"), so keep the granted role out of the prerequisite picker.
+    const grantedId = String(source.role_id || "0");
+    const reqRoles = roles.filter((r) => String(r.id) !== grantedId || grantedId === "0");
     const defs = [
       ["role_id", mountRolePicker, roles, "Role Handed Out"],
       ["log_channel_id", mountChannelPicker, channels, "Log Channel"],
       ["announce_channel_id", mountChannelPicker, channels, "Announcement Channel"],
-      ["required_role_id", mountRolePicker, roles, "Role Required First"],
+      ["required_role_id", mountRolePicker, reqRoles, "Role Required First"],
     ];
     pickers[grantName] = {};
     for (const [fieldName, mountFn, options, label] of defs) {

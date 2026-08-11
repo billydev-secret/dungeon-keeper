@@ -343,6 +343,27 @@ async def test_admin_bypasses_prerequisite(prereq_setup):
     member.add_roles.assert_awaited_once()
 
 
+async def test_already_has_role_reported_as_such_despite_missing_prerequisite(
+    prereq_setup,
+):
+    """A no-op must report as a no-op.
+
+    Telling a greeter "they need @Verified first" about someone who already
+    holds the role invites hand-adding the prerequisite in Discord — the
+    manual bypass the gate exists to prevent.
+    """
+    _, grant = prereq_setup
+    member_role = _MockRole(position=1, role_id=999, name="Member")
+    verified_role = _MockRole(position=2, role_id=PREREQ_ROLE_ID, name="Verified")
+    ix = _make_interaction(guild=_guild_with_roles(member_role, verified_role))
+    member = _make_member(roles=[member_role])  # has Member, lacks Verified
+
+    await grant(ix, member)
+
+    member.add_roles.assert_not_awaited()
+    assert "already has" in ix.response.send_message.call_args[0][0].lower()
+
+
 async def test_unconfigured_prerequisite_grants_freely(grant_setup):
     """required_role_id = 0 (the default) leaves every grant ungated."""
     _, grant = grant_setup

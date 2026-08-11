@@ -60,27 +60,57 @@ def headers(tok: str) -> dict[str, str]:
     }
 
 
-def request(method: str, url: str, tok: str, payload: dict | None = None):
-    """Call the API, transparently obeying 429 retry_after."""
+class ApiError(RuntimeError):
+    """A request that failed for a reason retrying won't fix."""
+
+
+def request(
+    method: str,
+    url: str,
+    tok: str,
+    payload: dict | None = None,
+    *,
+    reason: str | None = None,
+):
+    """Call the API, transparently obeying 429 retry_after.
+
+    Raises :class:`ApiError` rather than exiting: callers decide whether one
+    bad guild or one bad member should stop the whole run. A backfill that
+    dies partway through with no record of what it already changed is worse
+    than one that reports failures and keeps going.
+    """
     for attempt in range(6):
         data = json.dumps(payload).encode() if payload is not None else None
-        req = urllib.request.Request(
-            url, data=data, headers=headers(tok), method=method
-        )
+        head = headers(tok)
+        if reason:
+            # The guild audit log is the only durable record of a role change
+            # the bot didn't observe itself, so a bulk grant must explain
+            # itself there.
+            head["X-Audit-Log-Reason"] = reason
+        req = urllib.request.Request(url, data=data, headers=head, method=method)
         try:
             with urllib.request.urlopen(req) as resp:
                 body = resp.read()
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
-                retry = json.loads(exc.read() or b"{}").get("retry_after", 1.0)
-                time.sleep(float(retry) + 0.3)
+                # Edge-level 429s (Cloudflare) come back as HTML, not JSON.
+                try:
+                    retry = float(json.loads(exc.read() or b"{}").get("retry_after", 1.0))
+                except (ValueError, json.JSONDecodeError):
+                    retry = 5.0
+                time.sleep(retry + 0.3)
                 continue
             if exc.code >= 500 and attempt < 5:
                 time.sleep(2**attempt)
                 continue
-            raise SystemExit(f"{method} {url} -> {exc.code}: {exc.read()[:300]!r}")
-    raise SystemExit(f"{method} {url}: gave up after repeated rate limits")
+            raise ApiError(f"{method} {url} -> {exc.code}: {exc.read()[:300]!r}")
+        except urllib.error.URLError as exc:
+            if attempt < 5:
+                time.sleep(2**attempt)
+                continue
+            raise ApiError(f"{method} {url} -> {exc}")
+    raise ApiError(f"{method} {url}: gave up after repeated rate limits")
 
 
 def fetch_members(guild_id: int, tok: str) -> list[dict]:
@@ -104,20 +134,36 @@ def fetch_members(guild_id: int, tok: str) -> list[dict]:
         after = page[-1]["user"]["id"]
 
 
-def grants_with_prerequisites(db: Path, only: str | None) -> list[dict]:
-    """``grant_roles`` rows that actually configure a prerequisite."""
+def grants_with_prerequisites(
+    db: Path, only: str | None, guild_id: int | None
+) -> tuple[list[dict], list[dict]]:
+    """``grant_roles`` rows with a prerequisite: (selected, all_with_prereq).
+
+    Grant *names* are seeded identically into every guild
+    (``_DEFAULT_GRANT_ROLES``), so ``--grant denizen`` alone does not scope to
+    one server — this database is shared with a second live guild run by
+    someone else. ``--guild`` is the only real scope, hence both halves of the
+    return: the caller reports what it skipped rather than silently narrowing.
+    """
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            "SELECT guild_id, grant_name, label, role_id, required_role_id "
-            "FROM grant_roles WHERE required_role_id > 0 AND role_id > 0"
-        ).fetchall()
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT guild_id, grant_name, label, role_id, required_role_id "
+                "FROM grant_roles WHERE required_role_id > 0 AND role_id > 0"
+            ).fetchall()
+        ]
     finally:
         conn.close()
-    return [
-        dict(r) for r in rows if only is None or r["grant_name"] == only
+    selected = [
+        r
+        for r in rows
+        if (only is None or r["grant_name"] == only)
+        and (guild_id is None or int(r["guild_id"]) == guild_id)
     ]
+    return selected, rows
 
 
 def role_name(guild_id: int, role_id: int, tok: str) -> str:
@@ -136,6 +182,12 @@ def main() -> int:
     )
     parser.add_argument("--grant", help="limit to one grant_name (e.g. denizen)")
     parser.add_argument(
+        "--guild",
+        type=int,
+        help="limit to one guild id — the only filter that actually scopes to "
+        "a server, since grant names are seeded into every guild",
+    )
+    parser.add_argument(
         "--env",
         default="/home/ben/discord-bots/dungeon-keeper/.env",
         help="path to the .env holding DISCORD_TOKEN_PROD and DB_PATH_PROD",
@@ -153,18 +205,35 @@ def main() -> int:
     if not db.exists():
         sys.exit(f"database not found: {db}")
 
-    grants = grants_with_prerequisites(db, args.grant)
-    if not grants:
+    grants, all_with_prereq = grants_with_prerequisites(db, args.grant, args.guild)
+    if not all_with_prereq:
         print("No grant roles have a prerequisite configured. Nothing to check.")
         return 0
+    if not grants:
+        # Distinguish "you typo'd / wrong guild" from "nothing to do".
+        print("No grant matched those filters. Configured prerequisites:")
+        for r in all_with_prereq:
+            print(f"  guild {r['guild_id']}  {r['grant_name']} ({r['label']})")
+        return 1
+    skipped = len(all_with_prereq) - len(grants)
+    if skipped:
+        print(f"({skipped} configured prerequisite(s) in other guilds/grants not selected.)")
 
     total_missing = 0
+    failures = 0
     for cfg in grants:
         guild_id = int(cfg["guild_id"])
-        members = fetch_members(guild_id, tok)
         granted = str(cfg["role_id"])
         prereq = str(cfg["required_role_id"])
-        prereq_name = role_name(guild_id, int(prereq), tok)
+        try:
+            members = fetch_members(guild_id, tok)
+            prereq_name = role_name(guild_id, int(prereq), tok)
+        except ApiError as exc:
+            # A stale grant_roles row for a guild the bot has left shouldn't
+            # abort every other guild's report.
+            failures += 1
+            print(f"\nguild {guild_id}: skipped — {exc}")
+            continue
 
         missing = [
             m
@@ -173,34 +242,49 @@ def main() -> int:
             and prereq not in m.get("roles", [])
             and not m["user"].get("bot")
         ]
+        holders = sum(
+            1 for m in members if granted in m.get("roles", []) and not m["user"].get("bot")
+        )
         total_missing += len(missing)
 
         print(
-            f"\n{cfg['label']} ({cfg['grant_name']}) requires @{prereq_name} — "
-            f"{len(missing)} of {len(members)} members hold it without the prerequisite:"
+            f"\n{cfg['label']} ({cfg['grant_name']}) requires @{prereq_name} in "
+            f"guild {guild_id} — {len(missing)} of {holders} holders lack it "
+            f"({len(members)} members total):"
         )
+        if not missing:
+            continue
         for m in missing:
             user = m["user"]
             name = m.get("nick") or user.get("global_name") or user["username"]
             print(f"  {name} ({user['id']})")
 
-        if not missing:
-            continue
         if not args.apply:
             print("  (dry run — pass --apply to grant the prerequisite role)")
             continue
 
         for m in missing:
-            request(
-                "PUT",
-                f"{API}/guilds/{guild_id}/members/{m['user']['id']}/roles/{prereq}",
-                tok,
-            )
+            try:
+                request(
+                    "PUT",
+                    f"{API}/guilds/{guild_id}/members/{m['user']['id']}/roles/{prereq}",
+                    tok,
+                    reason=f"Prerequisite backfill for the {cfg['label']} grant",
+                )
+            except ApiError as exc:
+                # Keep going: a half-applied run that reports which members
+                # failed is recoverable; one that dies silently is not.
+                failures += 1
+                print(f"  FAILED {m['user']['id']}: {exc}")
+                continue
             print(f"  granted @{prereq_name} to {m['user']['id']}")
             time.sleep(0.3)  # stay well inside the per-route bucket
 
     if not args.apply and total_missing:
         print(f"\nTotal: {total_missing}. Nothing was modified.")
+    if failures:
+        print(f"\n{failures} operation(s) failed — see FAILED/skipped lines above.")
+        return 1
     return 0
 
 

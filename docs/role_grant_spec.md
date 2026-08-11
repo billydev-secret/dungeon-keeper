@@ -68,11 +68,11 @@ Migration `144_grant_permissions_seed_mods.sql` copies each guild's configured
 `mod_role_ids` into every grant it has, so the flip is behavior-neutral on the
 day it ships and narrowing a grant is a dashboard edit rather than an outage.
 
-The self-grant block inside `_execute_grant` (`role_grant_commands.py:62`) is
-deliberately still `is_mod` — it governs how a grant executes, not who may
-invoke it. A non-mod keeper can therefore use their grant but still can't
-grant it to themselves. (The `required_role_id` gate was the other `is_mod`
-check; it moved to `is_admin` on 2026-08-11 — see **Prerequisite role**.)
+The self-grant block inside `_execute_grant` is deliberately still `is_mod` —
+it governs how a grant executes, not who may invoke it. A non-mod keeper can
+therefore use their grant but still can't grant it to themselves. (The
+`required_role_id` gate was the other `is_mod` check; it moved to `is_admin`
+on 2026-08-11 — see **Prerequisite role**.)
 
 On success the bot adds the role (audit-log reason "Granted by {user} via slash command"), records a `role_events` row, and confirms to the invoker ephemerally.
 
