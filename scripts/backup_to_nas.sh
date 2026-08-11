@@ -127,6 +127,14 @@ newest="$(find "$LOCAL_BACKUP_DIR" -maxdepth 1 -name 'dungeonkeeper_*.db' -print
 # shared-memory machinery entirely. Safe here precisely because these are
 # finished backup-API outputs: dst.close() checkpointed them, so the whole
 # database is in the main file and there is no WAL content to miss.
+#
+# This is load-bearing, not cosmetic. Under the systemd unit's
+# ProtectSystem=strict the repo is READ-ONLY, so a plain mode=ro open cannot
+# create its -shm and dies with "attempt to write a readonly database" -- at the
+# integrity check, i.e. the first thing this script does with the file. Verified
+# 2026-08-10 against a chmod a-w directory: mode=ro exits 8, immutable=1 exits 0.
+# Removing immutable=1 breaks the timed run while leaving manual runs working,
+# which is the worst possible way for it to fail.
 log "Verifying $(basename "$newest") before transfer ..."
 check="$(sqlite3 "file:${newest}?mode=ro&immutable=1" 'PRAGMA quick_check;' 2>&1 || true)"
 [[ "$check" == "ok" ]] || die "local backup failed integrity check: $check"
