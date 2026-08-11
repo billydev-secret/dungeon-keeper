@@ -559,9 +559,43 @@ async def meta_channels(
 _prev_net: dict[str, dict] = {}
 _prev_net_ts: float = 0.0
 
+# Backup health, cached. This endpoint is polled every 3 seconds; the backup
+# state changes every 6 HOURS, so recomputing per poll would open a SQLite
+# connection 1,200 times an hour to learn nothing new.
+_BACKUP_CACHE_TTL = 30.0
+_backup_cache: dict | None = None
+_backup_cache_ts: float = 0.0
+
+
+async def _backup_health(request: Request) -> dict:
+    """Cached backup health for the panel.
+
+    Wrapped so a backup-reporting problem can never break System Stats itself —
+    CPU and memory must still render if the backup markers are unreadable.
+    """
+    global _backup_cache, _backup_cache_ts
+
+    now = time.monotonic()
+    if _backup_cache is not None and (now - _backup_cache_ts) < _BACKUP_CACHE_TTL:
+        return _backup_cache
+
+    from bot_modules.services.db_backup import gather_backup_health
+
+    ctx = get_ctx(request)
+    try:
+        health = await run_query(lambda: gather_backup_health(ctx.db_path))
+    except Exception:  # pragma: no cover — defensive
+        return {"available": False, "problems": []}
+
+    health["available"] = True
+    _backup_cache = health
+    _backup_cache_ts = now
+    return health
+
 
 @router.get("/system/stats")
 async def system_stats(
+    request: Request,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     global _prev_net, _prev_net_ts
@@ -632,4 +666,5 @@ async def system_stats(
         },
         "interfaces": interfaces,
         "uptime": time.time() - psutil.boot_time(),
+        "backups": await _backup_health(request),
     }

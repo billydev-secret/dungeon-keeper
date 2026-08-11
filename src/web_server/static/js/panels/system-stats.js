@@ -37,6 +37,81 @@ function pctColor(pct) {
   return "var(--red)";
 }
 
+function fmtAge(seconds) {
+  if (seconds == null) return "never";
+  if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+  if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
+  return Math.floor(seconds / 86400) + "d ago";
+}
+
+// Backups (finding B3). Two rows, because they fail independently and protect
+// against different things: the local copy covers a bad migration, and only the
+// off-device copy covers the disk dying. A green local row next to a stale
+// off-device one is the state worth being able to see at a glance.
+function backupRow(label, age, ok, detail) {
+  const color = ok ? "var(--green)" : "var(--red)";
+  return `<tr>
+    <td style="white-space:nowrap">${label}</td>
+    <td style="color:${color};white-space:nowrap">${ok ? "OK" : "Stale"}</td>
+    <td class="num">${esc(fmtAge(age))}</td>
+    <td class="num-dim">${esc(detail)}</td>
+  </tr>`;
+}
+
+function renderBackups(b) {
+  if (!b || b.available === false) {
+    return `<div class="section-label">Backups</div>
+      <div class="empty">Backup status is unavailable.</div>`;
+  }
+
+  const problems = b.problems || [];
+  const codes = new Set(problems.map((p) => p.code));
+  const local = b.local || {};
+  const offsite = b.offsite || {};
+
+  const localOk = !codes.has("backup_stale") && !codes.has("backup_none");
+  const localDetail = `${local.count || 0} file${local.count === 1 ? "" : "s"}, ${fmtBytes(
+    local.total_bytes || 0,
+  )}, every ${local.interval_hours || 6}h`;
+
+  let rows = backupRow("Local", local.age_seconds, localOk, localDetail);
+  if (offsite.configured) {
+    const offsiteOk = !codes.has("offsite_stale") && !codes.has("offsite_never");
+    const detail = `${offsite.host || "off-device"}, kept ${
+      offsite.retention_days || "?"
+    } days`;
+    rows += backupRow("Off-device", offsite.age_seconds, offsiteOk, detail);
+  }
+
+  const warnings = problems
+    .map(
+      (p) =>
+        `<div class="error" style="margin-top:8px"><strong>${esc(
+          p.title,
+        )}</strong> — ${esc(p.message)}</div>`,
+    )
+    .join("");
+
+  const failures = local.consecutive_failures || 0;
+  const failNote = failures
+    ? `<div class="home-dim" style="margin-top:6px">Last error: ${esc(
+        local.last_error || "(not recorded)",
+      )}</div>`
+    : "";
+
+  return `<div class="section-label">Backups</div>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr><th>Copy</th><th>State</th><th class="num">Last run</th><th>Detail</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${warnings}
+    ${failNote}`;
+}
+
 function renderStats(container, data) {
   const cpuColor = pctColor(data.cpu_percent);
   const memColor = pctColor(data.memory.percent);
@@ -114,6 +189,8 @@ function renderStats(container, data) {
         <tbody>${ifaceRows || '<tr><td colspan="6" class="empty">No network interface has sent or received anything yet.</td></tr>'}</tbody>
       </table>
     </div>
+
+    ${renderBackups(data.backups)}
   </div>`;
 }
 

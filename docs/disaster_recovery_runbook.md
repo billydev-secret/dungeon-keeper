@@ -26,6 +26,31 @@ for the drill and its timings.
 **Which copy do you need?** If the disk is alive, use `backups/` — it is local
 and newer. If the machine or disk is gone, everything comes from the NAS.
 
+## Are the backups actually running?
+
+Ask this on a quiet day, not at 3am. Both copies are meant to be invisible, so
+a stopped one changes nothing you would notice — the old files sit there looking
+healthy while the newest ages out of usefulness.
+
+- **Dashboard → System Stats → Backups** answers it in one glance: age and state
+  of the local rotation and of the off-device copy, plus the last error if one
+  failed. The home page's **Configuration Problems** card raises the same thing
+  unasked once a copy goes stale (local: 12h, off-device: 48h).
+- From a shell:
+
+```bash
+ls -lt backups/ | head -3                    # newest should be < 6h old
+systemctl status dk-nas-backup.service       # must end status=0/SUCCESS
+systemctl list-timers dk-nas-backup.timer
+cat ~/.local/state/dk-backup/last-nas-sync   # timestamp of the last NAS copy
+```
+
+**A green shell run of `backup_to_nas.sh` does not mean the timer works.** The
+unit is subject to SELinux constraints your login shell is not, and for that
+reason it silently never ran once in the four days after it was installed.
+Verify with `systemctl start dk-nas-backup.service` — see `deploy/README.md`,
+"The install trap".
+
 ---
 
 ## 0. Stop, before you touch anything

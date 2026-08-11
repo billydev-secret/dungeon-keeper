@@ -12,11 +12,39 @@ const CODE_LABEL = {
   nobody_can_view: "Nobody can see it",
 };
 
+// Host-level faults that aren't about a channel: a backup that stopped running
+// (finding B3). Rendered above the channel rows and — unlike them — still shown
+// when the bot is disconnected, because the backup check reads the filesystem
+// and the database, and a bot that is down is exactly when its backup loop has
+// stopped running.
+function systemRows(data) {
+  return ((data && data.system) || [])
+    .map(
+      (p) => `
+        <div class="sugg-row">
+          <div class="sugg-head">
+            <span class="sugg-name">${esc(p.title)}</span>
+            <span class="sugg-badge sugg-unset">${
+              p.severity === "error" ? "Broken" : "Warning"
+            }</span>
+          </div>
+          <div class="sugg-blurb">${esc(p.message)}</div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
 export function renderTile(el, data) {
+  const system = systemRows(data);
+
   if (!data || data.available === false) {
     el.innerHTML = `
       <div class="home-card-label">Configuration problems</div>
-      <div class="home-dim">Can't check right now — the bot isn't connected.</div>
+      ${system}
+      <div class="home-dim">
+        Can't check channels right now — the bot isn't connected.
+      </div>
     `;
     return;
   }
@@ -26,6 +54,7 @@ export function renderTile(el, data) {
     const n = data.checked || 0;
     el.innerHTML = `
       <div class="home-card-label">Configuration problems</div>
+      ${system}
       <div class="home-dim">
         All ${n} configured channel${n === 1 ? "" : "s"} are working.
       </div>
@@ -56,6 +85,7 @@ export function renderTile(el, data) {
 
   el.innerHTML = `
     <div class="home-card-label">Configuration problems</div>
+    ${system}
     ${rows}
   `;
 }
