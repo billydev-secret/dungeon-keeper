@@ -115,11 +115,23 @@ newest="$(find "$LOCAL_BACKUP_DIR" -maxdepth 1 -name 'dungeonkeeper_*.db' -print
           | sort -rn | head -1 | cut -d' ' -f2-)"
 [[ -n "$newest" ]] || die "no local backup found in $LOCAL_BACKUP_DIR"
 
+# `immutable=1`, not just `mode=ro`. A backup carries journal_mode=wal in its
+# header, and opening a WAL database requires shared memory -- so a plain
+# read-only open CREATES <name>.db-shm and <name>.db-wal beside the file it is
+# only supposed to be reading. That is how the first NAS run ended up shipping a
+# -shm/-wal pair next to the database: junk at best, and at worst a 3am trap,
+# because a restorer who copies all three gets a malformed database (which is
+# exactly what docs/disaster_recovery_runbook.md warns against).
+#
+# immutable=1 tells SQLite the file cannot change underneath it, so it skips the
+# shared-memory machinery entirely. Safe here precisely because these are
+# finished backup-API outputs: dst.close() checkpointed them, so the whole
+# database is in the main file and there is no WAL content to miss.
 log "Verifying $(basename "$newest") before transfer ..."
-check="$(sqlite3 "file:${newest}?mode=ro" 'PRAGMA quick_check;' 2>&1 || true)"
+check="$(sqlite3 "file:${newest}?mode=ro&immutable=1" 'PRAGMA quick_check;' 2>&1 || true)"
 [[ "$check" == "ok" ]] || die "local backup failed integrity check: $check"
 
-rows="$(sqlite3 "file:${newest}?mode=ro" 'SELECT COUNT(*) FROM messages;')"
+rows="$(sqlite3 "file:${newest}?mode=ro&immutable=1" 'SELECT COUNT(*) FROM messages;')"
 log "Integrity ok (messages=$rows, $(du -h "$newest" | cut -f1))"
 
 # --- 3. ship the database --------------------------------------------------
@@ -219,6 +231,19 @@ for d in "$NAS_DB_DIR" "$NAS_SECRET_DIR"; do
     stale="$(ssh_nas "find '$d' -maxdepth 1 -type f -name '*.partial' -mtime +1 -print0 \
                       | xargs -0 -r rm -vf | wc -l")"
     (( stale > 0 )) && log "Removed $stale stale .partial file(s) from $d"
+done
+
+# Stray -shm/-wal siblings. Nothing here creates them any more (see the
+# immutable=1 note at step 2), but the first runs did, and a restorer who copies
+# a .db together with a stale -wal gets a database SQLite refuses to open. They
+# are never load-bearing next to a backup-API file, so sweeping them is safe.
+for d in "$NAS_DB_DIR"; do
+    sidecars="$(ssh_nas "find '$d' -maxdepth 1 -type f \\( -name '*.db-shm' -o -name '*.db-wal' \\) | wc -l")"
+    if (( sidecars > 0 )); then
+        ssh_nas "find '$d' -maxdepth 1 -type f \\( -name '*.db-shm' -o -name '*.db-wal' \\) -print0 \
+                 | xargs -0 -r rm -f"
+        log "Removed $sidecars stray -shm/-wal file(s) from $d"
+    fi
 done
 
 kept="$(ssh_nas "ls -1 '$NAS_DB_DIR'/dungeonkeeper_*.db 2>/dev/null | wc -l")"
