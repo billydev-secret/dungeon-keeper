@@ -8,6 +8,13 @@ whoever's around can pick the intake up. ``nudged_at`` is stamped whether or
 not the send lands, mirroring greeting watch — a permission failure must not
 wedge a card into re-nudging every tick (it's already logged).
 
+A stale card is only worth a ping if the member is actually reachable, so
+each one is checked against the member's real state first
+(``intake_service.nudge_action``): someone who never accepted membership
+screening holds no roles and can't be greeted at all, and someone who left
+unnoticed has no intake left to run. Neither pings; the screening case stays
+unstamped so it can ping later, once accepting makes greeting possible.
+
 Config is read from the DB each tick, so dashboard changes apply on the next
 sweep without a restart. Every SQLite touch runs in ``asyncio.to_thread``.
 """
@@ -89,6 +96,25 @@ async def _nudge(
         log.warning("intake: stale nudge failed in guild %s", guild_id)
 
 
+async def _presence(guild: discord.Guild, user_id: int) -> str:
+    """Where a card's member stands: in, still screening, gone, or unknown.
+
+    The cache answers for anyone the gateway has seen, which is the normal
+    case; the fetch is the fallback for a cache miss, and only its explicit
+    404 may conclude "gone" — a rate limit or an outage must not close
+    somebody's card.
+    """
+    member = guild.get_member(user_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(user_id)
+        except discord.NotFound:
+            return svc.PRESENCE_GONE
+        except (discord.HTTPException, TimeoutError):
+            return svc.PRESENCE_UNKNOWN
+    return svc.PRESENCE_SCREENING if member.pending else svc.PRESENCE_IN
+
+
 async def run_tick(bot: Bot, db_path: Path, now: float) -> None:
     for guild in bot.guilds:
         try:
@@ -96,6 +122,17 @@ async def run_tick(bot: Bot, db_path: Path, now: float) -> None:
                 _stale_sync, db_path, guild.id, now
             )
             for card in stale:
+                user_id = int(card["user_id"])
+                action = svc.nudge_action(await _presence(guild, user_id))
+                if action == svc.NUDGE_SKIP:
+                    continue
+                if action == svc.NUDGE_CLOSE_LEFT:
+                    from bot_modules.services.intake_views import close_member_card
+
+                    await close_member_card(
+                        bot.ctx, guild, user_id, svc.RESOLUTION_LEFT
+                    )
+                    continue
                 await _nudge(bot, guild.id, card, greeter_role, hours)
                 await asyncio.to_thread(
                     _mark_nudged_sync, db_path, int(card["id"]), now

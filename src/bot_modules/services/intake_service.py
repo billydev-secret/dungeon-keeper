@@ -662,6 +662,43 @@ def mark_nudged(conn: sqlite3.Connection, card_id: int, at: float) -> None:
     )
 
 
+#: Presence of a card's member, as the nudge sweep can determine it.
+PRESENCE_IN = "in"
+PRESENCE_SCREENING = "screening"
+PRESENCE_GONE = "gone"
+PRESENCE_UNKNOWN = "unknown"
+
+NUDGE_SEND = "send"
+NUDGE_SKIP = "skip"
+NUDGE_CLOSE_LEFT = "close_left"
+
+
+def nudge_action(presence: str) -> str:
+    """What the stale sweep should do with a card, given its member's state.
+
+    A stale card only means the *checklist* hasn't moved; whether a greeter
+    can move it depends on the member actually being in the server:
+
+    ``screening`` — they joined but never accepted membership screening, so
+    they hold no roles and can neither see nor post anywhere. Nothing a
+    greeter does reaches them, so skip **without** stamping ``nudged_at``:
+    the card stays nudge-eligible and pings the moment they accept and are
+    genuinely stuck, the only moment the ping is worth a greeter's attention.
+
+    ``gone`` — they left while nothing was watching (a leave during downtime
+    never reaches ``on_member_remove``), so the card is an orphan. Close it
+    as ``left``, the resolution the live hook would have written.
+
+    ``unknown`` — Discord wouldn't say. Skip unstamped and re-decide next
+    tick rather than pinging about a member we can't place.
+    """
+    if presence == PRESENCE_IN:
+        return NUDGE_SEND
+    if presence == PRESENCE_GONE:
+        return NUDGE_CLOSE_LEFT
+    return NUDGE_SKIP
+
+
 # ---------------------------------------------------------------------------
 # Reports (dashboard analytics)
 # ---------------------------------------------------------------------------
