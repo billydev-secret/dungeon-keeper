@@ -83,18 +83,13 @@ from bot_modules.services.name_resolver import NameFn, build_name_fn
 
 log = logging.getLogger("dungeonkeeper.casino")
 
-# Restick pacing: chatter reveals a buried panel after the quick delay, but
-# while a communal round is open in the channel the panel stays put (a
-# delete+repost would yank the entry point around under people mid-bet) —
-# up to the hold cap, in case rounds run back to back.
-# The hub panel never moves out from under a live communal round, and stays
-# put for a short cooldown after one settles so players reading the result
-# aren't chasing the panel up the channel.
-HUB_ROUND_COOLDOWN_SECONDS = 60
-HUB_HOLD_POLL_SECONDS = 15
-# Ceiling on holding: past this the panel re-sticks even mid-round, so a
-# round that never settles can't bury it forever.
-HUB_HOLD_MAX_SECONDS = 300
+# The hub panel used to hold its restick while a communal round was taking
+# bets in the channel, because a delete+repost would yank the entry point
+# around under people mid-bet, and moving it the instant a round settled
+# pulled the result out from under everyone reading it. Private rounds live
+# in each player's own ephemeral message, which no amount of channel
+# traffic can disturb, so there is nothing left to hold for and the panel
+# resticks on the ordinary debounce.
 # Floor-ticker repaints coalesce a burst of plays into one hub-panel edit.
 HUB_REPAINT_SECONDS = 8.0
 # Big-bet slots show: pause between each reel stopping (and before the
@@ -126,8 +121,6 @@ class _HandOutcome(NamedTuple):
 
 class _RoundOpen(NamedTuple):
     err: str | None = None
-    running_at: float | None = None  # a round is already open, closing then
-    running_url: str | None = None  # jump link to its message, when known
     econ: EconSettings | None = None
     round_id: int = 0
     closes_at: float = 0.0
@@ -148,8 +141,16 @@ class _WindowUI(NamedTuple):
 
     key: str  # settings prefix, stake key, log label
     enabled_attr: str
-    window_attr: str
-    live_round: Callable[..., sqlite3.Row | None]
+    # The verb on this game's resolve button. A private round has no
+    # countdown — the player decides when the wheel turns — so every game
+    # needs its own word for "go" ("Spin" is wrong for a horse race).
+    resolve_label: str
+    resolve_emoji: str
+    # Refusal when the player already has one of these open. Per-game
+    # wording because "you already have a round open" reads wrong for a
+    # horse race, and this is the one message a player meets by accident.
+    already_open_note: str
+    live_player_round: Callable[..., sqlite3.Row | None]
     get_round: Callable[..., sqlite3.Row | None]
     open_round: Callable[..., int | None]
     open_rounds: Callable[..., list[sqlite3.Row]]  # boot/backstop sweeps
@@ -162,7 +163,6 @@ class _WindowUI(NamedTuple):
     draw: Callable[[], object]
     describe_bet: Callable[..., str]
     round_embed: Callable[..., discord.Embed]
-    running_note: Callable[..., str]
     build_view: Callable[[int], discord.ui.View]
     next_view: Callable[[], discord.ui.View]
     # (econ, accent, result, bets, pot_after, name_fn=) → (frames, result embed)
@@ -217,8 +217,10 @@ def _derby_show(
 _ROULETTE_UI = _WindowUI(
     key="roulette",
     enabled_attr="roulette_enabled",
-    window_attr="roulette_window_seconds",
-    live_round=svc.live_roulette_round,
+    resolve_label="Spin",
+    resolve_emoji="🎡",
+    already_open_note="You already have a spin open — finish it first.",
+    live_player_round=svc.live_roulette_player_round,
     get_round=svc.get_roulette_round,
     open_round=svc.open_roulette_round,
     open_rounds=svc.open_roulette_rounds,
@@ -231,7 +233,6 @@ _ROULETTE_UI = _WindowUI(
         str(b["bet_type"]), int(b["selection"])
     ),
     round_embed=casino_embeds.build_roulette_round_embed,
-    running_note=casino_embeds.build_round_running_note,
     build_view=build_roulette_view,
     next_view=RouletteNextView,
     build_show=_roulette_show,
@@ -241,8 +242,10 @@ _ROULETTE_UI = _WindowUI(
 _DERBY_UI = _WindowUI(
     key="derby",
     enabled_attr="derby_enabled",
-    window_attr="derby_window_seconds",
-    live_round=svc.live_race_round,
+    resolve_label="Race",
+    resolve_emoji="🏇",
+    already_open_note="You already have a race running — finish it first.",
+    live_player_round=svc.live_race_player_round,
     get_round=svc.get_race_round,
     open_round=svc.open_race_round,
     open_rounds=svc.open_race_rounds,
@@ -253,7 +256,6 @@ _DERBY_UI = _WindowUI(
     draw=logic.run_derby,
     describe_bet=lambda b: logic.describe_runner(int(b["runner"])),
     round_embed=casino_embeds.build_derby_round_embed,
-    running_note=casino_embeds.build_race_running_note,
     build_view=build_derby_view,
     next_view=DerbyNextView,
     build_show=_derby_show,
@@ -297,8 +299,10 @@ def _settle_baccarat(
 _BACCARAT_UI = _WindowUI(
     key="baccarat",
     enabled_attr="baccarat_enabled",
-    window_attr="baccarat_window_seconds",
-    live_round=svc.live_baccarat_round,
+    resolve_label="Deal",
+    resolve_emoji="🎴",
+    already_open_note="You already have a coup open — finish it first.",
+    live_player_round=svc.live_baccarat_player_round,
     get_round=svc.get_baccarat_round,
     open_round=svc.open_baccarat_round,
     open_rounds=svc.open_baccarat_rounds,
@@ -309,7 +313,6 @@ _BACCARAT_UI = _WindowUI(
     draw=logic.deal_baccarat,
     describe_bet=lambda b: logic.describe_baccarat_side(str(b["side"])),
     round_embed=casino_embeds.build_baccarat_round_embed,
-    running_note=casino_embeds.build_coup_running_note,
     build_view=build_baccarat_view,
     next_view=BaccaratNextView,
     build_show=_baccarat_show,
@@ -335,8 +338,10 @@ def _dice_show(
 _DICE_UI = _WindowUI(
     key="dice",
     enabled_attr="dice_enabled",
-    window_attr="dice_window_seconds",
-    live_round=svc.live_dice_round,
+    resolve_label="Roll",
+    resolve_emoji="🎲",
+    already_open_note="You already have a roll open — finish it first.",
+    live_player_round=svc.live_dice_player_round,
     get_round=svc.get_dice_round,
     open_round=svc.open_dice_round,
     open_rounds=svc.open_dice_rounds,
@@ -347,7 +352,6 @@ _DICE_UI = _WindowUI(
     draw=logic.roll_sicbo,
     describe_bet=lambda b: logic.describe_sicbo_bet(str(b["bet_type"])),
     round_embed=casino_embeds.build_dice_round_embed,
-    running_note=casino_embeds.build_roll_running_note,
     build_view=build_dice_view,
     next_view=DiceNextView,
     build_show=_dice_show,
@@ -373,8 +377,10 @@ def _keno_show(
 _KENO_UI = _WindowUI(
     key="keno",
     enabled_attr="keno_enabled",
-    window_attr="keno_window_seconds",
-    live_round=svc.live_keno_round,
+    resolve_label="Draw",
+    resolve_emoji="🔢",
+    already_open_note="You already have a ticket open — finish it first.",
+    live_player_round=svc.live_keno_player_round,
     get_round=svc.get_keno_round,
     open_round=svc.open_keno_round,
     open_rounds=svc.open_keno_rounds,
@@ -390,7 +396,6 @@ _KENO_UI = _WindowUI(
         json.loads(str(b["spots"])), list(drawn), int(b["payout"])
     ),
     round_embed=casino_embeds.build_keno_round_embed,
-    running_note=casino_embeds.build_draw_running_note,
     build_view=build_keno_view,
     next_view=KenoNextView,
     build_show=_keno_show,
@@ -402,6 +407,10 @@ _KENO_UI = _WindowUI(
 # from a sweep (stuck stakes after a restart) or a cross-game id mixup
 # (row ids collide across tables) cannot happen by omission or reorder.
 _WINDOW_UIS = (_ROULETTE_UI, _DERBY_UI, _BACCARAT_UI, _DICE_UI, _KENO_UI)
+# Resolve-button dispatch: the custom_id carries the game key, and the
+# button's own template only matches these five, so a stale id for a game
+# that no longer exists never reaches the lookup.
+_WINDOW_UIS_BY_KEY = {ui.key: ui for ui in _WINDOW_UIS}
 
 
 class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
@@ -410,14 +419,15 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         self.ctx = bot.ctx
         self._bj_locks: dict[int, asyncio.Lock] = {}
         self._war_locks: dict[int, asyncio.Lock] = {}
-        # Windowed-game close timers and debounced round-embed repaints,
-        # keyed (game key, round id) since the two tables' row ids can
-        # collide; plus panel resticks (one per guild). The repaint/restick
-        # maps are burst coalescers, not state.
-        self._window_timers: dict[tuple[str, int], asyncio.Task] = {}
-        self._window_repaints: dict[tuple[str, int], asyncio.Task] = {}
-        # guild → monotonic time a communal round was last seen open.
-        self._last_round_seen: dict[int, float] = {}
+        # Webhook handles for the private rounds' ephemeral messages, keyed
+        # (game key, round id) since the five tables' row ids can collide.
+        # The same shape as _bj_followups: an ephemeral is editable only
+        # through its own interaction's webhook, and only until Discord
+        # expires the token (~15 min), so these are best-effort render
+        # handles — never anything money depends on.
+        self._window_followups: dict[
+            tuple[str, int], tuple[discord.Webhook, int, float]
+        ] = {}
         # Pools repaints are coalesced per guild: a stake moves the
         # implied odds, and each repaint re-renders and re-uploads a PNG.
         self._pools_repaints: dict[int, asyncio.Task] = {}
@@ -428,9 +438,6 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             load_ids=self._panel_ids,
             save_ids=self._save_panel_ids,
             build=self._build_hub_panel,
-            hold=self._hub_hold,
-            hold_poll=HUB_HOLD_POLL_SECONDS,
-            hold_max=HUB_HOLD_MAX_SECONDS,
             # The casino buries its own panel: round results, big-win
             # broadcasts and jackpot celebrations all land in the hub channel.
             # Without this a round could settle and leave the hub -- the only
@@ -480,29 +487,34 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         if self._boot_task is not None:
             self._boot_task.cancel()
         self.hub_panel.cancel_all()
-        for task_map in (
-            self._window_timers, self._window_repaints, self._hub_repaints,
-            self._pools_repaints,
-        ):
+        for task_map in (self._hub_repaints, self._pools_repaints):
             for task in task_map.values():
                 task.cancel()
             task_map.clear()
+        self._window_followups.clear()
 
     async def _boot(self) -> None:
-        """Post-restart recovery: refund orphaned hands, re-arm round timers,
-        make sure every configured guild has its hub panel."""
+        """Post-restart recovery: refund orphaned hands and rounds, make
+        sure every configured guild has its hub panel.
+
+        Rounds are refunded rather than resolved for exactly the reason
+        hands are: a private round lives in an ephemeral message, and a
+        restart kills the webhook token that message is editable through,
+        so nothing could ever show the player the result. Settling anyway
+        would move money against an outcome only the ledger ever sees.
+        """
         await self.bot.wait_until_ready()
 
-        def _sweep() -> tuple[list[sqlite3.Row], dict[str, list[sqlite3.Row]]]:
+        def _sweep() -> tuple[list[sqlite3.Row], dict[str, dict[int, int]]]:
             with self.ctx.open_db() as conn:
                 return (
                     svc.refund_live_blackjack_hands(conn)
                     + svc.refund_live_war_hands(conn),
-                    {ui.key: ui.open_rounds(conn) for ui in _WINDOW_UIS},
+                    svc.refund_live_rounds(conn),
                 )
 
         try:
-            swept, open_by_game = await asyncio.to_thread(_sweep)
+            swept, rounds_by_game = await asyncio.to_thread(_sweep)
         except Exception:
             log.exception("casino boot sweep failed")
             return
@@ -511,14 +523,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             # the register feed's casino_refund entry is the player-facing
             # notice, and stale buttons answer "already finished".
             log.info("casino boot sweep refunded %d live hand(s)", len(swept))
-        for ui in _WINDOW_UIS:
-            for rnd in open_by_game[ui.key]:
-                if self.bot.get_guild(int(rnd["guild_id"])) is None:
-                    await self._void_window(ui, int(rnd["id"]))
-                else:
-                    self._arm_window_timer(
-                        ui, int(rnd["id"]), float(rnd["closes_at"])
-                    )
+        for game, totals in rounds_by_game.items():
+            log.info(
+                "casino boot sweep refunded %d %s round stake(s), %d coins",
+                len(totals), game, sum(totals.values()),
+            )
         for guild in self.bot.guilds:
             await self.ensure_panel(guild)
 
@@ -568,12 +577,16 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                         int(row["guild_id"])
                     ):
                         stale_wars.append(int(row["id"]))
+                # Private rounds have no timer of their own — this IS their
+                # auto-resolve. A player who bet and wandered off has a
+                # stake already debited, so the round resolves once it
+                # passes its abandonment TTL (round_idle_seconds, stamped
+                # into closes_at at open) rather than sitting forever.
                 overdue_by_game = {
                     ui.key: [
                         int(r["id"])
                         for r in ui.open_rounds(conn)
-                        # grace for a live timer
-                        if float(r["closes_at"]) <= now - 5
+                        if float(r["closes_at"]) <= now
                     ]
                     for ui in _WINDOW_UIS
                 }
@@ -615,12 +628,12 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                 log.exception("casino auto-war failed for hand %s", hand_id)
         for ui in _WINDOW_UIS:
             for round_id in overdue_by_game[ui.key]:
-                if (ui.key, round_id) in self._window_timers:
-                    continue  # a healthy timer owns it
                 try:
-                    # show=False: a pile of overdue rounds (the crashed-timer
-                    # case this backstop exists for) must not serialize
-                    # seconds of cosmetic frames per round inside the sweep.
+                    # show=False: a pile of abandoned rounds must not
+                    # serialize seconds of cosmetic frames per round inside
+                    # the sweep — and nobody is watching an abandoned one
+                    # anyway. The verdict still lands on the card if the
+                    # player's webhook token is somehow still alive.
                     await self._resolve_window(ui, round_id, show=False)
                 except Exception:
                     log.exception(
@@ -676,35 +689,6 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                 {"panel_message_id": message_id, "panel_channel_id": channel_id},
             )
 
-    def _round_open(self, guild_id: int) -> bool:
-        """Whether any communal round is currently taking bets in the hub channel.
-
-        Reads the channel from the warm ``_casino_channels`` map that
-        ``ensure_panel`` maintains, rather than re-loading settings — this runs
-        on a poll while a restick is held.
-        """
-        channel_id = self._casino_channels.get(guild_id)
-        if not channel_id:
-            return False
-        with self.ctx.open_db() as conn:
-            return any(
-                ui.live_round(conn, channel_id) is not None for ui in _WINDOW_UIS
-            )
-
-    async def _hub_hold(self, guild_id: int) -> bool:
-        """Defer a restick while a round is live, and for a cooldown after it.
-
-        Moving the panel mid-bet reorders the channel under someone who is
-        about to click, and moving it the instant a round settles yanks the
-        result out from under everyone reading it.
-        """
-        now = time.monotonic()
-        if await asyncio.to_thread(self._round_open, guild_id):
-            self._last_round_seen[guild_id] = now
-            return True
-        last = self._last_round_seen.get(guild_id)
-        return last is not None and (now - last) < HUB_ROUND_COOLDOWN_SECONDS
-
     async def _build_hub_panel(self, guild: discord.Guild) -> PanelContent:
         econ, settings, pot, casino_name, ticker, standings = await asyncio.to_thread(
             self._read_hub, guild.id
@@ -729,9 +713,9 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         """Keep the hub panel — the casino's only entry point — at the bottom
-        of its channel. Held while a round is open and for a cooldown after it
-        settles (see ``_hub_hold``); armed by bot messages too, since round
-        results are what usually bury it."""
+        of its channel. Armed by bot messages too: with the games private,
+        what buries it now is the occasional big-win broadcast and the other
+        panels sharing the channel, not a stream of round results."""
         await self.hub_panel.on_message(message)
 
     # ── shared helpers ─────────────────────────────────────────────────
@@ -1719,10 +1703,20 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
     async def _open_window(
         self, interaction: discord.Interaction, ui: _WindowUI
     ) -> None:
+        """Open this player's own private round.
+
+        Since migration 158 a round belongs to one player and renders in
+        their ephemeral message: nobody else's channel scrolls and nobody
+        else's buttons move. There is no countdown — they bet as many
+        times as they like and press the game's resolve button when ready.
+        The only clock is the abandonment TTL the maintenance sweep uses
+        (``round_idle_seconds``), because the stake is debited at bet time.
+        """
         guild = interaction.guild
         channel_id = interaction.channel_id
         if guild is None or channel_id is None:
             return
+        uid = interaction.user.id
 
         def _open() -> _RoundOpen:
             with self.ctx.open_db() as conn:
@@ -1737,23 +1731,14 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                     )
                 if not getattr(settings, ui.enabled_attr):
                     return _RoundOpen(err="That table is closed right now.")
-                existing = ui.live_round(conn, channel_id)
-                if existing is not None:
-                    mid = int(existing["message_id"])
-                    return _RoundOpen(
-                        running_at=float(existing["closes_at"]),
-                        running_url=(
-                            f"https://discord.com/channels/{guild.id}"
-                            f"/{channel_id}/{mid}"
-                            if mid
-                            else None
-                        ),
-                    )
+                if ui.live_player_round(conn, guild.id, uid) is not None:
+                    return _RoundOpen(err=ui.already_open_note)
                 round_id = ui.open_round(
-                    conn, guild.id, channel_id, getattr(settings, ui.window_attr)
+                    conn, guild.id, channel_id, settings.round_idle_seconds,
+                    user_id=uid,
                 )
                 if round_id is None:
-                    return _RoundOpen(running_at=time.time())
+                    return _RoundOpen(err=ui.already_open_note)
                 rnd = ui.get_round(conn, round_id)
                 assert rnd is not None
                 return _RoundOpen(
@@ -1764,27 +1749,16 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         try:
             result = await asyncio.to_thread(_open)
         except sqlite3.IntegrityError:
-            # Two simultaneous presses both passed the pre-check; the
-            # partial unique index caught the second — point them at the
-            # REAL round (its closes_at + jump link), not a fabricated
-            # "starts now".
-            await safe_ephemeral(
-                interaction, await self._running_note(ui, guild.id, channel_id)
-            )
+            # Two presses raced the pre-check and the partial unique index
+            # caught the second — their first round is the live one.
+            await safe_ephemeral(interaction, f"❌ {ui.already_open_note}")
             return
         if result.err is not None:
             await safe_ephemeral(interaction, f"❌ {result.err}")
             return
-        if result.running_at is not None or result.econ is None:
-            await safe_ephemeral(
-                interaction,
-                ui.running_note(result.running_at or 0.0, result.running_url),
-            )
+        if result.econ is None:
             return
         round_id = result.round_id
-        # Arm BEFORE the send: if the send fails the timer still resolves
-        # (refunds) the round instead of stranding it headless until boot.
-        self._arm_window_timer(ui, round_id, result.closes_at)
         embed = ui.round_embed(
             result.econ, result.closes_at, [], await self._accent(guild),
             name_fn=await self._names(guild, []),
@@ -1794,48 +1768,30 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                 embed=embed,
                 view=ui.build_view(round_id),
                 allowed_mentions=discord.AllowedMentions.none(),
+                ephemeral=True,
             )
             message = await interaction.original_response()
         except discord.HTTPException:
-            # No message means nobody can bet — kill the round now rather
-            # than leave a headless betting window blocking the channel.
-            timer = self._window_timers.pop((ui.key, round_id), None)
-            if timer is not None:
-                timer.cancel()
+            # No message means the player can neither bet nor resolve, so
+            # the round would sit until the idle sweep. Kill it now.
             await self._void_window(ui, round_id)
             await safe_ephemeral(
                 interaction, "❌ Couldn't open the round — try again."
             )
             return
 
+        # The only handle back into an ephemeral message is its
+        # interaction's webhook, whose token Discord expires after ~15
+        # minutes — which is why the idle TTL sits comfortably under it.
+        self._window_followups[(ui.key, round_id)] = (
+            interaction.followup, message.id, time.time()
+        )
+
         def _bind() -> None:
             with self.ctx.open_db() as conn:
                 ui.set_message(conn, round_id, message.id)
 
         await asyncio.to_thread(_bind)
-
-    async def _running_note(
-        self, ui: _WindowUI, guild_id: int, channel_id: int
-    ) -> str:
-        """The already-running pointer, from the live round's actual state."""
-
-        def _read() -> sqlite3.Row | None:
-            with self.ctx.open_db() as conn:
-                return ui.live_round(conn, channel_id)
-
-        try:
-            existing = await asyncio.to_thread(_read)
-        except Exception:
-            existing = None
-        if existing is None:  # resolved in the meantime — generic note
-            return ui.running_note(time.time(), None)
-        mid = int(existing["message_id"])
-        url = (
-            f"https://discord.com/channels/{guild_id}/{channel_id}/{mid}"
-            if mid
-            else None
-        )
-        return ui.running_note(float(existing["closes_at"]), url)
 
     async def _finish_window_bet(
         self,
@@ -1849,14 +1805,21 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         *,
         verb: str = "Bet placed",
     ) -> None:
-        """Shared tail of every windowed-game bet: error apology, last-bet
-        memory, confirmation, debounced board repaint."""
+        """Shared tail of every private-round bet: error apology, last-bet
+        memory, confirmation, board repaint.
+
+        The repaint is immediate rather than debounced now. The 2s
+        coalescing window existed because a communal round could take a
+        burst of bets from several people at once; a private round has one
+        bettor, so debouncing only ever made their own board lag behind
+        their own click.
+        """
         if err is not None:
             await safe_ephemeral(interaction, f"❌ {err}")
             return
         self._last_bets[(guild.id, interaction.user.id, ui.key)] = amount
         await safe_ephemeral(interaction, f"✅ {verb}: {desc} for {amount:,}.")
-        self._schedule_window_repaint(ui, guild, round_id)
+        await self._repaint_window(ui, guild, round_id)
 
     async def place_roulette_bet(
         self,
@@ -1883,24 +1846,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             logic.describe_bet(bet_type, selection),
         )
 
-    def _schedule_window_repaint(
-        self, ui: _WindowUI, guild: discord.Guild, round_id: int
-    ) -> None:
-        # Repaint is debounced per round — a burst of bets coalesces into
-        # one message edit (the live_signal idea) instead of one Discord
-        # edit per bettor.
-        key = (ui.key, round_id)
-        if key in self._window_repaints:
-            return
-        self._window_repaints[key] = asyncio.create_task(
-            self._repaint_window(ui, guild, round_id)
-        )
-
     async def _repaint_window(
         self, ui: _WindowUI, guild: discord.Guild, round_id: int
     ) -> None:
+        """Repaint the player's own board after a bet lands."""
         try:
-            await asyncio.sleep(2.0)
 
             def _read() -> _RoundBet:
                 with self.ctx.open_db() as conn:
@@ -1918,65 +1868,98 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             result = await asyncio.to_thread(_read)
             rnd = result.rnd
             if result.econ is None or rnd is None:
-                return  # settled while we slept — the result edit owns it now
-            channel = self.bot.get_channel(int(rnd["channel_id"]))
-            if isinstance(channel, discord.TextChannel) and int(rnd["message_id"]):
-                bets = result.bets or []
-                embed = ui.round_embed(
-                    result.econ, float(rnd["closes_at"]), bets,
-                    await self._accent(guild),
-                    name_fn=await self._names(guild, [b[0] for b in bets]),
-                )
-                try:
-                    await channel.get_partial_message(int(rnd["message_id"])).edit(
-                        embed=embed
-                    )
-                except discord.HTTPException:
-                    pass
+                return  # already resolved — the result edit owns the message
+            bets = result.bets or []
+            embed = ui.round_embed(
+                result.econ, float(rnd["closes_at"]), bets,
+                await self._accent(guild),
+                name_fn=await self._names(guild, [b[0] for b in bets]),
+            )
+            await self._edit_window_message(
+                ui, round_id, embed=embed, view=ui.build_view(round_id)
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("%s repaint failed for round %s", ui.key, round_id)
-        finally:
-            self._window_repaints.pop((ui.key, round_id), None)
 
-    def _arm_window_timer(
-        self, ui: _WindowUI, round_id: int, closes_at: float
+    async def _edit_window_message(
+        self,
+        ui: _WindowUI,
+        round_id: int,
+        *,
+        embed: discord.Embed,
+        view: discord.ui.View | None,
     ) -> None:
-        key = (ui.key, round_id)
-        if key in self._window_timers:
+        """Best-effort edit of a round's ephemeral message.
+
+        An ephemeral message is reachable only through the webhook of the
+        interaction that created it, and only while that token lives — so
+        this is deliberately best-effort. Nothing that moves money may
+        depend on it: the settle has always already happened by the time
+        the result gets rendered, and a player whose token died sees the
+        payout in their balance and the ticker rather than on the card.
+        """
+        handle = self._window_followups.get((ui.key, round_id))
+        if handle is None:
             return
-        delay = max(0.0, closes_at - time.time())
-        self._window_timers[key] = asyncio.create_task(
-            self._window_timer(ui, round_id, delay)
-        )
-
-    async def _window_timer(
-        self, ui: _WindowUI, round_id: int, delay: float
-    ) -> None:
+        webhook, message_id, _ = handle
         try:
-            await asyncio.sleep(delay)
-            await self._resolve_window(ui, round_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("%s resolution failed for round %s", ui.key, round_id)
-        finally:
-            self._window_timers.pop((ui.key, round_id), None)
+            await webhook.edit_message(message_id, embed=embed, view=view)
+        except discord.HTTPException:
+            pass
+
+    async def resolve_round(
+        self, interaction: discord.Interaction, game: str, round_id: int
+    ) -> None:
+        """The resolve button's entry point — the player says go.
+
+        Refuses a round with nothing staked (an empty resolve would burn
+        the round and leave them re-opening it to bet), and refuses a
+        round that is not theirs. The ephemeral message is private, so a
+        foreign press means a stale custom_id rather than an attack — but
+        the ownership check is what makes that a polite no instead of
+        someone else's wheel spinning.
+        """
+        ui = _WINDOW_UIS_BY_KEY.get(game)
+        if ui is None:
+            return
+        uid = interaction.user.id
+
+        def _check() -> str | None:
+            with self.ctx.open_db() as conn:
+                rnd = ui.get_round(conn, round_id)
+                if rnd is None or str(rnd["status"]) != "open":
+                    return "That round is already finished."
+                if int(rnd["user_id"]) != uid:
+                    return "That isn't your round."
+                if not ui.round_bets(conn, round_id):
+                    return "Place a bet first."
+                return None
+
+        err = await asyncio.to_thread(_check)
+        if err is not None:
+            await safe_ephemeral(interaction, f"❌ {err}")
+            return
+        # Ack before the show: the frames run on the webhook, and Discord
+        # kills the interaction if nothing responds within 3s.
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            pass
+        await self._resolve_window(ui, round_id)
 
     async def _resolve_window(
         self, ui: _WindowUI, round_id: int, *, show: bool = True
     ) -> None:
-        """Settle and render one window. ``show=False`` (the maintenance
-        backstop) skips the cosmetic frames and jumps to the verdict.
+        """Settle one private round and render the result into its own
+        ephemeral message. ``show=False`` (the idle sweep) skips the
+        cosmetic frames and jumps straight to the verdict.
 
         No lock needed: the status='open' claim inside the settle is the
-        mutual exclusion (timer, maintenance sweep and void can all reach
-        a round; only the first claim pays).
+        mutual exclusion — the player's resolve press, the idle sweep and
+        a void can all reach a round, and only the first claim pays.
         """
-        repaint = self._window_repaints.pop((ui.key, round_id), None)
-        if repaint is not None:
-            repaint.cancel()  # a stale "bets open" edit must not land post-show
 
         def _settle():
             with self.ctx.open_db() as conn:
@@ -1989,17 +1972,16 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                     return None
                 gid = int(rnd["guild_id"])
                 econ = load_econ_settings(conn, gid)
+                cs = svc.load_casino_settings(conn, gid)
                 pot_after = 0
-                if any(int(b["payout"]) == 0 for b in bets):
-                    cs = svc.load_casino_settings(conn, gid)
-                    if cs.jackpot_enabled:
-                        pot_after = svc.get_jackpot(conn, gid)
-                return rnd, result, bets, econ, pot_after
+                if any(int(b["payout"]) == 0 for b in bets) and cs.jackpot_enabled:
+                    pot_after = svc.get_jackpot(conn, gid)
+                return rnd, result, bets, econ, pot_after, cs
 
         settled = await asyncio.to_thread(_settle)
         if settled is None:
             return
-        rnd, result, bet_rows, econ, pot_after = settled
+        rnd, result, bet_rows, econ, pot_after, settings = settled
         annotate = ui.annotate_bet
         describe = (
             ui.describe_bet if annotate is None
@@ -2010,42 +1992,64 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
              int(b["payout"]))
             for b in bet_rows
         ]
+        guild = self.bot.get_guild(int(rnd["guild_id"]))
+        frames, result_embed = ui.build_show(
+            econ, await self._accent(guild), result, bets, pot_after,
+            name_fn=await self._names(guild, [b[0] for b in bets]),
+        )
+        # The show plays inside the player's own ephemeral message. The
+        # money settled above, so a token that dies mid-frames leaves a
+        # stale card, never a wrong balance.
+        if show:
+            for frame in frames:
+                await self._edit_window_message(
+                    ui, round_id, embed=frame, view=None
+                )
+                await asyncio.sleep(ui.frame_sleep)
+        await self._edit_window_message(
+            ui, round_id, embed=result_embed, view=ui.next_view()
+        )
+        self._window_followups.pop((ui.key, round_id), None)
+        if guild is not None:
+            self._schedule_hub_repaint(guild.id)
+        await self._broadcast_window_win(
+            ui, rnd, settings, bets, result_embed
+        )
+
+    async def _broadcast_window_win(
+        self,
+        ui: _WindowUI,
+        rnd: sqlite3.Row,
+        settings: svc.CasinoSettings,
+        bets: list[tuple[int, str, int, int]],
+        result_embed: discord.Embed,
+    ) -> None:
+        """Repost the result publicly when it clears the big-win bar.
+
+        Private rounds get the same treatment the instant games have had
+        since 2026-07-24 — nothing in the channel unless a payout is worth
+        advertising. Every play still shows on the hub's floor ticker, so
+        going quiet is not the same as going invisible.
+        """
+        threshold = settings.broadcast_min_payout
+        if threshold <= 0:
+            return
+        best = max((b[3] for b in bets), default=0)
+        if best < threshold:
+            return
         channel = self.bot.get_channel(int(rnd["channel_id"]))
         if not isinstance(channel, discord.TextChannel):
             return
-        frames, result_embed = ui.build_show(
-            econ, await self._accent(channel.guild), result, bets, pot_after,
-            name_fn=await self._names(channel.guild, [b[0] for b in bets]),
-        )
-        if int(rnd["message_id"]):
-            try:
-                # One resolution per window, so the show is worth it — and
-                # the money settled above, so a crash mid-frames leaves a
-                # stale message, never a wrong balance.
-                msg = channel.get_partial_message(int(rnd["message_id"]))
-                if show:
-                    for frame in frames:
-                        await msg.edit(embed=frame, view=None)
-                        await asyncio.sleep(ui.frame_sleep)
-                await msg.edit(embed=result_embed, view=None)
-            except discord.HTTPException:
-                log.warning(
-                    "%s result edit failed for round %s (%d winners) — "
-                    "panel may be stuck mid-show",
-                    ui.key, rnd["id"], sum(1 for b in bets if b[3] > 0),
-                )
-        if bets:
-            try:
-                await channel.send(
-                    embed=result_embed,
-                    view=ui.next_view(),
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-            except discord.HTTPException:
-                log.warning(
-                    "%s result send failed for round %s (%d winners)",
-                    ui.key, rnd["id"], sum(1 for b in bets if b[3] > 0),
-                )
+        try:
+            await channel.send(
+                embed=result_embed,
+                view=ui.next_view(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            log.warning(
+                "%s big-win broadcast failed in #%s", ui.key, channel.id
+            )
 
     async def _void_window(self, ui: _WindowUI, round_id: int) -> None:
         def _void() -> None:

@@ -83,12 +83,6 @@ class CasinoSettings:
     # list of pools_metrics keys. Empty = the whole roster, which is also
     # what every guild gets before an admin ever opens the panel.
     pools_metrics: str = ""
-    roulette_window_seconds: int = 45
-    # Derby races want a touch more hype time than a roulette spin.
-    derby_window_seconds: int = 60
-    baccarat_window_seconds: int = 45
-    dice_window_seconds: int = 45
-    keno_window_seconds: int = 45
     # An untouched blackjack hand auto-stands after this long.
     blackjack_idle_seconds: int = 180
     # An abandoned private round auto-resolves after this long. NOT a
@@ -477,9 +471,17 @@ def claim_jackpot(
     return int(row["last_amount"]) if row is not None else settings.jackpot_seed
 
 
-# Instant games land on the hub panel's floor ticker; communal rounds
-# (roulette/derby) already recap publicly, so they stay off it.
-TICKER_GAMES = ("coinflip", "slots", "blackjack", "war")
+# Every game whose result the channel does not otherwise see lands on the
+# hub panel's floor ticker. That used to mean the instant games only,
+# because the windowed five recapped publicly — the public recap WAS their
+# visibility. Private rounds have no recap, so leaving them off would make
+# them genuinely invisible rather than merely quiet, which is the opposite
+# of the point: the ticker is where the casino's social texture lives now.
+# Pools stays off — its daily market has its own panel and settles there.
+TICKER_GAMES = (
+    "coinflip", "slots", "blackjack", "war",
+    "roulette", "derby", "baccarat", "dice", "keno",
+)
 # Rows kept per guild — a small multiple of what the hub ever renders, so
 # the trim never fights the reader.
 TICKER_KEEP = 25

@@ -73,3 +73,15 @@ CREATE UNIQUE INDEX idx_casino_dice_open_player
     ON casino_dice_rounds (guild_id, user_id) WHERE status = 'open';
 CREATE UNIQUE INDEX idx_casino_keno_open_player
     ON casino_keno_rounds (guild_id, user_id) WHERE status = 'open';
+
+-- The five per-game betting windows are gone with the communal rounds they
+-- paced, replaced by one round_idle_seconds abandonment TTL. Drop any stored
+-- values so a guild that tuned them isn't carrying config nothing reads (and
+-- so a future setting reusing one of these names can't silently inherit it).
+DELETE FROM config WHERE key IN (
+    'casino_roulette_window_seconds',
+    'casino_derby_window_seconds',
+    'casino_baccarat_window_seconds',
+    'casino_dice_window_seconds',
+    'casino_keno_window_seconds'
+);

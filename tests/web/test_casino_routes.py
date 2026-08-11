@@ -20,8 +20,7 @@ def test_config_includes_casino_section_with_string_ids(authed_client):
     assert casino["daily_wager_cap"] == 500
     assert casino["coinflip_enabled"] is True
     assert casino["derby_enabled"] is True
-    assert casino["roulette_window_seconds"] == 45
-    assert casino["derby_window_seconds"] == 60
+    assert casino["round_idle_seconds"] == 600
     # bot bookkeeping must not leak to the dashboard
     assert "panel_message_id" not in casino
     assert "panel_channel_id" not in casino
@@ -37,7 +36,7 @@ def test_update_casino_persists_and_pokes_the_bot(authed_client, fake_ctx):
             "max_bet": 0,
             "daily_wager_cap": 0,
             "slots_enabled": False,
-            "roulette_window_seconds": 60,
+            "round_idle_seconds": 300,
         },
     )
     assert resp.status_code == 200
@@ -48,7 +47,7 @@ def test_update_casino_persists_and_pokes_the_bot(authed_client, fake_ctx):
     assert (s.min_bet, s.max_bet, s.daily_wager_cap) == (10, 0, 0)
     assert s.slots_enabled is False
     assert s.blackjack_enabled is True  # untouched
-    assert s.roulette_window_seconds == 60
+    assert s.round_idle_seconds == 300
 
     fake_ctx.bot.dispatch.assert_called_once_with(
         "casino_config_change", fake_ctx.guild_id
@@ -104,7 +103,7 @@ def test_update_casino_rejects_unknown_fields(authed_client):
 def test_update_casino_rejects_out_of_range_values(authed_client):
     assert (
         authed_client.put(
-            "/api/config/casino", json={"roulette_window_seconds": 5}
+            "/api/config/casino", json={"round_idle_seconds": 5}
         ).status_code
         == 422
     )
@@ -165,18 +164,21 @@ def test_update_economy_config_treats_explicit_nulls_as_no_change(
 def test_update_casino_derby_knobs_roundtrip_and_bounds(authed_client, fake_ctx):
     resp = authed_client.put(
         "/api/config/casino",
-        json={"derby_enabled": False, "derby_window_seconds": 90},
+        json={"derby_enabled": False, "round_idle_seconds": 90},
     )
     assert resp.status_code == 200
     with fake_ctx.open_db() as conn:
         s = load_casino_settings(conn, fake_ctx.guild_id)
-    assert (s.derby_enabled, s.derby_window_seconds) == (False, 90)
+    assert (s.derby_enabled, s.round_idle_seconds) == (False, 90)
     casino = authed_client.get("/api/config").json()["casino"]
     assert casino["derby_enabled"] is False
-    assert casino["derby_window_seconds"] == 90
+    assert casino["round_idle_seconds"] == 90
+    # Capped at 840s: the round lives in an ephemeral message whose webhook
+    # token Discord expires at 15 minutes, so a longer TTL would resolve
+    # rounds nobody can be shown the result of.
     assert (
         authed_client.put(
-            "/api/config/casino", json={"derby_window_seconds": 5}
+            "/api/config/casino", json={"round_idle_seconds": 900}
         ).status_code
         == 422
     )

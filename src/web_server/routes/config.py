@@ -664,11 +664,7 @@ def _casino_section(conn, guild_id: int) -> dict:
             {"key": m.key, "label": m.label, "cap_note": m.cap_note}
             for m in pools_metrics.SPECS.values()
         ],
-        "roulette_window_seconds": s.roulette_window_seconds,
-        "derby_window_seconds": s.derby_window_seconds,
-        "baccarat_window_seconds": s.baccarat_window_seconds,
-        "dice_window_seconds": s.dice_window_seconds,
-        "keno_window_seconds": s.keno_window_seconds,
+        "round_idle_seconds": s.round_idle_seconds,
         "blackjack_idle_seconds": s.blackjack_idle_seconds,
         "jackpot_enabled": s.jackpot_enabled,
         "jackpot_cut_pct": s.jackpot_cut_pct,
@@ -4329,11 +4325,12 @@ class CasinoConfigUpdate(BaseModel):
     # Empty = the whole roster. Validated against the registry on save so
     # a typo cannot quietly shrink the roster to nothing.
     pools_metrics: str | None = None
-    roulette_window_seconds: int | None = Field(default=None, ge=15, le=600)
-    derby_window_seconds: int | None = Field(default=None, ge=15, le=600)
-    baccarat_window_seconds: int | None = Field(default=None, ge=15, le=600)
-    dice_window_seconds: int | None = Field(default=None, ge=15, le=600)
-    keno_window_seconds: int | None = Field(default=None, ge=15, le=600)
+    # Abandonment TTL for a private round, not a betting window — the
+    # player paces their own round and resolves it when ready. Capped at
+    # 840s for the same reason blackjack_idle_seconds is: the round lives
+    # in an ephemeral message whose webhook token dies at 15 min, and a
+    # longer TTL would resolve rounds nobody can be shown the result of.
+    round_idle_seconds: int | None = Field(default=None, ge=60, le=840)
     # Capped at 840s: an ephemeral hand message is editable only through
     # its interaction webhook, whose token Discord expires after 15 min —
     # a longer idle window would auto-stand hands nobody can repaint.

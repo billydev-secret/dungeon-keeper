@@ -465,6 +465,87 @@ def test_abandoned_round_takes_no_more_bets(db):
         assert get_balance(conn, GUILD, A) == 90
 
 
+# ── private-round state machine ────────────────────────────────────────
+
+
+def test_idle_resolve_and_a_manual_spin_settle_once_between_them(db):
+    """The abandonment TTL and the player's own resolve press race whenever
+    someone comes back at the last second. The status='open' claim is the
+    mutual exclusion — whichever lands first pays, and the loser is a
+    no-op, so the stake can never be paid twice or paid and refunded.
+    """
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW
+        )
+        assert round_id is not None
+        svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
+
+        # The player presses Spin; the sweep then reaches the same round.
+        bets = svc.settle_roulette_round(conn, round_id, 3, now=NOW + 5)
+        assert bets is not None
+        after = get_balance(conn, GUILD, A)
+        assert svc.settle_roulette_round(conn, round_id, 0, now=NOW + 601) is None
+        # The public void wrapper folds "claim lost" into {} (the private
+        # _void_round distinguishes it with None), so the balance is what
+        # actually proves the settled stake was not also handed back.
+        assert svc.void_roulette_round(conn, round_id, now=NOW + 602) == {}
+        assert get_balance(conn, GUILD, A) == after
+
+
+def test_an_abandoned_round_still_pays_its_winner(db):
+    """Auto-resolve is a resolve, not a void: the bets were placed, so the
+    wheel turning without the player watching still pays what it owes."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW
+        )
+        assert round_id is not None
+        svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
+        bets = svc.settle_roulette_round(conn, round_id, 3, now=NOW + 601)
+        assert bets is not None and [int(b["payout"]) for b in bets] == [20]
+        assert get_balance(conn, GUILD, A) == 110
+
+
+def test_resolving_frees_the_player_to_open_another(db):
+    """The partial index only constrains 'open' rows, so finishing a round
+    is what lets the next one start — the play-again loop."""
+    with open_db(db) as conn:
+        first = svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW
+        )
+        assert first is not None
+        assert svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW
+        ) is None
+        svc.settle_roulette_round(conn, first, 3, now=NOW + 5)
+        assert svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW + 6
+        ) is not None
+
+
+def test_two_players_rounds_settle_independently(db):
+    """The whole point of the change: one player's spin must not touch
+    anyone else's round, which the old one-per-channel model made
+    impossible to even express."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        ra = svc.open_roulette_round(conn, GUILD, CHAN, 600, user_id=A, now=NOW)
+        rb = svc.open_roulette_round(conn, GUILD, CHAN, 600, user_id=B, now=NOW)
+        assert ra is not None and rb is not None
+        svc.place_roulette_bet(conn, ra, A, "red", 0, 10, now=NOW + 1)
+        svc.place_roulette_bet(conn, rb, B, "black", 0, 10, now=NOW + 1)
+
+        svc.settle_roulette_round(conn, ra, 3, now=NOW + 5)  # 3 = red, A wins
+        assert get_balance(conn, GUILD, A) == 110
+        assert get_balance(conn, GUILD, B) == 90  # still staked, still open
+        rnd_b = svc.get_roulette_round(conn, rb)
+        assert rnd_b is not None and str(rnd_b["status"]) == "open"
+
+
 # ── boot refund of private rounds ──────────────────────────────────────
 
 
@@ -1902,18 +1983,36 @@ def test_ticker_rows_land_via_instant_settle_paths(db):
     ]
 
 
-def test_ticker_skips_communal_games_and_refunds(db):
+def test_ticker_now_carries_the_private_round_games(db):
+    """The five windowed games used to stay off the ticker because their
+    public recap was their visibility. Private rounds have no recap, so
+    the ticker is the only place the channel sees them at all — leaving
+    them off would make them invisible rather than merely quiet."""
     with open_db(db) as conn:
         _fund(conn, A, 1_000)
-        # roulette settles through record_play too, but stays off the
-        # ticker — the round recap is already public
-        round_id = _open_round(conn)
+        round_id = _open_round(conn, user_id=A)
         svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
-        svc.settle_roulette_round(conn, round_id, 3, now=NOW + 45)
-        # a boot-sweep refund is not a play, so it can't be floor news
+        svc.settle_roulette_round(conn, round_id, 3, now=NOW + 45)  # 3 = red
+        assert [
+            (str(r["game"]), int(r["stake"]), int(r["payout"]))
+            for r in svc.recent_ticker(conn, GUILD)
+        ] == [("roulette", 10, 20)]
+
+
+def test_ticker_skips_refunds(db):
+    """A bet the house handed back is not a play, so a boot-sweep refund
+    can never be floor news."""
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
         hand_id = _deal(conn, stake=20)
         assert hand_id and svc.refund_live_blackjack_hands(conn, now=NOW)
         assert svc.recent_ticker(conn, GUILD) == []
+
+
+def test_ticker_still_skips_pools(db):
+    """Pools keeps its own daily-market panel and settles there, so it
+    stays off the hub ticker even though the five games joined."""
+    assert "pools" not in svc.TICKER_GAMES
 
 
 def test_ticker_trims_to_keep_and_respects_limit(db):

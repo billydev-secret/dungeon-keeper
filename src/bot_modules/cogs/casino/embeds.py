@@ -293,9 +293,8 @@ def build_help_embed(
             name="🎡 Roulette",
             value=(
                 "European wheel, one zero. Red/black **2×** · dozens **3×** · "
-                "straight numbers **36×** (~97% return). A betting window opens "
-                f"for {settings.roulette_window_seconds}s, then the wheel decides "
-                "for everyone at once.\n​"
+                "straight numbers **36×** (~97% return). Your own private wheel: "
+                "stack as many bets as you like, then press **Spin**.\n​"
             ),
             inline=False,
         )
@@ -309,8 +308,8 @@ def build_help_embed(
             value=(
                 f"{odds}\n"
                 "Back a critter to win — the favorite pays least, the snail "
-                "pays big (91–96% return by runner). Betting stays open for "
-                f"{settings.derby_window_seconds}s, then they're off.\n​"
+                "pays big (91–96% return by runner). Back as many runners as you "
+                "like in your own private race, then press **Race**.\n​"
             ),
             inline=False,
         )
@@ -321,9 +320,8 @@ def build_help_embed(
                 "Back the **Player** or **Banker** — both pay **2×** "
                 "(~99% return, the best odds in the house; a Banker win on a "
                 "three-card 7 pushes instead). **Tie** pays **9×** — the long "
-                "shot (~86% return). Ties push the side bets. A betting window "
-                f"opens for {settings.baccarat_window_seconds}s, then the cards "
-                "decide for everyone at once.\n​"
+                "shot (~86% return). Ties push the side bets. Your own private "
+                "coup — take your positions, then press **Deal**.\n​"
             ),
             inline=False,
         )
@@ -331,11 +329,10 @@ def build_help_embed(
         embed.add_field(
             name="🎲 Dice",
             value=(
-                "Three dice, one shared roll. **Big** (11–17), **Small** "
+                "Three dice, one roll. **Big** (11–17), **Small** "
                 "(4–10), **Odd**, **Even** — all pay **2×**, and any triple "
-                "sweeps the table (~97% return). A betting window opens for "
-                f"{settings.dice_window_seconds}s, then one roll settles "
-                "everyone.\n​"
+                "sweeps the table (~97% return). Your own private roll — make "
+                "your calls, then press **Roll**.\n​"
             ),
             inline=False,
         )
@@ -360,10 +357,9 @@ def build_help_embed(
             name="🔢 Keno",
             value=(
                 "Grab a quick-pick ticket of 4, 6, 8, or 10 numbers; 20 of 80 "
-                f"drop in one shared draw. {pays} — pays scale with how many "
-                "of yours hit (~95% return, tuned far kinder than real keno). "
-                f"Tickets stay open for {settings.keno_window_seconds}s, then "
-                "one draw settles everyone.\n​"
+                f"drop in your own private draw. {pays} — pays scale with how "
+                "many of yours hit (~95% return, tuned far kinder than real "
+                "keno). Buy your tickets, then press **Draw**.\n​"
             ),
             inline=False,
         )

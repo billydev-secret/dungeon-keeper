@@ -508,10 +508,64 @@ class RouletteBetButton(
             )
 
 
+# The verb, emoji and row for each game's resolve button. Anchored in the
+# template below as an enumerated alternation (the roulette-button rule), so
+# a stale custom_id naming a game that no longer exists fails the match
+# rather than KeyError-ing inside dispatch.
+_RESOLVE_SPECS = {
+    "roulette": ("Spin", "🎡"),
+    "derby": ("Race", "🏇"),
+    "baccarat": ("Deal", "🎴"),
+    "dice": ("Roll", "🎲"),
+    "keno": ("Draw", "🔢"),
+}
+
+
+class RoundResolveButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(
+        r"casino_go:(?P<game>roulette|derby|baccarat|dice|keno):(?P<rid>\d+)"
+    ),
+):
+    """"Go" on a private round — the player's replacement for the clock.
+
+    A communal round closed on a timer because other people needed time to
+    join. Nobody else can join a private one, so the only sensible moment to
+    resolve is the one its owner picks.
+    """
+
+    def __init__(self, game: str, round_id: int) -> None:
+        label, emoji = _RESOLVE_SPECS[game]
+        super().__init__(
+            discord.ui.Button(
+                label=label, emoji=emoji,
+                style=discord.ButtonStyle.success, row=4,
+                custom_id=f"casino_go:{game}:{round_id}",
+            )
+        )
+        self.game = game
+        self.round_id = round_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> RoundResolveButton:
+        return cls(match["game"], int(match["rid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.resolve_round(interaction, self.game, self.round_id)
+
+
 def build_roulette_view(round_id: int) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     for kind in ("red", "black", "num", "d1", "d2", "d3"):
         view.add_item(RouletteBetButton(kind, round_id))
+    view.add_item(RoundResolveButton("roulette", round_id))
     return view
 
 
@@ -563,6 +617,7 @@ def build_derby_view(round_id: int) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     for runner in range(len(logic.DERBY_FIELD)):
         view.add_item(DerbyBetButton(runner, round_id))
+    view.add_item(RoundResolveButton("derby", round_id))
     return view
 
 
@@ -573,7 +628,7 @@ class DerbyNextView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="Next Race", emoji="🏇",
+        label="Play Again", emoji="🏇",
         style=discord.ButtonStyle.secondary, custom_id="casino:derby_next",
     )
     async def next_race(
@@ -629,6 +684,7 @@ def build_baccarat_view(round_id: int) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     for side in logic.BACCARAT_SIDES:
         view.add_item(BaccaratBetButton(side, round_id))
+    view.add_item(RoundResolveButton("baccarat", round_id))
     return view
 
 
@@ -639,7 +695,7 @@ class BaccaratNextView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="Next Hand", emoji="🎴",
+        label="Play Again", emoji="🎴",
         style=discord.ButtonStyle.secondary, custom_id="casino:baccarat_next",
     )
     async def next_hand(
@@ -696,6 +752,7 @@ def build_dice_view(round_id: int) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     for kind in logic.SICBO_BET_TYPES:
         view.add_item(DiceBetButton(kind, round_id))
+    view.add_item(RoundResolveButton("dice", round_id))
     return view
 
 
@@ -706,7 +763,7 @@ class DiceNextView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="Next Roll", emoji="🎲",
+        label="Play Again", emoji="🎲",
         style=discord.ButtonStyle.secondary, custom_id="casino:dice_next",
     )
     async def next_roll(
@@ -774,6 +831,7 @@ def build_keno_view(round_id: int) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     for spots in logic.KENO_TIERS:
         view.add_item(KenoTierButton(spots, round_id))
+    view.add_item(RoundResolveButton("keno", round_id))
     return view
 
 
@@ -784,7 +842,7 @@ class KenoNextView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="Next Draw", emoji="🔢",
+        label="Play Again", emoji="🔢",
         style=discord.ButtonStyle.secondary, custom_id="casino:keno_next",
     )
     async def next_draw(
@@ -913,7 +971,7 @@ class RouletteNextView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="Next Round", emoji="🎡",
+        label="Play Again", emoji="🎡",
         style=discord.ButtonStyle.secondary, custom_id="casino:roulette_next",
     )
     async def next_round(
