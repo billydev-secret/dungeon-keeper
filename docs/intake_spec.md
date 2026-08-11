@@ -108,6 +108,15 @@ slash commands:
   card with no step progress for `intake_stale_hours` (default 24; any
   tick resets the clock), pinging the greeter role; `nudged_at` stamps
   even on send failure so it can't re-nudge.
+- **Screening-aware:** a stale card is checked against the member's actual
+  state before the ping (`intake_service.nudge_action`, presence resolved
+  from the member cache with a `fetch_member` fallback). A member still in
+  Discord's membership screening (`Member.pending`) holds no roles and can't
+  be greeted, so the card is **skipped unstamped** — it pings later, once
+  accepting makes greeting possible. A member who has left (an explicit 404,
+  never a transient error) had their leave missed by `on_member_remove`, so
+  the sweep closes the orphan card as `left` instead of pinging. Anything
+  unresolvable is skipped unstamped and re-decided next tick.
 - **Hot path:** `on_message` pre-filters via an O(1) watch set of members
   with open cards (`intake_service.is_watched`, seeded at startup, same
   pattern as promotion review); decisions live in

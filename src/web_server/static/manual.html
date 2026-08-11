@@ -2164,6 +2164,7 @@
     <h4>Finishing an intake</h4>
     <p>The welcomer posts the ending welcome message containing the configured <strong>completion code</strong> and @mentioning (or replying to) the newcomer — any channel works. The card completes, the poster is recorded as the welcomer, and any unticked steps are marked <em>skipped</em>: visible in analytics, never blocking.</p>
     <p>Cards only ever close on completion, a mod's Dismiss, or the member leaving or being banned — so the open cards <em>are</em> your intake queue. A card with no progress for the configured window gets one greeter-role nudge reply, never more.</p>
+    <p>The nudge only fires when a greeter could actually do something. Someone who joined but never accepted the server's <strong>membership screening</strong> (Discord's rules gate) has no roles and can't see or post anywhere, so their card sits quietly — and nudges later, if they accept and the intake is still stalled. If someone left while the bot was offline, the stale sweep closes their orphaned card as <em>left</em> rather than pinging you to chase them.</p>
 
     <h4>Earning coins</h4>
     <p>When the <a href="#economy">Economy</a> is running, each step pays a flat award to whoever ticks it — by the card's buttons, by the greeting that ticks <em>Greeted</em>, or by posting that step's code. Paying per step rather than per finished card means two people sharing a welcome are each paid for what they actually did.</p>
