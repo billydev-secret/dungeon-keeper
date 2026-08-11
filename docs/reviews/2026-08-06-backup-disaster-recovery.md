@@ -350,9 +350,9 @@ guard the empty case — the runbook below assumes the latter and calls
 |---|---|---|---|
 | B1 | **High** | No off-device backup; DB + all copies + `.env` on one disk | **Fixed and live** — installed 2026-08-07, first copy verified on the NAS |
 | B2 | **High** | Retention counted in files; restarts collapse the window (observed 18.3h, not 24h) | Fixed |
-| B3 | Medium | Backup failure logs and is never surfaced to anyone | **Open — needs an alert-surface decision** |
+| B3 | Medium | Backup failure logs and is never surfaced to anyone | **Fixed 2026-08-11** — outcome markers + dashboard surface |
 | B4 | Medium | A partial backup keeps the real filename and sorts newest | Fixed |
-| B5 | Medium | Ad-hoc snapshots never prune → unbounded erasure exposure (extends G5) | Documented; no auto-delete by design |
+| B5 | Medium | Ad-hoc snapshots never prune → unbounded erasure exposure (extends G5) | Documented; no auto-delete by design. **The one live offender was deleted 2026-08-11** |
 | B6 | Low | Erasure runbook says "nightly"; backups are 6-hourly, window unnamed | Fixed |
 | B7 | Low | DB-only restore orphans 9 media files; `.env`/units/tunnel unbacked | Documented; rides with B1 |
 | B8 | Low | Docstring promises env configuration that does not exist | Fixed |
@@ -465,10 +465,7 @@ warning is in the config template and the deploy README.
   (`~/.config/dk-backup/env-passphrase`) **in a password manager.** It exists
   today only on the disk this backup exists to survive, which makes the secrets
   bundle unopenable in precisely the disaster it was built for.
-- **B3** needs a choice of surface. Cheapest useful version: record
-  `last_backup_ok_at` in `config` and have the health panel flag it when it is
-  older than 2× the interval. Note the NAS job *does* have failure visibility
-  already — it exits non-zero, so a failed run shows in `systemctl --failed`.
+- ~~**B3** needs a choice of surface.~~ **Fixed 2026-08-11** — see below.
 - ~~**The Cloudflare tunnel credentials** are the one thing still outside the
   backup.~~ **Checked 2026-08-07 — already covered.** There is no
   `/etc/cloudflared/` and no `~/.cloudflared/` on this host: the tunnel is run
@@ -483,6 +480,56 @@ warning is in the config template and the deploy README.
 correctly, and the artifact it produces was proven restorable end-to-end.
 **Nothing found in backup reliability** — zero failures in 30 days, runtimes of
 2.5–12.7s.
+
+### B3 — the staleness signal (2026-08-11), and the incident that justified it
+
+Closed the way the finding recommended, plus the off-device half:
+
+- `db_backup.py` writes three global `config` markers — `backup_last_ok_at`,
+  `backup_consecutive_failures`, `backup_last_error`. Both writers are
+  best-effort and swallow their own exceptions: the likeliest cause of a backup
+  failing is a sick database, which is also the likeliest cause of *recording*
+  that failure failing, and neither may take the loop down. A deliberate skip
+  (B2's restart guard) counts as success — the mechanism working, not failing.
+- `assess_backup_health()` is pure and holds every threshold: local stale at
+  **2× the interval** (12h), off-device stale at 2× its daily timer (48h), a
+  failure streak that is a warning at 1–2 and an error at 3+. An *unconfigured*
+  off-device backup reports nothing — a warning that fires on every dev box is
+  a warning nobody reads on the one machine that matters.
+- Surfaced twice: the home dashboard's **Configuration Problems** card (the
+  existing "set up but silently broken" idiom — it rides that endpoint rather
+  than a new widget, because an existing layout would never gain a new widget
+  on its own), and a **Backups** table on **System Stats** with per-copy age.
+  The card keeps reporting while the bot is disconnected, since the check reads
+  only the filesystem and the DB — and a bot that is down is exactly when its
+  backup loop has stopped.
+
+**The incident.** Wiring this up is what found that **B1's off-device backup
+had never run through its timer — not once since it was installed on 08-07.**
+Every firing died at `203/EXEC`:
+
+> `Unable to locate executable '…/scripts/backup_to_nas.sh': Permission denied`
+
+The script is 0755 and runs fine from a shell. The cause is **SELinux**: repo
+files are `user_home_t` and the system manager cannot `execve` one. The denial
+is `dontaudit`'d, so `ausearch -m AVC` shows nothing at all. `ExecStart` now
+goes through `/usr/bin/bash`, which is immune to the relabelling a `chcon` fix
+would suffer on the next edit. Full write-up in `deploy/README.md`.
+
+Two things worth keeping from it. The install verification was
+`./scripts/backup_to_nas.sh` — a shell dry run, which cannot detect this class
+of failure; the README now verifies with `systemctl start`. And the review's
+own note that "the NAS job *does* have failure visibility already — it exits
+non-zero, so a failed run shows in `systemctl --failed`" was **true and
+useless**: it sat in `systemctl --failed` for four days and told nobody. That
+is precisely the argument B3 was making, demonstrated on B1's own fix.
+
+Also closed while in there: the NAS `db/media` directory was `drwxrwxrwx`
+(DSM's share default, inherited by `mkdir -p` and preserved through the swap)
+while `db/` and `secrets/` were correctly 700 — so the `guess_cache` mirror,
+member-submitted photos, was readable by every account on the LAN. The script
+now creates and re-asserts `700` on the media directory and strips group/other
+from each mirrored tree before swapping it in.
 
 Suggested order: B1 and B7's three small files together (one timer, off-device,
 encrypted) → B2's age floor → B5 + B6 (directory split + runbook text, both

@@ -16,7 +16,24 @@ Wants=network-online.target
 Type=oneshot
 User=ben
 Group=ben
-ExecStart=/home/ben/discord-bots/dungeon-keeper/scripts/backup_to_nas.sh
+# Invoked THROUGH bash rather than as ExecStart=<script> directly, and that is
+# load-bearing on SELinux. Files under the repo carry the `user_home_t` label,
+# and the system manager cannot execve a `user_home_t` file -- the unit dies at
+# 203/EXEC with "Unable to locate executable ... Permission denied" and *no
+# AVC*, because that denial is dontaudit'd. It reads like a chmod bug and is
+# not one; the script is 0755 and runs fine from a login shell, which is why
+# this survived install unnoticed until 2026-08-11.
+#
+# `bash` is /usr/bin/bash (`shell_exec_t`, executable by the manager), and bash
+# then *reads* the script -- and reading `user_home_t` is allowed. The bot's own
+# unit escapes the problem by accident: `.venv/bin/*` matches a policy fcontext
+# rule and comes out `bin_t`, which `scripts/*.sh` does not.
+#
+# Relabelling the script (`chcon -t bin_t`) also works, but is the wrong fix:
+# a git checkout or an editor save writes a NEW file that inherits the
+# directory default again, silently re-breaking the timer on the next edit.
+# Going through bash cannot regress that way.
+ExecStart=/usr/bin/bash /home/ben/discord-bots/dungeon-keeper/scripts/backup_to_nas.sh
 
 # The script verifies the backup before shipping it (sqlite quick_check on
 # ~790 MB) and pipes it over SSH; give it room without hanging forever.

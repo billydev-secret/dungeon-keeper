@@ -6,6 +6,7 @@ import asyncio
 import io
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
@@ -185,6 +186,8 @@ _POLICY_VOTE_TIMEOUT_KEY = "policy_vote_timeout_hours"
 _POLICY_VOTE_TIMEOUT_DEFAULT = 72
 
 router = APIRouter()
+
+_log = logging.getLogger("dungeonkeeper.web.config")
 
 
 class ChannelIdBody(BaseModel):
@@ -5038,6 +5041,12 @@ async def config_channel_health(
     signal for the latter — deleting a role takes its channel permission
     overwrites with it, so a members-only channel can go dark with no config
     change, no error, and nothing in the audit log naming the channel.
+
+    Also carries ``system`` — host-level faults that are not about a channel at
+    all, currently backup staleness (finding B3). They ride on this endpoint
+    rather than a new widget because an existing dashboard layout would never
+    gain a brand-new widget on its own, and "set up but silently broken" is
+    exactly what a backup that stopped running is.
     """
     from bot_modules.services.channel_health import snapshot_configured_channels
     from bot_modules.services.channel_health_logic import (
@@ -5045,15 +5054,25 @@ async def config_channel_health(
         group_by_channel,
         grouped_issue_to_dict,
     )
+    from bot_modules.services.db_backup import gather_backup_health
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
+    try:
+        system = (await run_query(lambda: gather_backup_health(ctx.db_path)))["problems"]
+    except Exception:  # pragma: no cover — defensive
+        _log.exception("Backup health check failed")
+        system = []
+
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
     if guild is None:
-        # Bot down or guild uncached — an unknown state is not a fault.
-        return {"available": False, "issues": []}
+        # Bot down or guild uncached — an unknown state is not a fault. The
+        # backup check still stands, though: it reads the filesystem and the
+        # database, neither of which needs Discord. A bot that is down is
+        # precisely when its backup loop has stopped running.
+        return {"available": False, "issues": [], "system": system}
 
     def _snapshot():
         with ctx.open_db() as conn:
@@ -5065,4 +5084,5 @@ async def config_channel_health(
         "available": True,
         "checked": len(snaps),
         "issues": [grouped_issue_to_dict(g) for g in groups],
+        "system": system,
     }

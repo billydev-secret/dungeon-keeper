@@ -172,10 +172,49 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dk-nas-backup.timer
 systemctl list-timers dk-nas-backup.timer
 
+# 5. VERIFY THROUGH SYSTEMD, not just from your shell. Step 3 passing proves
+#    nothing about step 4 -- see "The install trap" below. This is the check
+#    that matters:
+sudo systemctl start dk-nas-backup.service
+systemctl status dk-nas-backup.service     # must end "status=0/SUCCESS"
+
 # If the timer ever loads as `bad-setting`, check the two files differ:
 #   diff deploy/dk-nas-backup.service deploy/dk-nas-backup.timer
 #   git checkout -- deploy/dk-nas-backup.timer    # restore if clobbered
 ```
+
+### The install trap: a shell dry run does not prove the unit works
+
+The timer was installed on 2026-08-07, the dry run passed, and **it never ran
+once**. Every firing died instantly:
+
+```
+dk-nas-backup.service: Unable to locate executable
+  '/home/ben/.../scripts/backup_to_nas.sh': Permission denied
+Failed at step EXEC ... status=203/EXEC
+```
+
+The script is `0755`, owned by `ben`, and runs perfectly from a login shell.
+Nothing is wrong with its permissions. **SELinux** is: files under the repo are
+labelled `user_home_t`, and the system manager may not `execve` a `user_home_t`
+file. The denial is `dontaudit`'d, so `ausearch -m AVC` shows *nothing* — there
+is no evidence pointing at SELinux anywhere in the error.
+
+`dungeon-keeper.service` dodges this by accident: its `ExecStart` is
+`.venv/bin/python`, and `.venv/bin/*` matches a policy rule that labels it
+`bin_t`. `scripts/*.sh` gets no such rule.
+
+The fix, already in `dk-nas-backup.service`, is to run the script **through
+bash** — `ExecStart=/usr/bin/bash <script>`. `bash` is `shell_exec_t` and may
+be executed; it then only needs to *read* the script, which is allowed.
+`chcon -t bin_t` on the script also works but is the wrong fix: a git checkout
+or an editor save writes a new file that inherits the directory default again,
+silently re-breaking the timer at the next edit.
+
+**Any future unit that runs something out of this repo needs the same
+treatment**, and needs verifying with `systemctl start`, not `./script.sh`.
+Note that `systemd-run --user` does *not* reproduce the problem — a user
+manager runs in a different SELinux domain — so it is not a valid substitute.
 
 ### What it does
 

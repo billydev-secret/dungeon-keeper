@@ -152,6 +152,15 @@ log "Integrity ok (messages=$rows, $(du -h "$newest" | cut -f1))"
 ssh_nas "mkdir -p '$NAS_DB_DIR' '$NAS_SECRET_DIR' \
          && chmod 700 '$NAS_DB_DIR' '$NAS_SECRET_DIR'"
 
+# The media mirror (step 4) needs the same treatment and did not get it until
+# 2026-08-11: `mkdir -p` inside the share inherits DSM's 777, and the swap
+# preserves it, so db/media sat drwxrwxrwx holding guess_cache -- member-
+# submitted photos -- readable by every account on the LAN. Created here so the
+# mode is asserted before anything is written into it, then re-asserted after
+# each swap below.
+NAS_MEDIA_DIR="${NAS_MEDIA_DIR:-$NAS_DB_DIR/media}"
+ssh_nas "mkdir -p '$NAS_MEDIA_DIR' && chmod 700 '$NAS_MEDIA_DIR'"
+
 log "Syncing $(basename "$newest") -> $NAS_HOST:$NAS_DB_DIR/"
 send_file "$newest" "$NAS_DB_DIR/$(basename "$newest")"
 log "Transfer verified"
@@ -194,17 +203,23 @@ log "Secrets bundle synced (AES256, passphrase from $GPG_PASSPHRASE_FILE)"
 # is what keeps this safe -- the old copy is only removed once the new one has
 # been fully extracted, so a transfer that dies midway leaves the previous
 # mirror intact rather than a half-deleted one.
-NAS_MEDIA_DIR="${NAS_MEDIA_DIR:-$NAS_DB_DIR/media}"
+# NAS_MEDIA_DIR is created and chmod 700'd in step 3, before anything lands in it.
 for dir in guess_cache econ_icon_catalog econ_role_icons; do
     [[ -d "$DK_ROOT/$dir" ]] || continue
     ssh_nas "rm -rf '$NAS_MEDIA_DIR/$dir.new' && mkdir -p '$NAS_MEDIA_DIR/$dir.new'"
     tar -C "$DK_ROOT/$dir" -czf - . \
         | ssh_nas "tar -C '$NAS_MEDIA_DIR/$dir.new' -xzf -" \
         || die "media mirror failed for $dir"
+    # Strip group/other from the extracted tree before the swap: tar restores
+    # the local modes, and anything that was 644 locally is world-readable on a
+    # share other LAN accounts can reach. Re-asserted every run so a mirror
+    # written by an older version of this script heals instead of staying open.
+    ssh_nas "chmod -R go-rwx '$NAS_MEDIA_DIR/$dir.new'"
     ssh_nas "rm -rf '$NAS_MEDIA_DIR/$dir' \
              && mv '$NAS_MEDIA_DIR/$dir.new' '$NAS_MEDIA_DIR/$dir'"
     log "  mirrored $dir ($(find "$DK_ROOT/$dir" -type f | wc -l) files)"
 done
+ssh_nas "chmod 700 '$NAS_MEDIA_DIR'"
 log "Media directories mirrored"
 
 # --- 5. prune the NAS to the agreed window ---------------------------------

@@ -2011,6 +2011,7 @@
     </ul>
     <p>That last one is the reason the card exists. If <code>@everyone</code> is denied View Channel and one role grants it back, deleting that role takes the permission with it — no setting changes, no error, nothing in the audit log naming the channel, and the bot (which usually has its own permissions) keeps posting there quite happily.</p>
     <p>A channel locked down on purpose still has its staff, so it shows a small number of viewers; only a genuinely broken one reaches zero, which is why that's the line the card draws. When several settings share one broken channel they're listed together, because one permission fix clears them all.</p>
+    <p>The same card also warns when <strong>the database backups have stopped</strong> — either the copy taken here every few hours, or the nightly copy pushed to separate hardware. Both are meant to be invisible, which is the problem: when one quietly stops, nothing else changes, and the files already saved sit there looking healthy while the newest one gets older and older. The card is what breaks that silence. It keeps checking even while the bot is disconnected, since a bot that isn't running isn't backing anything up either. Full detail — how old each copy is, how many there are, and the last error if one failed — lives on the <strong>System Stats</strong> panel under Dev.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          22. CLEANUP & TAGGING
