@@ -67,7 +67,7 @@ function render(container, grants, channels, roles) {
           <div class="field">
             <label>Role Required First</label>
             <span data-picker="required_role_id" data-grant="${esc(name)}"></span>
-            <div class="field-hint">A member cannot receive this grant unless they already have this role — useful for gating NSFW or veteran perks. "(none)" means anyone is eligible.</div>
+            <div class="field-hint">A member cannot receive this grant unless they already have this role — useful for gating Member behind verification, or NSFW and veteran perks. Moderators are held to this too; only admins can override. "(none)" means anyone is eligible.</div>
           </div>
           <div class="field">
             <label>Who Can Hand This Out</label>
@@ -140,7 +140,7 @@ function render(container, grants, channels, roles) {
         <div class="field">
           <label>Role Required First</label>
           <span data-picker="required_role_id" data-grant="__new__"></span>
-          <div class="field-hint">A member cannot receive this grant unless they already have this role. "(none)" means anyone is eligible.</div>
+          <div class="field-hint">A member cannot receive this grant unless they already have this role. Moderators are held to this too; only admins can override. "(none)" means anyone is eligible.</div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <button type="submit" class="btn btn-primary">Add Grant</button>
@@ -152,11 +152,16 @@ function render(container, grants, channels, roles) {
   // ── Searchable pickers replace the old plain <select>s (W-C4). ────────
   const pickers = {}; // pickers[grantName][fieldName]
   function mountRow(grantName, source) {
+    // A grant whose prerequisite is its own role can never be handed out by
+    // anyone but an admin ("@user needs @Denizen before they can receive
+    // @Denizen"), so keep the granted role out of the prerequisite picker.
+    const grantedId = String(source.role_id || "0");
+    const reqRoles = roles.filter((r) => String(r.id) !== grantedId || grantedId === "0");
     const defs = [
       ["role_id", mountRolePicker, roles, "Role Handed Out"],
       ["log_channel_id", mountChannelPicker, channels, "Log Channel"],
       ["announce_channel_id", mountChannelPicker, channels, "Announcement Channel"],
-      ["required_role_id", mountRolePicker, roles, "Role Required First"],
+      ["required_role_id", mountRolePicker, reqRoles, "Role Required First"],
     ];
     pickers[grantName] = {};
     for (const [fieldName, mountFn, options, label] of defs) {

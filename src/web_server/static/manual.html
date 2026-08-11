@@ -885,6 +885,7 @@
         <strong>member</strong> — member to receive the role.
       </div>
       <p><strong>Who can use each grant.</strong> Every grant has its own <em>Who Can Hand This Out</em> list on the <a href="/#/config-roles">Role Grants</a> panel, and that list is the whole answer — moderators included. A moderator who isn't listed on a grant can't hand that role out, which is what lets one role belong to one keeper instead of to all staff. Administrators can always use every grant and never need listing, so you can't lock yourself out. An empty list means admins only.</p>
+      <p><strong>Roles that require another role first.</strong> A grant can name a <em>Role Required First</em> on the same panel — the member must already hold that role before this one can be handed out. The usual setup is gating Member behind your verification role, so nobody can be made a member without verifying. If the member doesn't have it, <code>/grant</code> refuses and tells you which role they need; <strong>moderators are held to this too</strong>, and only administrators can override it. If the required role has been deleted, the grant refuses as misconfigured rather than letting everyone through — a safety gate shouldn't quietly switch itself off.</p>
     </div>
 
     <p class="note">The <strong>grant-audit card</strong> — who's missing the grant role and

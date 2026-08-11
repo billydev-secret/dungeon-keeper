@@ -10,6 +10,11 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.core.utils import format_user_for_log, get_bot_member
+from bot_modules.services.role_grant_logic import (
+    GATE_MISSING_PREREQUISITE,
+    GATE_PREREQUISITE_DELETED,
+    prerequisite_gate,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext
@@ -78,24 +83,47 @@ async def _execute_grant(
         )
         return
 
-    if required_role_id > 0 and not ctx.is_mod(interaction):
-        req_role = guild.get_role(required_role_id)
-        if req_role is None:
-            await interaction.response.send_message(
-                "This grant is misconfigured — the required role no longer exists. Contact an admin.",
-                ephemeral=True,
-            )
-            return
-        if req_role not in member.roles:
-            await interaction.response.send_message(
-                f"{member.mention} needs {req_role.mention} before they can receive {role.mention}.",
-                ephemeral=True,
-            )
-            return
-
+    # Ahead of the prerequisite gate on purpose: a member who already holds
+    # the role needs no grant, and reporting that as "they need @Verified
+    # first" reads as a failure. The predictable reaction is to hand-add the
+    # prerequisite in Discord — the exact manual bypass the gate exists to
+    # prevent — so the no-op case has to report itself as a no-op.
     if role in member.roles:
         await interaction.response.send_message(
             f"{member.mention} already has {role.mention}.", ephemeral=True
+        )
+        return
+
+    actor_is_admin = ctx.is_admin(interaction)
+    req_role = guild.get_role(required_role_id) if required_role_id > 0 else None
+    gate = prerequisite_gate(
+        required_role_id=required_role_id,
+        required_role_exists=req_role is not None,
+        target_has_required=req_role in member.roles,
+        actor_is_admin=actor_is_admin,
+    )
+    if required_role_id > 0 and actor_is_admin and req_role is None:
+        # The bypass means the one person who can repair the config is the
+        # only one who never sees the refusal. Say it out loud instead.
+        log.warning(
+            "Grant %s requires role %s, which no longer exists in guild %s; "
+            "%s bypassed the gate as an administrator.",
+            role.name,
+            required_role_id,
+            guild.id,
+            format_user_for_log(actor, interaction.user.id),
+        )
+    if gate == GATE_PREREQUISITE_DELETED:
+        await interaction.response.send_message(
+            "This grant is misconfigured — the required role no longer exists. Contact an admin.",
+            ephemeral=True,
+        )
+        return
+    if gate == GATE_MISSING_PREREQUISITE:
+        assert req_role is not None  # GATE_MISSING_PREREQUISITE implies it exists
+        await interaction.response.send_message(
+            f"{member.mention} needs {req_role.mention} before they can receive {role.mention}.",
+            ephemeral=True,
         )
         return
 
