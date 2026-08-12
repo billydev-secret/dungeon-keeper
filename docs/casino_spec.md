@@ -33,10 +33,11 @@ todo #87): a five-wide row wraps on narrow clients, so Derby used to drop to a
 short line of its own. Rows are fixed on the decorators, not reflowed — a guild
 that closes a table leaves that row two wide.
 
-**Private play, public moments** (2026-07-24; before this, every result was
-its own public message and heavy slots play scrolled the channel non-stop,
-yanking active UI around): instant games (coinflip/slots/blackjack) render
-**ephemerally** — each player's private machine edits itself in place
+**Private play, public moments** (2026-07-24 for the instant games; extended
+to the last five on 2026-08-11 with migration 158, todos #94/#95): before
+this, every result was its own public message and heavy slots play scrolled
+the channel non-stop, yanking active UI around. **Every game now renders
+ephemerally** — each player's private machine edits itself in place
 (`_respond_private`: a press on your own ephemeral message edits it via
 `response.edit_message`; any other press opens a fresh ephemeral). Animation
 frames ride `edit_original_response` (the interaction webhook, not the
@@ -57,20 +58,19 @@ channel edit bucket). The channel itself carries only shared surfaces:
   reach `record_play`, so a handed-back bet never sways the board. The line
   refreshes on the instant-game repaint; a roulette/derby-only settle
   updates the table but the panel catches up on the next repaint;
-- **communal roulette/derby rounds** (public as ever, repainting on a 2s
-  debounce per round — one edit per burst of bets, the live_signal idea);
-- **broadcast moments**: the jackpot celebration (always), and any
-  instant-game win paying ≥ `broadcast_min_payout` (0 = off) — the result
+- **broadcast moments**: the jackpot celebration (always), and any win on
+  any table paying ≥ `broadcast_min_payout` (0 = off) — the result
   embed reposted publicly with its 🔁 Play Again button, so the "me too"
   invitation survives for wins worth advertising (`_after_instant`;
   skipped when the jackpot celebration already announced the spin).
 
 The panel is **bottom-sticky** (the economy sticky-panel pattern): channel
 traffic debounces a restick (delete + repost, since it is the casino's only
-entry point) after 60s — but the restick **holds while a roulette/derby
-round is open** in the channel (rechecking every 60s, up to a 5-minute
-cap) so the panel never jumps under members who are mid-bet
-(`RESTICK_QUICK_SECONDS` / `RESTICK_ROUND_HOLD_SECONDS`). Both the
+entry point) after 60s. It used to **hold** that restick while a communal
+round was taking bets, so the panel never jumped under members mid-bet;
+migration 158 removed the hold along with the public round boards, since a
+private round lives in its own ephemeral message and no amount of channel
+traffic can disturb it. Both the
 casino config PUT **and the economy config PUT** dispatch
 `casino_config_change`, so enabling/disabling/moving anything updates or
 tears down the panel without a restart.
@@ -137,11 +137,7 @@ All movement goes through `services/casino_service.py`:
 | `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
 | `jackpot_cut_pct` | 5 | % of each fully-lost stake skimmed into the pot — every skimmed coin is escrowed rather than burned, so this trades sink strength for pot drama (was 25 until 2026-07-25; see [reviews/2026-07-25-economy-casino-sources-sinks.md](reviews/2026-07-25-economy-casino-sources-sinks.md)) |
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
-| `roulette_window_seconds` | 45 | betting window (dashboard bounds 15–600) |
-| `derby_window_seconds` | 60 | derby betting window (bounds 15–600) |
-| `baccarat_window_seconds` | 45 | baccarat betting window (bounds 15–600) |
-| `dice_window_seconds` | 45 | dice betting window (bounds 15–600) |
-| `keno_window_seconds` | 45 | keno ticket window (bounds 15–600) |
+| `round_idle_seconds` | 600 | **abandonment** TTL for a private round, not a betting window — the player paces their own round and presses the resolve button when ready. The 60s maintenance sweep resolves anything past it, so a stake can never sit forever (bounds 60–840, capped for the same webhook-token reason as `blackjack_idle_seconds`) |
 | `blackjack_idle_seconds` | 180 | idle hand auto-stands **and idle War standoffs auto-resolve** — one table-idle knob, not two (bounds 30–**840**: an ephemeral hand is editable only through its interaction webhook, whose token dies at 15 min — a longer window would stand hands nobody can repaint; a larger pre-2026-07-24 stored value still loads and settles fine, its message just goes stale) |
 | `pools_enabled` | **false** | the daily prediction market — ships off, unlike the nine tables |
 | `pools_channel_id` | 0 | where the market panel lives; 0 = fall back to `channel_id`. Its own channel because the round is a day long |
@@ -192,18 +188,21 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   old message is unreachable post-restart — the register feed's
   `casino_refund` entry is the player-facing notice, and stale buttons
   answer "already finished").
-- **Roulette** — European single zero. One open round per channel (partial
-  unique index). Any member opens a round from the hub; bets (red/black 2×,
-  dozens 3×, straight 0–36 36×) debit at placement via buttons
-  (`casino_rl:{kind}:{round_id}`) + amount modal; the round embed updates
-  as bets land. At `closes_at` the timer spins once and settles everyone
-  (`status='open'` claim → exactly-once), edits the round message and posts
-  a recap. Boot re-arms timers (elapsed windows resolve immediately);
-  a round whose guild is gone is **voided** (all bets refunded).
+- **Roulette** — European single zero. One open round **per player**
+  (migration 158: partial unique index on `(guild_id, user_id)`, replacing the
+  channel-scoped one), rendered in that player's own ephemeral message. Bets
+  (red/black 2×, dozens 3×, straight 0–36 36×) debit at placement via buttons
+  (`casino_rl:{kind}:{round_id}`) + amount modal, and the board repaints
+  immediately — the old 2s debounce coalesced bursts from *several* bettors,
+  which a private round cannot have. The player presses **🎡 Spin**
+  (`casino_go:roulette:{round_id}`) when ready; there is no betting deadline.
+  The settle takes the `status='open'` claim → exactly-once, the show plays
+  into the same ephemeral message, and the result posts publicly only if it
+  clears `broadcast_min_payout`.
 - **Roulette, the derby, baccarat, dice and keno are ONE machine** — the
-  windowed-round family (`RoundTables` descriptor in `casino_service.py`:
+  private-round family (`RoundTables` descriptor in `casino_service.py`:
   open/place/settle/void with the exactly-once claims, and the `_WindowUI`
-  descriptor driving the cog's open/repaint/timer/resolve flow) is
+  descriptor driving the cog's open/repaint/resolve flow) is
   implemented once and parameterized per game, so a money-safety fix can
   never land in one game and miss the others. Per-game code is the
   paytable, the bet columns/validation, the embeds and the show frames.
@@ -211,12 +210,12 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   shared windowed machinery re-raced: six fixed runners
   (`casino_logic.DERBY_FIELD`, weights /100 × total-return ratios:
   🐇 38·2.5×, 🦔 19·5×, 🐝 13·7×, 🦋 12·8×, 🐢 10·9.5×, 🐌 8·12×), win
-  bets only. One open race per channel; runner buttons
-  (`casino_dy:{runner}:{round_id}`) + amount modal debit at placement; at
-  `closes_at` the timer draws the winner (weighted), settles exactly-once,
-  then plays `derby_frames` on the race message (money **before** the
-  first frame) and posts a recap with 🏇 Next Race. Same boot re-arm,
-  maintenance backstop, and void rules as roulette.
+  bets only. One open race per player; runner buttons
+  (`casino_dy:{runner}:{round_id}`) + amount modal debit at placement; **🏇
+  Race** draws the winner (weighted), settles exactly-once, then plays
+  `derby_frames` into the player's own ephemeral message (money **before**
+  the first frame). Same boot refund, idle backstop and void rules as
+  roulette.
 - **Baccarat** (plan: [plans/casino-classics-and-prediction-market.md](
   plans/casino-classics-and-prediction-market.md) Stage 1a) — punto banco
   on the shared windowed machinery: side buttons
@@ -235,7 +234,7 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   carries 🎴 Next Hand.
 - **Dice / Sic Bo** (plan: [plans/casino-classics-and-prediction-market.md](
   plans/casino-classics-and-prediction-market.md) Stage 1b) — three dice,
-  one communal roll on the shared machinery: call buttons
+  one roll on the shared machinery: call buttons
   (`casino_dc:{big|small|odd|even}:{round_id}`) + amount modal. v1 keeps
   the classic even-money quartet — Big 11–17, Small 4–10, Odd, Even, each
   2× total return, **all losing to any triple** (that exclusion is the
@@ -247,7 +246,7 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   🎲 Next Roll.
 - **Keno** (plan: [plans/casino-classics-and-prediction-market.md](
   plans/casino-classics-and-prediction-market.md) Stage 1d) — 20 of 80
-  drawn once per communal round on the shared machinery. Tier buttons
+  drawn once per private round on the shared machinery. Tier buttons
   (`casino_kn:{4|6|8|10}:{round_id}`) + amount modal; the ticket's numbers
   are **quick-picked by the house** at placement (`keno_quick_pick`,
   echoed back in the confirmation and on the bets board; a manual-numbers
@@ -308,12 +307,16 @@ stranding a stake), `double_blackjack_stake`, and `resolve_blackjack_action` (wh
 `last_action_at`, resetting the idle clock per press, and reports
 "already finished" instead of rendering an outcome the settle didn't pay).
 
-Recovery is layered: roulette close timers arm **before** the round
-message sends (a failed send voids the round instead of stranding it);
-the 60s maintenance sweep auto-stands idle blackjack hands **and resolves
-any open round or race past `closes_at`** (self-healing after a crashed
-timer; the backstop path skips the cosmetic frames so a pile-up can't
-stall the sweep); boot re-arms/refunds as before. Blackjack game rules (double only on two
+Recovery is layered: a round whose ephemeral send fails is voided
+immediately (the player could neither bet nor resolve it); the 60s
+maintenance sweep auto-stands idle blackjack hands **and resolves any open
+round past `closes_at`**, which for a private round is not a backstop but
+the *primary* auto-resolve — the abandonment TTL, since nothing else would
+ever finish a round its player walked away from (the sweep skips the
+cosmetic frames so a pile-up can't stall it); and boot **refunds** live
+hands and rounds alike, because a restart kills the webhook token their
+ephemeral messages are editable through, so no result could ever be
+shown. Blackjack game rules (double only on two
 cards, hit/stand/dealer flow) live in `resolve_blackjack_action` /
 `stand_idle_blackjack_hand` in the service — tested, not cog glue — and
 the double's second stake is derived from the hand row, never
@@ -415,7 +418,7 @@ Stage 2.
   stake **for whoever clicks** (their coins; every guard re-applies). On
   your own ephemeral machine it respins the same message in place; on a
   public big-win broadcast it opens the clicker's own machine — results
-  stay invitations, not dead ends. Roulette recaps carry 🎡 Next Round.
+  stay invitations, not dead ends. Every private round's recap carries 🔁 Play Again, which opens a fresh one.
   Stale buttons stay safe: stakes re-validate at click.
 - **Informed bets:** the bet modal's label carries live limits and cap
   headroom ("Your bet (5–100 · 340 left today)") and pre-fills the
@@ -477,12 +480,17 @@ matrix, wheel/dozen/straight payouts, derby race-frame invariants (winner
 finishes first and alone, positions only advance).
 `tests/test_casino_service.py` — the full `take_stake` guard cascade, cap
 accounting across local days, no-boost payouts, blackjack lifecycle
-(exactly-once settle, boot sweep, idle sweep, double), roulette rounds
-and derby races (one-per-channel, window close, exactly-once settle/void,
-conservation, jackpot feeding, the buzzer-beater claim, leaver refunds).
-The ticker rides `tests/test_casino_service.py` (rows land via each
-instant settle path, communal games and refunds stay off it, per-guild
-trim to `TICKER_KEEP`) and `tests/test_casino_embeds.py` (hub "On the
+(exactly-once settle, boot sweep, idle sweep, double), and private rounds
+(one-per-**player** as a parametrized row per game, the partial index
+refusing a second round when the pre-check is bypassed, betting into an
+abandoned round, an idle auto-resolve racing a manual resolve, the boot
+refund paying exactly once and replaying free, two players' rounds
+settling independently, exactly-once settle/void, conservation, jackpot
+feeding, the buzzer-beater claim, leaver refunds). Migration 158 has its
+own file proving the index swap in both directions with real INSERTs.
+The ticker rides `tests/test_casino_service.py` (rows land via every
+settle path including the five private-round games, refunds and pools
+stay off it, per-guild trim to `TICKER_KEEP`) and `tests/test_casino_embeds.py` (hub "On the
 floor" section renders newest-first, omitted when empty, push/partial
 lines). Name resolution is a two-part contract in
 `tests/test_casino_embeds.py`: a parametrized table renders every

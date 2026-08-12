@@ -141,33 +141,14 @@ export function mount(container) {
 
     const cardTiming = card("Table Timing");
     cardTiming.appendChild(field(
-      "Roulette Betting Window (seconds)",
-      numInput("roulette_window_seconds", c.roulette_window_seconds ?? 45, 15, "1", 600),
-      "How long bets stay open after someone starts a round. Between 15 and 600 seconds.",
-    ));
-    cardTiming.appendChild(field(
-      "Derby Betting Window (seconds)",
-      numInput("derby_window_seconds", c.derby_window_seconds ?? 60, 15, "1", 600),
-      "How long members can back a runner after someone opens a race. " +
-        "Between 15 and 600 seconds.",
-    ));
-    cardTiming.appendChild(field(
-      "Baccarat Betting Window (seconds)",
-      numInput("baccarat_window_seconds", c.baccarat_window_seconds ?? 45, 15, "1", 600),
-      "How long members can pick a side after someone opens a hand. " +
-        "Between 15 and 600 seconds.",
-    ));
-    cardTiming.appendChild(field(
-      "Dice Betting Window (seconds)",
-      numInput("dice_window_seconds", c.dice_window_seconds ?? 45, 15, "1", 600),
-      "How long members can call the roll after someone opens one. " +
-        "Between 15 and 600 seconds.",
-    ));
-    cardTiming.appendChild(field(
-      "Keno Ticket Window (seconds)",
-      numInput("keno_window_seconds", c.keno_window_seconds ?? 45, 15, "1", 600),
-      "How long members can grab tickets after someone opens a draw. " +
-        "Between 15 and 600 seconds.",
+      "Abandoned Round Timeout (seconds)",
+      numInput("round_idle_seconds", c.round_idle_seconds ?? 600, 60, "1", 840),
+      "Roulette, Derby, Baccarat, Dice and Keno are private: you place bets " +
+        "in your own window and press the button when you want to resolve. " +
+        "This is only the safety net \u2014 a round left untouched this long " +
+        "resolves itself, so a stake can never sit forever. Between 60 and " +
+        "840 seconds (Discord stops letting the bot update a private message " +
+        "after 15 minutes).",
     ));
     cardTiming.appendChild(field(
       "Blackjack Idle Timeout (seconds)",
@@ -209,11 +190,7 @@ export function mount(container) {
         ["daily_wager_cap", "Daily Wager Cap", 0, null],
         ["jackpot_cut_pct", "Share of Each Losing Bet", 0, 100],
         ["jackpot_seed", "Starting Pot After a Win", 0, null],
-        ["roulette_window_seconds", "Roulette Betting Window", 15, 600],
-        ["derby_window_seconds", "Derby Betting Window", 15, 600],
-        ["baccarat_window_seconds", "Baccarat Betting Window", 15, 600],
-        ["dice_window_seconds", "Dice Betting Window", 15, 600],
-        ["keno_window_seconds", "Keno Ticket Window", 15, 600],
+        ["round_idle_seconds", "Abandoned Round Timeout", 60, 840],
         ["blackjack_idle_seconds", "Blackjack Idle Timeout", 30, 840],
         ["broadcast_min_payout", "Big-Win Broadcast Threshold", 0, null],
       ]) {

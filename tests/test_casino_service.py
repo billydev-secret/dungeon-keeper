@@ -327,17 +327,60 @@ def test_idle_sweep_finds_only_stale_live_hands(db):
 # ── roulette rounds ────────────────────────────────────────────────────
 
 
-def _open_round(conn, channel=CHAN, now=NOW):
-    round_id = svc.open_roulette_round(conn, GUILD, channel, 45, now=now)
+def _open_round(conn, channel=CHAN, now=NOW, user_id=0):
+    round_id = svc.open_roulette_round(
+        conn, GUILD, channel, 45, user_id=user_id, now=now
+    )
     assert round_id is not None
     return round_id
 
 
-def test_one_open_round_per_channel(db):
+@pytest.mark.parametrize(
+    "opener",
+    ["open_roulette_round", "open_race_round", "open_baccarat_round",
+     "open_dice_round", "open_keno_round"],
+)
+def test_one_open_round_per_player(db, opener):
+    """Migration 158: a round belongs to a player, not to the channel.
+
+    Two people must be able to have their own round open at the same time
+    — under the old channel-scoped index the second player was simply
+    refused, which is exactly the communal constraint being removed. All
+    five games ride one implementation, so this is one contract with five
+    rows rather than five copies of a test.
+    """
     with open_db(db) as conn:
-        _open_round(conn)
-        assert svc.open_roulette_round(conn, GUILD, CHAN, 45, now=NOW) is None
-        assert svc.open_roulette_round(conn, GUILD, CHAN + 1, 45, now=NOW) is not None
+        open_round = getattr(svc, opener)
+        assert open_round(conn, GUILD, CHAN, 600, user_id=A, now=NOW) is not None
+        assert open_round(conn, GUILD, CHAN, 600, user_id=A, now=NOW) is None
+        assert open_round(conn, GUILD, CHAN, 600, user_id=B, now=NOW) is not None
+
+
+def test_live_player_round_reads_only_the_asking_player(db):
+    with open_db(db) as conn:
+        mine = _open_round(conn, user_id=A)
+        _open_round(conn, user_id=B)
+        row = svc.live_roulette_player_round(conn, GUILD, A)
+        assert row is not None and int(row["id"]) == mine
+        assert svc.live_roulette_player_round(conn, GUILD, 999) is None
+
+
+def test_second_round_for_a_player_is_index_proof_not_just_precheck(db):
+    """The pre-check is a courtesy; the partial unique index is the rule.
+
+    Two presses that both clear the pre-check (the race the cog catches as
+    IntegrityError) must not leave a player holding two live rounds — one
+    of which nothing would ever resolve or refund.
+    """
+    with open_db(db) as conn:
+        _open_round(conn, user_id=A)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO casino_roulette_rounds "
+                "(guild_id, channel_id, user_id, opened_at, closes_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (GUILD, CHAN, A, NOW, NOW + 600),
+            )
 
 
 def test_bets_debit_and_close_with_the_window(db):
@@ -392,26 +435,194 @@ def test_void_round_refunds_totals_once(db):
 
 def test_boot_sweep_lists_open_rounds(db):
     with open_db(db) as conn:
-        r1 = _open_round(conn)
-        r2 = _open_round(conn, channel=CHAN + 1)
+        r1 = _open_round(conn, user_id=A)
+        r2 = _open_round(conn, user_id=B)
         svc.settle_roulette_round(conn, r2, 0, now=NOW + 45)
         assert [int(r["id"]) for r in svc.open_roulette_rounds(conn)] == [r1]
+
+
+def test_abandoned_round_takes_no_more_bets(db):
+    """closes_at is the abandonment TTL now, and still shuts betting.
+
+    A player who wandered off and came back after the auto-resolve window
+    must not be able to bet into a round the maintenance sweep is about to
+    settle out from under them.
+    """
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW
+        )
+        assert round_id is not None
+        assert (
+            svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 599)
+            is None
+        )
+        assert (
+            svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 601)
+            == "Betting on that round has closed."
+        )
+        assert get_balance(conn, GUILD, A) == 90
+
+
+# ── private-round state machine ────────────────────────────────────────
+
+
+def test_idle_resolve_and_a_manual_spin_settle_once_between_them(db):
+    """The abandonment TTL and the player's own resolve press race whenever
+    someone comes back at the last second. The status='open' claim is the
+    mutual exclusion — whichever lands first pays, and the loser is a
+    no-op, so the stake can never be paid twice or paid and refunded.
+    """
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW
+        )
+        assert round_id is not None
+        svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
+
+        # The player presses Spin; the sweep then reaches the same round.
+        bets = svc.settle_roulette_round(conn, round_id, 3, now=NOW + 5)
+        assert bets is not None
+        after = get_balance(conn, GUILD, A)
+        assert svc.settle_roulette_round(conn, round_id, 0, now=NOW + 601) is None
+        # The public void wrapper folds "claim lost" into {} (the private
+        # _void_round distinguishes it with None), so the balance is what
+        # actually proves the settled stake was not also handed back.
+        assert svc.void_roulette_round(conn, round_id, now=NOW + 602) == {}
+        assert get_balance(conn, GUILD, A) == after
+
+
+def test_an_abandoned_round_still_pays_its_winner(db):
+    """Auto-resolve is a resolve, not a void: the bets were placed, so the
+    wheel turning without the player watching still pays what it owes."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW
+        )
+        assert round_id is not None
+        svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
+        bets = svc.settle_roulette_round(conn, round_id, 3, now=NOW + 601)
+        assert bets is not None and [int(b["payout"]) for b in bets] == [20]
+        assert get_balance(conn, GUILD, A) == 110
+
+
+def test_resolving_frees_the_player_to_open_another(db):
+    """The partial index only constrains 'open' rows, so finishing a round
+    is what lets the next one start — the play-again loop."""
+    with open_db(db) as conn:
+        first = svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW
+        )
+        assert first is not None
+        assert svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW
+        ) is None
+        svc.settle_roulette_round(conn, first, 3, now=NOW + 5)
+        assert svc.open_roulette_round(
+            conn, GUILD, CHAN, 600, user_id=A, now=NOW + 6
+        ) is not None
+
+
+def test_two_players_rounds_settle_independently(db):
+    """The whole point of the change: one player's spin must not touch
+    anyone else's round, which the old one-per-channel model made
+    impossible to even express."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        ra = svc.open_roulette_round(conn, GUILD, CHAN, 600, user_id=A, now=NOW)
+        rb = svc.open_roulette_round(conn, GUILD, CHAN, 600, user_id=B, now=NOW)
+        assert ra is not None and rb is not None
+        svc.place_roulette_bet(conn, ra, A, "red", 0, 10, now=NOW + 1)
+        svc.place_roulette_bet(conn, rb, B, "black", 0, 10, now=NOW + 1)
+
+        svc.settle_roulette_round(conn, ra, 3, now=NOW + 5)  # 3 = red, A wins
+        assert get_balance(conn, GUILD, A) == 110
+        assert get_balance(conn, GUILD, B) == 90  # still staked, still open
+        rnd_b = svc.get_roulette_round(conn, rb)
+        assert rnd_b is not None and str(rnd_b["status"]) == "open"
+
+
+# ── boot refund of private rounds ──────────────────────────────────────
+
+
+def test_boot_refund_hands_back_every_private_round_once(db):
+    """A restart kills the ephemeral message's webhook token, so the round
+    can never be shown to its player again — refund rather than resolve
+    against a result nobody can see."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        ra = svc.open_roulette_round(conn, GUILD, CHAN, 600, user_id=A, now=NOW)
+        rb = svc.open_keno_round(conn, GUILD, CHAN, 600, user_id=B, now=NOW)
+        assert ra is not None and rb is not None
+        svc.place_roulette_bet(conn, ra, A, "red", 0, 10, now=NOW + 1)
+        svc.place_roulette_bet(conn, ra, A, "number", 7, 15, now=NOW + 2)
+        svc.place_keno_ticket(conn, rb, B, 4, 20, now=NOW + 1)
+        assert get_balance(conn, GUILD, A) == 75
+
+        swept = svc.refund_live_rounds(conn, now=NOW + 10)
+        assert swept == {"roulette": {A: 25}, "keno": {B: 20}}
+        assert get_balance(conn, GUILD, A) == 100
+        assert get_balance(conn, GUILD, B) == 100
+        assert _kinds(conn, A)[-1] == ("casino_refund", 25)
+
+        # Replaying the sweep is free — the status='open' claim is gone.
+        assert svc.refund_live_rounds(conn, now=NOW + 11) == {}
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_boot_refund_absorbs_an_unowned_pre_migration_round(db):
+    """A round the pre-158 communal cog left open belongs to nobody, so no
+    player-scoped path would ever reach it. The sweep still hands the
+    stake back instead of stranding it."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        orphan = _open_round(conn, user_id=0)
+        svc.place_roulette_bet(conn, orphan, A, "red", 0, 30, now=NOW + 1)
+        assert svc.refund_live_rounds(conn, now=NOW + 5) == {"roulette": {A: 30}}
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_boot_refund_leaves_settled_rounds_and_pools_alone(db):
+    """Pools is a day-long communal market with pro-rata payouts — handing
+    every bettor their stake back on a restart would be wrong, so it is
+    deliberately outside PRIVATE_ROUND_TABLES."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        done = _open_round(conn, user_id=A)
+        svc.place_roulette_bet(conn, done, A, "red", 0, 10, now=NOW + 1)
+        svc.settle_roulette_round(conn, done, 3, now=NOW + 45)
+        after_settle = get_balance(conn, GUILD, A)
+
+        pool = svc.open_pools_round(
+            conn, GUILD, CHAN, "2026-08-11", 100.0, NOW + 3600, now=NOW
+        )
+        assert pool is not None
+        assert svc.refund_live_rounds(conn, now=NOW + 50) == {}
+        assert get_balance(conn, GUILD, A) == after_settle
+        still_open = svc.get_pools_round(conn, pool)
+        assert still_open is not None and str(still_open["status"]) == "open"
+
+
+def test_boot_refund_ignores_a_round_nobody_staked(db):
+    with open_db(db) as conn:
+        _open_round(conn, user_id=A)
+        assert svc.refund_live_rounds(conn, now=NOW + 5) == {}
 
 
 # ── derby races (docs/plans/casino-derby.md) ───────────────────────────
 
 
-def _open_race(conn, channel=CHAN, now=NOW):
-    round_id = svc.open_race_round(conn, GUILD, channel, 60, now=now)
+def _open_race(conn, channel=CHAN, now=NOW, user_id=0):
+    round_id = svc.open_race_round(
+        conn, GUILD, channel, 60, user_id=user_id, now=now
+    )
     assert round_id is not None
     return round_id
-
-
-def test_one_open_race_per_channel(db):
-    with open_db(db) as conn:
-        _open_race(conn)
-        assert svc.open_race_round(conn, GUILD, CHAN, 60, now=NOW) is None
-        assert svc.open_race_round(conn, GUILD, CHAN + 1, 60, now=NOW) is not None
 
 
 def test_race_bets_debit_and_close_with_the_window(db):
@@ -475,8 +686,8 @@ def test_void_race_refunds_totals_once(db):
 
 def test_boot_sweep_lists_open_races(db):
     with open_db(db) as conn:
-        r1 = _open_race(conn)
-        r2 = _open_race(conn, channel=CHAN + 1)
+        r1 = _open_race(conn, user_id=A)
+        r2 = _open_race(conn, user_id=B)
         svc.settle_race_round(conn, r2, 0, now=NOW + 60)
         assert [int(r["id"]) for r in svc.open_race_rounds(conn)] == [r1]
 
@@ -520,20 +731,12 @@ _TIE = (["4♠", "3♦"], ["2♠", "5♦"])            # 7 all — the long shot
 _DRAGON7 = (["2♠", "3♦"], ["A♠", "2♦", "4♣"])  # banker 3-card 7 beats 5
 
 
-def _open_coup(conn, channel=CHAN, now=NOW):
-    round_id = svc.open_baccarat_round(conn, GUILD, channel, 45, now=now)
+def _open_coup(conn, channel=CHAN, now=NOW, user_id=0):
+    round_id = svc.open_baccarat_round(
+        conn, GUILD, channel, 45, user_id=user_id, now=now
+    )
     assert round_id is not None
     return round_id
-
-
-def test_one_open_coup_per_channel(db):
-    with open_db(db) as conn:
-        _open_coup(conn)
-        assert svc.open_baccarat_round(conn, GUILD, CHAN, 45, now=NOW) is None
-        assert (
-            svc.open_baccarat_round(conn, GUILD, CHAN + 1, 45, now=NOW)
-            is not None
-        )
 
 
 def test_baccarat_bets_debit_and_close_with_the_window(db):
@@ -631,8 +834,8 @@ def test_void_coup_refunds_totals_once(db):
 
 def test_boot_sweep_lists_open_coups(db):
     with open_db(db) as conn:
-        r1 = _open_coup(conn)
-        r2 = _open_coup(conn, channel=CHAN + 1)
+        r1 = _open_coup(conn, user_id=A)
+        r2 = _open_coup(conn, user_id=B)
         svc.settle_baccarat_round(conn, r2, *_P_WIN, now=NOW + 45)
         assert [int(r["id"]) for r in svc.open_baccarat_rounds(conn)] == [r1]
 
@@ -688,17 +891,12 @@ def test_member_leave_refunds_live_baccarat_stakes(db):
 # ── dice rolls (casino-classics Stage 1b) ──────────────────────────────
 
 
-def _open_roll(conn, channel=CHAN, now=NOW):
-    round_id = svc.open_dice_round(conn, GUILD, channel, 45, now=now)
+def _open_roll(conn, channel=CHAN, now=NOW, user_id=0):
+    round_id = svc.open_dice_round(
+        conn, GUILD, channel, 45, user_id=user_id, now=now
+    )
     assert round_id is not None
     return round_id
-
-
-def test_one_open_roll_per_channel(db):
-    with open_db(db) as conn:
-        _open_roll(conn)
-        assert svc.open_dice_round(conn, GUILD, CHAN, 45, now=NOW) is None
-        assert svc.open_dice_round(conn, GUILD, CHAN + 1, 45, now=NOW) is not None
 
 
 def test_dice_bets_debit_and_close_with_the_window(db):
@@ -777,8 +975,8 @@ def test_void_roll_refunds_totals_once(db):
 
 def test_boot_sweep_lists_open_rolls(db):
     with open_db(db) as conn:
-        r1 = _open_roll(conn)
-        r2 = _open_roll(conn, channel=CHAN + 1)
+        r1 = _open_roll(conn, user_id=A)
+        r2 = _open_roll(conn, user_id=B)
         svc.settle_dice_round(conn, r2, (1, 2, 3), now=NOW + 45)
         assert [int(r["id"]) for r in svc.open_dice_rounds(conn)] == [r1]
 
@@ -834,8 +1032,10 @@ def test_member_leave_refunds_live_dice_stakes(db):
 # ── keno draws (casino-classics Stage 1d) ──────────────────────────────
 
 
-def _open_draw(conn, channel=CHAN, now=NOW):
-    round_id = svc.open_keno_round(conn, GUILD, channel, 45, now=now)
+def _open_draw(conn, channel=CHAN, now=NOW, user_id=0):
+    round_id = svc.open_keno_round(
+        conn, GUILD, channel, 45, user_id=user_id, now=now
+    )
     assert round_id is not None
     return round_id
 
@@ -843,13 +1043,6 @@ def _open_draw(conn, channel=CHAN, now=NOW):
 def _fixed_picks(monkeypatch, picks):
     """Pin the quick-pick (random.sample) to a fixed ticket."""
     monkeypatch.setattr(logic.random, "sample", lambda pop, k: list(picks)[:k])
-
-
-def test_one_open_draw_per_channel(db):
-    with open_db(db) as conn:
-        _open_draw(conn)
-        assert svc.open_keno_round(conn, GUILD, CHAN, 45, now=NOW) is None
-        assert svc.open_keno_round(conn, GUILD, CHAN + 1, 45, now=NOW) is not None
 
 
 def test_keno_tickets_quick_pick_debit_and_close(db, monkeypatch):
@@ -918,8 +1111,8 @@ def test_void_draw_refunds_totals_once(db, monkeypatch):
 
 def test_boot_sweep_lists_open_draws(db):
     with open_db(db) as conn:
-        r1 = _open_draw(conn)
-        r2 = _open_draw(conn, channel=CHAN + 1)
+        r1 = _open_draw(conn, user_id=A)
+        r2 = _open_draw(conn, user_id=B)
         svc.settle_keno_round(conn, r2, list(range(1, 21)), now=NOW + 45)
         assert [int(r["id"]) for r in svc.open_keno_rounds(conn)] == [r1]
 
@@ -1790,18 +1983,36 @@ def test_ticker_rows_land_via_instant_settle_paths(db):
     ]
 
 
-def test_ticker_skips_communal_games_and_refunds(db):
+def test_ticker_now_carries_the_private_round_games(db):
+    """The five windowed games used to stay off the ticker because their
+    public recap was their visibility. Private rounds have no recap, so
+    the ticker is the only place the channel sees them at all — leaving
+    them off would make them invisible rather than merely quiet."""
     with open_db(db) as conn:
         _fund(conn, A, 1_000)
-        # roulette settles through record_play too, but stays off the
-        # ticker — the round recap is already public
-        round_id = _open_round(conn)
+        round_id = _open_round(conn, user_id=A)
         svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
-        svc.settle_roulette_round(conn, round_id, 3, now=NOW + 45)
-        # a boot-sweep refund is not a play, so it can't be floor news
+        svc.settle_roulette_round(conn, round_id, 3, now=NOW + 45)  # 3 = red
+        assert [
+            (str(r["game"]), int(r["stake"]), int(r["payout"]))
+            for r in svc.recent_ticker(conn, GUILD)
+        ] == [("roulette", 10, 20)]
+
+
+def test_ticker_skips_refunds(db):
+    """A bet the house handed back is not a play, so a boot-sweep refund
+    can never be floor news."""
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
         hand_id = _deal(conn, stake=20)
         assert hand_id and svc.refund_live_blackjack_hands(conn, now=NOW)
         assert svc.recent_ticker(conn, GUILD) == []
+
+
+def test_ticker_still_skips_pools(db):
+    """Pools keeps its own daily-market panel and settles there, so it
+    stays off the hub ticker even though the five games joined."""
+    assert "pools" not in svc.TICKER_GAMES
 
 
 def test_ticker_trims_to_keep_and_respects_limit(db):
