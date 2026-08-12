@@ -422,6 +422,19 @@ Stage 2.
   member's last stake per game (in-memory). The cap error names its reset
   time; the hub's 📊 My Stats button shows the personal tally + today's
   cap usage ephemerally.
+- **Players are named, never mentioned** (todo #90, 2026-08-11): every card
+  that shows a player renders a plain display name through an injected
+  `name_fn`, built by `services/name_resolver.build_name_fn` (live member
+  cache → `known_users.display_name` → `username` → `<@id>`, markdown-escaped).
+  A `<@id>` inside an embed is resolved by the **reading** client from its own
+  cache — Discord's servers do nothing to it — so it degrades to a bare numeric
+  id for any viewer who hasn't seen that player. That is the normal case here,
+  not an edge case: the hub ticker and 📊 standings name *past* betters, and a
+  result card is read by the whole channel, not just the player on it. The
+  builders default `name_fn` to `mention` so an un-wired caller keeps its old
+  output, and `tests/test_casino_embeds.py` holds both halves of the contract
+  — no builder leaks a raw reference, and no render site forgets to pass a
+  resolver. Same defect and same fix as Whisper (`aa7ec8cb`).
 - **Jackpot feedback:** losing results append "the loss feeds the jackpot
   — now N" (from the settle's own transaction), so the jackpot's funding is
   visible instead of silent. The round-already-running note
@@ -471,6 +484,12 @@ The ticker rides `tests/test_casino_service.py` (rows land via each
 instant settle path, communal games and refunds stay off it, per-guild
 trim to `TICKER_KEEP`) and `tests/test_casino_embeds.py` (hub "On the
 floor" section renders newest-first, omitted when empty, push/partial
-lines). `tests/web/test_casino_routes.py` — section shape (string ids), PUT
+lines). Name resolution is a two-part contract in
+`tests/test_casino_embeds.py`: a parametrized table renders every
+player-naming builder and fails on any surviving `<@id>` (a new builder adds
+one row), and an AST guard walks `cog.py`/`pools_panel.py` requiring every
+render site to pass a `name_fn` — needed because the parameter defaults to
+`mention`, so a missed call site would silently reintroduce the bug.
+`tests/web/test_casino_routes.py` — section shape (string ids), PUT
 persistence + guards, `broadcast_min_payout` roundtrip/bounds, the 840s
 idle cap; authz/snowflake/browser sweeps cover the panel automatically.

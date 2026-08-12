@@ -1,11 +1,19 @@
 """Casino result-card colors — the win/loss pair must stay the sanctioned
 semantic set. A big win is still a win: it gets ``COLOR_GREEN`` like any other,
 with the celebration carried by the copy, not by a third color tier.
+
+Also home to the name-resolution contract (todo #90): no casino card may leave
+a player as a raw ``<@id>``, since that is resolved by the *reading* client and
+degrades to a bare id for anyone who hasn't cached that user.
 """
 from __future__ import annotations
 
-import discord
+import re
 
+import discord
+import pytest
+
+from bot_modules.cogs.casino import embeds as casino_embeds
 from bot_modules.cogs.casino.embeds import (
     build_derby_race_embed,
     build_derby_result_embed,
@@ -126,8 +134,10 @@ def test_round_embed_bets_fields_stay_under_the_field_limit():
 
 def test_round_embed_bets_show_newest_first():
     bets = [(1, "🔴 Red", 10), (2, "⚫ Black", 20)]
-    value = _bets_value(build_roulette_round_embed(_ECON, 0.0, bets, None))
-    assert value.index("<@2>") < value.index("<@1>")
+    value = _bets_value(
+        build_roulette_round_embed(_ECON, 0.0, bets, None, name_fn=_named)
+    )
+    assert value.index("Player2") < value.index("Player1")
 
 
 # ── How It Works lists only the open tables ────────────────────────────
@@ -149,10 +159,11 @@ def test_hub_embed_shows_ticker_lines_newest_first():
     embed = build_hub_embed(
         _ECON, CasinoSettings(channel_id=1), None,
         ticker=[(2, "slots", 50, 500), (1, "coinflip", 10, 0)],
+        name_fn=_named,
     )
     field = next(f for f in embed.fields if "On the floor" in (f.name or ""))
     assert field.value is not None
-    assert field.value.index("<@2>") < field.value.index("<@1>")
+    assert field.value.index("Player2") < field.value.index("Player1")
     assert "**500**" in field.value  # the win shows its payout
     assert "the house" in field.value  # the loss names its destination
 
@@ -442,13 +453,13 @@ def test_hub_embed_names_the_days_winner_and_loser_with_signed_amounts():
 
     embed = build_hub_embed(
         _ECON, CasinoSettings(channel_id=1), None,
-        standings=((7, 340), (9, -120)),
+        standings=((7, 340), (9, -120)), name_fn=_named,
     )
     value = _standings_field(embed)
     assert value is not None
-    assert "<@7>" in value and "**+340**" in value  # winner, signed +
-    assert "<@9>" in value and "**−120**" in value   # loser, magnitude with −
-    assert value.index("<@7>") < value.index("<@9>")  # up-most listed first
+    assert "Player7" in value and "**+340**" in value  # winner, signed +
+    assert "Player9" in value and "**−120**" in value  # loser, magnitude with −
+    assert value.index("Player7") < value.index("Player9")  # up-most first
 
 
 def test_hub_embed_shows_only_the_winner_when_nobody_is_down():
@@ -456,11 +467,11 @@ def test_hub_embed_shows_only_the_winner_when_nobody_is_down():
 
     embed = build_hub_embed(
         _ECON, CasinoSettings(channel_id=1), None,
-        standings=((7, 340), None),
+        standings=((7, 340), None), name_fn=_named,
     )
     value = _standings_field(embed)
     assert value is not None
-    assert "<@7>" in value and "Down most" not in value
+    assert "Player7" in value and "Down most" not in value
 
 
 def test_hub_embed_omits_standings_when_the_board_is_empty():
@@ -539,3 +550,150 @@ def test_void_card_distinguishes_the_two_refund_reasons():
     ).description or ""
     assert "same side" in one_sided
     assert "no longer measure" in unmeasurable
+
+
+# ── #90: a player is named, never left as a raw Discord reference ──────
+#
+# A `<@id>` inside an embed is resolved client-side, from the reader's own
+# cache — Discord's servers do nothing to it. So on a casino card it renders
+# as a bare id for any viewer who hasn't seen that player, which is the
+# common case for the hub's ticker (past betters) and for result cards read
+# by everyone else in the channel. Every builder that names a player takes a
+# `name_fn` and emits plain text; this table is the enforcement, and a new
+# builder adds one row rather than its own test.
+
+_MENTION = re.compile(r"<@!?\d+>")
+_BETS = [(7, "Red", 10)]
+_PAID = [(7, "Red", 10, 20)]
+
+
+def _seen(embed: discord.Embed) -> str:
+    """Every string a reader actually sees on a card."""
+    parts = [embed.title or "", embed.description or ""]
+    if embed.footer is not None:
+        parts.append(embed.footer.text or "")
+    if embed.author is not None:
+        parts.append(embed.author.name or "")
+    for f in embed.fields:
+        parts += [f.name or "", f.value or ""]
+    return "\n".join(parts)
+
+
+def _named(uid: int) -> str:
+    return f"Player{uid}"
+
+
+_HUB = (_ECON, CasinoSettings(channel_id=1), None)
+_NAME_CASES: list[tuple[str, object]] = [
+    ("hub_ticker", lambda n: casino_embeds.build_hub_embed(
+        *_HUB, ticker=[(7, "slots", 50, 500)], name_fn=n)),
+    ("hub_standings", lambda n: casino_embeds.build_hub_embed(
+        *_HUB, standings=((7, 340), (9, -120)), name_fn=n)),
+    ("coinflip", lambda n: casino_embeds.build_coinflip_embed(
+        _ECON, 7, "heads", "heads", 10, 20, name_fn=n)),
+    ("coinflip_spin", lambda n: casino_embeds.build_coinflip_spin_embed(
+        _ECON, 7, "heads", 10, None, name_fn=n)),
+    ("slots_win", lambda n: casino_embeds.build_slots_embed(
+        _ECON, 7, _REELS, 10, 20, "Three of a kind!", name_fn=n)),
+    ("slots_loss", lambda n: casino_embeds.build_slots_embed(
+        _ECON, 7, _REELS, 10, 0, None, name_fn=n)),
+    ("slots_spin", lambda n: casino_embeds.build_slots_spin_embed(
+        _ECON, 7, 10, ("🍯", None, None), None, name_fn=n)),
+    ("jackpot", lambda n: casino_embeds.build_jackpot_celebration(
+        _ECON, 7, 5000, name_fn=n)),
+    ("blackjack_reveal", lambda n: casino_embeds.build_blackjack_reveal_embed(
+        _ECON, 7, ["9♠", "5♦"], ["K♥"], 10, None, name_fn=n)),
+    ("blackjack", lambda n: casino_embeds.build_blackjack_embed(
+        _ECON, 7, ["9♠", "5♦"], ["K♥", "7♣"], 10, None,
+        outcome="win", payout=20, name_fn=n)),
+    ("war", lambda n: casino_embeds.build_war_embed(
+        _ECON, 7, "K♥", "7♣", 10, None, outcome="win", payout=20, name_fn=n)),
+    ("roulette_round", lambda n: casino_embeds.build_roulette_round_embed(
+        _ECON, 1.0, _BETS, None, name_fn=n)),
+    ("roulette_result", lambda n: casino_embeds.build_roulette_result_embed(
+        _ECON, 7, _PAID, name_fn=n)),
+    ("derby_round", lambda n: casino_embeds.build_derby_round_embed(
+        _ECON, 1.0, _BETS, None, name_fn=n)),
+    ("derby_result", lambda n: casino_embeds.build_derby_result_embed(
+        _ECON, 0, [12, 9, 8, 7, 6, 5], _PAID, name_fn=n)),
+    ("baccarat_round", lambda n: casino_embeds.build_baccarat_round_embed(
+        _ECON, 1.0, _BETS, None, name_fn=n)),
+    ("baccarat_result", lambda n: casino_embeds.build_baccarat_result_embed(
+        _ECON, ["9♠", "5♦"], ["K♥", "7♣"], _PAID, name_fn=n)),
+    ("dice_round", lambda n: casino_embeds.build_dice_round_embed(
+        _ECON, 1.0, _BETS, None, name_fn=n)),
+    ("dice_result", lambda n: casino_embeds.build_dice_result_embed(
+        _ECON, (3, 4, 5), _PAID, name_fn=n)),
+    ("keno_round", lambda n: casino_embeds.build_keno_round_embed(
+        _ECON, 1.0, _BETS, None, name_fn=n)),
+    ("keno_result", lambda n: casino_embeds.build_keno_result_embed(
+        _ECON, list(range(1, 21)), _PAID, name_fn=n)),
+    ("pools_result", lambda n: casino_embeds.build_pools_result_embed(
+        _ECON, "2026-08-03", 1204, 1186.5, pools_logic.OVER,
+        [(7, 10, 20)], 19, None, spec=pools_metrics.SPECS["messages"],
+        chart=False, name_fn=n)),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "build"), _NAME_CASES, ids=[c[0] for c in _NAME_CASES]
+)
+def test_no_casino_card_leaves_a_raw_discord_reference(label, build):
+    text = _seen(build(_named))
+    assert not _MENTION.search(text), f"{label} left a raw <@id> reference"
+    assert "Player7" in text, f"{label} never rendered the resolved name"
+
+
+def test_ticker_line_names_the_player():
+    assert "Player7" in casino_embeds.ticker_line(
+        7, "slots", 50, 500, name_fn=_named
+    )
+    assert not _MENTION.search(
+        casino_embeds.ticker_line(7, "slots", 50, 500, name_fn=_named)
+    )
+
+
+def test_every_casino_render_site_passes_a_resolver():
+    """The other half of the contract above.
+
+    ``name_fn`` defaults to ``mention`` so an un-wired caller keeps its old
+    output rather than crashing — which means a render site that forgets to
+    pass one silently reintroduces todo #90 and no builder test would notice.
+    This walks the two modules that actually render and requires every call
+    to a name-taking builder to hand one over. ``round_embed``/``build_show``
+    are the ``_WindowUI`` indirections onto those same builders.
+    """
+    import ast
+    import inspect
+    import pathlib
+
+    from bot_modules.cogs.casino import cog as casino_cog
+    from bot_modules.cogs.casino import pools_panel
+
+    needs = {"round_embed", "build_show"} | {
+        name
+        for name, fn in inspect.getmembers(casino_embeds, inspect.isfunction)
+        if "name_fn" in inspect.signature(fn).parameters
+    }
+    missed = []
+    for module in (casino_cog, pools_panel):
+        # Explicit utf-8: these sources are full of em-dashes and the CI
+        # runner is Windows, where the default encoding is cp1252.
+        source = pathlib.Path(inspect.getfile(module)).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            called = (
+                func.attr if isinstance(func, ast.Attribute)
+                else getattr(func, "id", None)
+            )
+            if called in needs and not any(
+                kw.arg == "name_fn" for kw in node.keywords
+            ):
+                missed.append(
+                    f"{module.__name__.rsplit('.', 1)[-1]}.py:"
+                    f"{node.lineno} {called}()"
+                )
+    assert not missed, "render sites with no name_fn: " + ", ".join(missed)
