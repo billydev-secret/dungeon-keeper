@@ -1653,3 +1653,71 @@ async def test_econ_birthday_wish_needs_an_announcement(mock_notify, econ_db):
             "SELECT 1 FROM econ_kind_activity WHERE kind = 'birthday_wish'"
         ).fetchone()
     assert row is None
+
+
+# ── Thread parentage recorded at ingest ───────────────────────────────
+#
+# Wiring guard. The stored channel_id of a message posted in a thread is the
+# thread's own, and nothing else distinguishes it afterwards — so if the cog
+# stops handing the parent to the channel registry, the analytics quietly go
+# back to listing threads as channels (todo #91, services/channel_rollup).
+
+def _thread_channel(*, channel_id: int, parent_id: int) -> MagicMock:
+    ch = MagicMock(spec=discord.Thread)
+    ch.id = channel_id
+    ch.name = "a thread"
+    ch.parent_id = parent_id
+    return ch
+
+
+def _text_channel(*, channel_id: int) -> MagicMock:
+    # spec'd to TextChannel precisely because it has no parent_id — an
+    # unspecced MagicMock would answer every attribute and read as a thread.
+    ch = MagicMock(spec=discord.TextChannel)
+    ch.id = channel_id
+    ch.name = "general"
+    return ch
+
+
+@patch("bot_modules.cogs.events_cog.upsert_known_channel")
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+async def test_a_thread_message_records_its_parent_channel(
+    mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level,
+    mock_upsert, cog,
+):
+    mock_spoiler.return_value = False
+    mock_award.return_value = None
+    msg = _make_message(channel_id=777)
+    msg.channel = _thread_channel(channel_id=777, parent_id=10)
+
+    await cog.on_message(msg)
+
+    kwargs = [c.kwargs for c in mock_upsert.call_args_list if c.kwargs.get("channel_id") == 777]
+    assert kwargs, "the thread was never recorded in the channel registry"
+    assert all(k["parent_id"] == 10 and k["is_thread"] is True for k in kwargs)
+
+
+@patch("bot_modules.cogs.events_cog.upsert_known_channel")
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+async def test_a_channel_message_records_no_parent(
+    mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level,
+    mock_upsert, cog,
+):
+    mock_spoiler.return_value = False
+    mock_award.return_value = None
+    msg = _make_message(channel_id=10)
+    msg.channel = _text_channel(channel_id=10)
+
+    await cog.on_message(msg)
+
+    kwargs = [c.kwargs for c in mock_upsert.call_args_list if c.kwargs.get("channel_id") == 10]
+    assert kwargs
+    assert all(k["parent_id"] is None and k["is_thread"] is False for k in kwargs)

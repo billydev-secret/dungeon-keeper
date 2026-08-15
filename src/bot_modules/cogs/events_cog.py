@@ -32,6 +32,7 @@ from bot_modules.services.birthday_service import (
     is_birthday_wish,
 )
 from bot_modules.services import marqo_nsfw, nsfw_classifier_service
+from bot_modules.services.channel_rollup import thread_parent_id
 from bot_modules.services.discord_scan import collect_messageable_channels
 from bot_modules.services.event_echo_service import echo_discord_event
 from bot_modules.services.greeting_watch_service import (
@@ -259,6 +260,8 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                             channel_id=channel.id,
                             channel_name=getattr(channel, "name", str(channel.id)),
                             ts=msg_ts,
+                            parent_id=thread_parent_id(channel),
+                            is_thread=thread_parent_id(channel) is not None,
                         )
 
             try:
@@ -665,6 +668,11 @@ class EventsCog(commands.Cog):
         # skip building the attachment/embed payloads that store_message would
         # discard. Derivations (sentiment/mentions/XP) are still computed below.
         retain = cfg.retains_content
+        # Recorded on the channel registry so the analytics can attribute a
+        # thread's messages to the channel it was started from — the stored
+        # channel_id is the thread's own, and nothing else distinguishes the
+        # two after the fact (services/channel_rollup).
+        channel_parent_id = thread_parent_id(message.channel)
 
         message_ts = (
             message.created_at.timestamp() if message.created_at else time.time()
@@ -744,6 +752,8 @@ class EventsCog(commands.Cog):
                         channel_id=message.channel.id,
                         channel_name=getattr(message.channel, "name", str(message.channel.id)),
                         ts=message_ts,
+                        parent_id=channel_parent_id,
+                        is_thread=channel_parent_id is not None,
                     )
 
             await asyncio.to_thread(_persist_bot_message)
@@ -801,6 +811,8 @@ class EventsCog(commands.Cog):
                             message.channel, "name", str(message.channel.id)
                         ),
                         ts=message_ts,
+                        parent_id=channel_parent_id,
+                        is_thread=channel_parent_id is not None,
                     )
 
             await asyncio.to_thread(_persist_nonmember_message)
@@ -939,6 +951,8 @@ class EventsCog(commands.Cog):
                     channel_id=message.channel.id,
                     channel_name=getattr(message.channel, "name", str(message.channel.id)),
                     ts=message_ts,
+                    parent_id=channel_parent_id,
+                    is_thread=channel_parent_id is not None,
                 )
 
                 interaction_targets = list(mention_ids)

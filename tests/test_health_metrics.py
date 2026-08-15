@@ -17,6 +17,7 @@ import pytest
 from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.core.db_utils import open_db
 from bot_modules.services import health_metrics as hm
+from bot_modules.services.channel_rollup import build_resolver
 from tests.db_template import migrated_db
 
 
@@ -328,6 +329,123 @@ def test_compute_channel_health_marks_dormant_and_active(db_conn):
     nsfw = {int(c["channel_id"]): c["is_nsfw"] for c in out["channels"]}
     assert nsfw[200] is True
     assert nsfw[100] is False
+
+
+# ── Thread attribution (see services/channel_rollup) ─────────────────
+#
+# A message posted in a thread carries the thread's own id, so without the
+# resolver every thread scored as a channel of its own and its parent read as
+# quieter than it was.
+
+
+def _seed_thread(conn, *, thread_id: int, parent_id: int):
+    conn.execute(
+        "INSERT OR REPLACE INTO known_channels "
+        "(guild_id, channel_id, channel_name, updated_at, parent_id, is_thread)"
+        " VALUES (?, ?, '', 0, ?, 1)",
+        (GUILD, thread_id, parent_id),
+    )
+
+
+def test_channel_health_counts_thread_messages_toward_the_parent(db_conn):
+    now = 1_700_000_000.0
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=int(now - 60))
+    _seed_message(db_conn, mid=2, cid=101, aid=2, ts=int(now - 120))
+    _seed_message(db_conn, mid=3, cid=101, aid=3, ts=int(now - 180))
+    _seed_thread(db_conn, thread_id=101, parent_id=100)
+    db_conn.commit()
+
+    out = hm.compute_channel_health(
+        db_conn,
+        GUILD,
+        now=now,
+        resolver=build_resolver(db_conn, GUILD, live_channel_ids=[100]),
+    )
+
+    rows = {int(c["channel_id"]): c for c in out["channels"]}
+    assert set(rows) == {100}, "the thread must not appear as a channel"
+    assert rows[100]["msgs_per_day"] == round(3 / 30, 1)
+
+
+def test_channel_health_does_not_double_count_an_author_across_a_thread(db_conn):
+    # Author 1 posts in both the channel and its thread: one unique user, not
+    # two. Summing the per-id distinct counts would say two.
+    now = 1_700_000_000.0
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=int(now - 60))
+    _seed_message(db_conn, mid=2, cid=101, aid=1, ts=int(now - 120))
+    _seed_thread(db_conn, thread_id=101, parent_id=100)
+    db_conn.commit()
+
+    out = hm.compute_channel_health(
+        db_conn,
+        GUILD,
+        now=now,
+        resolver=build_resolver(db_conn, GUILD, live_channel_ids=[100]),
+    )
+
+    assert {int(c["channel_id"]) for c in out["channels"]} == {100}
+    assert out["channels"][0]["msgs_per_day"] == round(2 / 30, 1)
+    assert out["channels"][0]["unique_weekly_users"] == 1
+
+
+def test_a_channel_alive_only_in_its_threads_is_not_dormant(db_conn):
+    # All the recent talk happened in the thread. Taking the parent's own last
+    # message would age it out at 14 days and call a live channel dormant.
+    now = 1_700_000_000.0
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=int(now - 25 * 86400))
+    _seed_message(db_conn, mid=2, cid=101, aid=2, ts=int(now - 60))
+    _seed_thread(db_conn, thread_id=101, parent_id=100)
+    db_conn.commit()
+
+    out = hm.compute_channel_health(
+        db_conn,
+        GUILD,
+        now=now,
+        resolver=build_resolver(db_conn, GUILD, live_channel_ids=[100]),
+    )
+
+    assert out["channels"][0]["status"] in {"healthy", "flagged"}
+
+
+def test_channel_health_drops_a_channel_the_guild_no_longer_has(db_conn):
+    now = 1_700_000_000.0
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=int(now - 60))
+    _seed_message(db_conn, mid=2, cid=999, aid=1, ts=int(now - 60))
+    db_conn.commit()
+
+    out = hm.compute_channel_health(
+        db_conn,
+        GUILD,
+        now=now,
+        resolver=build_resolver(db_conn, GUILD, live_channel_ids=[100]),
+    )
+
+    assert {int(c["channel_id"]) for c in out["channels"]} == {100}
+
+
+def test_heatmap_folds_thread_hours_into_the_parents_grid(db_conn):
+    now = 1_700_000_000.0
+    ts = int(now - 3600)
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=ts)
+    _seed_message(db_conn, mid=2, cid=101, aid=2, ts=ts)
+    _seed_thread(db_conn, thread_id=101, parent_id=100)
+    db_conn.commit()
+
+    out = hm.compute_heatmap(
+        db_conn,
+        GUILD,
+        now=now,
+        resolver=build_resolver(db_conn, GUILD, live_channel_ids=[100]),
+    )
+
+    per_channel = {int(c["channel_id"]): c for c in out["per_channel"]}
+    assert set(per_channel) == {100}
+    # Both messages land in the same slot, so the parent's grid carries both —
+    # and carries exactly what the server-wide grid does, since between them
+    # those two messages are the whole guild's traffic.
+    parent_peak = max(max(row) for row in per_channel[100]["grid"])
+    assert parent_peak == max(max(row) for row in out["grid"])
+    assert parent_peak > 0
 
 
 # ── compute_gini ─────────────────────────────────────────────────────

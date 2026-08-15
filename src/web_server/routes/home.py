@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import time
+from collections import defaultdict
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
 from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.core.db_utils import get_config_value
+from bot_modules.services.channel_rollup import build_resolver, guild_channel_ids
 from bot_modules.services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
@@ -272,7 +274,10 @@ async def home_data(
                     nsfw_unique=nsfw_unique,
                 )
 
-            # Top channels
+            # Top channels. The LIMIT is applied after folding thread activity
+            # into parent channels, not in SQL — a top-five taken first would be
+            # five raw ids, some of them threads, and folding them afterwards
+            # could only ever shrink the list.
             top_channels: list[dict] = []
             if _need("top_channels"):
                 top_channels_rows = conn.execute(
@@ -280,13 +285,23 @@ async def home_data(
                     SELECT channel_id, COUNT(*) AS cnt
                     FROM messages
                     WHERE guild_id = ? AND ts >= ?{bot_clause}
-                    GROUP BY channel_id ORDER BY cnt DESC LIMIT 5
+                    GROUP BY channel_id
                     """,
                     (guild_id, int(one_hour), *bot_params),
                 ).fetchall()
+                resolver = build_resolver(
+                    conn, guild_id, live_channel_ids=guild_channel_ids(guild)
+                )
+                folded: dict[int, int] = defaultdict(int)
+                for r in top_channels_rows:
+                    target = resolver.resolve(int(r[0]))
+                    if target is not None:
+                        folded[target] += int(r[1])
                 top_channels = [
-                    {"channel_id": str(r[0]), "channel_name": "", "count": int(r[1])}
-                    for r in top_channels_rows
+                    {"channel_id": str(cid), "channel_name": "", "count": count}
+                    for cid, count in sorted(
+                        folded.items(), key=lambda kv: kv[1], reverse=True
+                    )[:5]
                 ]
                 result["top_channels"] = top_channels
 

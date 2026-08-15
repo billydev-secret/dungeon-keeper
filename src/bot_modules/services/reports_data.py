@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Literal, TypedDict
 
 from bot_modules.core.bot_exclusion import bot_filter_clause
+from bot_modules.services.channel_rollup import ChannelResolver, build_resolver
 from bot_modules.services.activity_graphs import (
     Resolution,
     query_dropoff_profiles,
@@ -1393,7 +1394,23 @@ def get_channel_comparison_data(
     guild_id: int,
     days: int = 30,
     include_bots: bool = False,
+    resolver: ChannelResolver | None = None,
 ) -> ChannelComparisonData:
+    """Side-by-side channel metrics for the window.
+
+    Every query below groups by the raw ``channel_id``, which for a message
+    posted in a thread is the thread's own id. *resolver* folds those groups
+    onto the channel each one belongs to — a thread onto its parent — and drops
+    the ids that aren't channels at all (see services/channel_rollup). Passing
+    None builds one from the database alone, which is the degraded mode used
+    when the bot's guild cache isn't available.
+
+    The folding is why author counts and sentiment are recombined here rather
+    than taken from SQL: a thread and its parent share authors, so summing
+    per-channel distinct counts would double-count anyone who posted in both,
+    and averaging two averages would weight a three-message thread the same as
+    its thousand-message parent.
+    """
     now = int(datetime.now(timezone.utc).timestamp())
     cutoff = now - days * 86400
     mid = now - days * 86400 // 2  # midpoint for trend
@@ -1401,6 +1418,8 @@ def get_channel_comparison_data(
     msg_bot_clause, msg_bot_params = bot_filter_clause(
         guild_id, column="m.author_id", include_bots=include_bots
     )
+    if resolver is None:
+        resolver = build_resolver(conn, guild_id, live_channel_ids=None)
 
     rows = conn.execute(
         f"""
@@ -1427,7 +1446,13 @@ def get_channel_comparison_data(
         """,
         (guild_id, cutoff),
     ).fetchall()
-    xp_by_channel: dict[str, float] = {str(r[0]): float(r[1]) for r in xp_rows if r[0] is not None}
+    xp_by_channel: dict[int, float] = defaultdict(float)
+    for r in xp_rows:
+        if r[0] is None:
+            continue
+        target = resolver.resolve(int(r[0]))
+        if target is not None:
+            xp_by_channel[target] += float(r[1])
 
     # Per-channel Gini: message distribution among authors
     author_msg_rows = conn.execute(
@@ -1439,10 +1464,14 @@ def get_channel_comparison_data(
         """,
         (guild_id, cutoff, *bot_params),
     ).fetchall()
-    ch_author_counts: dict[str, list[float]] = {}
+    # Keyed per author, not appended as a flat list: a member posting in both a
+    # thread and its parent is one author of the merged channel, and their
+    # messages belong in one bucket for the Gini spread.
+    ch_author_counts: dict[int, dict[int, float]] = defaultdict(lambda: defaultdict(float))
     for r in author_msg_rows:
-        cid = str(r[0])
-        ch_author_counts.setdefault(cid, []).append(float(r[2]))
+        target = resolver.resolve(int(r[0]))
+        if target is not None:
+            ch_author_counts[target][int(r[1])] += float(r[2])
 
     def _gini(values: list[float]) -> float:
         if not values:
@@ -1457,10 +1486,11 @@ def get_channel_comparison_data(
             cumsum += v * (2 * (i + 1) - n - 1)
         return cumsum / (n * s)
 
-    # Average sentiment per channel
+    # Average sentiment per channel. Summed rather than averaged in SQL so the
+    # fold below can weight each thread by how much was actually said in it.
     sentiment_rows = conn.execute(
         f"""
-        SELECT m.channel_id, AVG(ms.sentiment) AS avg_s
+        SELECT m.channel_id, SUM(ms.sentiment) AS total_s, COUNT(ms.sentiment) AS n
         FROM message_sentiment ms
         JOIN messages m ON ms.message_id = m.message_id
         WHERE ms.guild_id = ? AND m.ts >= ?{msg_bot_clause}
@@ -1468,28 +1498,49 @@ def get_channel_comparison_data(
         """,
         (guild_id, cutoff, *msg_bot_params),
     ).fetchall()
-    sentiment_by_channel: dict[str, float | None] = {
-        str(r[0]): round(float(r[1]), 3) if r[1] is not None else None
-        for r in sentiment_rows
+    sentiment_totals: dict[int, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    for r in sentiment_rows:
+        if r[1] is None or not r[2]:
+            continue
+        target = resolver.resolve(int(r[0]))
+        if target is None:
+            continue
+        acc = sentiment_totals[target]
+        acc[0] += float(r[1])
+        acc[1] += float(r[2])
+    sentiment_by_channel: dict[int, float | None] = {
+        cid: round(total / n, 3) if n else None
+        for cid, (total, n) in sentiment_totals.items()
     }
 
-    channels: list[ChannelRow] = []
+    # Fold the raw per-id volumes onto their resolved channel. The SQL's
+    # ORDER BY no longer decides the final order — a channel can outrank
+    # another only after its threads have been added in — so sort after.
+    volumes: dict[int, list[int]] = defaultdict(lambda: [0, 0, 0])  # total, recent, prev
     for r in rows:
-        cid = str(r[0])
-        recent = int(r[3])
-        prev = int(r[4])
+        target = resolver.resolve(int(r[0]))
+        if target is None:
+            continue
+        acc = volumes[target]
+        acc[0] += int(r[1])
+        acc[1] += int(r[3])
+        acc[2] += int(r[4])
+
+    channels: list[ChannelRow] = []
+    for cid, (total, recent, prev) in volumes.items():
         trend = (
             round((recent - prev) / max(prev, 1) * 100, 1)
             if prev > 0
             else (100.0 if recent > 0 else 0.0)
         )
-        gini_val = round(_gini(ch_author_counts.get(cid, [])), 3)
+        by_author = ch_author_counts.get(cid, {})
+        gini_val = round(_gini(list(by_author.values())), 3)
         channels.append(
             {
-                "channel_id": cid,
+                "channel_id": str(cid),
                 "channel_name": "",
-                "message_count": int(r[1]),
-                "unique_authors": int(r[2]),
+                "message_count": total,
+                "unique_authors": len(by_author),
                 "recent_count": recent,
                 "prev_count": prev,
                 "trend_pct": trend,
@@ -1499,6 +1550,7 @@ def get_channel_comparison_data(
             }
         )
 
+    channels.sort(key=lambda c: c["message_count"], reverse=True)
     return {"channels": channels}
 
 

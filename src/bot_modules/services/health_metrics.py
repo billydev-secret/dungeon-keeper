@@ -15,6 +15,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 
 from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
+from bot_modules.services.channel_rollup import ChannelResolver, build_resolver
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -257,11 +258,16 @@ def compute_heatmap(
     now: float | None = None,
     utc_offset_hours: float = 0.0,
     include_bots: bool = False,
+    resolver: ChannelResolver | None = None,
 ) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
     offset_secs = int(utc_offset_hours * 3600)
     bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
+    # Only the per-channel breakdown needs this; the server-wide grid counts
+    # every message wherever it was posted, threads included.
+    if resolver is None:
+        resolver = build_resolver(conn, guild_id, live_channel_ids=None)
 
     # 7x24 grid: day_of_week (0=Mon) x hour_of_day -> avg msgs/hr, bucketed in
     # guild-local time (ts shifted by the guild's tz offset before bucketing).
@@ -302,7 +308,9 @@ def compute_heatmap(
         ap = "am" if hod < 12 else "pm"
         return f"{dow_names[dow]} {h}{ap}"
 
-    # Per-channel mini heatmaps (top 10 channels by volume)
+    # Per-channel mini heatmaps (top 10 channels by volume). Thread traffic is
+    # folded into the parent's grid, so a channel's busiest hours include the
+    # hours its threads were busy (services/channel_rollup).
     ch_rows = conn.execute(
         f"""SELECT channel_id,
              CAST((((ts + ?) % 604800) + 259200) / 86400 AS INTEGER) % 7 AS dow,
@@ -314,18 +322,28 @@ def compute_heatmap(
         (offset_secs, offset_secs, guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
 
+    # Raw counts first, averaged per week only once the channel's own messages
+    # and its threads' have been added together — rounding each contribution
+    # separately and summing those would drift low.
     ch_totals: dict[int, int] = defaultdict(int)
-    ch_grids: dict[int, list[list[float]]] = {}
+    ch_slots: dict[int, list[list[int]]] = {}
     for r in ch_rows:
-        cid = r["channel_id"]
+        cid = resolver.resolve(r["channel_id"])
+        if cid is None:
+            continue
         ch_totals[cid] += r["cnt"]
-        if cid not in ch_grids:
-            ch_grids[cid] = [[0.0] * 24 for _ in range(7)]
-        ch_grids[cid][r["dow"]][r["hod"]] = round(r["cnt"] / weeks, 1)
+        if cid not in ch_slots:
+            ch_slots[cid] = [[0] * 24 for _ in range(7)]
+        ch_slots[cid][r["dow"]][r["hod"]] += r["cnt"]
 
     top_channels = sorted(ch_totals, key=lambda c: ch_totals[c], reverse=True)[:10]
     per_channel = [
-        {"channel_id": str(cid), "grid": ch_grids.get(cid, [[0] * 24] * 7)}
+        {
+            "channel_id": str(cid),
+            "grid": [
+                [round(cnt / weeks, 1) for cnt in row] for row in ch_slots[cid]
+            ],
+        }
         for cid in top_channels
     ]
 
@@ -352,26 +370,45 @@ def compute_channel_health(
     now: float | None = None,
     nsfw_channel_ids: list[int] | None = None,
     include_bots: bool = False,
+    resolver: ChannelResolver | None = None,
 ) -> dict:
+    """30-day status and score for each channel.
+
+    *resolver* folds thread activity onto the channel the thread was started
+    from and drops ids that aren't channels — throwaway pen-pals/voice/jail
+    rooms, and anything the guild no longer has (services/channel_rollup).
+    Without it a busy thread scored as a channel of its own, and its parent
+    read as quieter than it really was.
+    """
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
     nsfw_ids = set(nsfw_channel_ids or [])
     bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
+    if resolver is None:
+        resolver = build_resolver(conn, guild_id, live_channel_ids=None)
 
-    # Per-channel stats
+    # Per-channel volume. unique_users is recomputed from the per-author rows
+    # below instead of taken from here — a member active in both a thread and
+    # its parent is one unique user of the merged channel, not two.
     ch_rows = conn.execute(
-        f"""SELECT channel_id,
-                  COUNT(*) AS msg_count,
-                  COUNT(DISTINCT author_id) AS unique_users
+        f"""SELECT channel_id, COUNT(*) AS msg_count
            FROM messages WHERE guild_id=? AND ts>=?{bot_clause}
            GROUP BY channel_id""",
         (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
+    msg_counts: dict[int, int] = defaultdict(int)
+    for r in ch_rows:
+        target = resolver.resolve(r["channel_id"])
+        if target is not None:
+            msg_counts[target] += r["msg_count"]
 
-    # Thread depth: avg replies per thread starter
+    # Conversation depth: replies per replied-to message. Summed rather than
+    # averaged in SQL so a thread's replies can be weighted into the parent's
+    # average by volume instead of as one more equal data point.
     depth_rows = conn.execute(
         f"""SELECT m.channel_id,
-                  AVG(reply_cnt) AS avg_depth
+                  SUM(reply_cnt) AS total_replies,
+                  COUNT(*) AS starters
            FROM (
                SELECT channel_id, reply_to_id, COUNT(*) AS reply_cnt
                FROM messages
@@ -381,7 +418,17 @@ def compute_channel_health(
            GROUP BY m.channel_id""",
         (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
-    depth_map = {r["channel_id"]: round(r["avg_depth"], 2) for r in depth_rows}
+    depth_totals: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+    for r in depth_rows:
+        target = resolver.resolve(r["channel_id"])
+        if target is not None:
+            depth_totals[target][0] += int(r["total_replies"] or 0)
+            depth_totals[target][1] += int(r["starters"] or 0)
+    depth_map = {
+        cid: round(replies / starters, 2)
+        for cid, (replies, starters) in depth_totals.items()
+        if starters
+    }
 
     # Per-channel Gini (message distribution among authors)
     author_counts_rows = conn.execute(
@@ -390,9 +437,11 @@ def compute_channel_health(
            GROUP BY channel_id, author_id""",
         (guild_id, thirty_days_ago, *bot_params),
     ).fetchall()
-    ch_author_counts: dict[int, list[int]] = defaultdict(list)
+    ch_author_counts: dict[int, dict[int, int]] = defaultdict(lambda: defaultdict(int))
     for r in author_counts_rows:
-        ch_author_counts[r["channel_id"]].append(r["cnt"])
+        target = resolver.resolve(r["channel_id"])
+        if target is not None:
+            ch_author_counts[target][r["author_id"]] += r["cnt"]
 
     # Last message per channel (for dormant detection). Bot-excluded too, so a
     # channel kept "alive" only by bot posts reads as dormant — which is the
@@ -402,7 +451,14 @@ def compute_channel_health(
         f"WHERE guild_id=?{bot_clause} GROUP BY channel_id",
         (guild_id, *bot_params),
     ).fetchall()
-    last_msg_map = {r["channel_id"]: r["last_ts"] for r in last_msg_rows}
+    # A channel is as recently active as the latest thing said anywhere in it,
+    # threads included — otherwise a channel whose life has moved into a thread
+    # reads as dormant while people are still talking.
+    last_msg_map: dict[int, float] = {}
+    for r in last_msg_rows:
+        target = resolver.resolve(r["channel_id"])
+        if target is not None:
+            last_msg_map[target] = max(last_msg_map.get(target, 0), r["last_ts"])
 
     channels = []
     active_count = 0
@@ -410,12 +466,11 @@ def compute_channel_health(
     dormant_count = 0
     archive_count = 0
 
-    for r in ch_rows:
-        cid = r["channel_id"]
-        msg_count = r["msg_count"]
-        unique = r["unique_users"]
+    for cid, msg_count in msg_counts.items():
+        by_author = ch_author_counts.get(cid, {})
+        unique = len(by_author)
         depth = depth_map.get(cid, 0)
-        gini = _gini(ch_author_counts.get(cid, []))
+        gini = _gini(list(by_author.values()))
         msgs_per_day = round(msg_count / 30, 1)
 
         # Composite score: volume (30%) + unique users (25%) + depth (25%) + equity (20%)
