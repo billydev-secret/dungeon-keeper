@@ -45,7 +45,7 @@ import pytest
 
 from bot_modules.cogs import pen_pals_cog as pp
 from bot_modules.core.db_utils import open_db
-from tests.fakes import FakeGuild, FakeRole, FakeUser, fake_interaction
+from tests.fakes import FakeGuild, FakeMember, FakeRole, FakeUser, fake_interaction
 
 GUILD_ID = 9001
 _COOLDOWN = pp._MATCH_COOLDOWN_SECS
@@ -1908,9 +1908,13 @@ async def test_tick_expiry_ignores_the_delete_event_it_causes(sync_db_path, monk
     await pp._tick(bot, sync_db_path)
 
     assert _close_reason(sync_db_path, "s1") == "expired"
-    assert _pool_ids(sync_db_path) == []            # neither member re-queued
-    guild.get_member(1).send.assert_not_awaited()   # no "no longer available"
-    guild.get_member(2).send.assert_not_awaited()
+    assert _pool_ids(sync_db_path) == []            # silent chat — neither re-queued
+    for uid in (1, 2):
+        send = guild.get_member(uid).send
+        assert send.await_count == 1                # the closing note, and only it
+        body = send.await_args.kwargs["embed"].description
+        assert "no longer available" not in body    # never "your partner vanished"
+        assert "unqueued you" in body
     assert fire.await_count == 2                    # the completion still counts
 
 
@@ -2347,3 +2351,582 @@ async def test_channel_delete_forgets_the_panel_when_its_own_channel_goes(
     await cog._on_channel_delete(channel)
 
     cog.panel.on_channel_delete.assert_awaited_once_with(channel)
+
+
+# ── Expiry: requeue, the inactivity gate, and the pool audit ──────────
+#
+# Until 2026-08-14 expiry was a dead end — it closed the session and told
+# nobody anything. Since a match is the only thing that drains the pool, every
+# round left it smaller, and TGM's ran down to one member and stalled for five
+# days. These cover the refill and the one gate on it.
+
+
+def _expiring_session(
+    conn,
+    session_id: str = "exp",
+    *,
+    user1_id: int = 1,
+    user2_id: int = 2,
+    channel_id: int = 4242,
+    guild_id: int = GUILD_ID,
+):
+    """An active session whose 24 hours are already up."""
+    pp._create_session(
+        conn, session_id, guild_id, channel_id, user1_id, user2_id, time.time() - 90000
+    )
+    return pp._get_active_session(conn, guild_id, user1_id)
+
+
+def _said_something(conn, user_id: int, *, channel_id: int = 4242, guild_id: int = GUILD_ID):
+    """Log a message from *user_id* in their pen pal channel.
+
+    The engagement test reads the guild-wide message log, the same source the
+    reply reminder uses — Pen Pals stores no chat history of its own.
+    """
+    conn.execute(
+        "INSERT INTO messages (guild_id, channel_id, author_id, ts) VALUES (?, ?, ?, ?)",
+        (guild_id, channel_id, user_id, int(time.time())),
+    )
+
+
+def _pool_events(conn, guild_id: int = GUILD_ID) -> list[tuple[int, str, str]]:
+    return [
+        (r["user_id"], r["action"], r["reason"])
+        for r in pp._recent_pool_events(conn, guild_id)
+    ]
+
+
+def test_expiry_returns_both_members_to_the_pool(sync_db_path):
+    """The refill. Before this, expiry re-pooled nobody and the pool only ever
+    shrank — the whole reason The Golden Meadow stopped matching."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row)
+
+        assert sorted(requeued) == [1, 2]
+        assert skipped == []
+        assert sorted(r["user_id"] for r in pp._get_pool(conn, GUILD_ID)) == [1, 2]
+
+
+def test_expiry_leaves_out_a_member_who_never_spoke(sync_db_path):
+    """The one gate on the refill: a member who ghosted is not recycled into
+    someone else's 24 hours. Their partner, who showed up, still is."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)  # 2 never posted
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row)
+
+        assert requeued == [1]
+        assert skipped == [2]
+        assert [r["user_id"] for r in pp._get_pool(conn, GUILD_ID)] == [1]
+
+
+def test_expiry_pools_nobody_when_the_chat_was_silent(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row)
+
+        assert requeued == []
+        assert sorted(skipped) == [1, 2]
+        assert pp._get_pool(conn, GUILD_ID) == []
+
+
+def test_expiry_reads_only_its_own_channel(sync_db_path):
+    """Talking somewhere else in the server is not talking to your pen pal."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn, channel_id=4242)
+        _said_something(conn, 1, channel_id=9999)  # a different channel
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row)
+
+        assert requeued == []
+        assert sorted(skipped) == [1, 2]
+
+
+def test_expiry_closes_the_session_as_expired(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        pp._close_expired_and_requeue(conn, row)
+
+        stored = conn.execute(
+            "SELECT state, close_reason FROM pen_pals_sessions WHERE session_id = 'exp'"
+        ).fetchone()
+        assert (stored["state"], stored["close_reason"]) == ("closed", "expired")
+
+
+def test_expiry_loses_the_race_and_changes_nothing(sync_db_path):
+    """Another handler already closed it: no second close, no re-pooling.
+
+    This is the guard that keeps our own ``channel.delete`` from being handled
+    twice — the expiry claims the close, and whatever the delete wakes up finds
+    nothing left to do.
+    """
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+        pp._claim_close(conn, "exp", "channel_deleted")
+
+        assert pp._close_expired_and_requeue(conn, row) is None
+        assert pp._get_pool(conn, GUILD_ID) == []
+        assert _pool_events(conn) == []
+
+
+def test_channel_delete_after_an_expiry_claim_repools_nobody(sync_db_path):
+    """The race the expiry comment warns about, as a state test.
+
+    Expiry claims the close, then deletes the channel; that delete fires
+    ``on_guild_channel_delete``. If the listener could still see the session it
+    would treat a chat that simply ran its course as abandoned — DMing both
+    members "your partner is no longer available" and re-pooling them. Two
+    independent guards stop it: the lookup filters on ``state = 'active'``, and
+    ``_claim_close`` re-checks the same thing.
+    """
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn, channel_id=4242)
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+        pp._close_expired_and_requeue(conn, row)
+        before = _pool_events(conn)
+
+        # What the listener does, in order.
+        assert pp._get_session_by_channel(conn, 4242) is None
+        assert pp._close_abnormal_and_requeue(conn, row, "channel_deleted", None) is None
+
+        # Nothing moved, and nobody was told their partner vanished.
+        assert _pool_events(conn) == before
+        assert conn.execute(
+            "SELECT close_reason FROM pen_pals_sessions WHERE session_id = 'exp'"
+        ).fetchone()["close_reason"] == "expired"
+
+
+def test_expiry_keeps_a_seat_a_member_already_has(sync_db_path):
+    """Re-pooling someone mid-chat would hand them a second one."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+        pp._create_session(conn, "other", GUILD_ID, 5555, 2, 3, time.time())
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row)
+
+        assert requeued == [1]  # 2 is already chatting elsewhere
+        assert skipped == []
+
+
+def test_requeued_member_waits_out_the_cooldown_before_matching(sync_db_path):
+    """Re-pooled the instant the chat ends, but not re-matched then.
+
+    The pool is where they wait; ``match_cooldown_seconds`` is what paces them,
+    measured from this close. Without that, auto-requeue would be a surprise
+    match seconds after a goodbye.
+    """
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 3600)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+        pp._close_expired_and_requeue(conn, row)
+
+        now = time.time()
+        assert pp._eligible_pool(conn, GUILD_ID, now, 3600) == []
+        assert sorted(pp._eligible_pool(conn, GUILD_ID, now + 3601, 3600)) == [1, 2]
+
+
+# ── Pool audit trail ──────────────────────────────────────────────────
+
+
+def test_expiry_records_why_each_member_moved_or_did_not(sync_db_path):
+    """'Did they drop out or get matched?' has to be answerable from the data —
+    it wasn't, which is why a pool stuck at one member went unseen for days."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        pp._close_expired_and_requeue(conn, row)
+
+        assert sorted(_pool_events(conn)) == [
+            (1, pp.POOL_JOIN, "requeue_expired"),
+            (2, pp.POOL_SKIP, "inactive"),
+        ]
+
+
+def test_abnormal_close_records_its_requeue(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        pp._close_abnormal_and_requeue(conn, row, "channel_deleted", None)
+
+        assert sorted(_pool_events(conn)) == [
+            (1, pp.POOL_JOIN, "requeue_abnormal"),
+            (2, pp.POOL_JOIN, "requeue_abnormal"),
+        ]
+
+
+def test_abnormal_close_records_the_departed_member_leaving_the_pool(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        pp._add_to_pool(conn, GUILD_ID, 2)
+        pp._close_abnormal_and_requeue(conn, row, "member_left", 2)
+
+        assert (2, pp.POOL_LEAVE, "departed") in _pool_events(conn)
+
+
+def test_recent_pool_events_are_newest_first_and_scoped_to_the_guild(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        pp._record_pool_event(conn, GUILD_ID, 1, pp.POOL_JOIN, "panel", at=100.0)
+        pp._record_pool_event(conn, GUILD_ID, 1, pp.POOL_LEAVE, "matched", at=200.0)
+        pp._record_pool_event(conn, GUILD_ID + 1, 9, pp.POOL_JOIN, "panel", at=300.0)
+
+        assert _pool_events(conn) == [
+            (1, pp.POOL_LEAVE, "matched"),
+            (1, pp.POOL_JOIN, "panel"),
+        ]
+
+
+async def test_tick_expiry_refills_the_pool_and_says_so(sync_db_path, monkeypatch):
+    """End to end through the tick: the wave that ends is the wave that starts.
+
+    The bug this closes — a normal expiry drained two members out of the pool
+    and put nobody back, so the pool only ever shrank.
+    """
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    monkeypatch.setattr("bot_modules.economy.game_rewards.fire_member_trigger", AsyncMock())
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(
+            conn, "s1", GUILD_ID, 4242, 1, 2, time.time() - 10, session_seconds=0,
+        )
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+    channel.delete = AsyncMock(side_effect=_echo_channel_delete(bot, sync_db_path, 4242))
+    bot.get_channel.return_value = channel
+
+    await pp._tick(bot, sync_db_path)
+
+    assert _pool_ids(sync_db_path) == [1, 2]
+    for uid in (1, 2):
+        send = guild.get_member(uid).send
+        assert "back in the Pen Pals pool" in send.await_args.kwargs["embed"].description
+        # One button, and it undoes what just happened to them.
+        item = send.await_args.kwargs["view"].children[0]
+        assert item.custom_id == f"pen_pals:dm:leave:{GUILD_ID}"
+
+
+async def test_tick_expiry_offers_a_rejoin_button_to_the_member_left_out(
+    sync_db_path, monkeypatch
+):
+    """Being unqueued has to be one tap to undo, or it's just a dead end."""
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    monkeypatch.setattr("bot_modules.economy.game_rewards.fire_member_trigger", AsyncMock())
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(
+            conn, "s1", GUILD_ID, 4242, 1, 2, time.time() - 10, session_seconds=0,
+        )
+        _said_something(conn, 1)  # 2 stayed quiet
+
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+    channel.delete = AsyncMock()
+    bot.get_channel.return_value = channel
+
+    await pp._tick(bot, sync_db_path)
+
+    assert _pool_ids(sync_db_path) == [1]
+    quiet = guild.get_member(2).send.await_args.kwargs
+    assert "unqueued you" in quiet["embed"].description
+    assert quiet["view"].children[0].custom_id == f"pen_pals:dm:join:{GUILD_ID}"
+
+
+async def test_dm_join_button_still_enforces_the_opt_in_role(sync_db_path, monkeypatch):
+    """A DM button must not be a way around the role gate the panel enforces."""
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    _configure(sync_db_path, opt_in_role_id=555)
+    guild = FakeGuild(id=GUILD_ID)
+    guild.roles[555] = FakeRole(id=555, name="Denizen")
+    guild.members[7] = FakeMember(id=7)  # in the server, but without the role
+    interaction = fake_interaction(user=FakeUser(id=7), guild=None)
+    interaction.client = MagicMock(spec=discord.Client)
+    interaction.client.get_guild.return_value = guild
+
+    await pp._handle_join(interaction, sync_db_path, from_guild_id=GUILD_ID, source="dm")
+
+    assert "Denizen" in interaction.response.send_message.await_args.args[0]
+    assert _pool_ids(sync_db_path) == []
+
+
+async def test_dm_join_button_records_the_dm_as_the_source(sync_db_path, monkeypatch):
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    _configure(sync_db_path)
+    guild = FakeGuild(id=GUILD_ID)
+    guild.members[7] = FakeMember(id=7)
+    interaction = fake_interaction(user=FakeUser(id=7), guild=None)
+    interaction.client = MagicMock(spec=discord.Client)
+    interaction.client.get_guild.return_value = guild
+
+    await pp._handle_join(interaction, sync_db_path, from_guild_id=GUILD_ID, source="dm")
+
+    assert _pool_ids(sync_db_path) == [7]
+    with open_db(sync_db_path) as conn:
+        assert _pool_events(conn) == [(7, pp.POOL_JOIN, "dm")]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason"),
+    [
+        pytest.param({}, "panel", id="panel"),
+        pytest.param({"source": "command"}, "command", id="command"),
+    ],
+)
+async def test_join_records_where_it_came_from(sync_db_path, monkeypatch, kwargs, reason):
+    """The audit is only useful if it distinguishes the paths in."""
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    _configure(sync_db_path)
+    interaction = _join_interaction(7)
+
+    await pp._handle_join(interaction, sync_db_path, **kwargs)
+
+    with open_db(sync_db_path) as conn:
+        assert _pool_events(conn) == [(7, pp.POOL_JOIN, reason)]
+
+
+async def test_leaving_the_pool_is_recorded(sync_db_path, monkeypatch):
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 7)
+
+    await pp._handle_leave(_join_interaction(7), sync_db_path)
+
+    with open_db(sync_db_path) as conn:
+        assert _pool_events(conn) == [(7, pp.POOL_LEAVE, "panel")]
+
+
+async def test_matching_records_both_members_leaving_the_pool(sync_db_path, pair_env):
+    """Otherwise a pool that drained looks the same whether they were matched
+    or gave up — the exact ambiguity that hid the stall."""
+    bot, _channel, _created = pair_env
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1, joined_at=100.0)
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=200.0)
+
+    assert await pp._do_pair(bot, sync_db_path, GUILD_ID, 1, 2)
+
+    with open_db(sync_db_path) as conn:
+        assert sorted(_pool_events(conn)) == [
+            (1, pp.POOL_LEAVE, "matched"),
+            (2, pp.POOL_LEAVE, "matched"),
+        ]
+
+
+# ── Expiry fixes from the 2026-08-15 review ───────────────────────────
+
+
+def test_expiry_does_not_unqueue_a_member_who_still_has_a_seat(sync_db_path):
+    """The seat check has to beat the engagement check.
+
+    A member already pooled or already in another chat keeps what they have
+    either way. Running the silence test on them first told a still-queued
+    member "we've unqueued you" and handed them a Join button that answers
+    "you're already in the pool" (review finding 3).
+    """
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        pp._add_to_pool(conn, GUILD_ID, 2)  # already queued, and never spoke
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row)
+
+        assert requeued == [1]
+        assert skipped == []  # not "unqueued" — they were never unqueued
+        assert (2, pp.POOL_SKIP, "inactive") not in _pool_events(conn)
+
+
+async def test_dm_join_button_refuses_someone_who_left_the_server(sync_db_path, monkeypatch):
+    """A DM outlives the membership it was sent to.
+
+    A panel click proves membership; a DM button proves nothing. Without this,
+    a member skipped for inactivity who then left could tap the old button and
+    insert a pool row for a guild they aren't in — and nothing clears it, so
+    `_do_round` burns a real member's match on them every round (review
+    finding 2).
+    """
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    _configure(sync_db_path)  # no opt-in role — the gate that used to be the
+    guild = FakeGuild(id=GUILD_ID)  # only thing consulting get_member
+    interaction = fake_interaction(user=FakeUser(id=7), guild=None)
+    interaction.client = MagicMock(spec=discord.Client)
+    interaction.client.get_guild.return_value = guild
+
+    await pp._handle_join(interaction, sync_db_path, from_guild_id=GUILD_ID, source="dm")
+
+    assert "not in that server" in interaction.response.send_message.await_args.args[0]
+    assert _pool_ids(sync_db_path) == []
+
+
+async def test_expiry_dm_states_the_wait_instead_of_promising_a_match(
+    sync_db_path, monkeypatch
+):
+    """`match_cooldown_seconds` ships at 30 days, so "a new match can come along
+    any time" would be a month wrong on an untouched guild (review finding 1).
+    Nothing in the copy names a duration the config can change underneath it."""
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    monkeypatch.setattr("bot_modules.economy.game_rewards.fire_member_trigger", AsyncMock())
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 172800)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(
+            conn, "s1", GUILD_ID, 4242, 1, 2, time.time() - 10, session_seconds=0,
+        )
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+    channel.delete = AsyncMock()
+    bot.get_channel.return_value = channel
+
+    await pp._tick(bot, sync_db_path)
+
+    body = guild.get_member(1).send.await_args.kwargs["embed"].description
+    assert "any time" not in body
+    assert "24 hours" not in body          # session length is configurable
+    assert "matched again <t:" in body     # the wait, as a live timestamp
+
+
+async def test_expiry_dm_promises_an_immediate_match_only_without_a_cooldown(
+    sync_db_path, monkeypatch
+):
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    monkeypatch.setattr("bot_modules.economy.game_rewards.fire_member_trigger", AsyncMock())
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 0)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(
+            conn, "s1", GUILD_ID, 4242, 1, 2, time.time() - 10, session_seconds=0,
+        )
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+    channel.delete = AsyncMock()
+    bot.get_channel.return_value = channel
+
+    await pp._tick(bot, sync_db_path)
+
+    body = guild.get_member(1).send.await_args.kwargs["embed"].description
+    assert "any time" in body
+
+
+async def test_unpairable_pool_stops_repeating_itself_in_the_log(sync_db_path, monkeypatch, caplog):
+    """Two ex-partners alone in the pool can never be paired, so the sweep runs
+    every tick forever. It should say "0 pairs" once, not every five minutes
+    (review finding 5)."""
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 0)
+    monkeypatch.setattr(pp, "_do_round", AsyncMock(return_value=(0, 2)))
+    monkeypatch.setattr(pp, "_LAST_SWEEP_LOG", {})
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1, joined_at=100.0)
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=200.0)
+
+    with caplog.at_level("INFO", logger="dungeonkeeper.pen_pals"):
+        await pp._tick(MagicMock(), sync_db_path)
+        await pp._tick(MagicMock(), sync_db_path)
+        await pp._tick(MagicMock(), sync_db_path)
+
+    assert sum("swept guild" in r.message for r in caplog.records) == 1
+
+
+async def test_expiry_does_not_repool_a_member_who_left_the_guild(sync_db_path):
+    """`on_member_remove` is the only thing that prunes the pool, and a member
+    who leaves while the bot is down never fires it — their session survives to
+    expiry. Re-pooling them plants a row nothing can clear, and `_do_round`
+    burns a real member's match on it every round (review finding 1)."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row, present={1})
+
+        assert requeued == [1]
+        assert skipped == []  # nobody left to tell, and no button that helps
+        assert [r["user_id"] for r in pp._get_pool(conn, GUILD_ID)] == [1]
+        assert (2, pp.POOL_SKIP, "departed") in _pool_events(conn)
+
+
+async def test_tick_reads_membership_off_the_channel_it_already_resolved(
+    sync_db_path, monkeypatch
+):
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    monkeypatch.setattr("bot_modules.economy.game_rewards.fire_member_trigger", AsyncMock())
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(
+            conn, "s1", GUILD_ID, 4242, 1, 2, time.time() - 10, session_seconds=0,
+        )
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+
+    guild = _make_guild_mock(1)  # 2 is gone from the guild
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+    channel.guild = guild
+    channel.delete = AsyncMock()
+    bot.get_channel.return_value = channel
+
+    await pp._tick(bot, sync_db_path)
+
+    assert _pool_ids(sync_db_path) == [1]
+
+
+async def test_a_round_that_pairs_someone_always_logs(sync_db_path, monkeypatch, caplog):
+    """Pairing is an event, not a state. De-duping it would hide every real
+    match on a guild that steadily pairs the same count (review finding 3)."""
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 0)
+    monkeypatch.setattr(pp, "_do_round", AsyncMock(return_value=(1, 0)))
+    monkeypatch.setattr(pp, "_LAST_SWEEP_LOG", {})
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1, joined_at=100.0)
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=200.0)
+
+    with caplog.at_level("INFO", logger="dungeonkeeper.pen_pals"):
+        await pp._tick(MagicMock(), sync_db_path)
+        await pp._tick(MagicMock(), sync_db_path)
+        await pp._tick(MagicMock(), sync_db_path)
+
+    assert sum("swept guild" in r.message for r in caplog.records) == 3

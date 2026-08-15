@@ -133,6 +133,12 @@ def purge_user_data(
         # Guess consent evidence. Kept through an optout (the record that
         # consent was held is the point), but a full erasure clears it.
         "guess_consents",
+        # Pen Pals pool movement (migration 160). Operational history — who
+        # joined the matching pool and why they left it. Unlike
+        # pen_pals_sessions (the no-repeat memory) and pen_pals_blocks (a
+        # protective record), nothing reads this back, so there is no ground
+        # to hold it against an erasure request.
+        "pen_pals_pool_events",
     ):
         _delete(
             conn,

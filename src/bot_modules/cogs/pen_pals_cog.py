@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 import discord
@@ -64,6 +64,14 @@ _QUEUED_MSG_INSTANT = (
     "your private channel opens automatically."
 )
 _QUEUED_MSG_SCHEDULED = "✅ You're in the pool! Matches go out once a day at 8:00 AM Eastern."
+
+# Last sweep outcome logged per guild — ("idle", eligible) or ("swept", pairs,
+# left) — so a pool in a steady state says so once rather than every five
+# minutes. Both branches need it: a flat pool used to log nothing at all, and a
+# pool of two ex-partners who can never be paired logs the same "0 pairs"
+# forever. Process lifetime only; a restart re-logs the current state, which is
+# what you want after a restart anyway.
+_LAST_SWEEP_LOG: dict[int, tuple] = {}
 
 
 def _normalize_room_visibility(value: object) -> str:
@@ -198,6 +206,45 @@ def _get_pool(conn, guild_id: int) -> list:
     return conn.execute(
         "SELECT user_id, joined_at FROM pen_pals_pool WHERE guild_id = ? ORDER BY joined_at ASC",
         (guild_id,),
+    ).fetchall()
+
+
+# ── Pool audit trail ──────────────────────────────────────────────────────────
+#
+# pen_pals_pool answers "who is waiting right now" and nothing else, so a pool
+# that empties looks identical to a pool nobody ever joined. Every mutation
+# also appends a row here naming the path that caused it (migration 160).
+#
+# This is a convention, not a mechanism: _add_to_pool / _remove_from_pool stay
+# dumb writers, and each *behavioural* call site logs its own reason right
+# where the decision is made. Every one of those paths has a test asserting
+# the event it writes — that, rather than a wrapper, is what keeps a new path
+# from moving the pool silently.
+
+POOL_JOIN = "join"
+POOL_LEAVE = "leave"
+POOL_SKIP = "skip"
+
+
+def _record_pool_event(
+    conn, guild_id: int, user_id: int, action: str, reason: str, at: float | None = None
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO pen_pals_pool_events (guild_id, user_id, at, action, reason)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (guild_id, user_id, at if at is not None else time.time(), action, reason),
+    )
+
+
+def _recent_pool_events(conn, guild_id: int, limit: int = 50) -> list:
+    return conn.execute(
+        """
+        SELECT user_id, at, action, reason FROM pen_pals_pool_events
+        WHERE guild_id = ? ORDER BY at DESC, event_id DESC LIMIT ?
+        """,
+        (guild_id, limit),
     ).fetchall()
 
 
@@ -405,6 +452,8 @@ def _close_abnormal_and_requeue(
         return None
     guild_id = session_row["guild_id"]
     if departed_user_id is not None:
+        if _in_pool(conn, guild_id, departed_user_id):
+            _record_pool_event(conn, guild_id, departed_user_id, POOL_LEAVE, "departed")
         _remove_from_pool(conn, guild_id, departed_user_id)
     requeued: list[int] = []
     for uid in (session_row["user1_id"], session_row["user2_id"]):
@@ -413,8 +462,95 @@ def _close_abnormal_and_requeue(
         if _get_active_session(conn, guild_id, uid) or _in_pool(conn, guild_id, uid):
             continue
         _add_to_pool(conn, guild_id, uid)
+        _record_pool_event(conn, guild_id, uid, POOL_JOIN, "requeue_abnormal")
         requeued.append(uid)
     return requeued
+
+
+def _member_spoke_in_session(conn, guild_id: int, channel_id: int, user_id: int) -> bool:
+    """Did *user_id* post anything in their pen pal channel?
+
+    Reads the guild-wide message log, which keeps author and timestamp for
+    every message whatever the guild's content-storage level — the same source
+    the reply reminder uses, so Pen Pals still needs no ingest of its own. A
+    channel id identifies exactly one session for all time, so no date window
+    is needed to scope this to the right chat.
+
+    This is the whole engagement test behind the expiry requeue: someone who
+    never said a word is not put back in the pool to occupy another member's
+    24 hours.
+    """
+    return conn.execute(
+        "SELECT 1 FROM messages WHERE guild_id = ? AND channel_id = ? AND author_id = ? LIMIT 1",
+        (guild_id, channel_id, user_id),
+    ).fetchone() is not None
+
+
+def _close_expired_and_requeue(
+    conn, session_row, present: set[int] | None = None
+) -> tuple[list[int], list[int]] | None:
+    """Close a session that ran its full course, and refill the pool from it.
+
+    Until 2026-08-14 expiry was a dead end: the session closed, the channel
+    vanished, and neither member was told anything or returned to the pool.
+    Since a match is the *only* thing that drains the pool, every round left it
+    emptier than it found it, and refilling depended on members spontaneously
+    walking back to the signup panel. The Golden Meadow's pool ran down to one
+    member and sat there for five days with no matches at all.
+
+    Both members go back in the pool, so the wave that just ended becomes the
+    wave that starts next — subject to one gate: a member who never posted in
+    the chat is left out (``skipped``) rather than recycled into someone else's
+    24 hours. They are told, and one button puts them back.
+
+    The re-match cooldown does the pacing from there: a re-pooled member is in
+    the pool immediately but ineligible until ``match_cooldown_seconds`` has
+    passed since this close, so nobody is handed a new partner the instant the
+    old chat closes.
+
+    Claims the close first and returns ``None`` if another handler got there —
+    identical to ``_close_abnormal_and_requeue``, and for the same reason: our
+    own ``channel.delete`` fires ``on_guild_channel_delete``, which must find
+    this session already closed and do nothing.
+
+    ``present`` is the subset of the two members still in the guild, or None to
+    skip the check. It matters because ``on_member_remove`` is the only thing
+    that prunes the pool: a member who leaves while the bot is down never fires
+    it, their session survives to expiry, and re-pooling them would plant a row
+    nothing can ever clear. `_do_pair` refuses on the missing member, but
+    `_do_round` has already taken their would-be partner out of that round — so
+    one real member goes unmatched every round, forever. Expiry is now the
+    dominant source of pool rows, so this is the path that has to check.
+
+    Returns ``(requeued, skipped)``.
+    """
+    if not _claim_close(conn, session_row["session_id"], "expired"):
+        return None
+    guild_id = session_row["guild_id"]
+    channel_id = session_row["channel_id"]
+    requeued: list[int] = []
+    skipped: list[int] = []
+    for uid in (session_row["user1_id"], session_row["user2_id"]):
+        # The seat check comes first, and has to: someone already pooled or
+        # already in another chat keeps what they have either way, so running
+        # the engagement test on them would report "we've unqueued you" to a
+        # member who is still queued, and hand them a Join button that answers
+        # "you're already in the pool".
+        if _get_active_session(conn, guild_id, uid) or _in_pool(conn, guild_id, uid):
+            continue
+        if present is not None and uid not in present:
+            # Gone from the guild. Not "skipped" — there is nobody left to tell
+            # they were left out, and no button that would help them.
+            _record_pool_event(conn, guild_id, uid, POOL_SKIP, "departed")
+            continue
+        if not _member_spoke_in_session(conn, guild_id, channel_id, uid):
+            _record_pool_event(conn, guild_id, uid, POOL_SKIP, "inactive")
+            skipped.append(uid)
+            continue
+        _add_to_pool(conn, guild_id, uid)
+        _record_pool_event(conn, guild_id, uid, POOL_JOIN, "requeue_expired")
+        requeued.append(uid)
+    return requeued, skipped
 
 
 def _set_close_warning_sent(conn, session_id: str) -> None:
@@ -890,8 +1026,9 @@ async def _do_pair(
                 session_seconds=session_seconds,
             )
             _record_question(conn, session_id, question)
-            _remove_from_pool(conn, guild_id, user1_id)
-            _remove_from_pool(conn, guild_id, user2_id)
+            for uid in (user1_id, user2_id):
+                _remove_from_pool(conn, guild_id, uid)
+                _record_pool_event(conn, guild_id, uid, POOL_LEAVE, "matched")
             # Pen-pal quest trigger for both matched members, keyed to the
             # session so one pairing pays each side once.
             from bot_modules.services.economy_quests_service import fire_trigger_inline
@@ -1060,6 +1197,82 @@ async def _end_session_abnormally(
         await _refresh_panel(bot, guild_id)
     except discord.HTTPException as exc:
         log.warning("pen_pals: panel refresh after abnormal close failed in %d: %s", guild_id, exc)
+
+
+async def _notify_expiry(
+    bot: discord.Client,
+    db_path: Path,
+    session_row,
+    requeued: list[int],
+    skipped: list[int],
+    cooldown_seconds: int,
+) -> None:
+    """Tell both members their chat has closed and where that leaves them.
+
+    A normal expiry used to say nothing at all — the channel simply vanished
+    mid-conversation with no word, which is the one ending Pen Pals never
+    explained. Each member now gets the outcome that applies to them and a
+    single button that reverses it, so neither state is a trap: the re-pooled
+    can leave, the left-out can rejoin.
+
+    Being back in the pool is not the same as being matchable, and the DM must
+    not imply otherwise: ``match_cooldown_seconds`` ships at 30 days, so "a new
+    match can come along any time" would be a month wrong on a guild that never
+    touched the dial. The wait is stated as a Discord relative timestamp, which
+    also keeps the copy honest for any session length — nothing here names a
+    duration the config can change underneath it.
+    """
+    guild_id = session_row["guild_id"]
+    user1_id, user2_id = session_row["user1_id"], session_row["user2_id"]
+    guild = bot.get_guild(guild_id)
+    eligible_at = int(time.time() + cooldown_seconds)
+
+    if guild is not None:
+        for uid in (user1_id, user2_id):
+            member = guild.get_member(uid)
+            if member is None:
+                continue
+            partner = guild.get_member(user2_id if uid == user1_id else user1_id)
+            partner_name = partner.mention if partner is not None else "your pen pal"
+            view: discord.ui.View | None = None
+            if uid in requeued:
+                when = (
+                    f"You can be matched again <t:{eligible_at}:R>."
+                    if cooldown_seconds > 0
+                    else "A new match can come along any time."
+                )
+                body = (
+                    f"Your time with {partner_name} is up — thanks for the chat.\n\n"
+                    f"You're back in the Pen Pals pool. {when}"
+                )
+                view = _dm_button_view(guild_id, joined=True)
+            elif uid in skipped:
+                body = (
+                    f"Your chat with {partner_name} has closed.\n\n"
+                    "That one stayed quiet, so we've unqueued you for now. "
+                    "Hop back in whenever you're up for another."
+                )
+                view = _dm_button_view(guild_id, joined=False)
+            else:
+                # Already had a seat — mid-session, or pooled again in the
+                # meantime. Nothing about the pool changed, so offer nothing.
+                body = f"Your time with {partner_name} is up — thanks for the chat."
+
+            await send_branded_dm(
+                member,
+                db_path=db_path,
+                guild=guild,
+                embed=discord.Embed(
+                    title="🖊️ Your pen pal channel has closed",
+                    description=body,
+                ),
+                **(cast("dict[str, Any]", {"view": view} if view is not None else {})),
+            )
+
+    try:
+        await _refresh_panel(bot, guild_id)
+    except discord.HTTPException as exc:
+        log.warning("pen_pals: panel refresh after expiry failed in %d: %s", guild_id, exc)
 
 
 # ── Reply reminders ───────────────────────────────────────────────────────────
@@ -1249,16 +1462,28 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
             # still active the listener treats it as an abandoned session:
             # both members get "your partner is no longer available" and are
             # re-pooled. Closing first makes the listener's lookup miss.
-            def _close_exp(sid: str = session_id):
+            # Membership is read off the channel we already resolved, so this
+            # needs no extra fetch and no guild-cache gamble.
+            present = {
+                uid for uid in (user1_id, user2_id)
+                if channel.guild.get_member(uid) is not None
+            }
+
+            def _close_exp(r=row, p: set[int] = present):
                 with open_db(db_path) as conn:
-                    return _claim_close(conn, sid, "expired")
-            if not await asyncio.to_thread(_close_exp):
+                    return _close_expired_and_requeue(conn, r, p)
+            outcome = await asyncio.to_thread(_close_exp)
+            if outcome is None:
                 continue  # another handler already closed it
+            requeued, skipped = outcome
             try:
                 await channel.delete(reason="Pen Pals session expired")
             except (discord.NotFound, discord.HTTPException):
                 pass
-            log.info("pen_pals: session %s expired", session_id)
+            log.info(
+                "pen_pals: session %s expired — %d re-pooled, %d left out for inactivity",
+                session_id, len(requeued), len(skipped),
+            )
 
             # Quest hook: running the full 24h is "seeing it through" — both
             # members fire; early-ended sessions never reach this path.
@@ -1269,6 +1494,11 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                     cast("Bot", bot), guild_id, uid, "pen_pal_complete",
                     occurrence=str(session_id),
                 )
+
+            await _notify_expiry(
+                bot, db_path, row, requeued, skipped,
+                cfg["match_cooldown_seconds"] if cfg else _MATCH_COOLDOWN_SECS,
+            )
             continue
 
         # 1-hour close warning
@@ -1361,10 +1591,32 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                 cooldown = c["match_cooldown_seconds"]
                 return len(_eligible_pool(conn, gid, time.time(), cooldown))
 
-        if await asyncio.to_thread(_pending) < 2:
+        pending = await asyncio.to_thread(_pending)
+        if pending < 2:
+            # Skipping is normal and constant, so this can't log every tick.
+            # It logs when the number changes, which is enough to see a pool
+            # that has gone flat: TGM sat at one waiting member for five days
+            # and the silent `continue` meant not one line said so, while the
+            # other guild's sweep line printed every five minutes (2026-08-14).
+            if _LAST_SWEEP_LOG.get(guild_id) != ("idle", pending):
+                log.info(
+                    "pen_pals: guild %d not swept — %d eligible, need 2",
+                    guild_id, pending,
+                )
+                _LAST_SWEEP_LOG[guild_id] = ("idle", pending)
             continue
         pairs, left = await _do_round(bot, db_path, guild_id)
-        log.info("pen_pals: swept guild %d — %d pairs, %d left over", guild_id, pairs, left)
+        # A round that paired somebody is an *event* and always logs — de-duping
+        # those would hide every real match on a guild that steadily pairs the
+        # same count, in a change whose whole point is making pool health
+        # readable. Only the barren sweep is a *state*, and it is the one that
+        # repeats: since the expiry requeue landed, two members who just
+        # finished together are each other's past partner, so they come off
+        # cooldown into a pool where `_pick_partner` can only return None and
+        # "0 pairs, 2 left over" would print every five minutes forever.
+        if pairs or _LAST_SWEEP_LOG.get(guild_id) != ("swept", 0, left):
+            log.info("pen_pals: swept guild %d — %d pairs, %d left over", guild_id, pairs, left)
+        _LAST_SWEEP_LOG[guild_id] = ("swept", pairs, left)
 
     # Maintenance goes last, and swallows everything. _pen_pals_loop catches
     # per-tick failures, so a transport error raised here from anywhere but
@@ -1437,12 +1689,34 @@ async def _refresh_panel(
 # ── Join / leave flows (shared by the panel buttons and slash commands) ──────
 
 
-async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
-    if not interaction.guild:
-        await interaction.response.send_message("❌ This only works in a server.", ephemeral=True)
+async def _handle_join(
+    interaction: discord.Interaction,
+    db_path: Path,
+    *,
+    from_guild_id: int | None = None,
+    source: str = "panel",
+) -> None:
+    """Put the clicking member in the pool, pairing them at once if they can be.
+
+    ``from_guild_id`` is for the buttons that ride on a DM: an interaction from
+    a DM has no guild of its own, so the guild is named in the button's own
+    custom_id and resolved from the bot's cache here. Everything downstream —
+    the opt-in role gate especially — then runs exactly as it does on the
+    panel, because a DM button must not become a way around a role check.
+    """
+    guild = (
+        interaction.guild
+        if from_guild_id is None
+        else interaction.client.get_guild(from_guild_id)
+    )
+    if guild is None:
+        await interaction.response.send_message(
+            "❌ This only works in a server." if from_guild_id is None
+            else "❌ That server is no longer available.",
+            ephemeral=True,
+        )
         return
 
-    guild = interaction.guild
     guild_id = guild.id
     user_id = interaction.user.id
 
@@ -1454,6 +1728,20 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
     if cfg is None or not cfg["enabled"]:
         await interaction.response.send_message(
             "❌ Pen Pals isn't set up yet — ask an admin.", ephemeral=True
+        )
+        return
+
+    if from_guild_id is not None and guild.get_member(user_id) is None:
+        # A panel click proves membership — you cannot press a button in a
+        # channel of a guild you left. A DM button proves nothing, and the DM
+        # outlives the membership: someone skipped for inactivity, who then
+        # leaves or is banned, could otherwise tap the old button and insert a
+        # pool row for a guild they are no longer in. Nothing would clear it —
+        # `_do_pair` refuses on the missing member, but `_do_round` has already
+        # taken their partner out of the running, so a real member loses their
+        # match every round, indefinitely.
+        await interaction.response.send_message(
+            "❌ You're not in that server anymore.", ephemeral=True
         )
         return
 
@@ -1477,6 +1765,7 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
             if _in_pool(conn, guild_id, user_id):
                 return "in_pool", None
             _add_to_pool(conn, guild_id, user_id)
+            _record_pool_event(conn, guild_id, user_id, POOL_JOIN, source)
             if scheduled:
                 # Scheduled mode never matches on join — everyone waits for
                 # the once-a-day round.
@@ -1526,12 +1815,29 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
     await _refresh_panel(interaction.client, guild_id)
 
 
-async def _handle_leave(interaction: discord.Interaction, db_path: Path) -> None:
-    if not interaction.guild:
-        await interaction.response.send_message("❌ This only works in a server.", ephemeral=True)
+async def _handle_leave(
+    interaction: discord.Interaction,
+    db_path: Path,
+    *,
+    from_guild_id: int | None = None,
+    source: str = "panel",
+) -> None:
+    """Take the clicking member out of the pool. See ``_handle_join`` on
+    ``from_guild_id`` — same reason, same resolution."""
+    guild = (
+        interaction.guild
+        if from_guild_id is None
+        else interaction.client.get_guild(from_guild_id)
+    )
+    if guild is None:
+        await interaction.response.send_message(
+            "❌ This only works in a server." if from_guild_id is None
+            else "❌ That server is no longer available.",
+            ephemeral=True,
+        )
         return
 
-    guild_id = interaction.guild.id
+    guild_id = guild.id
     user_id = interaction.user.id
 
     def _remove():
@@ -1539,6 +1845,7 @@ async def _handle_leave(interaction: discord.Interaction, db_path: Path) -> None
             if not _in_pool(conn, guild_id, user_id):
                 return False
             _remove_from_pool(conn, guild_id, user_id)
+            _record_pool_event(conn, guild_id, user_id, POOL_LEAVE, source)
             return True
 
     removed = await asyncio.to_thread(_remove)
@@ -1595,6 +1902,75 @@ class _PenPalsPanelLeaveButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         ctx = cast("Bot", interaction.client).ctx
         await _handle_leave(interaction, ctx.db_path)
+
+
+# ── Expiry DM buttons ─────────────────────────────────────────────────────────
+#
+# The panel's own buttons can't be reused here. Their custom_ids carry no
+# guild, because on the panel the interaction supplies one; a DM interaction
+# does not, so these bake the guild id into the id itself and hand it to the
+# same two handlers. Registered in cog_load like the panel pair, so a DM from
+# weeks ago still works after a restart.
+
+
+class _PenPalsDMJoinButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"pen_pals:dm:join:(?P<guild_id>\d+)",
+):
+    def __init__(self, guild_id: int) -> None:
+        self.guild_id = guild_id
+        super().__init__(
+            discord.ui.Button(
+                label="Join the pool",
+                emoji="✉️",
+                style=discord.ButtonStyle.success,
+                custom_id=f"pen_pals:dm:join:{guild_id}",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(int(match["guild_id"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        ctx = cast("Bot", interaction.client).ctx
+        await _handle_join(
+            interaction, ctx.db_path, from_guild_id=self.guild_id, source="dm"
+        )
+
+
+class _PenPalsDMLeaveButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"pen_pals:dm:leave:(?P<guild_id>\d+)",
+):
+    def __init__(self, guild_id: int) -> None:
+        self.guild_id = guild_id
+        super().__init__(
+            discord.ui.Button(
+                label="Leave the pool",
+                emoji="🚪",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"pen_pals:dm:leave:{guild_id}",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(int(match["guild_id"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        ctx = cast("Bot", interaction.client).ctx
+        await _handle_leave(
+            interaction, ctx.db_path, from_guild_id=self.guild_id, source="dm"
+        )
+
+
+def _dm_button_view(guild_id: int, *, joined: bool) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(
+        _PenPalsDMLeaveButton(guild_id) if joined else _PenPalsDMJoinButton(guild_id)
+    )
+    return view
 
 
 # ── Self-service blocklist (/penpals block) ───────────────────────────────────
@@ -1872,6 +2248,8 @@ class PenPalsCog(commands.Cog):
 
         bot.add_dynamic_items(_PenPalsPanelJoinButton)
         bot.add_dynamic_items(_PenPalsPanelLeaveButton)
+        bot.add_dynamic_items(_PenPalsDMJoinButton)
+        bot.add_dynamic_items(_PenPalsDMLeaveButton)
 
         def _load_panels():
             with open_db(db_path) as conn:
@@ -1902,6 +2280,7 @@ class PenPalsCog(commands.Cog):
                 was_pooled = _in_pool(conn, guild_id, member.id)
                 if was_pooled:
                     _remove_from_pool(conn, guild_id, member.id)
+                    _record_pool_event(conn, guild_id, member.id, POOL_LEAVE, "departed")
                 return _get_active_session(conn, guild_id, member.id), was_pooled
 
         session, was_pooled = await asyncio.to_thread(_lookup)
@@ -1971,13 +2350,13 @@ class PenPalsCog(commands.Cog):
 
     @penpals.command(name="join", description="Get matched with a pen pal now, or wait for the next person to join.")
     async def penpals_join(self, interaction: discord.Interaction) -> None:
-        await _handle_join(interaction, self.ctx.db_path)
+        await _handle_join(interaction, self.ctx.db_path, source="command")
 
     # ── /penpals leave ────────────────────────────────────────────────
 
     @penpals.command(name="leave", description="Leave the Pen Pals pool before being matched.")
     async def penpals_leave(self, interaction: discord.Interaction) -> None:
-        await _handle_leave(interaction, self.ctx.db_path)
+        await _handle_leave(interaction, self.ctx.db_path, source="command")
 
     # ── /penpals block ────────────────────────────────────────────────
 

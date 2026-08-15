@@ -156,6 +156,7 @@ from bot_modules.cogs.pen_pals_cog import (
     _get_pool as _pp_get_pool,
     _normalize_match_mode as _pp_normalize_match_mode,
     _normalize_room_visibility as _pp_normalize_room_visibility,
+    _recent_pool_events as _pp_recent_pool_events,
     _set_admin_separations as _pp_set_admin_separations,
     _set_config as _pp_set_config,
     _set_timers as _pp_set_timers,
@@ -3470,6 +3471,41 @@ async def update_pen_pals_timers(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+@router.get("/config/pen-pals/pool-events")
+async def pen_pals_pool_events(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Recent movement in and out of the matching pool.
+
+    The pool table itself is current-state only, so a pool that has gone flat
+    is indistinguishable from one nobody ever joined — which is exactly how a
+    five-day stall in The Golden Meadow went unnoticed (2026-08-14). This is
+    the history that answers "were they matched, or did they drop out?".
+
+    Its own endpoint rather than a field on ``/config`` because that payload is
+    fetched by every panel on the dashboard, and none of the others want fifty
+    rows of pen pal history.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return [
+                {
+                    # Snowflakes cross as strings — see _pen_pals_section.
+                    "user_id": str(r["user_id"]),
+                    "at": float(r["at"]),
+                    "action": r["action"],
+                    "reason": r["reason"],
+                }
+                for r in _pp_recent_pool_events(conn, guild_id)
+            ]
+
+    return {"events": await run_query(_q)}
 
 
 class PenPalsSeparation(BaseModel):

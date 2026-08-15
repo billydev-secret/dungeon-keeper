@@ -292,6 +292,14 @@ def test_purges_user_with_more_messages_than_sqlite_variable_cap(db):
             "guild_id = ? AND user_id = ?",
             id="bio_field_values",
         ),
+        pytest.param(
+            "pen_pals_pool_events",
+            "INSERT INTO pen_pals_pool_events (guild_id, user_id, at, action, reason) "
+            "VALUES (?, ?, 0, 'join', 'panel')",
+            (GUILD, USER),
+            "guild_id = ? AND user_id = ?",
+            id="pen_pals_pool_events",
+        ),
     ],
 )
 def test_purges_review_added_simple_tables(db, table, insert_sql, params, where):

@@ -828,6 +828,15 @@
       <li><strong>More than one person at a time</strong> — nobody is ever in two pen pal chats at once, and after a chat ends there's a re-match cooldown (set on the dashboard) before you can be paired again.</li>
     </ul>
 
+    <h4>When your chat ends</h4>
+    <p>The channel closes on its own when the session length runs out (you get a "closes in 1 hour" warning first), and it disappears — there's no transcript, so copy anything you want to keep before then.</p>
+    <p>You'll get a DM the moment it closes, and what it says depends on whether you used the chat:</p>
+    <ul>
+      <li><strong>If you posted in it</strong> — you go straight back into the pool for a new match, and the DM says so. If you'd rather sit the next one out, the <strong>Leave the pool</strong> button in that DM takes you out; <span class="cmd-name">/penpals leave</span> does the same.</li>
+      <li><strong>If you never posted</strong> — you're quietly taken out of the pool instead, so your spot goes to someone who's ready to chat. Nothing is held against you: the DM has a <strong>Join the pool</strong> button, and you can hop back in whenever you feel like it.</li>
+    </ul>
+    <p>Going back in the pool doesn't mean you'll be matched immediately — the re-match cooldown still has to pass first, so there's always a breather between chats.</p>
+
     <h4>Reminders to reply</h4>
     <p>If your server has switched them on, a chat that goes quiet gets a gentle nudge: when one of you has said something and the other hasn't answered for a set number of hours, the bot posts a short reminder in the chat that pings <em>only</em> the person who owes a reply. It happens once per silence — reply and it resets, so a later quiet spell can earn another one — and it stops once the "closing soon" notice is out. There's nothing to opt into or out of; if your server has left the setting at 0, no reminders are ever posted.</p>
 
@@ -850,6 +859,7 @@
       <div class="callout-body">
         <strong>Configure via the <a href="/#/pen-pals">web dashboard</a></strong>
         <p>The <strong>Social → Pen Pals</strong> panel holds the whole feature on one page: the enable toggle and wiring (channel category), session length, and the re-match cooldown, with the conversation-starter question bank below them. Moderators can change both halves — Pen Pals settings are moderator-level rather than admin-only, so whoever curates the prompts can also set the channel they post in. <strong>Pairing Mode</strong> picks how matches happen — <em>Instant</em> (the default) matches the moment a partner is waiting, or <em>Once a day</em> to queue everyone and pair the whole pool in a single batch at 8:00 AM Eastern instead. <strong>Who Can See Each Chat</strong> controls how much staff oversight the private rooms get — <em>Admins only</em>, <em>Admins and mods</em> (the default), or <em>Everyone</em> (anyone can read the chat but only the two members can post). It applies to chats opened after you save; chats already running keep their original visibility. <strong>Session Opening Message</strong> is an optional note you write once — it's shown at the top of the pinned intro embed every time a chat opens, above who's matched and when the chat ends. Leave it blank for no message. Under <strong>Timing &amp; Limits</strong>, <strong>Nudge A Quiet Partner After</strong> sets how many hours a message can go unanswered before the bot reminds the member who owes a reply — it pings that one member, fires once per silence, and is skipped once the closing-soon warning is out. It ships at 0 (no reminders); 6 hours is a sensible starting point on a 24-hour session.</p>
+        <p><strong>Pool Activity</strong>, below the settings, is the log of who joined or left the matching pool and why — signed up, matched, chat ended, left the server, or left out for never posting. It exists because the pool itself only shows who is waiting <em>right now</em>: a pool that has quietly stopped moving looks exactly like one nobody has ever joined, which is how a five-day stall went unnoticed. If matching seems to have stopped, read this list first.</p>
       </div>
     </div>
 
@@ -1399,6 +1409,7 @@
         <tr><td><strong>Who you interact with</strong> — a graph of who talks to, replies to and reacts to whom</td><td>The attention and network reports mods use to spot people being ignored or pestered</td><td>Indefinitely</td></tr>
         <tr><td><strong>Economy &amp; games</strong> — wallet, every ledger entry, quests, casino bets and hands, game results</td><td>Running the economy; the ledger is a double-entry record that has to balance</td><td>Indefinitely</td></tr>
         <tr><td><strong>Things you chose to add</strong> — bio answers, birthday (day and month only, never the year), Wellness settings, Pen Pals participation, role picks</td><td>The feature you opted into</td><td>Until you remove it (archived bios of members who left are deleted after 12 months)</td></tr>
+        <tr><td><strong>Pen Pals pool movement</strong> — when you joined or left the matching pool and what caused it (you signed up, you were matched, a chat ended, you left the server). Never any of what you and your pen pal said</td><td>So moderators can see whether matching is actually working — a pool that stops moving is invisible otherwise</td><td>Indefinitely; cleared in full by an erasure request</td></tr>
         <tr><td><strong>Anonymous features</strong> — Whisper, Confessions, Guess, and the anonymous party games</td><td>See the box below — "anonymous" means anonymous to other members, not to moderators</td><td>Varies; see below</td></tr>
         <tr><td><strong>Moderation records</strong> — warnings, jails, tickets and their transcripts, notes about rule-breaking, and flags raised by the automated Rules Watch</td><td>The record of moderation decisions, and the ability to justify one if challenged</td><td>Indefinitely</td></tr>
         <tr><td><strong>Command and panel usage</strong> — which slash commands you run and which dashboard pages you open</td><td>Finding features nobody uses. See <a href="#usage-telemetry">Command &amp; Panel Usage</a></td><td>Indefinitely</td></tr>
