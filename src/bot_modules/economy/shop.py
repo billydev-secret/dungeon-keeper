@@ -57,6 +57,7 @@ def build_shop_embed(
     *,
     panel: bool = False,
     owned: set[str] | frozenset[str] = frozenset(),
+    comped: set[str] | frozenset[str] = frozenset(),
     icon_catalog: tuple[int, int, int] | None = None,
     balance: int | None = None,
     shields_held: int = 0,
@@ -69,10 +70,12 @@ def build_shop_embed(
     inside a phone-width line). Five ``inline=False`` fields carrying four
     words each read as an airy list; a table reads as a storefront.
 
-    ``owned`` marks the viewer's rented rows, ``balance`` puts their wallet
-    in the description, and ``shields_held`` marks the shield row — all only
-    meaningful for the ephemeral per-member view; the channel panel is
-    member-agnostic and passes none of them.
+    ``owned`` marks the viewer's rented rows, ``comped`` marks the ones staff
+    get free (a subset of ``owned`` — the comp entitles, so a comped perk is
+    owned), ``balance`` puts their wallet in the description, and
+    ``shields_held`` marks the shield row — all only meaningful for the
+    ephemeral per-member view; the channel panel is member-agnostic and passes
+    none of them.
     ``icon_catalog`` is (min price, max price, icon count) across the guild's
     curated catalog; when set, the role-icon row shows that span and its size
     instead of a single flat price.
@@ -117,6 +120,11 @@ def build_shop_embed(
         note = ""
         if perk in gated:
             note = " · _needs a server feature not enabled here_"
+        elif perk in comped:
+            # Distinct from a plain ✅ so a mod can tell what they're paying
+            # for from what the server is covering — the price still shows,
+            # because it's what everyone else pays.
+            note = " · ✅ _on the house_"
         elif perk in owned:
             note = " · ✅"
         elif perk == "role_icon" and icon_catalog is not None:

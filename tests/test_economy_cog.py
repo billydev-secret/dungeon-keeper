@@ -54,7 +54,15 @@ def db(tmp_path):
 
 @pytest.fixture
 def ctx(db):
-    return SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    # is_mod/member_is_mod answer False by default: these tests are about the
+    # ordinary member's paid path, and the staff comp has its own coverage in
+    # test_economy_rentals_logic / test_economy_mod_comp.
+    return SimpleNamespace(
+        db_path=db,
+        open_db=lambda: open_db(db),
+        is_mod=lambda _interaction: False,
+        member_is_mod=lambda _member: False,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -1316,6 +1324,94 @@ async def test_role_studio_setter_refusals(ctx, db, perk, rented, refusal):
     apply_mock.assert_not_awaited()
 
 
+# ── staff perk comp ────────────────────────────────────────────────────
+#
+# The comp's own decision table lives in test_economy_rentals_logic; these
+# two are the wiring — that the cog's staff verdict actually reaches the
+# entitlement read, in both directions. Without them the gate could ignore
+# ``is_mod`` entirely and every pure test would still pass.
+
+
+@pytest.mark.asyncio
+async def test_role_setter_comped_for_staff_without_any_rental(ctx, db):
+    _enable(db, mod_perk_comp=True)
+    ctx.is_mod = lambda _interaction: True
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection() as (apply_mock, _r, _n):
+        await _role_color(cog, interaction, "#00FF00")
+    apply_mock.assert_awaited_once()
+    assert _personal_role(db)["color"] == 0x00FF00
+    # A comp is not a purchase: no rental row was created behind it.
+    assert _live_rentals(db) == []
+
+
+@pytest.mark.asyncio
+async def test_role_setter_still_refuses_staff_while_comp_is_off(ctx, db):
+    """The dashboard switch is enforced, not decorative."""
+    _enable(db)  # mod_perk_comp defaults off
+    ctx.is_mod = lambda _interaction: True
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection() as (apply_mock, _r, _n):
+        await _role_color(cog, interaction, "#00FF00")
+    assert "perk" in interaction.response.send_message.await_args.args[0].lower()
+    apply_mock.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("was_staff", "now_staff", "comp_on", "applies", "revokes"),
+    [
+        # Promoted → project the comped perks onto their personal role.
+        (False, True, True, True, False),
+        # Demoted → re-project, which reverts the nick and deletes the role
+        # when no real rental is left behind the comp.
+        (True, False, True, False, True),
+        # Staff-ness unchanged (a nick edit, an unrelated role) → no work.
+        (True, True, True, False, False),
+        (False, False, True, False, False),
+        # Comp switched off for this guild → the listener stays out of it.
+        (False, True, False, False, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_staff_change_reprojects_perks(
+    ctx, db, was_staff, now_staff, comp_on, applies, revokes
+):
+    _enable(db, mod_perk_comp=comp_on)
+    ctx.member_is_mod = lambda member: member.staff
+    cog = _make_cog(ctx)
+    before = _member(member_id=500)
+    after = _member(member_id=500)
+    before.staff, after.staff = was_staff, now_staff
+    # A role diff is the listener's cheap pre-filter; give it one so the
+    # staff-ness comparison is what decides these cases.
+    before.roles = [SimpleNamespace(id=1)]
+    after.roles = [SimpleNamespace(id=2)]
+    for m in (before, after):
+        m.guild = SimpleNamespace(id=GUILD_ID)
+    with _patch_projection() as (apply_mock, revoke_mock, _n):
+        await cog._on_staff_comp_changed(before, after)
+    assert apply_mock.await_count == (1 if applies else 0)
+    assert revoke_mock.await_count == (1 if revokes else 0)
+
+
+@pytest.mark.asyncio
+async def test_staff_change_ignores_updates_that_touch_no_roles(ctx, db):
+    """The listener sees every nick/avatar/timeout edit — exit before any I/O."""
+    _enable(db, mod_perk_comp=True)
+    ctx.member_is_mod = MagicMock(return_value=True)
+    cog = _make_cog(ctx)
+    roles = [SimpleNamespace(id=1)]
+    before, after = _member(member_id=500), _member(member_id=500)
+    before.roles = after.roles = roles
+    with _patch_projection() as (apply_mock, revoke_mock, _n):
+        await cog._on_staff_comp_changed(before, after)
+    ctx.member_is_mod.assert_not_called()
+    apply_mock.assert_not_awaited()
+    revoke_mock.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_role_name_blocklist_hit(ctx, db):
     _enable(db)
@@ -1545,6 +1641,91 @@ async def test_pick_custom_icon_rents_flat_when_unowned(ctx, db):
     apply_mock.assert_awaited_once()
     # The confirmation points at the image-upload path.
     assert "/bank role icon" in interaction.response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_pick_custom_icon_is_free_for_comped_staff(ctx, db):
+    """The picker's Custom entry reaches the rent flow directly, so the comp
+    has to be enforced there and not just on the shop's hidden buttons."""
+    _enable(db, mod_perk_comp=True)
+    _credit(db, 500, 500)
+    ctx.is_mod = lambda _interaction: True
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch(
+            "bot_modules.cogs.economy_cog.feature_gate_ok",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await cog.pick_custom_icon(interaction, _settings(db), _guild_roles())
+    assert _live_rentals(db) == []
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 500  # not a coin
+    apply_mock.assert_awaited_once()
+    assert "Unlocked" in interaction.response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_pick_catalog_icon_is_free_for_comped_staff(ctx, db):
+    """A catalog icon IS the role_icon perk at a per-icon price, so the comp
+    covers it — otherwise the curated icons would be the one thing a mod
+    still had to buy."""
+    from bot_modules.services.economy_icon_catalog_service import add_catalog_icon
+
+    _enable(db, mod_perk_comp=True)
+    _credit(db, 500, 500)
+    ctx.is_mod = lambda _interaction: True
+    from bot_modules.services.economy_icon_catalog_service import (
+        set_catalog_icon_image,
+    )
+
+    with open_db(db) as conn:
+        icon_id = add_catalog_icon(conn, GUILD_ID, name="Crown", price=100)
+        set_catalog_icon_image(conn, GUILD_ID, icon_id, "/icons/crown.png")
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch(
+            "bot_modules.cogs.economy_cog.feature_gate_ok",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await cog.pick_catalog_icon(interaction, _guild_roles(), icon_id)
+    assert _live_rentals(db) == []
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 500
+        row = conn.execute(
+            "SELECT icon_path FROM econ_personal_roles WHERE user_id = 500"
+        ).fetchone()
+    assert row["icon_path"] == "/icons/crown.png"  # the art still landed
+    apply_mock.assert_awaited_once()
+    assert "on the house" in interaction.edit_original_response.await_args.kwargs["content"]
+
+
+@pytest.mark.asyncio
+async def test_pick_catalog_icon_still_charges_a_non_mod(ctx, db):
+    from bot_modules.services.economy_icon_catalog_service import add_catalog_icon
+
+    _enable(db, mod_perk_comp=True)
+    _credit(db, 500, 500)
+    with open_db(db) as conn:
+        icon_id = add_catalog_icon(conn, GUILD_ID, name="Crown", price=100)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch(
+            "bot_modules.cogs.economy_cog.feature_gate_ok",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await cog.pick_catalog_icon(interaction, _guild_roles(), icon_id)
+    assert len(_live_rentals(db)) == 1
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 400
 
 
 @pytest.mark.asyncio

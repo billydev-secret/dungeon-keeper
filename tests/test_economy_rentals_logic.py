@@ -11,10 +11,12 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.economy.rentals import (
+    COMPED_PERKS,
     GRACE_SECONDS,
     WEEK_SECONDS,
     BillingAction,
     classify,
+    comp_entitlements,
     effective_color_mode,
     entitled_perks,
     prorated_refund,
@@ -96,6 +98,71 @@ def test_entitled_perks_active_and_grace_grant():
 def test_entitled_perks_empty():
     assert entitled_perks([]) == set()
     assert entitled_perks([_r("role_color", "lapsed")]) == set()
+
+
+# ── comp_entitlements (the staff perk comp) ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "rented,is_staff,comp_enabled,expected",
+    [
+        # The comp itself: staff + switch on = every rentable perk, free.
+        pytest.param(
+            set(), True, True, set(COMPED_PERKS), id="staff-on-gets-everything"
+        ),
+        # The refusal path. A non-mod is untouched by the comp whether the
+        # guild has it switched on or not — this is what keeps the paid shop
+        # a paid shop for everyone else.
+        pytest.param(set(), False, True, set(), id="non-staff-gets-nothing"),
+        pytest.param(
+            {"role_color"}, False, True, {"role_color"},
+            id="non-staff-keeps-only-what-they-rent",
+        ),
+        # Switch off = nobody is comped, mod or not. Default state for a
+        # guild that never opts in.
+        pytest.param(set(), True, False, set(), id="staff-comp-off-gets-nothing"),
+        pytest.param(
+            {"role_color"}, True, False, {"role_color"},
+            id="staff-comp-off-keeps-own-rental",
+        ),
+        # Union, not replacement: a mod who was already paying keeps the
+        # rental (we never cancel it for them), and it doesn't double up.
+        pytest.param(
+            {"role_color"}, True, True, set(COMPED_PERKS),
+            id="staff-rental-absorbed-not-duplicated",
+        ),
+        # A perk outside the comped set (a retired/gifted kind still on a
+        # live row) survives the union rather than being dropped.
+        pytest.param(
+            {"gift_color"}, True, True, set(COMPED_PERKS) | {"gift_color"},
+            id="staff-keeps-non-comped-kinds",
+        ),
+    ],
+)
+def test_comp_entitlements(rented, is_staff, comp_enabled, expected):
+    assert (
+        comp_entitlements(rented, is_staff=is_staff, comp_enabled=comp_enabled)
+        == expected
+    )
+
+
+def test_comp_entitlements_covers_every_rentable_perk():
+    """The comp is "everything", so it must track the shop's perk list.
+
+    A perk added to the shop but not to COMPED_PERKS would quietly become the
+    one thing a mod still has to pay for.
+    """
+    from bot_modules.economy.perks import GIFTABLE_PERKS, PERK_LABELS
+
+    assert COMPED_PERKS == set(GIFTABLE_PERKS) == set(PERK_LABELS)
+
+
+def test_comp_entitlements_does_not_mutate_the_input():
+    rented = {"role_color"}
+    comp_entitlements(rented, is_staff=True, comp_enabled=True)
+    # The caller's rental truth is what billing and refunds read — the comp
+    # must never leak back into it.
+    assert rented == {"role_color"}
 
 
 # ── prorated_refund ──────────────────────────────────────────────────────

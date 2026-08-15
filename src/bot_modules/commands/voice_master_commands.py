@@ -47,7 +47,7 @@ from bot_modules.voice_master.embeds import (
     build_knock_request_embed,
     build_panel_embed as _build_panel_embed,
 )
-from bot_modules.services.economy_rentals_service import entitlements
+from bot_modules.services.economy_rentals_service import effective_entitlements
 from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.voice_master.logic import (
     MemberInfo,
@@ -800,16 +800,24 @@ async def _style_gate_blocked(
     if ctx is None:
         return False
 
+    # Staff are comped the lease like any other perk; resolved off the guild
+    # since the clicker need not be the channel's owner.
+    owner = interaction.guild.get_member(owner_id) if interaction.guild else None
+    owner_is_staff = owner is not None and ctx.member_is_mod(owner)
+
     def _check() -> bool:
         with ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             if not settings.enabled or settings.price_voice_style <= 0:
                 # Skip the entitlement read entirely while the paywall is dark.
                 return False
+            ent = effective_entitlements(
+                conn, guild_id, owner_id, is_staff=owner_is_staff
+            )
             return style_lease_blocks(
                 economy_enabled=settings.enabled,
                 price=settings.price_voice_style,
-                entitled="voice_style" in entitlements(conn, guild_id, owner_id),
+                entitled="voice_style" in ent,
             )
 
     if not await asyncio.to_thread(_check):

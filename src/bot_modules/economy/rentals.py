@@ -18,8 +18,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from enum import Enum
 
+from bot_modules.economy.perks import GIFTABLE_PERKS
+
 WEEK_SECONDS = 7 * 86400
 GRACE_SECONDS = 36 * 3600
+
+# What a staff comp covers: every rentable perk, as one block. Running the
+# server shouldn't cost the people running it, and a partial comp would just
+# be a second price list to keep in step with the first.
+COMPED_PERKS = frozenset(GIFTABLE_PERKS)
 
 # Perks whose entitlement grants a solid custom color (the beneficiary's).
 # A gifted color is a role_color rental with a different beneficiary, so one
@@ -105,6 +112,27 @@ def entitled_perks(rentals: Iterable[Mapping[str, object] | object]) -> set[str]
         if r["state"] in ("active", "grace"):  # type: ignore[index]
             granted.add(str(r["perk"]))  # type: ignore[index]
     return granted
+
+
+def comp_entitlements(
+    rented: set[str], *, is_staff: bool, comp_enabled: bool
+) -> set[str]:
+    """Fold the staff comp into a member's rented entitlements.
+
+    A comp is *not* a rental: no ``econ_rentals`` row, no ledger entry, no
+    billing clock — mod status alone is the entitlement, so it appears the
+    moment the role lands and evaporates the moment it goes. That is why this
+    is a derivation over live inputs rather than persisted state; nothing can
+    go stale against the member's real roles, and the economy's spend metrics
+    never see a purchase that didn't happen.
+
+    Union, not replacement: a mod who was already paying for a rental keeps
+    that rental (we never cancel or refund it on their behalf), so their
+    entitlement set is the same either way and cancelling stays their call.
+    """
+    if is_staff and comp_enabled:
+        return set(rented) | set(COMPED_PERKS)
+    return set(rented)
 
 
 def effective_color_mode(perks: set[str]) -> str:

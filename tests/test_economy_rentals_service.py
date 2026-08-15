@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.economy.rentals import GRACE_SECONDS, WEEK_SECONDS
+from bot_modules.economy.rentals import COMPED_PERKS, GRACE_SECONDS, WEEK_SECONDS
 from bot_modules.services.economy_rentals_service import (
     BillingResult,
     RentalRefund,
@@ -21,6 +21,7 @@ from bot_modules.services.economy_rentals_service import (
     cancel_all_for_member,
     cancel_rental,
     delete_personal_role,
+    effective_entitlements,
     entitlements,
     get_personal_role,
     get_refundable_rental,
@@ -707,6 +708,67 @@ def test_entitlements_grace_grants_lapsed_does_not(db):
     _set(db, r2["id"], state="lapsed")
     with open_db(db) as conn:
         assert entitlements(conn, GUILD, USER) == {"role_color"}
+
+
+# ── effective_entitlements (the staff perk comp) ───────────────────────
+
+
+def _set_comp(db, on: bool) -> None:
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"mod_perk_comp": on})
+
+
+def test_effective_entitlements_comps_staff(db):
+    _set_comp(db, True)
+    with open_db(db) as conn:
+        ent = effective_entitlements(conn, GUILD, USER, is_staff=True)
+    assert ent == set(COMPED_PERKS)
+
+
+def test_effective_entitlements_refuses_non_staff(db):
+    """The enforcement side: an ordinary member still has to rent."""
+    _set_comp(db, True)
+    with open_db(db) as conn:
+        assert effective_entitlements(conn, GUILD, USER, is_staff=False) == set()
+
+
+def test_effective_entitlements_ignores_staff_while_comp_is_off(db):
+    # Default state — the guild never opted in, so a mod is an ordinary buyer.
+    with open_db(db) as conn:
+        assert effective_entitlements(conn, GUILD, USER, is_staff=True) == set()
+
+
+def test_comp_writes_no_rental_and_no_ledger_row(db):
+    """A comp is not a purchase.
+
+    The whole point of deriving it: nothing lands in ``econ_rentals`` (so the
+    billing loop never charges for it) and nothing lands in ``econ_ledger``
+    (so the economy's spend figures never see money that didn't move).
+    """
+    _set_comp(db, True)
+    with open_db(db) as conn:
+        assert effective_entitlements(conn, GUILD, USER, is_staff=True)
+        assert list_rentals(conn, GUILD) == []
+        assert get_ledger(conn, GUILD, USER) == []
+
+
+def test_comp_leaves_a_staff_members_own_rental_billable(db):
+    """A mod who was already paying keeps the rental, and it still bills.
+
+    ``entitlements`` stays the raw rental truth — if the comp leaked into it,
+    the billing loop and the refund picker would lose sight of a live row.
+    """
+    _fund(db, USER, 500)
+    _rent(db, USER, "role_color")
+    _set_comp(db, True)
+    with open_db(db) as conn:
+        assert entitlements(conn, GUILD, USER) == {"role_color"}
+        assert effective_entitlements(conn, GUILD, USER, is_staff=True) == set(
+            COMPED_PERKS
+        )
+        assert len(list_rentals(conn, GUILD)) == 1
 
 
 # ── list helpers ───────────────────────────────────────────────────────

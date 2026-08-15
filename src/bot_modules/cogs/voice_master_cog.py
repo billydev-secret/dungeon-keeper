@@ -36,7 +36,7 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.core.sticky import PanelContent, StickyPanel
-from bot_modules.services.economy_rentals_service import entitlements
+from bot_modules.services.economy_rentals_service import effective_entitlements
 from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.moderation import write_audit
 from bot_modules.services.voice_master_service import (
@@ -795,6 +795,8 @@ class VoiceMasterCog(commands.Cog):
                 return
             self._last_create[member.id] = now
 
+            member_is_staff = self.ctx.member_is_mod(member)
+
             def _load_profile_data() -> tuple[bool, VoiceProfile, list[int], list[int], list[str]]:
                 with self.ctx.open_db() as conn:
                     if active_channel_count(conn, guild_id, member_id) >= cfg.max_per_member:
@@ -822,7 +824,10 @@ class VoiceMasterCog(commands.Cog):
                         entitled=(
                             econ.enabled
                             and econ.price_voice_style > 0
-                            and "voice_style" in entitlements(conn, guild_id, member_id)
+                            and "voice_style"
+                            in effective_entitlements(
+                                conn, guild_id, member_id, is_staff=member_is_staff
+                            )
                         ),
                     ):
                         profile_ = replace(profile_, saved_name=None, saved_limit=0)
