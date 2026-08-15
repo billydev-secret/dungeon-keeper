@@ -82,6 +82,12 @@ def _write(directory, name: str) -> None:
         # A colour needs a name, so hexes alone are not a swatch.
         pytest.param("F0A830_8842C8.png", None, id="no-label"),
         pytest.param("plain.png", None, id="no-underscores"),
+        # Three parts, both hexes valid, but no name. Discord rejects a
+        # SelectOption with an empty label, so an unnamed colour would break the
+        # picker for every member and blow up panel posting after it had already
+        # deleted the old showroom.
+        pytest.param("_FF0000_8B0000.png", None, id="empty-label"),
+        pytest.param("  _FF0000_8B0000.png", None, id="whitespace-label"),
     ],
 )
 def test_parse_swatch_filename(filename, want):
@@ -132,10 +138,10 @@ def test_sync_builds_the_palette_from_filenames(db):
     _write(directory, "dusk_ember_F0A830_8842C8.png")
     _write(directory, "firefly_F5D042_3DB87A.png")
 
-    added, disabled, removed = sync_palette(db, GUILD)
+    added, disabled, removed, still_disabled = sync_palette(db, GUILD)
 
     assert sorted(added) == ["dusk ember", "firefly"]
-    assert (disabled, removed) == ([], [])
+    assert (disabled, removed, still_disabled) == ([], [], [])
     with open_db(db) as conn:
         rows = {r["key"]: r for r in list_catalog(conn, GUILD)}
     assert set(rows) == {"dusk_ember", "firefly"}
@@ -151,7 +157,7 @@ def test_sync_skips_badly_named_files(db):
     _write(directory, "dusk_ember_F0A830_8842C8.png")
     _write(directory, "oops.png")
 
-    added, _disabled, _removed = sync_palette(db, GUILD)
+    added, *_rest = sync_palette(db, GUILD)
     assert added == ["dusk ember"]
 
 
@@ -160,8 +166,8 @@ def test_sync_is_idempotent(db):
     _write(directory, "dusk_ember_F0A830_8842C8.png")
     sync_palette(db, GUILD)
 
-    added, disabled, removed = sync_palette(db, GUILD)
-    assert (added, disabled, removed) == ([], [], [])
+    added, disabled, removed, still_disabled = sync_palette(db, GUILD)
+    assert (added, disabled, removed, still_disabled) == ([], [], [], [])
 
 
 def test_sync_refuses_an_empty_folder(db):
@@ -197,7 +203,7 @@ def test_sync_deletes_an_unheld_color_whose_swatch_is_gone(db):
     sync_palette(db, GUILD)
 
     (directory / "firefly_F5D042_3DB87A.png").unlink()
-    _added, disabled, removed = sync_palette(db, GUILD)
+    _added, disabled, removed, _still = sync_palette(db, GUILD)
 
     assert removed == ["firefly"]
     assert disabled == []
@@ -221,7 +227,7 @@ def test_sync_disables_rather_than_deletes_a_rented_color(db):
     _rent(db, int(firefly["id"]))
 
     (directory / "firefly_F5D042_3DB87A.png").unlink()
-    _added, disabled, removed = sync_palette(db, GUILD)
+    _added, disabled, removed, _still = sync_palette(db, GUILD)
 
     assert disabled == ["firefly"]
     assert removed == []
@@ -346,11 +352,15 @@ def _wear(db, key, *, is_mod=False, features=("ENHANCED_ROLE_COLORS",), monkeypa
     return interaction
 
 
-def _seed_one_color(db, *, key="dusk_ember"):
+def _seed_one_color(db, *, key="dusk_ember", enabled=True):
     directory = _swatch_dir(db)
     _write(directory, "dusk_ember_F0A830_8842C8.png")
     sync_palette(db, GUILD)
     with open_db(db) as conn:
+        # The showroom refuses outright while the economy is off, so every
+        # wear test needs it switched on to reach the behaviour under test.
+        save_econ_settings(conn, GUILD, {"enabled": enabled})
+        conn.commit()
         return int(get_catalog_color_by_key(conn, GUILD, key)["id"])
 
 
@@ -429,7 +439,7 @@ def test_a_comped_mod_wears_without_a_rental(db, monkeypatch):
     """The staff comp covers role_preset, so it must cover the palette too."""
     _seed_one_color(db)
     with open_db(db) as conn:
-        save_econ_settings(conn, GUILD, {"enabled": True, "mod_perk_comp": True})
+        save_econ_settings(conn, GUILD, {"mod_perk_comp": True})
         conn.commit()
 
     _wear(db, "dusk_ember", is_mod=True, monkeypatch=monkeypatch)
@@ -475,3 +485,45 @@ def test_wearing_refuses_without_the_guild_feature(db, monkeypatch):
     assert "gradient roles" in said
     with open_db(db) as conn:
         assert get_personal_role(conn, GUILD, USER) is None
+
+
+def test_wearing_refuses_while_the_economy_is_off(db, monkeypatch):
+    """Every sibling entry point refuses; a public button must not be the way in.
+
+    With the economy switched off mid-week the showroom would otherwise keep
+    re-tagging live rentals and re-projecting Discord roles while `/bank shop`
+    turned everyone away.
+    """
+    color_id = _seed_one_color(db, enabled=False)
+    _rent(db, color_id)
+
+    interaction = _wear(db, "dusk_ember", monkeypatch=monkeypatch)
+
+    assert "switched off" in interaction.response.send_message.await_args.args[0]
+    with open_db(db) as conn:
+        assert get_personal_role(conn, GUILD, USER) is None
+
+
+def test_sync_names_a_present_but_unoffered_colour(db):
+    """Re-uploading a swatch deleted by mistake must not leave it hidden silently.
+
+    Sync never re-enables — it cannot tell an admin's deliberate retirement from
+    its own auto-disable — so it names the colour instead, and the dashboard
+    offers the one-click fix.
+    """
+    directory = _swatch_dir(db)
+    _write(directory, "dusk_ember_F0A830_8842C8.png")
+    _write(directory, "firefly_F5D042_3DB87A.png")
+    sync_palette(db, GUILD)
+    with open_db(db) as conn:
+        firefly = get_catalog_color_by_key(conn, GUILD, "firefly")
+    _rent(db, int(firefly["id"]))
+
+    # Deleted by mistake → auto-disabled while rented, then put back.
+    (directory / "firefly_F5D042_3DB87A.png").unlink()
+    sync_palette(db, GUILD)
+    _write(directory, "firefly_F5D042_3DB87A.png")
+    added, disabled, removed, still_disabled = sync_palette(db, GUILD)
+
+    assert (added, disabled, removed) == ([], [], [])
+    assert still_disabled == ["firefly"]

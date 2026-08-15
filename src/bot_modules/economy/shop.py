@@ -119,8 +119,15 @@ def build_shop_embed(
     # the table entirely — including the width calculation below, so a hidden row
     # can never pad the visible ones. ("Palette" is not the widest label today,
     # so this costs nothing now and stays correct if the labels change.)
+    #
+    # Unless the viewer is renting it: a palette can empty out under a live
+    # rental (its last colour disabled, or its swatch deleted), and hiding the
+    # row then would bill someone weekly for a perk with no row, no price and no
+    # ✅ anywhere in the shop.
+    show_palette = color_catalog is not None or "role_preset" in owned
+
     def _stocked(perks: tuple[str, ...]) -> tuple[str, ...]:
-        if color_catalog is not None:
+        if show_palette:
             return perks
         return tuple(p for p in perks if p != "role_preset")
 

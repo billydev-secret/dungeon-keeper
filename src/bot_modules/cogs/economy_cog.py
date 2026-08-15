@@ -1805,7 +1805,12 @@ class EconomyCog(commands.Cog):
         view = _ShopView(
             self, settings, guild, user_id, gated, shop.owned,
             shop.icon_range is not None,
-            has_palette=shop.color_range is not None,
+            # A renter keeps their button even if the palette emptied out
+            # under them — otherwise the only route to the perk they are
+            # still paying for is the generic refund picker.
+            has_palette=(
+                shop.color_range is not None or "role_preset" in shop.owned
+            ),
             shields_held=shop.shields_held, refundable=shop.refundable,
             shield_price=shop.shield_price,
         )
@@ -2735,9 +2740,14 @@ class EconomyCog(commands.Cog):
         tail = (
             "" if ok else " (I couldn't update your role right now — try again shortly.)"
         )
+        # "On the house" only where nothing is actually being billed. A comped
+        # mod who was already paying for a palette rental still pays it — the
+        # comp never cancels a rental on someone's behalf — so quoting them a
+        # free switch would be wrong. (The icon picker has the same shape at
+        # `pick_catalog_icon`; it predates this and is left alone here.)
         price_note = (
             " (on the house)"
-            if comped
+            if comped and existing_id is None
             else f" ({settings.currency_emoji} {color['price']:,}/week)"
         )
         await interaction.edit_original_response(

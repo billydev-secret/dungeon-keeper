@@ -647,14 +647,17 @@ async def sync_color_catalog(
 
     Touches no Discord roles. A colour whose swatch is gone is disabled when
     somebody is renting it and deleted otherwise, so the reply distinguishes the
-    two.
+    two — and names any colour whose swatch is present but which is still not
+    being offered.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
     def _q():
         try:
-            added, disabled, removed = sync_palette(ctx.db_path, guild_id)
+            added, disabled, removed, still_disabled = sync_palette(
+                ctx.db_path, guild_id
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
         return {
@@ -662,6 +665,9 @@ async def sync_color_catalog(
             "added": added,
             "disabled": disabled,
             "removed": removed,
+            # Present on disk but not offered — sync never re-enables, so these
+            # need a click if the swatch came back by design.
+            "still_disabled": still_disabled,
         }
 
     return await run_query(_q)

@@ -147,6 +147,21 @@ def test_shop_hides_the_palette_row_without_a_palette(db):
         _shop_row(embed, "Palette")
 
 
+def test_shop_keeps_the_palette_row_for_a_renter_when_it_empties(db):
+    """A palette can empty out under a live rental — its last colour disabled,
+    or its swatch deleted. Hiding the row then would bill someone weekly for a
+    perk with no row, no price and no ✅ anywhere in the shop, reachable only
+    through the generic refund picker.
+    """
+    _enable(db, price_role_preset=100)
+    embed = build_shop_embed(
+        _settings(db), set(), None, panel=True, owned={"role_preset"}
+    )
+    row = _shop_row(embed, "Palette")
+    assert "**100**" in row
+    assert "✅" in row
+
+
 def test_shop_shows_the_palette_row_with_one(db):
     _enable(db, price_role_preset=100)
     embed = build_shop_embed(

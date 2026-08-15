@@ -43,15 +43,22 @@ its gradient and weekly price. Choosing one runs `pick_catalog_color`:
   rental row at all. A comp is never a purchase.
 
 Then `apply_role_perks` projects it. The shop row and its button are **hidden
-entirely** when a guild has no rentable colors (`color_catalog=None`).
+entirely** when a guild has no rentable colors (`color_catalog=None`) — *unless
+the viewer is renting the perk*. A palette can empty out under a live rental (its
+last color disabled, or its swatch deleted), and hiding the row then would bill
+someone weekly for a perk with no row, no price and no ✅ anywhere in the shop.
 
 **In the showroom** (the in-channel panel): pressing a swatch calls
 `color_palette.wear_palette_color`, which is also what the shop picker's
 switch path amounts to. It **never charges** — a public button that debits a
 wallet on a press would be a trap — so it requires an existing entitlement
-(rental, gift or staff comp) and otherwise replies with the shop's price and a
+(rental, gift or staff comp) and otherwise replies with that color's price and a
 pointer to `/bank shop`. An entitled member's rental is re-tagged so billing
 follows the color they are actually wearing.
+
+It also refuses outright while the economy is switched off. Every sibling entry
+point does (`_refuse_disabled`), and a public button that kept re-tagging rentals
+and re-projecting roles would otherwise be the one way in.
 
 ## Projection
 
@@ -126,11 +133,19 @@ reconciles the catalog to the images on disk:
   name + gradient pair; `key` is the lowercased, underscored label. Invalid names
   are skipped and flagged in the UI. Sort order is the HSV hue of the gradient,
   so the showroom reads as a color wheel.
-- **What sync owns:** name, hexes, image path, sort order. It deliberately does
-  **not** touch `price` or `enabled` — those are the admin's edits, and a re-sync
-  must not silently re-enable a retired color or reset its price.
+- **What sync owns on update:** hexes, image path, sort order — what the file is
+  the truth for. It deliberately does **not** touch `name`, `price` or `enabled`
+  on an existing row: all three are editable per row on the dashboard, and a
+  re-sync that reset them would silently undo an admin's work (production's
+  labels arrived lowercase, so renaming is a thing people do). The filename still
+  seeds the name for a **new** color.
 - **Retiring:** a color whose file is gone is *disabled* if a live rental points
   at it, and deleted outright only if nobody holds it.
+- **Sync never re-enables**, because it cannot tell an admin's deliberate
+  retirement from its own auto-disable. So a swatch deleted by mistake and put
+  back would leave its color quietly out of the shop; instead sync returns those
+  colors as `still_disabled` and the dashboard names them with the one-click fix.
+  The return is `(added, disabled, removed, still_disabled)`.
 - An empty or all-invalid folder **aborts** rather than retiring everything.
 
 A color is **rentable** only with both hexes present and `enabled = 1`. A row

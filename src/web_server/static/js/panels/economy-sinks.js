@@ -908,6 +908,15 @@ function wirePalette(container, colors, channels) {
       if (data.disabled?.length) parts.push(`stopped offering ${data.disabled.length}`);
       if (data.removed?.length) parts.push(`removed ${data.removed.length}`);
       showStatus(syncStatus, true, parts.length ? parts.join(", ") : "Already up to date");
+      if (data.still_disabled?.length) {
+        // Sync never re-enables — it can't tell a deliberate retirement from a
+        // swatch that was deleted by mistake and put back.
+        toast(
+          `Not offered in the shop: ${data.still_disabled.join(", ")}. `
+          + "Tick \"Offer in the shop\" to bring one back.",
+          "info",
+        );
+      }
       renderList(await api("/api/economy/color-catalog"));
     } catch (err) {
       showStatus(syncStatus, false, err.message);

@@ -122,10 +122,15 @@ def upsert_catalog_color(
 ) -> int:
     """Insert or refresh a palette colour by key; returns its id.
 
-    Used by the swatch sync, which owns ``name``/hexes/``image_path``/order from
-    the filenames on disk. ``price`` and ``enabled`` are deliberately NOT touched
-    on an update — those are the admin's dashboard edits, and a re-sync must not
-    silently re-enable a colour or reset its price.
+    Used by the swatch sync. On **insert** everything comes from the filename. On
+    **update** the sync refreshes only what the file is the truth for — the
+    gradient, the art, and the hue ordering that art implies.
+
+    ``name``, ``price`` and ``enabled`` are deliberately NOT touched on an update:
+    all three are editable per row on the dashboard, and a re-sync that reset them
+    would silently undo an admin's work. (Production's labels arrived lowercase —
+    ``dusk ember`` — so renaming is a thing people will actually do.) The filename
+    still seeds the name for a brand-new colour.
     """
     conn.execute(
         """
@@ -134,7 +139,6 @@ def upsert_catalog_color(
              sort_order, legacy_role_id, created_at)
         VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, 0, ?)
         ON CONFLICT(guild_id, key) DO UPDATE SET
-            name       = excluded.name,
             hex1       = excluded.hex1,
             hex2       = excluded.hex2,
             image_path = excluded.image_path,

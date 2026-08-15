@@ -129,25 +129,38 @@ def test_list_orders_by_sort_then_id(db):
 
 
 def test_upsert_refreshes_art_but_keeps_admin_edits(db):
-    """A re-sync owns name/hexes/art/order; price and enabled belong to the admin.
+    """A re-sync owns the gradient, art and hue order; the dashboard owns the rest.
 
-    Without this, deleting and re-adding a swatch — or any routine sync — would
-    silently re-enable a colour the admin had retired, or reset its price to the
-    flat default.
+    Name, price and enabled are all editable per row on the Sinks page, so a
+    routine sync must not reset them — production's labels arrived lowercase
+    ("dusk ember"), so renaming is a thing people will actually do, and a rename
+    that silently reverted on the next sync would look like the save failed.
     """
     with open_db(db) as conn:
         color_id = _add(conn, key="dusk", name="dusk ember")
-        update_catalog_color(conn, GUILD, color_id, price=250, enabled=False)
+        update_catalog_color(
+            conn, GUILD, color_id, name="Dusk Ember", price=250, enabled=False
+        )
 
-        again = _add(conn, key="dusk", name="Dusk Ember Two", hex1="AABBCC", sort=9)
+        again = _add(conn, key="dusk", name="dusk ember", hex1="AABBCC", sort=9)
         assert again == color_id  # same row, by key
         row = get_catalog_color(conn, GUILD, color_id)
 
-    assert row["name"] == "Dusk Ember Two"
+    # From the file:
     assert row["hex1"] == "AABBCC"
     assert row["sort_order"] == 9
+    # From the admin:
+    assert row["name"] == "Dusk Ember"
     assert int(row["price"]) == 250
     assert not int(row["enabled"])
+
+
+def test_upsert_seeds_the_name_for_a_new_colour(db):
+    """The filename still names a colour the first time it is seen."""
+    with open_db(db) as conn:
+        _add(conn, key="dusk", name="dusk ember")
+        row = get_catalog_color_by_key(conn, GUILD, "dusk")
+    assert row["name"] == "dusk ember"
 
 
 def test_upsert_normalises_hex_case(db):

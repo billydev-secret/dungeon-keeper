@@ -194,6 +194,14 @@ async def wear_palette_color(
 
     colour, perks, rental_id, settings = await asyncio.to_thread(_load)
 
+    if not settings.enabled:
+        # Every sibling entry point refuses when the economy is switched off
+        # (the shop's `_refuse_disabled`); a showroom button that kept re-tagging
+        # rentals and re-projecting roles would be the one way in.
+        await interaction.response.send_message(
+            "The economy is currently switched off here.", ephemeral=True
+        )
+        return
     if colour is None or colour["pair"] is None or not colour["enabled"]:
         await interaction.response.send_message(
             "That color isn't available anymore.", ephemeral=True
@@ -350,7 +358,13 @@ def _parse_swatch_filename(filename: str) -> tuple[str, str, str] | None:
         re.fullmatch(r"[0-9A-Fa-f]{6}", hex1) and re.fullmatch(r"[0-9A-Fa-f]{6}", hex2)
     ):
         return None
-    label = " ".join(parts[:-2])
+    label = " ".join(parts[:-2]).strip()
+    if not label:
+        # `_FF0000_8B0000.png` parses as three parts with an empty name. An
+        # unnamed colour is not merely ugly: Discord rejects a SelectOption with
+        # an empty label, which would break the picker for *every* member and
+        # blow up panel posting after it had already deleted the old showroom.
+        return None
     return label, hex1, hex2
 
 
@@ -458,10 +472,17 @@ def resolve_swatch_directory(
 def sync_palette(
     db_path: Path,
     guild_id: int,
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str]]:
     """Reconcile a guild's palette to the swatch files on disk.
 
-    Returns ``(added, disabled, removed)`` labels. Unlike the booster-era sync
+    Returns ``(added, disabled, removed, still_disabled)`` labels.
+    ``still_disabled`` names colours whose swatch is present but which are not
+    being offered. Sync deliberately never re-enables a colour — it cannot tell
+    an admin's retirement from its own auto-disable — so re-uploading a swatch
+    deleted by mistake would otherwise leave that colour quietly out of the shop
+    for good. Naming them makes the one-click fix obvious instead.
+
+    Unlike the booster-era sync
     this touches **no Discord roles at all**: colours project onto members'
     personal roles now, and the legacy roles are worn by grandfathered members
     who must keep them. A colour whose swatch file disappears is therefore
@@ -505,12 +526,15 @@ def sync_palette(
     added: list[str] = []
     disabled: list[str] = []
     removed: list[str] = []
+    still_disabled: list[str] = []
 
     with open_db(db_path) as conn:
         existing = {str(r["key"]): r for r in list_catalog(conn, guild_id)}
         for key, (label, hex1, hex2, file_path, skey) in sorted(found.items()):
             if key not in existing:
                 added.append(label)
+            elif not int(existing[key]["enabled"]):
+                still_disabled.append(str(existing[key]["name"]))
             upsert_catalog_color(
                 conn, guild_id, key,
                 name=label, hex1=hex1, hex2=hex2,
@@ -526,4 +550,4 @@ def sync_palette(
                 delete_catalog_color(conn, guild_id, int(row["id"]))
                 removed.append(str(row["name"]))
 
-    return added, disabled, removed
+    return added, disabled, removed, still_disabled
