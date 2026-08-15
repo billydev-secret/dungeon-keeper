@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from typing import NamedTuple
+
 import discord
 
 from bot_modules.core.meters import mono
@@ -476,6 +478,62 @@ def build_jackpot_celebration(
     )
     embed.set_footer(text=_FOOTER)
     return embed
+
+
+class BigWinBroadcast(NamedTuple):
+    embed: discord.Embed
+    ping: bool  # send with @here, allowed_mentions=everyone
+
+
+def build_big_win_broadcast(
+    result: discord.Embed,
+    *,
+    payout: int,
+    threshold: int,
+    stake: int,
+    game_label: str,
+    top_pct_payout: int | None = None,
+    winner_name: str | None = None,
+    winner_icon: str | None = None,
+) -> BigWinBroadcast | None:
+    """The public big-win card, or None when this win stays private.
+
+    A SEPARATE embed from the one the player already holds — the result card
+    is titled for the game ("🎡 Roulette — no more bets!") and reads as a
+    receipt; in the channel it needs to read as an event. Copying rather than
+    retitling in place matters because the player's message and this one are
+    otherwise the same object: mutating it would rewrite the card already on
+    their screen, and the outcome would depend on which send ran first.
+
+    The color rides along from ``result``. ``big_win_tier`` refuses anything
+    that is not a win (``payout > stake``), so the card being copied is always
+    a winning one and its color is always the semantic green — never the guild
+    accent. That is the premise this builder's accent-contract exemption rests
+    on, so the stake gate is load-bearing for more than the copy.
+    """
+    tier = logic.big_win_tier(
+        payout, threshold, stake=stake, top_pct_payout=top_pct_payout
+    )
+    if tier is None:
+        return None
+    body = result.description or ""
+    if tier.lead:
+        body = f"{tier.lead}\n​\n{body}" if body else tier.lead
+    embed = discord.Embed(
+        title=f"{tier.header} — {game_label}",
+        description=body or None,
+        color=result.color,
+    )
+    if winner_name:
+        embed.set_author(name=winner_name, icon_url=winner_icon or None)
+    for field in result.fields:
+        embed.add_field(
+            name=field.name or "​",
+            value=field.value or "​",
+            inline=bool(field.inline),
+        )
+    embed.set_footer(text=_FOOTER)
+    return BigWinBroadcast(embed, tier.ping)
 
 
 # ── animation frames (big bets get the show; money is already settled) ─

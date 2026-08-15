@@ -697,3 +697,113 @@ def test_every_casino_render_site_passes_a_resolver():
                     f"{node.lineno} {called}()"
                 )
     assert not missed, "render sites with no name_fn: " + ", ".join(missed)
+
+
+# ── big-win broadcast (the public recap, separate from the player's card) ─
+
+
+def _result_card() -> discord.Embed:
+    """Stand-in for whatever the player already holds, with the two things
+    the broadcast must carry over: the copy and a result field."""
+    embed = discord.Embed(
+        title="🎡 Roulette — no more bets!",
+        description="The ball lands on 🔴 **7**.",
+        color=COLOR_GREEN,
+    )
+    embed.add_field(name="Winners", value="Nelli — 💎 1,200 gems", inline=False)
+    embed.set_footer(text="Play for fun, not for rent.")
+    return embed
+
+
+def _broadcast(payout: int, threshold: int = 500, stake: int = 10, **kw):
+    return casino_embeds.build_big_win_broadcast(
+        _result_card(), payout=payout, threshold=threshold, stake=stake,
+        game_label="Roulette", **kw,
+    )
+
+
+@pytest.mark.parametrize(
+    ("payout", "threshold"),
+    [
+        pytest.param(499, 500, id="under-the-bar"),
+        pytest.param(50_000, 0, id="bar-switched-off"),
+    ],
+)
+def test_no_broadcast_is_built_below_the_bar(payout, threshold):
+    """None is the whole decision — the cog has no second threshold check, so
+    a builder that returned an embed here would post one."""
+    assert _broadcast(payout, threshold) is None
+
+
+def test_broadcast_leads_with_the_tier_header_not_the_game_card_title():
+    """The point of the change: in-channel this has to read as an event, not
+    as a replay of the receipt the player already got."""
+    built = _broadcast(1200)
+    assert built is not None
+    assert built.embed.title == "💰 Big Win — Roulette"
+    assert built.embed.title != _result_card().title
+    assert not built.ping
+
+
+def test_broadcast_escalates_its_header_with_the_payout():
+    assert _broadcast(1499).embed.title.startswith("💰 Big Win")
+    assert _broadcast(1500).embed.title.startswith("🔥 Huge Win")
+
+
+def test_broadcast_carries_over_the_result_copy_and_fields():
+    """A new embed, but not a poorer one — the reason a bystander cares (what
+    landed, who won what) has to survive the retitle."""
+    built = _broadcast(1200)
+    assert built is not None
+    assert built.embed.description == "The ball lands on 🔴 **7**."
+    assert [(f.name, f.value) for f in built.embed.fields] == [
+        ("Winners", "Nelli — 💎 1,200 gems")
+    ]
+    assert built.embed.color is not None
+    assert built.embed.color.value == COLOR_GREEN
+
+
+def test_broadcast_never_mutates_the_players_own_card():
+    """These were one object before this change. If the builder retitled in
+    place, the card already on the player's screen would be rewritten — and
+    which text they ended up with would depend on send ordering."""
+    card = _result_card()
+    before = (card.title, card.description, len(card.fields), card.color)
+    built = casino_embeds.build_big_win_broadcast(
+        card, payout=9_999, threshold=500, stake=10, game_label="Roulette",
+        top_pct_payout=2500,
+    )
+    assert built is not None
+    assert built.embed is not card
+    assert (card.title, card.description, len(card.fields), card.color) == before
+
+
+def test_top_three_percent_pings_and_says_why():
+    """The loudest rung: @here plus a lead line above the result copy, so the
+    ping is explained by the card rather than just louder than the rest."""
+    built = _broadcast(3000, top_pct_payout=2500)
+    assert built is not None
+    assert built.ping
+    assert built.embed.title == f"{logic.LEGENDARY_HEADER} — Roulette"
+    assert built.embed.description is not None
+    assert built.embed.description.startswith(logic.LEGENDARY_LEAD)
+    # The result copy still follows the lead, not replaced by it.
+    assert "The ball lands on 🔴 **7**." in built.embed.description
+
+
+def test_a_push_over_the_bar_builds_nothing():
+    """The card being copied would be a push card — neither a win nor green.
+    This gate is what keeps the accent-contract exemption honest: every card
+    this builder ever copies is a winning one."""
+    assert _broadcast(2000, stake=2000) is None
+    assert _broadcast(2000, stake=4000) is None  # a war retreat
+
+
+def test_broadcast_names_the_winner_in_the_author_slot():
+    """Style guide: title = the event, author = the person it's about."""
+    built = _broadcast(1200, winner_name="Nelli", winner_icon="http://x/a.png")
+    assert built is not None
+    assert built.embed.author.name == "Nelli"
+    assert built.embed.author.icon_url == "http://x/a.png"
+    # Optional — the windowed games resolve a Member that can be uncached.
+    assert _broadcast(1200).embed.author.name is None

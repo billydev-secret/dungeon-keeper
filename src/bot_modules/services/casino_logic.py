@@ -222,6 +222,97 @@ def is_big_bet(stake: int, max_bet: int) -> bool:
     return stake >= BIG_BET_UNCAPPED
 
 
+# The public broadcast's header escalates with how far the payout clears the
+# guild's bar, so a rare haul doesn't read the same as a routine one. Steps
+# are MULTIPLES of ``broadcast_min_payout``, not coin amounts: the dial is
+# the only thing that knows what "big" is worth in a given economy (see
+# memory: guild "nut" runs ~8× The Golden Meadow's denomination).
+#
+# Deliberately no "Jackpot" tier — the casino already has a real progressive
+# jackpot with its own celebration embed, and reusing the word for a merely
+# large win would make the genuine article stop landing.
+#
+# The ladder is TWO rungs, not three, and the multiples are small. A 10× rung
+# shipped on 2026-08-15 and was measured against prod the same day: The Golden
+# Meadow has paid 4,350 winning bets on an average stake of 36 coins, and its
+# largest single win ever is 3,000 against a 500 bar — 6×. A 10× rung could
+# never have rendered. Rungs are sized to what the economy actually pays, and
+# the top of the ladder is the percentile, which resizes itself.
+BIG_WIN_TIERS: tuple[tuple[int, str], ...] = (
+    (3, "🔥 Huge Win"),
+    (1, "💰 Big Win"),
+)
+# Above the ladder sits the one that pings the channel: a payout in the top 3%
+# of the wins this guild has actually ANNOUNCED lately — casino_win_history
+# banks only broadcast-clearing wins, so the percentile ranks the population a
+# player would recognise as big. Ranking all wins instead put the mark below
+# the broadcast bar (most wins are ~52-coin pair payouts), which left the floor
+# deciding everything and the percentile contributing nothing.
+LEGENDARY_HEADER = "💎 Legendary Win"
+LEGENDARY_LEAD = "**One of the biggest payouts this casino has ever handed over.**"
+# The ping can never fire below the ladder's top rung: a guild whose announced
+# wins all cluster near its bar would otherwise have a percentile barely over
+# that bar and would ping on every broadcast.
+LEGENDARY_MIN_MULT = BIG_WIN_TIERS[0][0]
+
+
+class BigWinTier(NamedTuple):
+    header: str  # embed title prefix, before " — {game}"
+    lead: str | None  # extra first line of the description, loudest tier only
+    ping: bool  # whether the broadcast carries an @here
+
+
+def big_win_tier(
+    payout: int,
+    threshold: int,
+    *,
+    stake: int,
+    top_pct_payout: int | None = None,
+) -> BigWinTier | None:
+    """The broadcast tier for ``payout``, or None when it stays private.
+
+    None means "don't broadcast" — a payout under the bar, a bar of 0 (the
+    guild's off switch), or a payout that isn't a win at all. Callers treat
+    None as the whole decision; there is no second check anywhere.
+
+    ``stake`` is why this needs more than the payout. A **push returns the
+    stake**: blackjack pushes, baccarat Player/Banker bets push on a tie, and
+    a war retreat hands back half. Gating on ``payout >= threshold`` alone,
+    a 2,000-coin blackjack push against a 500 bar cleared 3× and announced
+    itself as "🔥 Huge Win" — a headline asserting a win that did not happen,
+    for a hand that won nothing. Same rule the service already used to decide
+    what counts as a win (``record_play``'s ``payout > stake``); the two must
+    not disagree, or the broadcast advertises what the stats refuse to count.
+
+    ``top_pct_payout`` is the guild's top-3% mark over its ANNOUNCED wins, or
+    None when there isn't enough history to rank against. None can only ever
+    *withhold* the ping: an unknown percentile is never treated as a passing
+    one, and it can never create a broadcast the dial switched off.
+
+    **Legendary supersedes the rung it lands on** rather than sitting above
+    it as a fourth step, and that is a deliberate accepted cost. The ping is
+    the larger of the percentile and ``LEGENDARY_MIN_MULT``× the bar, so when
+    a guild's percentile sits at or under that floor the two conditions
+    coincide and 🔥 Huge Win is subsumed — the ladder is then 💰 Big Win plus
+    the ping. The alternative, a strict inequality that reserves a sliver of
+    range for Huge Win, buys a rung nobody would ever see fire. Whichever is
+    loudest and true wins; the floor is what stops "loudest and true" from
+    being every broadcast.
+    """
+    if threshold <= 0 or payout < threshold or payout <= stake:
+        return None
+    if top_pct_payout is not None and payout >= max(
+        top_pct_payout, threshold * LEGENDARY_MIN_MULT
+    ):
+        return BigWinTier(LEGENDARY_HEADER, LEGENDARY_LEAD, True)
+    for mult, header in BIG_WIN_TIERS:
+        if payout >= threshold * mult:
+            return BigWinTier(header, None, False)
+    # Unreachable: the 1× row always matches above the bar. Kept explicit so a
+    # future edit to the ladder can't silently start returning None here.
+    return BigWinTier(BIG_WIN_TIERS[-1][1], None, False)
+
+
 # ── Roulette (European single zero) ────────────────────────────────────
 
 RED_NUMBERS = frozenset(

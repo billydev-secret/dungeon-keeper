@@ -523,6 +523,91 @@ def recent_ticker(
     ).fetchall()
 
 
+# Broadcast-clearing payouts kept per guild for the top-tier percentile
+# (migration 162). Only ANNOUNCED wins are banked — see the gate in
+# ``record_play``. Ranking every win instead put the mark below the broadcast
+# bar, because the overwhelming majority of casino wins are small pair
+# payouts: prod's average stake is 36 coins and its average win returns 71.
+WIN_HISTORY_KEEP = 1000
+# Below this many banked wins the percentile is refused outright — no ping,
+# whatever the payout. A fresh guild must not @here its first win because the
+# sample of one made it the top 3%. Sized against the announced-win rate
+# rather than the total win rate: prod broadcasts a few dozen times a year, so
+# a 100-row floor would have taken years to arm.
+PING_MIN_SAMPLE = 40
+# "Top 3% of winnings", as a percentile rank.
+PING_PERCENTILE = 97
+
+
+def record_win(
+    conn: sqlite3.Connection, guild_id: int, payout: int, *, now: float | None = None
+) -> None:
+    """Append one announced winning payout and trim to WIN_HISTORY_KEEP.
+
+    Called from the cog's broadcast seam — ONE row per public announcement,
+    written after the percentile for that announcement has been read. Both
+    halves of that matter:
+
+    * *Per announcement, not per settled bet.* A roulette round where the
+      player spread five bets that each cleared the bar is one card in the
+      channel, and banking it five times would over-weight multi-bet rounds
+      in the percentile. It also keeps jackpot spins out, whose big-win card
+      is suppressed in favour of the jackpot celebration — banking those
+      would pull the mark up with payouts nobody was ranked against.
+    * *After the read.* Banking inside the settle transaction put the current
+      win into the population it was about to be ranked against, so a payout
+      tying the guild's recent maximum always cleared its own mark — and a
+      guild whose announced wins cluster tightly above the floor would then
+      ping on every single broadcast.
+
+    Stores no user_id on purpose — see migration 162. This table answers "how
+    big is an announced win around here lately" and nothing else.
+    """
+    conn.execute(
+        "INSERT INTO casino_win_history (guild_id, payout, ts) VALUES (?, ?, ?)",
+        (guild_id, payout, time.time() if now is None else now),
+    )
+    conn.execute(
+        "DELETE FROM casino_win_history WHERE guild_id = ? AND id NOT IN ("
+        "SELECT id FROM casino_win_history WHERE guild_id = ? "
+        "ORDER BY id DESC LIMIT ?)",
+        (guild_id, guild_id, WIN_HISTORY_KEEP),
+    )
+
+
+def win_percentile(
+    conn: sqlite3.Connection, guild_id: int, percentile: int = PING_PERCENTILE
+) -> int | None:
+    """The payout at ``percentile`` of this guild's recent wins, or None when
+    the window is too thin to rank against.
+
+    None is a refusal, not a zero: callers must treat "I can't tell yet" as
+    "don't ping", never as "everything qualifies".
+    """
+    total = int(
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM casino_win_history WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()["n"]
+    )
+    if total < PING_MIN_SAMPLE:
+        return None
+    # Size the top band in ROWS and count back from the end, rather than
+    # taking an offset forward. `total * 97 // 100` is exact at multiples of
+    # 100 but rounds the wrong way below them: at the 40-row sample floor it
+    # yields offset 38, leaving two rows above the mark — the top 5%, not 3%,
+    # so the smallest guilds (the ones the floor exists to protect) would get
+    # the loosest ping bar. At least one row always qualifies.
+    band = max(1, total * (100 - percentile) // 100)
+    offset = total - band
+    row = conn.execute(
+        "SELECT payout FROM casino_win_history WHERE guild_id = ? "
+        "ORDER BY payout ASC LIMIT 1 OFFSET ?",
+        (guild_id, offset),
+    ).fetchone()
+    return None if row is None else int(row["payout"])
+
+
 def record_play(
     conn: sqlite3.Connection,
     guild_id: int,
