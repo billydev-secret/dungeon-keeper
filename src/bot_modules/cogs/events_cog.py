@@ -852,16 +852,32 @@ class EventsCog(commands.Cog):
 
         self._observe_age_gated_images(message)
 
-        spoiler_deleted = await enforce_spoiler_requirement(
-            message,
-            spoiler_required_channels=cfg.spoiler_required_channels,
-            bypass_role_ids=cfg.bypass_role_ids,
-            log=log,
-            classify=nsfw_classifier_service.classifier_for(
-                self.ctx.db_path, message
-            ),
-            report=self._block_reporter(),
-        )
+        # needs_labels: the bare-chest rule is evaluated from NudeNet labels,
+        # so the tagger must run here even when Discord doesn't age-gate the
+        # channel. Scoped to spoiler-required channels — passing it
+        # unconditionally would tag every image in general chat.
+        spoiler_channel = message.channel.id in cfg.spoiler_required_channels
+        try:
+            spoiler_deleted = await enforce_spoiler_requirement(
+                message,
+                spoiler_required_channels=cfg.spoiler_required_channels,
+                bypass_role_ids=cfg.bypass_role_ids,
+                log=log,
+                classify=nsfw_classifier_service.classifier_for(
+                    self.ctx.db_path, message, needs_labels=spoiler_channel
+                ),
+                report=self._block_reporter(),
+            )
+        except Exception:
+            # Guarded like the intake hook above: a failure here must not abort
+            # persistence, wellness and XP for the rest of the message. The
+            # gate has its own internal fail-closed handling for a classifier
+            # error, so reaching this is an unexpected bug rather than a
+            # classifier hiccup — hence log-and-continue rather than delete.
+            log.exception(
+                "nsfw: spoiler enforcement failed in guild %s", guild_id
+            )
+            spoiler_deleted = False
 
         mention_ids = _message_mention_ids(cfg.recorded_bot_user_ids, message)
 

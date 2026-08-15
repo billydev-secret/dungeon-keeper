@@ -7,17 +7,27 @@ result is shared (see :func:`classify_attachment`'s cache).
 
 Two models, doing different jobs:
 
-* **Marqo** (:mod:`marqo_nsfw`) produces the verdict, in every channel. It is
-  the only thing any consumer acts on.
+* **Marqo** (:mod:`marqo_nsfw`) produces the explicit/not verdict, in every
+  channel.
 * **NudeNet** (:mod:`guess_nudenet`) produces labels and boxes, in age-gated
-  channels **only**, purely to fill ``nsfw_detections``. It never changes what
-  happens to an image.
+  channels and in spoiler-required channels, to fill ``nsfw_detections``.
 
-That split is why tagging lives on the recording path rather than beside the
-verdict: it makes it structurally impossible to derive a body-part inventory
-of an upload in general chat, which is the thing the privacy rule forbids. It
-also costs less than the arrangement it replaced, where NudeNet ran everywhere
-and its labels were discarded outside age-gated channels.
+Tagging is scoped rather than universal, and the scope is the privacy
+boundary: no body-part inventory is derived for an upload in general chat.
+That scope used to be exactly "age-gated channels", which made the guarantee
+structural — the same flag drove tagging and recording, so there was no
+arrangement of the code that could label a general-chat image.
+
+The bare-chest spoiler rule widened it. Marqo scores male and female chests
+asymmetrically (see :data:`CHEST_LABELS` for the measured gap), and no
+threshold can express "any bare chest needs a spoiler" — so that rule is
+evaluated from labels, and spoiler-required channels therefore need labels
+whether or not Discord age-gates them. The guarantee is now scoped by two
+channel sets instead of one, which is a weaker structural claim: general chat
+is still excluded, but the exclusion rests on the spoiler channel list being
+what an admin thinks it is. Recording follows tagging exactly, so the rows
+exist wherever the labels do — that was a deliberate choice, not an oversight;
+see docs/data_register.md.
 
 The three consumers disagree about which way a *failure* should fall, so this
 module never picks for them: an unreadable or unclassifiable image yields
@@ -61,16 +71,64 @@ log = logging.getLogger("dungeonkeeper.nsfw")
 #: guess_pipeline.merge_sex_act_detections when two different genital labels
 #: overlap.
 #:
-#: Descriptive metadata, not a gate: Marqo decides the verdict on its own, so
-#: no label here can make an image explicit or spare it.
+#: Mostly descriptive metadata: Marqo decides the *explicit* verdict on its own
+#: and no label here can change it. :data:`CHEST_LABELS` is the one exception,
+#: and it is a separate rule layered on top rather than a change to the verdict
+#: — see :meth:`Classification.requires_spoiler`.
 DEFAULT_LABEL_SET: frozenset[str] = frozenset({
     "MALE_GENITALIA_EXPOSED",
     "FEMALE_GENITALIA_EXPOSED",
     "ANUS_EXPOSED",
     "FEMALE_BREAST_EXPOSED",
+    # Added with the bare-chest spoiler rule. Without it a male-chest image
+    # could be *deleted* by that rule and still report no label, leaving the
+    # blocked-images report unable to say why.
+    "MALE_BREAST_EXPOSED",
     "BUTTOCKS_EXPOSED",
     "SEX_ACT",
 })
+
+#: Bare chests, of any gender, treated identically.
+#:
+#: These drive a policy rule rather than a model verdict, and they exist
+#: because measurement said a threshold could not do the job. Against 869
+#: production classifications, Marqo scores a bare male chest below 0.5 in
+#: 14% of cases (5 of 36 chest-only images) and a bare female chest in 8%
+#: (9 of 110) — but the male misses sit at 0.05–0.32, not just under the bar.
+#: Catching the lowest by threshold alone would mean a bar of 0.05, which
+#: flags 98.3% of all images in spoiler-required channels and reverts the gate
+#: to the delete-everything behaviour the classifier was added to end. A label
+#: rule at :data:`DEFAULT_CHEST_FLOOR` newly catches 7 of 238 currently-passing
+#: images instead — and catches both genders, which is the point.
+CHEST_LABELS: frozenset[str] = frozenset({
+    "MALE_BREAST_EXPOSED",
+    "FEMALE_BREAST_EXPOSED",
+})
+
+#: NudeNet confidence at or above which a chest detection forces a spoiler.
+#: Not a Marqo probability — this is the detector's own confidence in one box,
+#: a different scale from :data:`DEFAULT_THRESHOLD`, which is why it is a
+#: separate dial and not a reuse of the existing one.
+#:
+#: 0.4 chosen by replaying the rule over the 821 classified images in
+#: production spoiler channels. Recall against the five known male-chest
+#: misses, and cost as a share of all traffic:
+#:
+#: === ================= =================== =============
+#: dial male tail caught female tail caught  newly deleted
+#: === ================= =================== =============
+#: 0.25 5 of 5           9 of 9              16  (1.9%)
+#: 0.40 4 of 5           4 of 9               9  (1.1%)
+#: 0.50 3 of 5           3 of 9               7  (0.9%)
+#: === ================= =================== =============
+#:
+#: NudeNet's own confidence, not this floor, is what bounds recall at the
+#: bottom: the two male images still missed at 0.4 carry chest detections it
+#: is only 0.29 and 0.41 sure of. 0.25 closes both tails completely and is one
+#: dashboard edit away, but it acts on detections weak enough that the
+#: false-positive cost can't be read off the recorded rows — so the shipped
+#: default stops short of it rather than guessing on a live guild.
+DEFAULT_CHEST_FLOOR = 0.4
 
 #: Probability at or above which an image counts as explicit. Consumers that
 #: destroy content use a higher one — see CONFIG_KEY_SFW_THRESHOLD. Both sit in
@@ -84,6 +142,7 @@ DEFAULT_SFW_THRESHOLD = 0.75
 
 CONFIG_KEY_THRESHOLD = "nsfw_classifier_threshold"
 CONFIG_KEY_SFW_THRESHOLD = "nsfw_classifier_sfw_threshold"
+CONFIG_KEY_CHEST_FLOOR = "nsfw_chest_label_floor"
 CONFIG_KEY_SFW_MODE = "nsfw_sfw_prevention_mode"
 CONFIG_KEY_SFW_LOG_CHANNEL = "nsfw_sfw_prevention_log_channel_id"
 CONFIG_BUCKET_SFW_EXEMPT = "nsfw_prevention_exempt_channels"
@@ -132,11 +191,13 @@ UNKNOWN = None
 #: avoid that would mean keeping up to 25 MB per cached attachment alive. So a
 #: single task downloads once, scores, and tags in the same pass.
 #:
-#: ``tagged`` records whether that pass included NudeNet. It is a property of
-#: the attachment's *channel*, and an attachment belongs to exactly one
-#: message, so it cannot differ between two consumers of the same entry — the
-#: mismatch branch in :func:`_shared_infer` exists to keep that assumption from
-#: failing silently if it ever stops holding.
+#: ``tagged`` records whether that pass included NudeNet. This used to be a
+#: pure property of the attachment's channel and so identical for every
+#: consumer; the bare-chest rule ended that, because spoiler enforcement now
+#: asks for labels in channels where reaction tipping does not. The mismatch
+#: branch in :func:`_shared_infer` is therefore a live path rather than a
+#: defensive one: it replaces an untagged entry when a caller needs tags,
+#: costing one duplicate download and inference in that overlap.
 #:
 #: What is held is the *score*, not a verdict, so an entry stays valid across
 #: threshold edits and across consumers applying different bars.
@@ -202,10 +263,56 @@ class Classification:
     inference_ms: int = 0
     size_bytes: int = 0
     threshold: float = DEFAULT_THRESHOLD
+    #: Carried on the result for the same reason :attr:`threshold` is: the
+    #: consumer that applies the bare-chest rule (spoiler enforcement) receives
+    #: a ``Classification`` and never sees the classifier that produced it, so
+    #: the dial has to travel with the verdict it qualifies.
+    chest_floor: float = DEFAULT_CHEST_FLOOR
 
     @property
     def is_unknown(self) -> bool:
         return self.verdict is UNKNOWN
+
+    @property
+    def has_bare_chest(self) -> bool:
+        """Whether the tagger saw an exposed chest it was confident about.
+
+        Always False where the tagger did not run — a channel with no labels
+        cannot answer this question, and the caller must not read that silence
+        as "no chest present". :attr:`tagged` is what distinguishes the two.
+        """
+        return any(
+            d.label in CHEST_LABELS and d.score >= self.chest_floor
+            for d in self.detections
+        )
+
+    @property
+    def requires_spoiler(self) -> bool:
+        """Whether the spoiler gate must act on this image.
+
+        Three ways to qualify, and the second is the one this property exists
+        for:
+
+        * **Explicit by score** — Marqo cleared the threshold.
+        * **A bare chest** — regardless of what Marqo thought. The model scores
+          male and female chests asymmetrically because its training labels do
+          (see :data:`CHEST_LABELS` for the measured gap), and the server's
+          rule is that any bare chest needs a spoiler. That is a policy the
+          model cannot express, so it is applied on top of the model rather
+          than tuned into it.
+        * **UNKNOWN** — unreadable is treated as maybe-explicit, so a CDN
+          failure cannot become a way to post explicit content unspoilered.
+
+        Note the asymmetry with SFW prevention, which fails *open* on UNKNOWN:
+        there a failed read would cost an innocent member their photo, here it
+        would leave explicit content unspoilered. Same uncertainty, opposite
+        correct answer.
+        """
+        if self.is_unknown:
+            return True
+        if self.verdict:
+            return True
+        return self.has_bare_chest
 
 
 @dataclass(frozen=True)
@@ -290,6 +397,32 @@ def load_settings_with_conn(
         conn, CONFIG_KEY_SFW_THRESHOLD, DEFAULT_SFW_THRESHOLD, guild_id
     )
     return threshold, sfw_threshold
+
+
+def load_dials(
+    db_path: Path, guild_id: int, *, strict: bool = False
+) -> tuple[float, float]:
+    """``(threshold, chest_floor)`` for one consumer, in one connection.
+
+    The threshold returned is already the one *this* consumer applies, so a
+    caller never has to remember which of the two bars ``strict`` selects.
+    """
+    with open_db(db_path) as conn:
+        threshold, sfw_threshold = load_settings_with_conn(conn, guild_id)
+        chest_floor = load_chest_floor_with_conn(conn, guild_id)
+    return (sfw_threshold if strict else threshold), chest_floor
+
+
+def load_chest_floor_with_conn(conn: sqlite3.Connection, guild_id: int) -> float:
+    """NudeNet confidence floor for the bare-chest spoiler rule.
+
+    Deliberately *not* folded into :func:`load_settings_with_conn`'s tuple:
+    that pair is two bars on the same Marqo probability, and this is a
+    detector confidence on a different scale. Callers that need both open one
+    connection and ask twice rather than unpacking three floats whose units
+    disagree.
+    """
+    return _float_config(conn, CONFIG_KEY_CHEST_FLOOR, DEFAULT_CHEST_FLOOR, guild_id)
 
 
 @dataclass(frozen=True)
@@ -378,11 +511,18 @@ def top_detection(
 ) -> tuple[str | None, float | None]:
     """Highest-scoring qualifying tag, for the recorded row's headline.
 
-    Reported for description only — Marqo already decided the verdict — so a
-    confident ``BELLY_EXPOSED`` never becomes the stated reason an image was
-    judged explicit. No threshold is applied: NudeNet's own floor is the only
-    bar that means anything for a label, and the configured threshold is a
-    whole-image probability that has nothing to say about one body part.
+    Descriptive: a confident ``BELLY_EXPOSED`` never becomes the stated reason
+    an image was judged explicit, because it isn't in
+    :data:`DEFAULT_LABEL_SET`. The one label that now *acts* is a chest — see
+    :meth:`Classification.requires_spoiler` — and that rule reads
+    :attr:`Classification.detections` directly rather than this headline, so a
+    chest losing the ``max`` to a genital label cannot cost the rule its
+    trigger.
+
+    No threshold is applied here: NudeNet's own floor is the only bar that
+    means anything for a label, and the configured Marqo threshold is a
+    whole-image probability with nothing to say about one body part. The
+    bare-chest rule's floor is deliberately separate and applied there.
     """
     qualifying = [d for d in detections if d.label in DEFAULT_LABEL_SET]
     if not qualifying:
@@ -530,6 +670,7 @@ async def classify_attachment(
     *,
     threshold: float = DEFAULT_THRESHOLD,
     tag: bool = False,
+    chest_floor: float = DEFAULT_CHEST_FLOOR,
 ) -> Classification:
     """Download, classify and return a verdict for one attachment.
 
@@ -556,6 +697,7 @@ async def classify_attachment(
         verdict=UNKNOWN,
         size_bytes=attachment.size,
         threshold=threshold,
+        chest_floor=chest_floor,
     )
 
     if not is_classifiable(attachment):
@@ -580,6 +722,7 @@ async def classify_attachment(
         inference_ms=inference_ms,
         size_bytes=size_bytes,
         threshold=threshold,
+        chest_floor=chest_floor,
     )
 
 
@@ -593,8 +736,9 @@ async def _shared_infer(
     """
     entry = _cache.get(attachment.id)
     # An entry computed without tags cannot satisfy a caller that wants them.
-    # This should be unreachable — see the cache's docstring — so it replaces
-    # the entry rather than trying to be clever about merging.
+    # Reachable since the bare-chest rule — see the cache's docstring. It
+    # replaces the entry rather than merging: the bytes are long gone by then,
+    # so there is nothing to tag except by fetching them again anyway.
     if entry is not None and tag and not entry[0]:
         entry = None
         _cache.pop(attachment.id, None)
@@ -656,10 +800,17 @@ class MessageClassifier:
     and keeping alive — the whole ``discord.Message`` and its guild.
 
     ``channel_is_nsfw`` is derived here rather than supplied per call site.
-    It drives both the recording scope and whether NudeNet runs at all, and
-    the callers that used to pass it were asserting a precondition enforced by
+    The callers that used to pass it were asserting a precondition enforced by
     a guard several frames away in another module — true when written,
     silently wrong the moment those guards got reordered.
+
+    ``labelled`` is the separate question of whether NudeNet runs and a row is
+    written. It used to be the same flag as ``channel_is_nsfw``; the bare-chest
+    spoiler rule split them, because that rule is evaluated from labels and a
+    spoiler-required channel is not necessarily age-gated. The two still move
+    together — tagging and recording are never enabled independently — so
+    there is no arrangement of this code that derives labels without also
+    recording them, or vice versa.
 
     Settings load lazily on first use and are then reused for the rest of the
     message, so constructing one is free. That matters: spoiler enforcement
@@ -672,39 +823,39 @@ class MessageClassifier:
     channel_id: int
     message_id: int
     channel_is_nsfw: bool
+    labelled: bool = False
     strict: bool = False
-    _threshold_task: "asyncio.Task[float] | None" = None
+    _dials_task: "asyncio.Task[tuple[float, float]] | None" = None
 
-    async def _load_threshold(self) -> float:
+    async def _load_dials(self) -> tuple[float, float]:
         # The task, not the value: the auto-react cog gathers classify() over
         # every attachment, so with a plain value all N coroutines see None in
         # the same tick and each opens its own connection.
-        if self._threshold_task is None:
-            self._threshold_task = asyncio.create_task(self._read_threshold())
+        if self._dials_task is None:
+            self._dials_task = asyncio.create_task(self._read_dials())
         try:
-            return await asyncio.shield(self._threshold_task)
+            return await asyncio.shield(self._dials_task)
         except Exception:
             # Evict, like _shared_infer does: a cached failed task would
             # re-raise for every remaining attachment of the message, where the
             # plain value this replaced simply retried.
-            self._threshold_task = None
+            self._dials_task = None
             raise
 
-    async def _read_threshold(self) -> float:
-        threshold, sfw_threshold = await asyncio.to_thread(
-            load_settings, self.db_path, self.guild_id
+    async def _read_dials(self) -> tuple[float, float]:
+        return await asyncio.to_thread(
+            load_dials, self.db_path, self.guild_id, strict=self.strict
         )
-        return sfw_threshold if self.strict else threshold
 
     async def __call__(self, attachment: SupportsAttachment) -> Classification:
-        threshold = await self._load_threshold()
-        # The age gate decides both whether tags are produced and whether a row
-        # is written, from the same flag — so there is no arrangement of this
-        # code that tags an image in general chat.
+        threshold, chest_floor = await self._load_dials()
         result = await classify_attachment(
-            attachment, threshold=threshold, tag=self.channel_is_nsfw
+            attachment,
+            threshold=threshold,
+            tag=self.labelled,
+            chest_floor=chest_floor,
         )
-        if result.is_unknown or not self.channel_is_nsfw:
+        if result.is_unknown or not self.labelled:
             return result
         await asyncio.to_thread(self._record, result)
         return result
@@ -726,7 +877,11 @@ class MessageClassifier:
 
 
 def classifier_for(
-    db_path: Path, message: object, *, strict: bool = False
+    db_path: Path,
+    message: object,
+    *,
+    strict: bool = False,
+    needs_labels: bool = False,
 ) -> MessageClassifier:
     """Bind a classifier to *message* for one consumer.
 
@@ -737,15 +892,31 @@ def classifier_for(
 
     Pass ``strict=True`` for consumers that destroy content (SFW nudity
     prevention) — it applies the higher threshold.
+
+    Pass ``needs_labels=True`` for a consumer whose policy is evaluated from
+    NudeNet labels rather than from Marqo's score alone. Spoiler enforcement
+    does, for its bare-chest rule. It widens tagging *and* recording beyond
+    age-gated channels, which is a privacy-relevant widening and is why it is
+    an explicit opt-in per consumer rather than a default — see
+    docs/nsfw_classifier_spec.md §Privacy.
+
+    One consequence worth knowing: two consumers of the same attachment can now
+    disagree about whether tags are wanted (spoiler enforcement in a
+    spoiler-required channel that isn't age-gated, versus reaction tipping in
+    the same channel). :func:`_shared_infer` already handles that by replacing
+    the untagged cache entry, so the result is correct; the cost is one
+    duplicate download and inference in that narrow overlap.
     """
     channel = getattr(message, "channel", None)
     guild = getattr(message, "guild", None)
+    age_gated = is_age_gated_channel(channel)
     return MessageClassifier(
         db_path=db_path,
         guild_id=getattr(guild, "id", 0) or 0,
         channel_id=getattr(channel, "id", 0) or 0,
         message_id=getattr(message, "id", 0) or 0,
-        channel_is_nsfw=is_age_gated_channel(channel),
+        channel_is_nsfw=age_gated,
+        labelled=age_gated or needs_labels,
         strict=strict,
     )
 

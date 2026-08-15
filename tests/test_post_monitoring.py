@@ -5,10 +5,19 @@ channel, so a meme or a screenshot went the same way as explicit content.
 These tests pin the narrowing, and pin the fallback direction: an image the
 classifier could not read is still deleted, because unreadable must be treated
 as maybe-explicit rather than opening a hole in the rule.
+
+Narrowing cut too deep in one place. Marqo inherits its training set's
+asymmetry between male and female chests, so a bare male chest could score
+0.05 and survive a gate the server intends it not to. The bare-chest rule is
+the policy layer that closes that — the decision itself lives on
+``Classification.requires_spoiler`` and is tested there; what these tests pin
+is that the gate honours it, and that the rule's own false-positive guard
+(covered chests are clothing) holds.
 """
 from __future__ import annotations
 
 import logging
+import sqlite3
 
 import discord
 import pytest
@@ -17,6 +26,7 @@ from bot_modules.core.post_monitoring import (
     enforce_sfw_image_policy,
     enforce_spoiler_requirement,
 )
+from bot_modules.services.guess_models import BoundingBox, Detection
 from bot_modules.services.nsfw_classifier_service import (
     SFW_MODE_ENFORCE,
     SFW_MODE_LOG,
@@ -137,16 +147,22 @@ def _member_isinstance(monkeypatch):
     )
 
 
-def classification(verdict_value, label=None, score=0.9):
-    # top_label defaults to None: the tagger only runs in age-gated channels,
-    # so outside them the score is the only number a consumer has.
+def classification(verdict_value, label=None, score=0.9, detections=None):
+    # top_label defaults to None: outside a tagged channel the score is the
+    # only number a consumer has.
     return Classification(
         attachment_id=1,
         verdict=verdict_value,
         score=score if verdict_value is not None else None,
         top_label=label,
         top_score=0.7 if label else None,
+        detections=detections or [],
+        tagged=bool(detections),
     )
+
+
+def chest(label="MALE_BREAST_EXPOSED", confidence=0.66):
+    return Detection(label=label, score=confidence, box=BoundingBox(0, 0, 10, 20))
 
 
 async def run(message, classify=None, bypass=frozenset(), report=None):
@@ -200,6 +216,85 @@ async def test_unreadable_image_is_still_deleted():
 
     assert await run(message, verdict(None)) is True
     assert message.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_a_bare_male_chest_is_deleted_despite_a_clean_verdict():
+    # todo #99, at the gate. Marqo called this not-explicit (0.2) and the gate
+    # let it through; the bare-chest rule is what stops it now.
+    message = FakeMessage(attachments=[FakeAttachment()])
+
+    async def classify(_attachment):
+        return classification(False, score=0.2, detections=[chest()])
+
+    assert await run(message, classify) is True
+    assert message.deleted is True
+    assert message.channel.sent
+
+
+@pytest.mark.asyncio
+async def test_a_bare_female_chest_is_deleted_on_the_same_rule():
+    # Identical treatment is the policy — one rule, not a male special case.
+    message = FakeMessage(attachments=[FakeAttachment()])
+
+    async def classify(_attachment):
+        return classification(
+            False, score=0.2, detections=[chest("FEMALE_BREAST_EXPOSED")]
+        )
+
+    assert await run(message, classify) is True
+    assert message.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_a_covered_chest_is_not_a_bare_one():
+    # The false-positive guard on the new rule: a swimwear or lingerie photo
+    # posted unspoilered stays up.
+    message = FakeMessage(attachments=[FakeAttachment()])
+
+    async def classify(_attachment):
+        return classification(
+            False, score=0.2, detections=[chest("FEMALE_BREAST_COVERED", 0.95)]
+        )
+
+    assert await run(message, classify) is False
+    assert message.deleted is False
+
+
+@pytest.mark.asyncio
+async def test_a_classifier_that_raises_deletes_rather_than_escaping():
+    # The gate used to fail *open* here: MessageClassifier re-raises when it
+    # can't read the threshold (a locked DB), the exception propagated out of
+    # on_message, and the unspoilered image stayed up. A safety gate that
+    # opens on an exception is worse than one that is too strict.
+    message = FakeMessage(attachments=[FakeAttachment()])
+
+    async def classify(_attachment):
+        raise sqlite3.OperationalError("database is locked")
+
+    assert await run(message, classify) is True
+    assert message.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_a_raising_classifier_does_not_abort_the_remaining_attachments():
+    # One attachment blowing up must not silently skip the rest of the
+    # message — the failure is per-image, like every other verdict here.
+    calls: list[str] = []
+
+    async def classify(attachment):
+        calls.append(attachment.filename)
+        if attachment.filename == "boom.png":
+            raise RuntimeError("classifier died")
+        return classification(False, score=0.1)
+
+    message = FakeMessage(
+        attachments=[FakeAttachment("boom.png"), FakeAttachment("cat.png")]
+    )
+
+    # The raising one is treated as maybe-explicit, so the message goes on it.
+    assert await run(message, classify) is True
+    assert calls == ["boom.png"]
 
 
 @pytest.mark.asyncio

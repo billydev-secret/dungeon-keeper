@@ -65,16 +65,25 @@ async def enforce_spoiler_requirement(
 ) -> bool:
     """Delete unspoilered images in spoiler-required channels.
 
-    With *classify* supplied, only images that classify as **explicit** are
-    deleted — a meme, a screenshot or a cat photo posted unspoilered is left
-    alone, which is the false-positive class this gate historically produced.
-    An image the classifier could not read (``None``) is deleted anyway:
-    unreadable is treated as maybe-explicit, so a CDN failure falls back to
-    the pre-classifier behavior rather than opening a hole in the rule.
+    With *classify* supplied, an image is deleted when
+    :attr:`Classification.requires_spoiler` says so — explicit by score, or a
+    bare chest of any gender, or unreadable. A meme, a screenshot or a cat
+    photo posted unspoilered is left alone, which is the false-positive class
+    this gate historically produced.
+
+    The bare-chest arm is a policy rule the model cannot express; it lives on
+    the ``Classification`` rather than here so it is testable without a Discord
+    message. See :meth:`Classification.requires_spoiler`.
 
     Without *classify* the original behavior applies unchanged — every
     unspoilered image goes. That is the correct fallback when no classifier is
     configured, and it keeps this function usable on its own.
+
+    **A classifier that raises is treated as a classifier that said
+    maybe-explicit.** The gate deletes, matching its own UNKNOWN fallback. A
+    DB hiccup while reading the threshold used to propagate out of here and
+    abort ``on_message`` entirely, which left the unspoilered image standing —
+    a safety gate that opened on an exception.
     """
     if message.channel.id not in spoiler_required_channels:
         return False
@@ -96,9 +105,22 @@ async def enforce_spoiler_requirement(
         if attachment.is_spoiler():
             continue
 
-        result = await classify(attachment) if classify is not None else None
-        if result is not None and result.verdict is False:
-            # Read it, and it isn't explicit — this is the deletion the
+        result: Classification | None = None
+        if classify is not None:
+            try:
+                result = await classify(attachment)
+            except Exception:
+                # Fail closed. `result` stays None, which reaches the same
+                # deletion path as "no classifier configured" — the strict
+                # fallback, not the permissive one.
+                log.exception(
+                    "nsfw: classifier failed for attachment %s — deleting on the "
+                    "safe side",
+                    attachment.id,
+                )
+
+        if result is not None and not result.requires_spoiler:
+            # Read it, and the rule doesn't apply — this is the deletion the
             # classifier exists to prevent. Keep checking the other
             # attachments; one innocent image doesn't clear the message.
             continue
