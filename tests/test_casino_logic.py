@@ -683,6 +683,73 @@ def test_is_big_bet_tiers():
     assert not logic.is_big_bet(99, 0)
 
 
+# ── big-win broadcast tiers ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("payout", "threshold", "expected"),
+    [
+        pytest.param(499, 500, None, id="under-the-bar-stays-private"),
+        pytest.param(5000, 0, None, id="bar-of-zero-is-the-off-switch"),
+        pytest.param(1200, 0, None, id="off-switch-beats-any-payout"),
+        pytest.param(5000, -1, None, id="negative-bar-is-also-off"),
+        pytest.param(500, 500, "💰 Big Win", id="exactly-the-bar-broadcasts"),
+        pytest.param(1200, 500, "💰 Big Win", id="1x-tier"),
+        pytest.param(1499, 500, "💰 Big Win", id="just-under-3x"),
+        pytest.param(1500, 500, "🔥 Huge Win", id="3x-tier"),
+        pytest.param(4999, 500, "🔥 Huge Win", id="just-under-10x"),
+        pytest.param(5000, 500, "🌟 Monster Win", id="10x-tier"),
+        pytest.param(50_000, 500, "🌟 Monster Win", id="far-over-10x"),
+    ],
+)
+def test_big_win_tier_ladder_without_history(payout, threshold, expected):
+    """The ladder with no percentile to rank against — every guild's first
+    weeks, and any guild whose win history is still under the sample floor."""
+    tier = logic.big_win_tier(payout, threshold)
+    assert (None if tier is None else tier.header) == expected
+    # No history can ever produce the @here: an unknown percentile withholds
+    # the ping rather than passing it.
+    assert tier is None or not tier.ping
+
+
+@pytest.mark.parametrize(
+    ("payout", "top_pct", "pings"),
+    [
+        pytest.param(9000, 8000, True, id="over-a-percentile-above-the-10x-floor"),
+        pytest.param(8000, 8000, True, id="exactly-the-percentile-qualifies"),
+        pytest.param(7999, 8000, False, id="just-under-the-percentile"),
+        pytest.param(6000, 3000, True, id="cheap-percentile-still-pings-over-the-floor"),
+        pytest.param(5000, 3000, True, id="the-10x-floor-is-the-ping-minimum"),
+        pytest.param(4999, 3000, False, id="cheap-percentile-cannot-ping-under-the-floor"),
+        pytest.param(4999, 100, False, id="a-cheap-percentile-cannot-ping-a-huge-win"),
+        pytest.param(50_000, None, False, id="no-history-never-pings"),
+    ],
+)
+def test_big_win_tier_ping_takes_the_higher_of_percentile_and_floor(
+    payout, top_pct, pings
+):
+    """The @here fires on the top 3% of recent wins, floored at 10× the bar.
+
+    The floor is the guard that matters: in a quiet low-stakes stretch a
+    guild's own 97th percentile can sit barely over its broadcast bar, and
+    without the floor every routine broadcast would ping the whole channel.
+    """
+    tier = logic.big_win_tier(payout, 500, top_pct_payout=top_pct)
+    assert tier is not None
+    assert tier.ping is pings
+    # The loudest tier is the only one that renames itself and adds a lead
+    # line; the quieter rungs must never carry either.
+    assert (tier.header == logic.LEGENDARY_HEADER) is pings
+    assert (tier.lead is not None) is pings
+
+
+def test_big_win_tier_ping_still_obeys_the_broadcast_bar():
+    """A percentile can only ever escalate a broadcast, never create one. A
+    guild with the feature switched off stays silent however rare the win."""
+    assert logic.big_win_tier(999_999, 0, top_pct_payout=1) is None
+    assert logic.big_win_tier(499, 500, top_pct_payout=1) is None
+
+
 # ── cap_lines (Discord field-limit guard) ──────────────────────────────
 
 

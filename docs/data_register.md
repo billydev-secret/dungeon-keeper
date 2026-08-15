@@ -89,6 +89,18 @@ exempts deletion, not disclosure.
 7. Mod visibility: which audit panels expose this data, gated how?
 8. Exportability: could we answer a subject-access request for this feature?
 
+## Deliberately not personal data
+
+Tables that look like they belong in the register and are absent on purpose.
+Recorded here so their absence reads as a decision rather than an oversight —
+and so that adding a member-identifying column to one is understood as putting
+it *into* the register, with a purge decision, rather than a routine schema
+tweak.
+
+| Table | What it holds | Why it stays out |
+|---|---|---|
+| `casino_win_history` (migration 161, 2026-08-15) | `(guild_id, payout, ts)` — a rolling `WIN_HISTORY_KEEP`-row window of winning payouts per guild, powering the big-win broadcast's top-3% `@here` tier | No `user_id` and no other member identifier. It answers only "how big is a big win in this guild lately", which never needs to know who won. The cheaper option was raising `casino_ticker`'s retention 25 → 500, and it was rejected precisely because those rows *do* carry `user_id`: it would have retained 20× more per-member play history to power a header. Pinned by a schema assertion in `tests/test_casino_service.py` |
+
 ## Processors (running inventory)
 
 - **Local/LAN only**: Marqo+NudeNet (ONNX in-process), VADER, faster-whisper,

@@ -222,6 +222,68 @@ def is_big_bet(stake: int, max_bet: int) -> bool:
     return stake >= BIG_BET_UNCAPPED
 
 
+# The public broadcast's header escalates with how far the payout clears the
+# guild's bar, so a rare haul doesn't read the same as a routine one. Steps
+# are MULTIPLES of ``broadcast_min_payout``, not coin amounts: the dial is
+# the only thing that knows what "big" is worth in a given economy (see
+# memory: guild "nut" runs ~8× The Golden Meadow's denomination).
+#
+# Deliberately no "Jackpot" tier — the casino already has a real progressive
+# jackpot with its own celebration embed, and reusing the word for a merely
+# large win would make the genuine article stop landing.
+BIG_WIN_TIERS: tuple[tuple[int, str], ...] = (
+    (10, "🌟 Monster Win"),
+    (3, "🔥 Huge Win"),
+    (1, "💰 Big Win"),
+)
+# Above the whole ladder sits the one that pings the channel: a payout in the
+# top 3% of what this guild has actually been winning lately (the percentile
+# comes from casino_service.win_percentile — see migration 161).
+LEGENDARY_HEADER = "💎 Legendary Win"
+LEGENDARY_LEAD = "**One of the biggest payouts this casino has ever handed over.**"
+
+
+class BigWinTier(NamedTuple):
+    header: str  # embed title prefix, before " — {game}"
+    lead: str | None  # extra first line of the description, loudest tier only
+    ping: bool  # whether the broadcast carries an @here
+
+
+def big_win_tier(
+    payout: int, threshold: int, *, top_pct_payout: int | None = None
+) -> BigWinTier | None:
+    """The broadcast tier for ``payout``, or None when it stays private.
+
+    None means "don't broadcast" — a payout under the bar, or a bar of 0,
+    which is the guild's off switch. Callers treat None as the whole
+    decision; there is no second threshold check anywhere.
+
+    ``top_pct_payout`` is the guild's top-3% mark, or None when there isn't
+    enough win history to rank against. None can only ever *withhold* the
+    ping: an unknown percentile is never treated as a passing one.
+
+    The ping also can't fire below the top rung of the multiple ladder. Left
+    to the percentile alone, a guild in a quiet low-stakes stretch would have
+    a top-3% mark barely over its own broadcast bar, and every routine
+    broadcast would ping the channel. Taking the larger of the two means the
+    @here is at minimum as rare as a Monster Win, and rarer whenever the
+    guild's real distribution says so.
+    """
+    if threshold <= 0 or payout < threshold:
+        return None
+    top_mult, top_header = BIG_WIN_TIERS[0]
+    if top_pct_payout is not None and payout >= max(
+        top_pct_payout, threshold * top_mult
+    ):
+        return BigWinTier(LEGENDARY_HEADER, LEGENDARY_LEAD, True)
+    for mult, header in BIG_WIN_TIERS:
+        if payout >= threshold * mult:
+            return BigWinTier(header, None, False)
+    # Unreachable: the 1× row always matches above the bar. Kept explicit so a
+    # future edit to the ladder can't silently start returning None here.
+    return BigWinTier(top_header, None, False)
+
+
 # ── Roulette (European single zero) ────────────────────────────────────
 
 RED_NUMBERS = frozenset(

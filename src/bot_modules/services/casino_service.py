@@ -523,6 +523,66 @@ def recent_ticker(
     ).fetchall()
 
 
+# Winning payouts kept per guild for the broadcast's top-tier percentile
+# (migration 161). Big enough that a 97th percentile rests on ~30 rows rather
+# than a handful, small enough to still be "lately" in an active guild.
+WIN_HISTORY_KEEP = 1000
+# Below this many banked wins the percentile is refused outright — no ping,
+# whatever the payout. A fresh guild must not @here its first win because the
+# sample of one made it the top 3%.
+PING_MIN_SAMPLE = 100
+# "Top 3% of winnings", as a percentile rank.
+PING_PERCENTILE = 97
+
+
+def record_win(
+    conn: sqlite3.Connection, guild_id: int, payout: int, *, now: float | None = None
+) -> None:
+    """Append one winning payout and trim the guild to WIN_HISTORY_KEEP.
+
+    Stores no user_id on purpose — see migration 161. This table answers
+    "how big is a big win around here lately" and nothing else.
+    """
+    conn.execute(
+        "INSERT INTO casino_win_history (guild_id, payout, ts) VALUES (?, ?, ?)",
+        (guild_id, payout, time.time() if now is None else now),
+    )
+    conn.execute(
+        "DELETE FROM casino_win_history WHERE guild_id = ? AND id NOT IN ("
+        "SELECT id FROM casino_win_history WHERE guild_id = ? "
+        "ORDER BY id DESC LIMIT ?)",
+        (guild_id, guild_id, WIN_HISTORY_KEEP),
+    )
+
+
+def win_percentile(
+    conn: sqlite3.Connection, guild_id: int, percentile: int = PING_PERCENTILE
+) -> int | None:
+    """The payout at ``percentile`` of this guild's recent wins, or None when
+    the window is too thin to rank against.
+
+    None is a refusal, not a zero: callers must treat "I can't tell yet" as
+    "don't ping", never as "everything qualifies".
+    """
+    total = int(
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM casino_win_history WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()["n"]
+    )
+    if total < PING_MIN_SAMPLE:
+        return None
+    # Ascending rank: with 100 rows, offset 97 is the 98th smallest, so the
+    # three above it are the top 3% and a payout at or over it qualifies.
+    offset = min(total * percentile // 100, total - 1)
+    row = conn.execute(
+        "SELECT payout FROM casino_win_history WHERE guild_id = ? "
+        "ORDER BY payout ASC LIMIT 1 OFFSET ?",
+        (guild_id, offset),
+    ).fetchone()
+    return None if row is None else int(row["payout"])
+
+
 def record_play(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -561,6 +621,10 @@ def record_play(
         payout,
     )
     won = 1 if payout > stake else 0
+    # The broadcast's percentile population: the games that can broadcast, and
+    # only real wins. A push returns the stake and would drag the bar down.
+    if won and game in TICKER_GAMES:
+        record_win(conn, guild_id, payout, now=now)
     conn.execute(
         "INSERT INTO casino_member_stats "
         "(guild_id, user_id, wagered, returned, plays, wins, biggest_win, "

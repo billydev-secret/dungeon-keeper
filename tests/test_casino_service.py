@@ -2046,3 +2046,89 @@ def test_broadcast_min_payout_defaults_off_and_roundtrips(db):
         assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 0
         svc.save_casino_settings(conn, GUILD, {"broadcast_min_payout": 500})
         assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 500
+
+
+# ── win history (the broadcast's top-3% percentile, migration 161) ─────
+
+
+def _bank_wins(conn, payouts, guild=GUILD):
+    for payout in payouts:
+        svc.record_win(conn, guild, payout, now=NOW)
+
+
+def test_win_percentile_refuses_a_sample_under_the_floor(db):
+    """The guard that stops a fresh guild @here-ing its very first win: with
+    a thin window the answer is a refusal, never a number the caller could
+    read as "everything qualifies"."""
+    with open_db(db) as conn:
+        _bank_wins(conn, [10_000] * (svc.PING_MIN_SAMPLE - 1))
+        assert svc.win_percentile(conn, GUILD) is None
+        svc.record_win(conn, GUILD, 10_000, now=NOW)
+        assert svc.win_percentile(conn, GUILD) == 10_000
+
+
+def test_win_percentile_marks_the_top_three_percent(db):
+    """1..200 banked: the top 3% is the largest six, so the mark lands where
+    exactly those clear it and the 194th does not."""
+    with open_db(db) as conn:
+        _bank_wins(conn, range(1, 201))
+        mark = svc.win_percentile(conn, GUILD)
+        assert mark == 195
+        over = [p for p in range(1, 201) if p >= mark]
+        assert len(over) == 6 == round(200 * 0.03)
+
+
+def test_win_percentile_is_scoped_per_guild(db):
+    """Two live guilds run economies ~8× apart (memory: guild "nut"), so a
+    shared bar would ping one constantly and never the other."""
+    other = GUILD + 1
+    with open_db(db) as conn:
+        _bank_wins(conn, range(1, 201))
+        _bank_wins(conn, range(1000, 1200), guild=other)
+        assert svc.win_percentile(conn, GUILD) == 195
+        assert svc.win_percentile(conn, other) == 1194
+
+
+def test_win_history_trims_to_the_window_and_keeps_the_newest(db):
+    """A rolling window, not an all-time archive — an old economy's payouts
+    must age out or the percentile calcifies around them."""
+    with open_db(db) as conn:
+        _bank_wins(conn, [1] * svc.WIN_HISTORY_KEEP)
+        _bank_wins(conn, [9_000] * 10)
+        rows = conn.execute(
+            "SELECT payout FROM casino_win_history WHERE guild_id = ?",
+            (GUILD,),
+        ).fetchall()
+        assert len(rows) == svc.WIN_HISTORY_KEEP
+        assert sum(1 for r in rows if int(r["payout"]) == 9_000) == 10
+
+
+def test_win_history_stores_no_user_id(db):
+    """Migration 161's whole privacy claim, pinned: this table is outside
+    personal data, so it carries no column naming a member. A future column
+    added here needs a data_register.md row and a purge decision."""
+    with open_db(db) as conn:
+        svc.record_win(conn, GUILD, 1000, now=NOW)
+        cols = {
+            r["name"]
+            for r in conn.execute("PRAGMA table_info(casino_win_history)")
+        }
+    assert cols == {"id", "guild_id", "payout", "ts"}
+
+
+def test_record_play_banks_only_real_wins_from_broadcasting_games(db):
+    """The percentile population: a push is not a win and would drag the bar
+    down, and pools settles on its own panel rather than in the channel."""
+    with open_db(db) as conn:
+        svc.record_play(conn, GUILD, A, "slots", 100, 900, now=NOW)   # win
+        svc.record_play(conn, GUILD, A, "slots", 100, 100, now=NOW)   # push
+        svc.record_play(conn, GUILD, A, "slots", 100, 0, now=NOW)     # loss
+        svc.record_play(conn, GUILD, A, "pools", 100, 900, now=NOW)   # off-ticker
+        banked = [
+            int(r["payout"])
+            for r in conn.execute(
+                "SELECT payout FROM casino_win_history WHERE guild_id = ?",
+                (GUILD,),
+            )
+        ]
+    assert banked == [900]

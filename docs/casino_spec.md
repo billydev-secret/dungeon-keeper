@@ -59,10 +59,52 @@ channel edit bucket). The channel itself carries only shared surfaces:
   refreshes on the instant-game repaint; a roulette/derby-only settle
   updates the table but the panel catches up on the next repaint;
 - **broadcast moments**: the jackpot celebration (always), and any win on
-  any table paying ≥ `broadcast_min_payout` (0 = off) — the result
-  embed reposted publicly with its 🔁 Play Again button, so the "me too"
-  invitation survives for wins worth advertising (`_after_instant`;
-  skipped when the jackpot celebration already announced the spin).
+  any table paying ≥ `broadcast_min_payout` (0 = off). The broadcast is a
+  **separate embed** built from the player's result card, never the card
+  itself — `build_big_win_broadcast` in `embeds.py`, routed through the cog's
+  one `_send_big_win` seam (`_after_instant` for the instant games,
+  `_broadcast_window_win` for the private-round family, `_auto_resolve_hand`
+  for the idle sweep; skipped when the jackpot celebration already announced
+  the spin). It carries **no button** — see "Public recaps carry no buttons"
+  below — and titles itself for the event rather than the game, on a ladder
+  that escalates with how far the payout clears the bar
+  (`casino_logic.big_win_tier`, tested in `tests/test_casino_logic.py`):
+
+  | rung | fires at | pings |
+  |---|---|---|
+  | 💰 Big Win | ≥ 1× `broadcast_min_payout` | — |
+  | 🔥 Huge Win | ≥ 3× | — |
+  | 🌟 Monster Win | ≥ 10× | — |
+  | 💎 Legendary Win | top 3% of the guild's recent wins, floored at 10× | `@here` |
+
+  Steps are **multiples of the dial**, never coin amounts: the two live
+  guilds run economies ~8× apart, and a hardcoded ladder would be wrong in
+  at least one of them. The top rung adds a lead line above the result copy
+  and is the only one that pings; `AllowedMentions(everyone=True)` is set
+  only for it, every other broadcast staying on `.none()`.
+
+  **Why the ladder is floored at 10×.** The percentile alone would misfire:
+  in a quiet low-stakes stretch a guild's own 97th percentile can sit barely
+  over its broadcast bar, and every routine broadcast would then ping the
+  channel. `big_win_tier` takes the larger of the percentile and 10× the
+  dial, so the `@here` is at minimum as rare as a Monster Win and rarer
+  whenever the guild's real distribution says so. A percentile can only
+  escalate a broadcast, never create one — a guild with the dial at 0 stays
+  silent however rare the win.
+
+  The percentile comes from `casino_service.win_percentile` over
+  `casino_win_history` (migration 161): a rolling `WIN_HISTORY_KEEP`-row
+  window of winning payouts per guild, banked from `record_play` in the
+  settle transaction for the nine `TICKER_GAMES` and only when
+  `payout > stake`. Under `PING_MIN_SAMPLE` banked wins it returns **None**,
+  a refusal callers must read as "don't ping" and never as "everything
+  qualifies" — this is what stops a fresh guild `@here`-ing its first win.
+  The read is skipped entirely for any payout under the 10× floor, and a
+  failed read degrades to None, so a hiccup costs the ping and never the
+  announcement. The table **deliberately stores no `user_id`**: it answers
+  only "how big is a big win around here lately", which never needs to know
+  who won, so it stays outside personal data — no `data_register.md` row, and
+  nothing for `purge_user_data` to clear.
 
 The panel is **bottom-sticky** (the economy sticky-panel pattern): channel
 traffic debounces a restick (delete + repost, since it is the casino's only
@@ -415,11 +457,20 @@ Stage 2.
 
 - **Loop-closers:** every instant/blackjack result carries a persistent
   🔁 button (`casino_again:{game}:{side}:{amount}`) that replays the same
-  stake **for whoever clicks** (their coins; every guard re-applies). On
-  your own ephemeral machine it respins the same message in place; on a
-  public big-win broadcast it opens the clicker's own machine — results
-  stay invitations, not dead ends. Every private round's recap carries 🔁 Play Again, which opens a fresh one.
-  Stale buttons stay safe: stakes re-validate at click.
+  stake **for whoever clicks** (their coins; every guard re-applies), and
+  respins the same ephemeral message in place. Every private round's recap
+  carries 🔁 Play Again, which opens a fresh one. Stale buttons stay safe:
+  stakes re-validate at click.
+- **Public recaps carry no buttons.** The big-win broadcast used to repost
+  the player's own view — Play Again on the instant games, Next Round on the
+  private-round family — as a "me too" invitation: a bystander seeing a big
+  win could play on the spot. That was deliberate, and Billy decided against
+  it (2026-08-15); the buttons now live only on the player's own card. This
+  finishes what `c69acb48` claimed when it said the public recap buttons were
+  deleted rather than replaced — these two call sites survived that pass, and
+  a third (`_auto_resolve_hand`, the blackjack/war idle sweep) was never in
+  scope of it at all. Pinned by `tests/cogs/test_casino_big_win_broadcast.py`,
+  which asserts the send reaches `channel.send` with no view.
 - **Informed bets:** the bet modal's label carries live limits and cap
   headroom ("Your bet (5–100 · 340 left today)") and pre-fills the
   member's last stake per game (in-memory). The cap error names its reset
@@ -501,3 +552,15 @@ render site to pass a `name_fn` — needed because the parameter defaults to
 `tests/web/test_casino_routes.py` — section shape (string ids), PUT
 persistence + guards, `broadcast_min_payout` roundtrip/bounds, the 840s
 idle cap; authz/snowflake/browser sweeps cover the panel automatically.
+The big-win broadcast is a three-layer contract: the tier ladder and the
+percentile/floor interaction in `tests/test_casino_logic.py` (including that
+an unknown percentile withholds the ping rather than passing it, and that a
+percentile can never create a broadcast the dial switched off), the rolling
+window in `tests/test_casino_service.py` (sample floor, per-guild scoping,
+trim keeping the newest, a schema assertion that the table holds no
+`user_id`, and that only real wins from `TICKER_GAMES` are banked), the
+embed in `tests/test_casino_embeds.py` (header replaces the game title, copy
+and fields survive, and the player's own card is never mutated), and the cog
+seam in `tests/cogs/test_casino_big_win_broadcast.py` (no view, `@here` with
+`everyone=True` only on the top rung, a thin history or a failed percentile
+read still broadcasting).
