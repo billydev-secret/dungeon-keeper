@@ -2866,3 +2866,67 @@ async def test_unpairable_pool_stops_repeating_itself_in_the_log(sync_db_path, m
         await pp._tick(MagicMock(), sync_db_path)
 
     assert sum("swept guild" in r.message for r in caplog.records) == 1
+
+
+async def test_expiry_does_not_repool_a_member_who_left_the_guild(sync_db_path):
+    """`on_member_remove` is the only thing that prunes the pool, and a member
+    who leaves while the bot is down never fires it — their session survives to
+    expiry. Re-pooling them plants a row nothing can clear, and `_do_round`
+    burns a real member's match on it every round (review finding 1)."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row, present={1})
+
+        assert requeued == [1]
+        assert skipped == []  # nobody left to tell, and no button that helps
+        assert [r["user_id"] for r in pp._get_pool(conn, GUILD_ID)] == [1]
+        assert (2, pp.POOL_SKIP, "departed") in _pool_events(conn)
+
+
+async def test_tick_reads_membership_off_the_channel_it_already_resolved(
+    sync_db_path, monkeypatch
+):
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    monkeypatch.setattr("bot_modules.economy.game_rewards.fire_member_trigger", AsyncMock())
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(
+            conn, "s1", GUILD_ID, 4242, 1, 2, time.time() - 10, session_seconds=0,
+        )
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+
+    guild = _make_guild_mock(1)  # 2 is gone from the guild
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+    channel.guild = guild
+    channel.delete = AsyncMock()
+    bot.get_channel.return_value = channel
+
+    await pp._tick(bot, sync_db_path)
+
+    assert _pool_ids(sync_db_path) == [1]
+
+
+async def test_a_round_that_pairs_someone_always_logs(sync_db_path, monkeypatch, caplog):
+    """Pairing is an event, not a state. De-duping it would hide every real
+    match on a guild that steadily pairs the same count (review finding 3)."""
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 0)
+    monkeypatch.setattr(pp, "_do_round", AsyncMock(return_value=(1, 0)))
+    monkeypatch.setattr(pp, "_LAST_SWEEP_LOG", {})
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1, joined_at=100.0)
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=200.0)
+
+    with caplog.at_level("INFO", logger="dungeonkeeper.pen_pals"):
+        await pp._tick(MagicMock(), sync_db_path)
+        await pp._tick(MagicMock(), sync_db_path)
+        await pp._tick(MagicMock(), sync_db_path)
+
+    assert sum("swept guild" in r.message for r in caplog.records) == 3

@@ -13,11 +13,14 @@
 --   action 'join'   reason panel | command | dm | requeue_expired |
 --                          requeue_abnormal | backfill
 --   action 'leave'  reason panel | command | dm | matched | departed
---   action 'skip'   reason inactive
+--   action 'skip'   reason inactive | departed
 --
 -- 'skip' is the odd one: nothing moved. It records that an expiring session
 -- deliberately did *not* return someone to the pool, which is otherwise
--- indistinguishable from the old silent behaviour.
+-- indistinguishable from the old silent behaviour. Its two reasons differ:
+-- 'inactive' means they never posted and were told so with a rejoin button,
+-- 'departed' means they had already left the guild and there was nobody to
+-- tell.
 --
 -- Metadata only — who and when, never message content. Erasable: see
 -- docs/data_register.md.

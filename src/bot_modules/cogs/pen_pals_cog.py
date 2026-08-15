@@ -486,7 +486,9 @@ def _member_spoke_in_session(conn, guild_id: int, channel_id: int, user_id: int)
     ).fetchone() is not None
 
 
-def _close_expired_and_requeue(conn, session_row) -> tuple[list[int], list[int]] | None:
+def _close_expired_and_requeue(
+    conn, session_row, present: set[int] | None = None
+) -> tuple[list[int], list[int]] | None:
     """Close a session that ran its full course, and refill the pool from it.
 
     Until 2026-08-14 expiry was a dead end: the session closed, the channel
@@ -511,6 +513,15 @@ def _close_expired_and_requeue(conn, session_row) -> tuple[list[int], list[int]]
     own ``channel.delete`` fires ``on_guild_channel_delete``, which must find
     this session already closed and do nothing.
 
+    ``present`` is the subset of the two members still in the guild, or None to
+    skip the check. It matters because ``on_member_remove`` is the only thing
+    that prunes the pool: a member who leaves while the bot is down never fires
+    it, their session survives to expiry, and re-pooling them would plant a row
+    nothing can ever clear. `_do_pair` refuses on the missing member, but
+    `_do_round` has already taken their would-be partner out of that round — so
+    one real member goes unmatched every round, forever. Expiry is now the
+    dominant source of pool rows, so this is the path that has to check.
+
     Returns ``(requeued, skipped)``.
     """
     if not _claim_close(conn, session_row["session_id"], "expired"):
@@ -526,6 +537,11 @@ def _close_expired_and_requeue(conn, session_row) -> tuple[list[int], list[int]]
         # member who is still queued, and hand them a Join button that answers
         # "you're already in the pool".
         if _get_active_session(conn, guild_id, uid) or _in_pool(conn, guild_id, uid):
+            continue
+        if present is not None and uid not in present:
+            # Gone from the guild. Not "skipped" — there is nobody left to tell
+            # they were left out, and no button that would help them.
+            _record_pool_event(conn, guild_id, uid, POOL_SKIP, "departed")
             continue
         if not _member_spoke_in_session(conn, guild_id, channel_id, uid):
             _record_pool_event(conn, guild_id, uid, POOL_SKIP, "inactive")
@@ -1446,9 +1462,16 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
             # still active the listener treats it as an abandoned session:
             # both members get "your partner is no longer available" and are
             # re-pooled. Closing first makes the listener's lookup miss.
-            def _close_exp(r=row):
+            # Membership is read off the channel we already resolved, so this
+            # needs no extra fetch and no guild-cache gamble.
+            present = {
+                uid for uid in (user1_id, user2_id)
+                if channel.guild.get_member(uid) is not None
+            }
+
+            def _close_exp(r=row, p: set[int] = present):
                 with open_db(db_path) as conn:
-                    return _close_expired_and_requeue(conn, r)
+                    return _close_expired_and_requeue(conn, r, p)
             outcome = await asyncio.to_thread(_close_exp)
             if outcome is None:
                 continue  # another handler already closed it
@@ -1583,15 +1606,17 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                 _LAST_SWEEP_LOG[guild_id] = ("idle", pending)
             continue
         pairs, left = await _do_round(bot, db_path, guild_id)
-        # Same de-dup as the skip above, and for a sharper reason since the
-        # expiry requeue landed: two members who just finished together are
-        # each other's past partner, so they come off cooldown into a pool
-        # where `_pick_partner` can only return None. "0 pairs, 2 left over"
-        # then repeats every five minutes indefinitely — the exact spam the
-        # skip de-dup was added to stop, one branch over.
-        if _LAST_SWEEP_LOG.get(guild_id) != ("swept", pairs, left):
+        # A round that paired somebody is an *event* and always logs — de-duping
+        # those would hide every real match on a guild that steadily pairs the
+        # same count, in a change whose whole point is making pool health
+        # readable. Only the barren sweep is a *state*, and it is the one that
+        # repeats: since the expiry requeue landed, two members who just
+        # finished together are each other's past partner, so they come off
+        # cooldown into a pool where `_pick_partner` can only return None and
+        # "0 pairs, 2 left over" would print every five minutes forever.
+        if pairs or _LAST_SWEEP_LOG.get(guild_id) != ("swept", 0, left):
             log.info("pen_pals: swept guild %d — %d pairs, %d left over", guild_id, pairs, left)
-            _LAST_SWEEP_LOG[guild_id] = ("swept", pairs, left)
+        _LAST_SWEEP_LOG[guild_id] = ("swept", pairs, left)
 
     # Maintenance goes last, and swallows everything. _pen_pals_loop catches
     # per-tick failures, so a transport error raised here from anywhere but

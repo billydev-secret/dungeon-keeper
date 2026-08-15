@@ -46,8 +46,12 @@ export function mountPoolActivity(container) {
     container.innerHTML = `
       <div class="section-label">Pool Activity</div>
       <div class="field-hint" style="margin-bottom:12px;">
-        The last ${events.length} change${events.length === 1 ? "" : "s"} to who is waiting
-        to be matched. A pool that stops moving is a pool that has stopped making pairs.
+        ${
+          events.length
+            ? `The last ${events.length} change${events.length === 1 ? "" : "s"} to who is waiting to be matched.`
+            : "Every join, match and departure shows up here."
+        }
+        A pool that stops moving is a pool that has stopped making pairs.
       </div>
       <div data-region="table"></div>
     `;

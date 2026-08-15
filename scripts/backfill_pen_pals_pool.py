@@ -44,11 +44,23 @@ sys.path.insert(0, str(REPO / "src"))
 REASON = "backfill"
 
 
-def candidates(conn: sqlite3.Connection, guild_id: int) -> list[tuple[int, float]]:
+def candidates(
+    conn: sqlite3.Connection, guild_id: int, present: set[int] | None = None
+) -> list[tuple[int, float]]:
     """(user_id, last_closed_at) for everyone the seed should pool, oldest first.
 
     Pure read. Kept separate from the write so the selection rule is testable
     without a database that anyone minds being written to.
+
+    ``present`` is the set of members who are still in the guild *and* hold the
+    opt-in role, read live from Discord by ``main``. Without it this script
+    would pool from DB history alone: Pen Pals has been live in TGM long enough
+    that some past participants have certainly left, and every one of them
+    would become a pool row nothing can clear — `_do_pair` refuses on the
+    missing member, but `_do_round` has already spent their would-be partner,
+    so a real member goes unmatched every round. It would also ignore
+    ``opt_in_role_id`` and pool people ``_handle_join`` would have refused.
+    None disables the filter, which is for tests and offline dry runs only.
     """
     rows = conn.execute(
         """
@@ -78,6 +90,8 @@ def candidates(conn: sqlite3.Connection, guild_id: int) -> list[tuple[int, float
     for uid, (channel_id, closed_at) in last.items():
         if uid in busy or uid in pooled:
             continue
+        if present is not None and uid not in present:
+            continue
         spoke = conn.execute(
             "SELECT 1 FROM messages WHERE guild_id = ? AND channel_id = ? "
             "AND author_id = ? LIMIT 1",
@@ -102,17 +116,72 @@ def apply(conn: sqlite3.Connection, guild_id: int, picks: list[tuple[int, float]
         )
 
 
+def live_members(guild_id: int, env_file: Path, opt_in_role_id: int) -> set[int]:
+    """Members currently in the guild who may join Pen Pals.
+
+    Live Discord state, not `role_events` or session history: a member who left
+    during a bot downtime is invisible to both, and seeding them plants a pool
+    row nothing can ever remove.
+    """
+    import importlib.util  # noqa: PLC0415 - borrowed from the sibling backfill
+
+    spec = importlib.util.spec_from_file_location(
+        "_bvr", Path(__file__).resolve().parent / "backfill_verified_role.py"
+    )
+    assert spec and spec.loader
+    bvr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bvr)
+
+    tok = bvr.env_value("DISCORD_TOKEN_PROD", env_file)
+    if not tok:
+        raise SystemExit(f"No DISCORD_TOKEN_PROD in {env_file} — pass --no-discord to skip")
+
+    out: set[int] = set()
+    for m in bvr.fetch_members(guild_id, tok):
+        uid = int(m["user"]["id"])
+        if opt_in_role_id and str(opt_in_role_id) not in m.get("roles", []):
+            continue
+        out.add(uid)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--guild", type=int, required=True)
     ap.add_argument("--db", type=Path, default=REPO / "dungeonkeeper.db")
     ap.add_argument("--apply", action="store_true", help="write (default is a dry run)")
+    ap.add_argument(
+        "--env", type=Path, default=Path("/home/ben/discord-bots/dungeon-keeper/.env")
+    )
+    ap.add_argument(
+        "--no-discord",
+        action="store_true",
+        help="skip the live membership/opt-in-role check (offline dry runs only — "
+             "seeding without it can pool members who have left the server)",
+    )
     args = ap.parse_args()
 
     uri = f"file:{args.db}?mode={'rw' if args.apply else 'ro'}"
     conn = sqlite3.connect(uri, uri=True)
     try:
-        picks = candidates(conn, args.guild)
+        present = None
+        if args.no_discord:
+            if args.apply:
+                raise SystemExit("--no-discord cannot be combined with --apply")
+            print("!! --no-discord: membership and opt-in role NOT checked\n")
+        else:
+            role_row = conn.execute(
+                "SELECT opt_in_role_id FROM pen_pals_config WHERE guild_id = ?",
+                (args.guild,),
+            ).fetchone()
+            opt_in = int(role_row[0]) if role_row and role_row[0] else 0
+            present = live_members(args.guild, args.env, opt_in)
+            print(
+                f"live guild: {len(present)} members"
+                + (f" holding role {opt_in}" if opt_in else "")
+            )
+
+        picks = candidates(conn, args.guild, present)
         pooled_now = conn.execute(
             "SELECT count(*) FROM pen_pals_pool WHERE guild_id = ?", (args.guild,)
         ).fetchone()[0]

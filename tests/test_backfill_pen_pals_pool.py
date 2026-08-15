@@ -138,3 +138,39 @@ def test_seeded_members_still_wait_out_the_cooldown(sync_db_path):
 
         assert pp._eligible_pool(conn, GUILD, now, 172800) == []
         assert sorted(pp._eligible_pool(conn, GUILD, now + 172800, 172800)) == [1, 2]
+
+
+def test_seed_excludes_members_who_are_no_longer_in_the_guild(sync_db_path):
+    """History alone can't tell you who left.
+
+    A departed member seeded into the pool is a row nothing can ever clear —
+    `_do_pair` refuses on the missing member, but `_do_round` has already spent
+    their would-be partner, so a real member goes unmatched every round.
+    """
+    with open_db(sync_db_path) as conn:
+        _closed_session(conn, "s1", 1, 2, channel_id=100, closed_at=1000.0)
+        _spoke(conn, 1, 100)
+        _spoke(conn, 2, 100)
+
+        assert [u for u, _ in backfill.candidates(conn, GUILD, present={1})] == [1]
+
+
+def test_seed_with_no_live_filter_still_pools_everyone(sync_db_path):
+    """present=None is the offline path, and `--apply` refuses to use it."""
+    with open_db(sync_db_path) as conn:
+        _closed_session(conn, "s1", 1, 2, channel_id=100, closed_at=1000.0)
+        _spoke(conn, 1, 100)
+        _spoke(conn, 2, 100)
+
+        assert len(backfill.candidates(conn, GUILD, present=None)) == 2
+
+
+def test_seed_excludes_everyone_when_nobody_holds_the_opt_in_role(sync_db_path):
+    """`present` arrives already role-filtered, so an empty set seeds nobody
+    rather than falling back to seeding all of them."""
+    with open_db(sync_db_path) as conn:
+        _closed_session(conn, "s1", 1, 2, channel_id=100, closed_at=1000.0)
+        _spoke(conn, 1, 100)
+        _spoke(conn, 2, 100)
+
+        assert backfill.candidates(conn, GUILD, present=set()) == []
