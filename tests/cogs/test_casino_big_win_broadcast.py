@@ -47,6 +47,7 @@ def cog(tmp_path: Path):
     migrated_db(db_path)
     ns = SimpleNamespace(ctx=SimpleNamespace(open_db=lambda: open_db(db_path)))
     ns._top_pct_payout = MethodType(CasinoCog._top_pct_payout, ns)
+    ns._bank_announced_win = MethodType(CasinoCog._bank_announced_win, ns)
     ns.db_path = db_path
     return ns
 
@@ -60,11 +61,24 @@ def _card() -> discord.Embed:
     return embed
 
 
-async def _broadcast(cog, channel, payout: int, threshold: int = 500):
+async def _broadcast(
+    cog, channel, payout: int, threshold: int = 500, stake: int = 10
+):
     await CasinoCog._send_big_win(
         cog, channel, _card(), guild_id=GUILD_ID, payout=payout,
-        threshold=threshold, game_label="Slots",
+        threshold=threshold, stake=stake, game_label="Slots",
     )
+
+
+def _banked(cog) -> list[int]:
+    with open_db(cog.db_path) as conn:
+        return [
+            int(r["payout"])
+            for r in conn.execute(
+                "SELECT payout FROM casino_win_history WHERE guild_id = ? "
+                "ORDER BY id", (GUILD_ID,)
+            )
+        ]
 
 
 def _bank_wins(cog, payouts):
@@ -85,6 +99,42 @@ async def test_a_win_below_the_bar_posts_nothing(cog, payout, threshold):
     channel = _Channel()
     await _broadcast(cog, channel, payout, threshold)
     assert channel.sends == []
+
+
+@pytest.mark.asyncio
+async def test_a_push_posts_nothing_and_banks_nothing(cog):
+    """A 2,000-coin blackjack push clears a 500 bar four times over on payout
+    alone, and used to headline itself as "🔥 Huge Win"."""
+    channel = _Channel()
+    await _broadcast(cog, channel, 2000, stake=2000)
+    assert channel.sends == []
+    assert _banked(cog) == []
+
+
+@pytest.mark.asyncio
+async def test_each_announcement_banks_exactly_one_row(cog):
+    """One row per card, not per settled bet — a five-bet roulette round is
+    one announcement, and banking it five times would over-weight multi-bet
+    rounds in the percentile."""
+    channel = _Channel()
+    await _broadcast(cog, channel, 1200)
+    await _broadcast(cog, channel, 1500)
+    assert _banked(cog) == [1200, 1500]
+
+
+@pytest.mark.asyncio
+async def test_the_current_win_is_not_ranked_against_itself(cog):
+    """Banking used to happen in the settle transaction, which commits before
+    the broadcast reads — so a payout tying the guild's recent maximum always
+    cleared its own mark, and a guild whose wins cluster tightly above the
+    floor pinged on every broadcast. The read must come first.
+    """
+    _bank_wins(cog, [2_000] * svc.PING_MIN_SAMPLE)
+    channel = _Channel()
+    await _broadcast(cog, channel, 2_000)
+    assert channel.sends[0]["content"] == "@here"  # ties the existing mark
+    # ...but the row it just banked was not part of that decision.
+    assert len(_banked(cog)) == svc.PING_MIN_SAMPLE + 1
 
 
 @pytest.mark.asyncio

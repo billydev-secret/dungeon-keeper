@@ -263,13 +263,26 @@ class BigWinTier(NamedTuple):
 
 
 def big_win_tier(
-    payout: int, threshold: int, *, top_pct_payout: int | None = None
+    payout: int,
+    threshold: int,
+    *,
+    stake: int,
+    top_pct_payout: int | None = None,
 ) -> BigWinTier | None:
     """The broadcast tier for ``payout``, or None when it stays private.
 
-    None means "don't broadcast" — a payout under the bar, or a bar of 0,
-    which is the guild's off switch. Callers treat None as the whole
-    decision; there is no second threshold check anywhere.
+    None means "don't broadcast" — a payout under the bar, a bar of 0 (the
+    guild's off switch), or a payout that isn't a win at all. Callers treat
+    None as the whole decision; there is no second check anywhere.
+
+    ``stake`` is why this needs more than the payout. A **push returns the
+    stake**: blackjack pushes, baccarat Player/Banker bets push on a tie, and
+    a war retreat hands back half. Gating on ``payout >= threshold`` alone,
+    a 2,000-coin blackjack push against a 500 bar cleared 3× and announced
+    itself as "🔥 Huge Win" — a headline asserting a win that did not happen,
+    for a hand that won nothing. Same rule the service already used to decide
+    what counts as a win (``record_play``'s ``payout > stake``); the two must
+    not disagree, or the broadcast advertises what the stats refuse to count.
 
     ``top_pct_payout`` is the guild's top-3% mark over its ANNOUNCED wins, or
     None when there isn't enough history to rank against. None can only ever
@@ -286,7 +299,7 @@ def big_win_tier(
     loudest and true wins; the floor is what stops "loudest and true" from
     being every broadcast.
     """
-    if threshold <= 0 or payout < threshold:
+    if threshold <= 0 or payout < threshold or payout <= stake:
         return None
     if top_pct_payout is not None and payout >= max(
         top_pct_payout, threshold * LEGENDARY_MIN_MULT

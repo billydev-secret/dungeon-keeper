@@ -704,7 +704,7 @@ def test_big_win_tier_ladder_without_history(payout, threshold, expected):
     """The ladder with no percentile to rank against — every guild's first
     weeks, and any guild whose announced-win history is under the sample
     floor. Two rungs, and the top of the ladder is as loud as it gets."""
-    tier = logic.big_win_tier(payout, threshold)
+    tier = logic.big_win_tier(payout, threshold, stake=1)
     assert (None if tier is None else tier.header) == expected
     # No history can ever produce the @here: an unknown percentile withholds
     # the ping rather than passing it.
@@ -716,7 +716,7 @@ def test_every_ladder_rung_is_reachable():
     10× the bar that no payout could reach, because Legendary's floor was the
     same 10× and always won. Every rung must have a payout that renders it."""
     rendered = {
-        logic.big_win_tier(payout, 500, top_pct_payout=2500).header
+        logic.big_win_tier(payout, 500, stake=1, top_pct_payout=2500).header
         for payout in range(500, 6001, 1)
     }
     assert rendered == {h for _, h in logic.BIG_WIN_TIERS} | {
@@ -747,7 +747,7 @@ def test_big_win_tier_ping_takes_the_higher_of_percentile_and_floor(
     cluster near its bar would have a percentile barely over that bar, and
     without the floor every routine broadcast would ping the whole channel.
     """
-    tier = logic.big_win_tier(payout, 500, top_pct_payout=top_pct)
+    tier = logic.big_win_tier(payout, 500, stake=1, top_pct_payout=top_pct)
     assert tier is not None
     assert tier.ping is pings
     # The loudest tier is the only one that renames itself and adds a lead
@@ -761,18 +761,37 @@ def test_legendary_supersedes_the_rung_it_lands_on():
     percentile sits at or under the ladder's top rung, Legendary and Huge Win
     coincide and Huge Win is subsumed. Reserving a sliver of range for it
     would buy a rung nobody would ever see fire."""
-    flat = logic.big_win_tier(1500, 500, top_pct_payout=900)
+    flat = logic.big_win_tier(1500, 500, stake=1, top_pct_payout=900)
     assert flat is not None and flat.header == logic.LEGENDARY_HEADER
     # With a percentile above the floor, Huge Win gets its own band back.
-    spread = logic.big_win_tier(1500, 500, top_pct_payout=2500)
+    spread = logic.big_win_tier(1500, 500, stake=1, top_pct_payout=2500)
     assert spread is not None and spread.header == "🔥 Huge Win"
+
+
+@pytest.mark.parametrize(
+    ("payout", "stake", "announced"),
+    [
+        pytest.param(2000, 2000, False, id="blackjack-push-returns-the-stake"),
+        pytest.param(2000, 4000, False, id="war-retreat-hands-back-half"),
+        pytest.param(2000, 1999, True, id="one-coin-up-is-a-win"),
+        pytest.param(2000, 100, True, id="an-ordinary-win"),
+    ],
+)
+def test_a_payout_that_is_not_a_win_never_broadcasts(payout, stake, announced):
+    """A push returns the stake and a retreat hands back half — both clear a
+    500 bar comfortably on payout alone. Gating without the stake announced a
+    2,000-coin blackjack push as "🔥 Huge Win": a headline asserting a win
+    that did not happen. Same rule ``record_play`` uses to count a win.
+    """
+    tier = logic.big_win_tier(payout, 500, stake=stake, top_pct_payout=1000)
+    assert (tier is not None) is announced
 
 
 def test_big_win_tier_ping_still_obeys_the_broadcast_bar():
     """A percentile can only ever escalate a broadcast, never create one. A
     guild with the feature switched off stays silent however rare the win."""
-    assert logic.big_win_tier(999_999, 0, top_pct_payout=1) is None
-    assert logic.big_win_tier(499, 500, top_pct_payout=1) is None
+    assert logic.big_win_tier(999_999, 0, stake=1, top_pct_payout=1) is None
+    assert logic.big_win_tier(499, 500, stake=1, top_pct_payout=1) is None
 
 
 # ── cap_lines (Discord field-limit guard) ──────────────────────────────

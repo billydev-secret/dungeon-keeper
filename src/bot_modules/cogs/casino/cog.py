@@ -1026,6 +1026,20 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             log.exception("casino win-percentile read failed for %s", guild_id)
             return None
 
+    async def _bank_announced_win(self, guild_id: int, payout: int) -> None:
+        """Add this announcement to the population future ones are ranked
+        against. Best-effort: a statistics row is not worth failing a post
+        that has already been decided."""
+
+        def _write() -> None:
+            with self.ctx.open_db() as conn:
+                svc.record_win(conn, guild_id, payout)
+
+        try:
+            await asyncio.to_thread(_write)
+        except Exception:
+            log.exception("casino win-history write failed for %s", guild_id)
+
     async def _send_big_win(
         self,
         channel: discord.TextChannel,
@@ -1034,6 +1048,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild_id: int,
         payout: int,
         threshold: int,
+        stake: int,
         game_label: str,
         winner: discord.abc.User | discord.Member | None = None,
     ) -> None:
@@ -1042,11 +1057,15 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         No view, deliberately. The broadcast used to carry the player's own
         Play Again / Next Round button as a "me too" invitation for bystanders;
         it is a recap now, and the buttons live only on the player's own card.
+
+        Also the one place the win-history population is written, once per
+        card and strictly after the percentile read — see ``record_win``.
         """
         built = casino_embeds.build_big_win_broadcast(
             result_embed,
             payout=payout,
             threshold=threshold,
+            stake=stake,
             game_label=game_label,
             top_pct_payout=await self._top_pct_payout(
                 guild_id, payout, threshold
@@ -1056,6 +1075,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         )
         if built is None:
             return
+        await self._bank_announced_win(guild_id, payout)
         try:
             await channel.send(
                 content="@here" if built.ping else None,
@@ -1074,6 +1094,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         *,
         payout: int,
         threshold: int,
+        stake: int,
         embed: discord.Embed,
         game_label: str,
         skip_broadcast: bool = False,
@@ -1088,14 +1109,17 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = interaction.guild
         if guild is not None:
             self._schedule_hub_repaint(guild.id)
-        if skip_broadcast or guild is None:
+        if skip_broadcast:
             return
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
             return
+        # guild_id off the channel, not off `guild`: an unresolved
+        # interaction guild should cost the broadcast nothing — the winner
+        # slot is already optional, and the channel knows its own guild.
         await self._send_big_win(
-            channel, embed, guild_id=guild.id, payout=payout,
-            threshold=threshold, game_label=game_label,
+            channel, embed, guild_id=channel.guild.id, payout=payout,
+            threshold=threshold, stake=stake, game_label=game_label,
             winner=interaction.user,
         )
 
@@ -1160,8 +1184,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             pass
         await self._after_instant(
             interaction, payout=result.payout,
-            threshold=settings.broadcast_min_payout, embed=final,
-            game_label="Coinflip",
+            threshold=settings.broadcast_min_payout, stake=amount,
+            embed=final, game_label="Coinflip",
         )
 
     async def play_slots(
@@ -1260,8 +1284,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         # The jackpot celebration above already is the broadcast.
         await self._after_instant(
             interaction, payout=result.payout,
-            threshold=settings.broadcast_min_payout, embed=final,
-            game_label="Slots",
+            threshold=settings.broadcast_min_payout, stake=amount,
+            embed=final, game_label="Slots",
             skip_broadcast=bool(result.jackpot_won),
         )
 
@@ -1386,8 +1410,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         else:
             await self._after_instant(
                 interaction, payout=result.payout,
-                threshold=result.broadcast_min, embed=embed,
-                game_label="Blackjack",
+                threshold=result.broadcast_min, stake=amount,
+                embed=embed, game_label="Blackjack",
             )
 
     async def blackjack_action(
@@ -1471,8 +1495,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             self._bj_followups.pop(hand_id, None)
             await self._after_instant(
                 interaction, payout=step.payout,
-                threshold=settings.broadcast_min_payout, embed=embed,
-                game_label="Blackjack",
+                threshold=settings.broadcast_min_payout, stake=base_stake,
+                embed=embed, game_label="Blackjack",
             )
         return step.outcome is not None
 
@@ -1551,6 +1575,10 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                 channel, embed, guild_id=int(row["guild_id"]),
                 payout=int(getattr(step, "payout", 0)),
                 threshold=settings.broadcast_min_payout,
+                # Both hand tables store the TOTAL stake, doubles/wars folded
+                # in — so an auto-stood push or a war retreat reads as the
+                # non-win it is instead of headlining its own stake back.
+                stake=int(row["stake"]),
                 game_label=game_label,
                 winner=guild.get_member(int(row["user_id"])) if guild else None,
             )
@@ -1667,8 +1695,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             pass
         await self._after_instant(
             interaction, payout=step.payout,
-            threshold=settings.broadcast_min_payout, embed=embed,
-            game_label="Casino War",
+            threshold=settings.broadcast_min_payout, stake=amount,
+            embed=embed, game_label="Casino War",
         )
 
     async def war_action(
@@ -1724,8 +1752,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         self._war_followups.pop(hand_id, None)
         await self._after_instant(
             interaction, payout=step.payout,
-            threshold=settings.broadcast_min_payout, embed=embed,
-            game_label="Casino War",
+            threshold=settings.broadcast_min_payout, stake=step.original,
+            embed=embed, game_label="Casino War",
         )
         return True
 
@@ -2116,13 +2144,15 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             return
         guild_id = int(rnd["guild_id"])
         # The broadcast fires on the single best payout in the round, so that
-        # bet's owner is the one the card is about — even when others also won.
-        top_better = max(bets, key=lambda b: b[3])[0]
+        # bet's owner is the one the card is about — even when others also won
+        # — and that same bet's stake is what decides whether it WAS a win.
+        # (A baccarat tie pushes Player/Banker bets: payout back = stake.)
+        top_bet = max(bets, key=lambda b: b[3])
         guild = self.bot.get_guild(guild_id)
         await self._send_big_win(
             channel, result_embed, guild_id=guild_id, payout=best,
-            threshold=threshold, game_label=ui.label,
-            winner=guild.get_member(top_better) if guild else None,
+            threshold=threshold, stake=top_bet[2], game_label=ui.label,
+            winner=guild.get_member(top_bet[0]) if guild else None,
         )
 
     async def _void_window(self, ui: _WindowUI, round_id: int) -> None:

@@ -490,6 +490,7 @@ def build_big_win_broadcast(
     *,
     payout: int,
     threshold: int,
+    stake: int,
     game_label: str,
     top_pct_payout: int | None = None,
     winner_name: str | None = None,
@@ -504,11 +505,14 @@ def build_big_win_broadcast(
     otherwise the same object: mutating it would rewrite the card already on
     their screen, and the outcome would depend on which send ran first.
 
-    The color rides along from ``result`` — a broadcast only ever fires on a
-    win, so it is always the semantic green, never the guild accent.
+    The color rides along from ``result``. ``big_win_tier`` refuses anything
+    that is not a win (``payout > stake``), so the card being copied is always
+    a winning one and its color is always the semantic green — never the guild
+    accent. That is the premise this builder's accent-contract exemption rests
+    on, so the stake gate is load-bearing for more than the copy.
     """
     tier = logic.big_win_tier(
-        payout, threshold, top_pct_payout=top_pct_payout
+        payout, threshold, stake=stake, top_pct_payout=top_pct_payout
     )
     if tier is None:
         return None

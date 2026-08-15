@@ -539,33 +539,29 @@ PING_MIN_SAMPLE = 40
 PING_PERCENTILE = 97
 
 
-def broadcast_bar(conn: sqlite3.Connection, guild_id: int) -> int:
-    """The guild's ``broadcast_min_payout``, read as a single key.
-
-    ``load_casino_settings`` would do, but this runs inside the settle
-    transaction on every winning play and only one integer is wanted.
-    """
-    row = conn.execute(
-        "SELECT value FROM config WHERE guild_id = ? AND key = ?",
-        (guild_id, f"{CASINO_PREFIX}broadcast_min_payout"),
-    ).fetchone()
-    if row is None:
-        return DEFAULT_CASINO_SETTINGS.broadcast_min_payout
-    try:
-        return int(str(row["value"]))
-    except ValueError:
-        return DEFAULT_CASINO_SETTINGS.broadcast_min_payout
-
-
 def record_win(
     conn: sqlite3.Connection, guild_id: int, payout: int, *, now: float | None = None
 ) -> None:
     """Append one announced winning payout and trim to WIN_HISTORY_KEEP.
 
-    A dumb writer: the caller decides what counts (``record_play`` gates on
-    the game, a real win, and the guild's bar). Stores no user_id on purpose
-    — see migration 162. This table answers "how big is an announced win
-    around here lately" and nothing else.
+    Called from the cog's broadcast seam — ONE row per public announcement,
+    written after the percentile for that announcement has been read. Both
+    halves of that matter:
+
+    * *Per announcement, not per settled bet.* A roulette round where the
+      player spread five bets that each cleared the bar is one card in the
+      channel, and banking it five times would over-weight multi-bet rounds
+      in the percentile. It also keeps jackpot spins out, whose big-win card
+      is suppressed in favour of the jackpot celebration — banking those
+      would pull the mark up with payouts nobody was ranked against.
+    * *After the read.* Banking inside the settle transaction put the current
+      win into the population it was about to be ranked against, so a payout
+      tying the guild's recent maximum always cleared its own mark — and a
+      guild whose announced wins cluster tightly above the floor would then
+      ping on every single broadcast.
+
+    Stores no user_id on purpose — see migration 162. This table answers "how
+    big is an announced win around here lately" and nothing else.
     """
     conn.execute(
         "INSERT INTO casino_win_history (guild_id, payout, ts) VALUES (?, ?, ?)",
@@ -596,9 +592,14 @@ def win_percentile(
     )
     if total < PING_MIN_SAMPLE:
         return None
-    # Ascending rank: with 100 rows, offset 97 is the 98th smallest, so the
-    # three above it are the top 3% and a payout at or over it qualifies.
-    offset = min(total * percentile // 100, total - 1)
+    # Size the top band in ROWS and count back from the end, rather than
+    # taking an offset forward. `total * 97 // 100` is exact at multiples of
+    # 100 but rounds the wrong way below them: at the 40-row sample floor it
+    # yields offset 38, leaving two rows above the mark — the top 5%, not 3%,
+    # so the smallest guilds (the ones the floor exists to protect) would get
+    # the loosest ping bar. At least one row always qualifies.
+    band = max(1, total * (100 - percentile) // 100)
+    offset = total - band
     row = conn.execute(
         "SELECT payout FROM casino_win_history WHERE guild_id = ? "
         "ORDER BY payout ASC LIMIT 1 OFFSET ?",
@@ -645,15 +646,6 @@ def record_play(
         payout,
     )
     won = 1 if payout > stake else 0
-    # The broadcast's percentile population: wins the channel actually saw.
-    # Three filters, each load-bearing — the games that can broadcast, real
-    # wins only (a push returns the stake and would drag the bar down), and
-    # only those clearing the guild's own bar, so "top 3%" ranks announcements
-    # against announcements rather than against 52-coin pair payouts.
-    if won and game in TICKER_GAMES:
-        bar = broadcast_bar(conn, guild_id)
-        if bar > 0 and payout >= bar:
-            record_win(conn, guild_id, payout, now=now)
     conn.execute(
         "INSERT INTO casino_member_stats "
         "(guild_id, user_id, wagered, returned, plays, wins, biggest_win, "

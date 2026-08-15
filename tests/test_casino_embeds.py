@@ -715,9 +715,9 @@ def _result_card() -> discord.Embed:
     return embed
 
 
-def _broadcast(payout: int, threshold: int = 500, **kw):
+def _broadcast(payout: int, threshold: int = 500, stake: int = 10, **kw):
     return casino_embeds.build_big_win_broadcast(
-        _result_card(), payout=payout, threshold=threshold,
+        _result_card(), payout=payout, threshold=threshold, stake=stake,
         game_label="Roulette", **kw,
     )
 
@@ -770,7 +770,7 @@ def test_broadcast_never_mutates_the_players_own_card():
     card = _result_card()
     before = (card.title, card.description, len(card.fields), card.color)
     built = casino_embeds.build_big_win_broadcast(
-        card, payout=9_999, threshold=500, game_label="Roulette",
+        card, payout=9_999, threshold=500, stake=10, game_label="Roulette",
         top_pct_payout=2500,
     )
     assert built is not None
@@ -789,6 +789,14 @@ def test_top_three_percent_pings_and_says_why():
     assert built.embed.description.startswith(logic.LEGENDARY_LEAD)
     # The result copy still follows the lead, not replaced by it.
     assert "The ball lands on 🔴 **7**." in built.embed.description
+
+
+def test_a_push_over_the_bar_builds_nothing():
+    """The card being copied would be a push card — neither a win nor green.
+    This gate is what keeps the accent-contract exemption honest: every card
+    this builder ever copies is a winning one."""
+    assert _broadcast(2000, stake=2000) is None
+    assert _broadcast(2000, stake=4000) is None  # a war retreat
 
 
 def test_broadcast_names_the_winner_in_the_author_slot():

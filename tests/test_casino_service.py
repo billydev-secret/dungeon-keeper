@@ -2116,47 +2116,37 @@ def test_win_history_stores_no_user_id(db):
     assert cols == {"id", "guild_id", "payout", "ts"}
 
 
-def test_record_play_banks_only_announced_wins_from_broadcasting_games(db):
-    """The percentile population is the wins the CHANNEL saw. Ranking every
-    win instead put the mark below the broadcast bar — prod's average win
-    returns 71 coins against a 500 bar — which left the percentile deciding
-    nothing. A push is not a win, and pools settles on its own panel.
-    """
+def test_record_play_no_longer_banks_win_history(db):
+    """Banking moved to the cog's broadcast seam. Inside the settle
+    transaction it counted a five-bet roulette round five times for one card,
+    banked jackpot spins whose big-win card is suppressed, and committed the
+    current win into the population it was about to be ranked against."""
     with open_db(db) as conn:
         svc.save_casino_settings(conn, GUILD, {"broadcast_min_payout": 500})
-        svc.record_play(conn, GUILD, A, "slots", 100, 900, now=NOW)   # announced
-        svc.record_play(conn, GUILD, A, "slots", 100, 499, now=NOW)   # under the bar
-        svc.record_play(conn, GUILD, A, "slots", 600, 600, now=NOW)   # push over the bar
-        svc.record_play(conn, GUILD, A, "slots", 100, 0, now=NOW)     # loss
-        svc.record_play(conn, GUILD, A, "pools", 100, 900, now=NOW)   # off-ticker
-        banked = [
-            int(r["payout"])
-            for r in conn.execute(
-                "SELECT payout FROM casino_win_history WHERE guild_id = ?",
-                (GUILD,),
-            )
-        ]
-    assert banked == [900]
-
-
-def test_record_play_banks_nothing_while_the_broadcast_bar_is_off(db):
-    """Bar at 0 is the guild's off switch. With nothing announced there is no
-    population to rank, so the table stays empty and the ping can never arm —
-    rather than quietly accruing a percentile from unannounced wins."""
-    with open_db(db) as conn:
-        assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 0
-        for _ in range(svc.PING_MIN_SAMPLE + 5):
-            svc.record_play(conn, GUILD, A, "slots", 100, 5000, now=NOW)
-        assert svc.win_percentile(conn, GUILD) is None
+        svc.record_play(conn, GUILD, A, "slots", 100, 900, now=NOW)
         assert conn.execute(
-            "SELECT COUNT(*) c FROM casino_win_history WHERE guild_id = ?",
-            (GUILD,),
+            "SELECT COUNT(*) c FROM casino_win_history"
         ).fetchone()["c"] == 0
 
 
-def test_broadcast_bar_reads_the_dial_and_falls_back(db):
+@pytest.mark.parametrize(
+    ("total", "expected_over"),
+    [
+        pytest.param(200, 6, id="200-rows-top-3pct-is-6"),
+        pytest.param(100, 3, id="100-rows-top-3pct-is-3"),
+        pytest.param(40, 1, id="at-the-sample-floor-round-down-not-up"),
+        pytest.param(50, 1, id="50-rows-stays-conservative"),
+    ],
+)
+def test_win_percentile_band_never_rounds_loose(db, total, expected_over):
+    """The mark must not let MORE than 3% through. ``total * 97 // 100``
+    rounded the wrong way below multiples of 100 — at the 40-row floor it left
+    two rows above the mark, the top 5%, so the smallest guilds got the
+    loosest ping bar."""
     with open_db(db) as conn:
-        assert svc.broadcast_bar(conn, GUILD) == 0  # unset -> the default
-        svc.save_casino_settings(conn, GUILD, {"broadcast_min_payout": 750})
-        assert svc.broadcast_bar(conn, GUILD) == 750
-        assert svc.broadcast_bar(conn, GUILD + 999) == 0  # another guild
+        _bank_wins(conn, range(1, total + 1))
+        mark = svc.win_percentile(conn, GUILD)
+        assert mark is not None
+        over = [p for p in range(1, total + 1) if p >= mark]
+        assert len(over) == expected_over
+        assert len(over) / total <= 0.03 or len(over) == 1

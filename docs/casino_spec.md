@@ -105,18 +105,47 @@ channel edit bucket). The channel itself carries only shared surfaces:
   escalate a broadcast, never create one — a guild with the dial at 0 stays
   silent however rare the win.
 
+  **A push is not a win, and the gate knows it.** `big_win_tier` takes the
+  `stake` and refuses `payout <= stake`. Blackjack pushes return the stake,
+  baccarat Player/Banker bets push on a tie, and a war retreat hands back
+  half — all of which clear a 500 bar easily on payout alone. Gating on the
+  payout by itself announced a 2,000-coin blackjack push as "🔥 Huge Win", a
+  headline asserting a win that did not happen. It is the same rule
+  `record_play` uses to count a win; the two must not disagree, or the
+  broadcast advertises what the stats refuse to count. It is also what keeps
+  the builder's accent-contract exemption honest — every card it copies is a
+  winning one, so the color it inherits is always the semantic green.
+
   The percentile comes from `casino_service.win_percentile` over
   `casino_win_history` (migration 162): a rolling `WIN_HISTORY_KEEP`-row
-  window per guild, banked from `record_play` inside the settle transaction
-  under three filters — one of the nine `TICKER_GAMES`, `payout > stake` (a
-  push is not a win), **and clearing the guild's own bar**. That last filter
-  is what makes the percentile mean anything: ranking *every* win put the
-  mark below the broadcast bar, because the overwhelming majority of casino
-  wins are small pair payouts (prod's average win returns 71 coins against a
-  500 bar), which left the floor deciding everything and the percentile
-  contributing nothing. `broadcast_bar` reads that dial as a single key
-  rather than through `load_casino_settings`, since this runs on every
-  winning play and only one integer is wanted.
+  window per guild, written by `record_win` from the cog's `_send_big_win`
+  seam — **one row per public announcement, after that announcement's
+  percentile has been read**. Both halves are load-bearing, and both were
+  wrong when this banked from `record_play` instead:
+
+  - *Per announcement, not per settled bet.* A roulette round where the
+    player spread five bets that each cleared the bar is one card in the
+    channel; banking it five times over-weighted multi-bet rounds. It also
+    banked jackpot spins, whose big-win card is suppressed in favour of the
+    jackpot celebration — the largest payouts in the distribution pulling up
+    a mark nobody was ranked against.
+  - *After the read.* `record_play` runs inside the settle transaction, which
+    commits before the broadcast reads, so each win entered the population it
+    was about to be ranked against: a payout tying the guild's recent maximum
+    always cleared its own mark, and a guild whose announced wins cluster
+    tightly above the floor would ping on *every* broadcast.
+
+  The population is announced wins only. Ranking *every* win put the mark
+  below the broadcast bar, because the overwhelming majority of casino wins
+  are small pair payouts (prod's average win returns 71 coins against a 500
+  bar), which left the floor deciding everything and the percentile
+  contributing nothing.
+
+  The top band is sized in **rows counted back from the end** (`max(1, total
+  × 3 ÷ 100)`), not as an offset forward. `total × 97 ÷ 100` is exact at
+  multiples of 100 but rounds loose below them — at the 40-row sample floor it
+  left two rows above the mark, the top 5%, handing the smallest guilds the
+  loosest ping bar.
 
   Under `PING_MIN_SAMPLE` (40) banked wins `win_percentile` returns **None**,
   a refusal callers must read as "don't ping" and never as "everything
@@ -585,10 +614,11 @@ percentile can never create a broadcast the dial switched off, the documented
 supersession, and `test_every_ladder_rung_is_reachable` guarding the dead-rung
 defect), the rolling window in `tests/test_casino_service.py` (sample floor,
 per-guild scoping, trim keeping the newest, a schema assertion that the table
-holds no `user_id`, and that only announced wins from `TICKER_GAMES` are
-banked — with the bar off, nothing accrues at all), the
+holds no `user_id`, the band never rounding loose at the sample floor, and
+`record_play` no longer banking at all), the
 embed in `tests/test_casino_embeds.py` (header replaces the game title, copy
 and fields survive, and the player's own card is never mutated), and the cog
 seam in `tests/cogs/test_casino_big_win_broadcast.py` (no view, `@here` with
 `everyone=True` only on the top rung, a thin history or a failed percentile
-read still broadcasting).
+read still broadcasting, a push posting and banking nothing, one banked row
+per announcement, and the current win not being ranked against itself).
