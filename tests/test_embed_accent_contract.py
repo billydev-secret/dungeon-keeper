@@ -621,7 +621,14 @@ def test_builder_falls_back_without_accent(build, fallback):
 # (adding an entry is an explicit, reviewable decision to skip the contract,
 # e.g. for content-string builders or semantic-color-only surfaces).
 KNOWN_UNCOVERED = {
+    # Bios carries its own per-guild dial (`bios_embed_color`, BiosConfig) and
+    # takes it as a required `embed_color=` argument rather than the optional
+    # `color=` the contract probes — there is no accent path to pass through and
+    # no fallback to assert. The wizard's two prompt embeds are the same builder
+    # family as the posted bio and share that dial.
     "bot_modules.bios.embeds.build_bio_embed",
+    "bot_modules.bios.embeds.build_field_prompt_embed",
+    "bot_modules.bios.embeds.build_question_prompt_embed",
     # baccarat result is semantic green/red only; the running note is a
     # content string — both out of accent scope by design.
     "bot_modules.cogs.casino.embeds.build_baccarat_result_embed",

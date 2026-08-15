@@ -166,10 +166,30 @@ After the last field, step through the drawn question slots in order. Each slot 
 - **Re-roll (🎲)** — discards the current slot's question and draws a fresh one from the active pool, excluding every question already drawn this session (all other slots) and the slot's current question. The user then answers the new question.
   - If the active pool offers no distinct alternative (pool too small / all drawn), the re-roll control is disabled with a brief inline note ("No other questions available right now").
 
-### 5.6 Edit-mode pre-fill
-When editing, each step shows the user's stored value/answer and lets them keep it (send `keep`) or send a replacement.
-- A field step pre-fills with the stored `value`.
-- A question step pre-fills with the stored `question_text` + `answer`. Re-rolling on a question step in edit mode discards the old question entirely and replaces that slot — new `question_id`, new `question_text`, new `answer`.
+### 5.6 Edit mode: showing the current answer, and warning that it will be replaced
+There is **no pre-fill**. Text answers are captured as a plain channel message
+(`wait_for("message", …)`), not through a modal, so there is no input box to
+seed with the stored value — which means nothing about the step is
+self-evidently destructive. Members read the prompt as "add to your bio" and
+lose the answer they had. The prompt therefore has to say so in words:
+
+- A **field step** in edit mode with a stored value shows it as a
+  **Current answer** embed field and leads the description with an explicit
+  warning that whatever they send next *replaces* it rather than adding to it,
+  naming **Keep** as the way to move on unchanged. A `choice` field is answered
+  by a control rather than a message, so its warning says "Picking a new
+  option" instead of "Whatever you send next".
+- A **question step** for an already-answered question — reached by re-picking
+  a ✏️ row from the browse list — shows the same **Current answer** field and
+  the same warning. This step has no **Keep** button; **Back** is its
+  non-destructive exit (it drops the pending question without saving), so the
+  warning names **Back**.
+- With nothing stored yet, neither prompt shows the field or the warning: a
+  first answer overwrites nothing, and a warning there would be noise.
+
+Both prompts are built by pure functions in `bios/embeds.py`
+(`build_field_prompt_embed`, `build_question_prompt_embed`) rather than by the
+wizard session, so the copy is assertable without a live wizard.
 
 ### 5.7 Timeout
 If the session is idle longer than `wizard_timeout`, auto-cancel: delete the channel, discard state, and (if possible) notify the user briefly via the triggering context.
