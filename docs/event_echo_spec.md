@@ -288,6 +288,14 @@ the event page would be a downgrade. An unresolvable channel (gone from the
 cache, so no name) falls back to the mention rather than to a link with
 nothing to label it.
 
+The name is **sanitised, not just escaped**, before it becomes link text
+(`_safe_link_text`). `escape_markdown` escapes a complete `[..](..)` sequence
+but leaves a stray `]` or `(` alone, so a channel named `x](https://evil.com)`
+would close our masked link early and publish a live link of its own into main
+chat — off nothing more than Manage Channels, or a thread title in an allowed
+channel. `[`, `]`, `(` and `)` are dropped first, then the rest is escaped so
+`_`/`*` can't reformat it either.
+
 A "happened" echo drops the invitation. There is nothing to join, so the call
 to action becomes **See the board →**, and the numbers get their own line:
 

@@ -22,6 +22,7 @@ purpose, not a flag to leave lying around.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import discord
@@ -44,6 +45,10 @@ SOURCE_COMMUNITY_TIER = "community_tier"
 
 # How long before a deadline the "last chance" echo fires.
 CLOSING_LEAD_SECONDS = 3600
+
+# The characters that can restructure a `[text](url)` masked link. Stripped
+# from any name we use as link text — see _safe_link_text.
+_LINK_STRUCTURE_RE = re.compile(r"[\[\]()]")
 
 # Ben's numbers (2026-07-28): same game type at most hourly, and nothing at
 # all within ten minutes of the last echo whatever it was. Ceiling is ~6/hour;
@@ -236,6 +241,19 @@ def is_fresh(opened_at: float | None, now: float) -> bool:
     return now - opened_at <= FRESHNESS_SECONDS
 
 
+def _safe_link_text(name: str) -> str:
+    """Make a channel name safe as the label half of a ``[text](url)`` link.
+
+    ``escape_markdown`` alone is not enough here: it escapes a complete
+    ``[..](..)`` sequence but leaves a stray ``]`` or ``(`` alone, so a channel
+    named ``x](https://evil.com)`` closes our masked link early and publishes a
+    link of its own — into main chat, off nothing more than Manage Channels or
+    a thread title. Drop the four characters that can restructure the link,
+    then escape the rest so ``_`` and ``*`` don't reformat it either.
+    """
+    return discord.utils.escape_markdown(_LINK_STRUCTURE_RE.sub("", name))
+
+
 def build_echo_embed(
     *,
     name: str,
@@ -284,8 +302,7 @@ def build_echo_embed(
     if channel_id is None:
         where = ""
     elif channel_name:
-        safe = discord.utils.escape_markdown(channel_name)
-        where = f" in [#{safe}]({url})"
+        where = f" in [#{_safe_link_text(channel_name)}]({url})"
     else:
         where = f" in <#{channel_id}>"
     when = f" <t:{int(deadline_epoch)}:R>" if deadline_epoch is not None else ""

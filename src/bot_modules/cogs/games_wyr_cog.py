@@ -17,6 +17,7 @@ from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
     create_game,
+    get_active_game_by_id,
     update_game_message,
     update_game_payload,
     get_game_payload,
@@ -371,6 +372,13 @@ class WYRCog(commands.Cog):
             await end_game(self.db, game_id)
             self.bot.active_views.pop(game_id, None)
             log.warning("WYR launch lacked send perms in channel %s", channel.id)
+            return None
+        # _run_round can end the game and unwind normally — an empty bank posts
+        # its notice and calls end_game, which deletes the row. Reporting a
+        # game id for that would mark the schedule 'launched' and, worse, put
+        # the scheduler's "is starting now!" ping under the "bank is empty"
+        # notice. A missing row is the signal the round bailed.
+        if await get_active_game_by_id(self.db, game_id) is None:
             return None
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id

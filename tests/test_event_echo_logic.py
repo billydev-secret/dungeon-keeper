@@ -148,6 +148,34 @@ class TestEchoEmbed:
         )
         assert r"hot\_takes\*vip\*" in (embed.description or "")
 
+    @pytest.mark.parametrize(
+        "hostile_name",
+        [
+            # escape_markdown escapes a whole [..](..) pair but not a stray
+            # bracket, so a name carrying only the closing half used to end the
+            # masked link early and leave the rest as a live link of its own.
+            pytest.param("x](https://evil.com)", id="closing-bracket"),
+            pytest.param("[x](https://evil.com", id="opening-bracket"),
+            pytest.param("a)(b", id="bare-parens"),
+        ],
+    )
+    def test_a_hostile_channel_name_cannot_inject_a_link(self, hostile_name):
+        """This lands in main chat, and Manage Channels is not trust to publish links.
+
+        Every link target in the embed must be the board's own. A hostile URL
+        surviving as *label* text is inert — Discord doesn't auto-link inside a
+        masked link's label — so the property under test is the structure, not
+        the substring.
+        """
+        board = "https://discord.com/channels/1/2/3"
+        desc = build_echo_embed(
+            name="G", channel_id=9, channel_name=hostile_name, url=board
+        ).description or ""
+        assert "](https://evil.com" not in desc
+        # Every link target is the game's, and no stray bracket pair is left to
+        # start one of its own.
+        assert desc.count("](") == desc.count(f"]({board})")
+
     def test_copy_is_derived_from_the_source(self):
         """"A game is open" reads as a bug on an event called Movie Night.
 
