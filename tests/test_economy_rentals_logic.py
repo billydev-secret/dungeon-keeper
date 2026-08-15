@@ -225,3 +225,27 @@ def test_color_mode_holographic_tops_everything():
         effective_color_mode({"role_holographic", "role_gradient", "role_color"})
         == "holographic"
     )
+
+
+@pytest.mark.parametrize(
+    "perks",
+    [
+        pytest.param({"role_preset"}, id="alone"),
+        pytest.param({"role_preset", "role_color"}, id="over-solid"),
+        pytest.param({"role_preset", "role_gradient"}, id="with-custom-gradient"),
+    ],
+)
+def test_color_mode_palette_color_is_a_gradient(perks):
+    """A curated palette colour projects as a two-colour fade.
+
+    ``role_preset`` and ``role_gradient`` differ only in where the pair came
+    from — the palette or the member — so the projector treats them alike and
+    needs no fourth mode.
+    """
+    assert effective_color_mode(perks) == "gradient"
+
+
+def test_color_mode_holographic_still_tops_the_palette():
+    assert (
+        effective_color_mode({"role_holographic", "role_preset"}) == "holographic"
+    )

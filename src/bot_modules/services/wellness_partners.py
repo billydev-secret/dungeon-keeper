@@ -1,7 +1,7 @@
 """Wellness Guardian persistent partner request view.
 
 The Accept/Decline buttons sent in DMs need to survive bot restarts. Following
-the BoosterRoleDynamicButton pattern (services/booster_roles.py:144), we
+the PaletteColorButton pattern (services/color_palette.py), we
 register two DynamicItem subclasses on the bot. They look up the partnership
 record by ID embedded in the button's custom_id.
 """

@@ -133,6 +133,83 @@ def test_shop_icon_row_shows_catalog_size(db):
     assert "40 + your own" in _shop_row(embed, "Icon")
 
 
+# ── the curated colour palette row ─────────────────────────────────────
+#
+# The palette is the one row whose very presence is conditional: a guild with no
+# curated colours has no such product, and ``color_catalog=None`` is how the
+# shop is told so.
+
+
+def test_shop_hides_the_palette_row_without_a_palette(db):
+    _enable(db)
+    embed = build_shop_embed(_settings(db), set(), None, panel=True)
+    with pytest.raises(AssertionError):
+        _shop_row(embed, "Palette")
+
+
+def test_shop_keeps_the_palette_row_for_a_renter_when_it_empties(db):
+    """A palette can empty out under a live rental — its last colour disabled,
+    or its swatch deleted. Hiding the row then would bill someone weekly for a
+    perk with no row, no price and no ✅ anywhere in the shop, reachable only
+    through the generic refund picker.
+    """
+    _enable(db, price_role_preset=100)
+    embed = build_shop_embed(
+        _settings(db), set(), None, panel=True, owned={"role_preset"}
+    )
+    row = _shop_row(embed, "Palette")
+    assert "**100**" in row
+    assert "✅" in row
+
+
+def test_shop_shows_the_palette_row_with_one(db):
+    _enable(db, price_role_preset=100)
+    embed = build_shop_embed(
+        _settings(db), set(), None, panel=True, color_catalog=(100, 100, 11)
+    )
+    row = _shop_row(embed, "Palette")
+    assert "**100**" in row
+    assert "11 to choose from" in row
+
+
+def test_shop_palette_row_spans_per_colour_prices(db):
+    """Individually priced colours read as a span, like the icon catalog."""
+    _enable(db, price_role_preset=100)
+    embed = build_shop_embed(
+        _settings(db), set(), None, panel=True, color_catalog=(100, 250, 11)
+    )
+    assert "**100–250**" in _shop_row(embed, "Palette")
+
+
+def test_shop_palette_row_ignores_the_flat_price_in_its_span(db):
+    """Unlike icons there is no bring-your-own entry, so the flat price is not
+    a price the row offers — the catalog's own span is the whole truth (the
+    catalog service has already substituted the flat price for 0-priced rows)."""
+    _enable(db, price_role_preset=999)
+    embed = build_shop_embed(
+        _settings(db), set(), None, panel=True, color_catalog=(100, 250, 11)
+    )
+    row = _shop_row(embed, "Palette")
+    assert "**100–250**" in row
+    assert "999" not in row
+
+
+def test_shop_palette_undercuts_the_custom_gradient(db):
+    """The product story: curated is the value pick, custom is the splurge.
+
+    Both live in the Signature tier, which sorts by price, so the palette must
+    render above the gradient.
+    """
+    _enable(db, price_role_preset=100, price_role_gradient=300)
+    embed = build_shop_embed(
+        _settings(db), set(), None, panel=True, color_catalog=(100, 100, 11)
+    )
+    signature = next(f for f in embed.fields if f.name == "Signature")
+    lines = [ln for ln in signature.value.splitlines() if ln.startswith("`")]
+    labels = [ln.split("`")[1].split("  ")[0].strip() for ln in lines]
+    assert labels.index("Palette") < labels.index("Gradient")
+
+
 def test_shop_shows_balance_to_a_member_but_not_in_the_panel(db):
     """The wallet anchors the prices — but the channel panel is member-agnostic."""
     _enable(db)

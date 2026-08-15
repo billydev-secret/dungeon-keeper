@@ -66,13 +66,13 @@ if TYPE_CHECKING:
 # ``beneficiary_id`` != ``user_id`` (the gift_color kind retired in 091).
 _PERKS = (
     "role_color", "role_name", "role_gradient", "role_holographic",
-    "role_icon", "voice_style",
+    "role_icon", "role_preset", "voice_style",
 )
 
 _RENTAL_COLS = (
     "id, guild_id, user_id, perk, state, price, started_at, next_bill_at, "
     "grace_since, cancel_at_period_end, suspended, suspended_since, "
-    "beneficiary_id, catalog_icon_id, meta, created_at"
+    "beneficiary_id, catalog_icon_id, catalog_color_id, meta, created_at"
 )
 
 # Personal-role columns a caller may write via upsert_personal_role.
@@ -122,6 +122,24 @@ def _catalog_icon_price(
     return int(row["price"]) if row is not None else None
 
 
+def _catalog_color_price(
+    conn: sqlite3.Connection, guild_id: int, color_id: int
+) -> int | None:
+    """A palette colour's own weekly price, or None for "use the flat price".
+
+    None covers both a vanished row and the price-0 default, which means the
+    colour bills ``settings.price_role_preset`` — most palettes are priced once
+    for the whole set rather than per colour.
+    """
+    row = conn.execute(
+        "SELECT price FROM econ_color_catalog WHERE guild_id = ? AND id = ?",
+        (guild_id, color_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return int(row["price"]) or None
+
+
 def _price_for(
     conn: sqlite3.Connection,
     settings: EconSettings,
@@ -129,17 +147,24 @@ def _price_for(
     perk: str,
     catalog_icon_id: int | None,
     meta_json: str | None = None,
+    catalog_color_id: int | None = None,
 ) -> int:
     """The current weekly price for a rental.
 
     A ``role_icon`` rental tied to a catalog icon bills that icon's CURRENT
     price (re-read every renewal, so an admin price edit lands at the next
     anniversary — spec §6/§9); if the icon row has vanished it falls back to the
-    flat ``settings.price_role_icon``. Every other rental bills the flat
-    ``settings.price_<perk>``.
+    flat ``settings.price_role_icon``. A ``role_preset`` rental works the same
+    way against ``econ_color_catalog``, except that a colour priced 0 (the
+    default) deliberately means "bill the flat ``price_role_preset``". Every
+    other rental bills the flat ``settings.price_<perk>``.
     """
     if perk == "role_icon" and catalog_icon_id:
         price = _catalog_icon_price(conn, guild_id, int(catalog_icon_id))
+        if price is not None:
+            return price
+    if perk == "role_preset" and catalog_color_id:
+        price = _catalog_color_price(conn, guild_id, int(catalog_color_id))
         if price is not None:
             return price
     if perk == "emoji":
@@ -186,6 +211,7 @@ def rent_perk(
     *,
     beneficiary_id: int | None = None,
     catalog_icon_id: int | None = None,
+    catalog_color_id: int | None = None,
     now: float | None = None,
 ) -> sqlite3.Row:
     """Rent a perk: charge the first week upfront and open a live rental row.
@@ -194,7 +220,8 @@ def rent_perk(
     price). ``catalog_icon_id`` ties a ``role_icon`` rental to a curated catalog
     icon, whose per-icon price is billed instead of the flat
     ``settings.price_role_icon`` (NULL = a bring-your-own icon at the flat
-    price). ``beneficiary_id`` defaults to ``user_id``; a gift passes the
+    price); ``catalog_color_id`` does the same for a ``role_preset`` rental
+    against the colour palette. ``beneficiary_id`` defaults to ``user_id``; a gift passes the
     friend's id, making them the beneficiary of the base perk. It is always
     stored non-NULL so the live-rental unique index fires. Raises ValueError: unknown ``perk``; "already rented" when a live
     rental for this (perk, beneficiary) exists (IntegrityError on the partial
@@ -207,7 +234,10 @@ def rent_perk(
         raise ValueError(f"unknown perk: {perk!r}")
     now = time.time() if now is None else now
     beneficiary = user_id if beneficiary_id is None else beneficiary_id
-    price = _price_for(conn, settings, guild_id, perk, catalog_icon_id)
+    price = _price_for(
+        conn, settings, guild_id, perk, catalog_icon_id,
+        catalog_color_id=catalog_color_id,
+    )
     next_bill_at = now + WEEK_SECONDS
 
     try:
@@ -216,12 +246,12 @@ def rent_perk(
             INSERT INTO econ_rentals
                 (guild_id, user_id, perk, state, price, started_at,
                  next_bill_at, cancel_at_period_end, suspended,
-                 beneficiary_id, catalog_icon_id, created_at)
-            VALUES (?, ?, ?, 'active', ?, ?, ?, 0, 0, ?, ?, ?)
+                 beneficiary_id, catalog_icon_id, catalog_color_id, created_at)
+            VALUES (?, ?, ?, 'active', ?, ?, ?, 0, 0, ?, ?, ?, ?)
             """,
             (
                 guild_id, user_id, perk, price, now, next_bill_at, beneficiary,
-                catalog_icon_id, now,
+                catalog_icon_id, catalog_color_id, now,
             ),
         )
     except sqlite3.IntegrityError as exc:
@@ -516,6 +546,45 @@ def get_live_role_icon_rental(
     ).fetchone()
 
 
+def get_live_preset_rental(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    """The live (active|grace) ``role_preset`` rental benefiting this member.
+
+    Beneficiary-matched like :func:`get_live_role_icon_rental`, and used the same
+    way: the palette picker reads it to decide between opening a new rental and
+    switching an existing one to a different colour.
+    """
+    return conn.execute(
+        f"""
+        SELECT {_RENTAL_COLS} FROM econ_rentals
+        WHERE guild_id = ? AND beneficiary_id = ? AND perk = 'role_preset'
+          AND state IN ('active', 'grace')
+        LIMIT 1
+        """,
+        (guild_id, user_id),
+    ).fetchone()
+
+
+def set_rental_catalog_color(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    rental_id: int,
+    catalog_color_id: int | None,
+) -> None:
+    """Point a live ``role_preset`` rental at a different palette colour.
+
+    Only the colour tag changes — no charge and no price snapshot update, so the
+    member finishes the week they already paid for and the newly chosen colour's
+    price (if it has its own) takes effect at the next renewal. Mirrors
+    :func:`set_rental_catalog_icon`.
+    """
+    conn.execute(
+        "UPDATE econ_rentals SET catalog_color_id = ? WHERE guild_id = ? AND id = ?",
+        (catalog_color_id, guild_id, rental_id),
+    )
+
+
 def set_rental_catalog_icon(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -600,6 +669,7 @@ def bill_rental(
     price = _price_for(
         conn, settings, int(rental["guild_id"]), perk,
         rental["catalog_icon_id"], meta_json=rental["meta"],
+        catalog_color_id=rental["catalog_color_id"],
     )
     ok = try_redeem_voucher(
         conn, int(rental["guild_id"]), user_id, rental_id=rental_id,

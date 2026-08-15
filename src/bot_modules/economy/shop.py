@@ -33,6 +33,7 @@ def shop_row_price(
     settings: EconSettings,
     perk: str,
     icon_catalog: tuple[int, int, int] | None,
+    color_catalog: tuple[int, int, int] | None = None,
 ) -> tuple[int, str]:
     """(sort key, display string) for a shop row's price.
 
@@ -40,11 +41,19 @@ def shop_row_price(
     and sorts on its floor. The flat ``price_role_icon`` folds into that span —
     the picker's bring-your-own Custom entry sells at it, so it's a price the
     row genuinely offers.
+
+    The palette spans the same way, but the flat ``price_role_preset`` is NOT
+    folded in: there is no bring-your-own palette colour, so the only prices on
+    offer are the palette's own (the catalog service has already substituted the
+    flat price for colours left at 0).
     """
     if perk == "role_icon" and icon_catalog is not None:
         lo, hi, _count = icon_catalog
         lo = min(lo, settings.price_role_icon)
         hi = max(hi, settings.price_role_icon)
+        return lo, f"{lo:,}" if lo == hi else f"{lo:,}–{hi:,}"
+    if perk == "role_preset" and color_catalog is not None:
+        lo, hi, _count = color_catalog
         return lo, f"{lo:,}" if lo == hi else f"{lo:,}–{hi:,}"
     price = perk_price(settings, perk)
     return price, f"{price:,}"
@@ -59,6 +68,7 @@ def build_shop_embed(
     owned: set[str] | frozenset[str] = frozenset(),
     comped: set[str] | frozenset[str] = frozenset(),
     icon_catalog: tuple[int, int, int] | None = None,
+    color_catalog: tuple[int, int, int] | None = None,
     balance: int | None = None,
     shields_held: int = 0,
 ) -> discord.Embed:
@@ -78,7 +88,10 @@ def build_shop_embed(
     none of them.
     ``icon_catalog`` is (min price, max price, icon count) across the guild's
     curated catalog; when set, the role-icon row shows that span and its size
-    instead of a single flat price.
+    instead of a single flat price. ``color_catalog`` is the same triple for the
+    colour palette, and doubles as the palette row's visibility switch: None
+    means this guild has no rentable colours, so the row is left out rather than
+    advertising a product with nothing behind it.
     """
     # The balance lives in the description, not the footer: footers render
     # plain text, so a custom currency emoji would show as raw <:name:id>.
@@ -102,10 +115,26 @@ def build_shop_embed(
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)
 
+    # A guild with no curated colours has no Palette product, so the row leaves
+    # the table entirely — including the width calculation below, so a hidden row
+    # can never pad the visible ones. ("Palette" is not the widest label today,
+    # so this costs nothing now and stays correct if the labels change.)
+    #
+    # Unless the viewer is renting it: a palette can empty out under a live
+    # rental (its last colour disabled, or its swatch deleted), and hiding the
+    # row then would bill someone weekly for a perk with no row, no price and no
+    # ✅ anywhere in the shop.
+    show_palette = color_catalog is not None or "role_preset" in owned
+
+    def _stocked(perks: tuple[str, ...]) -> tuple[str, ...]:
+        if show_palette:
+            return perks
+        return tuple(p for p in perks if p != "role_preset")
+
+    tiers = [(name, _stocked(perks)) for name, perks in PERK_TIERS]
+    table_perks: list[str] = list(_stocked(SELF_PERKS))
     # The Voice tier exists only while the lease is priced (> 0 = the paywall
     # is armed); at the price-0 dark default the shop shows no trace of it.
-    tiers = list(PERK_TIERS)
-    table_perks: list[str] = list(SELF_PERKS)
     if settings.price_voice_style > 0:
         tiers.append(("Voice", ("voice_style",)))
         table_perks.append("voice_style")
@@ -116,7 +145,7 @@ def build_shop_embed(
     blurb_width = max(len(PERK_BLURBS[p]) for p in table_perks)
 
     def _line(perk: str) -> str:
-        _sort, price_str = shop_row_price(settings, perk, icon_catalog)
+        _sort, price_str = shop_row_price(settings, perk, icon_catalog, color_catalog)
         note = ""
         if perk in gated:
             note = " · _needs a server feature not enabled here_"
@@ -129,6 +158,8 @@ def build_shop_embed(
             note = " · ✅"
         elif perk == "role_icon" and icon_catalog is not None:
             note = f" · {icon_catalog[2]} + your own"
+        elif perk == "role_preset" and color_catalog is not None:
+            note = f" · {color_catalog[2]} to choose from"
         return (
             f"`{_pad(PERK_SHORT[perk], label_width)}  "
             f"{_pad(PERK_BLURBS[perk], blurb_width)}` "
@@ -136,8 +167,11 @@ def build_shop_embed(
         )
 
     for tier_name, perks in tiers:
+        if not perks:
+            continue
         ordered = sorted(
-            perks, key=lambda p: shop_row_price(settings, p, icon_catalog)[0]
+            perks,
+            key=lambda p: shop_row_price(settings, p, icon_catalog, color_catalog)[0],
         )
         embed.add_field(
             name=tier_name,

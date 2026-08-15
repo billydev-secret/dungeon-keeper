@@ -33,6 +33,13 @@ COMPED_PERKS = frozenset(GIFTABLE_PERKS)
 # kind covers both (gift_color retired in migration 091).
 _SOLID_COLOR_PERKS = frozenset({"role_color"})
 
+# Perks whose entitlement grants a two-colour fade. Both write the same
+# ``econ_personal_roles.color``/``color2`` pair and project identically — they
+# differ only in where the pair comes from (``role_gradient`` is member-picked,
+# ``role_preset`` is chosen from the curated palette), which is a shop concern,
+# not a projection one.
+_GRADIENT_PERKS = frozenset({"role_gradient", "role_preset"})
+
 
 class BillingAction(Enum):
     """A billing decision (from ``classify``) or reported outcome.
@@ -139,13 +146,15 @@ def effective_color_mode(perks: set[str]) -> str:
     """Resolve the member's color mode from their entitled perks (spec §6).
 
     Richest wins: 'holographic' (Discord's fixed three-colour preset) tops
-    'gradient' (member-picked two-colour), which tops 'solid' (a role_color,
-    self-rented or received as a gift), else 'none'. Holographic overrides the
-    lower modes so a member who rents both wears the shimmer, not a stale fade.
+    'gradient' (a two-colour fade, member-picked via ``role_gradient`` or chosen
+    from the curated palette via ``role_preset``), which tops 'solid' (a
+    role_color, self-rented or received as a gift), else 'none'. Holographic
+    overrides the lower modes so a member who rents both wears the shimmer, not
+    a stale fade.
     """
     if "role_holographic" in perks:
         return "holographic"
-    if "role_gradient" in perks:
+    if perks & _GRADIENT_PERKS:
         return "gradient"
     if perks & _SOLID_COLOR_PERKS:
         return "solid"

@@ -7,7 +7,6 @@ import io
 import ipaddress
 import json
 import logging
-import os
 import re
 import socket
 import time
@@ -72,18 +71,6 @@ from bot_modules.services.auto_react_service import (
     remove_auto_react_rule,
     upsert_auto_react_rule,
 )
-from bot_modules.services.booster_roles import (
-    _IMAGE_EXTS,
-    delete_booster_role,
-    get_booster_panel_refs,
-    get_booster_roles,
-    get_guild_swatch_dir,
-    post_or_update_booster_panel,
-    resolve_swatch_directory,
-    swatch_file_info,
-    sync_swatches,
-    upsert_booster_role,
-)
 from bot_modules.services.greeting_watch_service import (
     parse_extra_words,
     parse_notify_ids,
@@ -108,6 +95,12 @@ from bot_modules.services.dm_perms_service import (
     set_dm_mode_role_ids,
     set_panel_settings,
     set_request_channel,
+)
+from web_server.routes.panel_posting import (
+    ChannelIdBody,
+    guild_or_503,
+    require_post_permissions,
+    text_channel_or_400,
 )
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, require_perms, run_query
@@ -189,13 +182,6 @@ _POLICY_VOTE_TIMEOUT_DEFAULT = 72
 router = APIRouter()
 
 _log = logging.getLogger("dungeonkeeper.web.config")
-
-
-class ChannelIdBody(BaseModel):
-    """A bare target channel — the body shape of every "post this panel
-    there" route. A snowflake, so it travels as a string."""
-
-    channel_id: str
 
 
 # ── Read helpers ───────────────────────────────────────────────────────
@@ -314,36 +300,6 @@ def _id_str_list(
     ]
 
 
-def _guild_or_503(ctx, guild_id: int):
-    """The active guild, or the 503 the dashboard shows as "bot offline".
-
-    Routes that act on Discord rather than just the DB all open this way.
-    Callers that must report a *different* failure first (a missing cog, say)
-    keep their own inline checks so the error precedence does not move.
-    """
-    bot = getattr(ctx, "bot", None)
-    if bot is None:
-        raise HTTPException(503, "Bot not available")
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        raise HTTPException(503, "Discord guild not available")
-    return guild
-
-
-def _text_channel_or_400(guild, raw_channel_id):
-    """Resolve a body's ``channel_id`` to a text channel in this guild."""
-    import discord
-
-    try:
-        channel_id = int(raw_channel_id)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "Invalid channel_id") from None
-    channel = guild.get_channel(channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        raise HTTPException(400, "Channel must be a text channel in this guild")
-    return channel
-
-
 # The XP coefficient names, each with the reader that coerces it. This is the
 # single list — the write path in update_xp iterates the same table, and the
 # storage key is always the name behind _XP_COEFF_PREFIX.
@@ -363,42 +319,6 @@ _XP_COEFF_READERS: dict = {
     "manual_grant_xp": _float_val,
     "level_curve_factor": _float_val,
 }
-
-
-_PERM_LABELS = {
-    "view_channel": "View Channel",
-    "send_messages": "Send Messages",
-    "embed_links": "Embed Links",
-    "attach_files": "Attach Files",
-}
-
-
-def _require_post_permissions(guild, channel, *required: str) -> None:
-    """Refuse up front if the bot cannot post what this panel actually posts.
-
-    Worth doing *before* calling a panel-posting service rather than letting
-    discord.Forbidden escape as a 500: post_or_update_booster_panel deletes the
-    existing panel messages before it sends the new ones, and those sends are
-    unguarded, so failing partway through leaves the guild with no panel at all
-    and a repost that fails the same way. A 400 naming the missing permission
-    is also simply actionable — the admin can go and fix it.
-
-    The flags differ per panel and must be passed explicitly: the DM perms
-    panel sends an embed, while the booster panel sends image *attachments* and
-    no embed. Checking the wrong set is worse than not checking, because it
-    both rejects channels that would have worked and waves through the one
-    failure this exists to prevent.
-    """
-    perms = channel.permissions_for(guild.me)
-    missing = [
-        _PERM_LABELS[name] for name in required if not getattr(perms, name)
-    ]
-    if missing:
-        raise HTTPException(
-            400,
-            f"The bot can't post in #{channel.name} — missing permissions: "
-            f"{', '.join(missing)}",
-        )
 
 
 def _xp_coefficients(conn, guild_id: int = 0) -> dict:
@@ -1322,19 +1242,6 @@ def _roles_section(conn, guild_id: int) -> dict:
         }
 
 
-def _booster_roles_section(conn, guild_id: int) -> list:
-    return [
-        {
-            "role_key": r["role_key"],
-            "label": r["label"],
-            "role_id": str(r["role_id"]),
-            "image_path": r["image_path"],
-            "sort_order": r["sort_order"],
-        }
-        for r in get_booster_roles(conn, guild_id)
-    ]
-
-
 def _auto_delete_section(conn, guild_id: int) -> list:
     return [
         {
@@ -1362,7 +1269,6 @@ async def get_config(
         with ctx.open_db() as conn:
             # Only what more than one section below needs; everything else
             # each section reads for itself.
-            booster_panel_refs = get_booster_panel_refs(conn, guild_id)
             bot = getattr(ctx, "bot", None)
             prune_guild = bot.get_guild(guild_id) if bot is not None else None
 
@@ -1382,10 +1288,6 @@ async def get_config(
                 },
                 "moderation": _moderation_section(conn, guild_id),
                 "roles": _roles_section(conn, guild_id),
-                "booster_roles": _booster_roles_section(conn, guild_id),
-                "booster_panel_channel_id": (
-                    str(booster_panel_refs[0][0]) if booster_panel_refs else "0"
-                ),
                 "auto_delete": _auto_delete_section(conn, guild_id),
                 "bulk_cleanup": _bulk_cleanup_section(conn, guild_id),
                 "confessions": _confessions_section(guild_id, bot, conn),
@@ -2377,8 +2279,8 @@ async def setup_inactive_channel_route(
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    guild = _guild_or_503(ctx, guild_id)
-    channel = _text_channel_or_400(guild, body.channel_id)
+    guild = guild_or_503(ctx, guild_id)
+    channel = text_channel_or_400(guild, body.channel_id)
 
     ok, note = await setup_inactive_channel(ctx, guild, channel)
     if not ok:
@@ -2405,7 +2307,7 @@ async def run_inactive_sweep_route(
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    guild = _guild_or_503(ctx, guild_id)
+    guild = guild_or_503(ctx, guild_id)
     if not read_inactive_channel_id(ctx, guild_id):
         raise HTTPException(
             400, "No inactive channel is set up yet — set one above first."
@@ -3026,202 +2928,6 @@ async def update_auto_role(
 
 
 # ── Booster roles ─────────────────────────────────────────────────────
-
-
-class BoosterRoleUpdate(BaseModel):
-    label: str
-    role_id: str
-    image_path: str = ""
-    sort_order: int = 0
-
-
-@router.put("/config/booster-roles/{role_key}")
-async def update_booster_role(
-    role_key: str,
-    request: Request,
-    body: BoosterRoleUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        with ctx.open_db() as conn:
-            upsert_booster_role(
-                conn,
-                guild_id,
-                role_key,
-                label=body.label,
-                role_id=int(body.role_id) if body.role_id else 0,
-                image_path=body.image_path,
-                sort_order=body.sort_order,
-            )
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-@router.delete("/config/booster-roles/{role_key}")
-async def remove_booster_role(
-    role_key: str,
-    request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        with ctx.open_db() as conn:
-            delete_booster_role(conn, guild_id, role_key)
-        return {"ok": True}
-
-    return await run_query(_q)
-
-
-@router.post("/config/booster-roles/post-panel")
-async def post_booster_panel(
-    request: Request,
-    body: ChannelIdBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    """Re-post the booster cosmetic role panel in the chosen channel."""
-
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    guild = _guild_or_503(ctx, guild_id)
-    channel = _text_channel_or_400(guild, body.channel_id)
-    # Attachments, not embeds — each role posts as an image file.
-    _require_post_permissions(
-        guild, channel, "view_channel", "send_messages", "attach_files"
-    )
-
-    msgs = await post_or_update_booster_panel(ctx.db_path, guild, channel)
-    if not msgs:
-        raise HTTPException(400, "No booster roles configured.")
-    return {"ok": True, "message_count": len(msgs)}
-
-
-@router.post("/config/booster-roles/sync-swatches")
-async def sync_booster_swatches(
-    request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    """Scan the configured swatch directory; create/remove roles to match."""
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    guild = _guild_or_503(ctx, guild_id)
-
-    try:
-        created, removed = await sync_swatches(ctx.db_path, guild)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    return {"ok": True, "created": created, "removed": removed}
-
-
-# ── Managed swatch uploads (per-guild folder) ────────────────────────
-
-_MAX_SWATCH_BYTES = 8 * 1024 * 1024
-
-
-def _safe_swatch_name(filename: str | None) -> str:
-    """Reject path traversal / unsupported types; return a bare filename."""
-    name = os.path.basename(filename or "")
-    if not name or name in (".", "..") or "/" in name or "\\" in name:
-        raise HTTPException(400, "Invalid filename")
-    ext = os.path.splitext(name)[1].lower()
-    if ext not in _IMAGE_EXTS:
-        raise HTTPException(400, f"Unsupported file type: {ext or '(none)'}")
-    return name
-
-
-def _swatch_listing(db_path, guild_id: int) -> dict:
-    managed = get_guild_swatch_dir(db_path, guild_id)
-    files = swatch_file_info(managed)
-    # The valid-swatch count resolve_swatch_directory needs is already in
-    # ``files`` — handing it over saves a second walk of the same directory.
-    active = resolve_swatch_directory(
-        db_path,
-        guild_id,
-        managed=managed,
-        managed_valid_count=sum(1 for f in files if f["valid"]),
-    )
-    return {
-        "ok": True,
-        "files": files,
-        "managed_dir": str(managed),
-        "active_dir": active,
-        "using_managed": active == str(managed),
-    }
-
-
-@router.get("/config/booster-roles/swatches")
-async def list_booster_swatches(
-    request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    """List uploaded swatch files in this guild's managed folder."""
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    # Directory walk + a config read, so off the event loop (as are the upload
-    # and delete handlers below — the dashboard shares the bot's event loop, so
-    # an 8 MB write on it stalls the Discord gateway).
-    return await run_query(lambda: _swatch_listing(ctx.db_path, guild_id))
-
-
-@router.post("/config/booster-roles/swatches")
-async def upload_booster_swatches(
-    request: Request,
-    files: list[UploadFile] = File(...),
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    """Save one or more uploaded swatch images into the managed folder."""
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    managed = get_guild_swatch_dir(ctx.db_path, guild_id)
-
-    saved: list[str] = []
-    for upload in files:
-        name = _safe_swatch_name(upload.filename)
-        content = await upload.read()
-        if not content:
-            continue
-        if len(content) > _MAX_SWATCH_BYTES:
-            raise HTTPException(400, f"{name} exceeds the 8 MB limit")
-        target = managed / name
-        if target.resolve().parent != managed.resolve():
-            raise HTTPException(400, "Invalid filename")
-        # Up to 8 MB of disk write per file — off the loop.
-        await asyncio.to_thread(target.write_bytes, content)
-        saved.append(name)
-
-    listing = await run_query(lambda: _swatch_listing(ctx.db_path, guild_id))
-    return {**listing, "saved": saved}
-
-
-@router.delete("/config/booster-roles/swatches/{filename}")
-async def delete_booster_swatch(
-    filename: str,
-    request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    """Delete a single uploaded swatch from the managed folder."""
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    name = _safe_swatch_name(filename)
-    managed = get_guild_swatch_dir(ctx.db_path, guild_id)
-    target = managed / name
-    if target.resolve().parent != managed.resolve():
-        raise HTTPException(400, "Invalid filename")
-    if not target.is_file():
-        raise HTTPException(404, "File not found")
-
-    def _delete() -> dict:
-        target.unlink()
-        return _swatch_listing(ctx.db_path, guild_id)
-
-    return await run_query(_delete)
 
 
 # ── Quote card border (per-guild uploaded frame) ─────────────────────
@@ -4057,7 +3763,7 @@ async def post_dms_panel(
     channel = guild.get_channel(channel_id)
     if not isinstance(channel, discord.TextChannel):
         raise HTTPException(400, "Channel not found or not a text channel")
-    _require_post_permissions(
+    require_post_permissions(
         guild, channel, "view_channel", "send_messages", "embed_links"
     )
 
@@ -4766,7 +4472,7 @@ async def update_bot_identity(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
-    guild = _guild_or_503(ctx, guild_id)
+    guild = guild_or_503(ctx, guild_id)
 
     # Resolve avatar bytes: file takes priority over URL
     avatar_bytes: bytes | None = None

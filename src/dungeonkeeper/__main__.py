@@ -23,7 +23,7 @@ from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.event_echo_service import event_echo_loop
 from bot_modules.services.game_start_ping_service import game_start_ping_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
-from bot_modules.services.booster_roles import BoosterRoleDynamicButton
+from bot_modules.services.color_palette import PaletteColorButton
 from bot_modules.services.intake_loop import intake_loop
 from bot_modules.services.intake_service import warm as warm_intake
 from bot_modules.services.intake_views import IntakeDismissButton, IntakeStepButton
@@ -305,8 +305,8 @@ def main() -> None:
                     remap_db.row_factory = aiosqlite.Row
                     await build_remap(remap_db, guild)
 
-    # Register persistent booster-role buttons so they survive restarts.
-    bot.add_dynamic_items(BoosterRoleDynamicButton)
+    # Register persistent palette swatch buttons so they survive restarts.
+    bot.add_dynamic_items(PaletteColorButton)
 
     # Register persistent Chat Revive opt-in buttons so they survive restarts.
     bot.add_dynamic_items(ReviveOptInButton)

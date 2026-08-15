@@ -57,7 +57,7 @@ Dashboard → Economy → QOTD: `qotd_ping_role_id` (§3.4).
 ## 3. Faucets (Earning)
 
 All credits flow through a single `apply_credit()` in the economy service: it applies
-the **booster ×1.5** (checked via `member.premium_since`, as `booster_roles.py:196` does),
+the **booster ×1.5** (checked via `member.premium_since`),
 rounds up, writes the wallet balance and an append-only ledger row atomically.
 
 ### 3.1 Daily Login
@@ -1344,8 +1344,9 @@ re-read price differs from the previous cycle's **DMs the owner** the old and ne
 |---|---|---|
 | Custom role color (solid) | 50 | `guild.create_role(color=…)` |
 | Custom role name | 35 | 32-char, filtered via the voice-master name-blocklist matcher (shared table). Setting it renames the member's personal role **and** sets their server nickname to match (`member.edit(nick=…)`, best-effort — a Forbidden/HTTP failure still keeps the role rename and tells them why via `_custom_name_confirmation`). When the perk lapses, `revoke_role_perks` reverts the nick too (`should_revert_nick` — only if the nick still equals the perk's name, so a game name-penalty stake set since is never clobbered) |
-| Role icon | 75 | Requires `ROLE_ICONS` in `guild.features`; upload utils exist in `booster_roles.py` |
-| Gradient (member-picked two-color fade) | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
+| Role icon | 75 | Requires `ROLE_ICONS` in `guild.features` |
+| Gradient (member-picked two-color fade) | 240 | Sets `secondary_color`; requires Enhanced Role Styles guild feature; supersedes solid. Raised from 120 with the palette's arrival (todo #76) so the curated set is the value pick |
+| Palette color (curated two-color fade) | 80, or the color's own price | `role_preset` (migration 159) — the ex-booster cosmetic colors, now rented from a curated catalog. Same projection and guild feature as the gradient; `econ_rentals.catalog_color_id` names the color, and a catalog `price` of 0 means "bill the flat `price_role_preset`". The shop row hides entirely in a guild with no palette. See [color_palette_spec.md](color_palette_spec.md) |
 | Holographic (Discord's fixed shimmer preset) | 300 | `role_holographic` perk (migration 107): the projector sets the fixed `(primary, secondary, tertiary)` triple Discord accepts for `tertiary_color`; requires the same Enhanced Role Styles feature; supersedes gradient; member picks nothing (no customise modal) |
 | Private text room | 200 | §8 (Stage 6) |
 | Private voice room | 200 | §8 (Stage 6) |
@@ -1394,9 +1395,10 @@ member always keeps the icon they paid for. Because the projector diffs the role
 `econ_personal_roles.projected_icon_path` records what was last projected, so a member
 *switching* from one icon to another forces the re-upload.
 
-**Personal roles:** one per member, auto-created **positioned above the booster
+**Personal roles:** one per member, auto-created **positioned above the legacy
 cosmetic swatch band** (the "#### Cosmetics" anchor) so a rented color wins the
-display-color contest — the position is set **on create only** (a reconcile never
+display-color contest — which is also what grandfathers the ex-booster colors: a
+member who rents overlays the role they were given, and a lapse uncovers it again — the position is set **on create only** (a reconcile never
 re-hoists a manually moved role). The projector is idempotent: it reconciles the role
 to the member's current entitlements (name / color / gradient / icon) and downgrades
 cleanly when a component lapses. Guards: role **names run through the Voice Control

@@ -15,6 +15,7 @@ const PERK_LABELS = {
   price_role_color: "Role color",
   price_role_name: "Role name",
   price_role_icon: "Role icon",
+  price_role_preset: "Palette color",
   price_role_gradient: "Role gradient",
   price_role_holographic: "Role holographic",
   price_streak_shield: "Streak shield",

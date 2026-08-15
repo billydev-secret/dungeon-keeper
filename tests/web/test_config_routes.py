@@ -133,7 +133,7 @@ def test_get_config_returns_expected_sections(authed_client):
     resp = authed_client.get("/api/config")
     assert resp.status_code == 200
     data = resp.json()
-    for section in ("global", "welcome", "xp", "prune", "spoiler", "moderation", "roles", "booster_roles", "auto_delete"):
+    for section in ("global", "welcome", "xp", "prune", "spoiler", "moderation", "roles", "auto_delete"):
         assert section in data, f"missing section: {section}"
 
 
@@ -534,31 +534,6 @@ def test_auto_react_drops_rungs_for_removed_emoji(authed_client, fake_ctx):
     assert get_rungs(fake_ctx.db_path, fake_ctx.guild_id, 4242) == {"🔥": 5}
 
 
-# ── PUT /api/config/booster-roles/{role_key} ─────────────────────────
-
-
-def test_booster_role_upsert_and_delete(authed_client, fake_ctx):
-    resp = authed_client.put("/api/config/booster-roles/fire", json={
-        "label": "Fire",
-        "role_id": "2001",
-        "image_path": "/img/fire.png",
-        "sort_order": 1,
-    })
-    assert resp.status_code == 200
-
-    with open_db(fake_ctx.db_path) as conn:
-        from bot_modules.services.booster_roles import get_booster_roles
-        roles = get_booster_roles(conn, fake_ctx.guild_id)
-    assert "fire" in [r["role_key"] for r in roles]
-
-    resp = authed_client.delete("/api/config/booster-roles/fire")
-    assert resp.status_code == 200
-    with open_db(fake_ctx.db_path) as conn:
-        from bot_modules.services.booster_roles import get_booster_roles
-        roles = get_booster_roles(conn, fake_ctx.guild_id)
-    assert "fire" not in [r["role_key"] for r in roles]
-
-
 def test_get_config_includes_guess_section(authed_client):
     resp = authed_client.get("/api/config")
     assert resp.status_code == 200
@@ -572,153 +547,6 @@ def test_get_config_includes_guess_section(authed_client):
     assert v["submit_max_per_window"] == 5
     assert v["submit_window_seconds"] == 3600
     assert v["max_guesses_per_round"] == 5
-
-
-def test_get_config_exposes_booster_panel_channel(authed_client, fake_ctx):
-    """Config GET surfaces the most recently posted booster panel channel."""
-    from bot_modules.services.booster_roles import replace_booster_panel_refs
-
-    with open_db(fake_ctx.db_path) as conn:
-        replace_booster_panel_refs(
-            conn, fake_ctx.guild_id, [(7777, 1), (7777, 2), (7777, 3)]
-        )
-        conn.commit()
-
-    resp = authed_client.get("/api/config")
-    assert resp.status_code == 200
-    assert resp.json()["booster_panel_channel_id"] == "7777"
-
-
-def test_post_booster_panel_requires_bot(authed_client):
-    """Without a live bot, the repost endpoint returns 503 rather than 500."""
-    resp = authed_client.post(
-        "/api/config/booster-roles/post-panel",
-        json={"channel_id": "12345"},
-    )
-    assert resp.status_code == 503
-
-
-def _booster_panel_guild(fake_ctx, perms):
-    """bot/guild/channel scaffolding for the booster post-panel tests."""
-    import discord
-
-    channel = MagicMock(spec=discord.TextChannel)
-    channel.name = "boosters"
-    channel.permissions_for = MagicMock(return_value=perms)
-
-    guild = MagicMock()
-    guild.id = fake_ctx.guild_id
-    guild.get_channel = MagicMock(return_value=channel)
-
-    bot = MagicMock()
-    bot.get_guild = MagicMock(return_value=guild)
-    fake_ctx.bot = bot
-    return channel
-
-
-def _booster_panel_service(monkeypatch):
-    """Stub post_or_update_booster_panel; returns a flag list recording calls.
-
-    Whether the service ran is the assertion that matters: it bulk-deletes
-    every existing panel message before its (unguarded) sends, so reaching it
-    without the right permissions is what destroys the panel.
-    """
-    calls: list[bool] = []
-
-    async def _svc(*a, **kw):
-        calls.append(True)
-        return [MagicMock(), MagicMock()]
-
-    monkeypatch.setattr("web_server.routes.config.post_or_update_booster_panel", _svc)
-    return calls
-
-
-@pytest.mark.parametrize(
-    ("perms", "want_missing"),
-    [
-        pytest.param(
-            {"view_channel": True, "send_messages": False, "attach_files": True},
-            "Send Messages",
-            id="no-send-messages",
-        ),
-        # The booster panel posts one image FILE per role and no embeds, so
-        # this is the flag that matters — and the one a check copied from the
-        # embed-posting DM panel would have waved straight through, into the
-        # delete-then-fail path.
-        pytest.param(
-            {"view_channel": True, "send_messages": True, "attach_files": False},
-            "Attach Files",
-            id="no-attach-files",
-        ),
-        pytest.param(
-            {"view_channel": False, "send_messages": True, "attach_files": True},
-            "View Channel",
-            id="no-view-channel",
-        ),
-    ],
-)
-def test_post_booster_panel_refuses_channel_it_cannot_post_in(
-    authed_client, fake_ctx, monkeypatch, perms, want_missing
-):
-    """A 400 *before* the service runs — not a 500 after it has already
-    deleted the old panel."""
-    import discord
-
-    calls = _booster_panel_service(monkeypatch)
-    _booster_panel_guild(fake_ctx, discord.Permissions(**perms))
-
-    resp = authed_client.post(
-        "/api/config/booster-roles/post-panel", json={"channel_id": "12345"}
-    )
-    assert resp.status_code == 400
-    assert want_missing in resp.json()["detail"]
-    assert not calls, "service ran despite missing permissions — panel would be lost"
-
-
-def test_post_booster_panel_does_not_require_embed_links(
-    authed_client, fake_ctx, monkeypatch
-):
-    """Embed Links is irrelevant here — the panel sends attachments, not
-    embeds. Requiring it would 400 channels that post perfectly well."""
-    import discord
-
-    calls = _booster_panel_service(monkeypatch)
-    _booster_panel_guild(
-        fake_ctx,
-        discord.Permissions(
-            view_channel=True,
-            send_messages=True,
-            attach_files=True,
-            embed_links=False,
-        ),
-    )
-
-    resp = authed_client.post(
-        "/api/config/booster-roles/post-panel", json={"channel_id": "12345"}
-    )
-    assert resp.status_code == 200
-    assert calls
-
-
-def test_post_booster_panel_posts_when_permitted(
-    authed_client, fake_ctx, monkeypatch
-):
-    """The precheck must not block the happy path."""
-    import discord
-
-    _booster_panel_service(monkeypatch)
-    _booster_panel_guild(
-        fake_ctx,
-        discord.Permissions(
-            view_channel=True, send_messages=True, attach_files=True
-        ),
-    )
-
-    resp = authed_client.post(
-        "/api/config/booster-roles/post-panel", json={"channel_id": "12345"}
-    )
-    assert resp.status_code == 200
-    assert resp.json()["message_count"] == 2
 
 
 # ── PUT /api/config/auto-delete/{channel_id} ─────────────────────────
@@ -1474,51 +1302,6 @@ def test_dms_post_panel_502_when_discord_rejects_send(authed_client, fake_ctx):
     )
     assert resp.status_code == 502
     assert cog.panel_settings == {}
-
-
-# ── /config/booster-roles/post-panel happy + sync-swatches ───────────
-
-
-def test_booster_post_panel_503_when_guild_missing(authed_client, fake_ctx):
-    """Bot is up but doesn't know the guild → can't post to Discord."""
-    from unittest.mock import MagicMock
-
-    bot = MagicMock()
-    bot.get_guild = MagicMock(return_value=None)
-    fake_ctx.bot = bot
-
-    resp = authed_client.post(
-        "/api/config/booster-roles/post-panel", json={"channel_id": "1234"}
-    )
-    assert resp.status_code == 503
-
-
-def test_booster_post_panel_400_when_channel_not_text(authed_client, fake_ctx):
-    """get_channel returns a non-TextChannel (e.g. voice) → 400, no send."""
-    from unittest.mock import MagicMock
-
-    auth_user = MagicMock()
-    auth_user.id = 1
-    auth_user.bot = False
-    auth_user.guild_permissions = MagicMock(value=0x8)
-    auth_user.display_name = "tester"
-    role = MagicMock(id=0, name="@everyone")
-    role.is_default = MagicMock(return_value=True)
-    auth_user.roles = [role]
-
-    guild = MagicMock()
-    guild.id = fake_ctx.guild_id
-    guild.get_member = MagicMock(return_value=auth_user)
-    # Plain MagicMock isn't a discord.TextChannel
-    guild.get_channel = MagicMock(return_value=MagicMock())
-    bot = MagicMock()
-    bot.get_guild = MagicMock(return_value=guild)
-    fake_ctx.bot = bot
-
-    resp = authed_client.post(
-        "/api/config/booster-roles/post-panel", json={"channel_id": "1234"}
-    )
-    assert resp.status_code == 400
 
 
 # ── /config/welcome/preview — admin-only render ──────────────────────

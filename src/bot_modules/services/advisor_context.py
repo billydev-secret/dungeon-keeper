@@ -310,7 +310,7 @@ _FEATURE_LOADERS: list[tuple[str, str, Callable]] = [
     ("guess", "Guess", _mk_getter("bot_modules.services.guess_repo", "get_guess_config", "conn")),
     ("confessions", "Confessions", _mk_getter("bot_modules.services.confessions_service", "get_config_conn", "conn")),
     ("grant_roles", "Grant roles", _mk_getter("bot_modules.core.db_utils", "get_grant_roles", "conn")),
-    ("booster_roles", "Booster roles", _mk_getter("bot_modules.services.booster_roles", "get_booster_roles", "conn")),
+    ("color_palette", "Color palette", _mk_getter("bot_modules.services.economy_color_catalog_service", "list_catalog", "conn")),
     ("auto_delete", "Auto-delete", _mk_getter("bot_modules.services.auto_delete_service", "list_auto_delete_rules_for_guild_with_conn", "conn")),
     ("auto_react", "Auto-react", _mk_getter("bot_modules.services.auto_react_service", "list_auto_react_rules_for_guild_with_conn", "conn")),
     ("voice_transcription", "Voice transcription", _mk_getter("bot_modules.services.voice_transcription_service", "get_config", "conn")),
