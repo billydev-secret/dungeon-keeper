@@ -28,7 +28,15 @@ Every new message in a rule-channel is recorded against the channel's rule (queu
 
 Once per minute the bot walks every active rule. A rule that's been "due" since the last sweep deletes every queued message older than its `max_age`. Messages younger than 13 days are deleted in bulk; older messages are deleted one at a time (Discord's bulk API rejects messages older than 14 days). The bot paces itself to stay under Discord's per-channel rate limits.
 
-If the bot loses **Manage Messages** mid-sweep, the current sweep stops, the rule remains active, and the next tick will retry. Mods see no in-channel notice — failures only appear in the bot's operator logs.
+If the bot loses **Manage Messages** mid-sweep, the current sweep stops, the rule remains active, and the next tick will retry. A permission gap is channel-wide rather than a verdict on any one message, so it costs no retry attempts. Mods see no in-channel notice — failures only appear in the bot's operator logs.
+
+### When a delete fails
+
+Any other HTTP error from Discord (a 429, a 500, a 400) costs the message **one attempt** and parks it behind a backoff of 1m → 5m → 15m → 1h → 6h; the rest of the queue drains around it in the meantime. Six tries across ~7.4 hours is the whole budget. Exhausting it **abandons** the message: an `ERROR` with the Discord status and code (plus a traceback) lands in the log, the operator gets one DM per abandoned message, and nothing retries it again. The queue row is kept as the record of what's stuck — it's filtered out of the due query by its attempt count, and it clears itself when the message is eventually deleted by any means.
+
+Before this, a single transient error untracked the messages it failed on. Because the sweep is queue-driven and the startup catch-up only reaches back to `last_run_ts - max_age`, those messages became invisible to every future sweep — three were stranded in #🔥│flash-channel on 2026-08-13. A `NotFound` still leaves the queue cleanly: the message is already gone. A 404 on a multi-message bulk request doesn't say *which* id is stale, so those ids are retried individually in the same sweep rather than dropped together.
+
+The startup scan walks channel history rather than the queue, so a delete it fails is handed to the queue with a fresh budget instead of being counted and forgotten.
 
 ### Startup catch-up
 
@@ -50,7 +58,7 @@ None. Auto-delete has no member-facing surface, so members never see error messa
 - **No edit-tracking.** A message's age is its creation time. Editing doesn't reset the timer.
 - **No "preserve pins" toggle in the live sweep.** Pin a message after the queue picks it up and it'll still get deleted on the next tick. Mod policy: don't pin in auto-delete channels.
 - **No per-author exclusion.** Bot messages age out the same as member messages.
-- **No retry queue / failure surface.** A permission failure just retries on the next tick; there's no in-Discord notice that anything went wrong.
+- **No in-Discord failure surface for mods.** Failures retry on a bounded schedule (see The sweep) and a give-up DMs the bot operator, but nothing is posted in-channel and no dashboard panel lists stuck messages — `SELECT * FROM auto_delete_messages WHERE attempts >= 6` is the report.
 - **No audit log of what was deleted.** The deletion is destructive — there's no "what was here" recovery.
 - **No coordination with other features.** A starboarded message that ages out leaves the starboard repost intact but its jump-link dies. See [[starboard-spec]].
 
@@ -71,6 +79,6 @@ No global config keys. Rules are per-guild, per-channel.
 Two per-guild tables:
 
 - **Rules** — one row per (guild, channel) with the max-age, interval, last-run timestamp, and the `media_only` flag.
-- **Tracked messages** — the pending-deletion queue. Transient — rows are deleted as soon as they're swept (or skipped if Discord already deleted the message). A wiped tracked-messages table is not catastrophic: the next startup catch-up rebuilds it from channel history.
+- **Tracked messages** — the pending-deletion queue, one row per pending message plus its retry state (`attempts`, `next_attempt_ts`). Mostly transient: rows are deleted as soon as they're swept (or skipped if Discord already deleted the message). The exception is an abandoned message, whose row is kept — inert, and the only record of what the sweep couldn't delete. A wiped tracked-messages table is not catastrophic: the next startup catch-up rebuilds it from channel history.
 
 No per-user data. No filesystem cache. Live tracking is wired through the bot's message listeners (see [[events-spec]]).
