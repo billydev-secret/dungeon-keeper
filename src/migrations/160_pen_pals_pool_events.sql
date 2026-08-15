@@ -10,7 +10,8 @@
 --
 -- One row per mutation, with the path that caused it:
 --
---   action 'join'   reason panel | command | dm | requeue_expired | requeue_abnormal
+--   action 'join'   reason panel | command | dm | requeue_expired |
+--                          requeue_abnormal | backfill
 --   action 'leave'  reason panel | command | dm | matched | departed
 --   action 'skip'   reason inactive
 --

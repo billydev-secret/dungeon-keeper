@@ -21,6 +21,7 @@ const REASONS = {
   dm: "used the button in their DM",
   requeue_expired: "chat ended — back in the pool",
   requeue_abnormal: "chat ended early — back in the pool",
+  backfill: "seeded from an earlier chat",
   matched: "matched with a pen pal",
   departed: "left the server",
   inactive: "never posted — left out of the pool",
