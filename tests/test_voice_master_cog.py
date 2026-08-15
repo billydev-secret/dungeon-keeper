@@ -45,6 +45,9 @@ def ctx(db):
         db_path=db,
         guild_id=GUILD,
         open_db=lambda: open_db(db),
+        # Not staff: these cover the paid voice-style lease, not the comp.
+        is_mod=lambda _interaction: False,
+        member_is_mod=lambda _member: False,
     )
     return c
 

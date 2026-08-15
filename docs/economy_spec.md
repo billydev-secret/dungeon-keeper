@@ -1414,6 +1414,44 @@ Icon perks gate on `ROLE_ICONS` and gradient on Enhanced Role Styles
 (`ENHANCED_ROLE_COLORS`) in `guild.features`. The role is deleted when the member's last
 role-perk lapses; a role-count alert fires near the 250 ceiling.
 
+**Staff perk comp** (`econ_mod_perk_comp`, default **off**, Sinks panel): while on,
+anyone `AppContext.is_mod`/`member_is_mod` counts as staff — a configured
+`mod_role_ids`/`admin_role_ids` holder, or Discord `manage_guild`/`administrator` — is
+entitled to **every** rentable perk without renting one. Running the server shouldn't
+cost the people running it.
+
+The comp is **derived, never stored**: `rentals.comp_entitlements` unions
+`COMPED_PERKS` (== `perks.GIFTABLE_PERKS`) onto the member's real rentals, and
+`economy_rentals_service.effective_entitlements` is the single chokepoint every
+"may this member use perk X" gate reads. Consequences, all deliberate:
+
+- **No `econ_rentals` row and no `econ_ledger` row.** A comp is not a purchase, so the
+  billing loop never sees it and the spend metrics never record money that didn't move.
+  (Contrast the raffle **free-week voucher**, which *does* write a 0-amount `rental`
+  row — that voucher covers a real rental with a real billing clock; a comp is not a
+  rental at all.) `entitlements` stays the raw rental truth for billing and refunds.
+- **Gaining or losing staff takes effect immediately.** The entitlement flips with the
+  role, and `EconomyCog._on_staff_comp_changed` (an `on_member_update` role diff) runs
+  the same reconcile a rent/lapse does: apply on promotion, re-project on demotion —
+  which reverts a perk-set nickname and deletes the personal role unless a real rental
+  is still behind it. Stored customisation (colour, name, icon) survives as dormant
+  state, so re-modding or renting restores the setup.
+- **Union, not replacement.** A mod already paying for a rental keeps it and keeps
+  being billed; we never cancel or refund on their behalf. The shop labels the comped
+  rows `✅ _on the house_` (distinct from a rented `✅`) and still shows the price,
+  which is what everyone else pays.
+- **Feature gates still bite.** The comp grants entitlement, not capability: gradient /
+  holographic / icon remain gated on `ENHANCED_ROLE_COLORS` / `ROLE_ICONS`.
+- **Curated catalog icons are covered.** A catalog icon is the `role_icon` perk at a
+  per-icon price, so `pick_catalog_icon` sets the art with no rental and no debit for a
+  comped member (otherwise the catalog would be the one thing the comp missed), and
+  `_rent_perk_flow` no-ops the purchase for a comped clicker — the icon picker's
+  **Custom** entry reaches that flow directly, past the shop buttons the comp hides.
+- **Known gap:** a role change made while the bot is down is missed by the listener, so
+  an ex-mod keeps the projected role until the next reconcile touches them (any shop or
+  role-studio action). The entitlement itself is already correct — only the projected
+  Discord role lags.
+
 **Rental engine:** hourly billing loop → debit on `next_bill_at` → on failed debit,
 **36h grace with hourly retries and one DM at entry** → revoke on expiry (`lapsed`),
 re-purchasable. Anniversaries are **no-drift** (each renewal advances `next_bill_at` by

@@ -701,6 +701,32 @@ def entitlements(conn: sqlite3.Connection, guild_id: int, user_id: int) -> set[s
     return rentals.entitled_perks(rows)
 
 
+def effective_entitlements(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, *, is_staff: bool
+) -> set[str]:
+    """Perks the member may actually USE right now — rentals plus a staff comp.
+
+    **This is the entitlement chokepoint.** Every "may this member use perk X"
+    gate reads this; ``entitlements`` above stays the raw rental truth because
+    billing, refunds and the register must never see a comp as a purchase.
+
+    ``is_staff`` is passed in rather than looked up because moderator status is
+    a live Discord role fact and this layer only has a database. Callers get it
+    from ``AppContext.member_is_mod`` / ``is_mod`` — one definition of "mod"
+    across the bot, configured on the dashboard.
+    """
+    rented = entitlements(conn, guild_id, user_id)
+    if not is_staff:
+        # Skip the settings read on the hot path for the ~everyone case.
+        return rented
+    from bot_modules.services.economy_service import load_econ_settings
+
+    settings = load_econ_settings(conn, guild_id)
+    return rentals.comp_entitlements(
+        rented, is_staff=True, comp_enabled=settings.mod_perk_comp
+    )
+
+
 def get_personal_role(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> sqlite3.Row | None:

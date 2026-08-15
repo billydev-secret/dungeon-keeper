@@ -591,6 +591,21 @@ class AppContext:
             return False
         return self.guild_config(interaction.guild_id).member_is_mod(member)
 
+    def member_is_mod(self, member: discord.Member) -> bool:
+        """``is_mod`` for a Member with no interaction in hand.
+
+        Same definition — Discord's manage_guild/administrator short-circuit,
+        then the guild's configured mod/admin roles — reachable from the paths
+        that hold a member object instead of an interaction (the perk-role
+        reconcile, the gift-recipient check, the voice-style paywall). Keeping
+        one definition matters: a second answer to "who is staff" would let the
+        perk comp and the moderation gates disagree about the same person.
+        """
+        perms = member.guild_permissions
+        if perms.manage_guild or perms.administrator:
+            return True
+        return self.guild_config(member.guild.id).member_is_mod(member)
+
     def is_admin(self, interaction: discord.Interaction) -> bool:
         if interaction.permissions.administrator:
             return True

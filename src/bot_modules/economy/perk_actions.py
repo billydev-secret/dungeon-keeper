@@ -45,7 +45,7 @@ import discord
 from bot_modules.economy.rentals import effective_color_mode
 from bot_modules.services.economy_rentals_service import (
     delete_personal_role,
-    entitlements,
+    effective_entitlements,
     get_personal_role,
     upsert_personal_role,
 )
@@ -114,6 +114,19 @@ def _resolve_icon_payload(icon_path: str) -> bytes | str | None:
     return icon_path
 
 
+def member_is_staff(bot: discord.Client, member: discord.Member) -> bool:
+    """Whether ``member`` gets the staff perk comp, via the bot's AppContext.
+
+    Duck-typed ``getattr`` because these reconcile helpers only ever receive a
+    ``discord.Client`` (the same pattern the voice-master callbacks use). No
+    ctx — a bare test client — simply means no comp, never a crash.
+    """
+    ctx = getattr(bot, "ctx", None)
+    if ctx is None:
+        return False
+    return bool(ctx.member_is_mod(member))
+
+
 async def apply_role_perks(
     bot: discord.Client, db_path: Path, guild_id: int, user_id: int
 ) -> bool:
@@ -131,11 +144,15 @@ async def apply_role_perks(
         # member-remove path / a later apply once they're resolvable.
         return False
 
+    is_staff = member_is_staff(bot, member)
+
     def _read() -> tuple[set[str], dict | None, object, bytes | str | None]:
         from bot_modules.core.db_utils import open_db
 
         with open_db(db_path) as conn:
-            ent = entitlements(conn, guild_id, user_id)
+            ent = effective_entitlements(
+                conn, guild_id, user_id, is_staff=is_staff
+            )
             row = get_personal_role(conn, guild_id, user_id)
             settings = load_econ_settings(conn, guild_id)
         desired = dict(row) if row is not None else None
@@ -387,11 +404,19 @@ async def revoke_role_perks(
     if guild is None:
         return
 
+    # Resolved before the read because the entitlement now depends on it: a
+    # member who just lost their mod role (or left) is no longer staff, so the
+    # comp is already gone by the time we ask what they still hold.
+    member = guild.get_member(user_id)
+    is_staff = member is not None and member_is_staff(bot, member)
+
     def _read() -> tuple[set[str], dict | None]:
         from bot_modules.core.db_utils import open_db
 
         with open_db(db_path) as conn:
-            ent = entitlements(conn, guild_id, user_id)
+            ent = effective_entitlements(
+                conn, guild_id, user_id, is_staff=is_staff
+            )
             row = get_personal_role(conn, guild_id, user_id)
         return ent, (dict(row) if row is not None else None)
 
@@ -399,7 +424,6 @@ async def revoke_role_perks(
 
     # Revert the nickname the name perk set — fires whether or not other perks
     # remain (so a role_name-only lapse still resets it), before the re-project.
-    member = guild.get_member(user_id)
     if (
         member is not None
         and desired

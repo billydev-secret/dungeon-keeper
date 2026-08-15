@@ -134,6 +134,7 @@ from bot_modules.services.economy_icon_catalog_service import (
 from bot_modules.services.economy_rentals_service import (
     RentalRefund,
     cancel_all_for_member,
+    effective_entitlements,
     entitlements,
     get_live_role_icon_rental,
     get_refundable_rental,
@@ -145,7 +146,7 @@ from bot_modules.services.economy_rentals_service import (
     upsert_personal_role,
 )
 from bot_modules.services.economy_loop import revoke_perk_effect
-from bot_modules.economy.rentals import prorated_refund
+from bot_modules.economy.rentals import comp_entitlements, prorated_refund
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_wager_service as wager_svc
 from bot_modules.services import economy_photo_service as photo_svc
@@ -302,6 +303,9 @@ class _ShopContext(NamedTuple):
 
     settings: EconSettings
     owned: set[str]
+    # The subset of ``owned`` the staff comp is covering (empty for everyone
+    # else), so the shop can label those rows without a second read.
+    comped: set[str]
     balance: int
     icon_range: tuple[int, int, int] | None
     refundable: list[dict]
@@ -1026,13 +1030,20 @@ async def _rent_perk_flow(
     """
     ctx = cog.ctx
     user_id = interaction.user.id
+    # A comped member is already entitled, so there is nothing to buy — take
+    # the money-free path rather than opening a rental they'd then be billed
+    # for. The shop hides rent buttons for perks it shows as owned, but the
+    # icon picker's Custom entry lands here directly, so the guard belongs in
+    # the shared flow rather than at each button.
+    comped = settings.mod_perk_comp and ctx.is_mod(interaction)
 
     def _rent() -> None:
         with ctx.open_db() as conn:
             rent_perk(conn, settings, guild.id, user_id, perk, now=time.time())
 
     try:
-        await asyncio.to_thread(_rent)
+        if not comped:
+            await asyncio.to_thread(_rent)
     except ValueError as exc:
         msg = str(exc)
         if "insufficient" in msg:
@@ -1046,11 +1057,13 @@ async def _rent_perk_flow(
         await interaction.response.send_message(text, ephemeral=True)
         return
 
+    # "Rented" would be a lie on the comped path — nothing was bought.
+    got = "Unlocked" if comped else "Rented"
     if perk == "voice_style":
         # No personal role to project and no customise modal — the perk's
         # controls ARE Voice Control's rename/limit, live again from now on.
         await interaction.response.send_message(
-            "Rented **Voice Style**! Renaming and sizing your voice channel "
+            f"{got} **Voice Style**! Renaming and sizing your voice channel "
             "are unlocked — your saved name and limit apply the next time "
             "you spin one up.",
             ephemeral=True,
@@ -1061,7 +1074,7 @@ async def _rent_perk_flow(
         # A fixed preset — there's nothing to set, so it's live the moment the
         # role projects. No customise button (an empty modal would confuse).
         await interaction.response.send_message(
-            f"Rented **{PERK_LABELS[perk]}**! Your personal role now wears "
+            f"{got} **{PERK_LABELS[perk]}**! Your personal role now wears "
             "Discord's holographic shimmer — no setup needed.",
             ephemeral=True,
         )
@@ -1072,7 +1085,7 @@ async def _rent_perk_flow(
         else ""
     )
     await interaction.response.send_message(
-        f"Rented **{PERK_LABELS[perk]}**! Set it up right here:{note}",
+        f"{got} **{PERK_LABELS[perk]}**! Set it up right here:{note}",
         view=_PostRentView(cog, perk),
         ephemeral=True,
     )
@@ -1667,7 +1680,9 @@ class EconomyCog(commands.Cog):
         guild = interaction.guild
         user_id = interaction.user.id
 
-        shop = await asyncio.to_thread(self._shop_context, guild.id, user_id)
+        shop = await asyncio.to_thread(
+            self._shop_context, guild.id, user_id, self.ctx.is_mod(interaction)
+        )
         settings = shop.settings
         if await self._refuse_disabled(interaction, settings):
             return
@@ -1680,6 +1695,7 @@ class EconomyCog(commands.Cog):
             gated,
             accent,
             owned=shop.owned,
+            comped=shop.comped,
             icon_catalog=shop.icon_range,
             balance=shop.balance,
             shields_held=shop.shields_held,
@@ -2359,8 +2375,14 @@ class EconomyCog(commands.Cog):
             return
 
         def _recipient_ent() -> set[str]:
+            # The recipient's staff comp counts here — gifting a mod a perk
+            # they already get free should hit the "already has it" confirm,
+            # not silently take the gifter's coins.
+            recipient_is_staff = self.ctx.member_is_mod(member)
             with self.ctx.open_db() as conn:
-                return entitlements(conn, guild.id, member.id)
+                return effective_entitlements(
+                    conn, guild.id, member.id, is_staff=recipient_is_staff
+                )
 
         if perk_key in await asyncio.to_thread(_recipient_ent):
             # Probably a mistake — the perk stacks silently (their role
@@ -2524,7 +2546,22 @@ class EconomyCog(commands.Cog):
         if not await self._role_icon_gate_ok(interaction, guild.id):
             return
 
-        if existing_id is None:
+        comped = settings.mod_perk_comp and self.ctx.is_mod(interaction)
+        if existing_id is None and comped:
+            # The comp entitles role_icon, and a catalog icon IS that perk at a
+            # per-icon price — so charging staff here would have made the
+            # curated icons the one thing the comp didn't cover. No rental row:
+            # a comp never creates one, and without it this branch stays the
+            # path every time they change icon.
+            def _set_comped_icon() -> None:
+                with self.ctx.open_db() as conn:
+                    upsert_personal_role(
+                        conn, guild.id, user_id, {"icon_path": icon["image_path"]}
+                    )
+
+            await asyncio.to_thread(_set_comped_icon)
+            verb = "Set"
+        elif existing_id is None:
             # New rental: rent_perk + icon set ride ONE transaction, so a failed
             # upfront debit rolls the whole thing back (the ValueError must
             # propagate out of the `with` block — never caught inside it).
@@ -2571,11 +2608,15 @@ class EconomyCog(commands.Cog):
         tail = (
             "" if ok else " (I couldn't update your role right now — try again shortly.)"
         )
+        # A comped icon has no weekly price to quote — saying one would imply a
+        # charge that never happens.
+        price_note = (
+            " (on the house)"
+            if comped
+            else f" ({settings.currency_emoji} {icon['price']:,}/week)"
+        )
         await interaction.edit_original_response(
-            content=(
-                f"{verb} the **{icon['name']}** icon "
-                f"({settings.currency_emoji} {icon['price']:,}/week).{tail}"
-            ),
+            content=f"{verb} the **{icon['name']}** icon{price_note}.{tail}",
         )
 
     async def pick_custom_icon(
@@ -2921,7 +2962,10 @@ class EconomyCog(commands.Cog):
         its refusal line.
         """
         settings, ent = await asyncio.to_thread(
-            self._load_role_ctx, guild_id, interaction.user.id
+            self._load_role_ctx,
+            guild_id,
+            interaction.user.id,
+            self.ctx.is_mod(interaction),
         )
         if await self._refuse_disabled(interaction, settings):
             return False
@@ -3024,7 +3068,9 @@ class EconomyCog(commands.Cog):
             f"but only have {bal:,}."
         )
 
-    def _shop_context(self, guild_id: int, user_id: int) -> _ShopContext:
+    def _shop_context(
+        self, guild_id: int, user_id: int, is_staff: bool = False
+    ) -> _ShopContext:
         """Read the whole shop in one go.
 
         The header (settings, entitlements, balance), the catalog row's price
@@ -3041,8 +3087,15 @@ class EconomyCog(commands.Cog):
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             if not settings.enabled:
-                return _ShopContext(settings, set(), 0, None, [], 0, 0)
-            ent = entitlements(conn, guild_id, user_id)
+                return _ShopContext(settings, set(), set(), 0, None, [], 0, 0)
+            # Both halves here rather than through ``effective_entitlements``:
+            # settings are already in hand, and the shop is the one surface
+            # that needs to tell a comped row from a rented one.
+            rented = entitlements(conn, guild_id, user_id)
+            ent = comp_entitlements(
+                rented, is_staff=is_staff, comp_enabled=settings.mod_perk_comp
+            )
+            comped = ent - rented
             balance = get_balance(conn, guild_id, user_id)
             icon_range = catalog_price_range(conn, guild_id)
             rentals = [dict(r) for r in list_refundable_rentals(conn, guild_id, user_id)]
@@ -3050,11 +3103,12 @@ class EconomyCog(commands.Cog):
                 conn, guild_id, user_id, settings
             )
         return _ShopContext(
-            settings, ent, balance, icon_range, rentals, shields_held, shield_price
+            settings, ent, comped, balance, icon_range, rentals,
+            shields_held, shield_price,
         )
 
     def _load_role_ctx(
-        self, guild_id: int, user_id: int
+        self, guild_id: int, user_id: int, is_staff: bool = False
     ) -> tuple[EconSettings, set[str]]:
         """Settings and the member's entitlements, for the role-studio gates.
 
@@ -3063,7 +3117,9 @@ class EconomyCog(commands.Cog):
         """
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
-            ent = entitlements(conn, guild_id, user_id)
+            ent = effective_entitlements(
+                conn, guild_id, user_id, is_staff=is_staff
+            )
         return settings, ent
 
     def _name_blocklist(self, guild_id: int) -> list[str]:
@@ -3392,6 +3448,46 @@ class EconomyCog(commands.Cog):
                 await message.add_reaction("✅")
             except discord.HTTPException:
                 log.debug("econ photo: participation react failed", exc_info=True)
+
+    @commands.Cog.listener("on_member_update")
+    async def _on_staff_comp_changed(
+        self, before: discord.Member, after: discord.Member
+    ) -> None:
+        """Project the staff perk comp when someone gains or loses mod status.
+
+        The comp is derived from live roles, so the entitlement itself flips the
+        instant the role does — but the member's personal ROLE is only rebuilt
+        by a reconcile, and nothing else triggers one on a role change. Gaining
+        staff applies the perks; losing it re-projects, which reverts the
+        perk-set nickname and deletes the personal role when no real rental
+        remains behind the comp.
+
+        Cheap-exit first: role objects are identical on the vast majority of
+        member updates (nick, avatar, timeout, presence), and this listener sees
+        every one of them.
+        """
+        if before.roles == after.roles:
+            return
+        was_staff = self.ctx.member_is_mod(before)
+        now_staff = self.ctx.member_is_mod(after)
+        if was_staff == now_staff:
+            return
+
+        def _comp_on() -> bool:
+            with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, after.guild.id)
+            return settings.enabled and settings.mod_perk_comp
+
+        if not await asyncio.to_thread(_comp_on):
+            return
+        if now_staff:
+            await apply_role_perks(
+                self.bot, self.ctx.db_path, after.guild.id, after.id
+            )
+        else:
+            await revoke_role_perks(
+                self.bot, self.ctx.db_path, after.guild.id, after.id
+            )
 
     @commands.Cog.listener("on_member_update")
     async def _on_boost_started(

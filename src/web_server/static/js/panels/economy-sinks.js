@@ -223,6 +223,18 @@ function render(container, cfg, pricing, icons) {
           <div class="field-row" style="flex-wrap:wrap;">
             ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
           </div>
+          <div class="field" style="margin-top:8px;">
+            <label style="display:flex;gap:6px;align-items:center;">
+              <input type="checkbox" name="mod_perk_comp" /> Moderators get perks free
+            </label>
+            <div class="field-hint">When checked, anyone with a moderator or admin role
+              here — or Discord's Manage Server permission — is entitled to every perk
+              above without renting one. Nothing is charged and nothing is recorded as a
+              purchase, so this does not show up as spending in your economy figures. The
+              perks appear the moment someone gains the role and come off when they lose
+              it. A moderator already paying for a rental keeps paying until they cancel
+              it themselves from the shop.</div>
+          </div>
         </div>
 
         <div class="card">
@@ -437,6 +449,7 @@ function wirePrices(container, cfg) {
     form.querySelector(`[name=${key}]`).value = cfg[key];
   }
   form.querySelector("[name=raffle_enabled]").checked = !!cfg.raffle_enabled;
+  form.querySelector("[name=mod_perk_comp]").checked = !!cfg.mod_perk_comp;
 
   guardForm(form);
 
@@ -458,6 +471,7 @@ function wirePrices(container, cfg) {
       payload[key] = n;
     }
     payload.raffle_enabled = form.querySelector("[name=raffle_enabled]").checked;
+    payload.mod_perk_comp = form.querySelector("[name=mod_perk_comp]").checked;
     try {
       await apiPut("/api/economy/config", payload);
       showStatus(status, true);

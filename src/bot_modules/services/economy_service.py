@@ -237,6 +237,14 @@ class EconSettings:
     # the lease on the Sinks page (suggested ≈ 30). Distinct from
     # price_voice_room (stage-6 private rooms).
     price_voice_style: int = 0
+    # Staff perk comp: while on, anyone `is_mod` counts as (configured mod or
+    # admin role, or Discord manage_guild/administrator) is entitled to every
+    # rentable perk without renting one. No rental row and no ledger row is
+    # written — the comp is derived from live role state, so it appears and
+    # disappears with the role and never shows up as spend that didn't happen.
+    # Off by default: a second guild running its own economy shouldn't start
+    # comping its staff because this shipped.
+    mod_perk_comp: bool = False
     # Emoji sponsorship (sinks round 3, stage 4): weekly rent to keep a custom
     # emoji in the server, escrowed at submit, mod-approved, deleted on lapse.
     # price_emoji 0 disables the whole feature (running rentals still bill and
@@ -304,7 +312,7 @@ class EconSettings:
 
 DEFAULT_ECON_SETTINGS = EconSettings()
 
-_BOOL_KEYS = ["enabled", "transfers_enabled", "raffle_enabled"]
+_BOOL_KEYS = ["enabled", "transfers_enabled", "raffle_enabled", "mod_perk_comp"]
 _FLOAT_KEYS = ["booster_multiplier", "xp_per_coin"]
 _STR_KEYS = [
     "currency_name",
