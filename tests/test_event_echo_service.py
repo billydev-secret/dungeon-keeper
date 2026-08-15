@@ -259,6 +259,7 @@ class TestGamebotLobby:
         msg.guild = guild
         msg.channel = MagicMock()
         msg.channel.id = 1483834493491085412
+        msg.channel.name = "gamebot"  # a real str, as every guild channel has
         msg.jump_url = "https://discord.com/channels/1/2/9001"
         return msg
 
@@ -453,6 +454,7 @@ class TestProcessGame:
         """The game's own channel resolves to a guild, as in production."""
         origin = MagicMock()
         origin.guild = guild
+        origin.name = "games-2"  # a real str, as every guild channel has
         guild.get_member = MagicMock(return_value=None)
         dest = bot.sent_channel
         bot.get_channel = MagicMock(
@@ -470,6 +472,18 @@ class TestProcessGame:
         await svc._process_game(sweep_bot, _game_row(), NOW)
         embed = sweep_bot.sent_channel.send.await_args.kwargs["embed"]
         assert f"/{GUILD_ID}/777/888" in embed.description
+
+    async def test_the_named_room_links_at_the_board(self, sweep_bot, sync_db_path):
+        """The origin channel's name is carried through so nothing points at #777.
+
+        A bare mention lands the reader at the bottom of the games channel with
+        the game still to find (todo #97).
+        """
+        configure(sync_db_path)
+        await svc._process_game(sweep_bot, _game_row(), NOW)
+        embed = sweep_bot.sent_channel.send.await_args.kwargs["embed"]
+        assert f"[#games-2](https://discord.com/channels/{GUILD_ID}/777/888)" in embed.description
+        assert "<#777>" not in embed.description
 
     async def test_a_game_in_an_unknown_channel_is_skipped(self, bot, sync_db_path):
         configure(sync_db_path)

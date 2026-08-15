@@ -264,6 +264,7 @@ async def echo_event(
     ref: str,
     name: str,
     origin_channel_id: int | None,
+    origin_channel_name: str | None = None,
     url: str,
     host_name: str | None = None,
     deadline_epoch: float | None = None,
@@ -356,6 +357,7 @@ async def echo_event(
         embed = build_echo_embed(
             name=name,
             channel_id=origin_channel_id,
+            channel_name=origin_channel_name,
             url=url,
             host_name=host_name,
             source=source,
@@ -395,6 +397,7 @@ async def echo_gamebot_lobby(bot, message: discord.Message, sub_game: str) -> bo
         ref=str(message.id),
         name=name,
         origin_channel_id=message.channel.id,
+        origin_channel_name=getattr(message.channel, "name", None),
         url=message.jump_url,
     )
 
@@ -709,6 +712,7 @@ async def _process_game(bot, row, now: float) -> None:
         # day it ships, not once someone remembers the display-name table.
         name=GAME_NAMES.get(game_type) or game_type.replace("_", " ").title(),
         origin_channel_id=channel_id,
+        origin_channel_name=getattr(channel, "name", None),
         url=jump_url(guild.id, channel_id, int(message_id)),
         host_name=_host_name(guild, row["host_id"]),
         now=now,

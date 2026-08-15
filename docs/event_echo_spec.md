@@ -277,6 +277,17 @@ rather than 🎲 and "A game is open". An `external` event carries a location
 string and no channel, so the `in <#…>` clause is dropped entirely — anything
 else there renders as a mention Discord can't resolve.
 
+**The room is named, but the link goes to the game.** The two game sources
+(`party_game`, `gamebot`) pass `channel_name` alongside `channel_id`, and the
+`where` clause renders as a masked link — `in [#games-2](…/board-message)` —
+so every clickable thing in the embed lands on the board rather than at the
+bottom of the channel with the game still to find (todo #97). Sources that
+don't pass a name keep the plain `<#id>` mention, which is deliberate for a
+Discord event: its channel is a voice room you *join*, and repointing that at
+the event page would be a downgrade. An unresolvable channel (gone from the
+cache, so no name) falls back to the mention rather than to a link with
+nothing to label it.
+
 A "happened" echo drops the invitation. There is nothing to join, so the call
 to action becomes **See the board →**, and the numbers get their own line:
 

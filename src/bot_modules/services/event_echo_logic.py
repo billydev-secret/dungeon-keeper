@@ -241,6 +241,7 @@ def build_echo_embed(
     name: str,
     url: str,
     channel_id: int | None = None,
+    channel_name: str | None = None,
     host_name: str | None = None,
     source: str = SOURCE_PARTY_GAME,
     deadline_epoch: float | None = None,
@@ -257,6 +258,14 @@ def build_echo_embed(
     location string and no channel; interpolating anything else into ``<#…>``
     renders as a mention Discord can't resolve.
 
+    ``channel_name`` turns that mention into a masked link at ``url`` — same
+    words, but clicking lands on the game rather than at the bottom of the
+    games channel, where the reader still has to find it (todo #97). Only the
+    game sources pass it: a Discord event's ``<#id>`` is a voice room you join,
+    and repointing that at the event page would be a downgrade. Without a name
+    (channel gone from the cache) it falls back to the plain mention rather
+    than to a link with nothing to label it.
+
     ``detail`` is the one concession to sources whose news is a *number* — how
     many weeklies rolled, which tier went down. Those can't be carried by the
     static ``lead`` and would read as noise crammed into ``name``, so they get
@@ -272,7 +281,13 @@ def build_echo_embed(
     renders it in the reader's own timezone.
     """
     spec = spec_for(source)
-    where = f" in <#{channel_id}>" if channel_id is not None else ""
+    if channel_id is None:
+        where = ""
+    elif channel_name:
+        safe = discord.utils.escape_markdown(channel_name)
+        where = f" in [#{safe}]({url})"
+    else:
+        where = f" in <#{channel_id}>"
     when = f" <t:{int(deadline_epoch)}:R>" if deadline_epoch is not None else ""
     body = f"{spec.lead}{where}{when}."
     if detail:

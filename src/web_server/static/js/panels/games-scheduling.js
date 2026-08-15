@@ -95,9 +95,9 @@ export function mount(container) {
           <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
             <div class="field m-0">
               <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                <input type="checkbox" data-ctrl="announce" /> Announce Before Launch
+                <input type="checkbox" data-ctrl="announce" /> Announce When It Starts
               </label>
-              <div class="field-hint">Posts a heads-up in the channel a few minutes ahead, so people can gather.</div>
+              <div class="field-hint">Posts a note in the channel the moment the game goes up, linking straight to it.</div>
             </div>
             <div class="field" data-region="role-field" style="flex:1;min-width:200px;display:none;">
               <label>Ping Role (Optional)
@@ -355,7 +355,7 @@ async function refreshList(root) {
           <div style="font-weight:600;">${esc(r.game_icon)} ${esc(r.game_name)} ${statusTag}</div>
           <div class="field-hint" style="margin:2px 0 0;">
             ${esc(chName(r.channel_id))} · ${esc(recurrenceLabel(r))} · ${esc(fmtTime(r.time_of_day))}
-            ${r.announce ? " · 📣 Announced ahead" : ""}
+            ${r.announce ? " · 📣 Announced" : ""}
           </div>
           <div class="field-hint" style="margin:2px 0 0;">
             ${done ? "" : `Next launch: ${esc(fmtNextRun(r.next_run_at))}`}${last}

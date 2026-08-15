@@ -19,7 +19,9 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 
-from bot_modules.core.utils import resolve_bot_channel
+import discord
+
+from bot_modules.core.utils import jump_url, resolve_bot_channel
 from bot_modules.games.constants import (
     GAME_NAMES,
     LOBBY_GAME_TYPES,
@@ -29,6 +31,7 @@ from bot_modules.games.constants import (
 from bot_modules.games.utils.game_manager import (
     check_game_enabled,
     get_active_game,
+    get_active_game_by_id,
     resolve_name,
 )
 from bot_modules.services.game_start_ping_service import (
@@ -45,6 +48,35 @@ GIVEUP_GRACE_SECONDS = 2 * 3600
 VALID_RECURRENCE = ("once", "daily", "weekly")
 
 _EPOCH = datetime(1970, 1, 1)
+
+
+# ── Announcement copy ───────────────────────────────────────────────────────
+
+def build_launch_announcement(
+    game_type: str,
+    *,
+    role_id: int | None,
+    guild_id: int,
+    channel_id: int,
+    message_id: int | None,
+) -> str:
+    """The "it's starting" post, pointing at the board rather than the room.
+
+    Built after the launcher has returned, which is the only reason a
+    ``message_id`` exists to link at — see ``_process_due``. Landing someone in
+    the channel and leaving them to find the game among whatever else is there
+    was the complaint this answers (todo #97).
+
+    ``message_id`` is None for the games that keep their state in memory and
+    never register a ``games_active_games`` row (risky_roll). Those keep the
+    bare line: a link needs a message, and half a URL is worse than none.
+    """
+    label = GAME_NAMES.get(game_type) or game_type.replace("_", " ").title()
+    prefix = f"<@&{role_id}> " if role_id else ""
+    line = f"{prefix}🎮 **{label}** is starting now!"
+    if message_id is None:
+        return line
+    return f"{line}\n{jump_url(guild_id, channel_id, message_id)}"
 
 
 # ── Pure time math ──────────────────────────────────────────────────────────
@@ -316,14 +348,6 @@ async def _process_due(bot, games_db, row, now: float) -> None:
     except Exception:
         options = {}
 
-    if row["announce"]:
-        game_label = GAME_NAMES.get(game_type, game_type)
-        prefix = f"<@&{row['announce_role_id']}> " if row["announce_role_id"] else ""
-        try:
-            await channel.send(f"{prefix}🎮 **{game_label}** is starting now!")
-        except Exception:
-            log.warning("Scheduled game %s: announce failed in channel %s", sched_id, channel_id)
-
     try:
         gid = await launcher(
             channel=channel,
@@ -346,6 +370,39 @@ async def _process_due(bot, games_db, row, now: float) -> None:
             "UPDATE games_scheduled SET last_status='launched' WHERE id=?", (sched_id,)
         )
         log.info("Scheduled game %s launched: %s in channel %s", sched_id, game_type, channel_id)
+
+        # Announce *after* the launch, not before. The board has to exist
+        # before there is anything to link at, and announcing first also meant
+        # a launch that then failed had already pinged a role about a game
+        # nobody would find (todo #97). Every DB-backed launcher writes
+        # message_id before returning, so the row is readable by now.
+        if row["announce"]:
+            board = await get_active_game_by_id(games_db, gid)
+            message_id = board["message_id"] if board else None
+            role_id = row["announce_role_id"]
+            try:
+                await channel.send(
+                    build_launch_announcement(
+                        game_type,
+                        role_id=role_id,
+                        guild_id=guild_id,
+                        channel_id=channel_id,
+                        message_id=int(message_id) if message_id else None,
+                    ),
+                    # Allow-list the one role the schedule names; never let the
+                    # rendered text decide who gets pinged (embed_style_guide).
+                    allowed_mentions=(
+                        discord.AllowedMentions(roles=[discord.Object(id=int(role_id))])
+                        if role_id
+                        else discord.AllowedMentions.none()
+                    ),
+                    # The board is one message up in this same channel — a link
+                    # preview of it would just be the game twice.
+                    suppress_embeds=True,
+                )
+            except Exception:
+                log.warning("Scheduled game %s: announce failed in channel %s", sched_id, channel_id)
+
         # A lobby game posts its lobby and waits for a human to press start —
         # nobody would otherwise know that's pending. Nudge the person who
         # scheduled it, right after the lobby so the nudge sits next to the

@@ -117,6 +117,37 @@ class TestEchoEmbed:
         assert "<#" not in (embed.description or "")
         assert "https://x/1" in (embed.description or "")
 
+    def test_a_named_channel_points_at_the_game_not_the_channel(self):
+        """The room is context; every clickable thing lands on the board.
+
+        A bare ``<#id>`` mention drops the reader at the *bottom* of the games
+        channel, where they still have to find the game among whatever else is
+        there. Given the channel's name we render the same words as a masked
+        link at the game message instead (todo #97).
+        """
+        embed = build_echo_embed(
+            name="Truth or Dare",
+            channel_id=999,
+            channel_name="games-2",
+            url="https://x/1",
+        )
+        assert "[#games-2](https://x/1)" in (embed.description or "")
+        assert "<#999>" not in (embed.description or "")
+
+    def test_an_unresolvable_channel_falls_back_to_the_mention(self):
+        """No name (channel left the cache) ⇒ today's behaviour, not a broken link."""
+        embed = build_echo_embed(
+            name="Truth or Dare", channel_id=999, channel_name=None, url="https://x/1"
+        )
+        assert "<#999>" in (embed.description or "")
+
+    def test_a_channel_name_cannot_break_out_of_the_masked_link(self):
+        """Discord permits `_` and `*` in channel names; markdown must not run."""
+        embed = build_echo_embed(
+            name="G", channel_id=9, channel_name="hot_takes*vip*", url="u"
+        )
+        assert r"hot\_takes\*vip\*" in (embed.description or "")
+
     def test_copy_is_derived_from_the_source(self):
         """"A game is open" reads as a bug on an event called Movie Night.
 
