@@ -22,19 +22,25 @@ PERK_LABELS = {
     "role_icon": "Role Icon",
     "role_gradient": "Gradient Role",
     "role_holographic": "Holographic Role",
+    "role_preset": "Palette Color",
     "voice_style": "Voice Style",
 }
 # The role perks a member rents for themselves, in shop display order. Every
 # giftable perk (these + the voice-style lease) is gifted as the same perk
 # kind rented with the friend as beneficiary (gift_color retired in 091).
-SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_holographic", "role_icon")
+SELF_PERKS = (
+    "role_color", "role_name", "role_preset", "role_gradient",
+    "role_holographic", "role_icon",
+)
 # Self-perks with no member-side customisation: renting IS the whole thing
 # (holographic is a fixed Discord preset, not a colour the member picks), so
 # these skip the "Set …" modal and post-rent button.
 NO_CONFIG_PERKS = ("role_holographic",)
 GIFTABLE_PERKS = (*SELF_PERKS, "voice_style")
 # Feature-gated perks and the friendly reason shown when the gate is closed.
-FEATURE_GATED = ("role_gradient", "role_holographic", "role_icon")
+# ``role_preset`` joins them because a palette colour IS a two-colour fade — it
+# needs the same ENHANCED_ROLE_COLORS support as the free-form gradient.
+FEATURE_GATED = ("role_gradient", "role_holographic", "role_icon", "role_preset")
 
 # Shop-table furniture. The full `PERK_LABELS` names are too wide for an
 # aligned two-cell row, so the shop uses a short cell label plus a one-line
@@ -46,6 +52,7 @@ PERK_SHORT = {
     "role_gradient": "Gradient",
     "role_holographic": "Holo",
     "role_icon": "Icon",
+    "role_preset": "Palette",
     "voice_style": "Voice",
 }
 # Blurbs stay under ~15 chars: the shop row is one code cell of
@@ -57,6 +64,7 @@ PERK_BLURBS = {
     "role_gradient": "two-color fade",
     "role_holographic": "shimmer preset",
     "role_icon": "badge by name",
+    "role_preset": "curated fade",
     "voice_style": "your voice room",
 }
 PERK_EMOJI = {
@@ -65,6 +73,7 @@ PERK_EMOJI = {
     "role_gradient": "🌈",
     "role_holographic": "🪩",
     "role_icon": "🖼️",
+    "role_preset": "🖌️",
     "voice_style": "🎙️",
 }
 # Self-perks grouped into a price ladder — cheap everyday tweaks first, the
@@ -73,7 +82,7 @@ PERK_EMOJI = {
 # prices are guild-configurable and can reorder.
 PERK_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Essentials", ("role_name", "role_color")),
-    ("Signature", ("role_gradient", "role_icon", "role_holographic")),
+    ("Signature", ("role_preset", "role_gradient", "role_icon", "role_holographic")),
 )
 
 
@@ -91,8 +100,9 @@ PERK_REFUSAL = {
     ),
     "role_gradient": "❌ Rent the **Gradient Role** perk first (/bank shop).",
     "role_icon": "❌ Rent the **Role Icon** perk first (/bank shop).",
+    "role_preset": "❌ Rent the **Palette Color** perk first (/bank shop).",
 }
-# PERK_REFUSAL covers four of the five SELF_PERKS — role_holographic has no
+# PERK_REFUSAL covers five of the six SELF_PERKS — role_holographic has no
 # setter to refuse from, and voice_style isn't a self-perk at all. A setter
 # added for either must degrade to a polite refusal, not a KeyError.
 PERK_REFUSAL_FALLBACK = "❌ Rent that perk first (/bank shop)."

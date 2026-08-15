@@ -23,7 +23,6 @@ from bot_modules.core.db_utils import (
     upsert_grant_role,
 )
 from bot_modules.services.auto_delete_service import init_auto_delete_tables, upsert_auto_delete_rule
-from bot_modules.services.booster_roles import init_booster_role_tables, upsert_booster_role
 from bot_modules.services.confessions_service import init_db as init_confessions_db
 from bot_modules.services.inactivity_prune_service import init_inactivity_prune_tables
 from bot_modules.services.message_store import (
@@ -81,7 +80,6 @@ def ctx(tmp_path):
         init_inactivity_prune_tables(conn)
         init_known_users_table(conn)
         init_known_channels_table(conn)
-        init_booster_role_tables(conn)
         init_auto_delete_tables(conn)
     init_confessions_db(db_path)
     return _TestCtx(db_path)
@@ -179,15 +177,6 @@ def test_get_config_returns_active_guild_scoped_values(ctx, make_client):
             grant_message="Granted!",
         )
         add_grant_permission(conn, secondary_guild_id, "denizen", "user", 777)
-        upsert_booster_role(
-            conn,
-            secondary_guild_id,
-            "rose",
-            label="Rose",
-            role_id=987,
-            image_path="C:/rose.png",
-            sort_order=1,
-        )
     upsert_auto_delete_rule(ctx.db_path, secondary_guild_id, 600, 3600, 7200)
 
     client = make_client(auth_mode="discord", active_guild_id=secondary_guild_id)
@@ -214,7 +203,6 @@ def test_get_config_returns_active_guild_scoped_values(ctx, make_client):
     assert data["moderation"]["warning_threshold"] == 7
     assert data["roles"]["denizen"]["role_id"] == "901"
     assert data["roles"]["denizen"]["permissions"] == [{"entity_type": "user", "entity_id": "777"}]
-    assert data["booster_roles"][0]["role_key"] == "rose"
     assert data["auto_delete"][0]["channel_id"] == "600"
 
 

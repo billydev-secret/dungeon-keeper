@@ -56,8 +56,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.economy.perk_actions")
 
-# The named hierarchy anchor booster_roles.sync_swatches also positions against;
+# The named hierarchy anchor the palette's legacy cosmetic roles sit under;
 # personal roles sit just above it so a rented color wins the display contest.
+# That ordering is what makes grandfathering work: a member who rents a colour
+# overlays the legacy role they were given as a booster, and if the rental lapses
+# the old colour shows through again instead of leaving them bare.
 _COSMETICS_ANCHOR = "#### Cosmetics"
 
 # Perk → the guild feature it needs (perks not listed are always available).
@@ -65,6 +68,9 @@ _FEATURE_FOR_PERK = {
     "role_icon": "ROLE_ICONS",
     "role_gradient": "ENHANCED_ROLE_COLORS",
     "role_holographic": "ENHANCED_ROLE_COLORS",
+    # A palette colour is a two-colour fade like the free-form gradient, so it
+    # needs the same guild support to render.
+    "role_preset": "ENHANCED_ROLE_COLORS",
 }
 
 # Discord's holographic role preset: the only (primary, secondary, tertiary)
@@ -175,6 +181,7 @@ async def apply_role_perks(
     if "ENHANCED_ROLE_COLORS" not in features:
         applied.discard("role_gradient")
         applied.discard("role_holographic")
+        applied.discard("role_preset")
     if "ROLE_ICONS" not in features:
         applied.discard("role_icon")
 

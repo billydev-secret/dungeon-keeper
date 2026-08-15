@@ -1,6 +1,8 @@
 import { api, apiPut, apiPost, apiDelete, request, esc } from "../api.js";
-import { showStatus, guardForm, mountAsync, loadMembers } from "../config-helpers.js";
-import { confirmDialog, promptDialog } from "../ui.js";
+import {
+  showStatus, guardForm, mountAsync, loadMembers, loadChannels, mountChannelPicker,
+} from "../config-helpers.js";
+import { confirmDialog, promptDialog, toast } from "../ui.js";
 
 // The perk-shop prices (the currency sinks). Moved here off the Settings page so
 // everything a member can spend on lives in one place. Faucet rates stay on the
@@ -16,8 +18,11 @@ const PRICE_FIELDS = [
   ["price_role_icon", "Custom Role Icon, Per Week", {
     hint: "Weekly rent when a member uploads an icon of their own. The curated catalog icons further down are priced one by one instead.",
   }],
+  ["price_role_preset", "Palette Color, Per Week", {
+    hint: "Weekly rent for a color from your curated palette (set up further down). Members pick a named gradient instead of choosing their own two colors, so price it below the Role Gradient. A palette color given its own price overrides this one. 0 makes it free.",
+  }],
   ["price_role_gradient", "Role Gradient, Per Week", {
-    hint: "Weekly rent for a two-color gradient on their role. 0 makes it free.",
+    hint: "Weekly rent for a two-color gradient a member picks themselves. Worth pricing above the curated Palette Color, since this is the same effect with a free choice of colors. 0 makes it free.",
   }],
   ["price_role_holographic", "Role Holographic Shimmer, Per Week", {
     hint: "Discord's fixed holographic shimmer — a separate, pricier tier than the two-color gradient. There is nothing to pick; renting it is the whole perk. Your server needs Discord's enhanced role colors feature for it to show up at all.",
@@ -180,19 +185,70 @@ function iconRow(icon) {
     </div>`;
 }
 
+function colorRow(color) {
+  const bust = Date.now();
+  const usedBadge = color.in_use
+    ? `<span class="badge" title="Members are renting this color right now">In use</span>`
+    : "";
+  // A row whose swatch filename never parsed has no gradient to project, so the
+  // shop cannot offer it however it is priced. Say that rather than showing a
+  // blank chip and an editable price that does nothing.
+  const brokenBadge = color.rentable
+    ? ""
+    : `<span class="badge" style="background:var(--danger,#e55);"
+         title="No gradient could be read from this color's file name — re-upload it as ColorName_HEX1_HEX2 and sync">Needs a re-sync</span>`;
+  // The real swatch art, over the gradient it encodes: the art can carry texture
+  // the two hex codes don't, and the gradient behind it still reads if the file
+  // has gone missing from disk.
+  const fallback = color.rentable
+    ? `linear-gradient(135deg,#${esc(color.hex1)},#${esc(color.hex2)})`
+    : "repeating-linear-gradient(45deg,#555,#555 6px,#333 6px,#333 12px)";
+  const swatch = `
+    <img src="/api/economy/color-catalog/${color.id}/image?t=${bust}" alt=""
+         width="48" height="48"
+         style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex:none;
+                border:1px solid var(--border,#333);background:${fallback};" />`;
+  return `
+    <div class="card" data-color-id="${color.id}"
+         style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
+      ${swatch}
+      <div class="field" style="margin:0;">
+        <label>Name</label>
+        <input type="text" data-name maxlength="64" value="${esc(color.name)}" style="max-width:200px;" />
+      </div>
+      <div class="field" style="margin:0;">
+        <label>Price Per Week</label>
+        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${color.price}" style="max-width:120px;" />
+        <div class="field-hint">0 uses the Palette Color price above.</div>
+      </div>
+      <label style="display:flex;gap:6px;align-items:center;">
+        <input type="checkbox" data-enabled${color.enabled ? " checked" : ""} /> Offer in the shop
+      </label>
+      ${usedBadge}
+      ${brokenBadge}
+      <div style="display:flex;gap:8px;margin-left:auto;">
+        <button type="button" class="btn btn-primary" data-save>Save</button>
+        <button type="button" class="btn btn-danger" data-delete>Delete</button>
+      </div>
+      <span data-row-status></span>
+    </div>`;
+}
+
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading prices…</div></div>`;
 
   return mountAsync(container, async () => {
-    const [cfg, metrics, icons] = await Promise.all([
+    const [cfg, metrics, icons, colors, channels] = await Promise.all([
       api("/api/economy/config"),
       api("/api/economy/metrics").catch(() => null),
       api("/api/economy/icon-catalog").catch(() => []),
+      api("/api/economy/color-catalog").catch(() => []),
+      loadChannels().catch(() => []),
     ]);
     const pricing = metrics && metrics.hints && Object.keys(metrics.hints).length
       ? { hints: metrics.hints, median: metrics.median_income }
       : null;
-    render(container, cfg, pricing, icons);
+    render(container, cfg, pricing, icons, colors, channels);
   }, { errorMsg: "Couldn’t load the economy sinks." });
 }
 
@@ -206,13 +262,13 @@ export function economyOffBanner(cfg) {
     on under <a href="#/economy-config">Economy Settings</a>.</div>`;
 }
 
-function render(container, cfg, pricing, icons) {
+function render(container, cfg, pricing, icons, colors = [], channels = []) {
   container.innerHTML = `
     <div class="panel">
       <header>
         <h2>Sinks</h2>
-        <div class="subtitle">Everything members can spend currency on — perk-shop prices
-          and the rentable icon catalog. What they earn is set on
+        <div class="subtitle">Everything members can spend currency on — perk-shop prices,
+          the rentable icon catalog and the color palette. What they earn is set on
           <a href="#/economy-income-sources">Income Sources</a>.</div>
       </header>
       ${economyOffBanner(cfg)}
@@ -312,6 +368,80 @@ function render(container, cfg, pricing, icons) {
       </section>
 
       <section class="form card" style="margin-top:1.5rem;">
+        <div class="section-label">Color Palette</div>
+        <div class="field-hint" style="margin-bottom:1rem;">
+          Named gradient colors members rent from <code>/bank shop</code> — the curated
+          alternative to picking their own two colors. Colors are authored by file name:
+          upload a swatch called <code>ColorName_HEX1_HEX2.png</code> and press Sync, and
+          the name, gradient and ordering all come from the file. Leave a color's price at
+          0 to charge the Palette Color price above, or give it its own. A color somebody
+          is renting cannot be deleted — clear "Offer in the shop" instead and current
+          renters keep it. Your server needs Discord's enhanced role colors feature for
+          gradients to show up at all.
+        </div>
+
+        <div data-palette></div>
+        <div data-palette-empty class="field-hint" style="display:none;">
+          No colors yet. Upload swatch images below and press Sync Palette.
+        </div>
+
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
+          <div class="section-label">Swatch Images</div>
+          <div class="field-hint" style="margin-bottom:10px;">
+            One image per color, named <code>ColorName_HEX1_HEX2.png</code> — for example
+            <code>Ruby_ff0000_8b0000.png</code>. The two hex codes become the gradient.
+            Images are stored for this server only.
+          </div>
+          <div data-swatch-active class="field-hint" style="margin-bottom:10px;"></div>
+          <div data-swatch-list style="margin-bottom:12px;"><div class="empty">Loading swatch images…</div></div>
+          <form class="field-row" style="flex-wrap:wrap;align-items:flex-end;" data-upload-form>
+            <div class="field">
+              <label for="sink-swatch-input">Image Files</label>
+              <input type="file" id="sink-swatch-input" name="files"
+                accept="image/png,image/jpeg,image/gif,image/webp" multiple data-swatch-input />
+              <div class="field-hint">Several at once is fine. Uploading alone changes nothing — press Sync Palette after.</div>
+            </div>
+            <button type="submit" class="btn btn-primary" data-upload-btn>Upload Images</button>
+            <span data-upload-status></span>
+          </form>
+        </div>
+
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
+          <div class="section-label">Sync Palette From Swatches</div>
+          <div class="field-hint" style="margin-bottom:10px;">
+            Makes the palette match the images above: new files become new colors, and
+            existing colors pick up any renamed file, changed gradient or new ordering.
+            A color whose image is gone stops being offered — if someone is renting it they
+            keep it, and it is deleted outright only when nobody holds it. No Discord roles
+            are created or deleted, so members wearing an old booster color keep it either way.
+          </div>
+          <form class="field-row" style="align-items:center;" data-sync-form>
+            <button type="submit" class="btn btn-primary" data-sync-btn>Sync Palette</button>
+            <span data-sync-status></span>
+          </form>
+        </div>
+
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
+          <div class="section-label">Showroom Panel</div>
+          <div class="field-hint" style="margin-bottom:10px;">
+            Posts one message per color so members can actually see the gradients, each
+            with a button that wears it. Pressing a button needs the Palette Color perk —
+            it never charges anyone, so nobody buys by accident. The messages posted last
+            time are <strong>deleted</strong> first, so post again after changing colors.
+          </div>
+          <form class="form" data-repost-form>
+            <div class="field">
+              <label>Channel</label>
+              <span data-picker="panel_channel_id"></span>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <button type="submit" class="btn btn-primary" data-repost-btn>Post Panel</button>
+              <span data-repost-status></span>
+            </div>
+          </form>
+        </div>
+      </section>
+      <section class="form card" style="margin-top:1.5rem;">
         <div class="section-label">Rentable Icon Catalog</div>
         <div class="field-hint" style="margin-bottom:1rem;">
           Role icons you curate, which members rent from <code>/bank shop</code> at whatever
@@ -354,6 +484,7 @@ function render(container, cfg, pricing, icons) {
 
   wirePrices(container, cfg);
   wireCatalog(container, icons);
+  wirePalette(container, colors, channels);
   wireEmojiQueue(container);
 }
 
@@ -592,6 +723,230 @@ function wireCatalog(container, icons) {
       showStatus(addStatus, false, err.message);
     } finally {
       addBtn.disabled = false;
+    }
+  });
+}
+
+// ── color palette ─────────────────────────────────────────────────────
+//
+// The palette is authored by file name, not by form: there is no "add a color"
+// control because a color IS a swatch image plus a sync. What can be edited per
+// row is what the sync deliberately never overwrites — the name shown in the
+// shop, the price, and whether it is offered at all.
+function wirePalette(container, colors, channels) {
+  const listEl = container.querySelector("[data-palette]");
+  const emptyEl = container.querySelector("[data-palette-empty]");
+
+  function renderList(rows) {
+    listEl.innerHTML = rows.map(colorRow).join("");
+    emptyEl.style.display = rows.length ? "none" : "block";
+  }
+  renderList(colors);
+
+  // Row actions via delegation so re-rendered rows stay wired.
+  listEl.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const row = btn.closest("[data-color-id]");
+    const id = row.getAttribute("data-color-id");
+    const rowStatus = row.querySelector("[data-row-status]");
+
+    if (btn.hasAttribute("data-save")) {
+      const nameInput = row.querySelector("[data-name]");
+      const priceInput = row.querySelector("[data-price]");
+      if (!nameInput.value.trim()) {
+        showStatus(rowStatus, false, "Name cannot be empty");
+        nameInput.focus();
+        return;
+      }
+      const price = parseInt(priceInput.value, 10);
+      if (!Number.isFinite(price) || price < 0 || price > DEFAULT_MAX) {
+        showStatus(rowStatus, false, `Price Per Week must be a whole number from 0 to ${DEFAULT_MAX}`);
+        priceInput.focus();
+        return;
+      }
+      btn.disabled = true;
+      try {
+        await request("PATCH", `/api/economy/color-catalog/${id}`, {
+          body: {
+            name: nameInput.value.trim(),
+            price,
+            enabled: row.querySelector("[data-enabled]").checked,
+          },
+        });
+        showStatus(rowStatus, true);
+      } catch (err) {
+        showStatus(rowStatus, false, err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    } else if (btn.hasAttribute("data-delete")) {
+      const colorName = row.querySelector("[data-name]").value.trim() || "this color";
+      const ok = await confirmDialog(
+        `"${colorName}" disappears from the shop and the showroom. Its swatch image stays, `
+        + "so the next sync brings it back — delete the image too if you want it gone. "
+        + "To retire a color while keeping it for current renters, clear \"Offer in the "
+        + "shop\" and save instead.",
+        { title: "Delete this color?", danger: true, confirmLabel: "Delete" },
+      );
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await apiDelete(`/api/economy/color-catalog/${id}`);
+        renderList(await api("/api/economy/color-catalog"));
+      } catch (err) {
+        // 409 = in use: surface the reason, keep the row.
+        showStatus(rowStatus, false, err.message);
+        btn.disabled = false;
+      }
+    }
+  });
+
+  // ── swatch images ──
+  const swatchList = container.querySelector("[data-swatch-list]");
+  const swatchActive = container.querySelector("[data-swatch-active]");
+
+  function renderSwatchList(data) {
+    const files = data.files || [];
+    if (!files.length) {
+      swatchList.innerHTML = `<div class="empty">No swatch images uploaded yet.</div>`;
+    } else {
+      swatchList.innerHTML = files.map((f) => {
+        const chip = f.valid
+          ? `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:linear-gradient(135deg,#${esc(f.hex1)},#${esc(f.hex2)});flex:none;"></span>`
+          : `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:repeating-linear-gradient(45deg,#555,#555 4px,#333 4px,#333 8px);flex:none;"></span>`;
+        const meta = f.valid
+          ? `<span>${esc(f.label)}</span>`
+          : `<span style="color:var(--danger,#e55)">⚠ Skipped when syncing — rename it to ColorName_HEX1_HEX2 plus its extension.</span>`;
+        return `
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--border,#2a2a2a);">
+            ${chip}
+            <span style="flex:none;font-family:monospace;opacity:.85;">${esc(f.name)}</span>
+            ${meta}
+            <button type="button" class="btn btn-danger" style="margin-left:auto;padding:2px 8px;" data-swatch-del="${esc(f.name)}">Delete</button>
+          </div>`;
+      }).join("");
+    }
+    swatchActive.innerHTML = data.using_managed
+      ? ""
+      : `<strong>Syncing currently reads a folder on the server:</strong> <code>${esc(data.active_dir)}</code>. Upload at least one correctly named image here to switch syncing over to this server's own set.`;
+
+    swatchList.querySelectorAll("[data-swatch-del]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const name = btn.dataset.swatchDel;
+        const ok = await confirmDialog(
+          `Delete the image "${name}"? At the next sync its color stops being offered — `
+          + "anyone renting it keeps it, and it is removed outright only if nobody holds it.",
+          { title: "Delete Swatch Image", danger: true, confirmLabel: "Delete Image" },
+        );
+        if (!ok) return;
+        try {
+          renderSwatchList(
+            await apiDelete(`/api/economy/color-catalog/swatches/${encodeURIComponent(name)}`),
+          );
+        } catch (err) {
+          toast(err.message, "error");
+        }
+      });
+    });
+  }
+
+  // The trailing .catch is not redundant with the try/inside: a throw from
+  // renderSwatchList itself would escape as an unhandled rejection and leave
+  // the list on "Loading swatch images…" forever.
+  (async () => {
+    try {
+      renderSwatchList(await api("/api/economy/color-catalog/swatches"));
+    } catch (err) {
+      swatchList.innerHTML = `<div class="error">Couldn't load the swatch images: ${esc(err.message)}</div>`;
+    }
+  })().catch(() => {
+    swatchList.innerHTML = `<div class="error">Couldn't load the swatch images.</div>`;
+  });
+
+  const uploadForm = container.querySelector("[data-upload-form]");
+  const uploadBtn = container.querySelector("[data-upload-btn]");
+  const uploadStatus = container.querySelector("[data-upload-status]");
+  const swatchInput = container.querySelector("[data-swatch-input]");
+  guardForm(uploadForm);
+  uploadForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!swatchInput.files.length) {
+      showStatus(uploadStatus, false, "Choose at least one image file first.");
+      swatchInput.focus();
+      return;
+    }
+    const fd = new FormData();
+    for (const file of swatchInput.files) fd.append("files", file);
+    uploadBtn.disabled = true;
+    uploadStatus.textContent = "Uploading…";
+    try {
+      const data = await apiPost("/api/economy/color-catalog/swatches", fd);
+      renderSwatchList(data);
+      swatchInput.value = "";
+      const n = data.saved?.length || 0;
+      showStatus(uploadStatus, true, `Uploaded ${n} image${n === 1 ? "" : "s"}`);
+    } catch (err) {
+      showStatus(uploadStatus, false, err.message);
+    } finally {
+      uploadBtn.disabled = false;
+    }
+  });
+
+  // ── sync ──
+  const syncForm = container.querySelector("[data-sync-form]");
+  const syncBtn = container.querySelector("[data-sync-btn]");
+  const syncStatus = container.querySelector("[data-sync-status]");
+  syncForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    syncBtn.disabled = true;
+    syncStatus.textContent = "Syncing…";
+    try {
+      const data = await apiPost("/api/economy/color-catalog/sync");
+      const parts = [];
+      if (data.added?.length) parts.push(`added ${data.added.length}`);
+      if (data.disabled?.length) parts.push(`stopped offering ${data.disabled.length}`);
+      if (data.removed?.length) parts.push(`removed ${data.removed.length}`);
+      showStatus(syncStatus, true, parts.length ? parts.join(", ") : "Already up to date");
+      renderList(await api("/api/economy/color-catalog"));
+    } catch (err) {
+      showStatus(syncStatus, false, err.message);
+    } finally {
+      syncBtn.disabled = false;
+    }
+  });
+
+  // ── showroom panel ──
+  const repostForm = container.querySelector("[data-repost-form]");
+  const repostBtn = container.querySelector("[data-repost-btn]");
+  const repostStatus = container.querySelector("[data-repost-status]");
+  const repostPicker = mountChannelPicker(
+    repostForm.querySelector('[data-picker="panel_channel_id"]'),
+    channels, "0",
+    { emptyValue: "0", emptyLabel: "(pick a channel)", label: "Channel" },
+  );
+  guardForm(repostForm);
+  repostForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const channelId = repostPicker.getValue() || "0";
+    if (channelId === "0") {
+      showStatus(repostStatus, false, "Pick a channel first.");
+      return;
+    }
+    const ok = await confirmDialog(
+      "Post the showroom? The panel posted last time is deleted first, so its buttons stop working.",
+      { title: "Post Showroom Panel", danger: true, confirmLabel: "Post Panel" },
+    );
+    if (!ok) return;
+    repostBtn.disabled = true;
+    try {
+      const data = await apiPost("/api/economy/color-catalog/post-panel", { channel_id: channelId });
+      const n = data.message_count || 0;
+      showStatus(repostStatus, true, `Posted ${n} message${n === 1 ? "" : "s"}`);
+    } catch (err) {
+      showStatus(repostStatus, false, err.message);
+    } finally {
+      repostBtn.disabled = false;
     }
   });
 }

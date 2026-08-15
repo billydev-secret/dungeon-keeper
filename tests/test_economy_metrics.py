@@ -129,7 +129,10 @@ def test_pricing_hints_default_ratios_at_median_100():
     assert hints["price_role_color"] == 50
     assert hints["price_role_name"] == 35
     assert hints["price_role_icon"] == 75
-    assert hints["price_role_gradient"] == 120
+    # The curated palette undercuts the free-form gradient, which rose to 240
+    # when the colours moved to the shop (todo #76).
+    assert hints["price_role_preset"] == 80
+    assert hints["price_role_gradient"] == 240
     assert hints["price_text_room"] == 200
     assert hints["price_voice_room"] == 200
 

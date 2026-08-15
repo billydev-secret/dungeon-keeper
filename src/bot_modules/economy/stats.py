@@ -70,6 +70,7 @@ PRICE_FIELDS: tuple[str, ...] = (
     "price_role_color",
     "price_role_name",
     "price_role_icon",
+    "price_role_preset",
     "price_role_gradient",
     "price_role_holographic",
     "price_streak_shield",

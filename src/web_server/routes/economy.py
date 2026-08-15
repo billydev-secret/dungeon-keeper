@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -13,6 +14,25 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from bot_modules.economy.metrics import pricing_hints
 from bot_modules.economy.quests import POOL_CAP
+from bot_modules.services.color_palette import (
+    IMAGE_EXTS,
+    get_guild_swatch_dir,
+    post_or_update_palette_panel,
+    resolve_swatch_directory,
+    swatch_file_info,
+    sync_palette,
+)
+from bot_modules.services.economy_color_catalog_service import (
+    color_in_use,
+    delete_catalog_color,
+    get_catalog_color,
+)
+from bot_modules.services.economy_color_catalog_service import (
+    list_catalog as list_color_catalog,
+)
+from bot_modules.services.economy_color_catalog_service import (
+    update_catalog_color,
+)
 from bot_modules.services.economy_icon_catalog_service import (
     add_catalog_icon,
     delete_catalog_icon,
@@ -32,6 +52,12 @@ from bot_modules.services.economy_service import (
     save_econ_settings,
 )
 from web_server.auth import AuthenticatedUser
+from web_server.routes.panel_posting import (
+    ChannelIdBody,
+    guild_or_503,
+    require_post_permissions,
+    text_channel_or_400,
+)
 from web_server.deps import (
     get_active_guild_id,
     get_ctx,
@@ -120,6 +146,7 @@ class EconomyConfigUpdate(BaseModel):
     price_role_color: int | None = Field(default=None, ge=0)
     price_role_name: int | None = Field(default=None, ge=0)
     price_role_icon: int | None = Field(default=None, ge=0)
+    price_role_preset: int | None = Field(default=None, ge=0)
     price_role_gradient: int | None = Field(default=None, ge=0)
     price_role_holographic: int | None = Field(default=None, ge=0)
     price_voice_style: int | None = Field(default=None, ge=0)
@@ -455,3 +482,311 @@ async def remove_icon_catalog(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+# ── curated colour palette ──────────────────────────────────────────────
+#
+# The admin side of ``econ_color_catalog`` — the palette members rent from via
+# the ``role_preset`` perk. It is the icon catalog's sibling and works the same
+# way, with two differences that come from its history as the booster
+# cosmetic-role picker (migration 159):
+#
+#  * Colours are authored by *filename*, not by form: swatch images named
+#    ``ColorName_HEX1_HEX2.ext`` are uploaded to a managed folder and Sync reads
+#    the name, gradient pair and display order out of them. So there is no
+#    "create colour" endpoint — upload art and sync.
+#  * There is a showroom panel to re-post, because a gradient has to be seen.
+
+_MAX_SWATCH_BYTES = 8 * 1024 * 1024
+
+
+class ColorCatalogPatch(BaseModel):
+    """Partial update of a palette colour's metadata; unknown keys rejected."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    price: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
+    sort_order: int | None = Field(default=None, ge=0)
+
+
+def _color_dict(conn, guild_id: int, row) -> dict:
+    """Serialise a palette row for the dashboard.
+
+    ``price`` 0 means "bill the flat ``price_role_preset``", which the dashboard
+    renders as an inherited price rather than free. ``rentable`` is false for a
+    row whose swatch filename never parsed — it needs a re-sync, and the panel
+    says so.
+    """
+    color_id = int(row["id"])
+    hex1, hex2 = str(row["hex1"]), str(row["hex2"])
+    return {
+        "id": color_id,
+        "key": row["key"],
+        "name": row["name"],
+        "hex1": hex1,
+        "hex2": hex2,
+        "price": int(row["price"]),
+        "enabled": bool(row["enabled"]),
+        "sort_order": int(row["sort_order"]),
+        "rentable": bool(hex1 and hex2),
+        "in_use": color_in_use(conn, guild_id, color_id),
+        # A grandfathered wearer's Discord role, kept for the record. Never
+        # granted or revoked by anything — see the migration.
+        "legacy_role_id": str(row["legacy_role_id"]),
+    }
+
+
+@router.get("/economy/color-catalog")
+async def list_color_palette(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Every palette colour (enabled and disabled), with usage and sync flags."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return [
+                _color_dict(conn, guild_id, r)
+                for r in list_color_catalog(conn, guild_id)
+            ]
+
+    return await run_query(_q)
+
+
+@router.get("/economy/color-catalog/{color_id}/image")
+async def get_color_catalog_image(
+    color_id: int,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Serve a colour's swatch image for dashboard preview (admin, guild-scoped)."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _load() -> str:
+        with ctx.open_db() as conn:
+            row = get_catalog_color(conn, guild_id, color_id)
+            return str(row["image_path"]) if row is not None else ""
+
+    image_path = await run_query(_load)
+    if not image_path or not Path(image_path).is_file():
+        raise HTTPException(404, "No image for this color.")
+    return FileResponse(image_path)
+
+
+@router.patch("/economy/color-catalog/{color_id}")
+async def patch_color_catalog(
+    color_id: int,
+    request: Request,
+    body: ColorCatalogPatch,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Rename / re-price / enable-disable / reorder a palette colour.
+
+    A price change is not charged immediately — existing renters pick it up at
+    their next weekly renewal. The gradient itself is not editable here: it comes
+    from the swatch filename, so changing it by hand would desync colour from art.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if get_catalog_color(conn, guild_id, color_id) is None:
+                raise HTTPException(404, "Color not found.")
+            row = update_catalog_color(
+                conn, guild_id, color_id,
+                name=body.name, price=body.price,
+                enabled=body.enabled, sort_order=body.sort_order,
+            )
+            return _color_dict(conn, guild_id, row)
+
+    return await run_query(_q)
+
+
+@router.delete("/economy/color-catalog/{color_id}")
+async def remove_color_catalog(
+    color_id: int,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Hard-delete a palette colour — blocked (409) while members are renting it.
+
+    Only the catalog row goes: the swatch file stays (delete it from the swatch
+    list to retire the colour properly) and so does any legacy Discord role,
+    which a grandfathered member may still be wearing.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if get_catalog_color(conn, guild_id, color_id) is None:
+                raise HTTPException(404, "Color not found.")
+            if color_in_use(conn, guild_id, color_id):
+                raise HTTPException(
+                    409,
+                    "Members are renting this color — disable it instead of deleting.",
+                )
+            delete_catalog_color(conn, guild_id, color_id)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.post("/economy/color-catalog/sync")
+async def sync_color_catalog(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Reconcile the palette to the swatch files on disk.
+
+    Touches no Discord roles. A colour whose swatch is gone is disabled when
+    somebody is renting it and deleted otherwise, so the reply distinguishes the
+    two.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        try:
+            added, disabled, removed = sync_palette(ctx.db_path, guild_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {
+            "ok": True,
+            "added": added,
+            "disabled": disabled,
+            "removed": removed,
+        }
+
+    return await run_query(_q)
+
+
+@router.post("/economy/color-catalog/post-panel")
+async def post_color_panel(
+    request: Request,
+    body: ChannelIdBody,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Re-post the palette showroom in the chosen channel."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    guild = guild_or_503(ctx, guild_id)
+    channel = text_channel_or_400(guild, body.channel_id)
+    # Attachments, not embeds — each colour posts as an image file.
+    require_post_permissions(
+        guild, channel, "view_channel", "send_messages", "attach_files"
+    )
+
+    msgs = await post_or_update_palette_panel(ctx.db_path, guild, channel)
+    if not msgs:
+        raise HTTPException(400, "No rentable colors in the palette.")
+    return {"ok": True, "message_count": len(msgs)}
+
+
+# ── managed swatch uploads (per-guild folder) ───────────────────────────
+
+
+def _safe_swatch_name(filename: str | None) -> str:
+    """Reject path traversal / unsupported types; return a bare filename."""
+    name = os.path.basename(filename or "")
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        raise HTTPException(400, "Invalid filename")
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in IMAGE_EXTS:
+        raise HTTPException(400, f"Unsupported file type: {ext or '(none)'}")
+    return name
+
+
+def _swatch_listing(db_path, guild_id: int) -> dict:
+    managed = get_guild_swatch_dir(db_path, guild_id)
+    files = swatch_file_info(managed)
+    # The valid-swatch count resolve_swatch_directory needs is already in
+    # ``files`` — handing it over saves a second walk of the same directory.
+    active = resolve_swatch_directory(
+        db_path,
+        guild_id,
+        managed=managed,
+        managed_valid_count=sum(1 for f in files if f["valid"]),
+    )
+    return {
+        "ok": True,
+        "files": files,
+        "managed_dir": str(managed),
+        "active_dir": active,
+        "using_managed": active == str(managed),
+    }
+
+
+@router.get("/economy/color-catalog/swatches")
+async def list_color_swatches(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """List uploaded swatch files in this guild's managed folder."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    # Directory walk + a config read, so off the event loop (as are the upload
+    # and delete handlers below — the dashboard shares the bot's event loop, so
+    # an 8 MB write on it stalls the Discord gateway).
+    return await run_query(lambda: _swatch_listing(ctx.db_path, guild_id))
+
+
+@router.post("/economy/color-catalog/swatches")
+async def upload_color_swatches(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Save one or more uploaded swatch images into the managed folder."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    managed = get_guild_swatch_dir(ctx.db_path, guild_id)
+
+    saved: list[str] = []
+    for upload in files:
+        name = _safe_swatch_name(upload.filename)
+        content = await upload.read()
+        if not content:
+            continue
+        if len(content) > _MAX_SWATCH_BYTES:
+            raise HTTPException(400, f"{name} exceeds the 8 MB limit")
+        target = managed / name
+        if target.resolve().parent != managed.resolve():
+            raise HTTPException(400, "Invalid filename")
+        # Up to 8 MB of disk write per file — off the loop.
+        await asyncio.to_thread(target.write_bytes, content)
+        saved.append(name)
+
+    listing = await run_query(lambda: _swatch_listing(ctx.db_path, guild_id))
+    return {**listing, "saved": saved}
+
+
+@router.delete("/economy/color-catalog/swatches/{filename}")
+async def delete_color_swatch(
+    filename: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Delete a single uploaded swatch from the managed folder."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    name = _safe_swatch_name(filename)
+    managed = get_guild_swatch_dir(ctx.db_path, guild_id)
+    target = managed / name
+    if target.resolve().parent != managed.resolve():
+        raise HTTPException(400, "Invalid filename")
+    if not target.is_file():
+        raise HTTPException(404, "File not found")
+
+    def _delete() -> dict:
+        target.unlink()
+        return _swatch_listing(ctx.db_path, guild_id)
+
+    return await run_query(_delete)

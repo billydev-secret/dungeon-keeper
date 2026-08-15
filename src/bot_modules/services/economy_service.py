@@ -225,7 +225,16 @@ class EconSettings:
     price_role_color: int = 50
     price_role_name: int = 35
     price_role_icon: int = 75
-    price_role_gradient: int = 120
+    # A colour from the curated palette (`econ_color_catalog`, the old booster
+    # cosmetic roles). Priced well under the free-form gradient it undercuts: the
+    # palette is the value pick, picking your own two colours is the splurge. A
+    # palette colour may also carry its own price, which wins over this flat one.
+    price_role_preset: int = 80
+    # Raised from 120 with the palette's arrival (todo #76) so the curated set
+    # reads as the cheaper option rather than a near-identical one. Existing
+    # renters move to the new price at their next renewal, and the billing loop
+    # DMs them the old and new figure (economy A2).
+    price_role_gradient: int = 240
     # Discord's holographic role preset — a fixed three-colour shimmer set via
     # `tertiary_colour`, not the member-picked two-colour gradient. Priced above
     # the gradient as the top cosmetic tier; like the gradient it needs the

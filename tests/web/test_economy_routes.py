@@ -313,7 +313,10 @@ def test_metrics_hints_from_latest_week_only(authed_client, fake_ctx):
     assert hints["price_role_color"] == 50
     assert hints["price_role_name"] == 35
     assert hints["price_role_icon"] == 75
-    assert hints["price_role_gradient"] == 120
+    # The palette undercuts the free-form gradient, which rose to 240 when the
+    # curated colours arrived (todo #76) — the hints track the spec defaults.
+    assert hints["price_role_preset"] == 80
+    assert hints["price_role_gradient"] == 240
     assert hints["price_text_room"] == 200
     assert hints["price_voice_room"] == 200
 

@@ -85,14 +85,15 @@ export function mount(container) {
           <div class="card">
             <div class="section-label">Server File Paths</div>
             <div class="field">
-              <label for="cg-swatch">Booster Swatch Directory</label>
+              <label for="cg-swatch">Color Swatch Directory</label>
               <input type="text" name="booster_swatch_dir" id="cg-swatch"
                 value="${esc(g.booster_swatch_dir || "")}"
                 placeholder="e.g. /srv/dungeon-keeper/swatches" />
-              <div class="field-hint">A folder path on the machine running Dungeon
-                Keeper (not on your computer, and not a link) holding the booster
-                color swatch images. Leave empty to use the built-in swatches. A path
-                that does not exist means boosters see no swatch preview.</div>
+              <div class="field-hint">A fallback folder path on the machine running
+                Dungeon Keeper (not on your computer, and not a link) holding color
+                palette swatch images. Only used while no swatches have been uploaded
+                under <a href="#/economy-sinks">Sinks → Color Palette</a>, which is the
+                normal way to manage them.</div>
             </div>
           </div>
 

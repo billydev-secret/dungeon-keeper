@@ -129,7 +129,6 @@ const SECTIONS = [
       ]},
       { heading: "Roles", items: [
         { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true, help: "help-setup" },
-        { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js", adminOnly: true },
         { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
         { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js", help: "help-role-menus" },
       ]},

@@ -126,6 +126,16 @@ from bot_modules.services.economy_quests_service import (
     load_member_quest_board,
     reroll_quote,
 )
+from bot_modules.services.economy_color_catalog_service import (
+    catalog_price_range as color_price_range,
+)
+from bot_modules.services.economy_color_catalog_service import (
+    color_ints,
+    get_catalog_color,
+)
+from bot_modules.services.economy_color_catalog_service import (
+    list_catalog as list_color_catalog,
+)
 from bot_modules.services.economy_icon_catalog_service import (
     catalog_price_range,
     get_catalog_icon,
@@ -136,12 +146,14 @@ from bot_modules.services.economy_rentals_service import (
     cancel_all_for_member,
     effective_entitlements,
     entitlements,
+    get_live_preset_rental,
     get_live_role_icon_rental,
     get_refundable_rental,
     list_member_rentals,
     list_refundable_rentals,
     refund_rental,
     rent_perk,
+    set_rental_catalog_color,
     set_rental_catalog_icon,
     upsert_personal_role,
 )
@@ -308,6 +320,9 @@ class _ShopContext(NamedTuple):
     comped: set[str]
     balance: int
     icon_range: tuple[int, int, int] | None
+    # (min, max, count) over the guild's rentable palette colours, or None when
+    # it has none — which is also the shop's switch for hiding the Palette row.
+    color_range: tuple[int, int, int] | None
     refundable: list[dict]
     shields_held: int
     shield_price: int
@@ -636,6 +651,9 @@ _CFG_MODALS = {
 # tells the member the list was trimmed.
 _ICON_SELECT_LIMIT = 24
 
+# The palette picker has no Custom slot, so it gets Discord's full 25.
+_COLOR_SELECT_LIMIT = 25
+
 
 class _IconCatalogSelect(discord.ui.Select):
     """A picker of curated role icons; choosing one rents or switches to it.
@@ -705,6 +723,62 @@ class _IconCatalogView(_MemberScopedView):
     ) -> None:
         super().__init__(user_id)
         self.add_item(_IconCatalogSelect(cog, settings, guild, icons))
+
+
+class _ColorPaletteSelect(discord.ui.Select):
+    """A picker of curated palette colours; choosing one rents or switches to it.
+
+    Unlike the icon picker there is no bring-your-own slot: picking your own two
+    colours is a different product (``role_gradient``), which the shop lists on
+    its own row.
+    """
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        colors: list[dict],
+    ) -> None:
+        super().__init__(
+            placeholder="Choose a color…",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=str(c["name"])[:100],
+                    value=str(c["id"]),
+                    description=(
+                        f"#{c['hex1']} → #{c['hex2']} · "
+                        f"{settings.currency_emoji} {int(c['price']):,} / week"
+                    )[:100],
+                )
+                for c in colors[:_COLOR_SELECT_LIMIT]
+            ],
+        )
+        self.cog = cog
+        self.settings = settings
+        self.guild = guild
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.cog.pick_catalog_color(
+            interaction, self.guild, int(self.values[0])
+        )
+
+
+class _ColorPaletteView(_MemberScopedView):
+    """Ephemeral palette picker, scoped to the member who opened the shop."""
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        user_id: int,
+        colors: list[dict],
+    ) -> None:
+        super().__init__(user_id)
+        self.add_item(_ColorPaletteSelect(cog, settings, guild, colors))
 
 
 class _RefundSelect(discord.ui.Select):
@@ -841,6 +915,7 @@ class _ShopView(_MemberScopedView):
         gated: set[str],
         owned: set[str],
         has_catalog: bool = False,
+        has_palette: bool = False,
         shields_held: int = 0,
         refundable: list[dict] | None = None,
         shield_price: int = 0,
@@ -852,6 +927,26 @@ class _ShopView(_MemberScopedView):
         self.refundable = refundable or []
         self.shield_price = shield_price
         for perk in SELF_PERKS:
+            if perk == "role_preset":
+                # No palette, no product — the embed drops the row too, so a
+                # button here would point at nothing.
+                if not has_palette:
+                    continue
+                # Like the icon catalog, one picker button covers both renting
+                # and restyling: the colour you choose IS the thing you rent.
+                button = discord.ui.Button(
+                    label="Change color" if perk in owned else "🖌️ Browse colors",
+                    style=(
+                        discord.ButtonStyle.success
+                        if perk in owned
+                        else discord.ButtonStyle.secondary
+                    ),
+                    disabled=perk in gated,
+                    custom_id="econ_shop_colors",
+                )
+                button.callback = self._make_colors_callback()
+                self.add_item(button)
+                continue
             if perk == "role_icon" and has_catalog:
                 # A curated catalog replaces the rent/customise buttons with a
                 # single picker — renting and restyling both happen by choosing
@@ -971,6 +1066,12 @@ class _ShopView(_MemberScopedView):
     def _make_icons_callback(self):
         async def _cb(interaction: discord.Interaction) -> None:
             await self.cog.open_icon_catalog(interaction, self.settings, self.guild)
+
+        return _cb
+
+    def _make_colors_callback(self):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await self.cog.open_color_palette(interaction, self.settings, self.guild)
 
         return _cb
 
@@ -1697,12 +1798,14 @@ class EconomyCog(commands.Cog):
             owned=shop.owned,
             comped=shop.comped,
             icon_catalog=shop.icon_range,
+            color_catalog=shop.color_range,
             balance=shop.balance,
             shields_held=shop.shields_held,
         )
         view = _ShopView(
             self, settings, guild, user_id, gated, shop.owned,
             shop.icon_range is not None,
+            has_palette=shop.color_range is not None,
             shields_held=shop.shields_held, refundable=shop.refundable,
             shield_price=shop.shield_price,
         )
@@ -2506,6 +2609,141 @@ class EconomyCog(commands.Cog):
             ephemeral=True,
         )
 
+    async def open_color_palette(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+    ) -> None:
+        """Show the curated colour picker (rent a colour, or switch the rented one)."""
+        if not await self._palette_gate_ok(interaction, guild.id):
+            return
+        colors = await asyncio.to_thread(self._load_palette, guild.id)
+        if not colors:
+            await interaction.response.send_message(
+                "❌ No rentable colors are set up here yet.", ephemeral=True
+            )
+            return
+        note = ""
+        if len(colors) > _COLOR_SELECT_LIMIT:
+            note = f"\n_Showing the first {_COLOR_SELECT_LIMIT} colors._"
+        await interaction.response.send_message(
+            "Pick a color to rent — each is billed weekly, and you can switch "
+            f"any time:{note}",
+            view=_ColorPaletteView(
+                self, settings, guild, interaction.user.id, colors
+            ),
+            ephemeral=True,
+        )
+
+    async def pick_catalog_color(
+        self, interaction: discord.Interaction, guild: discord.Guild, color_id: int
+    ) -> None:
+        """Rent the chosen palette colour, or switch a live rental to it.
+
+        A fresh rental charges the colour's price upfront; switching an existing
+        rental only re-tags it (no charge) so the newly chosen colour's price
+        takes effect at the next weekly renewal — the same deal as the icon
+        catalog. A staff comp wears the colour with no rental row at all.
+        """
+        user_id = interaction.user.id
+
+        def _load() -> tuple[EconSettings, dict | None, int | None]:
+            with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild.id)
+                row = get_catalog_color(conn, guild.id, color_id)
+                pair = color_ints(row) if row is not None else None
+                color = (
+                    {
+                        "name": str(row["name"]),
+                        "price": int(row["price"]) or settings.price_role_preset,
+                        "pair": pair,
+                    }
+                    if row is not None and int(row["enabled"]) and pair is not None
+                    else None
+                )
+                existing = get_live_preset_rental(conn, guild.id, user_id)
+                existing_id = int(existing["id"]) if existing is not None else None
+            return settings, color, existing_id
+
+        settings, color, existing_id = await asyncio.to_thread(_load)
+        if await self._refuse_disabled(interaction, settings):
+            return
+        if color is None:
+            await interaction.response.send_message(
+                "❌ That color isn't available anymore — open the shop again.",
+                ephemeral=True,
+            )
+            return
+        if not await self._palette_gate_ok(interaction, guild.id):
+            return
+
+        primary, secondary = color["pair"]
+        colors_patch = {"color": primary, "color2": secondary}
+        comped = settings.mod_perk_comp and self.ctx.is_mod(interaction)
+        if existing_id is None and comped:
+            # The comp entitles role_preset, and a palette colour IS that perk at
+            # a per-colour price — charging staff here would make the curated
+            # colours the one thing the comp didn't cover. No rental row: a comp
+            # never creates one.
+            def _set_comped_color() -> None:
+                with self.ctx.open_db() as conn:
+                    upsert_personal_role(conn, guild.id, user_id, colors_patch)
+
+            await asyncio.to_thread(_set_comped_color)
+            verb = "Set"
+        elif existing_id is None:
+            # New rental: rent_perk + colour set ride ONE transaction, so a
+            # failed upfront debit rolls the whole thing back (the ValueError
+            # must propagate out of the `with` block — never caught inside it).
+            def _rent() -> None:
+                with self.ctx.open_db() as conn:
+                    rent_perk(
+                        conn, settings, guild.id, user_id, "role_preset",
+                        catalog_color_id=color_id, now=time.time(),
+                    )
+                    upsert_personal_role(conn, guild.id, user_id, colors_patch)
+
+            try:
+                await asyncio.to_thread(_rent)
+            except ValueError as exc:
+                msg = str(exc)
+                if "insufficient" in msg:
+                    text = await self._short_funds_text(
+                        settings, guild.id, user_id, int(color["price"])
+                    )
+                elif "already rented" in msg:
+                    text = "❌ You're already renting a palette color."
+                else:
+                    text = "❌ That color isn't available."
+                await interaction.response.send_message(text, ephemeral=True)
+                return
+            verb = "Rented"
+        else:
+            def _switch() -> None:
+                with self.ctx.open_db() as conn:
+                    set_rental_catalog_color(conn, guild.id, existing_id, color_id)
+                    upsert_personal_role(conn, guild.id, user_id, colors_patch)
+
+            await asyncio.to_thread(_switch)
+            verb = "Switched to"
+
+        # Defer before apply_role_perks — its rate-limited role edits can exceed
+        # the 3s budget, and the rent/switch is already committed.
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        ok = await apply_role_perks(self.bot, self.ctx.db_path, guild.id, user_id)
+        tail = (
+            "" if ok else " (I couldn't update your role right now — try again shortly.)"
+        )
+        price_note = (
+            " (on the house)"
+            if comped
+            else f" ({settings.currency_emoji} {color['price']:,}/week)"
+        )
+        await interaction.edit_original_response(
+            content=f"{verb} **{color['name']}**{price_note}.{tail}",
+        )
+
     async def pick_catalog_icon(
         self, interaction: discord.Interaction, guild: discord.Guild, icon_id: int
     ) -> None:
@@ -2988,6 +3226,21 @@ class EconomyCog(commands.Cog):
         await interaction.response.send_message(_NO_ROLE_ICONS_MSG, ephemeral=True)
         return False
 
+    async def _palette_gate_ok(
+        self, interaction: discord.Interaction, guild_id: int
+    ) -> bool:
+        """Whether palette colours can render here; sends the refusal if not.
+
+        A palette colour is a two-colour fade, so it needs the same
+        ENHANCED_ROLE_COLORS support as the free-form gradient.
+        """
+        if await feature_gate_ok(self.bot, guild_id, "role_preset"):
+            return True
+        await interaction.response.send_message(
+            "❌ This server doesn't support gradient roles right now.", ephemeral=True
+        )
+        return False
+
     async def _gated_perks(self, guild_id: int) -> set[str]:
         """The feature-gated perks this guild currently can't offer."""
         return {
@@ -3087,7 +3340,7 @@ class EconomyCog(commands.Cog):
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             if not settings.enabled:
-                return _ShopContext(settings, set(), set(), 0, None, [], 0, 0)
+                return _ShopContext(settings, set(), set(), 0, None, None, [], 0, 0)
             # Both halves here rather than through ``effective_entitlements``:
             # settings are already in hand, and the shop is the one surface
             # that needs to tell a comped row from a rented one.
@@ -3098,12 +3351,15 @@ class EconomyCog(commands.Cog):
             comped = ent - rented
             balance = get_balance(conn, guild_id, user_id)
             icon_range = catalog_price_range(conn, guild_id)
+            color_range = color_price_range(
+                conn, guild_id, settings.price_role_preset
+            )
             rentals = [dict(r) for r in list_refundable_rentals(conn, guild_id, user_id)]
             shields_held, shield_price = get_streak_shield_status(
                 conn, guild_id, user_id, settings
             )
         return _ShopContext(
-            settings, ent, comped, balance, icon_range, rentals,
+            settings, ent, comped, balance, icon_range, color_range, rentals,
             shields_held, shield_price,
         )
 
@@ -3138,6 +3394,26 @@ class EconomyCog(commands.Cog):
             return [
                 {"id": int(r["id"]), "name": r["name"], "price": int(r["price"])}
                 for r in list_catalog(conn, guild_id, enabled_only=True)
+            ]
+
+    def _load_palette(self, guild_id: int) -> list[dict]:
+        """Rentable palette colours, as plain dicts for the picker view.
+
+        ``price`` resolves the per-colour override against the flat perk price
+        here, so the select's descriptions quote what the member will actually be
+        charged rather than a raw 0.
+        """
+        with self.ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild_id)
+            return [
+                {
+                    "id": int(r["id"]),
+                    "name": r["name"],
+                    "hex1": r["hex1"],
+                    "hex2": r["hex2"],
+                    "price": int(r["price"]) or settings.price_role_preset,
+                }
+                for r in list_color_catalog(conn, guild_id, rentable_only=True)
             ]
 
     def _icon_price_range(self, guild_id: int) -> tuple[int, int, int] | None:
@@ -3987,34 +4263,43 @@ class EconomyCog(commands.Cog):
         guild: discord.Guild,
         settings: EconSettings,
         icon_range: tuple[int, int, int] | None,
+        color_range: tuple[int, int, int] | None = None,
     ) -> discord.Embed:
-        """The channel shop panel's embed with current gating, icon prices and
+        """The channel shop panel's embed with current gating, catalog prices and
         accent. Every route to the panel — ``/bank post-shop`` and the sticky
         repost alike — arrives through ``_build_shop_panel``, so the two can't
         render different panels.
 
-        ``icon_range`` is read by the caller on the connection it already
-        holds; ``None`` means this guild has no icon catalog.
+        ``icon_range`` and ``color_range`` are read by the caller on the
+        connection it already holds; ``None`` means this guild has no icon
+        catalog / no colour palette.
         """
         gated = await self._gated_perks(guild.id)
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         return build_shop_embed(
-            settings, gated, accent, panel=True, icon_catalog=icon_range
+            settings, gated, accent, panel=True, icon_catalog=icon_range,
+            color_catalog=color_range,
         )
 
     async def _build_shop_panel(self, guild: discord.Guild) -> PanelContent:
-        def _read() -> tuple[EconSettings, tuple[int, int, int] | None]:
-            # One connection for both, like _build_leaderboard_panel — this
+        def _read() -> tuple[
+            EconSettings, tuple[int, int, int] | None, tuple[int, int, int] | None
+        ]:
+            # One connection for all three, like _build_leaderboard_panel — this
             # runs on every debounced sticky repost.
             with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild.id)
                 return (
-                    load_econ_settings(conn, guild.id),
+                    settings,
                     catalog_price_range(conn, guild.id),
+                    color_price_range(conn, guild.id, settings.price_role_preset),
                 )
 
-        settings, icon_range = await asyncio.to_thread(_read)
+        settings, icon_range, color_range = await asyncio.to_thread(_read)
         return PanelContent(
-            embed=await self._build_shop_panel_embed(guild, settings, icon_range),
+            embed=await self._build_shop_panel_embed(
+                guild, settings, icon_range, color_range
+            ),
             view=ShopPanelView(),
         )
 
