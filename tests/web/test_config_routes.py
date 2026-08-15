@@ -873,6 +873,35 @@ def test_update_pen_pals_config_persists_intro_message(authed_client, fake_ctx):
     assert pp["intro_message"] == "Be kind to your pen pal!"
 
 
+def test_pen_pals_pool_events_are_newest_first(authed_client, fake_ctx):
+    """The history behind the Pool Activity list. Without it the dashboard can
+    only show who is waiting right now, so a pool that has gone flat looks the
+    same as one nobody ever joined."""
+    from bot_modules.cogs.pen_pals_cog import _record_pool_event
+
+    with fake_ctx.open_db() as conn:
+        _record_pool_event(conn, fake_ctx.guild_id, 4242, "join", "panel", at=100.0)
+        _record_pool_event(conn, fake_ctx.guild_id, 4242, "leave", "matched", at=200.0)
+
+    events = authed_client.get("/api/config/pen-pals/pool-events").json()["events"]
+
+    assert [(e["action"], e["reason"]) for e in events] == [
+        ("leave", "matched"),
+        ("join", "panel"),
+    ]
+    # Snowflakes cross as strings so JS float math can't round them.
+    assert events[0]["user_id"] == "4242"
+
+
+def test_pen_pals_pool_events_are_scoped_to_the_active_guild(authed_client, fake_ctx):
+    from bot_modules.cogs.pen_pals_cog import _record_pool_event
+
+    with fake_ctx.open_db() as conn:
+        _record_pool_event(conn, fake_ctx.guild_id + 1, 99, "join", "panel", at=100.0)
+
+    assert authed_client.get("/api/config/pen-pals/pool-events").json()["events"] == []
+
+
 def test_update_pen_pals_config_rejects_oversized_intro_message(authed_client, fake_ctx):
     resp = authed_client.put(
         "/api/config/pen-pals",

@@ -12,6 +12,7 @@
  * in the bank is ever served, and the settings half says so in its own banner.
  */
 import { mountSettings } from "./pen-pals-settings.js";
+import { mountPoolActivity } from "./pen-pals-pool-activity.js";
 import { mountGamePanel } from "./games-panel-shared.js";
 
 export function mount(container) {
@@ -22,11 +23,13 @@ export function mount(container) {
         <div class="subtitle">Private one-day channels that match two members and give them something to talk about</div>
       </header>
       <section data-region="settings"></section>
+      <section data-region="pool" style="margin-top:32px;"></section>
       <section data-region="questions" style="margin-top:32px;"></section>
     </div>
   `;
 
   mountSettings(container.querySelector('[data-region="settings"]'));
+  mountPoolActivity(container.querySelector('[data-region="pool"]'));
 
   const questions = container.querySelector('[data-region="questions"]');
   questions.innerHTML = `<div class="section-label">Questions</div>`;
