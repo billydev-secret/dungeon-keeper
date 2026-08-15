@@ -697,14 +697,13 @@ def test_is_big_bet_tiers():
         pytest.param(1200, 500, "💰 Big Win", id="1x-tier"),
         pytest.param(1499, 500, "💰 Big Win", id="just-under-3x"),
         pytest.param(1500, 500, "🔥 Huge Win", id="3x-tier"),
-        pytest.param(4999, 500, "🔥 Huge Win", id="just-under-10x"),
-        pytest.param(5000, 500, "🌟 Monster Win", id="10x-tier"),
-        pytest.param(50_000, 500, "🌟 Monster Win", id="far-over-10x"),
+        pytest.param(50_000, 500, "🔥 Huge Win", id="far-over-3x-without-history"),
     ],
 )
 def test_big_win_tier_ladder_without_history(payout, threshold, expected):
     """The ladder with no percentile to rank against — every guild's first
-    weeks, and any guild whose win history is still under the sample floor."""
+    weeks, and any guild whose announced-win history is under the sample
+    floor. Two rungs, and the top of the ladder is as loud as it gets."""
     tier = logic.big_win_tier(payout, threshold)
     assert (None if tier is None else tier.header) == expected
     # No history can ever produce the @here: an unknown percentile withholds
@@ -712,26 +711,40 @@ def test_big_win_tier_ladder_without_history(payout, threshold, expected):
     assert tier is None or not tier.ping
 
 
+def test_every_ladder_rung_is_reachable():
+    """Guards the defect this ladder shipped with: a 🌟 Monster Win rung at
+    10× the bar that no payout could reach, because Legendary's floor was the
+    same 10× and always won. Every rung must have a payout that renders it."""
+    rendered = {
+        logic.big_win_tier(payout, 500, top_pct_payout=2500).header
+        for payout in range(500, 6001, 1)
+    }
+    assert rendered == {h for _, h in logic.BIG_WIN_TIERS} | {
+        logic.LEGENDARY_HEADER
+    }
+
+
 @pytest.mark.parametrize(
     ("payout", "top_pct", "pings"),
     [
-        pytest.param(9000, 8000, True, id="over-a-percentile-above-the-10x-floor"),
-        pytest.param(8000, 8000, True, id="exactly-the-percentile-qualifies"),
-        pytest.param(7999, 8000, False, id="just-under-the-percentile"),
-        pytest.param(6000, 3000, True, id="cheap-percentile-still-pings-over-the-floor"),
-        pytest.param(5000, 3000, True, id="the-10x-floor-is-the-ping-minimum"),
-        pytest.param(4999, 3000, False, id="cheap-percentile-cannot-ping-under-the-floor"),
-        pytest.param(4999, 100, False, id="a-cheap-percentile-cannot-ping-a-huge-win"),
+        pytest.param(3000, 2500, True, id="over-a-percentile-above-the-floor"),
+        pytest.param(2500, 2500, True, id="exactly-the-percentile-qualifies"),
+        pytest.param(2499, 2500, False, id="just-under-the-percentile"),
+        pytest.param(2000, 1000, True, id="cheap-percentile-still-pings-over-the-floor"),
+        pytest.param(1500, 1000, True, id="the-3x-floor-is-the-ping-minimum"),
+        pytest.param(1499, 1000, False, id="cheap-percentile-cannot-ping-under-the-floor"),
+        pytest.param(1499, 100, False, id="a-cheap-percentile-cannot-ping-a-big-win"),
         pytest.param(50_000, None, False, id="no-history-never-pings"),
     ],
 )
 def test_big_win_tier_ping_takes_the_higher_of_percentile_and_floor(
     payout, top_pct, pings
 ):
-    """The @here fires on the top 3% of recent wins, floored at 10× the bar.
+    """The @here fires on the top 3% of recent ANNOUNCED wins, floored at the
+    ladder's top rung.
 
-    The floor is the guard that matters: in a quiet low-stakes stretch a
-    guild's own 97th percentile can sit barely over its broadcast bar, and
+    The floor is the guard that matters: a guild whose announced wins all
+    cluster near its bar would have a percentile barely over that bar, and
     without the floor every routine broadcast would ping the whole channel.
     """
     tier = logic.big_win_tier(payout, 500, top_pct_payout=top_pct)
@@ -741,6 +754,18 @@ def test_big_win_tier_ping_takes_the_higher_of_percentile_and_floor(
     # line; the quieter rungs must never carry either.
     assert (tier.header == logic.LEGENDARY_HEADER) is pings
     assert (tier.lead is not None) is pings
+
+
+def test_legendary_supersedes_the_rung_it_lands_on():
+    """Documented, accepted behaviour rather than an accident: when a guild's
+    percentile sits at or under the ladder's top rung, Legendary and Huge Win
+    coincide and Huge Win is subsumed. Reserving a sliver of range for it
+    would buy a rung nobody would ever see fire."""
+    flat = logic.big_win_tier(1500, 500, top_pct_payout=900)
+    assert flat is not None and flat.header == logic.LEGENDARY_HEADER
+    # With a percentile above the floor, Huge Win gets its own band back.
+    spread = logic.big_win_tier(1500, 500, top_pct_payout=2500)
+    assert spread is not None and spread.header == "🔥 Huge Win"
 
 
 def test_big_win_tier_ping_still_obeys_the_broadcast_bar():

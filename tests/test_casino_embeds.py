@@ -746,8 +746,8 @@ def test_broadcast_leads_with_the_tier_header_not_the_game_card_title():
 
 
 def test_broadcast_escalates_its_header_with_the_payout():
+    assert _broadcast(1499).embed.title.startswith("💰 Big Win")
     assert _broadcast(1500).embed.title.startswith("🔥 Huge Win")
-    assert _broadcast(5000).embed.title.startswith("🌟 Monster Win")
 
 
 def test_broadcast_carries_over_the_result_copy_and_fields():
@@ -771,7 +771,7 @@ def test_broadcast_never_mutates_the_players_own_card():
     before = (card.title, card.description, len(card.fields), card.color)
     built = casino_embeds.build_big_win_broadcast(
         card, payout=9_999, threshold=500, game_label="Roulette",
-        top_pct_payout=1000,
+        top_pct_payout=2500,
     )
     assert built is not None
     assert built.embed is not card
@@ -781,7 +781,7 @@ def test_broadcast_never_mutates_the_players_own_card():
 def test_top_three_percent_pings_and_says_why():
     """The loudest rung: @here plus a lead line above the result copy, so the
     ping is explained by the card rather than just louder than the rest."""
-    built = _broadcast(9_999, top_pct_payout=8_000)
+    built = _broadcast(3000, top_pct_payout=2500)
     assert built is not None
     assert built.ping
     assert built.embed.title == f"{logic.LEGENDARY_HEADER} — Roulette"

@@ -99,7 +99,7 @@ tweak.
 
 | Table | What it holds | Why it stays out |
 |---|---|---|
-| `casino_win_history` (migration 161, 2026-08-15) | `(guild_id, payout, ts)` — a rolling `WIN_HISTORY_KEEP`-row window of winning payouts per guild, powering the big-win broadcast's top-3% `@here` tier | No `user_id` and no other member identifier. It answers only "how big is a big win in this guild lately", which never needs to know who won. The cheaper option was raising `casino_ticker`'s retention 25 → 500, and it was rejected precisely because those rows *do* carry `user_id`: it would have retained 20× more per-member play history to power a header. Pinned by a schema assertion in `tests/test_casino_service.py` |
+| `casino_win_history` (migration 162, 2026-08-15) | `(guild_id, payout, ts)` — a rolling `WIN_HISTORY_KEEP`-row window of the payouts this guild has publicly announced, powering the big-win broadcast's top-3% `@here` tier | No `user_id` and no other member identifier. It answers only "how big is a big win in this guild lately", which never needs to know who won. The cheaper option was raising `casino_ticker`'s retention 25 → 500, and it was rejected precisely because those rows *do* carry `user_id`: it would have retained 20× more per-member play history to power a header. Pinned by a schema assertion in `tests/test_casino_service.py` |
 
 ## Processors (running inventory)
 

@@ -1013,8 +1013,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         the ping is the right way to fail here; losing the whole announcement
         because a percentile lookup hiccuped is not.
         """
-        floor = threshold * logic.BIG_WIN_TIERS[0][0]
-        if threshold <= 0 or payout < floor:
+        if threshold <= 0 or payout < threshold * logic.LEGENDARY_MIN_MULT:
             return None
 
         def _read() -> int | None:

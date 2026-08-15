@@ -523,25 +523,49 @@ def recent_ticker(
     ).fetchall()
 
 
-# Winning payouts kept per guild for the broadcast's top-tier percentile
-# (migration 161). Big enough that a 97th percentile rests on ~30 rows rather
-# than a handful, small enough to still be "lately" in an active guild.
+# Broadcast-clearing payouts kept per guild for the top-tier percentile
+# (migration 162). Only ANNOUNCED wins are banked — see the gate in
+# ``record_play``. Ranking every win instead put the mark below the broadcast
+# bar, because the overwhelming majority of casino wins are small pair
+# payouts: prod's average stake is 36 coins and its average win returns 71.
 WIN_HISTORY_KEEP = 1000
 # Below this many banked wins the percentile is refused outright — no ping,
 # whatever the payout. A fresh guild must not @here its first win because the
-# sample of one made it the top 3%.
-PING_MIN_SAMPLE = 100
+# sample of one made it the top 3%. Sized against the announced-win rate
+# rather than the total win rate: prod broadcasts a few dozen times a year, so
+# a 100-row floor would have taken years to arm.
+PING_MIN_SAMPLE = 40
 # "Top 3% of winnings", as a percentile rank.
 PING_PERCENTILE = 97
+
+
+def broadcast_bar(conn: sqlite3.Connection, guild_id: int) -> int:
+    """The guild's ``broadcast_min_payout``, read as a single key.
+
+    ``load_casino_settings`` would do, but this runs inside the settle
+    transaction on every winning play and only one integer is wanted.
+    """
+    row = conn.execute(
+        "SELECT value FROM config WHERE guild_id = ? AND key = ?",
+        (guild_id, f"{CASINO_PREFIX}broadcast_min_payout"),
+    ).fetchone()
+    if row is None:
+        return DEFAULT_CASINO_SETTINGS.broadcast_min_payout
+    try:
+        return int(str(row["value"]))
+    except ValueError:
+        return DEFAULT_CASINO_SETTINGS.broadcast_min_payout
 
 
 def record_win(
     conn: sqlite3.Connection, guild_id: int, payout: int, *, now: float | None = None
 ) -> None:
-    """Append one winning payout and trim the guild to WIN_HISTORY_KEEP.
+    """Append one announced winning payout and trim to WIN_HISTORY_KEEP.
 
-    Stores no user_id on purpose — see migration 161. This table answers
-    "how big is a big win around here lately" and nothing else.
+    A dumb writer: the caller decides what counts (``record_play`` gates on
+    the game, a real win, and the guild's bar). Stores no user_id on purpose
+    — see migration 162. This table answers "how big is an announced win
+    around here lately" and nothing else.
     """
     conn.execute(
         "INSERT INTO casino_win_history (guild_id, payout, ts) VALUES (?, ?, ?)",
@@ -621,10 +645,15 @@ def record_play(
         payout,
     )
     won = 1 if payout > stake else 0
-    # The broadcast's percentile population: the games that can broadcast, and
-    # only real wins. A push returns the stake and would drag the bar down.
+    # The broadcast's percentile population: wins the channel actually saw.
+    # Three filters, each load-bearing — the games that can broadcast, real
+    # wins only (a push returns the stake and would drag the bar down), and
+    # only those clearing the guild's own bar, so "top 3%" ranks announcements
+    # against announcements rather than against 52-coin pair payouts.
     if won and game in TICKER_GAMES:
-        record_win(conn, guild_id, payout, now=now)
+        bar = broadcast_bar(conn, guild_id)
+        if bar > 0 and payout >= bar:
+            record_win(conn, guild_id, payout, now=now)
     conn.execute(
         "INSERT INTO casino_member_stats "
         "(guild_id, user_id, wagered, returned, plays, wins, biggest_win, "

@@ -1,4 +1,4 @@
--- Migration 161: a rolling window of winning payouts, so the public big-win
+-- Migration 162: a rolling window of winning payouts, so the public big-win
 -- broadcast can tell a genuinely rare haul from a merely large one.
 --
 -- WHY: the broadcast header now escalates with size (Big Win / Huge Win /
@@ -48,8 +48,14 @@ CREATE TABLE IF NOT EXISTS casino_win_history (
     ts       REAL    NOT NULL
 );
 
--- The percentile read is ORDER BY payout within one guild; the trim walks the
--- same rows by id. One composite index serves the read, and the primary key
--- serves the trim.
+-- Two guild-scoped indexes, because the two queries sort differently: the
+-- percentile read is ORDER BY payout within one guild, and the trim walks the
+-- same guild's rows by id. The primary key does NOT serve the trim — it is on
+-- id alone, so a guild-scoped ORDER BY id falls back to a temp b-tree over the
+-- whole window on every winning play, inside the settle transaction holding
+-- the write lock. casino_ticker carries the same pair for the same reason
+-- (idx_casino_ticker_guild, migration 128) at a fortieth of the row count.
 CREATE INDEX IF NOT EXISTS idx_casino_win_history_guild_payout
     ON casino_win_history (guild_id, payout);
+CREATE INDEX IF NOT EXISTS idx_casino_win_history_guild_id
+    ON casino_win_history (guild_id, id);

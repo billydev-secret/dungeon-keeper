@@ -625,6 +625,10 @@ KNOWN_UNCOVERED = {
     # baccarat result is semantic green/red only; the running note is a
     # content string — both out of accent scope by design.
     "bot_modules.cogs.casino.embeds.build_baccarat_result_embed",
+    # The big-win broadcast takes no color argument at all: it copies the
+    # color off the result card it is built from, which a broadcast only ever
+    # reaches on a win, so it is always the semantic green.
+    "bot_modules.cogs.casino.embeds.build_big_win_broadcast",
     "bot_modules.cogs.casino.embeds.build_coup_running_note",
     "bot_modules.cogs.casino.embeds.build_dice_result_embed",
     "bot_modules.cogs.casino.embeds.build_draw_running_note",

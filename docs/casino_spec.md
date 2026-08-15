@@ -74,8 +74,7 @@ channel edit bucket). The channel itself carries only shared surfaces:
   |---|---|---|
   | 💰 Big Win | ≥ 1× `broadcast_min_payout` | — |
   | 🔥 Huge Win | ≥ 3× | — |
-  | 🌟 Monster Win | ≥ 10× | — |
-  | 💎 Legendary Win | top 3% of the guild's recent wins, floored at 10× | `@here` |
+  | 💎 Legendary Win | top 3% of the guild's recent **announced** wins, floored at 3× | `@here` |
 
   Steps are **multiples of the dial**, never coin amounts: the two live
   guilds run economies ~8× apart, and a hardcoded ladder would be wrong in
@@ -83,28 +82,55 @@ channel edit bucket). The channel itself carries only shared surfaces:
   and is the only one that pings; `AllowedMentions(everyone=True)` is set
   only for it, every other broadcast staying on `.none()`.
 
-  **Why the ladder is floored at 10×.** The percentile alone would misfire:
-  in a quiet low-stakes stretch a guild's own 97th percentile can sit barely
-  over its broadcast bar, and every routine broadcast would then ping the
-  channel. `big_win_tier` takes the larger of the percentile and 10× the
-  dial, so the `@here` is at minimum as rare as a Monster Win and rarer
-  whenever the guild's real distribution says so. A percentile can only
+  **Rungs are sized against what the economy actually pays.** This shipped on
+  2026-08-15 with a three-rung ladder topping out at 🌟 Monster Win (10×) and
+  was corrected the same day against prod: The Golden Meadow has paid 4,350
+  winning bets on an average stake of 36 coins, and its largest single win
+  ever is 3,000 against a 500 bar — 6×. A 10× rung could never have rendered,
+  and neither could the ping sitting above it. The ladder is deliberately
+  short, and the *top* of it is the percentile, which resizes itself.
+
+  **Legendary supersedes the rung it lands on** rather than being a fourth
+  step. The ping fires at the larger of the percentile and 3× the bar, so
+  when a guild's percentile sits at or under that floor the two conditions
+  coincide and 🔥 Huge Win is subsumed. That is accepted, not overlooked:
+  reserving a sliver of range for Huge Win would buy a rung nobody would see
+  fire. `tests/test_casino_logic.py` pins both the supersession and — via
+  `test_every_ladder_rung_is_reachable` — that no rung is dead, which is the
+  regression guard for the defect above.
+
+  **Why the floor exists at all.** A guild whose announced wins all cluster
+  near its bar would have a percentile barely over that bar, and without the
+  floor every routine broadcast would ping the channel. A percentile can only
   escalate a broadcast, never create one — a guild with the dial at 0 stays
   silent however rare the win.
 
   The percentile comes from `casino_service.win_percentile` over
-  `casino_win_history` (migration 161): a rolling `WIN_HISTORY_KEEP`-row
-  window of winning payouts per guild, banked from `record_play` in the
-  settle transaction for the nine `TICKER_GAMES` and only when
-  `payout > stake`. Under `PING_MIN_SAMPLE` banked wins it returns **None**,
+  `casino_win_history` (migration 162): a rolling `WIN_HISTORY_KEEP`-row
+  window per guild, banked from `record_play` inside the settle transaction
+  under three filters — one of the nine `TICKER_GAMES`, `payout > stake` (a
+  push is not a win), **and clearing the guild's own bar**. That last filter
+  is what makes the percentile mean anything: ranking *every* win put the
+  mark below the broadcast bar, because the overwhelming majority of casino
+  wins are small pair payouts (prod's average win returns 71 coins against a
+  500 bar), which left the floor deciding everything and the percentile
+  contributing nothing. `broadcast_bar` reads that dial as a single key
+  rather than through `load_casino_settings`, since this runs on every
+  winning play and only one integer is wanted.
+
+  Under `PING_MIN_SAMPLE` (40) banked wins `win_percentile` returns **None**,
   a refusal callers must read as "don't ping" and never as "everything
-  qualifies" — this is what stops a fresh guild `@here`-ing its first win.
-  The read is skipped entirely for any payout under the 10× floor, and a
-  failed read degrades to None, so a hiccup costs the ping and never the
-  announcement. The table **deliberately stores no `user_id`**: it answers
-  only "how big is a big win around here lately", which never needs to know
-  who won, so it stays outside personal data — no `data_register.md` row, and
-  nothing for `purge_user_data` to clear.
+  qualifies" — this is what stops a fresh guild `@here`-ing its first win. The
+  floor is sized against the *announced*-win rate, not the total win rate:
+  prod broadcasts a few dozen times a year, so the 100-row floor this
+  originally shipped with would have taken years to arm. The read is skipped
+  for any payout under 3× the bar, and a failed read degrades to None, so a
+  hiccup costs the ping and never the announcement.
+
+  The table **deliberately stores no `user_id`**: it answers only "how big is
+  an announced win around here lately", which never needs to know who won, so
+  it stays outside personal data — see the "deliberately not personal data"
+  section of `data_register.md`, and nothing for `purge_user_data` to clear.
 
 The panel is **bottom-sticky** (the economy sticky-panel pattern): channel
 traffic debounces a restick (delete + repost, since it is the casino's only
@@ -554,11 +580,13 @@ persistence + guards, `broadcast_min_payout` roundtrip/bounds, the 840s
 idle cap; authz/snowflake/browser sweeps cover the panel automatically.
 The big-win broadcast is a three-layer contract: the tier ladder and the
 percentile/floor interaction in `tests/test_casino_logic.py` (including that
-an unknown percentile withholds the ping rather than passing it, and that a
-percentile can never create a broadcast the dial switched off), the rolling
-window in `tests/test_casino_service.py` (sample floor, per-guild scoping,
-trim keeping the newest, a schema assertion that the table holds no
-`user_id`, and that only real wins from `TICKER_GAMES` are banked), the
+an unknown percentile withholds the ping rather than passing it, that a
+percentile can never create a broadcast the dial switched off, the documented
+supersession, and `test_every_ladder_rung_is_reachable` guarding the dead-rung
+defect), the rolling window in `tests/test_casino_service.py` (sample floor,
+per-guild scoping, trim keeping the newest, a schema assertion that the table
+holds no `user_id`, and that only announced wins from `TICKER_GAMES` are
+banked — with the bar off, nothing accrues at all), the
 embed in `tests/test_casino_embeds.py` (header replaces the game title, copy
 and fields survive, and the player's own card is never mutated), and the cog
 seam in `tests/cogs/test_casino_big_win_broadcast.py` (no view, `@here` with

@@ -2048,7 +2048,7 @@ def test_broadcast_min_payout_defaults_off_and_roundtrips(db):
         assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 500
 
 
-# ── win history (the broadcast's top-3% percentile, migration 161) ─────
+# ── win history (the broadcast's top-3% percentile, migration 162) ─────
 
 
 def _bank_wins(conn, payouts, guild=GUILD):
@@ -2104,7 +2104,7 @@ def test_win_history_trims_to_the_window_and_keeps_the_newest(db):
 
 
 def test_win_history_stores_no_user_id(db):
-    """Migration 161's whole privacy claim, pinned: this table is outside
+    """Migration 162's whole privacy claim, pinned: this table is outside
     personal data, so it carries no column naming a member. A future column
     added here needs a data_register.md row and a purge decision."""
     with open_db(db) as conn:
@@ -2116,12 +2116,17 @@ def test_win_history_stores_no_user_id(db):
     assert cols == {"id", "guild_id", "payout", "ts"}
 
 
-def test_record_play_banks_only_real_wins_from_broadcasting_games(db):
-    """The percentile population: a push is not a win and would drag the bar
-    down, and pools settles on its own panel rather than in the channel."""
+def test_record_play_banks_only_announced_wins_from_broadcasting_games(db):
+    """The percentile population is the wins the CHANNEL saw. Ranking every
+    win instead put the mark below the broadcast bar — prod's average win
+    returns 71 coins against a 500 bar — which left the percentile deciding
+    nothing. A push is not a win, and pools settles on its own panel.
+    """
     with open_db(db) as conn:
-        svc.record_play(conn, GUILD, A, "slots", 100, 900, now=NOW)   # win
-        svc.record_play(conn, GUILD, A, "slots", 100, 100, now=NOW)   # push
+        svc.save_casino_settings(conn, GUILD, {"broadcast_min_payout": 500})
+        svc.record_play(conn, GUILD, A, "slots", 100, 900, now=NOW)   # announced
+        svc.record_play(conn, GUILD, A, "slots", 100, 499, now=NOW)   # under the bar
+        svc.record_play(conn, GUILD, A, "slots", 600, 600, now=NOW)   # push over the bar
         svc.record_play(conn, GUILD, A, "slots", 100, 0, now=NOW)     # loss
         svc.record_play(conn, GUILD, A, "pools", 100, 900, now=NOW)   # off-ticker
         banked = [
@@ -2132,3 +2137,26 @@ def test_record_play_banks_only_real_wins_from_broadcasting_games(db):
             )
         ]
     assert banked == [900]
+
+
+def test_record_play_banks_nothing_while_the_broadcast_bar_is_off(db):
+    """Bar at 0 is the guild's off switch. With nothing announced there is no
+    population to rank, so the table stays empty and the ping can never arm —
+    rather than quietly accruing a percentile from unannounced wins."""
+    with open_db(db) as conn:
+        assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 0
+        for _ in range(svc.PING_MIN_SAMPLE + 5):
+            svc.record_play(conn, GUILD, A, "slots", 100, 5000, now=NOW)
+        assert svc.win_percentile(conn, GUILD) is None
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM casino_win_history WHERE guild_id = ?",
+            (GUILD,),
+        ).fetchone()["c"] == 0
+
+
+def test_broadcast_bar_reads_the_dial_and_falls_back(db):
+    with open_db(db) as conn:
+        assert svc.broadcast_bar(conn, GUILD) == 0  # unset -> the default
+        svc.save_casino_settings(conn, GUILD, {"broadcast_min_payout": 750})
+        assert svc.broadcast_bar(conn, GUILD) == 750
+        assert svc.broadcast_bar(conn, GUILD + 999) == 0  # another guild

@@ -231,16 +231,29 @@ def is_big_bet(stake: int, max_bet: int) -> bool:
 # Deliberately no "Jackpot" tier — the casino already has a real progressive
 # jackpot with its own celebration embed, and reusing the word for a merely
 # large win would make the genuine article stop landing.
+#
+# The ladder is TWO rungs, not three, and the multiples are small. A 10× rung
+# shipped on 2026-08-15 and was measured against prod the same day: The Golden
+# Meadow has paid 4,350 winning bets on an average stake of 36 coins, and its
+# largest single win ever is 3,000 against a 500 bar — 6×. A 10× rung could
+# never have rendered. Rungs are sized to what the economy actually pays, and
+# the top of the ladder is the percentile, which resizes itself.
 BIG_WIN_TIERS: tuple[tuple[int, str], ...] = (
-    (10, "🌟 Monster Win"),
     (3, "🔥 Huge Win"),
     (1, "💰 Big Win"),
 )
-# Above the whole ladder sits the one that pings the channel: a payout in the
-# top 3% of what this guild has actually been winning lately (the percentile
-# comes from casino_service.win_percentile — see migration 161).
+# Above the ladder sits the one that pings the channel: a payout in the top 3%
+# of the wins this guild has actually ANNOUNCED lately — casino_win_history
+# banks only broadcast-clearing wins, so the percentile ranks the population a
+# player would recognise as big. Ranking all wins instead put the mark below
+# the broadcast bar (most wins are ~52-coin pair payouts), which left the floor
+# deciding everything and the percentile contributing nothing.
 LEGENDARY_HEADER = "💎 Legendary Win"
 LEGENDARY_LEAD = "**One of the biggest payouts this casino has ever handed over.**"
+# The ping can never fire below the ladder's top rung: a guild whose announced
+# wins all cluster near its bar would otherwise have a percentile barely over
+# that bar and would ping on every broadcast.
+LEGENDARY_MIN_MULT = BIG_WIN_TIERS[0][0]
 
 
 class BigWinTier(NamedTuple):
@@ -258,22 +271,25 @@ def big_win_tier(
     which is the guild's off switch. Callers treat None as the whole
     decision; there is no second threshold check anywhere.
 
-    ``top_pct_payout`` is the guild's top-3% mark, or None when there isn't
-    enough win history to rank against. None can only ever *withhold* the
-    ping: an unknown percentile is never treated as a passing one.
+    ``top_pct_payout`` is the guild's top-3% mark over its ANNOUNCED wins, or
+    None when there isn't enough history to rank against. None can only ever
+    *withhold* the ping: an unknown percentile is never treated as a passing
+    one, and it can never create a broadcast the dial switched off.
 
-    The ping also can't fire below the top rung of the multiple ladder. Left
-    to the percentile alone, a guild in a quiet low-stakes stretch would have
-    a top-3% mark barely over its own broadcast bar, and every routine
-    broadcast would ping the channel. Taking the larger of the two means the
-    @here is at minimum as rare as a Monster Win, and rarer whenever the
-    guild's real distribution says so.
+    **Legendary supersedes the rung it lands on** rather than sitting above
+    it as a fourth step, and that is a deliberate accepted cost. The ping is
+    the larger of the percentile and ``LEGENDARY_MIN_MULT``× the bar, so when
+    a guild's percentile sits at or under that floor the two conditions
+    coincide and 🔥 Huge Win is subsumed — the ladder is then 💰 Big Win plus
+    the ping. The alternative, a strict inequality that reserves a sliver of
+    range for Huge Win, buys a rung nobody would ever see fire. Whichever is
+    loudest and true wins; the floor is what stops "loudest and true" from
+    being every broadcast.
     """
     if threshold <= 0 or payout < threshold:
         return None
-    top_mult, top_header = BIG_WIN_TIERS[0]
     if top_pct_payout is not None and payout >= max(
-        top_pct_payout, threshold * top_mult
+        top_pct_payout, threshold * LEGENDARY_MIN_MULT
     ):
         return BigWinTier(LEGENDARY_HEADER, LEGENDARY_LEAD, True)
     for mult, header in BIG_WIN_TIERS:
@@ -281,7 +297,7 @@ def big_win_tier(
             return BigWinTier(header, None, False)
     # Unreachable: the 1× row always matches above the bar. Kept explicit so a
     # future edit to the ladder can't silently start returning None here.
-    return BigWinTier(top_header, None, False)
+    return BigWinTier(BIG_WIN_TIERS[-1][1], None, False)
 
 
 # ── Roulette (European single zero) ────────────────────────────────────

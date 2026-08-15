@@ -105,7 +105,7 @@ async def test_the_broadcast_carries_no_view(cog):
 async def test_an_ordinary_big_win_pings_nobody(cog):
     """Silent is the default. ``AllowedMentions.none()`` is what makes it hold
     even though the result copy renders player names."""
-    _bank_wins(cog, range(1, 201))  # top-3% mark ≈ 195, far under 10× the bar
+    _bank_wins(cog, [500] * 200)  # every announced win at the bar: a flat top 3%
     channel = _Channel()
     await _broadcast(cog, channel, 1200)
     sent = channel.sends[0]
@@ -118,9 +118,9 @@ async def test_a_top_three_percent_win_pings_here(cog):
     """The @here needs both halves to work: the text, and an allowance that
     lets Discord act on it. Sending "@here" under ``AllowedMentions.none()``
     would render the word and notify no one."""
-    _bank_wins(cog, [6_000] * 100 + [20_000] * 4)
+    _bank_wins(cog, [600] * 100 + [3_000] * 4)
     channel = _Channel()
-    await _broadcast(cog, channel, 20_000)
+    await _broadcast(cog, channel, 3_000)
     sent = channel.sends[0]
     assert sent["content"] == "@here"
     assert sent["allowed_mentions"].everyone is True
