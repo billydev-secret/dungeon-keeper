@@ -2097,12 +2097,16 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         bets: list[tuple[int, str, int, int]],
         result_embed: discord.Embed,
     ) -> None:
-        """Repost the result publicly when it clears the big-win bar.
+        """Announce the round publicly when its best payout clears the bar.
 
         Private rounds get the same treatment the instant games have had
         since 2026-07-24 — nothing in the channel unless a payout is worth
         advertising. Every play still shows on the hub's floor ticker, so
         going quiet is not the same as going invisible.
+
+        No longer a repost of ``result_embed``: ``_send_big_win`` builds a
+        separate card from it, so the Next Round button stays on the
+        player's own copy.
         """
         threshold = settings.broadcast_min_payout
         best = max((b[3] for b in bets), default=0)
