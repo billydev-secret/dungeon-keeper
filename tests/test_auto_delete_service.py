@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import logging
+
+import discord
 import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.auto_delete_service import (
+    MAX_DELETE_ATTEMPTS,
+    RETRY_BACKOFF_SECONDS,
     auto_delete_rule_exists,
+    delete_tracked_messages_older_than,
     format_duration_seconds,
     init_auto_delete_tables,
     list_auto_delete_rules_for_guild,
@@ -347,3 +353,316 @@ def test_claim_never_aborts_a_sweep(tmp_path):
     missing = tmp_path / "nonexistent" / "no.db"
     _claim_deleted(missing, 1, {1})  # must not raise
     _release_deleted(missing, 1, {1})
+
+
+# ── bounded retry on a failed delete ──────────────────────────────────
+#
+# A transient HTTP error used to untrack the messages it failed on ("avoid
+# infinite retry"), which made them permanent orphans: the sweep is
+# queue-driven, and the bounded startup scan can't see a message older than
+# ``last_run_ts - max_age``. Three messages were lost this way in
+# #flash-channel on 2026-08-13. Failures now cost an attempt and a backoff
+# instead of the queue row.
+
+
+OPERATOR_ID = 424242
+
+
+@pytest.fixture
+def operator_dm(monkeypatch):
+    """The give-up DM goes to SUPPORT_USER_ID — the same operator the watchdog pages."""
+    monkeypatch.setenv("SUPPORT_USER_ID", str(OPERATOR_ID))
+
+
+class _StubUser:
+    def __init__(self, user_id: int, sent: list[tuple[int, str]]):
+        self.id = user_id
+        self._sent = sent
+
+    async def send(self, content: str):
+        self._sent.append((self.id, content))
+
+
+class _StubBot:
+    def __init__(self):
+        self.dms: list[tuple[int, str]] = []
+
+    def get_user(self, user_id: int):
+        return _StubUser(user_id, self.dms)
+
+
+class _StubResponse:
+    def __init__(self, status: int):
+        self.status = status
+        self.reason = "stub"
+
+
+def _http_error(status: int = 500, code: int = 0) -> discord.HTTPException:
+    return discord.HTTPException(_StubResponse(status), {"code": code, "message": "boom"})
+
+
+class _StubPartial:
+    def __init__(self, message_id: int, channel: _SweepChannel):
+        self.id = message_id
+        self._channel = channel
+
+    async def delete(self, *, reason: str | None = None):
+        del reason
+        self._channel.individual_attempts.append(self.id)
+        exc = self._channel.raise_on_individual
+        if exc is not None:
+            raise exc
+        self._channel.deleted.append(self.id)
+
+
+class _SweepChannel:
+    """Minimal channel for driving delete_tracked_messages_older_than."""
+
+    def __init__(self, *, raise_on_bulk=None, raise_on_individual=None):
+        self.id = 100
+        self.name = "flash-channel"
+        self.raise_on_bulk = raise_on_bulk
+        self.raise_on_individual = raise_on_individual
+        self.bulk_attempts: list[list[int]] = []
+        self.individual_attempts: list[int] = []
+        self.deleted: list[int] = []
+
+    def get_partial_message(self, message_id: int):
+        return _StubPartial(message_id, self)
+
+    async def delete_messages(self, partials, *, reason: str):
+        del reason
+        ids = [p.id for p in partials]
+        self.bulk_attempts.append(ids)
+        if self.raise_on_bulk is not None:
+            raise self.raise_on_bulk
+        self.deleted.extend(ids)
+
+
+def _queue_state(db_path, message_id: int = 1001):
+    with open_db(db_path) as conn:
+        return conn.execute(
+            "SELECT attempts, next_attempt_ts FROM auto_delete_messages WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+
+
+async def _sweep(db_path, channel, *, now_ts: float, bot=None):
+    return await delete_tracked_messages_older_than(
+        db_path,
+        1,
+        channel,  # type: ignore[arg-type]
+        cutoff_ts=now_ts,
+        reason="test",
+        now_ts=now_ts,
+        bot=bot,
+    )
+
+
+@pytest.mark.asyncio
+async def test_http_failure_keeps_message_tracked_for_retry(ad_db):
+    """The regression: a transient bulk-delete error must not orphan the message."""
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+    channel = _SweepChannel(raise_on_bulk=_http_error(500))
+
+    queued, deleted, failed = await _sweep(ad_db, channel, now_ts=1_000.0)
+
+    assert (queued, deleted, failed) == (1, 0, 1)
+    row = _queue_state(ad_db)
+    assert row is not None, "a failed delete must leave the message in the queue"
+    assert row["attempts"] == 1
+    assert row["next_attempt_ts"] == pytest.approx(1_000.0 + 60)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "still_tracked", "counted_failed"),
+    [
+        pytest.param(_http_error(500), True, 1, id="server-error-retries"),
+        pytest.param(_http_error(429), True, 1, id="rate-limited-retries"),
+        pytest.param(_http_error(400, code=50034), True, 1, id="bad-request-retries"),
+        pytest.param(
+            discord.NotFound(_StubResponse(404), {"code": 10008}), False, 0,
+            id="lone-not-found-drops-clean",
+        ),
+        pytest.param(
+            discord.Forbidden(_StubResponse(403), {"code": 50013}), True, 1,
+            id="forbidden-keeps-and-aborts",
+        ),
+    ],
+)
+async def test_bulk_error_variants(ad_db, error, still_tracked, counted_failed):
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+    channel = _SweepChannel(raise_on_bulk=error)
+
+    _queued, _deleted, failed = await _sweep(ad_db, channel, now_ts=1_000.0)
+
+    assert failed == counted_failed
+    assert (_queue_state(ad_db) is not None) is still_tracked
+
+
+@pytest.mark.asyncio
+async def test_bulk_not_found_retries_the_chunk_one_at_a_time(ad_db):
+    """A 404 on a chunk doesn't say which id is stale, so the survivors get
+    tried individually rather than being dropped alongside the dead one."""
+    with open_db(ad_db) as conn:
+        for mid in (1001, 1002):
+            track_auto_delete_message(conn, 1, 100, mid, 100.0)
+    channel = _SweepChannel(
+        raise_on_bulk=discord.NotFound(_StubResponse(404), {"code": 10008})
+    )
+
+    await _sweep(ad_db, channel, now_ts=1_000.0)
+
+    assert sorted(channel.individual_attempts) == [1001, 1002]
+    assert _queue_state(ad_db, 1001) is None and _queue_state(ad_db, 1002) is None
+
+
+@pytest.mark.asyncio
+async def test_forbidden_does_not_consume_the_retry_budget(ad_db):
+    """A permission gap is channel-wide, not a verdict on this message."""
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+    channel = _SweepChannel(raise_on_bulk=discord.Forbidden(_StubResponse(403), {}))
+
+    await _sweep(ad_db, channel, now_ts=1_000.0)
+
+    row = _queue_state(ad_db)
+    assert row["attempts"] == 0
+    assert row["next_attempt_ts"] == 0
+
+
+@pytest.mark.asyncio
+async def test_backoff_defers_the_retry_and_then_succeeds(ad_db):
+    """Backed-off messages are invisible until due, then delete normally."""
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+    failing = _SweepChannel(raise_on_bulk=_http_error(500))
+    await _sweep(ad_db, failing, now_ts=1_000.0)
+
+    # 30s later the message is still parked — not even counted as due.
+    early = _SweepChannel()
+    assert await _sweep(ad_db, early, now_ts=1_030.0) == (0, 0, 0)
+    assert early.bulk_attempts == []
+
+    # Past the 60s backoff it sweeps normally and leaves the queue.
+    late = _SweepChannel()
+    assert await _sweep(ad_db, late, now_ts=1_061.0) == (1, 1, 0)
+    assert late.deleted == [1001]
+    assert _queue_state(ad_db) is None
+
+
+@pytest.mark.asyncio
+async def test_retry_budget_exhausts_loudly_and_stops_retrying(ad_db, caplog, operator_dm):
+    """Five failures, then the message is abandoned: logged with a traceback,
+    DM'd once, and never retried again — but the row stays as evidence."""
+    caplog.set_level(logging.ERROR, logger="dungeonkeeper.auto_delete")
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+
+    bot = _StubBot()
+    now = 1_000.0
+    for expected_attempt, backoff in enumerate(RETRY_BACKOFF_SECONDS, start=1):
+        channel = _SweepChannel(raise_on_bulk=_http_error(500))
+        await _sweep(ad_db, channel, now_ts=now, bot=bot)
+        assert channel.bulk_attempts == [[1001]], "the retry has to actually happen"
+        assert _queue_state(ad_db)["attempts"] == expected_attempt
+        now += backoff + 1
+
+    # One try per backoff step, plus the first: the last failure spends the budget.
+    final = _SweepChannel(raise_on_bulk=_http_error(500))
+    await _sweep(ad_db, final, now_ts=now, bot=bot)
+    assert _queue_state(ad_db)["attempts"] == MAX_DELETE_ATTEMPTS
+
+    # Sixth pass: the message is out of budget, so it isn't even due.
+    quiet = _SweepChannel(raise_on_bulk=_http_error(500))
+    assert await _sweep(ad_db, quiet, now_ts=now, bot=bot) == (0, 0, 0)
+    assert quiet.bulk_attempts == []
+
+    # Loud exactly once, with the Discord status/code and a traceback.
+    give_ups = [r for r in caplog.records if "gave up" in r.getMessage()]
+    assert len(give_ups) == 1
+    assert give_ups[0].levelname == "ERROR"
+    assert give_ups[0].exc_info is not None
+    assert "500" in give_ups[0].getMessage()
+
+    assert len(bot.dms) == 1, "one DM per abandoned message, not per attempt"
+    recipient, text = bot.dms[0]
+    assert recipient == OPERATOR_ID
+    assert "1001" in text and "flash-channel" in text
+
+
+@pytest.mark.asyncio
+async def test_failed_chunk_does_not_block_the_rest_of_the_queue(ad_db):
+    """The old untrack existed to stop a failing chunk stalling the drain loop;
+    the backoff has to buy the same protection without dropping anything."""
+    with open_db(ad_db) as conn:
+        for mid in (1001, 1002):
+            track_auto_delete_message(conn, 1, 100, mid, 100.0)
+
+    # First sweep fails on everything and parks both.
+    await _sweep(ad_db, _SweepChannel(raise_on_bulk=_http_error(500)), now_ts=1_000.0)
+    # A later sweep drains them; the loop must terminate, not spin.
+    ok = _SweepChannel()
+    queued, deleted, failed = await _sweep(ad_db, ok, now_ts=1_100.0)
+
+    assert (queued, deleted, failed) == (2, 2, 0)
+    assert sorted(ok.deleted) == [1001, 1002]
+
+
+@pytest.mark.asyncio
+async def test_individual_delete_failure_also_retries(ad_db):
+    """Messages past the bulk window take the one-at-a-time path; same rule."""
+    old_ts = 1_000.0 - (14 * 86400)
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, old_ts)
+    channel = _SweepChannel(raise_on_individual=_http_error(500))
+
+    await _sweep(ad_db, channel, now_ts=1_000.0)
+
+    assert channel.individual_attempts == [1001]
+    assert channel.bulk_attempts == []
+    row = _queue_state(ad_db)
+    assert row is not None and row["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_individual_not_found_still_drops_clean(ad_db):
+    old_ts = 1_000.0 - (14 * 86400)
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, old_ts)
+    channel = _SweepChannel(
+        raise_on_individual=discord.NotFound(_StubResponse(404), {"code": 10008})
+    )
+
+    await _sweep(ad_db, channel, now_ts=1_000.0)
+
+    assert _queue_state(ad_db) is None
+
+
+def test_retry_columns_migrated_onto_legacy_table(tmp_path):
+    """Existing queues predate the retry columns and must default to due-now."""
+    db_path = tmp_path / "legacy.db"
+    with open_db(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE auto_delete_messages (
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (guild_id, channel_id, message_id)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO auto_delete_messages VALUES (1, 100, 1001, 100.0)"
+        )
+    with open_db(db_path) as conn:
+        init_auto_delete_tables(conn)
+        due = pop_due_auto_delete_message_ids(
+            conn, 1, 100, cutoff_ts=9999.0, now_ts=9999.0
+        )
+    assert [mid for mid, _ in due] == [1001]

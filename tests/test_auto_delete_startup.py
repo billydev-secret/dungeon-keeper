@@ -195,6 +195,46 @@ async def test_scan_tracks_messages_younger_than_cutoff(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_scan_hands_failed_deletes_to_the_retry_queue(tmp_path):
+    """The scan walks history, not the queue, so a failed delete there used to
+    vanish the same way the tick path's did — counted, then forgotten. It has to
+    end up queued so the tick can spend a retry budget on it."""
+    import discord
+
+    db_path = tmp_path / "test.db"
+    with open_db(db_path) as conn:
+        init_auto_delete_tables(conn)
+
+    cutoff = datetime.now(timezone.utc)
+    doomed = _FakeMessage(1001, cutoff - timedelta(hours=1))
+    channel = _FakeChannel([doomed])
+
+    class _Resp:
+        status = 500
+        reason = "stub"
+
+    async def _boom(partials, *, reason: str):
+        raise discord.HTTPException(_Resp(), {"code": 0, "message": "boom"})
+
+    channel.delete_messages = _boom  # type: ignore[assignment]
+
+    deleted, failed = await _scan_and_delete_channel_history(
+        channel,  # type: ignore[arg-type]
+        cutoff,
+        reason="test",
+        db_path=db_path,
+        guild_id=42,
+    )
+
+    assert (deleted, failed) == (0, 1)
+    with open_db(db_path) as conn:
+        tracked = pop_due_auto_delete_message_ids(
+            conn, guild_id=42, channel_id=999, cutoff_ts=cutoff.timestamp() + 86400
+        )
+    assert [mid for mid, _ in tracked] == [1001]
+
+
+@pytest.mark.asyncio
 async def test_scan_does_not_track_when_db_path_omitted(tmp_path):
     """Backward-compat: with no db_path, behave like the old delete-only scan."""
     db_path = tmp_path / "test.db"

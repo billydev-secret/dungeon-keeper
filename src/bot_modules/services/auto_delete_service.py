@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -102,10 +103,24 @@ def init_auto_delete_tables(conn: sqlite3.Connection) -> None:
             channel_id INTEGER NOT NULL,
             message_id INTEGER NOT NULL,
             created_at REAL NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_ts REAL NOT NULL DEFAULT 0,
             PRIMARY KEY (guild_id, channel_id, message_id)
         )
         """
     )
+    # Migration: retry bookkeeping for queues built before bounded retry.
+    # Both default to 0, which reads as "never failed, due now".
+    msg_cols = {row[1] for row in conn.execute("PRAGMA table_info(auto_delete_messages)")}
+    if "attempts" not in msg_cols:
+        conn.execute(
+            "ALTER TABLE auto_delete_messages ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+        )
+    if "next_attempt_ts" not in msg_cols:
+        conn.execute(
+            "ALTER TABLE auto_delete_messages "
+            "ADD COLUMN next_attempt_ts REAL NOT NULL DEFAULT 0"
+        )
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_auto_delete_messages_due
@@ -337,6 +352,100 @@ _BULK_DELETE_MAX_AGE = (
 )  # 13-day buffer before Discord's hard 14-day cutoff
 _BULK_CHUNK = 100
 
+# Bounded retry for deletes Discord refuses with a transient error.
+#
+# A failure used to untrack the message outright ("avoid infinite retry"), which
+# made it a permanent orphan: the sweep is queue-driven, and the bounded startup
+# scan can't reach back past ``last_run_ts - max_age`` to find it again. That
+# cost three messages in #flash-channel on 2026-08-13. Now a failure costs one
+# attempt and parks the row until the next backoff step, so the rest of the
+# queue drains around it and a transient 429/500 fixes itself. These are the
+# waits *between* tries, so the message is attempted MAX_DELETE_ATTEMPTS times
+# across ~7.4 hours before the sweep abandons it — loudly, and without
+# discarding the row.
+RETRY_BACKOFF_SECONDS = (60, 300, 900, 3600, 21600)  # 1m, 5m, 15m, 1h, 6h
+MAX_DELETE_ATTEMPTS = len(RETRY_BACKOFF_SECONDS) + 1
+
+
+class AutoDeleteAbandoned(RuntimeError):
+    """A message that exhausted its retry budget and will never be swept.
+
+    Raised and caught at the point of failure purely so the give-up lands in the
+    log as an ``ERROR`` with a traceback chaining the underlying Discord error.
+    It deliberately does not escape the sweep: one cursed message must not stop
+    the other due messages in the channel from being deleted.
+    """
+
+
+def record_auto_delete_failure(
+    db_path: Path,
+    guild_id: int,
+    channel_id: int,
+    message_ids: set[int],
+    *,
+    now_ts: float | None = None,
+) -> list[int]:
+    """Charge a failed delete against each message's retry budget.
+
+    Returns the ids that just ran out of attempts. Those rows are **kept** —
+    ``attempts >= MAX_DELETE_ATTEMPTS`` filters them out of the due query, so
+    nothing retries them, but the queue still records what is stuck. Deleting
+    the row instead is what orphaned messages in the first place, and the row
+    clears itself when the message is eventually deleted (the gateway delete
+    listener untracks it).
+    """
+    if not message_ids:
+        return []
+    now = time.time() if now_ts is None else now_ts
+    abandoned: list[int] = []
+    with open_db(db_path) as conn:
+        for message_id in sorted(message_ids):
+            row = conn.execute(
+                """
+                SELECT attempts FROM auto_delete_messages
+                WHERE guild_id = ? AND channel_id = ? AND message_id = ?
+                """,
+                (guild_id, channel_id, message_id),
+            ).fetchone()
+            if row is None:
+                # Raced with a delete event that untracked it — nothing to charge.
+                continue
+            attempts = int(row["attempts"]) + 1
+            if attempts >= MAX_DELETE_ATTEMPTS:
+                next_ts = now
+                abandoned.append(message_id)
+            else:
+                next_ts = now + RETRY_BACKOFF_SECONDS[attempts - 1]
+            conn.execute(
+                """
+                UPDATE auto_delete_messages
+                SET attempts = ?, next_attempt_ts = ?
+                WHERE guild_id = ? AND channel_id = ? AND message_id = ?
+                """,
+                (attempts, next_ts, guild_id, channel_id, message_id),
+            )
+    return abandoned
+
+
+def queue_auto_delete_messages(
+    db_path: Path,
+    guild_id: int,
+    channel_id: int,
+    messages: list[tuple[int, float]],
+) -> None:
+    """Add (message_id, created_at) pairs to the queue, ignoring duplicates."""
+    if not messages:
+        return
+    with open_db(db_path) as conn:
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO auto_delete_messages
+                (guild_id, channel_id, message_id, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [(guild_id, channel_id, mid, created_at) for mid, created_at in messages],
+        )
+
 
 # ---------------------------------------------------------------------------
 # Pure scheduling / partition decisions
@@ -398,26 +507,133 @@ def partition_messages_by_age(
     return bulk, individual
 
 
+# Old enough to delete, not parked by a backoff, and still inside its retry
+# budget. Every "is it due?" question uses this, so the count that drives the
+# progress log can't disagree with the rows the sweep actually pulls.
+_DUE_PREDICATE = """
+    guild_id = ? AND channel_id = ? AND created_at <= ?
+    AND next_attempt_ts <= ? AND attempts < ?
+"""
+
+
+def count_due_auto_delete_messages(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    cutoff_ts: float,
+    *,
+    now_ts: float | None = None,
+) -> int:
+    """Count the messages a sweep would attempt right now."""
+    now = time.time() if now_ts is None else now_ts
+    row = conn.execute(
+        f"SELECT COUNT(*) AS cnt FROM auto_delete_messages WHERE {_DUE_PREDICATE}",
+        (guild_id, channel_id, cutoff_ts, now, MAX_DELETE_ATTEMPTS),
+    ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
 def pop_due_auto_delete_message_ids(
     conn: sqlite3.Connection,
     guild_id: int,
     channel_id: int,
     cutoff_ts: float,
     *,
+    now_ts: float | None = None,
     limit: int = 500,
 ) -> list[tuple[int, float]]:
     """Get (message_id, created_at) pairs that are due for deletion."""
+    now = time.time() if now_ts is None else now_ts
     rows = conn.execute(
-        """
+        f"""
         SELECT message_id, created_at
         FROM auto_delete_messages
-        WHERE guild_id = ? AND channel_id = ? AND created_at <= ?
+        WHERE {_DUE_PREDICATE}
         ORDER BY created_at, message_id
         LIMIT ?
         """,
-        (guild_id, channel_id, cutoff_ts, limit),
+        (guild_id, channel_id, cutoff_ts, now, MAX_DELETE_ATTEMPTS, limit),
     ).fetchall()
     return [(int(row["message_id"]), float(row["created_at"])) for row in rows]
+
+
+def _describe_http_error(exc: discord.HTTPException) -> str:
+    """HTTP status + Discord error code — the two facts the old bare except ate."""
+    return f"HTTP {exc.status}, discord code {getattr(exc, 'code', None)}"
+
+
+async def _dm_operator_about_abandoned(
+    bot: discord.Client | None,
+    channel: GuildTextLike,
+    message_id: int,
+    exc: discord.HTTPException,
+) -> None:
+    """DM the operator about one abandoned message.
+
+    Targets ``SUPPORT_USER_ID`` — the same operator the watchdog pages — rather
+    than ``guild.owner``, because rules exist in guilds the operator doesn't own
+    and this is bot-internal news, not a moderation notice.
+    """
+    raw = os.getenv("SUPPORT_USER_ID", "").strip()
+    if bot is None or not raw.isdigit():
+        return
+    channel_name = getattr(channel, "name", str(channel.id))
+    guild = getattr(channel, "guild", None)
+    link = f"https://discord.com/channels/{getattr(guild, 'id', '@me')}/{channel.id}/{message_id}"
+    text = (
+        f"🛑 **Auto-delete gave up** on a message in #{channel_name} after "
+        f"{MAX_DELETE_ATTEMPTS} attempts ({_describe_http_error(exc)}).\n"
+        f"It will not be retried — delete it by hand if it should be gone.\n"
+        f"`{message_id}` — {link}"
+    )
+    try:
+        user = bot.get_user(int(raw)) or await bot.fetch_user(int(raw))
+        if user is not None:
+            await user.send(text)
+    except discord.HTTPException as dm_exc:  # Forbidden is a subclass
+        log.warning(
+            "Auto-delete: could not DM the operator about abandoned message %s (%s)",
+            message_id,
+            dm_exc,
+        )
+
+
+async def _charge_delete_failure(
+    db_path: Path,
+    guild_id: int,
+    channel: GuildTextLike,
+    message_ids: set[int],
+    exc: discord.HTTPException,
+    *,
+    now_ts: float,
+    bot: discord.Client | None,
+) -> None:
+    """Log a failed delete, charge the retry budget, and report give-ups."""
+    channel_name = getattr(channel, "name", str(channel.id))
+    log.warning(
+        "Auto-delete #%s: delete failed for %s message(s) (%s): %s",
+        channel_name,
+        len(message_ids),
+        _describe_http_error(exc),
+        exc.text,
+    )
+    abandoned = record_auto_delete_failure(
+        db_path, guild_id, channel.id, message_ids, now_ts=now_ts
+    )
+    for message_id in abandoned:
+        try:
+            raise AutoDeleteAbandoned(
+                f"message {message_id} in #{channel_name}"
+            ) from exc
+        except AutoDeleteAbandoned:
+            log.exception(
+                "Auto-delete #%s: gave up on message %s after %s attempts (last error: %s)",
+                channel_name,
+                message_id,
+                MAX_DELETE_ATTEMPTS,
+                _describe_http_error(exc),
+            )
+        await _dm_operator_about_abandoned(bot, channel, message_id, exc)
 
 
 async def delete_tracked_messages_older_than(
@@ -427,6 +643,8 @@ async def delete_tracked_messages_older_than(
     cutoff_ts: float,
     *,
     reason: str,
+    now_ts: float | None = None,
+    bot: discord.Client | None = None,
 ) -> tuple[int, int, int]:
     """
     Delete tracked messages older than cutoff timestamp.
@@ -435,15 +653,21 @@ async def delete_tracked_messages_older_than(
     and individual deletes for older messages.  Loops until all due messages
     are processed so a backlog is drained in one call instead of waiting for
     the next tick.  Returns (queued, deleted, failed).
+
+    A delete Discord refuses with a transient error costs the message an
+    attempt and parks it behind a backoff (see ``RETRY_BACKOFF_SECONDS``); the
+    drain loop therefore skips it for the rest of this call and moves on to the
+    rest of the queue. ``bot`` is only needed to DM the operator when a message
+    exhausts its budget; ``now_ts`` pins the clock for the whole sweep and
+    exists mainly so tests can drive the backoff schedule.
     """
+    now = time.time() if now_ts is None else now_ts
+
     # Count total due upfront so progress logs can show "X / total"
     with open_db(db_path) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM auto_delete_messages "
-            "WHERE guild_id = ? AND channel_id = ? AND created_at <= ?",
-            (guild_id, channel.id, cutoff_ts),
-        ).fetchone()
-        grand_total = int(row["cnt"]) if row else 0
+        grand_total = count_due_auto_delete_messages(
+            conn, guild_id, channel.id, cutoff_ts, now_ts=now
+        )
 
     if grand_total == 0:
         return 0, 0, 0
@@ -461,12 +685,13 @@ async def delete_tracked_messages_older_than(
 
     while True:
         with open_db(db_path) as conn:
-            due = pop_due_auto_delete_message_ids(conn, guild_id, channel.id, cutoff_ts)
+            due = pop_due_auto_delete_message_ids(
+                conn, guild_id, channel.id, cutoff_ts, now_ts=now
+            )
 
         if not due:
             break
 
-        now = time.time()
         bulk_ids, old_ids = partition_messages_by_age(due, now)
 
         # Bulk-delete recent messages in chunks of 100
@@ -495,12 +720,24 @@ async def delete_tracked_messages_older_than(
                     total_failed,
                 )
                 return grand_total, total_deleted, total_failed
-            except discord.HTTPException:
+            except discord.NotFound:
+                # A 404 names the request, not which id in it is stale. For a
+                # single-message chunk (discord.py degrades those to a plain
+                # delete) that's unambiguous — the message is gone, so the claim
+                # stands and it leaves the queue. For a real chunk, retry the
+                # ids one at a time below, where a 404 can be pinned on the
+                # message that earned it instead of condemning its neighbours.
+                if len(chunk_ids) == 1:
+                    remove_tracked_auto_delete_messages(
+                        db_path, guild_id, channel.id, chunk_set
+                    )
+                else:
+                    old_ids.extend(chunk_ids)
+            except discord.HTTPException as exc:
                 _release_deleted(db_path, guild_id, chunk_set)
                 total_failed += len(chunk_ids)
-                # Remove from tracking to avoid infinite retry
-                remove_tracked_auto_delete_messages(
-                    db_path, guild_id, channel.id, set(chunk_ids)
+                await _charge_delete_failure(
+                    db_path, guild_id, channel, chunk_set, exc, now_ts=now, bot=bot
                 )
 
             if i + _BULK_CHUNK < len(bulk_ids):
@@ -530,14 +767,19 @@ async def delete_tracked_messages_older_than(
                 # Already gone — the claim stands, it just wasn't us who did it.
                 remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
             except discord.Forbidden:
+                # Channel-wide permission gap, not a verdict on this message —
+                # it doesn't consume the retry budget, and the sweep stops here
+                # rather than burning attempts on every other queued message.
                 _release_deleted(db_path, guild_id, {mid})
                 total_failed += 1
                 abort = True
                 break
-            except discord.HTTPException:
+            except discord.HTTPException as exc:
                 _release_deleted(db_path, guild_id, {mid})
                 total_failed += 1
-                remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
+                await _charge_delete_failure(
+                    db_path, guild_id, channel, {mid}, exc, now_ts=now, bot=bot
+                )
 
         if abort:
             break
@@ -670,6 +912,8 @@ async def process_auto_delete_tick(
                 channel,
                 cutoff_ts,
                 reason="Auto-delete scheduled cleanup",
+                now_ts=now_ts,
+                bot=bot,
             )
             if failed > 0:
                 log.info(
@@ -726,6 +970,29 @@ async def _scan_and_delete_channel_history(
     old_batch: list[discord.PartialMessage] = []
     tracking_batch: list[tuple[int, float]] = []
 
+    def _hand_failures_to_the_queue(message_ids: set[int]) -> None:
+        """Queue messages this scan failed to delete so the tick can retry them.
+
+        The scan walks history, not the queue, so these messages may not be
+        tracked at all — dropping them here is exactly how a message becomes an
+        orphan the next bounded scan can't see. The tick owns the retry budget,
+        so they go in with a clean one. ``created_at`` comes from the snowflake,
+        which needs no extra API call.
+        """
+        if not track_messages:
+            return
+        assert db_path is not None
+        assert guild_id is not None
+        queue_auto_delete_messages(
+            db_path,
+            guild_id,
+            channel.id,
+            [
+                (mid, discord.utils.snowflake_time(mid).timestamp())
+                for mid in sorted(message_ids)
+            ],
+        )
+
     async def _flush_bulk() -> bool:
         nonlocal deleted, failed
         if not bulk_batch:
@@ -741,9 +1008,17 @@ async def _scan_and_delete_channel_history(
             _release_deleted(db_path, guild_id, chunk_ids)
             failed += len(chunk)
             return False
-        except discord.HTTPException:
+        except discord.HTTPException as exc:
             _release_deleted(db_path, guild_id, chunk_ids)
             failed += len(chunk)
+            log.warning(
+                "Auto-delete scan #%s: bulk delete failed for %s message(s) (%s): %s",
+                channel_name,
+                len(chunk_ids),
+                _describe_http_error(exc),
+                exc.text,
+            )
+            _hand_failures_to_the_queue(chunk_ids)
         await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
         return True
 
@@ -847,9 +1122,17 @@ async def _scan_and_delete_channel_history(
             _release_deleted(db_path, guild_id, {partial.id})
             failed += 1
             break
-        except discord.HTTPException:
+        except discord.HTTPException as exc:
             _release_deleted(db_path, guild_id, {partial.id})
             failed += 1
+            log.warning(
+                "Auto-delete scan #%s: delete failed for message %s (%s): %s",
+                channel_name,
+                partial.id,
+                _describe_http_error(exc),
+                exc.text,
+            )
+            _hand_failures_to_the_queue({partial.id})
         old_processed += 1
         if old_processed % 50 == 0:
             log.debug(
