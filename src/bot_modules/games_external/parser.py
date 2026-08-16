@@ -8,7 +8,8 @@ Currently: Gamebot, which hosts many games in the same watched channel —
 Cards Against Humanity, Connect 4 and Anagrams so far (kind='gamebot' covers
 all of them; ``identify_game`` tells them apart). Each is a run of messages in
 one channel that opens with a *"<host> is starting a <Game> game!"* lobby embed
-and closes with a *Game over!* embed.
+and closes with a terminal embed (*Game over!* before 2026-08-15, *Final
+scores* after — see the CAH bullet below).
 
 **Everything here is a pure function of the banked message list** — no game
 registry, nothing tracked while a game is in flight. A finished game is
@@ -16,12 +17,28 @@ reconstructed by scanning *backwards* from its terminal message, which is
 unavoidable: the *Game over!* embed carries only the winner's mention, never
 the roster or the scores.
 
-* CAH — *Current Standings* embeds → each player's running score
-  (``<@id>: N``). Later standings supersede earlier ones (the count is
-  cumulative, not incremental), so only the last one before *Game over!*
-  matters. *Submission status* embeds (``✅ <@id> Submitted!``) fold in
-  players seen before any standings post, at score 0. *Game over!* →
-  ``<@id> is the winner!``.
+* CAH — standings → each player's running score (``<@id>: N``). Later
+  standings supersede earlier ones (the count is cumulative, not incremental),
+  so only the last one in the window matters. Submission embeds fold in
+  players seen before any standings post, at score 0.
+
+  Gamebot rewrote every one of those strings on **2026-08-15** and payouts
+  stopped dead (last ``gamebot_cah`` row: 08-14), so both vocabularies are
+  understood — the guild can have a pre-update game still in flight:
+
+  - **standings** — was a *Current Standings* embed with ``<@id>: 3`` in its
+    description; is now a *Standings* **field** hung off *Round winner* and
+    *Final scores*, with the score bolded (``<@id>: **3**``).
+  - **submissions** — was ``✅ <@id> Submitted!``; is now a *Submissions*
+    field listing a bare ``✅ <@id>`` (or ``⬜ <@id>``, still to play).
+  - **finish** — was *Game over!* + ``<@id> is the winner!``; is now
+    *Final scores*, which declares no winner at all.
+  - **lobby roster** — was a *Joined Players* field; is now *Players (6/12)*.
+
+  The new format never names a winner, so it's derived as the top score.
+  That can tie, and every tied leader wins (``extract_cah_game`` returns a
+  *list*) — the payout faucet already takes a collection, since Wordle ties
+  the same way.
 * Connect 4 — roster from the join phase (see ``players_from_join_phase``).
   *Game over!* → ``<@id> has won!`` (a draw's exact wording is unconfirmed —
   no real sample yet — so an unrecognised finish just pays participation, no
@@ -47,19 +64,37 @@ from typing import Any, Mapping, Sequence
 
 # <@123> / <@!123>, tolerant of the nickname bang.
 _MENTION = re.compile(r"<@!?(\d+)>")
-_STANDINGS_ENTRY = re.compile(r"<@!?(\d+)>\s*:\s*(\d+)")
+# "<@123>: 3" (old) and "<@123>: **3**" (new — the score is bolded).
+_STANDINGS_ENTRY = re.compile(r"<@!?(\d+)>\s*:\s*\*{0,2}(\d+)\*{0,2}")
 _SUBMITTED = re.compile(r"<@!?(\d+)>\s+Submitted")
 _WINNER = re.compile(r"<@!?(\d+)>\s+is the winner")
 _C4_WON = re.compile(r"<@!?(\d+)>\s+has won")
 _RECAP_TITLE = "Time's up!"
 _JOINED_FIELD = "Joined Players"
+# The same lobby roster field, renamed and given a live count on 2026-08-15:
+# "Joined Players" → "Players (6/12)".
+_PLAYERS_FIELD = re.compile(r"^Players(\s*\(\d+/\d+\))?$")
 _STANDINGS_TITLE = "Current Standings"
+# Post-2026-08-15 the scores moved out of their own embed and into a field
+# hung off *Round winner* and *Final scores*.
+_STANDINGS_FIELD = "Standings"
+_SUBMISSIONS_FIELD = "Submissions"
 _SCOREBOARD_TITLE = "Scoreboard"
 # An Anagrams Scoreboard field name: "efficientpanic - 900 POINTS". The trailing
 # "Pangram" field has no score and is skipped by the same pattern.
 _SCORE_FIELD = re.compile(r"^(.+?)\s+-\s+(\d+)\s+POINTS$")
 
 _GAME_OVER_TITLE = "Game over!"
+# The post-2026-08-15 CAH finish. Unlike *Game over!* it declares no winner —
+# it is just the last standings under a header — so the winner is derived.
+_FINAL_SCORES_TITLE = "Final scores"
+# Gamebot dropping a game mid-run. Seen once (2026-08-16), 1.4s *after* a
+# perfectly good *Final scores* on a game that had already been won, so it is
+# not on its own evidence of an abandoned game: it ends a window, and whatever
+# standings that window holds are paid. A window containing only this message
+# (the crash-after-a-clean-finish case) has no standings and so pays nobody,
+# which is what stops the same game being paid twice.
+_CRASHED_TITLE = "Something went wrong"
 
 # ── sub-games ────────────────────────────────────────────────────────────────
 #
@@ -107,31 +142,63 @@ def _embed_texts(embeds: Sequence[Mapping[str, Any]]):
             yield str(e.get("title") or ""), str(e.get("description") or "")
 
 
+def _embed_fields(embeds: Sequence[Mapping[str, Any]]):
+    """Yield (field_name, field_value) for every field across these embeds."""
+    for e in embeds:
+        if not isinstance(e, Mapping):
+            continue
+        for f in e.get("fields") or []:
+            if isinstance(f, Mapping):
+                yield str(f.get("name") or "").strip(), str(f.get("value") or "")
+
+
 def players_from_standings(embeds: Sequence[Mapping[str, Any]]) -> set[int]:
-    """Member ids from a *Current Standings* embed (``<@id>: N`` lines)."""
+    """Member ids from a standings post (``<@id>: N`` lines)."""
     return set(scores_from_standings(embeds))
 
 
 def scores_from_standings(embeds: Sequence[Mapping[str, Any]]) -> dict[int, int]:
-    """``{member_id: score}`` from a *Current Standings* embed.
+    """``{member_id: score}`` from a standings post, either format.
 
-    Gated on the embed title so a stray ``<@id>: N`` elsewhere in a game's
-    chatter can't invent a player or a score.
+    Old: a *Current Standings* embed with the entries in its description.
+    New (2026-08-15+): a *Standings* **field** hung off *Round winner* or
+    *Final scores*, with the score bolded.
+
+    Both reads stay gated — on the embed title before, on the field name now —
+    so a stray ``<@id>: N`` in a game's ordinary chatter can't invent a player
+    or a score.
     """
     out: dict[int, int] = {}
     for title, desc in _embed_texts(embeds):
-        if title.strip() != _STANDINGS_TITLE:
-            continue
-        for m in _STANDINGS_ENTRY.finditer(desc):
-            out[int(m.group(1))] = int(m.group(2))
+        if title.strip() == _STANDINGS_TITLE:
+            for m in _STANDINGS_ENTRY.finditer(desc):
+                out[int(m.group(1))] = int(m.group(2))
+    for name, value in _embed_fields(embeds):
+        if name == _STANDINGS_FIELD:
+            for m in _STANDINGS_ENTRY.finditer(value):
+                out[int(m.group(1))] = int(m.group(2))
     return out
 
 
 def players_from_submissions(embeds: Sequence[Mapping[str, Any]]) -> set[int]:
-    """Member ids from a *Submission status* embed (``✅ <@id> Submitted!``)."""
+    """Member ids who submitted a card this round, either format.
+
+    Old: a *Submission status* embed, ``✅ <@id> Submitted!`` in the
+    description. New: a *Submissions* field on the *Play your card* embed,
+    which dropped the word and lists a bare ``✅ <@id>`` per line — so the new
+    read has to be gated on the field name, there being nothing else in the
+    text to key on.
+
+    Either way this is only ever additive at score 0: the round czar never
+    appears (they're judging, not submitting), and standings cover everyone
+    the moment the first round resolves.
+    """
     out: set[int] = set()
     for _title, desc in _embed_texts(embeds):
         out.update(int(m) for m in _SUBMITTED.findall(desc))
+    for name, value in _embed_fields(embeds):
+        if name == _SUBMISSIONS_FIELD:
+            out.update(int(m) for m in _MENTION.findall(value))
     return out
 
 
@@ -145,22 +212,41 @@ def winner_from_game_over(embeds: Sequence[Mapping[str, Any]]) -> int | None:
 
 
 def is_game_over(embeds: Sequence[Mapping[str, Any]]) -> bool:
-    """True when these embeds are Gamebot's **CAH** end-of-game announcement."""
+    """True when these embeds are Gamebot's **CAH** end-of-game announcement.
+
+    *Final scores* is the new format's finish and is CAH's alone, so unlike
+    the old *Game over!* it needs no description check to tell it from Connect
+    4's. Deliberately does **not** cover *Something went wrong*: that ends a
+    window without being evidence a CAH game happened in it.
+    """
     for title, desc in _embed_texts(embeds):
-        if title.strip() == _GAME_OVER_TITLE and "is the winner" in desc:
+        title = title.strip()
+        if title == _FINAL_SCORES_TITLE:
+            return True
+        if title == _GAME_OVER_TITLE and "is the winner" in desc:
             return True
     return False
 
 
 def is_terminal(embeds: Sequence[Mapping[str, Any]]) -> bool:
-    """True for any Gamebot *Game over!* embed, CAH or Connect 4 alike.
+    """True for any Gamebot message that ends a game's run.
 
-    Used to bound a game's message window — both games share this title, so
-    telling *a* game apart from the next one only needs the title; telling
-    *which* game it was needs the more specific ``is_game_over`` (CAH).
+    Used both to bound a game's message window and, in the cog, as the trigger
+    to pay one out. Three titles qualify:
+
+    * *Game over!* — every sub-game's finish before 2026-08-15, and still
+      Connect 4's as far as we know (no post-update sample exists).
+    * *Final scores* — CAH's finish from 2026-08-15.
+    * *Something went wrong* — Gamebot dropping a run. Terminal so that a game
+      which dies mid-way still pays out the rounds that were actually played,
+      and so that one trailing after a clean *Final scores* is bounded into a
+      window of its own rather than re-paying the game before it.
+
+    Telling *a* game apart from the next one only needs this; telling *which*
+    game it was needs the more specific ``is_game_over`` (CAH).
     """
     for title, _desc in _embed_texts(embeds):
-        if title.strip() == _GAME_OVER_TITLE:
+        if title.strip() in (_GAME_OVER_TITLE, _FINAL_SCORES_TITLE, _CRASHED_TITLE):
             return True
     return False
 
@@ -262,10 +348,14 @@ def _infer_game(window: Sequence[Mapping[str, Any]]) -> str | None:
     for msg in window:
         embeds = msg.get("embeds") or []
         for title, _desc in _embed_texts(embeds):
-            if title.strip() == _STANDINGS_TITLE:
+            if title.strip() in (_STANDINGS_TITLE, _FINAL_SCORES_TITLE):
                 return GAME_CAH
             if title.strip() == _SCOREBOARD_TITLE:
                 return GAME_ANAGRAMS
+        # The new format has no standings embed of its own — the scores hang
+        # off *Round winner* as a field, and only CAH posts one.
+        if any(name == _STANDINGS_FIELD for name, _v in _embed_fields(embeds)):
+            return GAME_CAH
         if winner_from_connect4_over(embeds) is not None:
             return GAME_CONNECT4
         saw_winner = saw_winner or is_game_over(embeds)
@@ -292,17 +382,31 @@ def is_abandoned(window: Sequence[Mapping[str, Any]]) -> bool:
 
 def extract_cah_game(
     window: Sequence[Mapping[str, Any]]
-) -> tuple[dict[int, int], int | None]:
-    """(scores, winner) for one game's window of messages.
+) -> tuple[dict[int, int], list[int]]:
+    """(scores, winners) for one game's window of messages.
 
-    ``scores`` reflects the *last* Current Standings embed in the window
-    (each one is a full cumulative snapshot, so later ones supersede earlier
-    ones rather than merging with them). A player only seen submitting before
-    the first standings post is folded in at 0, and so is the winner if
-    they're otherwise absent — they plainly played.
+    ``scores`` reflects the *last* standings post in the window (each one is a
+    full cumulative snapshot, so later ones supersede earlier ones rather than
+    merging with them). A player only seen submitting before the first
+    standings post is folded in at 0, and so is a declared winner if they're
+    otherwise absent — they plainly played.
+
+    ``winners`` is a list because the new format stopped declaring a winner:
+
+    * Through 2026-08-14 Gamebot said ``<@id> is the winner!`` outright, and
+      that declaration is taken as-is when present — one name, always.
+    * From 2026-08-15 it just prints *Final scores* and stops, so the winner
+      is whoever tops the last standings. CAH is first-to-N, so a game that
+      finishes has a unique leader; a tie only turns up in a game Gamebot
+      dropped part-way, and then **every** tied leader wins. That's Billy's
+      call (2026-08-16) and it costs nothing to honour — the payout faucet
+      already accepts a collection of winner ids, since Wordle ties routinely.
+
+    Empty when there's nothing to go on: no declaration and no scores, or an
+    all-zero standings where nobody actually won a round.
     """
     scores: dict[int, int] = {}
-    winner: int | None = None
+    declared: int | None = None
     for msg in window:
         embeds = msg.get("embeds") or []
         scores.update(scores_from_standings(embeds))
@@ -310,10 +414,14 @@ def extract_cah_game(
             scores.setdefault(uid, 0)
         w = winner_from_game_over(embeds)
         if w is not None:
-            winner = w
-    if winner is not None:
-        scores.setdefault(winner, 0)
-    return scores, winner
+            declared = w
+    if declared is not None:
+        scores.setdefault(declared, 0)
+        return scores, [declared]
+    top = max(scores.values(), default=0)
+    if top <= 0:
+        return scores, []
+    return scores, sorted(uid for uid, n in scores.items() if n == top)
 
 
 # ── Gamebot Connect 4 ─────────────────────────────────────────────────────────
@@ -323,13 +431,14 @@ def players_from_join_phase(embeds: Sequence[Mapping[str, Any]]) -> set[int]:
     """Member ids from a game's lobby — shared by every Gamebot sub-game, which
     all use the identical join phase:
 
-    * the **Joined Players** field on the ``<host> is starting a <Game> game!``
-      embed (plus the host mentioned in its description), and
+    * the roster field on the ``<host> is starting a <Game> game!`` embed —
+      **Joined Players** before 2026-08-15, **Players (6/12)** after — plus
+      the host mentioned in its description, and
     * the *Time's up!* recap's ``<@id>, <@id> joined the game!`` description.
 
-    Both reads are gated on their embed's title. The **Joined Players** field
-    used to be read off *any* embed, so an abandoned Cards Against Humanity
-    lobby fed its roster straight into the Connect 4 payout.
+    Both reads are gated on their embed's title. The roster field used to be
+    read off *any* embed, so an abandoned Cards Against Humanity lobby fed its
+    roster straight into the Connect 4 payout.
     """
     out: set[int] = set()
     for e in embeds:
@@ -339,9 +448,9 @@ def players_from_join_phase(embeds: Sequence[Mapping[str, Any]]) -> set[int]:
         desc = str(e.get("description") or "")
         if _START_TITLE.search(title):
             out.update(int(m) for m in _MENTION.findall(desc))
-            for f in e.get("fields") or []:
-                if isinstance(f, Mapping) and str(f.get("name") or "").strip() == _JOINED_FIELD:
-                    out.update(int(m) for m in _MENTION.findall(str(f.get("value") or "")))
+            for name, value in _embed_fields([e]):
+                if name == _JOINED_FIELD or _PLAYERS_FIELD.match(name):
+                    out.update(int(m) for m in _MENTION.findall(value))
         elif title.strip() == _RECAP_TITLE and "joined the game" in desc:
             out.update(int(m) for m in _MENTION.findall(desc))
     return out
