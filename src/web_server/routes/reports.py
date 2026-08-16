@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services import reports_data
+from bot_modules.services.channel_rollup import build_resolver, guild_channel_ids
 from bot_modules.services import usage_telemetry_service as usage_telemetry
 from bot_modules.services.member_quality_score import (
     MemberStandIn,
@@ -715,6 +716,8 @@ async def channel_comparison(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
 
+    live_ids = guild_channel_ids(guild)
+
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_channel_comparison_data(
@@ -722,6 +725,7 @@ async def channel_comparison(
                 guild_id,
                 days=max(1, min(365, days)),
                 include_bots=include_bots,
+                resolver=build_resolver(conn, guild_id, live_channel_ids=live_ids),
             )
 
     result = await cached_run_query(

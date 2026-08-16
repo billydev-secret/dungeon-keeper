@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.core.db_utils import get_tz_offset_hours
+from bot_modules.services.channel_rollup import build_resolver, guild_channel_ids
 from bot_modules.services.health_metrics import (
     compute_channel_health,
     compute_cohort_retention,
@@ -273,6 +274,8 @@ async def health_tiles(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
+    # Read off the guild here, on the event loop, not inside the threaded _q.
+    tile_live_ids = guild_channel_ids(guild)
     is_admin = "admin" in user.perms
     is_mod = "moderator" in user.perms
 
@@ -353,6 +356,9 @@ async def health_tiles(
                             guild_id,
                             nsfw_channel_ids=extras["nsfw_ids"],
                             include_bots=include_bots,
+                            resolver=build_resolver(
+                                conn, guild_id, live_channel_ids=tile_live_ids
+                            ),
                         )
                         set_cached(conn, guild_id, ck("channel_health"), cached)
                     tiles["channel_health"] = {
@@ -729,6 +735,8 @@ async def health_heatmap(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     key = _deep_key("heatmap", include_bots=include_bots)
+    bot = getattr(ctx, "bot", None)
+    live_ids = guild_channel_ids(bot.get_guild(guild_id) if bot else None)
 
     def _q():
         with ctx.open_db() as conn:
@@ -736,7 +744,13 @@ async def health_heatmap(
             if data is None:
                 tz = get_tz_offset_hours(conn, guild_id)
                 data = compute_heatmap(
-                    conn, guild_id, utc_offset_hours=tz, include_bots=include_bots
+                    conn,
+                    guild_id,
+                    utc_offset_hours=tz,
+                    include_bots=include_bots,
+                    resolver=build_resolver(
+                        conn, guild_id, live_channel_ids=live_ids
+                    ),
                 )
                 set_cached(conn, guild_id, key, data)
             # Resolve channel names
@@ -764,6 +778,7 @@ async def health_channel_health(
     nsfw_ids = (
         [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)] if guild else []
     )
+    live_ids = guild_channel_ids(guild)
 
     key = _deep_key("channel_health", include_bots=include_bots)
 
@@ -776,6 +791,9 @@ async def health_channel_health(
                     guild_id,
                     nsfw_channel_ids=nsfw_ids,
                     include_bots=include_bots,
+                    resolver=build_resolver(
+                        conn, guild_id, live_channel_ids=live_ids
+                    ),
                 )
                 set_cached(conn, guild_id, key, data)
             ch_ids = {int(ch["channel_id"]) for ch in data["channels"]}

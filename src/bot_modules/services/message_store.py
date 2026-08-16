@@ -394,7 +394,11 @@ def get_known_user_names_bulk(
 
 
 def init_known_channels_table(conn: sqlite3.Connection) -> None:
-    """Create the known_channels lookup table for offline channel name resolution."""
+    """Create the known_channels lookup table for offline channel name resolution.
+
+    Also the registry of which ids are threads and what they hang off, which the
+    channel analytics need to attribute thread activity to a parent channel.
+    """
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS known_channels (
@@ -402,10 +406,20 @@ def init_known_channels_table(conn: sqlite3.Connection) -> None:
             channel_id      INTEGER NOT NULL,
             channel_name    TEXT NOT NULL DEFAULT '',
             updated_at      REAL NOT NULL DEFAULT 0,
+            parent_id       INTEGER,
+            is_thread       INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (guild_id, channel_id)
         )
         """
     )
+    # Migrate tables created before the thread columns existed (163).
+    _cols = {r[1] for r in conn.execute("PRAGMA table_info(known_channels)").fetchall()}
+    if "parent_id" not in _cols:
+        conn.execute("ALTER TABLE known_channels ADD COLUMN parent_id INTEGER")
+    if "is_thread" not in _cols:
+        conn.execute(
+            "ALTER TABLE known_channels ADD COLUMN is_thread INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def upsert_known_channel(
@@ -414,18 +428,36 @@ def upsert_known_channel(
     channel_id: int,
     channel_name: str,
     ts: float,
+    parent_id: int | None = None,
+    is_thread: bool = False,
 ) -> None:
-    """Insert or update a channel's known name. Only updates if ts is newer."""
+    """Insert or update a channel's known name. Only updates if ts is newer.
+
+    *parent_id* and *is_thread* record whether this id is a thread and which
+    channel it hangs off, which the channel analytics need to attribute a
+    thread's activity to its parent instead of listing the thread as a channel
+    of its own (see services/channel_rollup). Callers get both from discord.py's
+    ``Thread.parent_id`` — an attribute no other channel type has, so a text
+    channel can never be mistaken for a thread inside its category.
+
+    A known parent is never unlearned: a caller that doesn't know one passes
+    None and leaves whatever was already recorded in place. That matters because
+    the backfill can name a parent the ingest path never sees again once the
+    thread is archived.
+    """
     conn.execute(
         """
-        INSERT INTO known_channels (guild_id, channel_id, channel_name, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO known_channels
+            (guild_id, channel_id, channel_name, updated_at, parent_id, is_thread)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, channel_id) DO UPDATE SET
             channel_name = excluded.channel_name,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            parent_id = COALESCE(excluded.parent_id, known_channels.parent_id),
+            is_thread = excluded.is_thread
         WHERE excluded.updated_at > known_channels.updated_at
         """,
-        (guild_id, channel_id, channel_name, ts),
+        (guild_id, channel_id, channel_name, ts, parent_id, 1 if is_thread else 0),
     )
 
 

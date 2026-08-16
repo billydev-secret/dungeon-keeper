@@ -1782,6 +1782,13 @@
       </div>
     </div>
 
+    <h3 id="threads-in-metrics">Threads and Channel Metrics</h3>
+    <p>Anywhere the dashboard lists <strong>channels</strong> — the Channels panel, the per-channel heatmaps, the homepage's busiest-channels tile — a thread is never a row of its own. Whatever gets said in a thread counts toward the channel the thread was started from, so a channel whose conversation has moved into its threads still reads as busy rather than dead.</p>
+
+    <p>Channels the bot creates and throws away are left out entirely: <strong>Pen Pals</strong> pairing channels, <strong>Voice Master</strong> temporary rooms, jail channels, and the bio wizard's setup rooms. They're private, short-lived, and one-to-one, so counting them told you nothing about how the server is doing.</p>
+
+    <p style="font-size:0.9rem;color:var(--muted)">A handful of old messages can't be placed — ones in threads Discord has since deleted, or in channels that no longer exist. Those are left out rather than shown under an id nobody can open; it's about 3% of a month's messages. Message Search is unaffected and still finds everything, threads included.</p>
+
     <h3 id="bots-in-metrics">Bots and Metrics</h3>
     <p>Every metric on the dashboard counts <strong>humans only</strong>. Bot messages — yours and third-party ones like Cat Bot, Gamebot, or DISBOARD — are left out of message volume, active-user counts, channel health, participation spread, sentiment, retention cohorts, and the newcomer funnel. A channel kept busy only by a bot therefore reads as quiet, which is the intent: it tells you what your members are actually doing.</p>
 
