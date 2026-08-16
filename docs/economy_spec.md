@@ -436,7 +436,7 @@ to currency.
   `resolve_named_scores`. Wordle's raw score is inverted (fewer guesses is
   better) and flipped in the parser; its 👑 line often has **several winners**,
   which is why `pay_cah_game_by_score` accepts a collection of winner ids.
-  The top scorer (the *Game over!* winner) earns `EconSettings
+  The top scorer earns `EconSettings
   .reward_cah_win_max` (default 50) coins; every other player earns that cap
   scaled by their score's ratio to the winner's, rounded to the nearest coin —
   a share that rounds to 0 pays nothing. 0 turns the CAH payout off entirely.
@@ -445,9 +445,13 @@ to currency.
   `party_game`/`game_win` quest triggers fire for the full roster/winner as a
   flat payout would — only the coin math changed. Configurable on the Income
   Sources dashboard page next to the flat game rewards. Scores come from
-  `parser.extract_cah_game`, which reads the *last* Current Standings embed in
-  the game's window (each is a cumulative snapshot, so later ones supersede
+  `parser.extract_cah_game`, which reads the *last* standings post in the
+  game's window (each is a cumulative snapshot, so later ones supersede
   earlier ones) and folds in submission-only/winner-only players at 0.
+  Since Gamebot's 2026-08-15 format change CAH declares no winner either, so
+  it is derived as the top of those standings and can tie when Gamebot drops
+  a game part-way — every tied player then takes the cap, exactly as Wordle's
+  👑 line already did. See `docs/games_system_spec.md` for both vocabularies.
 - **Payout visibility (2026-07-20):** every paying party game's recap embed gets a
   footer via `append_payout_footer` — `🪙 +20 to winners · +5 to everyone who
   played`, using the guild's configured amounts and currency emoji; winner line only
@@ -788,7 +792,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `message_sent` | any member message (channel-scopable) | `events_cog._econ_work` (same txn as login/QOTD) | `message_sent:<message_id>` |
 | `reply_sent` | a Discord reply to someone ELSE's message (self-replies skipped; unresolvable references count) | `events_cog._econ_work` | `reply_sent:<message_id>` |
 | `reaction_given` | reaction-given XP newly awarded (inherits the farm guard: one per message+reactor ever, no self-reacts) | `events_cog.on_raw_reaction_add` | `reaction_given:<message_id>` |
-| `game_win` | winning a party game (NHIE, TTL liar+guesser, Hot Takes, Rushmore, Clapback, MLT, Price resolve winners as of 2026-07-20) — **including external CAH** (the *Game over!* winner) | `pay_game_rewards` winners pass, or `pay_cah_game_by_score` for CAH | `game_win:<game_type>:<game_id>` |
+| `game_win` | winning a party game (NHIE, TTL liar+guesser, Hot Takes, Rushmore, Clapback, MLT, Price resolve winners as of 2026-07-20) — **including external CAH** (the declared winner, or the top scorer since 2026-08-15) | `pay_game_rewards` winners pass, or `pay_cah_game_by_score` for CAH | `game_win:<game_type>:<game_id>` |
 | `duel_win` | winning a duel/PvP match | `pay_game_rewards` winners pass | `duel_win:<game_type>:<id>` |
 | `duel_lose` | resolving a duel/PvP match without winning it (every participant minus the winner set) | `pay_game_rewards` losers pass | `duel_lose:<game_type>:<id>` |
 | `cat_catch` | catching a cat with the external **Cat Bot** in a channel tracked with the Cat Bot parser — parsed from the catch message (catcher resolved by username→member, rarity from the emoji). Pays **rarity-tiered coins** (six per-guild dials `catcatch_coins_common..divine`, defaults 1 → 300, tunable from the Income Sources panel since 2026-08-06; blessed catches ×2), clipped by the per-member, per-guild-local-day `cat_catch_daily_cap` (0 = uncapped; a clipped catch pays nothing but **still fires this trigger**, so the cap bounds the faucet, not participation) *and* this trigger | `games_external_cog._pay_cat_catch` → `pay_cat_catch` (`apply_credit` kind `cat_catch` + trigger); once per catch via the `games_external_payouts` ledger | `catbot:<catch-msg-id>` |

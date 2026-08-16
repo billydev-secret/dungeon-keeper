@@ -95,15 +95,17 @@ async def _bank(gdb, mid, ts, embeds):
     )
 
 
-def _over_message(guild=None):
+def _over_message(guild=None, *, mid=OVER_ID, at=datetime(2026, 7, 21, 1, 8, 36, tzinfo=timezone.utc)):
     return SimpleNamespace(
-        id=OVER_ID,
+        id=mid,
         # Defaults to a guild that resolves nobody — a real discord.Guild always
         # has get_member_named, which the host lookup calls.
         guild=guild if guild is not None else _guild({}),
         channel=SimpleNamespace(id=CHAN),
         author=SimpleNamespace(id=GAMEBOT),
-        created_at=datetime(2026, 7, 21, 1, 8, 36, tzinfo=timezone.utc),
+        # The window lookback is `created_at <= this`, so a game banked on
+        # other dates must hand its own terminal timestamp in.
+        created_at=at,
         embeds=[],
     )
 
@@ -143,7 +145,8 @@ async def test_cah_payout_pays_roster_and_winner_once(gdb):
     args, kwargs = pay.await_args
     assert args[1] == GUILD
     assert args[2] == {ALICE: 5, BOB: 1, CAROL: 1}  # full roster + scores
-    assert args[3] == ALICE                          # winner
+    assert args[3] == [ALICE]                        # winner(s) — a list since
+                                                     # the new format can tie
     assert kwargs["occurrence"] == str(OVER_ID)
     assert (await _claimed_kinds(gdb))[OVER_ID] == "gamebot_cah"
 
@@ -168,7 +171,7 @@ async def test_cah_payout_lone_game_over_pays_the_winner(gdb):
     pay.assert_awaited_once()
     args, _ = pay.await_args
     assert args[2] == {ALICE: 0}
-    assert args[3] == ALICE
+    assert args[3] == [ALICE]
 
 
 @pytest.mark.asyncio
@@ -734,3 +737,111 @@ async def test_unresolvable_host_is_skipped_not_guessed(gdb):
 
     _args, kwargs = pay.await_args
     assert kwargs["host_id"] is None
+
+
+# ── Gamebot's 2026-08-15 format change ───────────────────────────────────────
+
+_AUG16 = datetime(2026, 8, 16, 3, 10, 0, tzinfo=timezone.utc)
+
+
+def _embeds_new_lobby(joined):
+    return [{
+        "title": "EP is starting a Cards Against Humanity game!",
+        "description": "Press **Join** to play. <@1>, press **Start** once everyone's in.",
+        "fields": [{"name": f"Players ({len(joined)}/12)",
+                    "value": ", ".join(f"<@{u}>" for u in joined)}],
+    }]
+
+
+def _embeds_new_standings(scores, title="Round winner"):
+    return [{
+        "title": title,
+        "description": "**A card.**\n\n<@11> takes the point.",
+        "fields": [{"name": "Standings",
+                    "value": "\n".join(f"<@{u}>: **{n}**" for u, n in scores.items())}],
+    }]
+
+
+def _embeds_crashed():
+    return [{"title": "Something went wrong",
+             "description": "This game ended unexpectedly. Sorry about that!"}]
+
+
+@pytest.mark.asyncio
+async def test_new_format_game_pays_on_final_scores(gdb):
+    # The regression that stopped CAH paying on 2026-08-15: the new format has
+    # no *Game over!* and no "is the winner", so nothing was ever terminal and
+    # no payout was dispatched at all.
+    await _bank(gdb, 4400, "2026-08-16T03:00:00", _embeds_new_lobby([ALICE, BOB]))
+    await _bank(gdb, 4401, "2026-08-16T03:05:00", _embeds_new_standings({ALICE: 3, BOB: 1}))
+    await _bank(gdb, OVER_ID, "2026-08-16T03:10:00",
+                _embeds_new_standings({ALICE: 5, BOB: 1, CAROL: 0}, title="Final scores"))
+
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(at=_AUG16))
+
+    pay.assert_awaited_once()
+    args, _ = pay.await_args
+    assert args[2] == {ALICE: 5, BOB: 1, CAROL: 0}
+    assert args[3] == [ALICE]          # derived, since Gamebot declares nobody
+    assert (await _claimed_kinds(gdb))[OVER_ID] == "gamebot_cah"
+
+
+@pytest.mark.asyncio
+async def test_a_crash_after_final_scores_does_not_pay_the_game_twice(gdb):
+    # The real 08-16 tail. Both messages are terminal and each claims on its
+    # own id, so the ledger can't dedupe them — what stops the second payout
+    # is the window bounding back to the *Final scores* before it, leaving
+    # nothing to pay.
+    CRASH_ID = OVER_ID + 1
+    await _bank(gdb, 4500, "2026-08-16T03:00:00", _embeds_new_lobby([ALICE, BOB]))
+    await _bank(gdb, 4501, "2026-08-16T03:05:00", _embeds_new_standings({ALICE: 5, BOB: 1}))
+    await _bank(gdb, OVER_ID, "2026-08-16T03:10:00",
+                _embeds_new_standings({ALICE: 5, BOB: 1}, title="Final scores"))
+    await _bank(gdb, CRASH_ID, "2026-08-16T03:10:02", _embeds_crashed())
+
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(at=_AUG16))
+        await cog._pay_gamebot_game(_over_message(
+            mid=CRASH_ID, at=datetime(2026, 8, 16, 3, 10, 2, tzinfo=timezone.utc)))
+
+    pay.assert_awaited_once()
+    assert CRASH_ID not in await _claimed_kinds(gdb)
+
+
+@pytest.mark.asyncio
+async def test_a_game_gamebot_dropped_pays_the_rounds_that_were_played(gdb):
+    # No *Final scores* — Gamebot fell over mid-run. Billy's call
+    # (2026-08-16): pay from the last standings, and a lead left tied there
+    # means every tied player takes the win.
+    await _bank(gdb, 4600, "2026-08-16T03:00:00", _embeds_new_lobby([ALICE, BOB]))
+    await _bank(gdb, 4601, "2026-08-16T03:05:00",
+                _embeds_new_standings({ALICE: 2, BOB: 2, CAROL: 1}))
+    await _bank(gdb, OVER_ID, "2026-08-16T03:06:00", _embeds_crashed())
+
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(at=_AUG16))
+
+    pay.assert_awaited_once()
+    args, _ = pay.await_args
+    assert args[2] == {ALICE: 2, BOB: 2, CAROL: 1}
+    assert args[3] == [ALICE, BOB]
+    assert (await _claimed_kinds(gdb))[OVER_ID] == "gamebot_cah"

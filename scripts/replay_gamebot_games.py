@@ -207,14 +207,21 @@ def main() -> int:
                     continue
 
                 # ── work out who is owed what, per sub-game ──────────────────
-                winner: int | None
+                #
+                # A set, because CAH can finish with the lead tied since
+                # Gamebot stopped declaring a winner (2026-08-15) — see
+                # parser.extract_cah_game. Connect 4 and Anagrams still name
+                # exactly one, so theirs is a set of one or none.
+                winners: set[int]
                 if game == parser.GAME_CAH:
-                    raw_scores, winner = parser.extract_cah_game(window)
+                    raw_scores, cah_winners = parser.extract_cah_game(window)
+                    winners = set(cah_winners)
                     scores = {u: s for u, s in raw_scores.items() if u in member_ids}
                     payouts = _cah_shares(scores, settings.reward_cah_win_max)
                     roster = sorted(scores)
                 elif game == parser.GAME_ANAGRAMS:
                     named, winner = parser.extract_anagrams_game(window)
+                    winners = {winner} if winner is not None else set()
                     scores = {}
                     for name, points in named.items():
                         uid = by_name.get(name)
@@ -228,14 +235,15 @@ def main() -> int:
                     roster = sorted(scores)
                 else:  # Connect 4 — flat participation + win bonus, no scores
                     raw_roster, winner = parser.extract_connect4_game(window)
+                    winners = {winner} if winner is not None else set()
                     scores = {}
                     roster = sorted(u for u in raw_roster if u in member_ids)
                     payouts = {u: settings.reward_game_participation for u in roster}
                     if winner in roster and settings.reward_game_win > 0:
                         payouts[winner] = payouts[winner] + settings.reward_game_win
 
-                if winner is not None and winner not in member_ids:
-                    winner = None  # left the server / a bot — no win bonus
+                # Left the server / a bot — no win bonus.
+                winners &= member_ids
                 if not roster:
                     log.info("  %s  %-8s no resolvable players — skipped", when, game)
                     continue
@@ -245,8 +253,9 @@ def main() -> int:
                 for uid, coins in payouts.items():
                     per_user[uid] += coins
                 log.info(
-                    "  %s  %-8s %2d players, %4d coins, winner %s",
-                    when, game, len(roster), sum(payouts.values()), winner,
+                    "  %s  %-8s %2d players, %4d coins, winner(s) %s",
+                    when, game, len(roster), sum(payouts.values()),
+                    sorted(winners) or "none",
                 )
 
                 if not args.apply:
@@ -274,7 +283,7 @@ def main() -> int:
                         )
                         apply_credit(
                             conn, guild_id, uid, coins,
-                            "game_win" if uid == winner else "game_participation",
+                            "game_win" if uid in winners else "game_participation",
                             meta=meta, booster=False,
                         )
                     # Quest triggers fire for the whole roster, including anyone
@@ -284,7 +293,7 @@ def main() -> int:
                         conn, settings, guild_id, "party_game", uid,
                         local_day=day, occurrence=occurrence, booster=False,
                     )
-                    if uid == winner:
+                    if uid in winners:
                         fire_trigger_quests(
                             conn, settings, guild_id, "game_win", uid,
                             local_day=day, occurrence=occurrence, booster=False,

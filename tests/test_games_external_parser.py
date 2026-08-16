@@ -5,9 +5,18 @@ submission status (`✅ <@id> Submitted!`), round wins, and the terminal
 `Game over!` embed (`<@id> is the winner!`) for CAH; the join-phase start
 embed, the `Time's up!` recap, and the terminal `Game over!` embed
 (`<@id> has won!`) for Connect 4.
+
+Gamebot rewrote every CAH string on 2026-08-15 and payouts stopped. The
+"format change" section at the bottom covers the new vocabulary alongside the
+old, and runs against two whole real games pulled out of the prod archive
+(`tests/data/gamebot_cah_{old,new}_format.json`) so the shapes are Gamebot's
+rather than our guess at them.
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 
@@ -116,9 +125,9 @@ def test_extract_cah_game_unions_roster_and_finds_winner():
         _standings({ALICE: 5, BOB: 1, CAROL: 1}),
         _game_over(ALICE),
     ]
-    scores, winner = parser.extract_cah_game(window)
+    scores, winners = parser.extract_cah_game(window)
     assert scores == {ALICE: 5, BOB: 1, CAROL: 1}
-    assert winner == ALICE
+    assert winners == [ALICE]
 
 
 def test_extract_cah_game_last_standings_supersedes_earlier_ones():
@@ -129,9 +138,9 @@ def test_extract_cah_game_last_standings_supersedes_earlier_ones():
         _standings({ALICE: 5, BOB: 1}),
         _game_over(ALICE),
     ]
-    scores, winner = parser.extract_cah_game(window)
+    scores, winners = parser.extract_cah_game(window)
     assert scores == {ALICE: 5, BOB: 1}
-    assert winner == ALICE
+    assert winners == [ALICE]
 
 
 def test_extract_cah_game_submission_only_player_folded_in_at_zero():
@@ -142,9 +151,9 @@ def test_extract_cah_game_submission_only_player_folded_in_at_zero():
         _standings({ALICE: 3, BOB: 1}),
         _game_over(ALICE),
     ]
-    scores, winner = parser.extract_cah_game(window)
+    scores, winners = parser.extract_cah_game(window)
     assert scores == {ALICE: 3, BOB: 1, CAROL: 0}
-    assert winner == ALICE
+    assert winners == [ALICE]
 
 
 def test_current_game_window_bounds_on_previous_game_over():
@@ -158,15 +167,43 @@ def test_current_game_window_bounds_on_previous_game_over():
         _game_over(CAROL),                # 3: game B ends
     ]
     window = parser.current_game_window(parsed, over_index=3)
-    scores, winner = parser.extract_cah_game(window)
+    scores, winners = parser.extract_cah_game(window)
     assert scores == {CAROL: 5, DAVE: 2}
-    assert winner == CAROL
+    assert winners == [CAROL]
 
 
-def test_extract_handles_no_winner():
-    scores, winner = parser.extract_cah_game([_standings({ALICE: 2, BOB: 2})])
-    assert scores == {ALICE: 2, BOB: 2}
-    assert winner is None
+def test_undeclared_winner_is_derived_from_the_top_score():
+    # No *Game over!* to name one — the case every post-2026-08-15 game is in,
+    # since Gamebot stopped declaring a winner. Top of the standings wins.
+    scores, winners = parser.extract_cah_game([_standings({ALICE: 5, BOB: 2})])
+    assert scores == {ALICE: 5, BOB: 2}
+    assert winners == [ALICE]
+
+
+def test_a_tied_lead_makes_every_tied_player_a_winner():
+    # CAH is first-to-N, so a game that finishes has a unique leader; a tie is
+    # what a game Gamebot dropped part-way leaves behind. Billy's call
+    # (2026-08-16): they all take the cap. The payout faucet already accepts a
+    # collection of winner ids, so this needs no special-casing downstream.
+    scores, winners = parser.extract_cah_game([_standings({ALICE: 3, BOB: 3, CAROL: 1})])
+    assert scores == {ALICE: 3, BOB: 3, CAROL: 1}
+    assert winners == [ALICE, BOB]
+
+
+def test_a_declared_winner_beats_the_top_score():
+    # Old format only. If Gamebot named someone, take its word rather than
+    # re-deriving — the standings can lag the final round.
+    window = [_standings({ALICE: 5, BOB: 4}), _game_over(BOB)]
+    _scores, winners = parser.extract_cah_game(window)
+    assert winners == [BOB]
+
+
+def test_nobody_wins_a_game_where_no_round_was_played():
+    # An all-zero standings is not a ten-way tie for first — a game that died
+    # before anyone took a point has no winner to pay a win bonus to.
+    scores, winners = parser.extract_cah_game([_standings({ALICE: 0, BOB: 0})])
+    assert scores == {ALICE: 0, BOB: 0}
+    assert winners == []
 
 
 # ── Connect 4 (#70 follow-up) ──────────────────────────────────────────────────
@@ -419,9 +456,9 @@ def test_current_game_window_stops_at_its_own_lobby():
     ]
     window = parser.current_game_window(parsed, over_index=3)
     assert parser.identify_game(window) == parser.GAME_CAH
-    scores, winner = parser.extract_cah_game(window)
+    scores, winners = parser.extract_cah_game(window)
     assert scores == {ALICE: 5, BOB: 1}   # CAROL's 9 is not in this game
-    assert winner == ALICE
+    assert winners == [ALICE]
 
 
 def test_is_abandoned_flags_a_lobby_that_never_filled():
@@ -719,3 +756,207 @@ def test_econ_settings_carry_catcatch_dials_roundtrip(tmp_path):
         s = load_econ_settings(conn, 9)
     assert s.catcatch_coins_mythic == 40
     assert s.catcatch_coins_divine == 300  # untouched dial keeps its default
+
+
+# ── Gamebot's 2026-08-15 format change ───────────────────────────────────────
+#
+# Gamebot rewrote every CAH string overnight and DK stopped paying: the last
+# gamebot_cah payout is 2026-08-14. These run against two whole real games
+# lifted out of the prod archive — the last old-format one (08-14) and the
+# first new-format one (08-16) — so the shapes are Gamebot's, not ours. Only
+# the card text is redacted; every line the parser reads is byte-for-byte.
+
+_DATA = Path(__file__).parent / "data"
+
+
+def _load_game(name: str) -> list[dict]:
+    return json.loads((_DATA / name).read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def new_format_game() -> list[dict]:
+    """The real 2026-08-16 game: 10 players, EP hosting, first to 5."""
+    return _load_game("gamebot_cah_new_format.json")
+
+
+@pytest.fixture
+def old_format_game() -> list[dict]:
+    """The real 2026-08-14 game: 6 players, efficientpanic hosting."""
+    return _load_game("gamebot_cah_old_format.json")
+
+
+# The real outcomes, read off the archived Final scores / Game over! embeds.
+NEW_SCORES = {
+    616146317864992778: 5, 1383575324977139773: 4, 1284869710847934544: 3,
+    1376250515976884288: 3, 1461101902686327120: 3, 776959697811013672: 3,
+    519296430834319365: 2, 1236049683416088658: 1, 884813145833619466: 0,
+    203866639005908992: 0,
+    # Joined at 03:02, took a point at 03:25, left at 03:33 — so Gamebot cut
+    # them from every later standings and they're absent from Final scores.
+    # Standings are accumulated, never pruned, so a leaver keeps the score
+    # they earned and gets paid for the eighteen rounds they played. That has
+    # always been the behaviour; the new format is just the first archived
+    # game where somebody actually left mid-run.
+    416829953355808808: 1,
+}
+NEW_WINNER = 616146317864992778
+OLD_SCORES = {
+    708158421920251984: 5, 1284869710847934544: 2, 1359533934387396638: 2,
+    1376250515976884288: 1, 674879423844974602: 1, 203866639005908992: 0,
+}
+OLD_WINNER = 708158421920251984
+
+
+@pytest.mark.parametrize(
+    "fixture, scores, winner",
+    [
+        pytest.param("old_format_game", OLD_SCORES, OLD_WINNER, id="old-2026-08-14"),
+        pytest.param("new_format_game", NEW_SCORES, NEW_WINNER, id="new-2026-08-16"),
+    ],
+)
+def test_a_whole_real_game_pays_its_players(request, fixture, scores, winner):
+    """End to end over a real archived game, both formats.
+
+    The guild can still have a pre-update game in flight, so the old strings
+    have to keep working — a fix that only speaks the new format would trade
+    one outage for another.
+    """
+    game = request.getfixturevalue(fixture)
+    over = next(i for i, m in enumerate(game) if parser.is_terminal(m["embeds"]))
+    window = parser.current_game_window(game, over_index=over)
+
+    assert parser.identify_game(window) == parser.GAME_CAH
+    assert parser.is_abandoned(window) is False
+    got_scores, winners = parser.extract_cah_game(window)
+    assert got_scores == scores
+    assert winners == [winner]
+
+
+def _new_standings(scores: dict[int, int], title: str = "Round winner") -> dict:
+    """A post-2026-08-15 standings post: a *Standings* field, scores bolded."""
+    return {"embeds": [{
+        "title": title,
+        "description": "**Some card.**\n\n<@1> takes the point.",
+        "fields": [{"name": "Standings",
+                    "value": "\n".join(f"<@{u}>: **{n}**" for u, n in scores.items())}],
+    }]}
+
+
+def _new_submissions(uids: list[int]) -> dict:
+    """A post-2026-08-15 *Play your card* embed. ⬜ means "not in yet"."""
+    return {"embeds": [{
+        "title": "Play your card",
+        "description": "<@999> is judging this round.",
+        "fields": [{"name": "Submissions",
+                    "value": "\n".join(f"{'✅' if i else '⬜'} <@{u}>"
+                                       for i, u in enumerate(uids))}],
+    }]}
+
+
+def _final_scores(scores: dict[int, int]) -> dict:
+    return _new_standings(scores, title="Final scores")
+
+
+def _crashed() -> dict:
+    return {"embeds": [{"title": "Something went wrong",
+                        "description": "This game ended unexpectedly. Sorry about that!"}]}
+
+
+@pytest.mark.parametrize(
+    "embeds",
+    [
+        pytest.param(_standings({ALICE: 5, BOB: 1, CAROL: 0})["embeds"], id="old"),
+        pytest.param(_new_standings({ALICE: 5, BOB: 1, CAROL: 0})["embeds"], id="new"),
+    ],
+)
+def test_standings_read_in_either_format(embeds):
+    assert parser.scores_from_standings(embeds) == {ALICE: 5, BOB: 1, CAROL: 0}
+
+
+@pytest.mark.parametrize(
+    "embeds",
+    [
+        pytest.param(_submissions([ALICE, BOB])["embeds"], id="old"),
+        # ⬜/✅ alike: both are players in the game, which is all this is for.
+        pytest.param(_new_submissions([ALICE, BOB])["embeds"], id="new"),
+    ],
+)
+def test_submissions_read_in_either_format(embeds):
+    assert parser.players_from_submissions(embeds) == {ALICE, BOB}
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [pytest.param("Joined Players", id="old"), pytest.param("Players (6/12)", id="new")],
+)
+def test_lobby_roster_read_from_either_field_name(field_name):
+    embeds = [{
+        "title": "EP is starting a Cards Against Humanity game!",
+        "description": f"Press **Join** to play. <@{CAROL}>, press **Start**.",
+        "fields": [{"name": field_name, "value": f"<@{ALICE}>, <@{BOB}>"}],
+    }]
+    assert parser.players_from_join_phase(embeds) == {ALICE, BOB, CAROL}
+
+
+@pytest.mark.parametrize(
+    "embeds, terminal, cah_finish",
+    [
+        pytest.param(_game_over(ALICE)["embeds"], True, True, id="old-game-over"),
+        pytest.param(_c4_game_over(ALICE)["embeds"], True, False, id="connect4-game-over"),
+        pytest.param(_final_scores({ALICE: 5})["embeds"], True, True, id="new-final-scores"),
+        # Ends a window, but is no evidence a CAH game happened inside it.
+        pytest.param(_crashed()["embeds"], True, False, id="new-crash"),
+        pytest.param(_new_standings({ALICE: 1})["embeds"], False, False, id="new-round-winner"),
+        pytest.param(_round_win(ALICE)["embeds"], False, False, id="old-round-win"),
+    ],
+)
+def test_terminal_and_finish_detection(embeds, terminal, cah_finish):
+    assert parser.is_terminal(embeds) is terminal
+    assert parser.is_game_over(embeds) is cah_finish
+
+
+def test_new_format_standings_are_gated_on_the_field_name():
+    # Same guarantee the old title gate gave: a stray "<@id>: N" in a field
+    # that isn't the standings must not invent a player or a score.
+    stray = [{"title": "Game settings",
+              "fields": [{"name": "Points to win", "value": f"<@{ALICE}>: 5"}]}]
+    assert parser.scores_from_standings(stray) == {}
+
+
+def test_a_game_gamebot_dropped_still_pays_the_rounds_that_were_played():
+    # No *Final scores* — Gamebot just fell over. Billy's call (2026-08-16):
+    # pay from the last standings anyway, since those rounds really happened.
+    window = [
+        _lobby("Cards Against Humanity", [ALICE, BOB, CAROL]),
+        _new_standings({ALICE: 1, BOB: 0, CAROL: 0}),
+        _new_standings({ALICE: 2, BOB: 2, CAROL: 0}),
+        _crashed(),
+    ]
+    assert parser.is_terminal(_crashed()["embeds"]) is True
+    assert parser.identify_game(window) == parser.GAME_CAH
+    assert parser.is_abandoned(window) is False
+    scores, winners = parser.extract_cah_game(window)
+    assert scores == {ALICE: 2, BOB: 2, CAROL: 0}
+    assert winners == [ALICE, BOB]        # dropped mid-game, so the lead tied
+
+
+def test_a_crash_after_a_clean_finish_pays_nobody_a_second_time(new_format_game):
+    """The real 08-16 tail: *Something went wrong* 1.4s after *Final scores*.
+
+    Both are terminal, so both fire a payout attempt, and each claims on its
+    own message id — the ledger can't dedupe them. What stops the double
+    payment is the window: bounding backwards from the crash stops at the
+    *Final scores* that precedes it, leaving a window of one message with no
+    standings in it, which the cog skips.
+    """
+    final = next(i for i, m in enumerate(new_format_game)
+                 if m["embeds"] and m["embeds"][0]["title"] == "Final scores")
+    crash = next(i for i, m in enumerate(new_format_game)
+                 if m["embeds"] and m["embeds"][0]["title"] == "Something went wrong")
+    assert crash == final + 1
+
+    window = parser.current_game_window(new_format_game, over_index=crash)
+    assert len(window) == 1
+    scores, winners = parser.extract_cah_game(window)
+    assert scores == {}      # the cog's `if not scores` short-circuit
+    assert winners == []

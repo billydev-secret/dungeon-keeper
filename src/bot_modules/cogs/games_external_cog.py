@@ -252,23 +252,30 @@ class GamesExternalCog(commands.Cog):
         The top scorer (the winner) earns the configured cap and everyone else
         a ratio of it, but the same party_game/game_win quest triggers fire as
         a flat payout would.
+
+        From 2026-08-15 Gamebot declares no winner, so ``winners`` is derived
+        from the top of the last standings and can hold more than one id when
+        a dropped game left the lead tied — they all take the cap.
         """
         guild = message.guild
         assert guild is not None
-        scores, winner = parser.extract_cah_game(window)
+        scores, winners = parser.extract_cah_game(window)
         if not scores:
+            # Nothing was played in this window — e.g. a *Something went
+            # wrong* trailing a game that already paid out on its *Final
+            # scores*, which bounds into a window holding only itself.
             await logic.mark_parsed(self.db, message.id, "skip")
             return
         if not await logic.claim_payout(self.db, message.id, guild.id, "gamebot_cah"):
             return
         await pay_cah_game_by_score(
-            self.bot, guild.id, scores, winner, occurrence=str(message.id),
+            self.bot, guild.id, scores, winners, occurrence=str(message.id),
             host_id=host_id,
         )
         await logic.mark_parsed(self.db, message.id, "ok")
         log.info(
-            "CAH payout: guild %s game %s — %d players, winner %s",
-            guild.id, message.id, len(scores), winner,
+            "CAH payout: guild %s game %s — %d players, winner(s) %s",
+            guild.id, message.id, len(scores), winners,
         )
 
     async def _pay_connect4_game(self, message, window, host_id=None) -> None:
