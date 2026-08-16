@@ -1,9 +1,12 @@
-"""Tier 1 unit tests: scheduled-games recurrence math (pure, no I/O)."""
+"""Tier 1 unit tests: scheduled-games recurrence math + announcement copy (pure, no I/O)."""
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from bot_modules.services.scheduled_games_service import (
     _local_to_epoch,
+    build_launch_announcement,
     compute_next_run,
 )
 
@@ -141,3 +144,54 @@ def test_negative_offset_local_walltime():
         now_utc=now, offset_hours=-8.0, recurrence="daily", time_of_day_min=20 * 60,
     )
     assert _local(nxt, offset=-8.0) == datetime(2026, 6, 8, 20, 0)
+
+
+# ── launch announcement copy (todo #97) ──────────────────────────────────────
+#
+# The announcement used to fire *before* the launcher, so it could only ever
+# name the channel it was already sitting in. It now fires after, which means
+# there is a board message to point at — except for the games that keep their
+# state in memory and never register one.
+
+@pytest.mark.parametrize(
+    "role_id, message_id, expected",
+    [
+        pytest.param(
+            None, 333,
+            "🎮 **Never Have I Ever** is starting now!\n"
+            "https://discord.com/channels/111/222/333",
+            id="link-no-ping",
+        ),
+        pytest.param(
+            42, 333,
+            "<@&42> 🎮 **Never Have I Ever** is starting now!\n"
+            "https://discord.com/channels/111/222/333",
+            id="link-with-ping",
+        ),
+        # risky_roll tracks rounds in memory and never writes a
+        # games_active_games row — there is genuinely nothing to link to, and a
+        # half-built URL would be worse than the channel it's already posted in.
+        pytest.param(
+            None, None,
+            "🎮 **Never Have I Ever** is starting now!",
+            id="no-board-no-link",
+        ),
+        pytest.param(
+            42, None,
+            "<@&42> 🎮 **Never Have I Ever** is starting now!",
+            id="no-board-still-pings",
+        ),
+    ],
+)
+def test_build_launch_announcement(role_id, message_id, expected):
+    assert build_launch_announcement(
+        "nhie", role_id=role_id, guild_id=111, channel_id=222, message_id=message_id,
+    ) == expected
+
+
+def test_unknown_game_type_still_gets_a_readable_label():
+    """A game shipped before GAME_NAMES caught up must not announce as `foo_bar`."""
+    out = build_launch_announcement(
+        "foo_bar", role_id=None, guild_id=1, channel_id=2, message_id=3,
+    )
+    assert "**Foo Bar**" in out

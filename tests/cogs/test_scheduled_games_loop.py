@@ -328,24 +328,66 @@ async def test_scheduled_lobby_game_nudges_the_schedule_creator(sync_db_path):
 
 
 async def test_scheduled_lobby_nudge_lands_after_the_lobby(sync_db_path):
-    # Ordering matters: announce → lobby → nudge, so the actionable message
-    # sits next to the button rather than above the card. The stand-in
+    # Ordering matters: lobby → announce → nudge. The announcement moved behind
+    # the launch because it now links at the board, and there is no board to
+    # link at until the launcher has posted one (todo #97). The stand-in
     # launcher posts a marker so the lobby's position is actually observable.
     db = GamesDb(sync_db_path)
     chan = _Chan(CHAN)
 
     async def fake_launch(*, channel, host_id, host_name, guild_id, options):
         await channel.send("LOBBY CARD")
-        return "fake-gid"
+        # Every real launcher registers its board before returning, which is
+        # what makes the message id readable by the time we announce.
+        return await create_game(db, CHAN, 2001, "story", message_id=555)
 
     bot = _Bot(db, {CHAN: chan}, {"story": fake_launch})
     row = await _insert(db, game_type="story", announce=1, created_by=2001)
 
     await svc._process_due(bot, db, row, NOW)
 
-    assert "is starting now!" in chan.sends[0]
-    assert chan.sends[1] == "LOBBY CARD"
+    assert chan.sends[0] == "LOBBY CARD"
+    assert "is starting now!" in chan.sends[1]
+    # The whole point: the ping carries a link to the board just posted above it.
+    assert f"https://discord.com/channels/{GUILD}/{CHAN}/555" in chan.sends[1]
     assert "<@2001>" in chan.sends[2]
+
+
+async def test_announce_without_a_registered_board_carries_no_link(sync_db_path):
+    """risky_roll keeps its round in memory and writes no games_active_games row.
+
+    There is genuinely nothing to point at, so the announcement stays the bare
+    line rather than shipping a URL with a missing message segment.
+    """
+    db = GamesDb(sync_db_path)
+    chan = _Chan(CHAN)
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        return "in-memory-gid"  # no row registered, as risky_roll does
+
+    bot = _Bot(db, {CHAN: chan}, {"risky_roll": fake_launch})
+    row = await _insert(db, game_type="risky_roll", announce=1)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert "is starting now!" in chan.sends[0]
+    assert "discord.com/channels" not in chan.sends[0]
+
+
+async def test_a_failed_launch_announces_nothing(sync_db_path):
+    """Announcing first meant pinging a role about a game that never appeared."""
+    db = GamesDb(sync_db_path)
+    chan = _Chan(CHAN)
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        return None  # missing perms, caught inside the launcher
+
+    bot = _Bot(db, {CHAN: chan}, {"wyr": fake_launch})
+    row = await _insert(db, game_type="wyr", announce=1)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert chan.sends == []
 
 
 async def test_scheduled_lobbyless_game_is_not_nudged(sync_db_path):

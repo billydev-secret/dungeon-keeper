@@ -565,6 +565,7 @@
         <p>Six games open a lobby and wait for you to press start — <strong>Clapback</strong>, <strong>Spin the Compliment</strong>, <strong>Marry, Fornicate, Kiss</strong>, <strong>Most Likely To</strong>, <strong>Mt. Rushmore Draft</strong> and <strong>Story Builder</strong>. Add <code>start_in:</code> (1–60 minutes) when you open one and the lobby shows a live countdown, so people know when to be there — e.g. <code>/games play rushmore start_in:15</code>.</p>
         <p>The game does <em>not</em> start by itself. When the countdown runs out the bot posts a message in the channel tagging you, so you don't have to watch the clock — you still press the button when everyone's in. Most games that aren't on that list begin the moment you run the command, so they have no <code>start_in:</code>.</p>
         <p>Scheduled games work the same way: if an admin has one of those six on a schedule, the bot tags whoever set it up as soon as the lobby appears, since someone still has to start it.</p>
+        <p>A schedule can also be set to <strong>announce when it starts</strong> — the bot posts a note in the channel (pinging a role, if staff picked one) the moment the game goes up, with a link straight to it. The note follows the game rather than leading it, so it never announces one that failed to appear.</p>
         <p>Two Truths and a Lie, Hot Takes and LegitLibs also wait on the host, but don't take <code>start_in:</code> yet.</p>
       </div>
     </div>
@@ -2245,7 +2246,7 @@
     </div>
 
     <h3 id="event-echo">Event Echo</h3>
-    <p>Posts a small note in main chat whenever something worth your attention is happening elsewhere in the server, with a link that takes you straight to it — so a game running in the games channel doesn't go unnoticed by everyone sitting in the main room.</p>
+    <p>Posts a small note in main chat whenever something worth your attention is happening elsewhere in the server, with a link that takes you straight to it — so a game running in the games channel doesn't go unnoticed by everyone sitting in the main room. For games, the channel named in the note is itself the link, and it drops you on the game rather than at the bottom of the channel with the game still to find.</p>
 
     <h4>Three kinds of note</h4>
     <ul>
