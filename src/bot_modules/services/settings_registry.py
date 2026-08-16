@@ -21,9 +21,9 @@ expose keys nobody vetted for model access.
 Two safety rules govern entries:
 
 * ``writable`` is **opt-in per setting**. The human Apply gate in
-  ``advisor_actions`` is the only thing between a prompt-injected pinned message
-  and a config write, so widening what model output can propose is deliberate,
-  never a default.
+  ``advisor_actions`` is the only thing between a prompt-injected channel topic
+  or server doc and a config write, so widening what model output can propose is
+  deliberate, never a default.
 * ``admin_only`` raises the bar for settings that grant access or moderation
   authority (the jailed role, NSFW/veil access roles, who may mark Q&A answers),
   **or that route confidential data to a channel** (the whisper mod log, which

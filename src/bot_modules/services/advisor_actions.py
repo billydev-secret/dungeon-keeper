@@ -3,8 +3,8 @@
 The advisor can *propose* a settings change via its ``propose_config_change``
 tool, but never applies one itself: the proposal is validated here, attached
 to the reply as an Apply button, and only written when an admin clicks it
-(``advisor_cog``). That human gate is the prompt-injection defence — pinned
-messages, server docs, and announcements are all in the model's context, so
+(``advisor_cog``). That human gate is the prompt-injection defence — channel
+topics, server docs, and announcements are all in the model's context, so
 model output alone must never mutate config.
 
 Scope comes from ``settings_registry``: a key is proposable only if it is listed

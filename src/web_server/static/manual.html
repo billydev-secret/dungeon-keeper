@@ -466,7 +466,9 @@
     <h3 id="ask-guide">Ask Billy-bot (AI)</h3>
     <p>Run <code>/ask</code>, or use the <strong>Ask Billy-bot</strong> box above — a guide-grounded AI that won't invent commands. Admins get more from <em>Config → AI Assistant</em>: model per audience, live server context, a setup review, and Apply buttons for settings changes. Details in <a href="#config">Configuration</a>.</p>
 
-    <p><strong>Live server context</strong> is off until an admin switches it on. With it on, each question is answered using the channels <em>you</em> can see (names and topics), the pinned messages in them, server docs, recent announcements, and your nickname and roles — never a channel you can't see, and never an age-gated one. Private per-member rooms (jail, tickets, Pen&nbsp;Pals, the bios wizard) are left out entirely. That material goes to the AI along with your question — it is the one part of the bot that sends anything off the server, so see <a href="#privacy">Privacy &amp; Your Data</a>.</p>
+    <p><strong>Live server context</strong> is off until an admin switches it on. With it on, each question is answered using the shared channels <em>you</em> can see (names and topics), server docs, recent announcements, and your roles — never a channel you can't see, and never an age-gated one. Private per-member rooms (jail, tickets, Pen&nbsp;Pals, the bios wizard) are left out entirely, for everyone including staff: those channels are named after the people in them. That material goes to the AI along with your question — it is the one part of the bot that sends anything off the server, so see <a href="#privacy">Privacy &amp; Your Data</a>.</p>
+
+    <p><strong>It is never given anything about a member</strong> — not your bio, birthday, confessions, wellness entries, DMs, balance, inventory or stats, and not anyone else's, whether or not live server context is switched on. It isn't given messages people have posted either. Ask it what someone's bio says and it will tell you it has no access and point you at the bios channel; if it ever appears to answer such a question, it is making the answer up, so please report it to a mod. Your roles go to it because answers are tailored to what you're able to do; your nickname does not.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
@@ -1430,7 +1432,7 @@
     <p>Almost all processing happens on the machine the bot runs on. Image classification, voice transcription, sentiment scoring and the moderation model are all local — nothing is uploaded to a third-party service for any of them. Three exceptions leave the box:</p>
     <ul>
       <li><strong>Discord</strong> — inherent; they host everything the bot reads and writes.</li>
-      <li><strong>Anthropic (Claude)</strong> — when you ask the in-server AI assistant a question, your question text is sent to Anthropic's API to answer it. Your Discord identity is not sent with it. Don't put anything in a question you wouldn't want leaving the server.</li>
+      <li><strong>Anthropic (Claude)</strong> — when you ask the in-server AI assistant a question, your question text is sent to Anthropic's API to answer it. Your Discord identity is not sent with it: no name, no user id. If an admin has switched on live server context, the channel names and topics you can see, server docs and recent announcements go with it, plus your role names so the answer matches what you're allowed to do. <strong>Nothing a member wrote or stored goes with it</strong> — no messages, bios, birthdays, confessions, wellness entries, DMs, balances or stats, for you or anyone else. Don't put anything in a question you wouldn't want leaving the server.</li>
       <li><strong>Spotify</strong> — when you queue music by name or link, the track query is sent to Spotify's API to resolve it. No member identity is attached.</li>
     </ul>
 

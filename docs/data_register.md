@@ -105,7 +105,28 @@ tweak.
 
 - **Local/LAN only**: Marqo+NudeNet (ONNX in-process), VADER, faster-whisper,
   Ollama/llama-server (LAN, host-allowlisted) — moderation, wellness, guess.
-- **Anthropic API (cloud)**: advisor (asker's question + secret-filtered admin-gated config summary — audited, fixtures review), quest-idea gen, game-prep. Remaining action: privacy-notice line. 
+- **Anthropic API (cloud)**: advisor, quest-idea gen, game-prep.
+  What the advisor sends, as of 2026-08-16 (todo #100): the asker's question;
+  the cached manual; a secret-filtered, admin-gated config summary; and — only
+  when `advisor_server_context` is on — names/topics of the **shared** channels
+  the asker can see, staff-authored dashboard `docs`, recent sent
+  announcements, and the asker's **role names and permissions**. Per-member
+  rooms (jail, tickets, Pen Pals, bios wizard) are excluded for every asker
+  including staff: their channel names identify their occupants. No Discord identity: no user id, and the
+  asker's display name was removed with the rest.
+  **No member content, by construction.** Until 2026-08-16 a background loop
+  (`guild_pins_loop`) snapshotted the first five pins of every shared channel
+  and fed them into each ask, taking an embed's title+description when the
+  message had no content — which is the shape of a bio, a starboard entry, or
+  any other embed. That loop, its snapshot, and its `is_private_room` gate are
+  deleted, not merely disabled, and `tests/test_advisor_context.py` fails if any
+  of them reappear. Nothing else in the AI path reads `bio_answers`,
+  `bio_field_values`, `messages`, or any other per-member store — this remains
+  true only as long as no new source is added to
+  `advisor_context.build_asker_context`, which is why that function carries a
+  pointer back to this register.
+  Privacy-notice line: **shipped** — `manual.html` §Where your data goes now
+  itemises what is and is not sent.
 - Lavalink: local (127.0.0.1) ✓. **Spotify Web API (cloud)**: track queries only, no member identity; OAuth token storage → security sweep. Discord CDN: inherent.
 
 ## Known context (seeded from loose-ends audit)
@@ -130,10 +151,12 @@ they land, not only in the synthesis header.
 4. ~~Guess: consent/opt-out package~~ — **shipped `775d903d`**. Retention
    half is partly open: 90d original age-out shipped, `guess_*` purge
    coverage and the confession-text TTL did not.
-5. **OPEN** — processors needing a privacy-notice line: Anthropic
-   (advisor), Spotify. Neither name appears in any user-facing surface
-   (grepped `manual.html`, `privacy_spec.md`, `bot_modules/privacy/`).
-   This is the last unshipped High-tier item.
+5. ~~Processors needing a privacy-notice line: Anthropic (advisor),
+   Spotify~~ — **closed 2026-08-16.** Both are named in `manual.html`
+   §Your Data & Privacy → "Where your data goes"; the item's claim that
+   neither appears in a user-facing surface was already stale when
+   re-read. The Anthropic entry was expanded the same day (todo #100) to
+   itemise what is and is not sent.
 6. TTL/sweep debt — ~~rules_events (dismissed)~~ `49a02867`,
    ~~games_external_messages~~ `49a02867`, ~~bios archives~~ `9374c306`,
    ~~greeting_watch~~ `49a02867`. **Still open:** `xp_events` (deferred
