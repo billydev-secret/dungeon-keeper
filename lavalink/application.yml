@@ -32,10 +32,21 @@ lavalink:
       vimeo: false
       http: false
       local: true
-    bufferDurationMs: 400
-    frameBufferDurationMs: 5000
+    # Koe's UDP send buffer. 400 (the default) leaves almost no headroom for a
+    # GC pause or a network hiccup, both of which surface as audible stutter.
+    # Cost of raising it is a slower reaction to skip/seek, not quality.
+    bufferDurationMs: 1000
+    # How much audio is pre-buffered from the source. Guards against YouTube
+    # throttling mid-track. Costs heap per player, which is why LAVALINK_HEAP_MB
+    # went to 2048 in the same change.
+    frameBufferDurationMs: 10000
     opusEncodingQuality: 10
-    resamplingQuality: LOW
+    # Only reachable because Opus passthrough is off: the cog connects at
+    # volume 20 (music_cog.py:_DEFAULT_VOLUME), and any volume != 100 forces a
+    # decode/resample/re-encode instead of forwarding the source's Opus frames.
+    # While we're paying for that re-encode, do it well. If the volume default
+    # ever goes back to 100, passthrough returns and this setting stops mattering.
+    resamplingQuality: HIGH
     trackStuckThresholdMs: 10000
     useSeekGhosting: true
     youtubePlaylistLoadLimit: 6

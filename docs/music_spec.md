@@ -118,6 +118,37 @@ Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are 
 
 The music cog has no per-guild configuration of its own.
 
+### Audio quality and Opus passthrough (2026-08-16)
+
+Lavalink forwards the source's Opus frames to Discord untouched — no decode, no
+re-encode, near-zero CPU — but **only** while the player's volume is exactly 100
+and no filter is active. Any other volume forces a full decode → resample →
+re-encode, which adds a lossy generation on top of a source that is usually
+already Opus (YouTube itag 251, ~149kbps).
+
+`_DEFAULT_VOLUME` in `cogs/music_cog.py` is therefore **100 and must stay there**.
+It was 20 until 2026-08-16, chosen so the bot wasn't startling on connect; the
+cost turned out to be every track being re-encoded, on a voice channel running at
+384kbps. Members who want it quieter use Discord's own per-user volume slider.
+
+The Lavalink dials live in `lavalink/application.yml`:
+
+| Setting | Value | Why |
+|---|---|---|
+| `bufferDurationMs` | 1000 | Koe's UDP send buffer. The 400 default leaves no headroom for a GC pause or network hiccup, both of which are audible as stutter. Raising it slows skip/seek response, not quality. |
+| `frameBufferDurationMs` | 10000 | Source-side pre-buffer; guards against YouTube throttling mid-track. Costs heap per player. |
+| `opusEncodingQuality` | 10 | Already the maximum. |
+| `resamplingQuality` | HIGH | Only in the path when passthrough is off (non-Opus sources such as the SoundCloud fallback, or YouTube tracks offering only AAC). Free on tracks that pass through. |
+
+Lavalink exposes no encode-bitrate setting; passthrough on or off is effectively
+the quality switch.
+
+Lavalink runs as a **child process of the bot** (`services/lavalink_manager.py`),
+not a systemd unit, with its heap from `LAVALINK_HEAP_MB` (2048 in prod; the 512
+default sat at ~72% resident, which means frequent GC and audible stutter). That
+variable is read when the bot constructs the manager, so a heap change needs a
+full bot restart — respawning the JVM alone only picks up `application.yml`.
+
 ## Stored data
 
 No persistent tables. The per-channel 24/7 settings table (`music_channel_settings`) is no longer read or written; it survives as an empty orphan. All queue state, playback position, and now-playing message ids are in-memory only and don't survive a restart.

@@ -51,9 +51,16 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.music")
 
 _IDLE_DISCONNECT_S = 60
-# Initial volume on every fresh voice connect. New users often don't know how
-# to lower it; 20% is a friendly default that nobody complains about.
-_DEFAULT_VOLUME = 20
+# Initial volume on every fresh voice connect. **Must stay 100.** Lavalink
+# forwards the source's Opus frames untouched only while volume is exactly 100
+# and no filter is active; any other value forces a decode → resample →
+# re-encode, which costs a lossy generation and real CPU per stream. This was
+# 20 ("friendly default nobody complains about") until 2026-08-16, when that
+# re-encode turned out to be throwing away YouTube's ~149kbps Opus on a channel
+# running at 384kbps. Members who want it quieter have Discord's own per-user
+# volume slider; the bot paying for everyone's comfort in audio quality is the
+# wrong trade.
+_DEFAULT_VOLUME = 100
 
 
 class MusicCog(commands.Cog):
