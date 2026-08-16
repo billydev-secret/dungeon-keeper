@@ -256,7 +256,7 @@ class AdvisorCog(commands.Cog):
                 if tools_on and member is not None and can_see_config(member):
                     tools = _make_tools(guild, member, db_path, proposals)
                 # Tools replace the inline settings dump; the rest of the
-                # context (who's asking, channels, pins, docs) stays inline.
+                # context (what the asker can do, channels, docs) stays inline.
                 guild_context = build_asker_context(
                     guild, member, db_path, include_config=tools is None
                 )

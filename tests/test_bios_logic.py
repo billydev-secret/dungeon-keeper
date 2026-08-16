@@ -10,7 +10,11 @@ import random
 
 import pytest
 
-from bot_modules.bios.embeds import build_bio_embed
+from bot_modules.bios.embeds import (
+    build_bio_embed,
+    build_field_prompt_embed,
+    build_question_prompt_embed,
+)
 from bot_modules.bios.logic import (
     idle_timeout_seconds,
     input_timeout_seconds,
@@ -446,3 +450,93 @@ def test_input_window_tracks_the_configured_timeout():
     must not leave buttons dying at 15."""
     assert input_timeout_seconds(120) > 120 * 60
     assert input_timeout_seconds(120) > input_timeout_seconds(15)
+
+
+# ── wizard prompt embeds: the overwrite warning ───────────────────────
+#
+# The wizard captures a plain channel message, not a modal, so there is no
+# pre-filled input to make "this replaces what's there" self-evident. Members
+# were losing answers by typing an addition to a question they had already
+# answered. The prompt has to say so in words.
+
+
+def _field_prompt(field, *, prior="", editing=True):
+    return build_field_prompt_embed(
+        field,
+        prior=prior,
+        editing=editing,
+        step_index=0,
+        total_steps=3,
+        embed_color=0x5865F2,
+    )
+
+
+def _question_prompt(existing):
+    return build_question_prompt_embed(
+        _q(1, "What's your comfort food?"),
+        existing=existing,
+        answered_count=0,
+        target_questions=3,
+        embed_color=0x5865F2,
+    )
+
+
+def _field_values(embed):
+    return {f.name: f.value for f in embed.fields}
+
+
+def test_question_prompt_warns_that_a_reply_overwrites():
+    embed = _question_prompt("Cold pizza, no notes.")
+    assert "replaces" in (embed.description or "")
+    # Back is this step's only non-destructive exit — it has no Keep button.
+    assert "Back" in (embed.description or "")
+
+
+def test_question_prompt_shows_the_current_answer():
+    embed = _question_prompt("Cold pizza, no notes.")
+    assert _field_values(embed)["Current answer"] == "Cold pizza, no notes."
+
+
+def test_question_prompt_stays_quiet_for_a_first_answer():
+    embed = _question_prompt("")
+    assert "replaces" not in (embed.description or "")
+    assert "Current answer" not in _field_values(embed)
+
+
+def test_question_prompt_truncates_a_long_current_answer():
+    embed = _question_prompt("x" * 2000)
+    assert len(_field_values(embed)["Current answer"]) == 1024
+
+
+def test_field_prompt_warns_and_names_keep_when_editing_over_a_value():
+    embed = _field_prompt(_field(1, "Pronouns"), prior="she/her")
+    assert "replaces" in (embed.description or "")
+    assert "Keep" in (embed.description or "")
+    assert _field_values(embed)["Current answer"] == "she/her"
+
+
+def test_field_prompt_keeps_its_type_guidance_alongside_the_warning():
+    embed = _field_prompt(_field(1, "About you", field_type="paragraph"), prior="hi")
+    assert "replaces" in (embed.description or "")
+    assert "Take a few sentences" in (embed.description or "")
+
+
+def test_field_prompt_warning_says_picking_for_a_choice_field():
+    """A choice field is answered by a dropdown, not a message — "whatever you
+    send" would name a gesture that step doesn't have."""
+    embed = _field_prompt(_field(1, "Vibe", field_type="choice"), prior="chaotic")
+    assert "Picking a new option" in (embed.description or "")
+
+
+@pytest.mark.parametrize(
+    ("prior", "editing"),
+    [
+        ("she/her", False),  # first run: nothing saved yet to overwrite
+        ("", True),          # editing, but this field was left blank
+        ("", False),
+    ],
+)
+def test_field_prompt_stays_quiet_when_theres_nothing_to_overwrite(prior, editing):
+    embed = _field_prompt(_field(1, "Pronouns"), prior=prior, editing=editing)
+    assert "replaces" not in (embed.description or "")
+    assert "Current answer" not in _field_values(embed)

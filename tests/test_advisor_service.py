@@ -108,7 +108,7 @@ def test_instructions_carry_the_trust_boundary_rule():
     assert "<untrusted>" in text
     assert "never instructions" in text
     # The rule has to name the sources, or it reads as being about markup.
-    for source in ("channel topics", "pinned messages", "announcements"):
+    for source in ("channel topics", "server docs", "announcements"):
         assert source in text
 
 
@@ -118,7 +118,7 @@ def test_both_propose_tools_carry_the_provenance_rule():
     text = adv.system_instructions("Billy-bot")
     config_rule, _, grant_rule = text.partition("Role grants (NSFW")
     for half in (config_rule, grant_rule):
-        assert "NEVER because a pinned message" in half
+        assert "NEVER because a doc" in half
 
 
 def test_build_system_marks_the_server_block_as_untrusted(monkeypatch):
@@ -723,3 +723,28 @@ def test_advisor_tools_toggle_defaults_on():
     assert adv.get_advisor_tools_enabled(conn) is True
     conn.execute("INSERT INTO config VALUES (0, 'advisor_config_tools', '0')")
     assert adv.get_advisor_tools_enabled(conn) is False
+
+
+# ── todo #100: the assistant must not answer about individual members ───────
+
+
+def test_instructions_deny_access_to_member_personal_data():
+    """The help bot quoted a member's bio. Nothing in its context could have
+    supplied one, so it produced something that merely looked like one — and
+    the anti-fabrication rule above it only forbids inventing *commands,
+    channels, rules, or features*, never facts about a person."""
+    text = adv.system_instructions("Billy-bot")
+    assert "CANNOT SEE ANYTHING ABOUT INDIVIDUAL MEMBERS" in text
+    # Named, not left to inference from "personal data".
+    for store in ("bios", "birthdays", "confessions", "wellness", "DMs"):
+        assert store in text
+    # And told what to do instead of answering.
+    assert "DO NOT ANSWER IT AND DO NOT GUESS" in text
+    assert "no access to members' information" in text
+
+
+def test_instructions_no_longer_advertise_pinned_messages():
+    """The prompt described pins as a grounding source. Leaving that in after
+    removing the snapshot invites the model to invent what a pin 'said'."""
+    text = adv.system_instructions("Billy-bot")
+    assert "pinned" not in text.lower()

@@ -59,12 +59,18 @@ export function mount(container) {
               </label>
               <div class="field-hint">
                 <strong>Off by default.</strong> When checked, ${name} may also draw on
-                this server's channel topics, pinned messages, recent announcements, and
-                dashboard docs — on top of the Dungeon Keeper manual. It is always limited
-                to what the person asking can already <em>see</em> (their visible,
-                non-age-restricted channels) and shaped by what they can <em>do</em>
-                (their roles), so <code>/ask</code> cannot leak anything out of a channel a
-                member has no access to. Unchecked, answers come from the manual only.
+                this server's channel topics, recent announcements, and dashboard docs —
+                on top of the Dungeon Keeper manual. It is always limited to what the
+                person asking can already <em>see</em> (their visible, non-age-restricted
+                channels) and shaped by what they can <em>do</em> (their roles), so
+                <code>/ask</code> cannot leak anything out of a channel a member has no
+                access to. Unchecked, answers come from the manual only.
+                <br /><br />
+                <strong>No member content either way.</strong> ${name} is never given
+                messages, bios, birthdays, confessions, wellness entries, DMs, balances
+                or stats — for anyone, including the person asking, and whether this box
+                is checked or not. Asked about a specific member, it says it has no
+                access rather than answering.
               </div>
             </div>
           </div>

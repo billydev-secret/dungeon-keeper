@@ -2,22 +2,23 @@
 
 The advisor's static grounding is the user manual (``advisor_service``). This
 module adds *live, per-server* grounding — server docs, recent announcements,
-channel topics, and pinned messages — plus a summary of what the asker can
-**do** (their roles/permissions), so answers are tailored to them.
+and channel names/topics — plus a summary of what the asker can **do** (their
+roles/permissions), so answers are tailored to them.
 
-Two hard rules, both enforced here and covered by tests:
+Three hard rules, all enforced here and covered by tests:
 
-- **See:** a channel's topic/pins are only ever included if the asker can view
-  that channel (``permissions_for(viewer).view_channel``), and NSFW channels
+- **See:** a channel's topic is only ever included if the asker can view that
+  channel (``permissions_for(viewer).view_channel``), and NSFW channels
   (``is_nsfw()``) are never included. ``/ask`` is open to everyone, so this is
   the gate that stops a member extracting mod-only content.
 - **Do:** the capability summary reflects the asker's real permissions, so
   the advisor only suggests actions they can actually perform.
-
-Pins require an API call per channel, so they come from a per-guild snapshot
-refreshed by ``guild_pins_loop`` rather than fetched on every ``/ask``. The
-snapshot holds every non-NSFW channel the *bot* can read; the per-asker
-visibility gate is applied when the context is built, not when it's cached.
+- **Nothing about a person:** no member-written message, no stored per-member
+  data, and no member's name — the asker's included. Everything assembled here
+  is server-level: channel structure, staff-authored docs and announcements,
+  and the asker's permissions. See the note above
+  :func:`build_asker_context` before adding a source, and record the change in
+  ``docs/data_register.md``.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ import importlib
 import logging
 import re
 import sqlite3
-import time
 from collections.abc import Callable
 
 import discord
@@ -42,8 +42,6 @@ log = logging.getLogger(__name__)
 # Caps — keep the live block small so the cached manual stays the bulk of the
 # prompt and per-ask cost stays bounded.
 MAX_CHANNELS = 60
-MAX_PINS_PER_CHANNEL = 5
-MAX_PIN_CHARS = 300
 MAX_TOPIC_CHARS = 300
 MAX_DOCS = 12
 MAX_DOC_CHARS = 900
@@ -51,20 +49,17 @@ MAX_ANNOUNCEMENTS = 6
 MAX_ANNOUNCEMENT_CHARS = 500
 MAX_CONTEXT_CHARS = 12000  # hard ceiling on the whole assembled block
 
-# guild_id -> {channel_id -> [pin text, ...]}, plus last-refresh timestamps.
-_pins: dict[int, dict[int, list[str]]] = {}
-_pins_refreshed_at: dict[int, float] = {}
-
 
 # ---------------------------------------------------------------------------
 # Trust boundary
 # ---------------------------------------------------------------------------
 
-# Everything this module gathers except the config summary is text a member
-# wrote. It goes into a *system* block, so without neutralizing the delimiters
-# the prompt itself uses, a pinned message could close the context section and
-# open something that reads like instructions. Strip the fence tags and any run
-# of '=' that could forge a "=== SECTION ===" header.
+# Everything this module gathers except the config summary is text a human
+# typed — a channel topic, a doc, an announcement, a role name. It goes into a
+# *system* block, so without neutralizing the delimiters the prompt itself uses,
+# a channel topic could close the context section and open something that reads
+# like instructions. Strip the fence tags and any run of '=' that could forge a
+# "=== SECTION ===" header.
 _FENCE_RE = re.compile(r"</?untrusted[^>]*>|={3,}", re.I)
 
 
@@ -116,6 +111,41 @@ def visible_text_channels(guild, viewer) -> list:
     if vis is None:
         return []
     return [ch for ch in getattr(guild, "text_channels", []) if can_view(ch, vis)]
+
+
+def is_private_room(channel, me=None) -> bool:
+    """True if a *specific member* was granted view — a per-member private room.
+
+    Jail channels, tickets, Pen Pals rooms and the bios wizard all create a
+    channel and hand view access to one or two named members; staff channels
+    gate on a role instead. That difference is the only reliable signal we have
+    without hard-coding four category ids, and it fails closed: an unreadable
+    overwrite map counts as private, and over-excluding costs context quality,
+    never confidentiality.
+
+    ``me`` is the bot's own member, whose overwrite these features also set and
+    which must not make every one of them look private.
+
+    These rooms are **named after the members in them** — ``penpals-alice-bob``,
+    ``jail-alice-1723``, ``bio-<user id>`` — so to a staff asker, who can see
+    them all, the channel list alone would hand the AI a roster of who is in
+    jail and who is talking to whom. That is why this gate now sits on the
+    channel list itself; it used to guard only the pin snapshot, which left the
+    names flowing regardless.
+    """
+    try:
+        overwrites = getattr(channel, "overwrites", None) or {}
+        my_id = getattr(me, "id", None)
+        for target, perms in overwrites.items():
+            if isinstance(target, discord.Role):
+                continue
+            if my_id is not None and getattr(target, "id", None) == my_id:
+                continue
+            if perms.view_channel:
+                return True
+    except Exception:
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -463,16 +493,20 @@ def build_config_summary(conn, guild, member: discord.Member | None, db_path=Non
 
 
 def capability_summary(member: discord.Member | None) -> str:
-    """One line describing the asker's powers, for answer tailoring."""
+    """One line describing the asker's powers, for answer tailoring.
+
+    Deliberately nameless. The asker's nickname used to open this line, and it
+    bought nothing — the answers turn on what the asker *can do*, not on who
+    they are — so it went with the pins (todo #100). Role names stay: they are
+    admin-set server structure, and "you'd need @Denizen for that" is the
+    permission-tailoring the whole feature rests on.
+    """
     if member is None:
         return "The person asking is a regular member (no special permissions)."
 
     p = member.guild_permissions
-    # Nickname and role names are member/admin-set text going into a system
-    # block; the sentence around them is ours, the values are not.
-    name = _untrusted(
-        getattr(member, "display_name", None) or getattr(member, "name", "a member")
-    )
+    # Role names are admin-set text going into a system block; the sentence
+    # around them is ours, the values are not.
     if p.administrator:
         powers = "is a server administrator (full control)"
     else:
@@ -491,103 +525,25 @@ def capability_summary(member: discord.Member | None) -> str:
 
     roles = [_untrusted(r.name) for r in getattr(member, "roles", []) if getattr(r, "name", "") not in ("@everyone", "")]
     role_note = f" Roles: {', '.join(roles)}." if roles else ""
-    return f"The person asking is {name} and {powers}.{role_note}"
-
-
-# ---------------------------------------------------------------------------
-# Pins snapshot (refreshed in the background)
-# ---------------------------------------------------------------------------
-
-
-def _pin_text(message: discord.Message) -> str | None:
-    body = (getattr(message, "content", "") or "").strip().replace("\n", " ")
-    if not body:
-        embeds = getattr(message, "embeds", None) or []
-        if embeds:
-            e = embeds[0]
-            body = ((getattr(e, "title", "") or "") + " " + (getattr(e, "description", "") or "")).strip()
-    body = body.strip()
-    return body[:MAX_PIN_CHARS] if body else None
-
-
-def is_private_room(channel, me=None) -> bool:
-    """True if a *specific member* was granted view — a per-member private room.
-
-    Jail channels, tickets, Pen Pals rooms and the bios wizard all create a
-    channel and hand view access to one or two named members; staff channels
-    gate on a role instead. That difference is the only reliable signal we have
-    without hard-coding four category ids, and it fails closed: an unreadable
-    overwrite map counts as private, and over-excluding costs context quality,
-    never confidentiality.
-
-    ``me`` is the bot's own member, whose overwrite these features also set and
-    which must not make every one of them look private.
-    """
-    try:
-        overwrites = getattr(channel, "overwrites", None) or {}
-        my_id = getattr(me, "id", None)
-        for target, perms in overwrites.items():
-            if isinstance(target, discord.Role):
-                continue
-            if my_id is not None and getattr(target, "id", None) == my_id:
-                continue
-            if perms.view_channel:
-                return True
-    except Exception:
-        return True
-    return False
-
-
-async def refresh_guild_pins(guild: discord.Guild) -> dict[int, list[str]]:
-    """Snapshot pins for the guild's shared, non-NSFW text channels.
-
-    "Shared" excludes per-member private rooms (:func:`is_private_room`). The
-    snapshot is guild-wide and only filtered per asker at build time, so a
-    private room's pins would otherwise be readable by any admin who can view
-    it — a wider rule than "the bot can read it" should ever have implied.
-    """
-    result: dict[int, list[str]] = {}
-    me = getattr(guild, "me", None)
-    count = 0
-    for ch in getattr(guild, "text_channels", []):
-        if count >= MAX_CHANNELS:
-            break
-        try:
-            if ch.is_nsfw() or is_private_room(ch, me):
-                continue
-            pins = await ch.pins()
-        except (discord.Forbidden, discord.HTTPException):
-            continue
-        except Exception:
-            log.debug("pins fetch failed for channel %s", getattr(ch, "id", "?"))
-            continue
-        texts = [t for m in pins[:MAX_PINS_PER_CHANNEL] if (t := _pin_text(m))]
-        if texts:
-            result[ch.id] = texts
-        count += 1
-    _pins[guild.id] = result
-    _pins_refreshed_at[guild.id] = time.time()
-    return result
-
-
-async def guild_pins_loop(bot, db_path, *, interval: float = 1800.0) -> None:
-    """Background loop: keep each guild's pin snapshot fresh (default 30 min)."""
-    import asyncio
-
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        for guild in list(getattr(bot, "guilds", [])):
-            try:
-                await refresh_guild_pins(guild)
-            except Exception:
-                log.exception("pin snapshot failed for guild %s", getattr(guild, "id", "?"))
-            await asyncio.sleep(2)
-        await asyncio.sleep(interval)
+    return f"The person asking {powers}.{role_note}"
 
 
 # ---------------------------------------------------------------------------
 # Context assembly
 # ---------------------------------------------------------------------------
+#
+# No member-written *messages* reach this module. A background loop used to
+# snapshot every shared channel's pins and feed them in as context — up to five
+# per channel, taking an embed's title+description when a message had no
+# content. That put arbitrary member-authored text (and anything posted as an
+# embed, which is the shape a bio takes) in front of the AI, which is a wider
+# reach than a help assistant needs. Removed 2026-08-16 (todo #100) along with
+# the asker's own display name and the per-member private rooms whose *names*
+# identify their occupants. What stays is server-level material — shared
+# channel names and topics, staff-authored docs and announcements, and the
+# asker's permissions, which the answers have to be tailored to. Don't add a
+# message, transcript, or profile source back without a decision recorded in
+# docs/data_register.md.
 
 
 def build_asker_context(
@@ -607,7 +563,13 @@ def build_asker_context(
     the caller gives the advisor the ``get_server_settings`` tool instead, so
     settings are fetched on demand rather than paid for on every ask.
     """
-    visible = visible_text_channels(guild, viewer)
+    # Per-member rooms are dropped even from a staff asker's list: they are
+    # named after their occupants, so listing them tells the AI who is in jail
+    # and who is paired with whom (see :func:`is_private_room`).
+    me = getattr(guild, "me", None)
+    visible = [
+        ch for ch in visible_text_channels(guild, viewer) if not is_private_room(ch, me)
+    ]
     visible_ids = {ch.id for ch in visible}
 
     sections: list[str] = [capability_summary(viewer)]
@@ -621,19 +583,6 @@ def build_asker_context(
     ]
     if topic_lines:
         sections.append(_fenced("Channels you can see:", "\n".join(topic_lines)))
-
-    # Pinned messages, from the snapshot, restricted to visible channels.
-    guild_pins = _pins.get(getattr(guild, "id", 0), {})
-    pin_blocks: list[str] = []
-    for ch in visible:
-        texts = guild_pins.get(ch.id)
-        if texts:
-            pin_blocks.append(
-                f"Pinned in #{_untrusted(ch.name)} (<#{ch.id}>):\n- "
-                + "\n- ".join(_untrusted(t) for t in texts)
-            )
-    if pin_blocks:
-        sections.append(_fenced("Pinned messages:", "\n\n".join(pin_blocks)))
 
     # Server docs, announcements, and (for admins) core settings come from the DB.
     config_text = ""

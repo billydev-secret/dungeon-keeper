@@ -18,7 +18,11 @@ import discord
 
 from bot_modules.bios import db as bios_db
 from bot_modules.bios.config import BiosConfig
-from bot_modules.bios.embeds import build_bio_embed
+from bot_modules.bios.embeds import (
+    build_bio_embed,
+    build_field_prompt_embed,
+    build_question_prompt_embed,
+)
 from bot_modules.bios.logic import (
     BioField,
     BioQuestion,
@@ -29,7 +33,6 @@ from bot_modules.bios.logic import (
     headline_value,
     idle_timeout_seconds,
     input_timeout_seconds,
-    question_field_name,
 )
 from bot_modules.bios.trigger import reposition_trigger_button
 from bot_modules.bios.views import BrowseQuestionsView, CombinedStepView
@@ -678,48 +681,35 @@ class WizardSession:
         return e
 
     def _build_field_prompt_embed(self, f: BioField, prior: str) -> discord.Embed:
-        progress = f"Step {self.state.step_index + 1} / {self.state.total_steps}"
-        e = discord.Embed(
-            title=f.label,
-            color=self.config.embed_color,
+        return build_field_prompt_embed(
+            f,
+            prior=prior,
+            editing=self.state.mode == "edit",
+            step_index=self.state.step_index,
+            total_steps=self.state.total_steps,
+            embed_color=self.config.embed_color,
         )
-        if self.state.mode == "edit" and prior:
-            e.add_field(name="Current", value=prior[:1024], inline=False)
-        # Warm, type-aware guidance instead of a bare "reply with..." line.
-        if f.field_type == "paragraph":
-            e.description = "Take a few sentences — no need to be polished, just be you."
-        elif f.field_type == "choice":
-            e.description = "Pick whichever fits best below — you can change it later."
-        else:
-            e.description = "A word or a short phrase is perfect."
-        # Admin-authored example, if one is set — the biggest unblocker for
-        # members who aren't sure what to write.
-        if f.hint:
-            e.add_field(name="💡 For Example", value=f.hint[:256], inline=False)
-        if not f.required:
-            e.add_field(
-                name="​",
-                value="*Totally optional — tap **Skip** if you'd rather not.*",
-                inline=False,
-            )
-        e.set_footer(text=progress)
-        return e
 
     def _build_question_prompt_embed(self, q: BioQuestion) -> discord.Embed:
-        e = discord.Embed(
-            # Prompts accept 512 chars from the dashboard; an over-long title
-            # would make Discord reject this embed, and a failed send inside
-            # the step loop tears the member's session down with no
-            # explanation.
-            title=question_field_name(q.prompt),
-            description="Reply with your answer, or use **Back** to pick a different question.",
-            color=self.config.embed_color,
+        return build_question_prompt_embed(
+            q,
+            existing=self._existing_answer_for(q),
+            answered_count=len(self.state.question_answers),
+            target_questions=self.state.target_questions,
+            embed_color=self.config.embed_color,
         )
-        answered = len(self.state.question_answers)
-        e.set_footer(
-            text=f"Icebreaker {answered + 1} of up to {self.state.target_questions}"
-        )
-        return e
+
+    def _existing_answer_for(self, q: BioQuestion) -> str:
+        """This session's answer to ``q``, or "" if it hasn't been answered.
+
+        Re-picking an answered question from the browse list replaces its entry
+        in place (see :meth:`_apply_action_to_state`), which is exactly the
+        overwrite the prompt has to warn about.
+        """
+        for question, answer in self.state.question_answers:
+            if question.id == q.id:
+                return answer
+        return ""
 
     def _build_browse_embed(
         self, *, page: int, total_pages: int, unanswered_count: int

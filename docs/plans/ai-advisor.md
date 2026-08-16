@@ -26,13 +26,32 @@ it can't invent commands or promise unbuilt features.
   `top_k`).
 - **Server context is opt-in, default OFF** (`advisor_server_context`, admin
   toggle). When on, `advisor_context.build_asker_context` adds live per-server
-  grounding — channel topics, pinned messages (snapshotted by `guild_pins_loop`,
-  ~30 min), recent announcements, and dashboard `docs` — as an uncached block
-  after the cached manual. **Privacy gate (enforced + tested):** every channel is
-  filtered by `can_view(channel, asker)` (the asker's `view_channel`, or
-  @everyone as the public fallback) and NSFW channels are always excluded, so an
-  open `/ask` can't surface content the asker can't see. Answers are also
-  tailored to the asker's permissions (`capability_summary`).
+  grounding — channel names/topics, recent announcements, and dashboard `docs`
+  — as an uncached block after the cached manual. **Privacy gate (enforced +
+  tested):** every channel is filtered by `can_view(channel, asker)` (the
+  asker's `view_channel`, or @everyone as the public fallback) and NSFW channels
+  are always excluded, so an open `/ask` can't surface content the asker can't
+  see. Answers are also tailored to the asker's permissions and role names
+  (`capability_summary`).
+- **No member content, and no member identity** (todo #100, 2026-08-16). Pinned
+  messages used to be part of that grounding, snapshotted from every shared
+  channel by a `guild_pins_loop` background task; the snapshot took an embed's
+  title+description when a message had no content, so any member-authored embed
+  — a bio among them — could land in front of the model. The loop, the
+  snapshot, and the `is_private_room` gate that existed only to serve it are
+  **deleted**. `is_private_room` came back in a different place: it now filters
+  the *channel list*, so jail rooms, tickets, Pen Pals rooms and bios wizard
+  channels are omitted even for a staff asker who can see them — those channels
+  are named after their occupants (`penpals-alice-bob`, `jail-alice-1723`), so
+  listing them handed over a roster. `visible_ids` drives the announcement
+  filter too, so announcements sent into such a room drop out with it. The
+  asker's display name went as well; their roles stayed, because
+  permission-tailoring depends on them. The system prompt now carries an
+  explicit rule that the assistant has no access to any member's bio, birthday,
+  confessions, wellness data, DMs, messages, balance or stats and must say so
+  rather than answer — the anti-fabrication rule above it only ever forbade
+  inventing commands, channels, rules and features, never facts about a person.
+  See `docs/data_register.md` § Processors before adding any new source.
 - **Config awareness (admins only):** `build_config_summary` gives admins a
   secret-filtered (drops `*token*`/`*secret*`/`*refresh*` etc.), id-resolved view
   of the guild's settings so they get correct "is X set up?" answers. It combines
