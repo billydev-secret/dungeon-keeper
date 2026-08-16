@@ -60,14 +60,23 @@ def test_loss_is_red():
     assert _slots(10, 0).color == discord.Color(COLOR_RED)
 
 
-def test_slots_reels_sit_inside_the_cabinet():
-    """Result and spin frames both box the reel row in the text-art
-    machine; unrevealed reels spin as 🌀."""
+def test_slots_reels_render_unframed():
+    """Result and spin frames both show a bare reel row; unrevealed reels
+    spin as 🌀.
+
+    The text-art cabinet that used to box this row was removed 2026-08-16:
+    its two lines rendered 16 and 17 display cells wide, so the box was
+    visibly crooked in Discord, and it could never have been made to fit
+    around emoji whose width varies by client. The box-glyph assertions
+    below are the regression guard — a frame built from these characters
+    is exactly what must not come back.
+    """
     final = _slots(10, 20)
     spin = build_slots_spin_embed(_ECON, 42, 10, ("🍯", None, None), None)
     for embed in (final, spin):
         assert embed.description is not None
-        assert "┤🎰├" in embed.description
+        for glyph in ("╭", "╮", "╰", "╯", "┤", "├", "┬", "─"):
+            assert glyph not in embed.description
     assert "▶ 🍯 │ 🍯 │ 🍯 ◀" in (final.description or "")
     assert "▶ 🍯 │ 🌀 │ 🌀 ◀" in (spin.description or "")
 

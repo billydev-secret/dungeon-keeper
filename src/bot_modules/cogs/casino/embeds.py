@@ -411,13 +411,22 @@ def build_coinflip_embed(
     return embed
 
 
-def _slot_cabinet(cells: tuple[str, ...]) -> str:
-    """Box the reel row in a small text-art slot machine. The reel row
-    carries no side walls and no code span — emoji width varies per
-    platform (and code spans swallow emoji rendering), so only the pure
-    box-glyph lines are expected to align with each other."""
-    row = f"▶ {cells[0]} │ {cells[1]} │ {cells[2]} ◀"
-    return f"╭─────┤🎰├─────╮\n{row}\n╰──┬─────────┬──╯"
+def _reel_row(cells: tuple[str, ...]) -> str:
+    """The slots reel row, deliberately unframed.
+
+    A text-art cabinet used to box this row and was removed 2026-08-16.
+    It could not be made to fit. The reel symbols are emoji whose display
+    width varies by client, and ▶/◀ render in emoji presentation on
+    Discord, so the row's rendered width isn't knowable at build time. The
+    frame's own two lines had drifted apart as well — 16 display cells on
+    top against 17 on the bottom — which is what finally showed up as a
+    visibly crooked box.
+
+    A code span would align all three lines, but Discord renders emoji
+    inside code spans as monochrome glyphs, which costs the coloured reels
+    that are the whole point. Better no box than one that never fit.
+    """
+    return f"▶ {cells[0]} │ {cells[1]} │ {cells[2]} ◀"
 
 
 def build_slots_embed(
@@ -434,7 +443,7 @@ def build_slots_embed(
     casino_name: str = DEFAULT_CASINO_NAME,
     name_fn: NameFn = mention,
 ) -> discord.Embed:
-    reel_line = _slot_cabinet(reels)
+    reel_line = _reel_row(reels)
     title = f"🎰 {casino_name} Slots"
     if payout > 0:
         desc = (
@@ -569,7 +578,7 @@ def build_slots_spin_embed(
     embed = discord.Embed(
         title=f"🎰 {casino_name} Slots",
         description=(
-            f"{_slot_cabinet(cells)}\n\n{name_fn(user_id)} bet "
+            f"{_reel_row(cells)}\n\n{name_fn(user_id)} bet "
             f"{_coins(econ, stake)} — the reels are spinning…"
         ),
         color=_accent(accent),

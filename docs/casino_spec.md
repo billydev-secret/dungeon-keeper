@@ -502,8 +502,12 @@ Stage 2.
 - **Tiered animations** — `is_big_bet` (≥70% of `max_bet`, or ≥100 coins
   uncapped; fixed constants) gates the staged reveals: slots reels stop
   one at a time (`SLOTS_REEL_STOP_SECONDS`, 1.4s per stop; the reel row
-  sits in a text-art cabinet on every slots frame, spinning reels shown
-  as 🌀), coinflip hangs in the air, blackjack pauses on the
+  renders bare on every slots frame, spinning reels shown as 🌀 — a
+  text-art cabinet boxed it until 2026-08-16, when it turned out the
+  frame's two lines were 16 and 17 display cells wide and so rendered
+  visibly crooked; emoji widths vary by client, so no box can be made to
+  fit around the reels outside a code span, and a code span would strip
+  the reel emoji of their colour), coinflip hangs in the air, blackjack pauses on the
   hole-card flip. Roulette's once-per-round resolution always gets a
   two-frame ball bounce. **Money settles before the first frame** — a
   crash mid-show leaves a stale message, never a wrong balance.
