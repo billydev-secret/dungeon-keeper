@@ -97,6 +97,15 @@ export function mount(container) {
                 someone's image in a SFW channel — being wrong there costs a member
                 their photo, so it should demand more certainty than the setting above.</div>
             </div>
+            <div class="field">
+              <label>Bare Chest Sensitivity</label>
+              <input type="number" data-field="chest_floor" min="0.05" max="1" step="0.05" value="${n.chest_floor}">
+              <div class="field-hint">In spoiler channels, a bare chest of any gender
+                always needs a spoiler, whatever the thresholds above say — the model
+                rates male and female chests differently, and this rule overrides that.
+                This is how sure the bot must be that it is looking at one. Lower catches
+                more chests and more shirtless-but-innocent photos.</div>
+            </div>
           </div>
 
           <div class="card">
@@ -206,6 +215,8 @@ export function mount(container) {
       if (threshold === null) return;
       const sfwThreshold = readThreshold("sfw_threshold", "SFW Removal Threshold");
       if (sfwThreshold === null) return;
+      const chestFloor = readThreshold("chest_floor", "Bare Chest Sensitivity");
+      if (chestFloor === null) return;
       try {
         // Independent endpoints — no reason to pay two round trips in series.
         await Promise.all([
@@ -215,6 +226,7 @@ export function mount(container) {
           apiPut("/api/config/nsfw-classifier", {
             threshold,
             sfw_threshold: sfwThreshold,
+            chest_floor: chestFloor,
             sfw_mode: modeSelect.value,
             sfw_log_channel_id: logPicker.getValue() || "0",
             sfw_exempt_channels: exemptPicker.getValues(),

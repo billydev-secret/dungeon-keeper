@@ -50,6 +50,7 @@ from bot_modules.services.auto_delete_service import (
 )
 from bot_modules.services.nsfw_classifier_service import (
     CONFIG_BUCKET_SFW_EXEMPT,
+    CONFIG_KEY_CHEST_FLOOR,
     CONFIG_KEY_OBSERVE,
     CONFIG_KEY_SFW_LOG_CHANNEL,
     CONFIG_KEY_SFW_MODE,
@@ -58,6 +59,7 @@ from bot_modules.services.nsfw_classifier_service import (
     DEFAULT_SFW_MODE,
     SFW_MODES,
     is_valid_threshold,
+    load_chest_floor_with_conn,
     load_settings_with_conn,
 )
 from bot_modules.services.reaction_tip_service import (
@@ -888,6 +890,7 @@ def _nsfw_classifier_section(conn, guild_id: int) -> dict:
     return {
         "threshold": threshold,
         "sfw_threshold": sfw_threshold,
+        "chest_floor": load_chest_floor_with_conn(conn, guild_id),
         # So the panel's own guard reads the same number the service enforces.
         "min_rung": min_rung_amount(),
         "sfw_mode": mode if mode in SFW_MODES else DEFAULT_SFW_MODE,
@@ -2762,6 +2765,7 @@ async def update_spoiler(
 class NsfwClassifierUpdate(BaseModel):
     threshold: float | None = None
     sfw_threshold: float | None = None
+    chest_floor: float | None = None
     sfw_mode: str | None = None
     sfw_log_channel_id: str | None = None
     sfw_exempt_channels: list[str] | None = None
@@ -2771,6 +2775,7 @@ class NsfwClassifierUpdate(BaseModel):
 _NSFW_FIELDS = {
     "threshold": (CONFIG_KEY_THRESHOLD, str),
     "sfw_threshold": (CONFIG_KEY_SFW_THRESHOLD, str),
+    "chest_floor": (CONFIG_KEY_CHEST_FLOOR, str),
     "sfw_mode": (CONFIG_KEY_SFW_MODE, _raw),
     "sfw_log_channel_id": (
         CONFIG_KEY_SFW_LOG_CHANNEL,
@@ -2792,6 +2797,10 @@ async def update_nsfw_classifier(
     for field, value in (
         ("threshold", body.threshold),
         ("sfw_threshold", body.sfw_threshold),
+        # Same predicate: a chest floor outside (0, 1] answers identically for
+        # every detection, so it would silently disable or universalise the
+        # bare-chest rule rather than tune it.
+        ("chest_floor", body.chest_floor),
     ):
         # The service rejects an out-of-range threshold on read; reject it at
         # write time too, using the same predicate, so the dashboard can't

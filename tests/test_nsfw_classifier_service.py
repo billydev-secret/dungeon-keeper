@@ -9,6 +9,13 @@ Since the Marqo swap there is a second scoping rule with teeth: the NudeNet
 tagger runs **only** where rows are recorded, so a body-part inventory can
 never be derived from an upload in general chat. Several tests below exist
 purely to keep that true.
+
+The bare-chest spoiler rule widened *where* that scope reaches — labels are
+now also produced in spoiler-required channels, because the rule is evaluated
+from labels and such a channel is not necessarily age-gated. It did not
+loosen the coupling: tagging and recording still move as one, and general
+chat is still excluded. ``test_labels_and_recording_never_diverge`` and
+``test_general_chat_is_never_tagged`` are what keep that from rotting.
 """
 from __future__ import annotations
 
@@ -23,6 +30,8 @@ from bot_modules.services.guess_models import BoundingBox, Detection
 from bot_modules.services.nsfw_classifier_service import (
     ACTION_LOGGED,
     ACTION_REMOVED,
+    CONFIG_KEY_CHEST_FLOOR,
+    DEFAULT_CHEST_FLOOR,
     DEFAULT_SFW_THRESHOLD,
     DEFAULT_THRESHOLD,
     IMAGE_EXTENSIONS,
@@ -185,6 +194,7 @@ def test_evaluate_honors_a_stricter_threshold():
     ("label", "qualifies"),
     [
         pytest.param("FEMALE_BREAST_EXPOSED", True, id="exposed-qualifies"),
+        pytest.param("MALE_BREAST_EXPOSED", True, id="male-chest-qualifies"),
         pytest.param("MALE_GENITALIA_EXPOSED", True, id="genitalia-qualifies"),
         pytest.param("ANUS_EXPOSED", True, id="anus-qualifies"),
         pytest.param("BUTTOCKS_EXPOSED", True, id="buttocks-qualifies"),
@@ -224,6 +234,140 @@ def test_top_detection_ignores_the_verdict_threshold():
     # per-part confidence would drop tags for no defensible reason.
     label, score = top_detection([det("SEX_ACT", 0.05)])
     assert (label, score) == ("SEX_ACT", 0.05)
+
+
+# --------------------------------------------------------------------------
+# requires_spoiler() — the bare-chest policy layer
+#
+# The rule the model cannot express. Measured against 869 production
+# classifications, Marqo scores a bare male chest below the 0.5 threshold in
+# 14% of chest-only images (5 of 36) against 8% for female (9 of 110), and the
+# male misses sit at 0.05–0.32 rather than just under the bar — so no
+# threshold reachable without flagging 98% of all traffic closes the gap.
+# These tests pin the rule that closes it instead.
+# --------------------------------------------------------------------------
+
+
+def classified(verdict, detections=None, *, chest_floor=DEFAULT_CHEST_FLOOR):
+    return Classification(
+        attachment_id=1,
+        verdict=verdict,
+        score=None if verdict is UNKNOWN else 0.2,
+        detections=detections or [],
+        tagged=bool(detections),
+        chest_floor=chest_floor,
+    )
+
+
+def test_male_chest_below_the_threshold_still_requires_a_spoiler():
+    # The reported bug, at the layer that decides it. Marqo scored this 0.2 —
+    # comfortably "not explicit" — and before the policy layer the image was
+    # left standing.
+    result = classified(False, [det("MALE_BREAST_EXPOSED", 0.66)])
+
+    assert result.requires_spoiler is True
+
+
+def test_female_chest_below_the_threshold_is_treated_identically():
+    # "Identical treatment" is the policy, so the female low tail (8% of
+    # chest-only images) is closed by the same rule and not left as the
+    # asymmetry it was.
+    result = classified(False, [det("FEMALE_BREAST_EXPOSED", 0.66)])
+
+    assert result.requires_spoiler is True
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        pytest.param("MALE_BREAST_EXPOSED", True, id="male-chest"),
+        pytest.param("FEMALE_BREAST_EXPOSED", True, id="female-chest"),
+        # Covered chests are clothing. The rule is about bare skin, and a
+        # swimwear or lingerie photo is exactly the false positive that would
+        # make the gate intolerable.
+        pytest.param("MALE_BREAST_COVERED", False, id="male-covered"),
+        pytest.param("FEMALE_BREAST_COVERED", False, id="female-covered"),
+        pytest.param("BELLY_EXPOSED", False, id="belly"),
+        pytest.param("ARMPITS_EXPOSED", False, id="armpits"),
+        pytest.param("FACE_MALE", False, id="face"),
+    ],
+)
+def test_only_bare_chests_trigger_the_rule(label, expected):
+    assert classified(False, [det(label, 0.9)]).requires_spoiler is expected
+
+
+@pytest.mark.parametrize(
+    ("confidence", "expected"),
+    [
+        pytest.param(0.9, True, id="well-above"),
+        pytest.param(0.5, True, id="exactly-at-the-floor"),
+        pytest.param(0.49, False, id="just-below"),
+        pytest.param(0.1, False, id="far-below"),
+    ],
+)
+def test_chest_floor_is_inclusive_at_the_boundary(confidence, expected):
+    # Inclusive, matching evaluate(): a dial set to 0.5 reads as "0.5 counts".
+    # Pinned against an explicit floor rather than the default, so retuning
+    # the default is not a boundary-semantics change.
+    result = classified(False, [det("MALE_BREAST_EXPOSED", confidence)], chest_floor=0.5)
+    assert result.requires_spoiler is expected
+
+
+def test_the_shipped_default_catches_the_reported_bug():
+    # The lowest-confidence male chest the rule is expected to catch in
+    # production carries a NudeNet score of 0.659 (Marqo scored that image
+    # 0.053). If the default floor ever drifts above it this silently stops
+    # fixing todo #99, so the number is pinned rather than left implicit.
+    assert DEFAULT_CHEST_FLOOR <= 0.659
+    assert classified(False, [det("MALE_BREAST_EXPOSED", 0.659)]).requires_spoiler is True
+
+
+def test_a_configured_floor_overrides_the_default():
+    detections = [det("MALE_BREAST_EXPOSED", 0.4)]
+
+    assert classified(False, detections, chest_floor=0.3).requires_spoiler is True
+    assert classified(False, detections, chest_floor=0.7).requires_spoiler is False
+
+
+def test_explicit_by_score_still_requires_a_spoiler_without_any_chest():
+    # The pre-existing path, unchanged: the rule is additive, not a
+    # replacement for the model's verdict.
+    assert classified(True).requires_spoiler is True
+
+
+def test_an_ordinary_photo_is_still_left_alone():
+    # The false positive the classifier was added to prevent. A cat photo has
+    # no chest detection and a False verdict, and must survive both.
+    assert classified(False, [det("FACE_FEMALE", 0.9)]).requires_spoiler is False
+    assert classified(False).requires_spoiler is False
+
+
+def test_unknown_requires_a_spoiler_even_with_no_detections():
+    # Fail closed. An unreadable image is maybe-explicit; a CDN failure must
+    # not become a way to post explicit content unspoilered.
+    assert classified(UNKNOWN).requires_spoiler is True
+
+
+def test_an_untagged_channel_cannot_report_a_bare_chest():
+    # Where the tagger never ran there are no detections, so the chest arm is
+    # silent and the verdict alone decides. This is a real limitation, not a
+    # pass — pinned so it can't be mistaken for "no chest present".
+    result = classified(False)
+
+    assert result.tagged is False
+    assert result.has_bare_chest is False
+    assert result.requires_spoiler is False
+
+
+def test_a_chest_losing_the_headline_still_triggers_the_rule():
+    # top_detection reports one label by max score; the rule reads the
+    # detections directly, so a chest outranked by a genital label is not
+    # silently dropped from the decision.
+    detections = [det("MALE_GENITALIA_EXPOSED", 0.95), det("MALE_BREAST_EXPOSED", 0.6)]
+    label, _ = top_detection(detections)
+
+    assert label == "MALE_GENITALIA_EXPOSED"
+    assert classified(False, detections).requires_spoiler is True
 
 
 # --------------------------------------------------------------------------
@@ -922,6 +1066,85 @@ async def test_classifier_derives_the_age_gate_itself(sync_db_path):
 
 
 @pytest.mark.asyncio
+async def test_needs_labels_tags_a_channel_discord_does_not_age_gate(
+    sync_db_path, patched_score, patched_tag
+):
+    # The widening the bare-chest rule needs: a spoiler-required channel is
+    # not necessarily NSFW-marked, and the rule cannot be evaluated without
+    # labels. Without this the reported bug is unfixable in 10 of the 17
+    # spoiler channels in production.
+    patched_score(0.2)
+    calls = patched_tag([det("MALE_BREAST_EXPOSED", 0.66)])
+
+    classify = classifier_for(
+        sync_db_path, FakeMessage(nsfw=False), needs_labels=True
+    )
+    result = await classify(FakeAttachment())
+
+    assert len(calls) == 1
+    assert result.verdict is False  # Marqo still says not explicit …
+    assert result.requires_spoiler is True  # … and the rule catches it anyway
+
+
+@pytest.mark.asyncio
+async def test_general_chat_is_never_tagged(
+    sync_db_path, patched_score, patched_tag
+):
+    # The privacy boundary. needs_labels defaults off, so a consumer that
+    # doesn't ask cannot accidentally build a body-part inventory of an
+    # ordinary channel.
+    patched_score(0.9)
+    calls = patched_tag([det("MALE_BREAST_EXPOSED", 0.9)])
+
+    await classifier_for(sync_db_path, FakeMessage(nsfw=False))(FakeAttachment())
+
+    assert calls == []
+    assert _rows(sync_db_path) == 0
+
+
+@pytest.mark.parametrize(
+    ("nsfw", "needs_labels"),
+    [
+        pytest.param(True, False, id="age-gated"),
+        pytest.param(False, True, id="spoiler-required"),
+        pytest.param(True, True, id="both"),
+        pytest.param(False, False, id="neither"),
+    ],
+)
+def test_labels_and_recording_never_diverge(sync_db_path, nsfw, needs_labels):
+    # Tagging and recording were one flag before this change and are two now.
+    # They must still answer identically: deriving labels without recording
+    # them, or recording a row with no labels behind it, would each be a
+    # different privacy story than the one documented.
+    classify = classifier_for(
+        sync_db_path, FakeMessage(nsfw=nsfw), needs_labels=needs_labels
+    )
+
+    assert classify.labelled is (nsfw or needs_labels)
+
+
+@pytest.mark.asyncio
+async def test_the_chest_floor_reaches_the_result_from_config(
+    sync_db_path, patched_score, patched_tag
+):
+    # The dial has to travel with the verdict: the consumer that applies the
+    # rule receives a Classification and never sees the classifier.
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, CONFIG_KEY_CHEST_FLOOR, "0.8", GUILD)
+    patched_score(0.2)
+    patched_tag([det("MALE_BREAST_EXPOSED", 0.66)])
+
+    classify = classifier_for(
+        sync_db_path, FakeMessage(nsfw=False), needs_labels=True
+    )
+    result = await classify(FakeAttachment())
+
+    assert result.chest_floor == 0.8
+    # 0.66 is under the configured 0.8, so the rule stays silent.
+    assert result.requires_spoiler is False
+
+
+@pytest.mark.asyncio
 async def test_strict_classifier_applies_the_higher_threshold(
     sync_db_path, patched_score
 ):
@@ -944,10 +1167,10 @@ async def test_settings_are_read_once_per_message_not_per_attachment(
 ):
     patched_score(0.9)
     calls = []
-    real = nsfw_module.load_settings
+    real = nsfw_module.load_dials
     monkeypatch.setattr(
         nsfw_module,
-        "load_settings",
+        "load_dials",
         lambda *a, **k: (calls.append(1), real(*a, **k))[1],
     )
 
@@ -1242,7 +1465,7 @@ async def test_observe_survives_a_failure_it_cannot_classify_around(
     patched_score(0.9)
     monkeypatch.setattr(
         nsfw_module,
-        "load_settings",
+        "load_dials",
         lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("locked")),
     )
 

@@ -11,13 +11,13 @@ Implemented in `src/bot_modules/services/nsfw_classifier_service.py`; inference 
 | | model | runs in | produces | acted on? |
 |---|---|---|---|---|
 | Verdict | `Marqo/nsfw-image-detection-384` (ONNX) | every channel | one probability | **yes** — this is the verdict |
-| Tags | NudeNet (`guess_nudenet`) | age-gated channels only | labels + boxes | **no** — metrics only |
+| Tags | NudeNet (`guess_nudenet`) | age-gated **+ spoiler-required** channels | labels + boxes | metrics, **plus** the bare-chest rule |
 
 Marqo replaced NudeNet as the verdict engine because NudeNet could not see the content the gates exist to catch. A dark, warm-monochrome boudoir photo passed an *enforcing* SFW gate: NudeNet 320n returned zero detections (even cropped and brightened), 640m returned only a 0.26 `MALE_BREAST_EXPOSED`, and a Falconsai ViT called it `normal` at 0.9997. Marqo scores that image **0.91**, against **0.04–0.08** for non-explicit control images. That lighting is simply outside NudeNet's training data.
 
 NudeNet was kept as a **tagger** because Marqo has no localization: it answers "is it?" and nothing about "where?". The Guess game still calls `guess_nudenet.detect` directly for the bounding boxes it blurs and crops with — that pipeline is untouched by this split.
 
-Tagging runs on the *recording* path rather than beside the verdict, and the same `channel_is_nsfw` flag drives both. That is what makes it structurally impossible to derive a body-part inventory of an upload in general chat. It is also cheaper than the arrangement it replaced, where NudeNet ran on every image in every channel and its labels were discarded outside age-gated ones.
+Tagging runs on the *recording* path rather than beside the verdict, and one flag (`MessageClassifier.labelled`) drives both, so labels are never derived without being recorded or vice versa. Its scope is what keeps a body-part inventory out of general chat. That scope was exactly `channel_is_nsfw` until the bare-chest rule needed labels in spoiler-required channels too — see §Privacy for what that cost. It remains cheaper than the arrangement it replaced, where NudeNet ran on every image in every channel and its labels were discarded outside age-gated ones.
 
 ## Verdict
 
@@ -34,7 +34,7 @@ Three-valued, and the third value is the point:
 | consumer | where it runs | threshold | on `UNKNOWN` |
 |---|---|---|---|
 | Reaction tipping | `is_nsfw()` channels with a tipping rule | standard | react anyway — a CDN hiccup must not cost a poster their tips |
-| Spoiler enforcement | `spoiler_required_channels` | standard | delete — preserves the pre-classifier behavior; unreadable is treated as maybe-explicit |
+| Spoiler enforcement | `spoiler_required_channels` | standard, **plus the bare-chest rule** | delete — preserves the pre-classifier behavior; unreadable is treated as maybe-explicit, and so is a classifier that raises |
 | SFW nudity prevention | every other channel | **higher** | do nothing — never delete on a failed read |
 
 The higher threshold for SFW prevention is deliberate. A false positive there deletes a member's innocent photo, so it demands more certainty than merely qualifying a post for coins.
@@ -55,13 +55,49 @@ The cost is a real blind spot: a centre crop means content at the far edge of a 
 
 Exposed nudity only:
 
-`MALE_GENITALIA_EXPOSED`, `FEMALE_GENITALIA_EXPOSED`, `ANUS_EXPOSED`, `FEMALE_BREAST_EXPOSED`, `BUTTOCKS_EXPOSED`, `SEX_ACT`
+`MALE_GENITALIA_EXPOSED`, `FEMALE_GENITALIA_EXPOSED`, `ANUS_EXPOSED`, `FEMALE_BREAST_EXPOSED`, `MALE_BREAST_EXPOSED`, `BUTTOCKS_EXPOSED`, `SEX_ACT`
 
 The paired `*_COVERED` labels (lingerie, swimwear, implied nudity) are not reported as the headline tag, nor are `BELLY_*`, `ARMPITS_*` or face labels. `SEX_ACT` is not a NudeNet label — it is synthesised by `guess_pipeline.merge_sex_act_detections()` when two different genital labels overlap.
 
-This set is **descriptive, not a gate**. It used to be guild-configurable; a per-label vocabulary has nothing to attach to under a single probability, and a stored preference that enforces nothing is worse than no preference at all, so the config key and its dashboard grid were retired (migration 147 deletes the rows).
+This set is **descriptive** with one exception, the bare-chest rule below. It used to be guild-configurable; a per-label vocabulary has nothing to attach to under a single probability, and a stored preference that enforces nothing is worse than no preference at all, so the config key and its dashboard grid were retired (migration 147 deletes the rows).
 
 No threshold is applied when picking the headline tag: NudeNet's own floor is the only bar that means anything for a label, and the configured threshold is a whole-image probability with nothing to say about one body part.
+
+## The bare-chest rule
+
+**The one place a label decides an outcome.** In spoiler-required channels, an exposed chest of either gender requires a spoiler regardless of what Marqo scored the image.
+
+**Why a rule and not a threshold.** Marqo inherits its training set's asymmetry between male and female chests. Measured against 869 production classifications (2026-08-15), on chest-only images — no genitalia, buttocks or sex act present:
+
+| | n | mean score | scored < 0.5 |
+|---|---|---|---|
+| `MALE_BREAST_EXPOSED` | 36 | 0.80 | **5 (14%)** |
+| `FEMALE_BREAST_EXPOSED` | 110 | 0.85 | 9 (8%) |
+
+The model is not blind to male chests — it flags 31 of 36 — but the ones it misses sit at 0.053, 0.163, 0.163, 0.311 and 0.324, not just under the bar. Catching the lowest by threshold alone means a threshold of 0.05, which flags **98.3%** of all images in spoiler-required channels and reverts the gate to the delete-everything behaviour the classifier was introduced to end. There is no threshold that expresses this policy; hence a rule layered on top of the verdict rather than a retuning of it.
+
+Measured effect of the rule instead, on the 238 currently-passing images in those channels:
+
+| floor | male tail caught | female tail caught | newly deleted |
+|---|---|---|---|
+| 0.25 | 5 of 5 | 9 of 9 | 16 (1.9%) |
+| **0.4 (default)** | **4 of 5** | **4 of 9** | **9 (1.1%)** |
+| 0.5 | 3 of 5 | 3 of 9 | 7 (0.9%) |
+| 0.6 | 3 of 5 | 2 of 9 | 5 (0.6%) |
+
+It is symmetric by design — the female tail is closed by the same rule — because the server's policy is that any bare chest needs a spoiler.
+
+**The rule does not close the gap completely, and the floor is not what limits it.** NudeNet's own confidence is: the two male images still missed at 0.4 carry chest detections it is only 0.29 and 0.41 sure of. A floor of 0.25 closes both tails entirely and is one dashboard edit away, but it acts on detections weak enough that the recorded rows cannot say what it would cost in false positives — so the shipped default stops short of it rather than guessing on a live guild. If the remaining misses matter more than the unknown cost, move the dial and watch the Blocked Images report.
+
+**Where it is evaluated.** `Classification.requires_spoiler`, a pure property on the result: explicit by score, **or** a bare chest at or above `chest_floor`, **or** UNKNOWN. It lives on the result rather than in `post_monitoring` so it is testable without a Discord message, and so the dial travels with the verdict it qualifies — the consumer that applies it never sees the classifier that produced it.
+
+**Its blind spot.** A channel where the tagger never ran has no detections, so the chest arm is silent and the score alone decides. `has_bare_chest` is False there, which means "we did not look", not "no chest present" — `tagged` is what distinguishes the two. This is why the tagger's scope had to widen; see §Recording.
+
+## Failure direction
+
+`enforce_spoiler_requirement` treats a classifier that **raises** exactly as it treats UNKNOWN: it deletes. Previously the exception propagated out of the gate and out of `on_message`, so a locked DB during the threshold read left the unspoilered image standing *and* dropped persistence, wellness and XP for that message. A safety gate that opens on an exception is worse than one that is too strict, so the failure is caught per-attachment inside the gate, and the cog additionally guards the whole call the way it already guards the intake hook.
+
+Note the deliberate asymmetry with SFW prevention, which fails **open** on the same uncertainty: there a failed read costs an innocent member their photo, here it leaves explicit content unspoilered. Same signal, opposite correct answer.
 
 ## Scope
 
@@ -99,7 +135,13 @@ It is a value object rather than a closure deliberately: it copies the handful o
 
 ## Recording
 
-**Coverage and recording deliberately differ.** Classification runs on attachments in *every* channel, because SFW prevention needs a verdict everywhere. Classification rows are written **only for uploads in Discord-age-gated (`is_nsfw`) channels**, so no dataset is built out of general chat.
+**Coverage and recording deliberately differ.** Classification runs on attachments in *every* channel, because SFW prevention needs a verdict everywhere. Rows are written — and the tagger runs — only in **age-gated (`is_nsfw`) channels and spoiler-required channels**, so no dataset is built out of general chat.
+
+Spoiler-required channels joined that scope with the bare-chest rule, which cannot be evaluated without labels. In production 10 of the 17 spoiler-required channels are not Discord-age-gated, so without the widening the rule would be unenforceable in most of the channels it exists for. Tagging and recording are one decision (`MessageClassifier.labelled`) and are never enabled independently; `test_labels_and_recording_never_diverge` pins that.
+
+Consumers opt in explicitly via `classifier_for(..., needs_labels=True)`. Only spoiler enforcement does. It is per-consumer rather than a default precisely because it widens a privacy boundary.
+
+One consequence: two consumers of the same attachment can now disagree about whether tags are wanted — spoiler enforcement and reaction tipping in a spoiler-required channel that isn't age-gated. `_shared_infer` replaces the untagged cache entry, so the result is correct; the cost is one duplicate download and inference in that overlap.
 
 ### Observation
 
@@ -140,8 +182,14 @@ Retention is indefinite for all three tables (a deliberate choice — see `docs/
 `nsfw_detections` is the most sensitive table this bot holds: effectively a labelled body-part inventory of members' uploads. It is derived metadata rather than message content, which fits the project's "derive at ingest, store minimal" rule, but three minimisations apply regardless:
 
 - **No `author_id` column** on `nsfw_classifications`/`nsfw_detections`. Authorship joins through `messages`.
-- **The tagger never runs outside age-gated channels**, so no body-part inventory of a general-chat upload exists to leak, recorded or not. Observation does not relax this — it is scoped to the same channels and turned on per guild.
+- **The tagger never runs in general chat**, so no body-part inventory of an ordinary upload exists to leak, recorded or not. Observation does not relax this — it is scoped to age-gated channels and turned on per guild.
 - **Admin-gated on the dashboard.** These rows are never surfaced to non-admins in any view.
+
+⚠️ **This guarantee got weaker on 2026-08-15 and the change was deliberate.** It used to be *structural*: tagging and recording were the same flag as `channel_is_nsfw`, so no arrangement of the code could label a general-chat image. The bare-chest rule needs labels in spoiler-required channels, which are not necessarily age-gated, so the scope is now two channel sets instead of one.
+
+What that costs, stated plainly: general chat is still excluded, but the exclusion now rests on **the spoiler-required channel list being what an admin thinks it is** rather than on Discord's own age gate. Adding a channel to that list is now also a decision to record body-part labels for its uploads. The alternatives were considered and rejected by the server owner — running the tagger without persisting (keeps "never stored", loses the tuning data) and leaving the 10 non-age-gated channels unfixed (keeps the structural guarantee, leaves the reported bug live in most of the affected channels).
+
+The `nsfw_detections` row in `docs/data_register.md` carries the matching scope note.
 
 ## Configuration
 
@@ -153,17 +201,18 @@ Stored in the shared `config` table, per guild:
 |---|---|---|
 | `nsfw_classifier_threshold` | `0.5` | probability at which an image counts as explicit |
 | `nsfw_classifier_sfw_threshold` | `0.75` | stricter bar used by SFW nudity prevention |
+| `nsfw_chest_label_floor` | `0.4` | NudeNet confidence at which a bare chest forces a spoiler. **Not** a Marqo probability — a detector confidence on one box, a different scale from the two above, which is why it is a separate dial |
 | `nsfw_observe_age_gated` | `0` | classify and record *every* image in age-gated channels, not only the ones a gate had to judge. Changes nothing about what happens to an image |
 
 Both defaults are unchanged across the engine swap, and that is not laziness: the old values were detector confidences and the new ones are whole-image probabilities, but both live on the same 0–1 scale and 0.5/0.75 sit in a wide empty gap between the measured control scores (0.04–0.08) and the measured true positive (0.91).
 
-Both thresholds are validated on read *and* on write, through the same `is_valid_threshold` predicate: a value outside `(0, 1]` is rejected, because such a value answers the same way for every image and would silently disable the gate rather than loosen it.
+All three are validated on read *and* on write, through the same `is_valid_threshold` predicate: a value outside `(0, 1]` is rejected, because such a value answers the same way for every image and would silently disable the gate — or, for the chest floor, universalise it — rather than tune it.
 
 ## Reports
 
 Two admin-gated panels under Moderation → Audit Logs:
 
-**Image Tags** (`/api/moderation/nsfw-tags`) — age-gated channels only, since that is the only scope the tagger runs in. Volume, verdict split, tag distribution with the mean verdict score per tag, and a 0.1-wide score histogram. Its two headline numbers are the **disagreements**: images the verdict engine called explicit that the tagger saw nothing in (the NudeNet blind spot that prompted the swap), and the reverse.
+**Image Tags** (`/api/moderation/nsfw-tags`) — wherever the tagger runs, which since the bare-chest rule is age-gated **and** spoiler-required channels. Volume, verdict split, tag distribution with the mean verdict score per tag, and a 0.1-wide score histogram. Its two headline numbers are the **disagreements**: images the verdict engine called explicit that the tagger saw nothing in (the NudeNet blind spot that prompted the swap), and the reverse.
 
 **Blocked Images** (`/api/moderation/nsfw-blocks`) — every channel. Who, where, which gate, what score, removed or log-only. This is how a false positive gets found and put right.
 
@@ -190,6 +239,10 @@ Total compute is **lower** than before the swap in typical traffic, because Nude
 
 `tests/test_nsfw_classifier_service.py` — threshold boundaries (inclusive at the threshold), the stricter-threshold override, tag membership per qualifying and non-qualifying label, model-name reporting, config parsing and out-of-range rejection, attachment type/size gating, `UNKNOWN` for download failure / timeout / inference failure / missing model / unclassifiable type, cache reuse across consumers, cache bypass on a differing threshold, `UNKNOWN` never cached, **the tagger never running or recording in a SFW channel**, tagging failure still recording the verdict, two consumers sharing one tagging pass and one download, recording writes both tables with near-misses kept, `UNKNOWN` never recorded, recording idempotent per attachment, no `author_id` column, and block rows keeping an unreadable image distinct from a low score.
 
-`tests/test_post_monitoring.py` — spoiler and SFW block reporting, including the unreadable-image case and a report failure not resurrecting the message.
+The bare-chest rule is covered at the layer that decides it: `requires_spoiler` over a male chest under the threshold (the reported bug — this fails without the rule), a female chest treated identically, covered chests **not** triggering it, floor inclusivity pinned against an explicit floor rather than the default, a configured floor overriding it, a chest that loses the `top_detection` headline still triggering, an untagged channel reporting `has_bare_chest is False` distinctly from "no chest present", and `DEFAULT_CHEST_FLOOR` pinned at or below the 0.659 detection that the lowest-scoring production miss depends on — so retuning the default cannot silently un-fix todo #99.
+
+Scope: `needs_labels` tagging a channel Discord does not age-gate, general chat never tagged without it, and a parametrised check that tagging and recording never diverge across all four channel combinations.
+
+`tests/test_post_monitoring.py` — spoiler and SFW block reporting, including the unreadable-image case and a report failure not resurrecting the message. For the bare-chest rule at the gate: a bare male chest deleted despite a clean verdict, a female chest on the same rule, a covered chest left alone, **a classifier that raises deleting rather than escaping** (the fail-open bug), and a raising classifier not aborting the remaining attachments.
 
 `tests/web/test_nsfw_report_routes.py` — both report endpoints plus the legacy Image Guard summary: the disagreement counts, the score histogram's top-bucket fold, pre-swap rows excluded from all three, snowflake-safe string ids, surface filtering, and guild scoping.
