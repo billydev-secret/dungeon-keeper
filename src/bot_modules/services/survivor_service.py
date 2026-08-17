@@ -46,9 +46,11 @@ DEFAULT_CONFIG: dict[str, object] = {
     "role_survivor_id": 0,
     "role_ghost_id": 0,
     "role_sole_survivor_id": 0,
-    # The pinned §2.2 announcement, so the entrant counter can be refreshed
-    # and the Join button re-pointed after a repost. Set by the post route.
+    # The pinned §2.2 announcement — id AND channel, so the entrant counter
+    # can be refreshed and a repost can retire the previous pin even if the
+    # Survivor channel has since been re-pointed. Set by the post route.
     "announcement_message_id": 0,
+    "announcement_channel_id": 0,
 }
 
 _ENUM_KEYS: dict[str, tuple[str, ...]] = {
@@ -78,6 +80,7 @@ _INT_RANGES: dict[str, tuple[int, int]] = {
     "role_ghost_id": (0, 1 << 63),
     "role_sole_survivor_id": (0, 1 << 63),
     "announcement_message_id": (0, 1 << 63),
+    "announcement_channel_id": (0, 1 << 63),
 }
 
 _BOOL_KEYS = frozenset({"ghost_streak"})

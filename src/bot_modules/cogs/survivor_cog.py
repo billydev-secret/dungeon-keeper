@@ -219,7 +219,11 @@ class SurvivorCog(commands.Cog):
 
         def name_of(user_id: int) -> str:
             member = guild.get_member(user_id)
-            return member.display_name if member else f"soul {user_id}"
+            if member is None:
+                return f"soul {user_id}"
+            # Style guide: member text is escaped before it enters an embed —
+            # a name like "**everyone** ·" must not reformat the board.
+            return discord.utils.escape_markdown(member.display_name)
 
         color = await resolve_accent_color(self.ctx.db_path, guild)
         await interaction.response.send_message(

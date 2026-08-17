@@ -248,6 +248,40 @@ def test_pick_refusals_teach_the_rule(db, team, match):
             place_pick(conn, season, 1, 1, team, NOW)
 
 
+@pytest.mark.parametrize(
+    ("result", "ok"),
+    [
+        pytest.param("loss", False, id="settled-loss-immutable"),
+        pytest.param("win", False, id="settled-win-immutable"),
+        pytest.param("void", True, id="void-frees-the-slot"),
+    ],
+)
+def test_settled_results_are_immutable_but_void_frees(db, result, ok):
+    # Regression (08-17 review): a settled result on the current week's pick
+    # bypassed the lock and the upsert erased it back to NULL — a graded loss
+    # vanished before the Reckoning. Only 'void' frees the slot (§1.3).
+    with open_db(db) as conn:
+        season = _season(conn)
+        _join(conn, season, 1)
+        conn.execute(
+            "INSERT INTO survivor_picks (season_id, user_id, week, slot, team, game_id, result)"
+            " VALUES (?, 1, 1, 1, 'SEA', 'g-thu', ?)",
+            (season["id"], result),
+        )
+        if ok:
+            game = place_pick(conn, season, 1, 1, "SF", NOW)
+            assert game.team == "SF"
+        else:
+            with pytest.raises(PickError, match="already settled"):
+                place_pick(conn, season, 1, 1, "SF", NOW)
+            row = conn.execute(
+                "SELECT team, result FROM survivor_picks "
+                "WHERE season_id = ? AND user_id = 1 AND week = 1",
+                (season["id"],),
+            ).fetchone()
+            assert (row["team"], row["result"]) == ("SEA", result)
+
+
 def test_pick_guards_membership_week_and_season_state(db):
     with open_db(db) as conn:
         season = _season(conn)
@@ -316,6 +350,20 @@ def test_join_insufficient_balance_leaves_no_entry(db):
         assert player_status(conn, season, 1, NOW) is None
 
 
+def test_join_race_loser_raises_so_the_debit_rolls_back(db, monkeypatch):
+    # Regression (08-17 review): two double-clicked confirms both passed the
+    # duplicate SELECT; the loser's add_player INSERT OR IGNORE returned
+    # False silently and the member was charged twice. The loser must raise.
+    import bot_modules.survivor.logic as logic_mod
+
+    with open_db(db) as conn:
+        season = _season(conn, buyin_coins=100)
+        economy_service.apply_credit(conn, GID, 1, 200, "test_seed")
+        monkeypatch.setattr(logic_mod, "add_player", lambda *a, **kw: False)
+        with pytest.raises(PickError, match="already in"):
+            join_season(conn, season, 1, NOW)
+
+
 def test_late_join_is_gauntlet_pending_or_closed(db):
     with open_db(db) as conn:
         season = _season(conn)
@@ -360,10 +408,43 @@ def test_board_pots_and_most_burned(db):
         board = board_data(conn, season, NOW)
         # Seed 10,000 splits 8,000/2,000; three 50-coin buy-ins land in main.
         assert board["pots"] == {"main": 8150, "ghost": 2000}
+        # Regression (08-17 review): unsettled picks are THIS week's secrets —
+        # the public most-burned stat must not count them (§1.2).
+        assert board["most_burned"] == []
+        conn.execute(
+            "UPDATE survivor_picks SET result = 'loss' "
+            "WHERE season_id = ? AND team = 'SEA'",
+            (season["id"],),
+        )
+        board = board_data(conn, season, NOW)
         assert board["most_burned"][0] == ("SEA", 2)
         assert [p["user_id"] for p in board["alive"]] == [1, 2]
         assert board["graveyard"][0]["user_id"] == 3
         assert board["week"] == 1
+
+
+def test_pot_scoping_is_exact_not_a_prefix_match(db):
+    # Regression (08-17 review): meta LIKE '%"season_id": 1%' also matched
+    # season 12 — and was welded to json.dumps spacing. json_extract is
+    # spacing-proof and exact.
+    with open_db(db) as conn:
+        season = _season(conn)  # id 1
+        assert season["id"] == 1
+        base = pot_totals(conn, season)["main"]
+        # A different season's fee whose id has ours as a decimal prefix.
+        conn.execute(
+            "INSERT INTO econ_ledger (guild_id, user_id, amount, kind, meta, created_at)"
+            " VALUES (?, 9, -500, 'survivor_buyin', '{\"season_id\": 12}', 1)",
+            (GID,),
+        )
+        assert pot_totals(conn, season)["main"] == base
+        # Compact JSON (no space after the colon) still counts for OUR season.
+        conn.execute(
+            "INSERT INTO econ_ledger (guild_id, user_id, amount, kind, meta, created_at)"
+            " VALUES (?, 9, -70, 'survivor_buyin', '{\"season_id\":1}', 1)",
+            (GID,),
+        )
+        assert pot_totals(conn, season)["main"] == base + 70
 
 
 def test_pot_totals_are_season_scoped(db):
@@ -377,3 +458,51 @@ def test_pot_totals_are_season_scoped(db):
         assert pot_totals(conn, fresh) == {"main": 8000, "ghost": 2000}
         old = get_season(conn, season["id"])
         assert pot_totals(conn, old)["main"] == 8050
+
+
+# ── embed hardening (feature-file pins; accent riding the shared contract) ──
+
+
+def test_board_embed_fields_stay_under_discord_limit():
+    from bot_modules.survivor.embeds import build_board_embed
+
+    board = {
+        "week": 1,
+        "alive": [
+            {"user_id": i, "strikes_used": i % 2, "weeks_survived": 3}
+            for i in range(60)
+        ],
+        "graveyard": [
+            {"user_id": 100 + i, "eliminated_week": 2} for i in range(60)
+        ],
+        "pots": {"main": 8000, "ghost": 2000},
+        "most_burned": [("SEA", 4)],
+    }
+    embed = build_board_embed(
+        board, lambda uid: f"a-perfectly-ordinary-nickname-{uid}", season_name="S"
+    )
+    for field in embed.fields:
+        assert field.value is not None and len(field.value) <= 1024
+    alive_field = embed.fields[0]
+    assert "more souls" in alive_field.value  # overflow is honest, not silent
+
+
+@pytest.mark.parametrize(
+    ("late_entry", "needle"),
+    [
+        pytest.param("gauntlet", "gauntlet replays", id="gauntlet"),
+        pytest.param("ghost_only", "ghost game", id="ghost-only"),
+        pytest.param("closed", "door shuts", id="closed"),
+    ],
+)
+def test_announcement_late_entry_copy_matches_config(late_entry, needle):
+    # Regression (08-17 review): the pin promised "join any week" over a
+    # closed season — the bullet must tell the season's actual truth.
+    from bot_modules.survivor.embeds import build_announcement_embed
+
+    embed = build_announcement_embed(
+        season_name="S", entrants=1, buyin=0,
+        gauntlet_mode=False, late_entry=late_entry,
+    )
+    rules = next(f for f in embed.fields if f.name == "The rules, briefly")
+    assert needle in rules.value

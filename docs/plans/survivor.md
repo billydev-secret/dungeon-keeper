@@ -1,7 +1,7 @@
 # Survivor — staging plan
 
 **Status (2026-08-17):** stages 1–3 shipped same-day. Stage 1 (schema —
-migration 165 after a renumber around main's 164 — service, panel, privacy
+migration 166 after a renumber around main's 164 — service, panel, privacy
 wiring) plus a code-review fix pass; stage 2 (ESPN parser + ingest on real
 captured fixtures; create-season ingests the full schedule) plus its own fix
 pass; stage 3 (survivor/logic.py locks + joins + satchel, /survivor

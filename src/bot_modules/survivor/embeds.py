@@ -28,6 +28,22 @@ def _rel(ts: float | None) -> str:
     return f"<t:{int(ts)}:R>" if ts else "—"
 
 
+def _clip_field(lines: list[str], noun: str) -> str:
+    """Join lines under Discord's 1024-char field cap, with an honest
+    overflow line — a row cap alone lets 25 ordinary display names blow the
+    limit and 400 the whole board."""
+    out: list[str] = []
+    used = 0
+    for i, line in enumerate(lines):
+        cost = len(line) + (1 if out else 0)
+        if used + cost > 984:  # headroom for the overflow line below
+            out.append(f"…and {len(lines) - i} more {noun}")
+            break
+        out.append(line)
+        used += cost
+    return "\n".join(out)
+
+
 def build_status_embed(
     st: dict, *, season_name: str, color: discord.Color | None = None
 ) -> discord.Embed:
@@ -122,27 +138,21 @@ def build_board_embed(
         lines = [
             f"{name_of(p['user_id'])} · {p['weeks_survived']} wk · "
             f"{strike_hearts(p['strikes_used'], strikes_allowed)}"
-            for p in board["alive"][:25]
+            for p in board["alive"]
         ]
-        extra = len(board["alive"]) - 25
-        if extra > 0:
-            lines.append(f"…and {extra} more souls")
         embed.add_field(
             name=f"🌾 Alive ({len(board['alive'])})",
-            value="\n".join(lines),
+            value=_clip_field(lines, "souls"),
             inline=False,
         )
     if board["graveyard"]:
         lines = [
             f"{name_of(p['user_id'])} · wk {p['eliminated_week'] or '?'}"
-            for p in board["graveyard"][:15]
+            for p in board["graveyard"]
         ]
-        extra = len(board["graveyard"]) - 15
-        if extra > 0:
-            lines.append(f"…and {extra} more ghosts")
         embed.add_field(
             name=f"👻 Graveyard ({len(board['graveyard'])})",
-            value="\n".join(lines),
+            value=_clip_field(lines, "ghosts"),
             inline=False,
         )
     if board["most_burned"]:
@@ -160,6 +170,7 @@ def build_announcement_embed(
     entrants: int,
     buyin: int,
     gauntlet_mode: bool,
+    late_entry: str = "gauntlet",
     color: discord.Color | None = None,
 ) -> discord.Embed:
     """The pinned season announcement (§2.2). ``gauntlet_mode`` flips the
@@ -186,6 +197,13 @@ def build_announcement_embed(
         value=f"{buyin:,} coins" if buyin else "free — walk in",
         inline=True,
     )
+    # The late-entry bullet must match the season's actual config — a pin
+    # promising "join any week" over a closed season is the bot lying.
+    late_lines = {
+        "gauntlet": "• join any week: the gauntlet replays what you missed",
+        "ghost_only": "• join late and you haunt — late arrivals play the ghost game",
+        "closed": "• enrollment closes at Week 1 kickoff — after that, the door shuts",
+    }
     embed.add_field(
         name="The rules, briefly",
         value=(
@@ -193,7 +211,7 @@ def build_announcement_embed(
             "• each team usable **once** all season\n"
             "• picks lock at that game's kickoff; secret until Tuesday\n"
             "• one strike of grace 💛 — the second is the end\n"
-            "• join any week: the gauntlet replays what you missed"
+            + late_lines.get(late_entry, late_lines["gauntlet"])
         ),
         inline=False,
     )

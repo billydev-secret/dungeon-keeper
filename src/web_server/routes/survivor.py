@@ -45,6 +45,7 @@ _ID_KEYS = frozenset(
     {
         "channel_id", "role_survivor_id", "role_ghost_id",
         "role_sole_survivor_id", "announcement_message_id",
+        "announcement_channel_id",
     }
 )
 
@@ -342,7 +343,9 @@ async def end_season(request: Request, user: AuthenticatedUser = _ADMIN):
 @router.post("/survivor/announcement")
 async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
     """Post (and pin) the §2.2 season announcement with its Join button in
-    the configured channel; repost repoints the button and counter."""
+    the configured channel. A repost retires the previous pin first — the
+    old message's Join button would otherwise stay live under a frozen
+    counter and stale entry terms, accreting toward the 50-pin cap."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
@@ -355,13 +358,9 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
                 raise svc.SeasonError(
                     "Set the Survivor channel in Wiring first."
                 )
-            entrants = conn.execute(
-                "SELECT COUNT(*) FROM survivor_players WHERE season_id = ?",
-                (season["id"],),
-            ).fetchone()[0]
-        return season, int(entrants)
+        return season
 
-    season, entrants = await _service_call(run_query(_q))
+    season = await _service_call(run_query(_q))
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
@@ -373,28 +372,17 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "Bot offline or the configured channel isn't a text channel.",
         )
+    assert guild is not None
 
-    from bot_modules.core.branding import resolve_accent_color
-    from bot_modules.survivor.embeds import build_announcement_embed
-    from bot_modules.survivor.logic import elapsed_weeks
-    from bot_modules.survivor.views import JoinSeasonButton
+    from bot_modules.survivor.views import JoinSeasonButton, build_live_announcement
 
-    def _elapsed():
-        import time
+    built = await build_live_announcement(bot, ctx.db_path, season["id"])
+    if built is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Couldn't build the announcement."
+        )
+    _, embed = built
 
-        with ctx.open_db() as conn:
-            return elapsed_weeks(conn, season["season_year"], time.time())
-
-    gauntlet_mode = bool(await run_query(_elapsed))
-    assert guild is not None  # the channel isinstance check above implies it
-    color = await resolve_accent_color(ctx.db_path, guild)
-    embed = build_announcement_embed(
-        season_name=season["name"],
-        entrants=entrants,
-        buyin=int(season["config"]["buyin_coins"]),
-        gauntlet_mode=gauntlet_mode,
-        color=color,
-    )
     view = discord.ui.View(timeout=None)
     view.add_item(JoinSeasonButton(season["id"]))
     try:
@@ -409,15 +397,38 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
             status.HTTP_502_BAD_GATEWAY, f"Couldn't post: {exc}"
         ) from exc
 
+    # Retire the previous announcement, best-effort, in the channel it was
+    # actually posted to (which may not be the current one).
+    old_message_id = int(season["config"].get("announcement_message_id") or 0)
+    old_channel_id = int(
+        season["config"].get("announcement_channel_id") or 0
+    ) or int(season["config"]["channel_id"])
+    retired = False
+    if old_message_id:
+        old_channel = guild.get_channel(old_channel_id)
+        if isinstance(old_channel, discord.TextChannel):
+            try:
+                await old_channel.get_partial_message(old_message_id).delete()
+                retired = True
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                log.warning(
+                    "survivor: couldn't retire old announcement %s", old_message_id
+                )
+
     def _store():
         with ctx.open_db() as conn:
             svc.update_config(
-                conn, season["id"], {"announcement_message_id": message.id}
+                conn, season["id"],
+                {
+                    "announcement_message_id": message.id,
+                    "announcement_channel_id": channel.id,
+                },
             )
             write_audit(
                 conn, guild_id=guild_id, action="survivor_announcement_post",
                 actor_id=int(user.user_id),
                 extra={"season_id": season["id"], "message_id": str(message.id),
+                       "retired_message_id": str(old_message_id) if old_message_id else None,
                        "via": "web"},
             )
             conn.commit()
@@ -426,10 +437,17 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
     await _mirror_mod_log(
         ctx, guild_id,
         action="announcement posted",
-        summary=f"in <#{channel.id}>" + ("" if pinned else " (pin failed)"),
+        summary=f"in <#{channel.id}>"
+        + ("" if pinned else " (pin failed)")
+        + (" · previous pin retired" if retired else ""),
         user=user,
     )
-    return {"ok": True, "message_id": str(message.id), "pinned": pinned}
+    return {
+        "ok": True,
+        "message_id": str(message.id),
+        "pinned": pinned,
+        "retired_previous": retired,
+    }
 
 
 # ── config ────────────────────────────────────────────────────────────

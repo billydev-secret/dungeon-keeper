@@ -228,17 +228,26 @@ def place_pick(
         raise PickError(f"Picks are open for week {current}, not week {week}.")
 
     existing = get_pick(conn, season["id"], user_id, week, slot)
-    if existing is not None and existing["result"] is None:
-        game = conn.execute(
-            "SELECT kickoff_utc FROM nfl_games "
-            "WHERE season_year = ? AND game_id = ?",
-            (season["season_year"], existing["game_id"]),
-        ).fetchone()
-        if game is not None and kickoff_ts(game["kickoff_utc"]) <= now:
+    if existing is not None:
+        if existing["result"] is not None and existing["result"] != "void":
+            # A settled result is the record — re-picking must never erase a
+            # graded loss before the Reckoning. Only 'void' frees the slot
+            # (§1.3: a postponement returns the team and the week).
             raise PickError(
-                f"Your {existing['team']} pick locked at kickoff — "
-                "you ride it now."
+                f"Your {existing['team']} pick is already settled — "
+                "the record stands."
             )
+        if existing["result"] is None:
+            game = conn.execute(
+                "SELECT kickoff_utc FROM nfl_games "
+                "WHERE season_year = ? AND game_id = ?",
+                (season["season_year"], existing["game_id"]),
+            ).fetchone()
+            if game is not None and kickoff_ts(game["kickoff_utc"]) <= now:
+                raise PickError(
+                    f"Your {existing['team']} pick locked at kickoff — "
+                    "you ride it now."
+                )
 
     legal = {g.team: g for g in legal_teams(
         conn, season, user_id, week, now, slot=slot
@@ -314,7 +323,12 @@ def join_season(
             raise PickError(
                 f"The buy-in is {buyin} coins and your wallet came up short."
             )
-    add_player(conn, season["id"], user_id, joined_at=now)
+    if not add_player(conn, season["id"], user_id, joined_at=now):
+        # Race loser: the duplicate SELECT above passed before the winner
+        # committed. Raising here rolls this transaction back, debit and
+        # all — the caller must be on open_db_immediate (the views are) so
+        # two confirms serialize instead of double-charging.
+        raise PickError("One entry per person — and you're already in. 🌾")
     return JoinResult(charged=buyin)
 
 
@@ -403,8 +417,10 @@ def board_data(conn: sqlite3.Connection, season: dict, now: float) -> dict:
     most_burned = [
         (r["team"], int(r["n"]))
         for r in conn.execute(
+            # Settled picks only: counting result-IS-NULL rows would let the
+            # public board leak the current week's secret picks (§1.2).
             "SELECT team, COUNT(*) AS n FROM survivor_picks "
-            "WHERE season_id = ? AND (result IS NULL OR result != 'void') "
+            "WHERE season_id = ? AND result IN ('win', 'loss', 'tie') "
             "GROUP BY team ORDER BY n DESC, team LIMIT 5",
             (season["id"],),
         ).fetchall()
@@ -428,15 +444,17 @@ def pot_totals(conn: sqlite3.Connection, season: dict) -> dict[str, int]:
     ghost_share = seed * int(config["ghost_pot_pct"]) // 100
     pots = {"main": seed - ghost_share, "ghost": ghost_share}
     rows = conn.execute(
-        # Season-scoped via the meta the debit writers always include —
-        # without it a second season would inherit the first one's buy-ins.
+        # Season-scoped via json_extract on the meta the debit writers always
+        # include. NOT a LIKE: '"season_id": 1' is a substring of
+        # '"season_id": 12', so a prefix match would hand season 1 the
+        # buy-ins of seasons 10-19. json_valid guard per the register.py
+        # precedent — meta is NULL on plenty of rows.
         "SELECT kind, meta, SUM(-amount) AS total FROM econ_ledger "
         "WHERE guild_id = ? AND amount < 0 AND kind IN (?, ?) "
-        "AND meta LIKE ? GROUP BY kind, meta",
-        (
-            season["guild_id"], KIND_BUYIN, KIND_GAUNTLET_FEE,
-            f'%"season_id": {season["id"]}%',
-        ),
+        "AND COALESCE(json_extract("
+        "CASE WHEN json_valid(meta) THEN meta ELSE '{}' END, "
+        "'$.season_id'), 0) = ? GROUP BY kind, meta",
+        (season["guild_id"], KIND_BUYIN, KIND_GAUNTLET_FEE, season["id"]),
     ).fetchall()
     for r in rows:
         pot = "ghost" if (r["meta"] and '"pot": "ghost"' in r["meta"]) else "main"

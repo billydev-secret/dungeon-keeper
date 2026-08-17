@@ -1,5 +1,5 @@
--- 165_survivor.sql
--- (renumbered from 164 pre-ship: main took 164 for casino mines on 2026-08-17)
+-- 166_survivor.sql
+-- (renumbered twice pre-ship: main took 164 for casino mines, then 165 for music playlists, both on 2026-08-17)
 -- Survivor: NFL pick'em survival pool (docs/survivor_spec.md v2.2, amended
 -- 2026-08-17). Five tables, laid down together in stage 1 of
 -- docs/plans/survivor.md so no later stage needs a schema change:

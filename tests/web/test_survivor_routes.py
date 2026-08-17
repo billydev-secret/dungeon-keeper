@@ -329,6 +329,44 @@ def test_announcement_posts_pins_and_stores_message_id(
     assert any(cid.startswith("survivor_join:") for cid in custom_ids)
 
 
+def test_repost_retires_the_previous_announcement(
+    authed_client, fake_ctx, monkeypatch
+):
+    # Regression (08-17 review): a repost pinned a second announcement and
+    # left the old one live with a frozen counter — the setup-pin swamp.
+    monkeypatch.setattr(
+        "bot_modules.core.branding.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+    guild = _attach_bot(fake_ctx)
+    _create_season(authed_client)
+    authed_client.put("/api/survivor/config", json={"channel_id": "555"})
+
+    old_partial = MagicMock()
+    old_partial.delete = AsyncMock()
+    messages = iter([MagicMock(id=111, pin=AsyncMock()),
+                     MagicMock(id=222, pin=AsyncMock())])
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 555
+    channel.send = AsyncMock(side_effect=lambda **kw: next(messages))
+    channel.get_partial_message = MagicMock(return_value=old_partial)
+    guild.get_channel = MagicMock(
+        side_effect=lambda cid: channel if int(cid) == 555 else None
+    )
+
+    first = authed_client.post("/api/survivor/announcement", json={})
+    assert first.status_code == 200
+    assert first.json()["retired_previous"] is False
+
+    second = authed_client.post("/api/survivor/announcement", json={})
+    assert second.status_code == 200
+    assert second.json()["retired_previous"] is True
+    channel.get_partial_message.assert_called_with(111)
+    old_partial.delete.assert_awaited_once()
+    over = authed_client.get("/api/survivor/overview").json()
+    assert over["season"]["config"]["announcement_message_id"] == "222"
+
+
 def test_eliminate_week_out_of_bounds_is_422(authed_client, fake_ctx):
     _create_season(authed_client)
     resp = authed_client.post(

@@ -165,7 +165,7 @@ def purge_user_data(
         table="role_events",
     )
 
-    # Survivor (migration 165): entries and picks key on season_id, not
+    # Survivor (migration 166): entries and picks key on season_id, not
     # guild_id, so they scope through the seasons table. Purged across every
     # season, live or archived — a game record has no Art 17(3) ground to
     # outlive the member (register rows: docs/data_register.md). Coin

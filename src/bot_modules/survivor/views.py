@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.core.db_utils import open_db, open_db_immediate
 from bot_modules.services.survivor_service import get_season
 from bot_modules.survivor import logic
 from bot_modules.survivor.embeds import (
@@ -240,7 +240,11 @@ class JoinConfirmView(discord.ui.View):
         now = discord.utils.utcnow().timestamp()
 
         def _q():
-            with open_db(db_path) as conn:
+            # BEGIN IMMEDIATE: this is a read-validate-then-write money path
+            # (duplicate check → debit → entry row). Two double-clicked
+            # confirms serialize on the write lock instead of both passing
+            # the duplicate check and double-charging the buy-in.
+            with open_db_immediate(db_path) as conn:
                 season = get_season(conn, self.season_id)
                 if season is None:
                     raise logic.PickError("This season no longer exists.")
@@ -256,15 +260,24 @@ class JoinConfirmView(discord.ui.View):
             )
             return
 
-        note = await _grant_survivor_role(interaction, season)
+        # Respond FIRST: the member is charged and enrolled the moment the
+        # commit lands, and a rate-limited role grant must not eat the
+        # 3-second interaction window and turn a successful join into
+        # "This interaction failed".
         charged = f" ({result.charged:,} coins paid)" if result.charged else ""
         await interaction.response.edit_message(
             content=(
                 f"you're in{charged}. the slate posts Wednesdays; "
-                "your first pick awaits. 🌾" + (f"\n-# {note}" if note else "")
+                "your first pick awaits. 🌾"
             ),
             view=None,
         )
+        note = await _grant_survivor_role(interaction, season)
+        if note:
+            try:
+                await interaction.followup.send(f"-# {note}", ephemeral=True)
+            except discord.HTTPException:
+                log.warning("survivor: join followup failed for %s", user_id)
         await refresh_announcement(bot, db_path, season["id"])
 
 
@@ -286,8 +299,13 @@ async def _grant_survivor_role(
     return None
 
 
-async def refresh_announcement(bot, db_path, season_id: int) -> None:
-    """Best-effort entrant-counter refresh on the pinned announcement."""
+async def build_live_announcement(
+    bot, db_path, season_id: int
+) -> tuple[dict, discord.Embed] | None:
+    """The single source of the announcement payload — live entrant count,
+    gauntlet mode, accent color. Shared by the dashboard post/repost route
+    and the post-join counter refresh, so the pinned message can never flip
+    content depending on which path touched it last."""
 
     def _q():
         with open_db(db_path) as conn:
@@ -305,7 +323,28 @@ async def refresh_announcement(bot, db_path, season_id: int) -> None:
 
     season, entrants, elapsed = await asyncio.to_thread(_q)
     if season is None:
+        return None
+    guild = bot.get_guild(season["guild_id"])
+    if guild is None:
+        return None
+    color = await resolve_accent_color(db_path, guild)
+    embed = build_announcement_embed(
+        season_name=season["name"],
+        entrants=entrants,
+        buyin=int(season["config"]["buyin_coins"]),
+        gauntlet_mode=bool(elapsed),
+        late_entry=str(season["config"]["late_entry"]),
+        color=color,
+    )
+    return season, embed
+
+
+async def refresh_announcement(bot, db_path, season_id: int) -> None:
+    """Best-effort entrant-counter refresh on the pinned announcement."""
+    built = await build_live_announcement(bot, db_path, season_id)
+    if built is None:
         return
+    season, embed = built
     config = season["config"]
     channel_id = int(config["channel_id"] or 0)
     message_id = int(config.get("announcement_message_id") or 0)
@@ -315,21 +354,8 @@ async def refresh_announcement(bot, db_path, season_id: int) -> None:
     channel = guild.get_channel(channel_id) if guild else None
     if not isinstance(channel, discord.TextChannel):
         return
-    color = await resolve_accent_color(db_path, guild)
-    embed = build_announcement_embed(
-        season_name=season["name"],
-        entrants=entrants,
-        buyin=int(config["buyin_coins"]),
-        gauntlet_mode=bool(elapsed),
-        color=color,
-    )
     try:
         message = channel.get_partial_message(message_id)
         await message.edit(embed=embed)
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         log.warning("survivor: announcement refresh failed for %s", message_id)
-
-
-def offset_hours_for(db_path, guild_id: int) -> float:
-    with open_db(db_path) as conn:
-        return get_tz_offset_hours(conn, guild_id)
