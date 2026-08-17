@@ -9,6 +9,7 @@ ships.
 from __future__ import annotations
 
 import itertools
+from fractions import Fraction
 
 import pytest
 
@@ -827,3 +828,171 @@ def test_cap_lines_marker_only_when_overflow():
     capped = logic.cap_lines(lines, limit=1022)
     assert capped == lines
     assert not any("…and" in line for line in capped)
+
+
+# ── mines ──────────────────────────────────────────────────────────────
+
+
+def _hypergeom_reach(tiles: int, bombs: int, k: int) -> Fraction:
+    """P(the first k presses are all safe), written out independently of
+    the ladder generator so the EV test is not checking itself."""
+    p = Fraction(1)
+    for i in range(k):
+        p *= Fraction(tiles - bombs - i, tiles - i)
+    return p
+
+
+@pytest.mark.parametrize("bombs", logic.MINES_BOMB_CHOICES)
+def test_mines_every_rung_of_every_ladder_is_in_the_design_band(bombs):
+    """THE design contract. The player picks the bomb count and picks when
+    to stop, so the band has to hold at every cash-out point of every
+    configuration — 43 of them — not at one headline number.
+    """
+    ladder = logic.mines_ladder(bombs)
+    for k, rung in enumerate(ladder, start=1):
+        reach = _hypergeom_reach(logic.MINES_TILES, bombs, k)
+        rtp = reach * Fraction(rung, 100)
+        assert Fraction(93, 100) <= rtp <= Fraction(97, 100), (
+            f"{bombs} bombs, {k} tiles: {rung / 100}× returns {float(rtp):.4f}"
+        )
+
+
+def test_mines_rungs_are_the_fair_curve_times_the_house_edge():
+    """Pins the generator against the hypergeometric written the other way
+    round: pay(k) = round(0.95 / P(reach k)), half up."""
+    for bombs in logic.MINES_BOMB_CHOICES:
+        for k, rung in enumerate(logic.mines_ladder(bombs), start=1):
+            fair = 1 / _hypergeom_reach(logic.MINES_TILES, bombs, k)
+            expected = int(Fraction(95) * fair + Fraction(1, 2))
+            assert rung == expected, f"{bombs} bombs, {k} tiles"
+
+
+def test_mines_advertised_return_sits_inside_what_the_rungs_actually_pay():
+    """MINES_RTP_PCT is quoted at the player; keep it true. Rounding to two
+    decimals is the only thing that moves a rung off 95%."""
+    rtps = [
+        float(_hypergeom_reach(logic.MINES_TILES, bombs, k) * Fraction(rung, 100))
+        for bombs in logic.MINES_BOMB_CHOICES
+        for k, rung in enumerate(logic.mines_ladder(bombs), start=1)
+    ]
+    assert min(rtps) * 100 <= logic.MINES_RTP_PCT <= max(rtps) * 100
+    assert min(rtps) == pytest.approx(0.9480, abs=0.0005)
+    assert max(rtps) == pytest.approx(0.9540, abs=0.0005)
+
+
+def test_mines_ladders_are_capped_and_shaped_as_designed():
+    """All four ceilings land within 19–22× — the property that makes the
+    risk options comparable rather than a difficulty ramp."""
+    shapes = {
+        bombs: (len(logic.mines_ladder(bombs)), logic.mines_ladder(bombs)[-1])
+        for bombs in logic.MINES_BOMB_CHOICES
+    }
+    assert shapes == {1: (19, 1900), 3: (12, 1934), 5: (8, 1860), 10: (4, 2192)}
+    for bombs in logic.MINES_BOMB_CHOICES:
+        assert all(
+            rung <= logic.MINES_MAX_MULT_HUNDREDTHS
+            for rung in logic.mines_ladder(bombs)
+        )
+    # One bomb tops out by clearing the field; nothing runs past the grid.
+    assert len(logic.mines_ladder(1)) == logic.MINES_TILES - 1
+
+
+def test_mines_top_rung_is_reachable_about_one_time_in_twenty():
+    """P(top) = 0.95 / pay(top) falls out of the flat edge — so every bomb
+    count is roughly a 1-in-20 clear, not a difficulty ladder."""
+    for bombs in logic.MINES_BOMB_CHOICES:
+        top = logic.mines_top_rung(bombs)
+        reach = float(_hypergeom_reach(logic.MINES_TILES, bombs, top))
+        assert 0.04 <= reach <= 0.06, f"{bombs} bombs: P(top) = {reach:.4f}"
+
+
+@pytest.mark.parametrize(
+    ("bombs", "revealed", "stake", "expected"),
+    [
+        (1, 1, 100, 100),    # the 1.00× rung is a push, not a win
+        (1, 2, 100, 106),
+        (3, 1, 100, 112),
+        (10, 4, 1000, 21920),  # the biggest payout the table can hand over
+        (1, 4, 5, 6),        # rounds UP at min bet where floor would pay 5
+        (5, 1, 36, 46),      # prod's average stake
+    ],
+)
+def test_mines_payout_rounds_half_up(bombs, revealed, stake, expected):
+    assert logic.mines_payout(bombs, revealed, stake) == expected
+
+
+def test_mines_payout_at_min_bet_never_becomes_a_sucker_rung():
+    """The test that fails if anyone 'fixes' the rounding back to floor.
+
+    Flooring drops the worst rung to 0.80 at a 5-coin stake; rounding holds
+    it at 0.90. Integer payouts can't be exact at tiny stakes, but they must
+    not turn a 95% paytable into a 80% one.
+    """
+    for stake, floor_at in ((5, 0.895), (10, 0.93), (25, 0.94)):
+        worst = min(
+            float(_hypergeom_reach(logic.MINES_TILES, bombs, k))
+            * logic.mines_payout(bombs, k, stake)
+            / stake
+            for bombs in logic.MINES_BOMB_CHOICES
+            for k in range(1, logic.mines_top_rung(bombs) + 1)
+        )
+        assert worst >= floor_at, f"stake {stake}: worst rung {worst:.4f}"
+
+
+def test_mines_multiplier_is_dead_on_an_untouched_grid():
+    """Cash Out has no rung to pay at zero reveals — a button paying 0.95×
+    for doing nothing is a trap, so it pays nothing and the UI disables it."""
+    assert logic.mines_multiplier(1, 0) == 0
+    assert logic.mines_payout(1, 0, 500) == 0
+
+
+def test_mines_multiplier_clamps_at_the_top_rung():
+    """Defence in depth: the top rung auto-cashes, so a reveal past it
+    should be unreachable — if it ever happens it must not index off the
+    end of the ladder."""
+    for bombs in logic.MINES_BOMB_CHOICES:
+        top = logic.mines_top_rung(bombs)
+        assert logic.mines_multiplier(bombs, top + 5) == logic.mines_multiplier(
+            bombs, top
+        )
+
+
+def test_mines_place_bombs_draws_once_from_the_whole_grid():
+    for bombs in logic.MINES_BOMB_CHOICES:
+        tiles = logic.mines_place_bombs(bombs)
+        assert len(tiles) == bombs
+        assert len(set(tiles)) == bombs
+        assert tiles == sorted(tiles)
+        assert all(0 <= t < logic.MINES_TILES for t in tiles)
+
+
+def test_mines_place_bombs_uses_module_random(monkeypatch):
+    monkeypatch.setattr(
+        logic.random, "sample", lambda pop, k: list(range(k))
+    )
+    assert logic.mines_place_bombs(3) == [0, 1, 2]
+
+
+def test_mines_rejects_bomb_counts_that_have_no_ladder():
+    for bad in (0, 2, 4, 11, 20):
+        with pytest.raises(ValueError, match="mines bomb count"):
+            logic.mines_ladder(bad)
+        with pytest.raises(ValueError, match="mines bomb count"):
+            logic.mines_place_bombs(bad)
+
+
+def test_mines_labels_read_the_way_players_see_them():
+    assert logic.mines_mult_label(100) == "1.00×"
+    assert logic.mines_mult_label(1934) == "19.34×"
+    assert logic.mines_risk_label(1) == "1 bomb · 19 tiles to 19.00×"
+    assert logic.mines_risk_label(10) == "10 bombs · 4 tiles to 21.92×"
+
+
+def test_mines_grid_leaves_room_for_the_cash_out_button():
+    """The constraint that chose the grid: Discord allows 25 components per
+    message (5 rows × 5), so 25 tiles would leave nowhere to put the stop
+    button — and the voluntary stop is the whole game."""
+    rows = logic.MINES_TILES / logic.MINES_GRID_WIDTH
+    assert rows == int(rows)
+    assert int(rows) + 1 <= 5
+    assert logic.MINES_TILES + logic.MINES_GRID_WIDTH <= 25

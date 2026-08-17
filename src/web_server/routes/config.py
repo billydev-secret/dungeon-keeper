@@ -575,6 +575,7 @@ def _casino_section(conn, guild_id: int) -> dict:
         "dice_enabled": s.dice_enabled,
         "war_enabled": s.war_enabled,
         "keno_enabled": s.keno_enabled,
+        "mines_enabled": s.mines_enabled,
         "pools_enabled": s.pools_enabled,
         "pools_channel_id": str(s.pools_channel_id),
         "pools_close_hour": s.pools_close_hour,
@@ -4062,6 +4063,7 @@ class CasinoConfigUpdate(BaseModel):
     dice_enabled: bool | None = None
     war_enabled: bool | None = None
     keno_enabled: bool | None = None
+    mines_enabled: bool | None = None
     pools_enabled: bool | None = None
     # A snowflake, so it travels as a string like channel_id. "0" means
     # "put the market in the casino channel".

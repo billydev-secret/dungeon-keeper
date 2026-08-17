@@ -45,7 +45,7 @@ REFUND_KIND = "casino_refund"
 
 GAMES = (
     "coinflip", "slots", "blackjack", "roulette", "derby", "baccarat",
-    "dice", "war", "keno",
+    "dice", "war", "keno", "mines",
 )
 
 
@@ -66,6 +66,7 @@ class CasinoSettings:
     dice_enabled: bool = True
     war_enabled: bool = True
     keno_enabled: bool = True
+    mines_enabled: bool = True
     pools_enabled: bool = False
     # Pools runs its own daily market and gets its own channel — a round is
     # a day long, so its panel would otherwise sit pinned above the casino
@@ -129,6 +130,7 @@ _BOOL_KEYS = [
     "dice_enabled",
     "war_enabled",
     "keno_enabled",
+    "mines_enabled",
     "pools_enabled",
     "jackpot_enabled",
 ]
@@ -479,7 +481,7 @@ def claim_jackpot(
 # of the point: the ticker is where the casino's social texture lives now.
 # Pools stays off — its daily market has its own panel and settles there.
 TICKER_GAMES = (
-    "coinflip", "slots", "blackjack", "war",
+    "coinflip", "slots", "blackjack", "war", "mines",
     "roulette", "derby", "baccarat", "dice", "keno",
 )
 # Rows kept per guild — a small multiple of what the hub ever renders, so
@@ -976,6 +978,27 @@ class HandTables(NamedTuple):
 
 BLACKJACK_HANDS = HandTables("blackjack", "casino_blackjack_hands")
 WAR_HANDS = HandTables("war", "casino_war_hands")
+MINES_HANDS = HandTables("mines", "casino_mines_hands")
+
+# Every live-hand game, the sibling of ALL_ROUND_TABLES. Anything that has
+# to reach EVERY live hand — the boot sweep, the leaver refund — iterates
+# this instead of naming the games one at a time. Two hand-coded copies
+# were readable; the third (Mines, 2026-08-16) is where a game starts
+# getting forgotten in one of the three places and stakes strand behind it.
+ALL_HAND_TABLES: tuple[HandTables, ...] = (
+    BLACKJACK_HANDS, WAR_HANDS, MINES_HANDS,
+)
+
+
+def live_hand(
+    conn: sqlite3.Connection, t: HandTables, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    """This member's live hand at one table, if any."""
+    return conn.execute(
+        f"SELECT * FROM {t.table} "
+        "WHERE guild_id = ? AND user_id = ? AND settled_at IS NULL",
+        (guild_id, user_id),
+    ).fetchone()
 
 
 def _settle_hand(
@@ -1210,25 +1233,22 @@ def refund_member_live_stakes(
     """Refund a departing member's live casino money — the on_member_remove
     seam the PvP wager escrow already has, extended to the casino.
 
-    The blackjack hand (and any pending war decision) settles as refunded;
-    the member's bets on any open windowed round are deleted (so the
+    Every live hand they hold — blackjack, a pending war decision, an
+    unfinished Mines grid — settles as refunded (ALL_HAND_TABLES, so a new
+    live-hand game is covered the day it lands rather than the day someone
+    notices); the member's bets on any open windowed round are deleted (so the
     resolution can't pay a ghost) and refunded as one credit per game.
     Returns {game: amount} for each game something actually came back from
     (sparse — a game with nothing live has no key).
     """
     out: dict[str, int] = {}
-    hand = live_blackjack_hand(conn, guild_id, user_id)
-    if hand is not None and settle_blackjack_hand(
-        conn, int(hand["id"]), int(hand["stake"]), "refunded",
-        kind=REFUND_KIND, now=now,
-    ):
-        out["blackjack"] = int(hand["stake"])
-    war_hand = live_war_hand(conn, guild_id, user_id)
-    if war_hand is not None and _settle_war_hand(
-        conn, int(war_hand["id"]), int(war_hand["stake"]), "refunded",
-        kind=REFUND_KIND, now=now,
-    ):
-        out["war"] = int(war_hand["stake"])
+    for h in ALL_HAND_TABLES:
+        hand = live_hand(conn, h, guild_id, user_id)
+        if hand is not None and _settle_hand(
+            conn, h, int(hand["id"]), int(hand["stake"]), "refunded",
+            kind=REFUND_KIND, now=now,
+        ):
+            out[h.game] = int(hand["stake"])
     for t in ALL_ROUND_TABLES:
         # The DELETE itself is the claim: its status='open' predicate is
         # re-evaluated inside OUR write transaction, so a settle that
@@ -2511,3 +2531,350 @@ def refund_live_war_hands(
 ) -> list[sqlite3.Row]:
     """Boot sweep: refund every live decision's stake (honest reset)."""
     return _refund_live_hands(conn, WAR_HANDS, now=now)
+
+
+def refund_all_live_hands(
+    conn: sqlite3.Connection, *, now: float | None = None
+) -> list[sqlite3.Row]:
+    """Boot sweep across every live-hand game — the honest reset.
+
+    A restart kills the interaction webhook each hand's ephemeral message
+    is editable through, so resolving would move money against a result
+    nobody can ever see. One call rather than one per game: the sweep must
+    not be the place a new table is forgotten.
+    """
+    swept: list[sqlite3.Row] = []
+    for t in ALL_HAND_TABLES:
+        swept.extend(_refund_live_hands(conn, t, now=now))
+    return swept
+
+
+# ── mines grids ────────────────────────────────────────────────────────
+# The third live-hand game (docs/plans/casino-mines.md). Unlike blackjack
+# and war, EVERY press between the deal and the stop is a decision the
+# player could walk away from, so the row lives for the whole round.
+
+
+class MinesStep(NamedTuple):
+    """One deal, reveal or cash-out, ready to render. err = nothing happened."""
+
+    err: str | None = None
+    hand_id: int = 0
+    stake: int = 0
+    bombs: int = 0
+    revealed: tuple[int, ...] = ()      # tiles opened so far, in press order
+    mult: int = 0                       # rung standing now, in hundredths
+    next_mult: int = 0                  # the rung one safe tile away (0 = at top)
+    outcome: str | None = None          # None = the grid is still live
+    payout: int = 0
+    # Bomb positions, and ONLY once the round is over. A live step never
+    # carries them, so no embed, log line or debug print can leak the board
+    # a player is still betting into.
+    bomb_tiles: tuple[int, ...] | None = None
+    topped: bool = False                # cleared the ladder (auto-cashed)
+    streak: int = 0
+    pot_after: int = 0
+
+
+def serialize_mines(bomb_tiles: list[int], revealed: list[int]) -> str:
+    return json.dumps({"bombs": bomb_tiles, "revealed": revealed})
+
+
+def deserialize_mines(state_json: str) -> tuple[list[int], list[int]]:
+    state = json.loads(state_json)
+    return state["bombs"], state["revealed"]
+
+
+def live_mines_hand(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    return live_hand(conn, MINES_HANDS, guild_id, user_id)
+
+
+def get_mines_hand(conn: sqlite3.Connection, hand_id: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM casino_mines_hands WHERE id = ?", (hand_id,)
+    ).fetchone()
+
+
+def set_mines_message(
+    conn: sqlite3.Connection, hand_id: int, message_id: int
+) -> None:
+    conn.execute(
+        "UPDATE casino_mines_hands SET message_id = ? WHERE id = ?",
+        (message_id, hand_id),
+    )
+
+
+def _mines_live_step(row: sqlite3.Row, revealed: list[int]) -> MinesStep:
+    """A still-live grid: what the player may bank, and what one more tile
+    would be worth. The next rung is stated because the decision genuinely
+    needs it — hiding it would only make them press blind — but it is never
+    dressed up, and the bombs are not in here."""
+    bombs = int(row["bombs"])
+    top = casino_logic.mines_top_rung(bombs)
+    return MinesStep(
+        hand_id=int(row["id"]),
+        stake=int(row["stake"]),
+        bombs=bombs,
+        revealed=tuple(revealed),
+        mult=casino_logic.mines_multiplier(bombs, len(revealed)),
+        next_mult=(
+            casino_logic.mines_multiplier(bombs, len(revealed) + 1)
+            if len(revealed) < top
+            else 0
+        ),
+    )
+
+
+def _settle_mines(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    payout: int,
+    outcome: str,
+    *,
+    bomb_tiles: list[int],
+    revealed: list[int],
+    topped: bool = False,
+    kind: str = PAYOUT_KIND,
+    now: float | None = None,
+) -> MinesStep:
+    """Finalize a grid and build the step that renders it.
+
+    The settle claim is the exactly-once guard: the player's own Cash Out,
+    the idle auto-cash and a boot sweep can all arrive at the same row, and
+    only the first one pays.
+    """
+    hand_id, guild_id, user_id = (
+        int(row["id"]), int(row["guild_id"]), int(row["user_id"])
+    )
+    stake, bombs = int(row["stake"]), int(row["bombs"])
+    if not _settle_hand(
+        conn, MINES_HANDS, hand_id, payout, outcome, kind=kind, now=now
+    ):
+        return MinesStep(err="That grid is already finished.")
+    stats = member_casino_stats(conn, guild_id, user_id)
+    pot_after = 0
+    if payout < stake:  # the settle fed the pot with the lost slice
+        settings = load_casino_settings(conn, guild_id)
+        if settings.jackpot_enabled:
+            pot_after = get_jackpot(conn, guild_id)
+    return MinesStep(
+        hand_id=hand_id, stake=stake, bombs=bombs, revealed=tuple(revealed),
+        mult=casino_logic.mines_multiplier(bombs, len(revealed)),
+        outcome=outcome, payout=payout, bomb_tiles=tuple(bomb_tiles),
+        topped=topped,
+        streak=int(stats["streak"]) if stats is not None else 0,
+        pot_after=pot_after,
+    )
+
+
+def _mines_cash_outcome(payout: int, stake: int) -> str:
+    """"pushed" when the rung only hands the stake back.
+
+    The 1.00× first rung of the one-bomb ladder pays exactly the stake, and
+    rounding can land other small rungs there too. Calling that a win is
+    the losses-disguised-as-wins rule failing at its mildest — so the
+    outcome itself carries the distinction and every surface inherits it.
+    """
+    return "cashed" if payout > stake else "pushed"
+
+
+def deal_mines_hand(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int | None,
+    user_id: int,
+    amount: int,
+    bombs: int,
+    *,
+    now: float | None = None,
+) -> MinesStep:
+    """Open a grid: validate, debit, place the bombs, persist.
+
+    The one-live-grid-per-member partial unique index backstops the
+    pre-check the way blackjack's does — a raced second deal raises
+    IntegrityError and rolls back, stake included.
+    """
+    if bombs not in casino_logic.MINES_BOMB_CHOICES:
+        raise ValueError(f"unknown mines bomb count: {bombs}")
+    if live_mines_hand(conn, guild_id, user_id) is not None:
+        return MinesStep(
+            err="You already have a grid open — finish that one first."
+        )
+    err = take_stake(
+        conn, guild_id, user_id, amount, "mines", now=now, channel_id=channel_id
+    )
+    if err is not None:
+        return MinesStep(err=err)
+    ts = time.time() if now is None else now
+    bomb_tiles = casino_logic.mines_place_bombs(bombs)
+    cur = conn.execute(
+        "INSERT INTO casino_mines_hands "
+        "(guild_id, channel_id, user_id, stake, bombs, state_json, "
+        "created_at, last_action_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            guild_id, channel_id or 0, user_id, amount, bombs,
+            serialize_mines(bomb_tiles, []), ts, ts,
+        ),
+    )
+    return MinesStep(
+        hand_id=int(cur.lastrowid or 0), stake=amount, bombs=bombs,
+        next_mult=casino_logic.mines_multiplier(bombs, 1),
+    )
+
+
+def _claim_mines_hand(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    hand_id: int,
+    user_id: int,
+    ts: float,
+) -> sqlite3.Row | None:
+    """Claim the live grid inside the write transaction, bumping the idle
+    clock — blackjack's rule, and load-bearing for the same reason.
+
+    Ownership rides in the claim itself rather than a separate check: the
+    buttons live on an ephemeral message, but a leaked custom_id must not
+    let a stranger reset someone else's idle clock (which would block the
+    auto-cash and strand their stake) before being told no.
+    """
+    return conn.execute(
+        "UPDATE casino_mines_hands SET last_action_at = ? "
+        "WHERE id = ? AND settled_at IS NULL AND guild_id = ? AND user_id = ? "
+        "RETURNING *",
+        (ts, hand_id, guild_id, user_id),
+    ).fetchone()
+
+
+def _mines_claim_error(conn: sqlite3.Connection, hand_id: int) -> str:
+    """Tell "not yours" from "already over" without touching the row."""
+    other = conn.execute(
+        "SELECT settled_at FROM casino_mines_hands WHERE id = ?", (hand_id,)
+    ).fetchone()
+    if other is not None and other["settled_at"] is None:
+        return "That's not your grid — open your own!"
+    return "That grid is already finished."
+
+
+def reveal_mines_tile(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    hand_id: int,
+    user_id: int,
+    tile: int,
+    *,
+    now: float | None = None,
+) -> MinesStep:
+    """One tile press — every rule and coin movement in one tested place.
+
+    Clearing the last rung of the ladder cashes the player out on the spot:
+    the ceiling is where the game ends, so there is no infinite climb to
+    keep pressing into.
+    """
+    if not 0 <= tile < casino_logic.MINES_TILES:
+        raise ValueError(f"tile out of range: {tile}")
+    ts = time.time() if now is None else now
+    row = _claim_mines_hand(conn, guild_id, hand_id, user_id, ts)
+    if row is None:
+        return MinesStep(err=_mines_claim_error(conn, hand_id))
+    bomb_tiles, revealed = deserialize_mines(str(row["state_json"]))
+    if tile in revealed:
+        return MinesStep(err="You've already opened that tile.")
+    bombs, stake = int(row["bombs"]), int(row["stake"])
+    if tile in bomb_tiles:
+        return _settle_mines(
+            conn, row, 0, "bombed",
+            bomb_tiles=bomb_tiles, revealed=revealed, now=ts,
+        )
+    revealed.append(tile)
+    if len(revealed) >= casino_logic.mines_top_rung(bombs):
+        payout = casino_logic.mines_payout(bombs, len(revealed), stake)
+        return _settle_mines(
+            conn, row, payout, _mines_cash_outcome(payout, stake),
+            bomb_tiles=bomb_tiles, revealed=revealed, topped=True, now=ts,
+        )
+    conn.execute(
+        "UPDATE casino_mines_hands SET state_json = ? "
+        "WHERE id = ? AND settled_at IS NULL",
+        (serialize_mines(bomb_tiles, revealed), hand_id),
+    )
+    return _mines_live_step(row, revealed)
+
+
+def cash_out_mines_hand(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    hand_id: int,
+    user_id: int,
+    *,
+    now: float | None = None,
+) -> MinesStep:
+    """Bank the rung standing. Refused on an untouched grid — there is no
+    rung at zero reveals, and a stop button that pays 0.95× for doing
+    nothing is a trap rather than a choice."""
+    ts = time.time() if now is None else now
+    row = _claim_mines_hand(conn, guild_id, hand_id, user_id, ts)
+    if row is None:
+        return MinesStep(err=_mines_claim_error(conn, hand_id))
+    bomb_tiles, revealed = deserialize_mines(str(row["state_json"]))
+    if not revealed:
+        return MinesStep(err="Open a tile first — there's nothing to bank yet.")
+    stake, bombs = int(row["stake"]), int(row["bombs"])
+    payout = casino_logic.mines_payout(bombs, len(revealed), stake)
+    return _settle_mines(
+        conn, row, payout, _mines_cash_outcome(payout, stake),
+        bomb_tiles=bomb_tiles, revealed=revealed, now=ts,
+    )
+
+
+def resolve_idle_mines_hand(
+    conn: sqlite3.Connection, hand_id: int, *, now: float | None = None
+) -> MinesStep | None:
+    """The idle sweep's resolve. None = already settled concurrently.
+
+    Auto-cashes at the rung the player actually reached — exactly what
+    their own press would have paid, so walking away costs nothing that
+    staying would not have. The game's one nasty edge is that stopping is
+    punished; the sweep at least does not add to it.
+
+    An untouched grid is REFUNDED in full instead: there is no rung at zero
+    reveals, so there is nothing to settle, and taking the edge for a game
+    the player never played would be inventing a loss.
+    """
+    ts = time.time() if now is None else now
+    row = conn.execute(
+        "UPDATE casino_mines_hands SET last_action_at = last_action_at "
+        "WHERE id = ? AND settled_at IS NULL RETURNING *",
+        (hand_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    bomb_tiles, revealed = deserialize_mines(str(row["state_json"]))
+    stake, bombs = int(row["stake"]), int(row["bombs"])
+    if not revealed:
+        step = _settle_mines(
+            conn, row, stake, "refunded", bomb_tiles=bomb_tiles,
+            revealed=revealed, kind=REFUND_KIND, now=ts,
+        )
+    else:
+        payout = casino_logic.mines_payout(bombs, len(revealed), stake)
+        step = _settle_mines(
+            conn, row, payout, _mines_cash_outcome(payout, stake),
+            bomb_tiles=bomb_tiles, revealed=revealed, now=ts,
+        )
+    return None if step.err is not None else step
+
+
+def idle_live_mines_hands(
+    conn: sqlite3.Connection, older_than: float
+) -> list[sqlite3.Row]:
+    """Live grids untouched since ``older_than`` — the auto-cash sweep."""
+    return _idle_live_hands(conn, MINES_HANDS, older_than)
+
+
+def refund_live_mines_hands(
+    conn: sqlite3.Connection, *, now: float | None = None
+) -> list[sqlite3.Row]:
+    """Boot sweep: refund every live grid's stake (honest reset)."""
+    return _refund_live_hands(conn, MINES_HANDS, now=now)

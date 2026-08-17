@@ -26,21 +26,26 @@ jackpot embed titles interpolate the configured name directly.
 
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
-🏇 Derby · 🎴 Baccarat · 🎲 Dice · ⚔️ War · 🔢 Keno · 📊 My Stats ·
-❓ How It Works); every flow is buttons + amount modals. The nine tables sit
-**three to a row** with the two grey utility buttons on the row below
+🏇 Derby · 🎴 Baccarat · 🎲 Dice · ⚔️ War · 🔢 Keno · 💣 Mines ·
+📊 My Stats · ❓ How It Works); every flow is buttons + amount modals. Tables
+sit **three to a row** with the two grey utility buttons on the row below
 (2026-07-30, todo #87): a five-wide row wraps on narrow clients, so Derby used
 to drop to a short line of its own.
 
 Rows are computed in `build_hub_view` from the **enabled** set, not taken from
 the decorators (2026-08-16, todo #98). Open tables are split across
 `ceil(n / 3)` rows as evenly as the count allows, widest first, keeping their
-listed order — 9 tables pack 3/3/3, 8 pack 3/3/2, 7 pack 3/2/2, 4 pack 2/2 —
-and the utility buttons take the first free row, so a smaller casino has no
-gap. Discord stretches a button to fill its row, so before this a closed table
-left a short row rendering full-width beside full ones (a guild with Derby and
-Baccarat shut showed Roulette alone across the panel). Worst case is three
-game rows plus one utility row, inside Discord's five.
+listed order — 10 tables pack 3/3/2/2, 9 pack 3/3/3, 8 pack 3/3/2, 7 pack
+3/2/2, 4 pack 2/2 — and the utility buttons take the first free row, so a
+smaller casino has no gap. Discord stretches a button to fill its row, so
+before this a closed table left a short row rendering full-width beside full
+ones (a guild with Derby and Baccarat shut showed Roulette alone across the
+panel).
+
+**The hub is now full.** With Mines (2026-08-16) all ten tables open pack into
+four game rows plus the utility row — **exactly** Discord's five, nothing
+spare. Eleven and twelve tables still fit (four rows); a thirteenth does not,
+and the hub would need a different shape rather than another button.
 
 **Private play, public moments** (2026-07-24 for the instant games; extended
 to the last five on 2026-08-11 with migration 158, todos #94/#95): before
@@ -239,13 +244,13 @@ All movement goes through `services/casino_service.py`:
 | `channel_id` | 0 | **Master switch** — 0 = casino closed (ships dark) |
 | `min_bet` / `max_bet` | 5 / 100 | max 0 = no ceiling |
 | `daily_wager_cap` | 500 | per member per guild-local day; 0 = uncapped |
-| `{game}_enabled` ×9 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
+| `{game}_enabled` ×10 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
 | `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
 | `jackpot_cut_pct` | 5 | % of each fully-lost stake skimmed into the pot — every skimmed coin is escrowed rather than burned, so this trades sink strength for pot drama (was 25 until 2026-07-25; see [reviews/2026-07-25-economy-casino-sources-sinks.md](reviews/2026-07-25-economy-casino-sources-sinks.md)) |
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
 | `round_idle_seconds` | 600 | **abandonment** TTL for a private round, not a betting window — the player paces their own round and presses the resolve button when ready. The 60s maintenance sweep resolves anything past it, so a stake can never sit forever (bounds 60–840, capped for the same webhook-token reason as `blackjack_idle_seconds`) |
-| `blackjack_idle_seconds` | 180 | idle hand auto-stands **and idle War standoffs auto-resolve** — one table-idle knob, not two (bounds 30–**840**: an ephemeral hand is editable only through its interaction webhook, whose token dies at 15 min — a longer window would stand hands nobody can repaint; a larger pre-2026-07-24 stored value still loads and settles fine, its message just goes stale) |
-| `pools_enabled` | **false** | the daily prediction market — ships off, unlike the nine tables |
+| `blackjack_idle_seconds` | 180 | idle hand auto-stands, idle War standoffs auto-resolve **and idle Mines grids auto-cash** — one table-idle knob, not three (bounds 30–**840**: an ephemeral hand is editable only through its interaction webhook, whose token dies at 15 min — a longer window would stand hands nobody can repaint; a larger pre-2026-07-24 stored value still loads and settles fine, its message just goes stale) |
+| `pools_enabled` | **false** | the daily prediction market — ships off, unlike the ten tables |
 | `pools_channel_id` | 0 | where the market panel lives; 0 = fall back to `channel_id`. Its own channel because the round is a day long |
 | `pools_close_hour` | 18 | guild-local hour betting shuts on the day being measured (bounds 0–23). Settlement is at the day roll, not here |
 | `pools_takeout_pct` | 5 | % of the whole pool taken at settle and **burned** (bounds 0–50). Distinct from `jackpot_cut_pct`, which is skimmed per lost stake and fed to a pot that re-mints it |
@@ -263,8 +268,8 @@ guild's casino name, which is edited on **Config → Branding**
 The five `pools_*` keys are **not** on that page. Since 2026-07-28 they have
 their own admin-only **Economy → Pools** page (`config-pools.js`,
 [plans/pools-own-config-page.md](plans/pools-own-config-page.md)): a day-long
-parimutuel round whose takeout is burned had nothing in common with nine
-instant-settle tables, and `pools_takeout_pct` sat one card from
+parimutuel round whose takeout is burned had nothing in common with the
+ordinary house tables, and `pools_takeout_pct` sat one card from
 `jackpot_cut_pct`, which re-mints what it skims. The keys keep their
 `casino_pools_*` names in the `config` table, both pages write through the same
 `PUT /api/config/casino` (its body model is every-field-optional, so the Pools
@@ -401,6 +406,47 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   return means the jackpot feeds on the **lost portion** of the stake
   (`stake − payout`), not only total losses.
 
+- **Mines** (plan: [plans/casino-mines.md](plans/casino-mines.md), built
+  2026-08-16) — a **20-tile grid** (5 wide × 4 tall) hiding a player-chosen
+  1/3/5/10 bombs. Each safe reveal steps a multiplier; **Cash Out** banks it;
+  a bomb takes the stake. The grid is 20 rather than 25 because Discord allows
+  25 components per message, and a 5×5 board leaves nowhere to put the stop
+  button — the voluntary stop being the entire game.
+  **The ladder is generated, not typed** (`MINES_LADDERS`): the paid rung is
+  `round(0.95 × C(n,k)/C(n−m,k) × 100)` hundredths, so `P(reach k) × pay(k) =
+  0.95` identically and **every cash-out point on every ladder returns 95%**
+  before rounding — 43 rungs pinned in [0.9480, 0.9540] by exact enumeration
+  written independently of the generator. The ladder **stops at the last rung
+  paying ≤ 25×** (uncapped, a 10-bomb clear pays 175,518×), which lands all
+  four bomb counts at a 19–22× ceiling reachable ~5% of the time: the risk
+  dial changes the road (19 nervous presses vs 4 brutal ones), not the
+  destination. Clearing the top rung **auto-cashes** — the ceiling ends the
+  round, so there is no infinite climb to press into.
+  **Mines rounds half up where every other table floors** (`mines_payout`),
+  and the deviation is arithmetic, not taste: it is the only game paying a
+  ladder of tiny multipliers, and flooring a 1.19× rung on a 5-coin stake pays
+  5 against a 5.95 expectation — collapsing that cash-out point to **80% RTP**
+  for a paytable that is exactly 95% on paper. A second test pins the integer
+  drift at `min_bet` so nobody "fixes" it back.
+  **The third live-hand game** (`casino_mines_hands`, migration 164): one live
+  grid per member via partial unique index, exactly-once `settled_at IS NULL`
+  settlement, in-transaction claims carrying ownership (a rejected press must
+  not bump `last_action_at`, or a stranger could block the auto-cash and
+  strand the owner's stake). Bomb positions are drawn **once at deal** and
+  never re-rolled — no adaptive difficulty — and a live `MinesStep` never
+  carries them, so nothing downstream can leak a board still being bet into.
+  The idle sweep (same `blackjack_idle_seconds` clock) **auto-cashes at the
+  rung reached** — exactly what the player's own press would have paid, so
+  walking away costs nothing that staying would not have — and **refunds in
+  full** an untouched grid, which has no rung to settle. Boot sweeps refund
+  live grids; a leaver's grid refunds via `refund_member_live_stakes`.
+  **Two UI rules come from the responsible-design notes, not from taste:** a
+  cash-out does **not** reveal the tiles you walked away from (that
+  manufactures a near miss out of a correct decision), while a bomb reveals
+  the whole board (that is what makes the loss legible); and a rung that only
+  returns the stake — the one-bomb ladder's 1.00× first step — settles as
+  `pushed` and reads "broke even", never as a win.
+
 Every terminal path settles or refunds, exactly-once via
 `settled_at IS NULL` / `status='open'` claims — a stake can never evaporate
 or double-pay, including replayed timers and double-clicks. Because the
@@ -409,7 +455,7 @@ path **re-claims its row inside the write transaction** with a guarded
 no-op UPDATE before the debit: `place_roulette_bet`, `place_race_bet`,
 `place_baccarat_bet`, `place_dice_bet` and `place_keno_ticket`
 (a buzzer-beater bet racing the resolution misses the claim instead of
-stranding a stake), `double_blackjack_stake`, and `resolve_blackjack_action` (which also bumps
+stranding a stake), `double_blackjack_stake`, `reveal_mines_tile` / `cash_out_mines_hand`, and `resolve_blackjack_action` (which also bumps
 `last_action_at`, resetting the idle clock per press, and reports
 "already finished" instead of rendering an outcome the settle didn't pay).
 
