@@ -28,10 +28,19 @@ jackpot embed titles interpolate the configured name directly.
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
 🏇 Derby · 🎴 Baccarat · 🎲 Dice · ⚔️ War · 🔢 Keno · 📊 My Stats ·
 ❓ How It Works); every flow is buttons + amount modals. The nine tables sit
-**three to a row** with the two grey utility buttons on a fourth (2026-07-30,
-todo #87): a five-wide row wraps on narrow clients, so Derby used to drop to a
-short line of its own. Rows are fixed on the decorators, not reflowed — a guild
-that closes a table leaves that row two wide.
+**three to a row** with the two grey utility buttons on the row below
+(2026-07-30, todo #87): a five-wide row wraps on narrow clients, so Derby used
+to drop to a short line of its own.
+
+Rows are computed in `build_hub_view` from the **enabled** set, not taken from
+the decorators (2026-08-16, todo #98). Open tables are split across
+`ceil(n / 3)` rows as evenly as the count allows, widest first, keeping their
+listed order — 9 tables pack 3/3/3, 8 pack 3/3/2, 7 pack 3/2/2, 4 pack 2/2 —
+and the utility buttons take the first free row, so a smaller casino has no
+gap. Discord stretches a button to fill its row, so before this a closed table
+left a short row rendering full-width beside full ones (a guild with Derby and
+Baccarat shut showed Roulette alone across the panel). Worst case is three
+game rows plus one utility row, inside Discord's five.
 
 **Private play, public moments** (2026-07-24 for the instant games; extended
 to the last five on 2026-08-11 with migration 158, todos #94/#95): before
