@@ -165,6 +165,20 @@ def purge_user_data(
         table="role_events",
     )
 
+    # Survivor (migration 164): entries and picks key on season_id, not
+    # guild_id, so they scope through the seasons table. Purged across every
+    # season, live or archived — a game record has no Art 17(3) ground to
+    # outlive the member (register rows: docs/data_register.md). Coin
+    # movements live in econ_ledger, which is preserved separately.
+    for table in ("survivor_picks", "survivor_players"):
+        _delete(
+            conn,
+            f"DELETE FROM {table} WHERE user_id = ? AND season_id IN "
+            "(SELECT id FROM survivor_seasons WHERE guild_id = ?)",
+            (user_id, guild_id),
+            table=table,
+        )
+
     # Mention Awards: a `from_user` condition chip names the member inside the
     # rule's conditions JSON — the list-column blind spot, so SUBJECT_ID_COLUMNS
     # can't see it. Strip the member's chips; a rule left with no chips is

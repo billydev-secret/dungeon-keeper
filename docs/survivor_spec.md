@@ -230,6 +230,7 @@ CREATE TABLE survivor_flavor (
 | `accord_max_alive` | 6 | `/survivor accord` available at ≤ this many living |
 | `ghost_streak` | on | Side-pot % of main pot + DOA fees |
 | `slate_hour`, `lastcall_hour`, `reckoning_hour` | Wed 9 / Sat 18 / Tue 9 | Guild-local, via `tz_offset_hours`. `slate_hour` added 2026-08-17 — §2.3 schedules three tasks; the table only had hours for two |
+| `channel_id`, `role_survivor_id`, `role_ghost_id`, `role_sole_survivor_id` | 0 (unset) | Wiring, not rules — the #survivor channel and the three managed roles (§3.3). Added at stage 1; 0 degrades that step to skipped-and-logged, never a crash |
 
 ### 5.1 The seed is a faucet — say so out loud
 

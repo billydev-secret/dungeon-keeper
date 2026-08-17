@@ -1,0 +1,420 @@
+"""Survivor dashboard API — the feature's entire admin surface.
+
+Survivor's configuration is dashboard-managed per the 2026-08-17 decision
+(spec §3): season lifecycle, every §5 dial, the flavor corpus, and roster
+eliminate/revive all live here, admin-gated. The only Discord-side admin
+surface is the two live mod actions (`/survivor admin settle`,
+`preview-reckoning`), which arrive with the settle engine in stage 4.
+
+Every mutation mirrors to the DK mod-log channel (spec §3: "all admin
+actions → DK mod-log"). Snowflakes go out as strings — JS ``Number`` can't
+hold a full Discord id.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import discord
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+
+from bot_modules.services import survivor_service as svc
+from web_server.auth import AuthenticatedUser
+from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+
+log = logging.getLogger("web.survivor")
+
+router = APIRouter()
+_ADMIN = Depends(require_perms({"admin"}))
+
+# The three roles the bot manages (spec §3.3), paired with the config key
+# that stores each one's id.
+MANAGED_ROLES = (
+    ("role_survivor_id", "🏈 Survivor"),
+    ("role_ghost_id", "👻 Ghost"),
+    ("role_sole_survivor_id", "🏈 Sole Survivor"),
+)
+
+_ID_KEYS = frozenset(
+    {"channel_id", "role_survivor_id", "role_ghost_id", "role_sole_survivor_id"}
+)
+
+
+class CreateSeasonBody(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    season_year: int = Field(ge=2020, le=2100)
+
+
+class FlavorBody(BaseModel):
+    category: str
+    line: str = Field(min_length=1, max_length=500)
+
+
+class FlavorUpdateBody(BaseModel):
+    line: str | None = Field(default=None, min_length=1, max_length=500)
+    active: bool | None = None
+
+
+class EliminateBody(BaseModel):
+    week: int = Field(ge=1, le=18)
+
+
+def _config_json(config: dict) -> dict:
+    """Config for the wire: id-valued keys become strings."""
+    out: dict[str, Any] = {}
+    for key, value in config.items():
+        out[key] = str(value) if key in _ID_KEYS else value
+    return out
+
+
+def _season_json(season: dict) -> dict:
+    return {
+        "id": season["id"],
+        "name": season["name"],
+        "season_year": season["season_year"],
+        "status": season["status"],
+        "config": _config_json(season["config"]),
+    }
+
+
+def _coerce_config_body(body: dict) -> dict:
+    """Undo the wire's stringly ids before the service validates types."""
+    coerced = dict(body)
+    for key in _ID_KEYS & set(coerced):
+        try:
+            coerced[key] = int(coerced[key] or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"{key} must be an id."
+            ) from None
+    return coerced
+
+
+async def _mirror_mod_log(
+    ctx: Any, guild_id: int, *, action: str, summary: str, user: AuthenticatedUser
+) -> None:
+    """Post the admin action to the guild's mod-log channel, best-effort."""
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        return
+    mod_channel_id = ctx.guild_config(guild_id).mod_channel_id
+    channel = guild.get_channel(mod_channel_id) if mod_channel_id else None
+    if not isinstance(channel, discord.TextChannel):
+        return
+    embed = discord.Embed(
+        title=f"🏈 Survivor — {action}",
+        description=summary,
+        color=discord.Color.orange(),
+    )
+    embed.set_footer(text=f"by {user.username} (web) ({user.user_id})")
+    try:
+        await channel.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception("survivor web: failed to mirror admin action to mod-log")
+
+
+async def _service_call(coro):
+    """Await a query, translating service errors to a 422."""
+    try:
+        return await coro
+    except svc.SeasonError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+
+# ── overview ──────────────────────────────────────────────────────────
+
+
+@router.get("/survivor/overview")
+async def overview(request: Request, _: AuthenticatedUser = _ADMIN):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            players = svc.list_players(conn, season["id"]) if season else []
+            flavor = svc.list_flavor(conn, guild_id, include_inactive=True)
+            archived = [
+                s for s in svc.list_seasons(conn, guild_id) if s["status"] == "complete"
+            ]
+        return season, players, flavor, archived
+
+    season, players, flavor, archived = await run_query(_q)
+    return {
+        "season": _season_json(season) if season else None,
+        "players": [
+            {**p, "user_id": str(p["user_id"])} for p in players
+        ],
+        "flavor": flavor,
+        "archived_seasons": [
+            {"id": s["id"], "name": s["name"], "season_year": s["season_year"]}
+            for s in archived
+        ],
+    }
+
+
+# ── season lifecycle ──────────────────────────────────────────────────
+
+
+@router.post("/survivor/season")
+async def create_season(
+    request: Request, body: CreateSeasonBody, user: AuthenticatedUser = _ADMIN
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    # Roles first (spec §3.3): create any of the three that aren't configured,
+    # so their ids can be stored in the season's config at birth. Degraded
+    # path — no bot, no guild, or no Manage Roles — creates the season anyway
+    # and reports which roles are missing; the panel surfaces the warning.
+    role_ids: dict[str, int] = {}
+    role_report: list[str] = []
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is not None:
+        existing = {r.name: r for r in guild.roles}
+        for key, role_name in MANAGED_ROLES:
+            role = existing.get(role_name)
+            if role is None:
+                try:
+                    role = await guild.create_role(
+                        name=role_name, reason="Survivor season setup"
+                    )
+                    role_report.append(f"created {role_name}")
+                except discord.Forbidden:
+                    role_report.append(
+                        f"couldn't create {role_name} — missing Manage Roles"
+                    )
+                    continue
+                except discord.HTTPException:
+                    log.exception("survivor: role create failed for %s", role_name)
+                    role_report.append(f"couldn't create {role_name}")
+                    continue
+            role_ids[key] = role.id
+    else:
+        role_report.append("bot offline — roles not created; set them later")
+
+    def _q():
+        with ctx.open_db() as conn:
+            season_id = svc.create_season(
+                conn, guild_id, body.name, body.season_year, overrides=role_ids
+            )
+            seeded = svc.seed_default_flavor(conn, guild_id)
+            season = svc.get_season(conn, season_id)
+            conn.commit()
+        return season, seeded
+
+    season, seeded = await _service_call(run_query(_q))
+    assert season is not None
+    await _mirror_mod_log(
+        ctx,
+        guild_id,
+        action="season created",
+        summary=f"**{season['name']}** ({season['season_year']}) — enrolling",
+        user=user,
+    )
+    return {
+        "season": _season_json(season),
+        "flavor_seeded": seeded,
+        "role_report": role_report,
+    }
+
+
+@router.post("/survivor/season/end")
+async def end_season(request: Request, user: AuthenticatedUser = _ADMIN):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season to end.")
+            svc.end_season(conn, season["id"])
+            conn.commit()
+        return season
+
+    season = await _service_call(run_query(_q))
+    await _mirror_mod_log(
+        ctx,
+        guild_id,
+        action="season ended",
+        summary=f"**{season['name']}** archived; history stays queryable",
+        user=user,
+    )
+    return {"ok": True}
+
+
+# ── config ────────────────────────────────────────────────────────────
+
+
+@router.put("/survivor/config")
+async def update_config(
+    request: Request, body: dict, user: AuthenticatedUser = _ADMIN
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    coerced = _coerce_config_body(body)
+
+    def _q():
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season — create one first.")
+            merged = svc.update_config(conn, season["id"], coerced)
+            conn.commit()
+        return merged
+
+    merged = await _service_call(run_query(_q))
+    await _mirror_mod_log(
+        ctx,
+        guild_id,
+        action="config updated",
+        summary=f"changed: {', '.join(sorted(coerced)) or '(nothing)'}",
+        user=user,
+    )
+    return {"config": _config_json(merged)}
+
+
+# ── flavor corpus ─────────────────────────────────────────────────────
+
+
+@router.post("/survivor/flavor")
+async def add_flavor(
+    request: Request, body: FlavorBody, user: AuthenticatedUser = _ADMIN
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            flavor_id = svc.add_flavor(conn, guild_id, body.category, body.line)
+            conn.commit()
+        return flavor_id
+
+    flavor_id = await _service_call(run_query(_q))
+    await _mirror_mod_log(
+        ctx, guild_id,
+        action="flavor added",
+        summary=f"{body.category}: {body.line[:120]}",
+        user=user,
+    )
+    return {"id": flavor_id}
+
+
+@router.put("/survivor/flavor/{flavor_id}")
+async def update_flavor(
+    request: Request,
+    flavor_id: int,
+    body: FlavorUpdateBody,
+    user: AuthenticatedUser = _ADMIN,
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            changed = svc.update_flavor(
+                conn, guild_id, flavor_id, line=body.line, active=body.active
+            )
+            conn.commit()
+        return changed
+
+    changed = await _service_call(run_query(_q))
+    if not changed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such flavor line.")
+    await _mirror_mod_log(
+        ctx, guild_id, action="flavor updated", summary=f"line #{flavor_id}", user=user
+    )
+    return {"ok": True}
+
+
+@router.delete("/survivor/flavor/{flavor_id}")
+async def delete_flavor(
+    request: Request, flavor_id: int, user: AuthenticatedUser = _ADMIN
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            deleted = svc.delete_flavor(conn, guild_id, flavor_id)
+            conn.commit()
+        return deleted
+
+    deleted = await run_query(_q)
+    if not deleted:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such flavor line.")
+    await _mirror_mod_log(
+        ctx, guild_id, action="flavor deleted", summary=f"line #{flavor_id}", user=user
+    )
+    return {"ok": True}
+
+
+# ── roster ────────────────────────────────────────────────────────────
+
+
+@router.post("/survivor/player/{user_id}/eliminate")
+async def eliminate_player(
+    request: Request,
+    user_id: int,
+    body: EliminateBody,
+    user: AuthenticatedUser = _ADMIN,
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season.")
+            done = svc.eliminate_player(conn, season["id"], user_id, body.week)
+            conn.commit()
+        return done
+
+    done = await _service_call(run_query(_q))
+    if not done:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "That member isn't alive in this season."
+        )
+    await _mirror_mod_log(
+        ctx, guild_id,
+        action="player eliminated",
+        summary=f"<@{user_id}> marked dead in week {body.week}",
+        user=user,
+    )
+    return {"ok": True}
+
+
+@router.post("/survivor/player/{user_id}/revive")
+async def revive_player(
+    request: Request, user_id: int, user: AuthenticatedUser = _ADMIN
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season.")
+            done = svc.revive_player(conn, season["id"], user_id)
+            conn.commit()
+        return done
+
+    done = await _service_call(run_query(_q))
+    if not done:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "That member isn't a ghost in this season."
+        )
+    await _mirror_mod_log(
+        ctx, guild_id,
+        action="player revived",
+        summary=f"<@{user_id}> walks again",
+        user=user,
+    )
+    return {"ok": True}
