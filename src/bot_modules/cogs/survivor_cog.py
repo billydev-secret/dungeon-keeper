@@ -1,9 +1,10 @@
 """Survivor cog — member self-service only (spec §2, stage 3).
 
 Thin glue over ``survivor/logic.py``: `/survivor pick|status|board` plus the
-persistent Join button. Admin configuration lives on the dashboard (the
-2026-08-17 decision); the two live admin commands (settle, preview-reckoning)
-arrive with the settle engine in stage 4.
+persistent Join button — the feature's ENTIRE command footprint. Everything
+admin, including manual settle and the Reckoning preview, lives on the
+dashboard (decided 2026-08-17/18); this cog deliberately registers no admin
+commands.
 """
 
 from __future__ import annotations

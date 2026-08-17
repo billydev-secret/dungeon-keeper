@@ -116,15 +116,26 @@ Route id `survivor` (bare feature name, per CLAUDE.md's frozen-id convention).
   you the state you're editing before you edit it.
 - **Role pickers** — Survivor / Ghost / Sole Survivor (see §3.3).
 
-### 3.2 Discord — live mod actions only
+### 3.2 Discord — no admin surface at all
 
-- `/survivor admin settle <game> <winner>` — the API-failure escape hatch; feeds
-  the normal pipeline silently. Stays a command because it is used *during* a
-  Sunday slate, from a phone, when ESPN has gone sideways.
-- `/survivor admin preview-reckoning` — renders Tuesday's post to the mod channel
-  Monday night.
+> **Amended 2026-08-18.** The strict split originally kept two live mod actions
+> as commands (`settle`, `preview-reckoning`). Billy cut both before stage 4
+> built them, on a re-examination of the urgency claim: a stuck game's real
+> deadline is *the Tuesday Reckoning*, not minutes-after-final — the Reckoning
+> fires regardless, flags stragglers, and late settles post an addendum — so
+> the escape hatch is a Monday-evening tool, and the dashboard (phone-usable)
+> serves it better than a remembered command signature.
 
-All admin actions, from either surface → DK mod-log.
+Both land on the dashboard panel instead (stage 4):
+
+- **This Week's Games card** — the week's slate with live status; a stuck game
+  offers per-team settle buttons (+ void), feeding the same idempotent settle
+  pipeline as the poller, with the usual audit row and mod-log mirror.
+- **Preview Reckoning button** — renders Tuesday's post in the panel, any time.
+
+Survivor therefore registers **zero admin commands** in Discord — the member
+surface (`/survivor pick|status|board` + the Join button) is the entire command
+footprint. All admin actions → DK mod-log, as ever.
 
 ### 3.3 Roles
 
@@ -143,7 +154,7 @@ than failing.
 ### 4.1 Source
 **ESPN unofficial scoreboard API** (free, keyless):
 `site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?week=N&seasontype=2`
-— schedule + kickoff times (lock enforcement), live status, finals, and odds (auto-assign) in one endpoint. Unofficial and unversioned: parse defensively, and every settle path must also work through `admin settle`. *(Field notes 2026-08-17, pinned by the fixture tests: the season-year selector is `dates=YYYY` — `year=` is silently ignored and serves the current season; kickoffs come as minute-precision Zulu; and **completed games carry no odds at all**, so the frozen-at-last-poll favorite is genuinely unrecoverable after the fact.)*
+— schedule + kickoff times (lock enforcement), live status, finals, and odds (auto-assign) in one endpoint. Unofficial and unversioned: parse defensively, and every settle path must also work through the panel's manual settle (§3.2). *(Field notes 2026-08-17, pinned by the fixture tests: the season-year selector is `dates=YYYY` — `year=` is silently ignored and serves the current season; kickoffs come as minute-precision Zulu; and **completed games carry no odds at all**, so the frozen-at-last-poll favorite is genuinely unrecoverable after the fact.)*
 
 ### 4.2 Bootstrap & polling
 - `create-season` ingests the full season schedule into `nfl_games`; daily refresh (flex scheduling moves kickoffs — validate locks against *current* times).

@@ -2,9 +2,9 @@
 
 Survivor's configuration is dashboard-managed per the 2026-08-17 decision
 (spec §3): season lifecycle, every §5 dial, the flavor corpus, and roster
-eliminate/revive all live here, admin-gated. The only Discord-side admin
-surface is the two live mod actions (`/survivor admin settle`,
-`preview-reckoning`), which arrive with the settle engine in stage 4.
+eliminate/revive all live here, admin-gated. There is NO Discord-side admin
+surface at all (decided 2026-08-18) — manual settle and the Reckoning
+preview arrive on this panel with the settle engine in stage 4.
 
 Every mutation mirrors to the DK mod-log channel (spec §3: "all admin
 actions → DK mod-log"). Snowflakes go out as strings — JS ``Number`` can't

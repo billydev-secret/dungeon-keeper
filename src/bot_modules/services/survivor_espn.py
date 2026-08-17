@@ -2,7 +2,8 @@
 
 The data source is ESPN's unofficial, unversioned scoreboard endpoint, so the
 parser is deliberately paranoid: a malformed event is skipped and counted,
-never raised, and every settle path must also work through ``admin settle``.
+never raised, and every settle path must also work through the panel's
+manual settle (spec §3.2).
 Tests run on saved JSON under ``tests/fixtures/espn/`` — the suite never
 touches the network; only this module's ``fetch_scoreboard`` does, at runtime.
 
@@ -192,7 +193,7 @@ def _parse_winner(
 
     Ties (§1.3) have no ``winner`` flag on either side — equal scores make
     it 'TIE'. A final with no flag and unreadable scores returns None:
-    unsettled, flagged at the Reckoning, and `admin settle`'s job.
+    unsettled, flagged at the Reckoning, and the manual settle's job.
     """
     for entry, abbr in ((home_entry, home_abbr), (away_entry, away_abbr)):
         if entry is not None and entry.get("winner"):
@@ -224,7 +225,7 @@ def ingest_games(
       pre-kickoff poll — the gauntlet's determinism guarantee. Post-kickoff
       polls (where ESPN drops odds entirely) can never null them out.
     - ``winner`` is set once, when a final arrives with one, and an existing
-      winner is never overwritten: a manual ``admin settle`` outranks the
+      winner is never overwritten: the panel's manual settle outranks the
       feed, and correcting it is another settle, not a poll.
     """
     counts = {"inserted": 0, "updated": 0}

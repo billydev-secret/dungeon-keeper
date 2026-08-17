@@ -38,7 +38,7 @@ week of slack before kickoff, with enrollment opening that day.
 | **1. Schema + config** | 1 | Migration for the five tables, `survivor_service.py` season/config accessors, dashboard panel (create season, all §5 dials, role pickers). Data register rows + privacy notice land here. | Aug 20 |
 | **2. ESPN ingest + parser** | 2 | `survivor_espn.py` — scoreboard parse, schedule ingest into `nfl_games`, daily refresh, favorite capture. Fixture-based tests on saved JSON; **no network in the suite**. | Aug 23 |
 | **3. Join / pick / status / board** | 3 | Lock + validation logic (`survivor_logic.py`), `/survivor pick` with autocomplete, slate button dual-select, `/survivor status`, `/survivor board`, season announcement embed + Join button. Economy: buy-in debit. | Aug 27 |
-| **4. Poll + settle engine** | 4 | 10-min polling in game windows, idempotent settle, strike accounting, tie-as-loss, void handling, auto-assign at final kickoff + cap. `/survivor admin settle`, `preview-reckoning`. | Aug 30 |
+| **4. Poll + settle engine** | 4 | 10-min polling in game windows, idempotent settle, strike accounting, tie-as-loss, void handling, auto-assign at final kickoff + cap. Panel: This Week's Games card (manual settle buttons) + Preview Reckoning button — **no Discord admin commands, decided 2026-08-18** (spec §3.2). | Aug 30 |
 | **5. Reckoning + slate + last-call** | 5 | The three-act Tuesday post, Wed slate task, Sat last-call DMs, flavor corpus + its dashboard CRUD. Guild-local scheduling via `tz_offset_hours`. | Sep 2 |
 | **5b. Gauntlet replay + receipt** | 5b | Deterministic replay engine + private receipt embed, gauntlet fee debit and its routing. | Sep 3 |
 | **6a. Ghost roles + Ghost Streak** | 6 | Elimination → Ghost role + condolence DM, ghost picking flow, streak tracking. | Sep 5 |
@@ -75,7 +75,7 @@ playoff capstone. Not scheduled.
 
 Ordered by what I'd sacrifice first. Each is a real degradation, stated honestly:
 
-1. **`preview-reckoning`** — nice, not load-bearing. You'd read the Reckoning live.
+1. **Reckoning preview** (panel button) — nice, not load-bearing. You'd read the Reckoning live.
 2. **Board meta-stats** (most-burned teams) — the roster and graveyard are the point.
 3. **Slate dual-select button** — `/survivor pick` still works; casuals face slash
    syntax, which the spec explicitly wanted to avoid. Costs accessibility, not play.
