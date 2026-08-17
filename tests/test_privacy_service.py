@@ -371,6 +371,53 @@ def test_purge_covers_economy_per_member_state(db):
     assert ledger == 1  # preserved on purpose
 
 
+def test_purge_covers_music_playlist_member_rows(db):
+    """purge_user_data delegates the music playlist's `added_by` rows to
+    music_playlist_store.purge_member_rows — the generic user_id sweep can't
+    reach them (register: docs/data_register.md). Reviewer references are
+    nulled, other members' rows survive."""
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO music_playlist_tracks (guild_id, playlist_id, track_id, "
+            "channel_id, message_id, added_by, added_at) VALUES (?, 'pl', 't1', 5, 6, ?, 0)",
+            (GUILD, USER),
+        )
+        conn.execute(
+            "INSERT INTO music_playlist_tracks (guild_id, playlist_id, track_id, "
+            "channel_id, message_id, added_by, added_at) VALUES (?, 'pl', 't2', 5, 7, ?, 0)",
+            (GUILD, OTHER_USER),
+        )
+        conn.execute(
+            "INSERT INTO music_playlist_unmatched (guild_id, channel_id, message_id, "
+            "source_url, added_by, created_at) VALUES (?, 5, 8, 'https://x/1', ?, 0)",
+            (GUILD, USER),
+        )
+        conn.execute(
+            "INSERT INTO music_playlist_unmatched (guild_id, channel_id, message_id, "
+            "source_url, added_by, status, reviewed_by, reviewed_at, created_at) "
+            "VALUES (?, 5, 9, 'https://x/2', ?, 'approved', ?, 0, 0)",
+            (GUILD, OTHER_USER, USER),
+        )
+        purge_user_data(conn, GUILD, USER)
+        mine = conn.execute(
+            "SELECT (SELECT COUNT(*) FROM music_playlist_tracks WHERE added_by = ?) + "
+            "(SELECT COUNT(*) FROM music_playlist_unmatched WHERE added_by = ?)",
+            (USER, USER),
+        ).fetchone()[0]
+        others = conn.execute(
+            "SELECT (SELECT COUNT(*) FROM music_playlist_tracks WHERE added_by = ?) + "
+            "(SELECT COUNT(*) FROM music_playlist_unmatched WHERE added_by = ?)",
+            (OTHER_USER, OTHER_USER),
+        ).fetchone()[0]
+        reviewer = conn.execute(
+            "SELECT reviewed_by FROM music_playlist_unmatched WHERE added_by = ?",
+            (OTHER_USER,),
+        ).fetchone()[0]
+    assert mine == 0
+    assert others == 2  # other members' rows survive
+    assert reviewer is None  # the erased member's reviewer reference is nulled
+
+
 # ── subject access export (GDPR Art 15 / Art 20) ───────────────────────
 
 

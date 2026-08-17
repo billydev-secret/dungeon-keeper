@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import get_config_value, open_db
 from bot_modules.services.wellness_service import add_cap, opt_in_user
 from web_server.auth import SESSION_COOKIE, DiscordOAuthAuth
 from web_server.server import create_app
@@ -717,3 +717,62 @@ def test_spotify_callback_escapes_the_error_param(open_client):
     assert resp.status_code == 400
     assert "<img" not in resp.text
     assert "&lt;img" in resp.text
+
+
+# ── Spotify OAuth — scope widening for playlist writes (stage 0) ─────
+#
+# Not a review finding, but this file holds the route's only coverage, so
+# the functional tests live beside the B-SEC6 one. The read scopes are
+# load-bearing in prod (private-playlist reads); a re-consent that drops
+# them silently breaks the live reader, so the redirect must always carry
+# all four.
+
+
+def test_spotify_authorize_requests_read_and_modify_scopes(open_client, monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "cid")
+    resp = open_client.get("/spotify/authorize", follow_redirects=False)
+    assert resp.status_code == 302
+    query = parse_qs(urlsplit(resp.headers["location"]).query)
+    granted = set(query["scope"][0].split())
+    assert granted == {
+        "playlist-read-private",
+        "playlist-read-collaborative",
+        "playlist-modify-private",
+        "playlist-modify-public",
+    }
+
+
+def test_spotify_callback_persists_refresh_token_and_scope(
+    open_client, fake_ctx, monkeypatch
+):
+    from unittest.mock import AsyncMock, patch
+
+    from web_server.routes.spotify_oauth import SPOTIFY_SCOPES
+
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "cid")
+    monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "secret")
+    open_client.cookies.set("dk_spotify_oauth_state", "s")
+
+    token_resp = SimpleNamespace(
+        status_code=200,
+        json=lambda: {"refresh_token": "rt-123", "scope": SPOTIFY_SCOPES},
+    )
+    with patch("web_server.routes.spotify_oauth.httpx.AsyncClient") as MockClient:
+        instance = AsyncMock()
+        instance.post = AsyncMock(return_value=token_resp)
+        instance.__aenter__ = AsyncMock(return_value=instance)
+        instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = instance
+        resp = open_client.get(
+            "/spotify/callback", params={"state": "s", "code": "auth-code"}
+        )
+
+    assert resp.status_code == 200
+    assert "update" in resp.text.lower()
+    with open_db(fake_ctx.db_path) as conn:
+        assert (
+            get_config_value(conn, "spotify_bot_refresh_token", "") == "rt-123"
+        )
+        assert get_config_value(conn, "spotify_bot_scope", "") == SPOTIFY_SCOPES
