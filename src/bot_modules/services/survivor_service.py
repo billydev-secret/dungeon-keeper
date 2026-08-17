@@ -111,11 +111,18 @@ def create_season(
     if get_active_season(conn, guild_id) is not None:
         raise SeasonError("This guild already has a live season — end it first.")
     config = validate_config(overrides or {})
-    cur = conn.execute(
-        "INSERT INTO survivor_seasons (guild_id, name, season_year, status, config) "
-        "VALUES (?, ?, ?, 'enrolling', ?)",
-        (guild_id, name, season_year, json.dumps(config)),
-    )
+    try:
+        cur = conn.execute(
+            "INSERT INTO survivor_seasons (guild_id, name, season_year, status, config) "
+            "VALUES (?, ?, ?, 'enrolling', ?)",
+            (guild_id, name, season_year, json.dumps(config)),
+        )
+    except sqlite3.IntegrityError as exc:
+        # The schema backstop (partial unique index on live seasons): two
+        # concurrent creates both pass the check above; the loser lands here.
+        raise SeasonError(
+            "This guild already has a live season — end it first."
+        ) from exc
     return int(cur.lastrowid or 0)
 
 
@@ -381,7 +388,9 @@ def update_flavor(
         sets.append("active = ?")
         params.append(1 if active else 0)
     if not sets:
-        return False
+        # Distinct from the False no-such-row return: an empty update is a
+        # caller mistake, not a missing line, and must not surface as a 404.
+        raise SeasonError("Nothing to update.")
     params += [flavor_id, guild_id]
     cur = conn.execute(
         f"UPDATE survivor_flavor SET {', '.join(sets)} WHERE id = ? AND guild_id = ?",

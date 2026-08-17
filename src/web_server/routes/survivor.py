@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from bot_modules.services import survivor_service as svc
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from web_server.helpers import mirror_admin_action_to_mod_log
 
 log = logging.getLogger("web.survivor")
 
@@ -95,25 +96,46 @@ def _coerce_config_body(body: dict) -> dict:
 async def _mirror_mod_log(
     ctx: Any, guild_id: int, *, action: str, summary: str, user: AuthenticatedUser
 ) -> None:
-    """Post the admin action to the guild's mod-log channel, best-effort."""
+    """Post the admin action to the guild's mod-log channel, best-effort —
+    the shared mirror in ``web_server.helpers``, branded for Survivor."""
+    await mirror_admin_action_to_mod_log(
+        ctx, guild_id,
+        domain="🏈 Survivor",
+        action=action,
+        summary=summary,
+        user=user,
+        log=log,
+    )
+
+
+async def _swap_member_roles(
+    ctx: Any, guild_id: int, config: dict, user_id: int, *, to_ghost: bool
+) -> str | None:
+    """Best-effort Survivor↔Ghost swap for an admin eliminate/revive — the
+    same swap the settle engine performs on a game death (spec §1.7), so the
+    weekly role pings match the roster the panel shows. Returns a note when
+    the swap was skipped or failed, for the mod-log mirror; never raises."""
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     if guild is None:
-        return
-    mod_channel_id = ctx.guild_config(guild_id).mod_channel_id
-    channel = guild.get_channel(mod_channel_id) if mod_channel_id else None
-    if not isinstance(channel, discord.TextChannel):
-        return
-    embed = discord.Embed(
-        title=f"🏈 Survivor — {action}",
-        description=summary,
-        color=discord.Color.orange(),
-    )
-    embed.set_footer(text=f"by {user.username} (web) ({user.user_id})")
+        return "role swap skipped — bot offline"
+    member = guild.get_member(user_id)
+    if member is None:
+        return "role swap skipped — member not in guild"
+    survivor = guild.get_role(int(config.get("role_survivor_id") or 0))
+    ghost = guild.get_role(int(config.get("role_ghost_id") or 0))
+    add, remove = (ghost, survivor) if to_ghost else (survivor, ghost)
+    if add is None and remove is None:
+        return "role swap skipped — roles not configured"
     try:
-        await channel.send(embed=embed)
+        if remove is not None and remove in member.roles:
+            await member.remove_roles(remove, reason="Survivor: web admin action")
+        if add is not None and add not in member.roles:
+            await member.add_roles(add, reason="Survivor: web admin action")
     except (discord.Forbidden, discord.HTTPException):
-        log.exception("survivor web: failed to mirror admin action to mod-log")
+        log.exception("survivor: role swap failed for %s", user_id)
+        return "role swap failed — check Manage Roles"
+    return None
 
 
 async def _service_call(coro):
@@ -166,10 +188,22 @@ async def create_season(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
-    # Roles first (spec §3.3): create any of the three that aren't configured,
-    # so their ids can be stored in the season's config at birth. Degraded
-    # path — no bot, no guild, or no Manage Roles — creates the season anyway
-    # and reports which roles are missing; the panel surfaces the warning.
+    # The DB create runs FIRST: it owns the one-live-season rule (service
+    # check + schema backstop), and a refused create must leave the guild
+    # untouched — creating roles before validation left orphans behind a 422.
+    def _create():
+        with ctx.open_db() as conn:
+            season_id = svc.create_season(conn, guild_id, body.name, body.season_year)
+            seeded = svc.seed_default_flavor(conn, guild_id)
+            conn.commit()
+        return season_id, seeded
+
+    season_id, seeded = await _service_call(run_query(_create))
+
+    # Roles only after the season exists (spec §3.3): create any of the three
+    # that are missing and store their ids in the season's config. Degraded
+    # path — no bot, no guild, or no Manage Roles — leaves ids unset and
+    # reports it; the panel surfaces the warning.
     role_ids: dict[str, int] = {}
     role_report: list[str] = []
     bot = getattr(ctx, "bot", None)
@@ -197,17 +231,15 @@ async def create_season(
     else:
         role_report.append("bot offline — roles not created; set them later")
 
-    def _q():
+    def _finish():
         with ctx.open_db() as conn:
-            season_id = svc.create_season(
-                conn, guild_id, body.name, body.season_year, overrides=role_ids
-            )
-            seeded = svc.seed_default_flavor(conn, guild_id)
+            if role_ids:
+                svc.update_config(conn, season_id, role_ids)
             season = svc.get_season(conn, season_id)
             conn.commit()
-        return season, seeded
+        return season
 
-    season, seeded = await _service_call(run_query(_q))
+    season = await _service_call(run_query(_finish))
     assert season is not None
     await _mirror_mod_log(
         ctx,
@@ -374,20 +406,24 @@ async def eliminate_player(
                 raise svc.SeasonError("No live season.")
             done = svc.eliminate_player(conn, season["id"], user_id, body.week)
             conn.commit()
-        return done
+        return done, season
 
-    done = await _service_call(run_query(_q))
+    done, season = await _service_call(run_query(_q))
     if not done:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "That member isn't alive in this season."
         )
+    note = await _swap_member_roles(
+        ctx, guild_id, season["config"], user_id, to_ghost=True
+    )
     await _mirror_mod_log(
         ctx, guild_id,
         action="player eliminated",
-        summary=f"<@{user_id}> marked dead in week {body.week}",
+        summary=f"<@{user_id}> marked dead in week {body.week}"
+        + (f" ({note})" if note else ""),
         user=user,
     )
-    return {"ok": True}
+    return {"ok": True, "role_note": note}
 
 
 @router.post("/survivor/player/{user_id}/revive")
@@ -404,17 +440,20 @@ async def revive_player(
                 raise svc.SeasonError("No live season.")
             done = svc.revive_player(conn, season["id"], user_id)
             conn.commit()
-        return done
+        return done, season
 
-    done = await _service_call(run_query(_q))
+    done, season = await _service_call(run_query(_q))
     if not done:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "That member isn't a ghost in this season."
         )
+    note = await _swap_member_roles(
+        ctx, guild_id, season["config"], user_id, to_ghost=False
+    )
     await _mirror_mod_log(
         ctx, guild_id,
         action="player revived",
-        summary=f"<@{user_id}> walks again",
+        summary=f"<@{user_id}> walks again" + (f" ({note})" if note else ""),
         user=user,
     )
-    return {"ok": True}
+    return {"ok": True, "role_note": note}

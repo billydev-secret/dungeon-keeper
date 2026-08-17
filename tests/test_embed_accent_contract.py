@@ -716,7 +716,6 @@ KNOWN_UNCOVERED = {
     "bot_modules.services.risky_roll.formatters.build_question_reply_content",
     "bot_modules.services.risky_roll.formatters.build_rolloff_embed",
     "bot_modules.starboard.embeds.build_starboard_embed",
-    "bot_modules.voice_master.embeds.build_admin_audit_mirror_embed",
     "bot_modules.voice_master.embeds.build_claim_done_embed",
     "bot_modules.voice_master.embeds.build_claim_prompt_embed",
     "bot_modules.voice_master.embeds.build_howto_embed",

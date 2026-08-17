@@ -8,6 +8,7 @@ settle, gauntlet) arrives in later stages with its own suites.
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 
@@ -91,6 +92,39 @@ def test_create_season_rejects_blank_name(db, bad_name):
     with open_db(db) as conn:
         with pytest.raises(SeasonError):
             create_season(conn, GID, bad_name, 2026)
+
+
+def test_schema_backstop_blocks_second_live_season(db):
+    # The check-then-insert race: two concurrent creates both pass the
+    # get_active_season check before either commits. The partial unique index
+    # is the backstop — a direct second live INSERT must fail at the schema.
+    with open_db(db) as conn:
+        create_season(conn, GID, "First", 2026)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO survivor_seasons (guild_id, name, season_year) "
+                "VALUES (?, 'Racer', 2026)",
+                (GID,),
+            )
+        # A complete season doesn't occupy the slot; a second archive is fine.
+        conn.execute(
+            "INSERT INTO survivor_seasons (guild_id, name, season_year, status) "
+            "VALUES (?, 'Old', 2025, 'complete')",
+            (GID,),
+        )
+
+
+def test_create_season_translates_race_loss_to_season_error(db, monkeypatch):
+    # The service half of the same fix: when the check misses (simulated by
+    # blinding it) the IntegrityError surfaces as the same friendly SeasonError
+    # the check raises, not a 500.
+    import bot_modules.services.survivor_service as svc
+
+    with open_db(db) as conn:
+        create_season(conn, GID, "First", 2026)
+        monkeypatch.setattr(svc, "get_active_season", lambda conn, gid: None)
+        with pytest.raises(SeasonError, match="already has a live season"):
+            create_season(conn, GID, "Racer", 2026)
 
 
 def test_status_never_goes_backward(db):
@@ -235,6 +269,18 @@ def test_flavor_crud_and_guild_isolation(db):
 
         assert delete_flavor(conn, GID, line_id)
         assert list_flavor(conn, GID, "eulogy", include_inactive=True) == []
+
+
+def test_update_flavor_with_no_fields_is_an_error_not_a_missing_row(db):
+    # Regression: an empty update returned the same False as a missing row,
+    # which the route translated to a 404 for a line that exists.
+    with open_db(db) as conn:
+        line_id = add_flavor(conn, GID, "toll", "week {week} tolls.")
+        with pytest.raises(SeasonError, match="Nothing to update"):
+            update_flavor(conn, GID, line_id)
+        # The line is untouched.
+        (row,) = list_flavor(conn, GID, "toll")
+        assert row["line"] == "week {week} tolls."
 
 
 @pytest.mark.parametrize(

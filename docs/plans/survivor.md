@@ -1,5 +1,9 @@
 # Survivor — staging plan
 
+**Status (2026-08-17):** stage 1 shipped (schema — migration 165 after a
+renumber around main's 164 — service, panel, privacy wiring) + a same-day
+code-review fix pass. Stage 2 next.
+
 **Spec:** [`docs/survivor_spec.md`](../survivor_spec.md) (v2.2, amended 2026-08-17)
 **Deadline:** NFL Week 1 kickoff — **Thursday Sept 10 2026**, ~24 days out from 08-17.
 **Branch/worktree:** `survivor-cog`.

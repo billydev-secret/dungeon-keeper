@@ -5,7 +5,66 @@ from __future__ import annotations
 import asyncio
 import os
 
+import discord
+
 from bot_modules.services.message_store import get_known_users_bulk
+
+
+async def mirror_admin_action_to_mod_log(
+    ctx,
+    guild_id: int,
+    *,
+    domain: str,
+    action: str,
+    summary: str,
+    user,
+    log,
+) -> None:
+    """Mirror a web admin action to the guild's Discord mod-log channel.
+
+    One copy of the plumbing every dashboard-managed feature needs (grown out
+    of voice_master's ``_post_mod_log_mirror``, 2026-08-17): resolve the
+    configured mod channel, post an orange audit embed titled
+    ``"{domain} — {action}"`` with a ``by {user} (web)`` footer, and swallow
+    send failures with a log line — a mirror must never fail the action it
+    mirrors. ``domain`` is the feature's branded prefix (``"🛡️ Voice
+    Control"``, ``"🏈 Survivor"``); ``user`` is the AuthenticatedUser;
+    ``log`` is the caller's logger so failures land in its feature's feed.
+    """
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        return
+    mod_channel_id = ctx.guild_config(guild_id).mod_channel_id
+    channel = guild.get_channel(mod_channel_id) if mod_channel_id else None
+    if not isinstance(channel, discord.TextChannel):
+        return
+    embed = build_admin_mirror_embed(
+        domain=domain,
+        action=action,
+        summary=summary,
+        actor_name=f"{user.username} (web)",
+        actor_id=int(user.user_id),
+    )
+    try:
+        await channel.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception("failed to mirror web admin action to mod-log")
+
+
+def build_admin_mirror_embed(
+    *, domain: str, action: str, summary: str, actor_name: str, actor_id: int
+) -> discord.Embed:
+    """The mirror's embed, pure for testing. Orange is semantic here — the
+    mod-audit color, exempt from the accent contract like every sanction
+    surface (moved from voice_master.embeds when the mirror was shared)."""
+    embed = discord.Embed(
+        title=f"{domain} — {action}",
+        description=summary,
+        color=discord.Color.orange(),
+    )
+    embed.set_footer(text=f"by {actor_name} ({actor_id})")
+    return embed
 
 
 def public_base_url() -> str:

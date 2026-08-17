@@ -39,6 +39,15 @@ const ENUMS = {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading Survivor…</div></div>`;
 
+  return refreshAll(container);
+}
+
+// The guarded full re-render: season create/end changes the panel's whole
+// shape, so those two actions rebuild everything — through mountAsync, whose
+// error-with-retry state catches a failed refetch instead of leaving an
+// unhandled rejection and a stale panel. Everything else re-renders only its
+// own card (below), so unsaved rules-form edits survive roster/flavor work.
+function refreshAll(container) {
   return mountAsync(container, () => render(container), {
     errorMsg: "Couldn’t load the Survivor settings.",
   });
@@ -67,17 +76,17 @@ async function render(container) {
     </div>
   `;
 
-  const refresh = () => render(container);
+  const refresh = () => refreshAll(container);
   renderSeasonCard(container.querySelector("[data-season-zone]"), overview, refresh);
   if (season) {
     renderRulesCards(
       container.querySelector("[data-rules-zone]"), season, roles, channels,
     );
     await renderRosterCard(
-      container.querySelector("[data-roster-zone]"), overview, refresh,
+      container.querySelector("[data-roster-zone]"), overview.players,
     );
   }
-  renderFlavorCard(container.querySelector("[data-flavor-zone]"), overview, refresh);
+  renderFlavorCard(container.querySelector("[data-flavor-zone]"), overview.flavor);
 }
 
 // ── season lifecycle ──────────────────────────────────────────────────
@@ -318,8 +327,8 @@ function renderRulesCards(zone, season, roles, channels) {
 
 // ── roster ────────────────────────────────────────────────────────────
 
-async function renderRosterCard(zone, overview, refresh) {
-  const players = overview.players || [];
+async function renderRosterCard(zone, players) {
+  players = players || [];
   if (!players.length) {
     zone.innerHTML = `
       <div class="card">
@@ -365,7 +374,11 @@ async function renderRosterCard(zone, overview, refresh) {
     </div>
   `;
   const status = zone.querySelector("[data-status]");
-  zone.addEventListener("click", async (e) => {
+  // Scoped re-render: only this card refetches and rebuilds, so unsaved
+  // edits in the rules form survive. `onclick` assignment (not
+  // addEventListener) keeps the handler single across re-renders of the
+  // same zone. A failed refetch lands in the still-present status line.
+  zone.onclick = async (e) => {
     const elim = e.target.closest("[data-eliminate]");
     const revive = e.target.closest("[data-revive]");
     try {
@@ -375,22 +388,24 @@ async function renderRosterCard(zone, overview, refresh) {
           zone.querySelector(`[data-week="${uid}"]`).value, 10) || 1;
         if (!window.confirm(`Eliminate this member in week ${week}?`)) return;
         await apiPost(`/api/survivor/player/${uid}/eliminate`, { week });
-        refresh();
       } else if (revive) {
         if (!window.confirm("Revive this member?")) return;
         await apiPost(`/api/survivor/player/${revive.dataset.revive}/revive`, {});
-        refresh();
+      } else {
+        return;
       }
+      const fresh = await api("/api/survivor/overview");
+      await renderRosterCard(zone, fresh.players);
     } catch (err) {
       showStatus(status, false, err.message);
     }
-  });
+  };
 }
 
 // ── flavor corpus ─────────────────────────────────────────────────────
 
-function renderFlavorCard(zone, overview, refresh) {
-  const flavor = overview.flavor || [];
+function renderFlavorCard(zone, flavor) {
+  flavor = flavor || [];
   const byCategory = new Map(FLAVOR_CATEGORIES.map((cat) => [cat, []]));
   for (const f of flavor) byCategory.get(f.category)?.push(f);
 
@@ -441,6 +456,14 @@ function renderFlavorCard(zone, overview, refresh) {
   `;
 
   const status = zone.querySelector("[data-status]");
+  // Scoped like the roster card: this card refetches and rebuilds alone
+  // (unsaved rules edits survive), onclick assignment keeps the zone's
+  // handler single across re-renders, and a failed refetch lands in the
+  // still-present status line.
+  const refreshFlavor = async () => {
+    const fresh = await api("/api/survivor/overview");
+    renderFlavorCard(zone, fresh.flavor);
+  };
   zone.querySelector("[data-flavor-form]").addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -449,12 +472,12 @@ function renderFlavorCard(zone, overview, refresh) {
         category: fd.get("category"),
         line: fd.get("line"),
       });
-      refresh();
+      await refreshFlavor();
     } catch (err) {
       showStatus(status, false, err.message);
     }
   });
-  zone.addEventListener("click", async (e) => {
+  zone.onclick = async (e) => {
     const toggle = e.target.closest("[data-toggle]");
     const del = e.target.closest("[data-delete]");
     try {
@@ -462,14 +485,15 @@ function renderFlavorCard(zone, overview, refresh) {
         await apiPut(`/api/survivor/flavor/${toggle.dataset.toggle}`, {
           active: toggle.dataset.active !== "1",
         });
-        refresh();
       } else if (del) {
         if (!window.confirm("Delete this line for good? Retiring keeps it around.")) return;
         await apiDelete(`/api/survivor/flavor/${del.dataset.delete}`);
-        refresh();
+      } else {
+        return;
       }
+      await refreshFlavor();
     } catch (err) {
       showStatus(status, false, err.message);
     }
-  });
+  };
 }

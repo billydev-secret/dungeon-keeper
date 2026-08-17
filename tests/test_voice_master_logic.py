@@ -12,7 +12,6 @@ from __future__ import annotations
 import discord
 
 from bot_modules.voice_master.embeds import (
-    build_admin_audit_mirror_embed,
     build_claim_done_embed,
     build_claim_prompt_embed,
     build_inline_panel_embed,
@@ -1008,53 +1007,6 @@ def test_build_profile_show_embed_has_blurple_color():
         blocked_count=0,
     )
     assert embed.color == discord.Color.blurple()
-
-
-# ── embeds.build_admin_audit_mirror_embed ────────────────────────────
-
-
-def test_build_admin_audit_mirror_embed_prefixes_action_in_title():
-    embed = build_admin_audit_mirror_embed(
-        action="force-delete",
-        summary="Deleted X.",
-        actor_name="mod#1234",
-        actor_id=42,
-    )
-    assert embed.title is not None
-    assert "Voice Control" in embed.title
-    assert "force-delete" in embed.title
-
-
-def test_build_admin_audit_mirror_embed_uses_summary_as_description():
-    embed = build_admin_audit_mirror_embed(
-        action="force-transfer",
-        summary="<@1> → <@2>",
-        actor_name="mod",
-        actor_id=42,
-    )
-    assert embed.description == "<@1> → <@2>"
-
-
-def test_build_admin_audit_mirror_embed_sets_actor_footer():
-    embed = build_admin_audit_mirror_embed(
-        action="force-clear-profile",
-        summary="Cleared.",
-        actor_name="mod#1234",
-        actor_id=42,
-    )
-    assert embed.footer.text is not None
-    assert "mod#1234" in embed.footer.text
-    assert "42" in embed.footer.text
-
-
-def test_build_admin_audit_mirror_embed_color_is_orange():
-    embed = build_admin_audit_mirror_embed(
-        action="force-delete",
-        summary="x",
-        actor_name="mod",
-        actor_id=1,
-    )
-    assert embed.color == discord.Color.orange()
 
 
 # ── validate_rename_input ────────────────────────────────────────────

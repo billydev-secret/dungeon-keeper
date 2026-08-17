@@ -1,4 +1,5 @@
--- 164_survivor.sql
+-- 165_survivor.sql
+-- (renumbered from 164 pre-ship: main took 164 for casino mines on 2026-08-17)
 -- Survivor: NFL pick'em survival pool (docs/survivor_spec.md v2.2, amended
 -- 2026-08-17). Five tables, laid down together in stage 1 of
 -- docs/plans/survivor.md so no later stage needs a schema change:
@@ -40,6 +41,12 @@ CREATE TABLE IF NOT EXISTS survivor_seasons (
 
 CREATE INDEX IF NOT EXISTS idx_survivor_seasons_guild
     ON survivor_seasons (guild_id, status);
+
+-- One live season per guild (spec §6.12) enforced at the schema, not just the
+-- service's check-then-insert — two concurrent creates (double-click, second
+-- admin) would otherwise both pass the check and leave a hidden second season.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_survivor_one_live_season
+    ON survivor_seasons (guild_id) WHERE status != 'complete';
 
 CREATE TABLE IF NOT EXISTS survivor_players (
     season_id INTEGER NOT NULL REFERENCES survivor_seasons(id),
