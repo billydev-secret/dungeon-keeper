@@ -399,6 +399,28 @@ class CasinoHubView(discord.ui.View):
             await cog.send_help(interaction)
 
 
+HUB_ROW_WIDTH = 3
+
+
+def pack_hub_rows(count: int, *, width: int = HUB_ROW_WIDTH) -> list[int]:
+    """Row sizes for ``count`` game buttons — widest row first, none stranded.
+
+    ``ceil(count / width)`` rows, split as evenly as the count allows, so
+    every row is within one button of every other. Discord stretches a
+    button to fill its row, so a row of one renders full-width beside rows
+    of three (todo #98); balancing means that only happens when one table
+    is all a guild has open.
+
+    Sizes only — the caller fills them from the enabled games in decorator
+    order, so repacking never moves a game past its neighbours.
+    """
+    if count <= 0:
+        return []
+    rows = -(-count // width)
+    base, extra = divmod(count, rows)
+    return [base + 1] * extra + [base] * (rows - extra)
+
+
 def build_hub_view(settings: svc.CasinoSettings) -> CasinoHubView:
     """The hub panel's view for ONE guild: disabled tables drop off.
 
@@ -406,13 +428,36 @@ def build_hub_view(settings: svc.CasinoSettings) -> CasinoHubView:
     stale panel still route after a restart or re-enable; this pared copy
     is what actually gets sent — making "closed tables disappear from the
     panel" true for the buttons, not just the embed's Tables text.
+
+    Rows are assigned here from the *enabled* set rather than taken from
+    the decorators: dropping a table used to leave its row short while the
+    others stayed full (todo #98). The utility buttons follow on the first
+    free row, so a smaller casino has no gap above them. Worst case is
+    three game rows plus one utility row — inside Discord's five.
     """
     view = CasinoHubView()
+    games, utility = [], []
     for item in list(view.children):
         custom_id = getattr(item, "custom_id", "") or ""
         game = custom_id.removeprefix("casino:")
-        if game in svc.GAMES and not svc.game_enabled(settings, game):
-            view.remove_item(item)
+        if game not in svc.GAMES:
+            utility.append(item)
+        elif svc.game_enabled(settings, game):
+            games.append(item)
+
+    # clear_items() resets the view's row weights; re-adding is what makes
+    # the new row= stick, since to_components() renders _rendered_row.
+    view.clear_items()
+    row, taken = 0, 0
+    for size in pack_hub_rows(len(games)):
+        for item in games[taken:taken + size]:
+            item.row = row
+            view.add_item(item)
+        taken += size
+        row += 1
+    for item in utility:
+        item.row = row
+        view.add_item(item)
     return view
 
 
