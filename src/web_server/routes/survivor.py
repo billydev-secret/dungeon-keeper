@@ -42,7 +42,10 @@ MANAGED_ROLES = (
 )
 
 _ID_KEYS = frozenset(
-    {"channel_id", "role_survivor_id", "role_ghost_id", "role_sole_survivor_id"}
+    {
+        "channel_id", "role_survivor_id", "role_ghost_id",
+        "role_sole_survivor_id", "announcement_message_id",
+    }
 )
 
 
@@ -331,6 +334,102 @@ async def end_season(request: Request, user: AuthenticatedUser = _ADMIN):
         user=user,
     )
     return {"ok": True}
+
+
+# ── announcement ──────────────────────────────────────────────────────
+
+
+@router.post("/survivor/announcement")
+async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
+    """Post (and pin) the §2.2 season announcement with its Join button in
+    the configured channel; repost repoints the button and counter."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season — create one first.")
+            if not int(season["config"]["channel_id"] or 0):
+                raise svc.SeasonError(
+                    "Set the Survivor channel in Wiring first."
+                )
+            entrants = conn.execute(
+                "SELECT COUNT(*) FROM survivor_players WHERE season_id = ?",
+                (season["id"],),
+            ).fetchone()[0]
+        return season, int(entrants)
+
+    season, entrants = await _service_call(run_query(_q))
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    channel = (
+        guild.get_channel(int(season["config"]["channel_id"])) if guild else None
+    )
+    if not isinstance(channel, discord.TextChannel):
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Bot offline or the configured channel isn't a text channel.",
+        )
+
+    from bot_modules.core.branding import resolve_accent_color
+    from bot_modules.survivor.embeds import build_announcement_embed
+    from bot_modules.survivor.logic import elapsed_weeks
+    from bot_modules.survivor.views import JoinSeasonButton
+
+    def _elapsed():
+        import time
+
+        with ctx.open_db() as conn:
+            return elapsed_weeks(conn, season["season_year"], time.time())
+
+    gauntlet_mode = bool(await run_query(_elapsed))
+    assert guild is not None  # the channel isinstance check above implies it
+    color = await resolve_accent_color(ctx.db_path, guild)
+    embed = build_announcement_embed(
+        season_name=season["name"],
+        entrants=entrants,
+        buyin=int(season["config"]["buyin_coins"]),
+        gauntlet_mode=gauntlet_mode,
+        color=color,
+    )
+    view = discord.ui.View(timeout=None)
+    view.add_item(JoinSeasonButton(season["id"]))
+    try:
+        message = await channel.send(embed=embed, view=view)
+        try:
+            await message.pin(reason="Survivor season announcement")
+            pinned = True
+        except (discord.Forbidden, discord.HTTPException):
+            pinned = False
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"Couldn't post: {exc}"
+        ) from exc
+
+    def _store():
+        with ctx.open_db() as conn:
+            svc.update_config(
+                conn, season["id"], {"announcement_message_id": message.id}
+            )
+            write_audit(
+                conn, guild_id=guild_id, action="survivor_announcement_post",
+                actor_id=int(user.user_id),
+                extra={"season_id": season["id"], "message_id": str(message.id),
+                       "via": "web"},
+            )
+            conn.commit()
+
+    await run_query(_store)
+    await _mirror_mod_log(
+        ctx, guild_id,
+        action="announcement posted",
+        summary=f"in <#{channel.id}>" + ("" if pinned else " (pin failed)"),
+        user=user,
+    )
+    return {"ok": True, "message_id": str(message.id), "pinned": pinned}
 
 
 # ── config ────────────────────────────────────────────────────────────

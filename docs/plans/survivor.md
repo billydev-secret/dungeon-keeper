@@ -1,10 +1,15 @@
 # Survivor — staging plan
 
-**Status (2026-08-17):** stages 1 and 2 shipped same-day — stage 1 (schema —
+**Status (2026-08-17):** stages 1–3 shipped same-day. Stage 1 (schema —
 migration 165 after a renumber around main's 164 — service, panel, privacy
-wiring) plus a code-review fix pass, then stage 2 (ESPN parser + ingest on
-real captured fixtures; create-season ingests the full schedule). The daily
-refresh timer deliberately rides with stage 4's polling loop. Stage 3 next.
+wiring) plus a code-review fix pass; stage 2 (ESPN parser + ingest on real
+captured fixtures; create-season ingests the full schedule) plus its own fix
+pass; stage 3 (survivor/logic.py locks + joins + satchel, /survivor
+pick|status|board, the AFC/NFC pick panel, the pinned announcement with its
+persistent Join button posted from the dashboard, buy-in via
+`survivor_buyin`). Late entry deliberately raises "gauntlet pending" until
+5b ships — never a silent skip of the replay and fee. The daily refresh
+timer rides with stage 4's polling loop. Stage 4 next.
 
 **Spec:** [`docs/survivor_spec.md`](../survivor_spec.md) (v2.2, amended 2026-08-17)
 **Deadline:** NFL Week 1 kickoff — **Thursday Sept 10 2026**, ~24 days out from 08-17.

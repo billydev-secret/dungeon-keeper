@@ -47,6 +47,8 @@ from bot_modules.services import pools_logic, pools_metrics
 from bot_modules.services import welcome_service
 from bot_modules.services.risky_roll import formatters as risky_formatters
 from bot_modules.services.risky_roll import models as risky_models
+from bot_modules.survivor import embeds as survivor_embeds
+from bot_modules.survivor.logic import OpenGame as _SurvivorGame
 
 # Deliberately no builder defaults to this value.
 ACCENT = discord.Color(0x5A32A8)
@@ -596,7 +598,58 @@ CASES = [
         ),
         discord.Color(services_embeds.DM_PRIMARY),
     ),
+    # ── survivor ─────────────────────────────────────────────────────────
+    case(
+        "survivor.status",
+        lambda **kw: survivor_embeds.build_status_embed(
+            _survivor_status(), season_name="S", **kw
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.pick_confirm",
+        lambda **kw: survivor_embeds.build_pick_confirm_embed(
+            _SurvivorGame(
+                team="SEA", opponent="NE", is_home=True, game_id="g",
+                week=1, kickoff_ts=1_700_000_000.0,
+            ),
+            _survivor_status(), changed=False, **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.board",
+        lambda **kw: survivor_embeds.build_board_embed(
+            {
+                "week": 1,
+                "alive": [{"user_id": 1, "strikes_used": 0, "weeks_survived": 2}],
+                "graveyard": [{"user_id": 2, "eliminated_week": 1}],
+                "pots": {"main": 8000, "ghost": 2000},
+                "most_burned": [("SEA", 2)],
+            },
+            lambda uid: f"soul {uid}", season_name="S", **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.announcement",
+        lambda **kw: survivor_embeds.build_announcement_embed(
+            season_name="S", entrants=3, buyin=0, gauntlet_mode=False, **kw
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
 ]
+
+
+def _survivor_status() -> dict:
+    return {
+        "status": "alive", "strikes_used": 0, "strikes_allowed": 1,
+        "eliminated_week": None, "week": 1,
+        "pick": {"team": "SEA", "game_id": "g", "auto_assigned": False,
+                 "result": None},
+        "pick_locked": False, "pick_kickoff_ts": 1_700_000_000.0,
+        "satchel_count": 31, "satchel_low": False,
+    }
 
 # Passthrough-only builders (fallback None) are excluded from the fallback test.
 FALLBACK_CASES = [p for p in CASES if p.values[1] is not None]

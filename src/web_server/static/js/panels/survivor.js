@@ -152,15 +152,27 @@ function renderSeasonCard(zone, overview, refresh) {
       <div class="section-label">Season</div>
       <p><strong>${esc(season.name)}</strong> (${season.season_year}) —
         <code>${esc(season.status)}</code></p>
-      <div style="display:flex; gap:8px; align-items:center;">
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <button type="button" class="btn btn-primary" data-announce-btn>
+          📌 Post Announcement</button>
         <button type="button" class="btn btn-danger" data-end-btn>End Season</button>
         <span data-status></span>
       </div>
-      <div class="field-hint">Ending archives the season — history stays
-        queryable, and a new season can then be created.</div>
+      <div class="field-hint">Post Announcement pins the season embed with its
+        Join button in the configured Survivor channel (repost re-points the
+        counter). Ending archives the season — history stays queryable, and a
+        new season can then be created.</div>
     </div>
   `;
   const status = zone.querySelector("[data-status]");
+  zone.querySelector("[data-announce-btn]").addEventListener("click", async () => {
+    try {
+      const res = await apiPost("/api/survivor/announcement", {});
+      showStatus(status, true, res.pinned ? "posted and pinned" : "posted (pin failed — check Manage Messages)");
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  });
   zone.querySelector("[data-end-btn]").addEventListener("click", async () => {
     if (!window.confirm(`End "${season.name}"? This archives the season.`)) return;
     try {

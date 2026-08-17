@@ -271,6 +271,64 @@ def test_eliminate_and_revive_conflict_mapping(authed_client, fake_ctx, web_db):
     assert actions == ["survivor_eliminate", "survivor_revive"]
 
 
+# ── announcement ──────────────────────────────────────────────────────
+
+
+def test_announcement_needs_season_then_channel(authed_client, fake_ctx):
+    assert (
+        authed_client.post("/api/survivor/announcement", json={}).status_code == 422
+    )
+    _create_season(authed_client)
+    resp = authed_client.post("/api/survivor/announcement", json={})
+    assert resp.status_code == 422
+    assert "channel" in resp.json()["detail"].lower()
+
+
+def test_announcement_bot_offline_is_503(authed_client, fake_ctx):
+    _create_season(authed_client)
+    authed_client.put("/api/survivor/config", json={"channel_id": "555"})
+    fake_ctx.bot = None
+    assert (
+        authed_client.post("/api/survivor/announcement", json={}).status_code == 503
+    )
+
+
+def test_announcement_posts_pins_and_stores_message_id(
+    authed_client, fake_ctx, monkeypatch
+):
+    # resolve_accent_color reads the bot avatar, which a MagicMock guild
+    # can't serve — same stub voice_master's route tests use.
+    monkeypatch.setattr(
+        "bot_modules.core.branding.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+    guild = _attach_bot(fake_ctx)
+    _create_season(authed_client)
+    authed_client.put("/api/survivor/config", json={"channel_id": "555"})
+
+    message = MagicMock(id=BIG_ID)
+    message.pin = AsyncMock()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 555
+    channel.send = AsyncMock(return_value=message)
+    guild.get_channel = MagicMock(
+        side_effect=lambda cid: channel if int(cid) == 555 else None
+    )
+
+    resp = authed_client.post("/api/survivor/announcement", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["pinned"] is True
+    assert data["message_id"] == str(BIG_ID)  # snowflake stays a string
+    # Stored in config so the Join flow can refresh the counter.
+    over = authed_client.get("/api/survivor/overview").json()
+    assert over["season"]["config"]["announcement_message_id"] == str(BIG_ID)
+    # The posted view carries the persistent Join button.
+    (_, kwargs) = channel.send.call_args
+    custom_ids = [item.custom_id for item in kwargs["view"].children]
+    assert any(cid.startswith("survivor_join:") for cid in custom_ids)
+
+
 def test_eliminate_week_out_of_bounds_is_422(authed_client, fake_ctx):
     _create_season(authed_client)
     resp = authed_client.post(

@@ -906,7 +906,15 @@
     <h4>The endgame</h4>
     <p>The last living player takes the pot and the 🏈 Sole Survivor role. If the field ever collapses to a handful, any living player can propose <strong>the Accord</strong> &mdash; a public vote to end the season in an equal split, but only if <em>every</em> living player agrees within 24 hours. And if one savage week kills everyone at once: early in the season the week is annulled (nobody dies, burned teams stay burned); late in the season, the fallen split the pot.</p>
 
-    <p class="muted">Admins: the season is run entirely from the dashboard panel (Games &rarr; Survivor) &mdash; season creation, every rule dial, the flavor-line corpus behind the eulogies, and roster corrections. The two live escape hatches, <span class="cmd-name">/survivor admin settle</span> and <span class="cmd-name">preview-reckoning</span>, arrive with the results engine. Member commands (<span class="cmd-name">/survivor pick</span>, <span class="cmd-name">status</span>, <span class="cmd-name">board</span>) ship before the season opens.</p>
+    <h4>Commands</h4>
+    <ul>
+      <li><span class="cmd-name">/survivor pick [team]</span> &mdash; make or change this week&rsquo;s pick. With a team, the autocomplete only offers what you can legally take &mdash; unburned, playing this week, not yet kicked off. Without one, you get a two-menu panel (AFC / NFC) instead: no syntax, just pick.</li>
+      <li><span class="cmd-name">/survivor status</span> &mdash; private: your pick and its lock time, your satchel (🟢 turns 🟡 when you&rsquo;re under a dozen teams), your strikes.</li>
+      <li><span class="cmd-name">/survivor board</span> &mdash; public: the living with weeks survived, the graveyard with week of death, both pots, and the most-burned teams.</li>
+    </ul>
+    <p>Joining happens through the <strong>🌾 Join the Season</strong> button on the pinned announcement &mdash; an ephemeral confirm shows the entry cost (and your balance, if it isn&rsquo;t free) before anything is charged.</p>
+
+    <p class="muted">Admins: the season is run entirely from the dashboard panel (Games &rarr; Survivor) &mdash; season creation, every rule dial, posting the pinned announcement, the flavor-line corpus behind the eulogies, and roster corrections. The two live escape hatches, <span class="cmd-name">/survivor admin settle</span> and <span class="cmd-name">preview-reckoning</span>, arrive with the results engine.</p>
 
     <h2 id="community" class="section-break"><span class="section-num">10</span> Community &amp; XP</h2>
 
