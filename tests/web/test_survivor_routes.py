@@ -373,3 +373,93 @@ def test_eliminate_week_out_of_bounds_is_422(authed_client, fake_ctx):
         f"/api/survivor/player/{BIG_ID}/eliminate", json={"week": 99}
     )
     assert resp.status_code == 422
+
+
+# ── week card + manual settle ─────────────────────────────────────────
+
+
+def _seed_week(web_db, fake_ctx):
+    """A tiny settled-ish week: one final-ready game, one scheduled."""
+    with open_db(web_db) as conn:
+        conn.execute(
+            "INSERT INTO nfl_games (season_year, week, game_id, home, away,"
+            " kickoff_utc) VALUES"
+            " (2026, 1, 'g-a', 'SEA', 'NE', '2026-09-10T00:20:00+00:00'),"
+            " (2026, 1, 'g-b', 'KC', 'LV', '2099-09-13T17:00:00+00:00')"
+        )
+        season = svc.get_active_season(conn, fake_ctx.guild_id)
+        svc.add_player(conn, season["id"], BIG_ID, joined_at=1.0)
+        conn.execute(
+            "INSERT INTO survivor_picks (season_id, user_id, week, slot, team,"
+            " game_id) VALUES (?, ?, 1, 1, 'NE', 'g-a')",
+            (season["id"], BIG_ID),
+        )
+        conn.commit()
+        return season
+
+
+def test_week_card_shape(authed_client, fake_ctx, web_db):
+    assert authed_client.get("/api/survivor/week").status_code == 422  # no season
+    _create_season(authed_client)
+    _seed_week(web_db, fake_ctx)
+    data = authed_client.get("/api/survivor/week").json()
+    assert data["week"] == 1
+    assert {g["game_id"] for g in data["games"]} == {"g-a", "g-b"}
+    assert data["alive"] == 1 and data["picked"] == 1
+
+
+def test_manual_settle_grades_and_corrects(authed_client, fake_ctx, web_db):
+    _create_season(authed_client)
+    season = _seed_week(web_db, fake_ctx)
+
+    resp = authed_client.post(
+        "/api/survivor/settle", json={"game_id": "g-a", "outcome": "sea"}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["correction"] is False
+    assert data["changes"][str(season["id"])]["graded"] == 1
+    with open_db(web_db) as conn:
+        row = conn.execute(
+            "SELECT result FROM survivor_picks WHERE season_id = ?",
+            (season["id"],),
+        ).fetchone()
+        assert row["result"] == "loss"
+        player = conn.execute(
+            "SELECT strikes_used FROM survivor_players WHERE season_id = ?",
+            (season["id"],),
+        ).fetchone()
+        assert player["strikes_used"] == 1
+        audit = conn.execute(
+            "SELECT extra FROM audit_log WHERE action = 'survivor_manual_settle'"
+        ).fetchone()
+        assert audit is not None
+
+    # The correction path: flip the winner, the strike unwinds.
+    resp = authed_client.post(
+        "/api/survivor/settle", json={"game_id": "g-a", "outcome": "NE"}
+    )
+    assert resp.json()["correction"] is True
+    with open_db(web_db) as conn:
+        player = conn.execute(
+            "SELECT strikes_used, status FROM survivor_players WHERE season_id = ?",
+            (season["id"],),
+        ).fetchone()
+        assert (player["strikes_used"], player["status"]) == (0, "alive")
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        pytest.param({"game_id": "g-a", "outcome": "KC"}, "Outcome must be",
+                     id="wrong-team"),
+        pytest.param({"game_id": "nope", "outcome": "SEA"}, "No such game",
+                     id="unknown-game"),
+    ],
+)
+def test_manual_settle_validation(authed_client, fake_ctx, web_db, body, match):
+    _create_season(authed_client)
+    _seed_week(web_db, fake_ctx)
+    resp = authed_client.post("/api/survivor/settle", json=body)
+    assert resp.status_code == 422
+    assert match in resp.json()["detail"]

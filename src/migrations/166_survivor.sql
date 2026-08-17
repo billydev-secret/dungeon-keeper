@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS survivor_players (
     status TEXT NOT NULL DEFAULT 'alive',       -- alive|ghost
     strikes_used INTEGER NOT NULL DEFAULT 0,
     eliminated_week INTEGER,
+    -- Why they died (added with stage 4's settle engine, pre-ship):
+    --   'picks'  derived from graded results — the settle engine recomputes
+    --            it, so a corrected result can resurrect the player
+    --   'cap'    the groundskeeper stopped covering (§1.2 auto-assign cap)
+    --   'admin'  dashboard eliminate
+    --   'left'   walked out of the meadow (§6.14, stage 5)
+    -- Non-'picks' deaths survive recomputation; NULL while alive.
+    elimination_source TEXT,
     joined_at TEXT NOT NULL,
     PRIMARY KEY (season_id, user_id)
 );

@@ -7,9 +7,14 @@ captured fixtures; create-season ingests the full schedule) plus its own fix
 pass; stage 3 (survivor/logic.py locks + joins + satchel, /survivor
 pick|status|board, the AFC/NFC pick panel, the pinned announcement with its
 persistent Join button posted from the dashboard, buy-in via
-`survivor_buyin`). Late entry deliberately raises "gauntlet pending" until
-5b ships — never a silent skip of the replay and fee. The daily refresh
-timer rides with stage 4's polling loop. Stage 4 next.
+`survivor_buyin`); stage 4 (2026-08-18: settle engine in survivor/settle.py
+— derived grading, so manual corrections unwind strikes and resurrect;
+elimination_source column distinguishes picks/cap/admin/left deaths; the
+groundskeeper with cap + dead-end handling; the poll loop in
+services/survivor_loop.py with schedule-derived windows and the daily
+refresh; panel This Week's Games card with manual settle). The Reckoning
+preview button rides with stage 5's renderer. Late entry still raises
+"gauntlet pending" until 5b. Stage 5 next.
 
 **Spec:** [`docs/survivor_spec.md`](../survivor_spec.md) (v2.2, amended 2026-08-17)
 **Deadline:** NFL Week 1 kickoff — **Thursday Sept 10 2026**, ~24 days out from 08-17.

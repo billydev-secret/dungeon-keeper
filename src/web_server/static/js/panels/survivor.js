@@ -1,8 +1,7 @@
-// Survivor — the feature's entire admin surface (docs/survivor_spec.md §3,
-// dashboard-managed per the 2026-08-17 decision). Season lifecycle, every §5
-// dial, the flavor corpus, and the roster's eliminate/revive live here; the
-// only Discord-side admin commands are the two live mod actions (settle,
-// preview-reckoning), which ship with the settle engine.
+// Survivor — the feature's ENTIRE admin surface (docs/survivor_spec.md §3;
+// decided 2026-08-17/18: zero admin commands in Discord). Season lifecycle,
+// every §5 dial, This Week's Games with manual settle, the flavor corpus,
+// and the roster's eliminate/revive all live here.
 import { api } from "../api.js";
 import {
   apiPost,
@@ -70,6 +69,7 @@ async function render(container) {
       </header>
       ${renderMetaWarning()}
       <div data-season-zone></div>
+      <div data-week-zone></div>
       <div data-rules-zone></div>
       <div data-roster-zone></div>
       <div data-flavor-zone></div>
@@ -79,6 +79,7 @@ async function render(container) {
   const refresh = () => refreshAll(container);
   renderSeasonCard(container.querySelector("[data-season-zone]"), overview, refresh);
   if (season) {
+    await renderWeekCard(container.querySelector("[data-week-zone]"));
     renderRulesCards(
       container.querySelector("[data-rules-zone]"), season, roles, channels,
     );
@@ -87,6 +88,83 @@ async function render(container) {
     );
   }
   renderFlavorCard(container.querySelector("[data-flavor-zone]"), overview.flavor);
+}
+
+// ── this week's games (manual settle) ─────────────────────────────────
+
+const STATUS_BADGE = {
+  scheduled: "🕐", in: "🏈 live", final: "✅ final", postponed: "⛔ postponed",
+};
+
+async function renderWeekCard(zone) {
+  let data;
+  try {
+    data = await api("/api/survivor/week");
+  } catch (err) {
+    zone.innerHTML = `<div class="card"><div class="section-label">This Week's
+      Games</div><div class="field-hint">${esc(err.message)}</div></div>`;
+    return;
+  }
+  const rows = (data.games || []).map((g) => {
+    const kick = new Date(g.kickoff_ts * 1000).toLocaleString([], {
+      weekday: "short", hour: "numeric", minute: "2-digit",
+    });
+    const state = g.status === "final"
+      ? `✅ ${esc(g.winner || "?")}${g.winner === "TIE" ? "" : " won"}`
+      : `${STATUS_BADGE[g.status] || esc(g.status)}${g.kicked && g.status === "scheduled" ? " (kicked?)" : ""}`;
+    // Settle for stuck games; correction stays available on finals — the
+    // buttons feed the same derived pipeline either way.
+    const verb = g.status === "final" ? "correct:" : "settle:";
+    const btn = (outcome, label) =>
+      `<button type="button" class="btn btn-small" data-settle="${g.game_id}"
+        data-outcome="${outcome}">${label}</button>`;
+    return `
+      <tr>
+        <td>wk ${g.week}</td>
+        <td><strong>${esc(g.away)}</strong> @ <strong>${esc(g.home)}</strong></td>
+        <td>${esc(kick)}</td>
+        <td>${state}</td>
+        <td style="white-space:nowrap;">${verb}
+          ${btn(g.home, g.home)} ${btn(g.away, g.away)}
+          ${btn("TIE", "tie")} ${btn("VOID", "void")}
+        </td>
+      </tr>`;
+  }).join("");
+
+  zone.innerHTML = `
+    <div class="card">
+      <div class="section-label">This Week's Games</div>
+      <div class="field-hint">week ${data.week ?? "—"} ·
+        ${data.picked} of ${data.alive} alive have picked. The poller settles
+        results itself every 10 minutes during games — these buttons are the
+        escape hatch for a stuck result, and a correction on a final unwinds
+        strikes and resurrects the wrongly dead.</div>
+      <div style="overflow-x:auto;">
+        <table class="table">
+          <thead><tr><th></th><th>Game</th><th>Kickoff</th><th>Status</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td class="field-hint">no games in view</td></tr>`}</tbody>
+        </table>
+      </div>
+      <span data-status></span>
+    </div>
+  `;
+  const status = zone.querySelector("[data-status]");
+  zone.onclick = async (e) => {
+    const btn = e.target.closest("[data-settle]");
+    if (!btn) return;
+    const outcome = btn.dataset.outcome;
+    if (!window.confirm(
+      `Settle ${btn.dataset.settle} as ${outcome}? This grades picks `
+      + "immediately (and a correction re-grades them).")) return;
+    try {
+      await apiPost("/api/survivor/settle", {
+        game_id: btn.dataset.settle, outcome,
+      });
+      await renderWeekCard(zone);
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  };
 }
 
 // ── season lifecycle ──────────────────────────────────────────────────
@@ -215,11 +293,11 @@ function renderRulesCards(zone, season, roles, channels) {
     <form class="form form-cards" data-rules-form>
       <div class="card" style="border-color: var(--gold-solid, #e6b84c);">
         <div class="section-label">⚠️ Under Construction</div>
-        <p class="field-hint">The game engine is still being built (picks,
-          settling, gauntlet, ghosts — landing in stages before Week 1).
-          Every dial below <strong>stores now</strong> and takes effect as its
-          logic ships; until then nothing here is live for members. This
-          notice comes down when the season engine does the enforcing.</p>
+        <p class="field-hint">Picks, results, strikes, and the groundskeeper
+          are live. Still landing before Week 1: the weekly posts (slate,
+          Reckoning, last call), the gauntlet, and ghost machinery — dials
+          for those <strong>store now</strong> and bind when their logic
+          ships. This notice comes down with the last of them.</p>
       </div>
       <div class="card">
         <div class="section-label">Wiring</div>

@@ -54,6 +54,15 @@ class SurvivorCog(commands.Cog):
     async def cog_load(self) -> None:
         # The Join button on the pinned announcement must survive restarts.
         self.bot.add_dynamic_items(JoinSeasonButton)
+        # The §4.2 poll/settle loop: 10-min cadence inside game windows,
+        # one daily full refresh, settle sweep after any ingest.
+        from bot_modules.services.survivor_loop import survivor_poll_loop
+
+        bot = self.bot
+        db_path = self.ctx.db_path
+        self.bot.startup_task_factories.append(
+            lambda: survivor_poll_loop(bot, db_path)
+        )
 
     # ── helpers ───────────────────────────────────────────────────────
 

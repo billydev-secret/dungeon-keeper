@@ -179,6 +179,10 @@ CREATE TABLE survivor_players (
   status TEXT NOT NULL DEFAULT 'alive',       -- alive|ghost
   strikes_used INTEGER NOT NULL DEFAULT 0,
   eliminated_week INTEGER,
+  elimination_source TEXT,                    -- added at stage 4: picks|cap|admin|left.
+                                              -- 'picks' deaths are DERIVED and a corrected
+                                              -- result resurrects; the rest are decisions
+                                              -- and survive recomputation
   joined_at TEXT NOT NULL,
   PRIMARY KEY (season_id, user_id)
 );

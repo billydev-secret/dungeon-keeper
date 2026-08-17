@@ -300,23 +300,34 @@ def add_player(
 
 
 def eliminate_player(
-    conn: sqlite3.Connection, season_id: int, user_id: int, week: int
+    conn: sqlite3.Connection,
+    season_id: int,
+    user_id: int,
+    week: int,
+    *,
+    source: str = "admin",
 ) -> bool:
-    """Admin elimination: alive → ghost at ``week``. False if not alive."""
+    """Elimination: alive → ghost at ``week``. False if not alive. ``source``
+    records why ('admin' | 'cap' | 'left'); non-'picks' sources survive the
+    settle engine's recomputation."""
     cur = conn.execute(
-        "UPDATE survivor_players SET status = 'ghost', eliminated_week = ? "
+        "UPDATE survivor_players SET status = 'ghost', eliminated_week = ?, "
+        "elimination_source = ? "
         "WHERE season_id = ? AND user_id = ? AND status = 'alive'",
-        (week, season_id, user_id),
+        (week, source, season_id, user_id),
     )
     return (cur.rowcount or 0) > 0
 
 
 def revive_player(conn: sqlite3.Connection, season_id: int, user_id: int) -> bool:
-    """Admin revival: ghost → alive, elimination week cleared. Strike counts
-    are left as they stand — a wrong *result* is corrected through re-settling
-    (stage 4), which unwinds the strike too; this only restores life."""
+    """Admin revival: ghost → alive, elimination week + source cleared.
+    Strike counts are left as they stand — a wrong *result* is corrected by
+    re-settling the game, which recomputes state properly; a revive over an
+    uncorrected picks-death stands only until the next settle touches that
+    player's picks (the record still says they died)."""
     cur = conn.execute(
-        "UPDATE survivor_players SET status = 'alive', eliminated_week = NULL "
+        "UPDATE survivor_players SET status = 'alive', eliminated_week = NULL, "
+        "elimination_source = NULL "
         "WHERE season_id = ? AND user_id = ? AND status = 'ghost'",
         (season_id, user_id),
     )

@@ -337,6 +337,146 @@ async def end_season(request: Request, user: AuthenticatedUser = _ADMIN):
     return {"ok": True}
 
 
+# ── this week's games + manual settle ─────────────────────────────────
+
+
+class SettleBody(BaseModel):
+    game_id: str = Field(min_length=1, max_length=32)
+    outcome: str = Field(min_length=1, max_length=8)  # abbr | TIE | VOID
+
+
+@router.get("/survivor/week")
+async def week_card(request: Request, _: AuthenticatedUser = _ADMIN):
+    """The panel's This Week's Games card: the current pick week's slate plus
+    any earlier still-unsettled games (the ones the settle buttons exist for),
+    with pick-count context."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        import time
+
+        from bot_modules.survivor.logic import kickoff_ts, pick_week
+
+        now = time.time()
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season.")
+            week = pick_week(conn, season["season_year"], now)
+            rows = conn.execute(
+                "SELECT week, game_id, home, away, kickoff_utc, status, winner,"
+                " favorite FROM nfl_games WHERE season_year = ? AND ("
+                "  week = ? OR (status != 'final' AND week < ?)"
+                ") ORDER BY week, kickoff_utc",
+                (
+                    season["season_year"],
+                    week if week is not None else -1,
+                    week if week is not None else 99,
+                ),
+            ).fetchall()
+            alive = conn.execute(
+                "SELECT COUNT(*) FROM survivor_players "
+                "WHERE season_id = ? AND status = 'alive'",
+                (season["id"],),
+            ).fetchone()[0]
+            picked = conn.execute(
+                "SELECT COUNT(DISTINCT p.user_id) FROM survivor_picks p "
+                "JOIN survivor_players pl ON pl.season_id = p.season_id "
+                " AND pl.user_id = p.user_id "
+                "WHERE p.season_id = ? AND p.week = ? AND pl.status = 'alive'",
+                (season["id"], week if week is not None else -1),
+            ).fetchone()[0]
+            games = [
+                {
+                    "week": int(r["week"]),
+                    "game_id": r["game_id"],
+                    "home": r["home"],
+                    "away": r["away"],
+                    "kickoff_ts": kickoff_ts(r["kickoff_utc"]),
+                    "status": r["status"],
+                    "winner": r["winner"],
+                    "favorite": r["favorite"],
+                    "kicked": kickoff_ts(r["kickoff_utc"]) <= now,
+                }
+                for r in rows
+            ]
+        return week, games, int(alive), int(picked)
+
+    week, games, alive, picked = await _service_call(run_query(_q))
+    return {"week": week, "games": games, "alive": alive, "picked": picked}
+
+
+@router.post("/survivor/settle")
+async def settle_game(
+    request: Request, body: SettleBody, user: AuthenticatedUser = _ADMIN
+):
+    """The panel's manual settle: record (or correct) a result by hand and
+    re-grade every live season sharing the schedule. Grading is derived, so
+    a correction unwinds strikes and resurrects the wrongly dead."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    outcome = body.outcome.strip().upper()
+
+    def _q():
+        from bot_modules.survivor.settle import manual_settle
+
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season.")
+            # nfl_games is league truth shared by every guild — re-grade all
+            # live seasons on this schedule, not just the caller's.
+            guilds = conn.execute(
+                "SELECT DISTINCT guild_id FROM survivor_seasons "
+                "WHERE status != 'complete'"
+            ).fetchall()
+            live = [
+                s
+                for r in guilds
+                if (s := svc.get_active_season(conn, int(r["guild_id"])))
+            ]
+            try:
+                out = manual_settle(
+                    conn, season["season_year"], body.game_id, outcome, live
+                )
+            except ValueError as exc:
+                raise svc.SeasonError(str(exc)) from exc
+            write_audit(
+                conn, guild_id=guild_id, action="survivor_manual_settle",
+                actor_id=int(user.user_id),
+                extra={
+                    "game_id": body.game_id, "outcome": outcome,
+                    "old_winner": out["old_winner"],
+                    "old_status": out["old_status"], "via": "web",
+                },
+            )
+            conn.commit()
+        return out
+
+    out = await _service_call(run_query(_q))
+    correction = out["old_winner"] is not None and out["old_winner"] != outcome
+    await _mirror_mod_log(
+        ctx, guild_id,
+        action="game settled by hand",
+        summary=f"`{body.game_id}` → **{outcome}**"
+        + (f" (was {out['old_winner']})" if correction else ""),
+        user=user,
+    )
+    return {
+        "ok": True,
+        "old_winner": out["old_winner"],
+        "correction": correction,
+        "changes": {
+            str(season_id): {
+                "graded": r.graded, "voided": r.voided,
+                "recomputed": [str(u) for u in r.recomputed],
+            }
+            for season_id, r in out["reports"].items()
+        },
+    }
+
+
 # ── announcement ──────────────────────────────────────────────────────
 
 
