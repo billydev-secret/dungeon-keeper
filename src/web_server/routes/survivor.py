@@ -16,10 +16,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
 import discord
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from bot_modules.services import survivor_espn as espn
 from bot_modules.services import survivor_service as svc
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
@@ -241,18 +243,54 @@ async def create_season(
 
     season = await _service_call(run_query(_finish))
     assert season is not None
+
+    # Full-season schedule ingest (spec §4.2), best-effort like the roles:
+    # 18 weeks of ESPN fetches, with failed weeks reported and healed by the
+    # daily refresh once the polling loop (stage 4) is running.
+    schedule_report = await _ingest_season_schedule(ctx, body.season_year)
+
     await _mirror_mod_log(
         ctx,
         guild_id,
         action="season created",
-        summary=f"**{season['name']}** ({season['season_year']}) — enrolling",
+        summary=f"**{season['name']}** ({season['season_year']}) — enrolling; "
+        + schedule_report,
         user=user,
     )
     return {
         "season": _season_json(season),
         "flavor_seeded": seeded,
         "role_report": role_report,
+        "schedule_report": schedule_report,
     }
+
+
+async def _ingest_season_schedule(ctx: Any, season_year: int) -> str:
+    """Fetch and ingest the season's schedule; returns a one-line report."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            games, skipped, failed_weeks = await espn.fetch_season(
+                session, season_year
+            )
+    except Exception:  # noqa: BLE001 — unversioned API, never fail the create
+        log.exception("survivor: season schedule fetch failed outright")
+        return "schedule ingest failed — the daily refresh will retry"
+    if not games:
+        return "schedule ingest got no games — the daily refresh will retry"
+
+    def _q():
+        with ctx.open_db() as conn:
+            counts = espn.ingest_games(conn, season_year, games)
+            conn.commit()
+        return counts
+
+    counts = await run_query(_q)
+    report = f"schedule ingested ({counts['inserted']} games)"
+    if failed_weeks:
+        report += f"; weeks failed, refresh will heal: {failed_weeks}"
+    if skipped:
+        report += f"; {skipped} malformed events skipped"
+    return report
 
 
 @router.post("/survivor/season/end")

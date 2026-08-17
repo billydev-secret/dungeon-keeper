@@ -143,7 +143,7 @@ than failing.
 ### 4.1 Source
 **ESPN unofficial scoreboard API** (free, keyless):
 `site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?week=N&seasontype=2`
-— schedule + kickoff times (lock enforcement), live status, finals, and odds (auto-assign) in one endpoint. Unofficial and unversioned: parse defensively, and every settle path must also work through `admin settle`.
+— schedule + kickoff times (lock enforcement), live status, finals, and odds (auto-assign) in one endpoint. Unofficial and unversioned: parse defensively, and every settle path must also work through `admin settle`. *(Field notes 2026-08-17, pinned by the fixture tests: the season-year selector is `dates=YYYY` — `year=` is silently ignored and serves the current season; kickoffs come as minute-precision Zulu; and **completed games carry no odds at all**, so the frozen-at-last-poll favorite is genuinely unrecoverable after the fact.)*
 
 ### 4.2 Bootstrap & polling
 - `create-season` ingests the full season schedule into `nfl_games`; daily refresh (flex scheduling moves kickoffs — validate locks against *current* times).

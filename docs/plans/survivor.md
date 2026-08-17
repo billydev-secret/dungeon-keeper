@@ -1,8 +1,10 @@
 # Survivor — staging plan
 
-**Status (2026-08-17):** stage 1 shipped (schema — migration 165 after a
-renumber around main's 164 — service, panel, privacy wiring) + a same-day
-code-review fix pass. Stage 2 next.
+**Status (2026-08-17):** stages 1 and 2 shipped same-day — stage 1 (schema —
+migration 165 after a renumber around main's 164 — service, panel, privacy
+wiring) plus a code-review fix pass, then stage 2 (ESPN parser + ingest on
+real captured fixtures; create-season ingests the full schedule). The daily
+refresh timer deliberately rides with stage 4's polling loop. Stage 3 next.
 
 **Spec:** [`docs/survivor_spec.md`](../survivor_spec.md) (v2.2, amended 2026-08-17)
 **Deadline:** NFL Week 1 kickoff — **Thursday Sept 10 2026**, ~24 days out from 08-17.
