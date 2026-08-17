@@ -26,7 +26,7 @@ import logging
 import sqlite3
 import time
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import NamedTuple
 
 import discord
@@ -57,6 +57,10 @@ from bot_modules.cogs.casino.views import (
     RouletteBetButton,
     RouletteBetModal,
     RouletteNextView,
+    MinesBetModal,
+    MinesCashOutButton,
+    MinesRiskButton,
+    MinesTileButton,
     WarActionButton,
     build_baccarat_view,
     build_blackjack_view,
@@ -64,6 +68,8 @@ from bot_modules.cogs.casino.views import (
     build_dice_view,
     build_hub_view,
     build_keno_view,
+    build_mines_risk_view,
+    build_mines_view,
     build_roulette_view,
     build_war_view,
     play_again_view,
@@ -424,6 +430,49 @@ _WINDOW_UIS = (_ROULETTE_UI, _DERBY_UI, _BACCARAT_UI, _DICE_UI, _KENO_UI)
 _WINDOW_UIS_BY_KEY = {ui.key: ui for ui in _WINDOW_UIS}
 
 
+class _HandUI(NamedTuple):
+    """Cog-side descriptor for one live-hand game — the ``_WindowUI``
+    sibling for tables that persist a row per player.
+
+    Blackjack, war and Mines run the same idle-sweep flow (find stale rows,
+    prune dead webhook handles, auto-resolve each one), and everything that
+    differs lives here so that flow exists once. Two hand-coded copies were
+    readable; the third is where a game starts getting forgotten in one leg
+    of one sweep and stakes strand behind it — the reason ``_WINDOW_UIS``
+    exists in the same file, for the same games' other half.
+
+    ``followups`` reaches the cog's per-game webhook-handle map rather than
+    holding it, because the maps are instance state and this tuple is a
+    module constant. ``resolver`` is the cog method that auto-resolves one
+    stale hand, named rather than bound for the same reason — keeping it
+    HERE rather than in a parallel dict means there is one list to add a
+    game to, not two that have to agree.
+    """
+
+    key: str  # game key: settings, stake, ledger, stats
+    idle_live: Callable[..., list[sqlite3.Row]]
+    followups: Callable[
+        [CasinoCog], dict[int, tuple[discord.Webhook, int, float]]
+    ]
+    resolver: str  # CasinoCog method: (hand_id) -> None
+
+
+_HAND_UIS = (
+    _HandUI(
+        "blackjack", svc.idle_live_blackjack_hands,
+        lambda c: c._bj_followups, "_auto_stand",
+    ),
+    _HandUI(
+        "war", svc.idle_live_war_hands,
+        lambda c: c._war_followups, "_auto_war",
+    ),
+    _HandUI(
+        "mines", svc.idle_live_mines_hands,
+        lambda c: c._mines_followups, "_auto_cash",
+    ),
+)
+
+
 class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -464,6 +513,12 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         self._bj_followups: dict[int, tuple[discord.Webhook, int, float]] = {}
         # Same handle map for war's tie standoffs (their own id space).
         self._war_followups: dict[int, tuple[discord.Webhook, int, float]] = {}
+        # ...and for Mines grids, which need it most: a 19-press ladder can
+        # outlive the deal interaction's 15-minute token, so unlike the
+        # other two this handle is REFRESHED on every reveal rather than
+        # stored once at the deal.
+        self._mines_followups: dict[int, tuple[discord.Webhook, int, float]] = {}
+        self._mines_locks: dict[int, asyncio.Lock] = {}
         # guild_id → configured casino channel, kept warm by ensure_panel so
         # the on_message restick gate never touches the DB.
         self._casino_channels: dict[int, int] = {}
@@ -489,6 +544,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             BlackjackActionButton, RouletteBetButton, DerbyBetButton,
             BaccaratBetButton, DiceBetButton, KenoTierButton,
             WarActionButton, PlayAgainButton, RoundResolveButton,
+            MinesRiskButton, MinesTileButton, MinesCashOutButton,
         )
         self._boot_task = asyncio.create_task(self._boot())
         self.maintenance.start()
@@ -503,6 +559,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                 task.cancel()
             task_map.clear()
         self._window_followups.clear()
+        self._mines_followups.clear()
 
     async def _boot(self) -> None:
         """Post-restart recovery: refund orphaned hands and rounds, make
@@ -519,8 +576,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         def _sweep() -> tuple[list[sqlite3.Row], dict[str, dict[int, int]]]:
             with self.ctx.open_db() as conn:
                 return (
-                    svc.refund_live_blackjack_hands(conn)
-                    + svc.refund_live_war_hands(conn),
+                    svc.refund_all_live_hands(conn),
                     svc.refund_live_rounds(conn),
                 )
 
@@ -555,17 +611,16 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         here free.
         """
         cutoff = time.time() - _BJ_FOLLOWUP_TTL
-        for followups in (self._bj_followups, self._war_followups):
+        for ui in _HAND_UIS:
+            followups = ui.followups(self)
             for hand_id, (_, _, stored_at) in list(followups.items()):
                 if stored_at < cutoff:  # webhook token expired — handle is dead
                     followups.pop(hand_id, None)
 
         def _scan() -> tuple[
-            list[int], list[int], dict[str, list[int]], dict[int, int]
+            dict[str, list[int]], dict[str, list[int]], dict[int, int]
         ]:
             with self.ctx.open_db() as conn:
-                stale: list[int] = []
-                stale_wars: list[int] = []
                 thresholds: dict[int, int] = {}
                 now = time.time()
 
@@ -576,18 +631,19 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                         ).blackjack_idle_seconds
                     return thresholds[gid]
 
-                for row in svc.idle_live_blackjack_hands(conn, now):
-                    if now - float(row["last_action_at"]) >= _idle_after(
-                        int(row["guild_id"])
-                    ):
-                        stale.append(int(row["id"]))
-                # War standoffs idle out on the same clock as blackjack
-                # hands — one table-idle knob, not two.
-                for row in svc.idle_live_war_hands(conn, now):
-                    if now - float(row["last_action_at"]) >= _idle_after(
-                        int(row["guild_id"])
-                    ):
-                        stale_wars.append(int(row["id"]))
+                # War standoffs and Mines grids idle out on the same
+                # clock as blackjack hands — one table-idle knob, not
+                # three. Keyed by game, never zipped positionally, so a
+                # table cannot go missing from the sweep by reorder.
+                stale_by_game = {
+                    ui.key: [
+                        int(row["id"])
+                        for row in ui.idle_live(conn, now)
+                        if now - float(row["last_action_at"])
+                        >= _idle_after(int(row["guild_id"]))
+                    ]
+                    for ui in _HAND_UIS
+                }
                 # Private rounds have no timer of their own — this IS their
                 # auto-resolve. A player who bet and wandered off has a
                 # stake already debited, so the round resolves once it
@@ -612,10 +668,10 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                     cs = svc.load_casino_settings(conn, gid)
                     if cs.jackpot_enabled and cs.slots_enabled:
                         pots[gid] = svc.get_jackpot(conn, gid, seed=cs.jackpot_seed)
-                return stale, stale_wars, overdue_by_game, pots
+                return stale_by_game, overdue_by_game, pots
 
         try:
-            stale, stale_wars, overdue_by_game, pots = (
+            stale_by_game, overdue_by_game, pots = (
                 await asyncio.to_thread(_scan)
             )
         except Exception:
@@ -627,16 +683,18 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             guild = self.bot.get_guild(gid)
             if guild is not None:
                 await self.ensure_panel(guild)  # re-reads + records the pot
-        for hand_id in stale:
-            try:
-                await self._auto_stand(hand_id)
-            except Exception:
-                log.exception("casino auto-stand failed for hand %s", hand_id)
-        for hand_id in stale_wars:
-            try:
-                await self._auto_war(hand_id)
-            except Exception:
-                log.exception("casino auto-war failed for hand %s", hand_id)
+        for ui in _HAND_UIS:
+            for hand_id in stale_by_game[ui.key]:
+                try:
+                    resolve: Callable[[int], Awaitable[None]] = getattr(
+                        self, ui.resolver
+                    )
+                    await resolve(hand_id)
+                except Exception:
+                    log.exception(
+                        "casino idle %s resolve failed for hand %s",
+                        ui.key, hand_id,
+                    )
         for ui in _WINDOW_UIS:
             for round_id in overdue_by_game[ui.key]:
                 try:
@@ -1781,6 +1839,258 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             render=render,
             footer="Resolved automatically — fortune favors the decisive.",
             game_label="Casino War",
+        )
+
+    # ── mines (a live grid, the third hand game) ───────────────────────
+
+    async def open_mines(self, interaction: discord.Interaction) -> None:
+        """The risk picker — bomb count before stake, so the shape of the
+        bet is on the buttons before any money moves."""
+        await interaction.response.send_message(
+            "How dangerous do you want it?",
+            view=build_mines_risk_view(),
+            ephemeral=True,
+        )
+
+    async def open_mines_bet_modal(
+        self, interaction: discord.Interaction, bombs: int
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        label, last = await self._modal_context(
+            guild.id, interaction.user.id, "mines"
+        )
+        await interaction.response.send_modal(
+            MinesBetModal(bombs, limits_label=label, default_amount=last)
+        )
+
+    def _mines_render(
+        self,
+        econ: EconSettings,
+        user_id: int,
+        step: svc.MinesStep,
+        accent: discord.Color | None,
+        name_fn: NameFn,
+        *,
+        unit: str,
+    ) -> tuple[discord.Embed, discord.ui.View]:
+        """One grid's embed + view, live or finished — every surface that
+        renders Mines goes through here so the button labels and the
+        embed's standing line cannot drift apart."""
+        embed = casino_embeds.build_mines_embed(
+            econ, user_id, step, accent, name_fn=name_fn
+        )
+        if step.outcome is None:
+            view: discord.ui.View = build_mines_view(
+                step.hand_id, step.revealed,
+                payout=logic.mines_payout(
+                    step.bombs, len(step.revealed), step.stake
+                ),
+                unit=unit,
+            )
+        else:
+            view = play_again_view("mines", step.stake, side=str(step.bombs))
+        return embed, view
+
+    def _remember_mines_handle(
+        self, interaction: discord.Interaction, hand_id: int, message_id: int
+    ) -> None:
+        """Store (and RE-store) the webhook handle the idle auto-cash edits
+        through.
+
+        Blackjack stores its handle once at the deal, which is fine for a
+        hand that lasts seconds. A Mines ladder can run 19 presses, and the
+        deal interaction's token dies at ~15 minutes — so a slow grind
+        would leave the sweep holding a dead handle and the player watching
+        a frozen grid while their payout landed silently. Every press is
+        its own interaction with its own fresh token, so refreshing here
+        keeps the handle at most one idle period old.
+        """
+        self._mines_followups[hand_id] = (
+            interaction.followup, message_id, time.time()
+        )
+
+    async def deal_mines(
+        self, interaction: discord.Interaction, bombs: int, amount: int
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        uid = interaction.user.id
+
+        def _deal() -> tuple[svc.MinesStep, EconSettings | None]:
+            with self.ctx.open_db() as conn:
+                step = svc.deal_mines_hand(
+                    conn, guild.id, interaction.channel_id, uid, amount, bombs,
+                )
+                if step.err is not None:
+                    return step, None
+                return step, load_econ_settings(conn, guild.id)
+
+        try:
+            step, econ = await asyncio.to_thread(_deal)
+        except sqlite3.IntegrityError:
+            # The one-live-grid index caught a double-submitted modal that
+            # raced past the pre-check. The stake rolled back with the
+            # transaction; what's left is telling them why.
+            await safe_ephemeral(
+                interaction,
+                "❌ You already have a grid open — finish that one first.",
+            )
+            return
+        if step.err is not None or econ is None:
+            await safe_ephemeral(interaction, f"❌ {step.err}")
+            return
+        self._last_bets[(guild.id, uid, "mines")] = amount
+        embed, view = self._mines_render(
+            econ, uid, step, await self._accent(guild),
+            await self._names(guild, [uid]), unit=econ.currency_plural,
+        )
+        await self._respond_private(interaction, embed, view)
+        message = await interaction.original_response()
+        hand_id = step.hand_id
+        self._remember_mines_handle(interaction, hand_id, message.id)
+
+        def _bind() -> None:
+            with self.ctx.open_db() as conn:
+                svc.set_mines_message(conn, hand_id, message.id)
+
+        await asyncio.to_thread(_bind)
+
+    async def mines_reveal(
+        self, interaction: discord.Interaction, hand_id: int, tile: int
+    ) -> None:
+        await self._mines_step(
+            interaction, hand_id,
+            lambda conn, gid, uid: svc.reveal_mines_tile(
+                conn, gid, hand_id, uid, tile
+            ),
+        )
+
+    async def mines_cash_out(
+        self, interaction: discord.Interaction, hand_id: int
+    ) -> None:
+        await self._mines_step(
+            interaction, hand_id,
+            lambda conn, gid, uid: svc.cash_out_mines_hand(
+                conn, gid, hand_id, uid
+            ),
+        )
+
+    async def _mines_step(
+        self,
+        interaction: discord.Interaction,
+        hand_id: int,
+        act: Callable[..., svc.MinesStep],
+    ) -> None:
+        """One press — reveal or cash out. Both repaint the same message,
+        so they share everything but the service call.
+
+        The per-hand lock is the same mutual exclusion blackjack uses: a
+        player double-clicking two tiles must not have both presses read
+        the same state. The service claim is the real guard; this keeps the
+        render honest too.
+        """
+        if interaction.guild is None:
+            return
+        lock = self._mines_locks.setdefault(hand_id, asyncio.Lock())
+        async with lock:
+            done = await self._mines_press(interaction, hand_id, act)
+        if done:
+            self._mines_locks.pop(hand_id, None)
+
+    async def _mines_press(
+        self,
+        interaction: discord.Interaction,
+        hand_id: int,
+        act: Callable[..., svc.MinesStep],
+    ) -> bool:
+        """One press, rules in the service. True once the grid is terminally
+        gone (settled now, or found already settled) so the caller drops its
+        lock — presses on the stale buttons a boot sweep leaves behind must
+        not grow the lock dict for the life of the process.
+
+        The whole press — settle, render and repaint — runs under the
+        caller's lock. The service claim is what protects the money, but
+        two tiles pressed together would otherwise race on the EDIT and
+        could repaint the board backwards, showing an opened tile as
+        pressable and Cash Out at a rung the player has already passed.
+        """
+        guild = interaction.guild
+        assert guild is not None
+        uid = interaction.user.id
+
+        def _act() -> tuple[svc.MinesStep, EconSettings | None, int]:
+            with self.ctx.open_db() as conn:
+                step = act(conn, guild.id, uid)
+                if step.err is not None:
+                    return step, None, 0
+                settings = svc.load_casino_settings(conn, guild.id)
+                return (
+                    step, load_econ_settings(conn, guild.id),
+                    settings.broadcast_min_payout,
+                )
+
+        step, econ, broadcast_min = await asyncio.to_thread(_act)
+        if step.err is not None or econ is None:
+            await safe_ephemeral(interaction, f"❌ {step.err}")
+            # "Not your grid" and "already opened that tile" both leave a
+            # LIVE row whose lock its owner still needs.
+            return step.err == svc.MINES_FINISHED_ERR
+        embed, view = self._mines_render(
+            econ, uid, step, await self._accent(guild),
+            await self._names(guild, [uid]), unit=econ.currency_plural,
+        )
+        try:
+            await interaction.response.edit_message(embed=embed, view=view)
+        except discord.HTTPException:
+            pass
+        if step.outcome is None:
+            # Still live: keep the auto-cash's way back into this message
+            # fresh, since this press minted a brand-new token.
+            message = interaction.message
+            if message is not None:
+                self._remember_mines_handle(interaction, hand_id, message.id)
+            return False
+        self._mines_followups.pop(hand_id, None)
+        await self._after_instant(
+            interaction, payout=step.payout, threshold=broadcast_min,
+            stake=step.stake, embed=embed, game_label="Mines",
+        )
+        return True
+
+    async def _auto_cash(self, hand_id: int) -> None:
+        """The idle sweep's resolve — bank the rung the player reached.
+
+        Exactly what their own press would have paid, so walking away
+        costs nothing that staying would not have. An untouched grid is
+        refunded in full by the service instead.
+        """
+
+        def render(
+            row: sqlite3.Row,
+            step: svc.MinesStep,
+            econ: EconSettings,
+            accent: discord.Color | None,
+            name_fn: NameFn,
+        ) -> tuple[discord.Embed, Callable[[], discord.ui.View]]:
+            embed = casino_embeds.build_mines_embed(
+                econ, int(row["user_id"]), step, accent, name_fn=name_fn
+            )
+            return embed, lambda: play_again_view(
+                "mines", step.stake, side=str(step.bombs)
+            )
+
+        await self._auto_resolve_hand(
+            hand_id,
+            locks=self._mines_locks,
+            followups=self._mines_followups,
+            get_hand=svc.get_mines_hand,
+            resolve_idle=svc.resolve_idle_mines_hand,
+            render=render,
+            footer="Cashed out automatically — the grid keeps no one waiting.",
+            game_label="Mines",
         )
 
     # ── windowed communal games (roulette + derby: ONE flow) ───────────

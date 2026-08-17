@@ -377,6 +377,17 @@ class CasinoHubView(discord.ui.View):
             await cog.open_keno(interaction)
 
     @discord.ui.button(
+        label="Mines", emoji="💣",
+        style=discord.ButtonStyle.primary, custom_id="casino:mines", row=3,
+    )
+    async def mines(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_mines(interaction)
+
+    @discord.ui.button(
         label="My Stats", emoji="📊",
         style=discord.ButtonStyle.secondary, custom_id="casino:stats", row=3,
     )
@@ -432,8 +443,11 @@ def build_hub_view(settings: svc.CasinoSettings) -> CasinoHubView:
     Rows are assigned here from the *enabled* set rather than taken from
     the decorators: dropping a table used to leave its row short while the
     others stayed full (todo #98). The utility buttons follow on the first
-    free row, so a smaller casino has no gap above them. Worst case is
-    three game rows plus one utility row — inside Discord's five.
+    free row, so a smaller casino has no gap above them. Worst case with
+    all ten tables open is four game rows (3/3/2/2) plus one utility row —
+    exactly Discord's five, with nothing to spare. An eleventh table still
+    packs into four rows; a thirteenth would not fit, and the hub would
+    need a different shape rather than another button.
     """
     view = CasinoHubView()
     games, utility = [], []
@@ -943,6 +957,179 @@ def build_war_view(hand_id: int) -> discord.ui.View:
     return view
 
 
+# ── mines grid buttons ─────────────────────────────────────────────────
+
+# 20 tiles (5 wide × 4 tall) + one action row = 25 components, exactly
+# Discord's per-message ceiling. That is what chose the grid size: a 5×5
+# board leaves nowhere to put Cash Out, and the voluntary stop IS the game.
+
+_MINES_HIDDEN = "\u2b1b"   # ⬛ an unopened tile
+_MINES_SAFE = "\U0001f48e"  # 💎 a safe reveal
+_MINES_BOMB = "\U0001f4a3"  # 💣 the one that ended it
+
+
+class MinesRiskButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"casino_mn:risk:(?P<bombs>\d+)"),
+):
+    """One bomb count, labelled with what it costs and what it tops out at.
+
+    The whole shape of the bet is on the button before any money moves:
+    "5 bombs · 8 tiles to 18.60×" says both how far the ladder runs and how
+    hard the road is, so the choice is informed at the point of choosing.
+    """
+
+    def __init__(self, bombs: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label=logic.mines_risk_label(bombs),
+                emoji="💣",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"casino_mn:risk:{bombs}",
+            )
+        )
+        self.bombs = bombs
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> MinesRiskButton:
+        return cls(int(match["bombs"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_mines_bet_modal(interaction, self.bombs)
+
+
+class MinesBetModal(_AmountBetModal):
+    """One amount box; the risk was chosen by the button that opened it."""
+
+    def __init__(self, bombs: int, **kwargs) -> None:
+        super().__init__(title=f"Mines — {bombs} bomb{'' if bombs == 1 else 's'}",
+                         **kwargs)
+        self.bombs = bombs
+
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
+        await cog.deal_mines(interaction, self.bombs, amount)
+
+
+def build_mines_risk_view() -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    for bombs in logic.MINES_BOMB_CHOICES:
+        view.add_item(MinesRiskButton(bombs))
+    return view
+
+
+class MinesTileButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"casino_mn:tile:(?P<hid>\d+):(?P<tile>\d+)"),
+):
+    """One tile. Opened tiles stay in place as disabled buttons so the grid
+    never reflows under the player's finger mid-press."""
+
+    def __init__(
+        self, hand_id: int, tile: int, *, opened: bool = False,
+        emoji: str = _MINES_HIDDEN,
+    ) -> None:
+        super().__init__(
+            discord.ui.Button(
+                emoji=emoji,
+                style=(
+                    discord.ButtonStyle.success if opened
+                    else discord.ButtonStyle.secondary
+                ),
+                disabled=opened,
+                custom_id=f"casino_mn:tile:{hand_id}:{tile}",
+                row=tile // logic.MINES_GRID_WIDTH,
+            )
+        )
+        self.hand_id = hand_id
+        self.tile = tile
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> MinesTileButton:
+        return cls(int(match["hid"]), int(match["tile"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.mines_reveal(interaction, self.hand_id, self.tile)
+
+
+class MinesCashOutButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"casino_mn:cash:(?P<hid>\d+)"),
+):
+    """The stop button, carrying what it actually banks right now.
+
+    Dead until the first tile is open: there is no rung at zero reveals,
+    and a stop button that pays 0.95× for doing nothing is a trap.
+    """
+
+    def __init__(self, hand_id: int, *, payout: int = 0, unit: str = "coins") -> None:
+        super().__init__(
+            discord.ui.Button(
+                label=(
+                    f"Cash Out — {payout:,} {unit}" if payout
+                    else "Cash Out"
+                ),
+                emoji="💰",
+                style=discord.ButtonStyle.success,
+                disabled=not payout,
+                custom_id=f"casino_mn:cash:{hand_id}",
+                row=4,
+            )
+        )
+        self.hand_id = hand_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> MinesCashOutButton:
+        return cls(int(match["hid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.mines_cash_out(interaction, self.hand_id)
+
+
+def build_mines_view(
+    hand_id: int,
+    revealed: tuple[int, ...] | list[int],
+    *,
+    payout: int = 0,
+    unit: str = "coins",
+) -> discord.ui.View:
+    """The live grid: 20 tiles + the stop button."""
+    view = discord.ui.View(timeout=None)
+    opened = set(revealed)
+    for tile in range(logic.MINES_TILES):
+        view.add_item(
+            MinesTileButton(
+                hand_id, tile,
+                opened=tile in opened,
+                emoji=_MINES_SAFE if tile in opened else _MINES_HIDDEN,
+            )
+        )
+    view.add_item(MinesCashOutButton(hand_id, payout=payout, unit=unit))
+    return view
+
+
 # ── the loop-closers: Play Again / Next Round ──────────────────────────
 
 _AGAIN_LABELS = {
@@ -950,14 +1137,15 @@ _AGAIN_LABELS = {
     "slots": "Spin again",
     "blackjack": "Deal again",
     "war": "Battle again",
+    "mines": "Play again",
 }
 
 
 class PlayAgainButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=re.compile(
-        r"casino_again:(?P<game>coinflip|slots|blackjack|war)"
-        r":(?P<side>heads|tails|x):(?P<amt>\d+)"
+        r"casino_again:(?P<game>coinflip|slots|blackjack|war|mines)"
+        r":(?P<side>heads|tails|x|\d+):(?P<amt>\d+)"
     ),
 ):
     """On every instant/blackjack result: replay the same bet — for
@@ -967,7 +1155,11 @@ class PlayAgainButton(
     invitation surviving the ephemeral move."""
 
     def __init__(self, game: str, side: str, amount: int) -> None:
-        side_note = f" · {side}" if game == "coinflip" else ""
+        side_note = (
+            f" · {side}" if game == "coinflip"
+            else f" · {side} 💣" if game == "mines"
+            else ""
+        )
         super().__init__(
             discord.ui.Button(
                 label=f"{_AGAIN_LABELS[game]} ({amount:,}{side_note})",
@@ -999,6 +1191,8 @@ class PlayAgainButton(
             await cog.play_slots(interaction, self.amount)
         elif self.game == "war":
             await cog.play_war(interaction, self.amount)
+        elif self.game == "mines":
+            await cog.deal_mines(interaction, int(self.side), self.amount)
         else:
             await cog.deal_blackjack(interaction, self.amount)
 

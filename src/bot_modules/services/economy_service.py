@@ -1336,6 +1336,7 @@ _PURGE_USER_ID_TABLES: tuple[str, ...] = (
     "casino_ticker",
     "casino_blackjack_hands",
     "casino_war_hands",
+    "casino_mines_hands",
     "casino_race_bets",
     "casino_keno_bets",
     "casino_roulette_bets",

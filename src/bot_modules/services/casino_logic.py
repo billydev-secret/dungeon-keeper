@@ -5,7 +5,10 @@ Every RNG call lives at module level (``random.<fn>``) so tests patch
 keeps the patch point stable.
 
 Payouts are TOTAL RETURN on the stake (stake included), floored to whole
-coins; 0 means the stake is simply gone. The paytables are fixed constants,
+coins; 0 means the stake is simply gone. **Mines is the one exception — it
+rounds half up**, because it is the only table paying a ladder of very
+small multipliers and flooring one of those at the minimum bet drops an
+in-band rung to 80% RTP; see ``mines_payout``. The paytables are fixed constants,
 not settings: the house edge is design, enforced by the RTP tests, not a
 knob an admin could turn into a coin printer. Coinflip returns 92.5%, slots
 ~91.3% (see the exact-EV test), roulette is single-zero (~97.3%);
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import random
 
+from fractions import Fraction
 from typing import NamedTuple
 
 # ── Coinflip ───────────────────────────────────────────────────────────
@@ -793,3 +797,136 @@ def describe_keno_result(picks: list[int], drawn: list[int], payout: int) -> str
         else "pays"
     )
     return f"{line} · {need} {verb}"
+
+
+# ── Mines ──────────────────────────────────────────────────────────────
+
+# A 20-tile grid (5 wide × 4 tall) hiding a player-chosen number of bombs.
+# Each safe reveal steps the multiplier up; cashing out banks it; a bomb
+# takes the lot. 5×5 is not an option — Discord allows 25 components per
+# message, so a 25-tile grid leaves nowhere to put the Cash Out button, and
+# the voluntary stop is the entire game (docs/plans/casino-mines.md).
+
+MINES_TILES = 20
+MINES_GRID_WIDTH = 5
+MINES_BOMB_CHOICES = (1, 3, 5, 10)
+
+# One house edge applied to the whole surface: the paid multiplier is
+# 0.95 × the fair one, so P(reach k) × pay(k) = 0.95 identically and EVERY
+# cash-out point on EVERY ladder returns the same 95% before rounding.
+# Rungs are stored in HUNDREDTHS so the money path stays integer-only —
+# two decimals is also all a player-facing "1.06×" can carry.
+MINES_RTP_PCT = 95.0
+_MINES_RTP_NUM = 95
+
+# The ladder stops at the last rung paying no more than this. Uncapped, a
+# 10-bomb full clear pays 175,518× — not a paytable but an unbounded
+# liability against a five-figure float. The cap bends no RTP (every rung
+# it keeps is paid at its own in-band multiplier; the rung it drops is
+# simply not offered) and lands all four bomb counts within 18.6–21.9×, each
+# reachable ~5% of the time. The risk dial changes the road, not the
+# destination: 19 nervous presses or 4 brutal ones.
+MINES_MAX_MULT_HUNDREDTHS = 2500
+
+
+def _mines_ladder(bombs: int, *, tiles: int = MINES_TILES) -> tuple[int, ...]:
+    """Generate one bomb count's rungs, in hundredths.
+
+    ``fair(k) = C(n,k)/C(n−m,k) = Π (n−i)/(n−m−i)`` for i in 0..k−1, paid
+    at ``round(0.95 × fair × 100)`` half up, stopping at the last rung
+    within the cap.
+
+    Generated rather than hand-typed on purpose: 43 hand-typed numbers is
+    43 chances to fat-finger the house edge, and the enumeration test would
+    then be checking a typo against itself. The test writes the
+    hypergeometric out independently and asserts against this.
+    """
+    ladder: list[int] = []
+    fair = Fraction(1)
+    for i in range(tiles - bombs):
+        fair *= Fraction(tiles - i, tiles - bombs - i)
+        rung = int(Fraction(_MINES_RTP_NUM) * fair + Fraction(1, 2))
+        if rung > MINES_MAX_MULT_HUNDREDTHS:
+            break
+        ladder.append(rung)
+    return tuple(ladder)
+
+
+MINES_LADDERS: dict[int, tuple[int, ...]] = {
+    bombs: _mines_ladder(bombs) for bombs in MINES_BOMB_CHOICES
+}
+
+
+def mines_ladder(bombs: int) -> tuple[int, ...]:
+    ladder = MINES_LADDERS.get(bombs)
+    if ladder is None:
+        raise ValueError(f"unknown mines bomb count: {bombs}")
+    return ladder
+
+
+def mines_top_rung(bombs: int) -> int:
+    """Safe tiles needed to top the ladder out — which auto-cashes."""
+    return len(mines_ladder(bombs))
+
+
+def mines_multiplier(bombs: int, revealed: int) -> int:
+    """The rung standing after ``revealed`` safe tiles, in hundredths.
+
+    0 = no rung yet, which is why Cash Out is dead on an untouched grid: a
+    button paying 0.95× for doing nothing is a trap, not a choice.
+    """
+    ladder = mines_ladder(bombs)
+    if revealed <= 0:
+        return 0
+    return ladder[min(revealed, len(ladder)) - 1]
+
+
+def mines_payout(bombs: int, revealed: int, stake: int) -> int:
+    """Total return for cashing out after ``revealed`` safe tiles.
+
+    ROUNDS half up where every other table floors, and the deviation is
+    arithmetic rather than taste. Mines is the only game paying a ladder of
+    very small multipliers: flooring a 1.19× rung on a 5-coin stake pays 5
+    against a 5.95 expectation, collapsing that cash-out point to 80% RTP
+    for a paytable that is exactly 95% on paper. The band is a promise
+    about what a player actually receives, so it outranks the convention.
+    Costs the house a fraction of a coin per small win, and can round a
+    small rung *up* — player-favourable, the correct direction to err.
+    """
+    mult = mines_multiplier(bombs, revealed)
+    if mult <= 0:
+        return 0
+    return (stake * mult + 50) // 100
+
+
+def mines_place_bombs(bombs: int, *, tiles: int = MINES_TILES) -> list[int]:
+    """Bomb tile indices, drawn ONCE at deal and never re-drawn.
+
+    The alternative — roll each tile as it is pressed — is equally natural
+    to write and statistically identical, and would leave the house holding
+    a lever it should not have. Pre-committing is the version that cannot
+    quietly grow adaptive difficulty later.
+    """
+    if bombs not in MINES_BOMB_CHOICES:
+        raise ValueError(f"unknown mines bomb count: {bombs}")
+    return sorted(random.sample(range(tiles), bombs))
+
+
+def mines_mult_label(mult: int) -> str:
+    """106 → "1.06×" — the multiplier as players read it."""
+    return f"{mult // 100}.{mult % 100:02d}×"
+
+
+def mines_risk_label(bombs: int) -> str:
+    """"5 bombs · 8 tiles to 18.60×" — the risk picker's button.
+
+    Says what the choice costs and what it tops out at before any money
+    moves, so the shape of the bet is visible at the point of choosing.
+    """
+    ladder = mines_ladder(bombs)
+    tiles = "tile" if len(ladder) == 1 else "tiles"
+    bomb_word = "bomb" if bombs == 1 else "bombs"
+    return (
+        f"{bombs} {bomb_word} · {len(ladder)} {tiles} "
+        f"to {mines_mult_label(ladder[-1])}"
+    )

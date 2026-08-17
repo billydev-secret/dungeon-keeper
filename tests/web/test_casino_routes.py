@@ -382,3 +382,35 @@ def test_an_empty_roster_means_all_not_none(authed_client, fake_ctx):
     with fake_ctx.open_db() as conn:
         stored = load_casino_settings(conn, fake_ctx.guild_id).pools_metrics
     assert pools_metrics.enabled_keys(stored) == pools_metrics.ALL_KEYS
+
+
+def test_config_exposes_the_mines_toggle(authed_client):
+    casino = authed_client.get("/api/config").json()["casino"]
+    assert casino["mines_enabled"] is True
+
+
+def test_update_casino_mines_toggle_roundtrips(authed_client, fake_ctx):
+    fake_ctx.bot = MagicMock()
+    resp = authed_client.put(
+        "/api/config/casino", json={"mines_enabled": False}
+    )
+    assert resp.status_code == 200
+    with fake_ctx.open_db() as conn:
+        assert load_casino_settings(conn, fake_ctx.guild_id).mines_enabled is False
+    # ...and back, so a closed table is not a one-way door.
+    assert authed_client.put(
+        "/api/config/casino", json={"mines_enabled": True}
+    ).status_code == 200
+    with fake_ctx.open_db() as conn:
+        assert load_casino_settings(conn, fake_ctx.guild_id).mines_enabled is True
+
+
+def test_closing_mines_leaves_the_other_tables_open(authed_client, fake_ctx):
+    """Every-field-optional means one checkbox must not carry the rest with it."""
+    fake_ctx.bot = MagicMock()
+    with fake_ctx.open_db() as conn:
+        save_casino_settings(conn, fake_ctx.guild_id, {"keno_enabled": False})
+    authed_client.put("/api/config/casino", json={"mines_enabled": False})
+    with fake_ctx.open_db() as conn:
+        s = load_casino_settings(conn, fake_ctx.guild_id)
+    assert (s.mines_enabled, s.keno_enabled, s.slots_enabled) == (False, False, True)

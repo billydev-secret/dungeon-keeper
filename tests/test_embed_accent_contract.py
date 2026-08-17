@@ -39,6 +39,7 @@ from bot_modules.games_traditional import embeds as traditional_embeds
 from bot_modules.games_ttl import embeds as ttl_embeds
 from bot_modules.games_wyr import embeds as wyr_embeds
 from bot_modules.services import branding_service
+from bot_modules.services import casino_service
 from bot_modules.services import dm_branding
 from bot_modules.services import economy_service
 from bot_modules.services import event_echo_logic
@@ -486,6 +487,18 @@ CASES = [
         "casino.war_standoff",
         lambda **kw: casino_embeds.build_war_embed(
             _econ_settings(), 1, "7♠", "7♦", 10, kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        # The live grid (outcome=None) is the accent-colored state; the
+        # cashed/bombed verdicts are semantic and tested in the embeds file.
+        "casino.mines_grid",
+        lambda **kw: casino_embeds.build_mines_embed(
+            _econ_settings(), 1,
+            casino_service.MinesStep(hand_id=1, stake=10, bombs=3, revealed=(4,),
+                                     mult=133, next_mult=159),
+            kw.get("color"),
         ),
         discord.Color(services_embeds.COLOR_GOLD),
     ),

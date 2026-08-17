@@ -106,6 +106,7 @@ export function mount(container) {
       checkbox("dice_enabled", c.dice_enabled !== false, "Dice"),
       checkbox("war_enabled", c.war_enabled !== false, "War"),
       checkbox("keno_enabled", c.keno_enabled !== false, "Keno"),
+      checkbox("mines_enabled", c.mines_enabled !== false, "Mines"),
     );
     cardTables.appendChild(field(
       "Open Tables", tables,
@@ -222,6 +223,7 @@ export function mount(container) {
           dice_enabled: fd.has("dice_enabled"),
           war_enabled: fd.has("war_enabled"),
           keno_enabled: fd.has("keno_enabled"),
+          mines_enabled: fd.has("mines_enabled"),
           jackpot_enabled: fd.has("jackpot_enabled"),
         });
         showStatus(statusEl, true);
