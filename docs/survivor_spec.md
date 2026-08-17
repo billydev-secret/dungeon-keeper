@@ -45,7 +45,7 @@
 
 ### 1.7 The dead
 - Elimination = `👻 Ghost` role, channel access unchanged, one warm condolence DM. Heckling from the graveyard is a feature.
-- **Ghost Streak (v1 core — promoted):** ghosts keep picking via the identical flow; longest post-death correct streak takes the side-pot (funded by a % of the main pot + DOA gauntlet fees; streak-length ties split it). **Your satchel follows you into death** — no-reuse continues, so early ghosts are rich in teams and late ghosts scrape. **Ghosts always pick one team**, even in double-pick weeks — the escalation exists to end the main game, and the streak game stays simple for casuals. Load-bearing by design: gauntlet joiners who arrive dead land here, so anyone can join any week and always have a live game to play.
+- **Ghost Streak (v1 core — promoted):** ghosts keep picking via the identical flow; longest post-death correct streak takes the side-pot (funded by `ghost_pot_pct` of the seed — **20%, decided 2026-08-17** — plus DOA gauntlet fees; streak-length ties split it). **Your satchel follows you into death** — no-reuse continues, so early ghosts are rich in teams and late ghosts scrape. **Ghosts always pick one team**, even in double-pick weeks — the escalation exists to end the main game, and the streak game stays simple for casuals. Load-bearing by design: gauntlet joiners who arrive dead land here, so anyone can join any week and always have a live game to play.
 
 ---
 
@@ -94,12 +94,46 @@ Champion gets a dedicated post (never folded into a Reckoning): season stats (we
 
 ## 3. Admin
 
-- `/survivor admin create-season` — modal: name, buy-in, strikes, double-pick start, wipeout boundary.
-- `/survivor admin config` — paginated settings embed with toggle buttons; **every rule in §1 is a setting, not code** (see §5).
-- `/survivor admin settle <game> <winner>` — the API-failure escape hatch; feeds the normal pipeline silently.
-- `/survivor admin preview-reckoning` — renders Tuesday's post to the mod channel Monday night.
-- `eliminate` / `revive <player>`, `end-season` (archives; history stays queryable).
-- All admin actions → DK mod-log.
+> **Amended 2026-08-17.** As drafted, this section put all five admin surfaces in
+> Discord, which collides head-on with CLAUDE.md — *"configuration lives on the web
+> dashboard, not Discord… don't build slash commands, modals, or button flows for
+> admin config."* Raised with Billy before any code; he chose the **strict split**.
+> Configuration and state edits go to the dashboard; only the two genuine live mod
+> actions stay as commands. **Every rule in §1 is still a setting, not code** (see
+> §5) — the setting just lives on a panel instead of a paginated embed.
+
+### 3.1 Dashboard — `src/web_server/`, admin-gated, nav heading **Games**
+
+Route id `survivor` (bare feature name, per CLAUDE.md's frozen-id convention).
+
+- **Season lifecycle** — create a season (name, year, config), and end it
+  (archives; history stays queryable). One active season per guild (§6.12).
+- **Config** — every dial in §5, laid out as one page rather than paginated.
+- **Flavor corpus CRUD** — eulogy / toll / no_death / annul lines, active toggle.
+- **Roster table** — one row per player with per-row **eliminate** / **revive**
+  buttons. A table beats a command signature you have to remember, and it shows
+  you the state you're editing before you edit it.
+- **Role pickers** — Survivor / Ghost / Sole Survivor (see §3.3).
+
+### 3.2 Discord — live mod actions only
+
+- `/survivor admin settle <game> <winner>` — the API-failure escape hatch; feeds
+  the normal pipeline silently. Stays a command because it is used *during* a
+  Sunday slate, from a phone, when ESPN has gone sideways.
+- `/survivor admin preview-reckoning` — renders Tuesday's post to the mod channel
+  Monday night.
+
+All admin actions, from either surface → DK mod-log.
+
+### 3.3 Roles
+
+**The bot creates them on first season** (`🏈 Survivor`, `👻 Ghost`,
+`🏈 Sole Survivor`) if they don't already exist, matching by name, and stores the
+resulting ids in config. Dashboard role pickers let you repoint any of the three
+at a role you made yourself, and a role deleted out from under the bot is
+recreated rather than crashing the week. Creation requires Manage Roles; if the
+bot lacks it, the panel says so and the game runs without role grants rather
+than failing.
 
 ---
 
@@ -177,7 +211,8 @@ CREATE TABLE survivor_flavor (
 | Key | Default | Notes |
 |---|---|---|
 | `buyin_coins` | 0 | Season one: free entry |
-| `pot_seed` | 5000 | House-seeded pot (admin funds at create-season) |
+| `pot_seed` | **10000** | House-seeded pot. **Amended 2026-08-17 from 5000.** See §5.1 |
+| `ghost_pot_pct` | **20** | Ghost Streak side-pot's share of the seed. Was unspecified |
 | `gauntlet_fee_per_week` | 50 | × weeks elapsed; alive → main pot, DOA → ghost pot |
 | `strikes` | 1 | 0 = sudden death |
 | `tie_rule` | `loss` | `loss` \| `survive` |
@@ -189,7 +224,38 @@ CREATE TABLE survivor_flavor (
 | `wipeout_annul_through_week` | 13 | After: equal split |
 | `accord_max_alive` | 6 | `/survivor accord` available at ≤ this many living |
 | `ghost_streak` | on | Side-pot % of main pot + DOA fees |
-| `lastcall_hour`, `reckoning_hour` | Sat 18 / Tue 9 | Guild-local |
+| `lastcall_hour`, `reckoning_hour` | Sat 18 / Tue 9 | Guild-local, via `tz_offset_hours` |
+
+### 5.1 The seed is a faucet — say so out loud
+
+With `buyin_coins: 0` there is **no player money in the main pot**. Every coin the
+champion receives is newly minted, so the seed is a faucet and gets counted as
+one. Decided 2026-08-17 against the numbers in
+`docs/reviews/2026-07-30-economy-health.md`:
+
+| | |
+|---|---|
+| Seed | **10,000** — main pot 8,000, Ghost Streak side-pot 2,000 |
+| Share of the ~74,600 guild float | 13.4% |
+| Against net supply growth (+5,221/day) | ~1.9 days, minted once around week 18 |
+| Against p90 balance (1,304) / median (186) | 7.7× / 54× |
+| Against the largest casino win ever (3,000) | 3.3× |
+
+**Every movement rides `economy_service`** — `apply_credit` / `apply_debit` with
+its own ledger kinds, never a bare wallet UPDATE, so the whole feature is visible
+in the economy metrics rather than appearing as unexplained mint:
+
+| Ledger kind | Direction | When |
+|---|---|---|
+| `survivor_buyin` | debit player | join, when `buyin_coins > 0` |
+| `survivor_gauntlet_fee` | debit player | late entry, `fee_per_week × weeks` |
+| `survivor_payout` | credit player | champion, equal split, or annul-era split |
+| `survivor_ghost_payout` | credit player | Ghost Streak side-pot, ties split |
+
+The seed itself is **booked, not minted, at create-season** — the pot displays
+truthfully all season and the 10,000 enters supply exactly once, at payout.
+Gauntlet fees and buy-ins are recycled player coin: they raise the pot without
+raising the float, so a pot that grows past the seed is not extra faucet.
 
 ---
 
@@ -218,4 +284,8 @@ CREATE TABLE survivor_flavor (
 5b. Gauntlet replay engine + receipt flow
 6. Ghost roles + Ghost Streak (v1 core), wipeout/annul logic, Accord vote flow, endgame + coin payouts (main + ghost pots)
 7. **v2 backlog:** buyback window (escalating coin cost — natural sink), dead pool, loser-pool & underdog off-season variants, playoff survivor capstone
-8. Soft-launch with the mod team as a test league… or go live Week 1 and let the meadow learn by dying
+8. **Decided 2026-08-17: go live Week 1** and let the meadow learn by dying. No mod
+   test league — the Gauntlet means a member who shows up in Week 4 still gets a
+   live game, so the usual reason to soft-open a pool (miss the start, miss the
+   season) doesn't apply here. Enrollment opens as soon as join/pick/slate is
+   testable, ~Sept 3, with real stakes from Sept 10.
