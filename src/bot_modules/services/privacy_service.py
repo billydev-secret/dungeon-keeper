@@ -257,6 +257,16 @@ def purge_user_data(
 
     econ_purge_user(conn, guild_id, user_id)
 
+    # Music playlist: `added_by` rows in tracks + unmatched, and reviewer
+    # references nulled — the member column is `added_by`, so the generic
+    # user_id sweep above can't reach it (register: docs/data_register.md).
+    from bot_modules.music_playlist.music_playlist_store import purge_member_rows
+
+    try:
+        purge_member_rows(conn, guild_id, user_id)
+    except sqlite3.Error as exc:
+        log.warning("Purge: failed on music_playlist tables (%s)", exc)
+
     return len(msg_ids)
 
 
@@ -279,6 +289,7 @@ SUBJECT_ID_COLUMNS = frozenset(
         "owner_id", "partner_id", "player_id", "poster_id", "protected_user_id",
         "quoted_id", "quoted_user_id", "quoter_id", "reactor_id", "recipient_id",
         "replier_id", "reporter_id", "requester_id", "resolver_id",
+        "reviewed_by",
         "second_highest_user", "second_lowest_user", "sender_id", "set_by",
         "solver_id", "sponsor_user_id", "subject_id", "submitter_id",
         "target_author_id", "target_id", "to_user_id", "updated_by_user_id",

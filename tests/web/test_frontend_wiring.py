@@ -310,6 +310,12 @@ _HTML_COLUMNS = {
     ("usage-telemetry.js", "name"),
     # <span class="num-err|num-dim">: a Number()-coerced count
     ("usage-telemetry.js", "errors"),
+    # anchor built by sourceCell(): href/host both esc()'d, non-http(s) falls back to esc(url)
+    ("music-playlist.js", "source_url"),
+    # reason badge from reasonCell(): class name is a literal, label esc()'d
+    ("music-playlist.js", "removal_reason"),
+    # action buttons keyed by a server-issued row id, Number()-coerced into data-* attrs
+    ("music-playlist.js", "id"),
 }
 
 

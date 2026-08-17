@@ -496,6 +496,7 @@
         <tr><td><strong><a href="#economy">Economy &amp; Perk Shop</a></strong></td><td>Per-server currency earned from activity — daily logins, quests, games, QOTD — spent on weekly-renewing role perks (color, name, icon, palette, gradient, holographic) and gifts.</td></tr>
         <tr><td><strong><a href="#voice">Voice Control</a></strong></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
         <tr><td><strong><a href="#music">Music</a></strong></td><td>YouTube/Spotify playback in voice channels.</td></tr>
+        <tr><td><strong><a href="#music-playlist">Music Playlist</a></strong></td><td>A watched channel feeds a rolling Spotify playlist of the last 30 songs members posted — drop a Spotify or YouTube link and it's on the playlist.</td></tr>
         <tr><td><strong><a href="#wellness">Wellness</a></strong></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides on the dashboard.</td></tr>
         <tr><td><strong><a href="#dm-perms">DM Permissions</a></strong></td><td>Per-member DM-mode system (Open / Ask / Closed) with anonymous request flow.</td></tr>
         <tr><td><strong><a href="#self-service">Member Self-Service</a></strong></td><td>Help dropdown, support link, bot invite, birthday registration, data self-erasure.</td></tr>
@@ -1197,6 +1198,59 @@
       voice channel once it has been alone for a minute, or once the queue empties,
       in every channel.</p>
 
+    <h3 id="music-playlist">Music Playlist</h3>
+    <p>Separate from voice playback: one channel on the server (ask a mod which one) feeds a <strong>rolling Spotify playlist of the last 30 songs</strong> the community posted. Drop a song link in that channel and the bot adds it to the playlist; once the playlist is full, each new song pushes the oldest one out. Posting the link is the whole interaction — there is nothing to run.</p>
+
+    <h4>Posting a song</h4>
+    <ul>
+      <li><strong>What counts:</strong> Spotify track links and YouTube video links. A YouTube link is matched to the same song on Spotify using the video's title.</li>
+      <li><strong>Album and playlist links are skipped</strong> — one album post would flush everyone else's songs out of the window. Post individual tracks.</li>
+      <li><strong>One message can carry several links</strong> — each is handled on its own.</li>
+    </ul>
+
+    <p>The bot reacts on your message to tell you what happened:</p>
+    <table>
+      <thead><tr><th>Reaction</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>✅</td><td>Added to the playlist.</td></tr>
+        <tr><td>🔁</td><td>Already on the current playlist — the song stays where it is, nothing is added twice. Once it rolls off, it can be posted again.</td></tr>
+        <tr><td>❓</td><td>Sent to the review queue — see below. If a mod approves it, it's added then.</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Why a song lands in review:</strong> YouTube links are matched to Spotify by title, and titles are messy — "(Official Video)", "sped up", fan uploads. When the bot isn't confident its best Spotify match is really your song (or can't read the video's title at all, or finds no candidates), it queues the link with its best guess instead of adding the wrong track. A mod approves or rejects it from the dashboard; nothing below the confidence bar ever reaches the playlist on its own.</p>
+
+    <p><strong>Deleting your message</strong> removes the song from the playlist too — unless someone else's message also posted the same song, in which case it stays (their post keeps it alive).</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/playlist</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Ephemeral panel showing the rolling playlist. Three buttons: <strong>🎶 Playlist</strong> (the current window, newest first), <strong>🎧 My Songs</strong> (what you posted that's currently on it), and <strong>❓ In Review</strong> (your links waiting on a mod). Only visible to you.</span>
+    </div>
+
+    <h4>For admins</h4>
+    <p>Everything is configured on the dashboard at <strong>Config → Channels &amp; Messages → Music Playlist</strong> — there are no admin commands. The panel's sections:</p>
+    <table>
+      <thead><tr><th>Section</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Connection</strong></td><td>Status chip for the bot's Spotify account link, with a Connect / Re-consent button. See below for what each state means.</td></tr>
+        <tr><td><strong>Watch</strong></td><td><em>Enabled</em> (doubles as pause — turning it off stops processing without losing anything), the <em>watched channel</em>, and the <em>target playlist</em> (paste a playlist link, a <code>spotify:playlist:</code> URI, or the bare id).</td></tr>
+        <tr><td><strong>Behavior</strong></td><td><em>Window size</em> (default 30, 1–200); <em>match threshold</em> (0–1, default 0.74 — raise it and more YouTube links go to review, lower it and more get auto-added); <em>expand albums</em> (default <strong>off</strong>: album/playlist links are skipped; on, they expand into the window — one album post can flush it); <em>remove on delete</em> (default on: deleting the source message pulls the song).</td></tr>
+        <tr><td><strong>Live Window</strong></td><td>The current playlist, newest first, with a per-row <strong>Remove</strong>.</td></tr>
+        <tr><td><strong>Review Queue</strong></td><td>Pending unmatched links: the poster, what was extracted, the best Spotify candidate and its confidence score, and the reason it queued. <strong>Approve</strong> adds it (or marks it a duplicate if it's already live); <strong>Reject</strong> discards it.</td></tr>
+        <tr><td><strong>History</strong></td><td>Every song that left the window, with why: <em>rolled off</em>, <em>message deleted</em>, or <em>admin removed</em>.</td></tr>
+        <tr><td><strong>Maintenance</strong></td><td><strong>Re-scan</strong> replays the watched channel's history through the pipeline (already-processed messages are skipped, so it's safe to repeat); <strong>Reconcile</strong> squares the real Spotify playlist against the bot's window, and asks first if it would delete songs it doesn't recognise — so pointing the playlist dial at a playlist you already had can't silently strip it.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>The connection chip, and re-consent</strong>
+        <p><strong>Connected</strong> — the linked Spotify account's grant includes playlist-write permission; everything works. <strong>Read-only, needs re-consent</strong> — an account is linked, but its grant predates playlist writing: the bot can read playlists but every add/remove is blocked. Click the button and approve the Spotify prompt once more — the wider grant takes effect immediately, no restart needed. <strong>Not connected</strong> — no Spotify account is linked at all; connect one from the same button. While writes are blocked, the bot remembers which messages it could not land — so after re-consenting, run <strong>Re-scan</strong> to pick those songs up. Use Re-scan, not Reconcile: a blocked write never recorded a track, and Reconcile only pushes tracks the bot already holds, so it would do nothing here. Re-scan reaches back as far as the <strong>Re-scan Depth</strong> dial (200 messages by default), so if writes were blocked for longer than that, raise it before running the sweep.</p>
+      </div>
+    </div>
+
     <!-- ══════════════════════════════════════════════════════════
          13. WELLNESS
     ═══════════════════════════════════════════════════════════ -->
@@ -1417,6 +1471,7 @@
         <tr><td><strong>Economy &amp; games</strong> — wallet, every ledger entry, quests, casino bets and hands, game results</td><td>Running the economy; the ledger is a double-entry record that has to balance</td><td>Indefinitely</td></tr>
         <tr><td><strong>Things you chose to add</strong> — bio answers, birthday (day and month only, never the year), Wellness settings, Pen Pals participation, role picks</td><td>The feature you opted into</td><td>Until you remove it (archived bios of members who left are deleted after 12 months)</td></tr>
         <tr><td><strong>Pen Pals pool movement</strong> — when you joined or left the matching pool and what caused it (you signed up, you were matched, a chat ended, you left the server). Never any of what you and your pen pal said</td><td>So moderators can see whether matching is actually working — a pool that stops moving is invisible otherwise</td><td>Indefinitely; cleared in full by an erasure request</td></tr>
+        <tr><td><strong>Music playlist posts</strong> — which track you posted into the playlist channel, and any link of yours that's waiting in the review queue</td><td>Running the rolling community playlist: crediting posts, skipping duplicates, and removing a song when its message is deleted</td><td>Indefinitely (rolled-off songs are kept as playlist history); cleared in full by an erasure request</td></tr>
         <tr><td><strong>Anonymous features</strong> — Whisper, Confessions, Guess, and the anonymous party games</td><td>See the box below — "anonymous" means anonymous to other members, not to moderators</td><td>Varies; see below</td></tr>
         <tr><td><strong>Moderation records</strong> — warnings, jails, tickets and their transcripts, notes about rule-breaking, and flags raised by the automated Rules Watch</td><td>The record of moderation decisions, and the ability to justify one if challenged</td><td>Indefinitely</td></tr>
         <tr><td><strong>Image checks</strong> — for pictures you post in <strong>age-gated channels and spoiler-required channels</strong>, a score for how explicit the picture is, plus which body parts were detected and roughly where in the frame. Elsewhere, only the score, and only while a rule is deciding what to do — nothing is written down. Every removal is recorded wherever it happens</td><td>Enforcing the spoiler rule and keeping explicit images out of SFW channels. All of it runs on the bot's own machine; no picture is ever uploaded anywhere</td><td>Indefinitely. Admin-only — never shown to other members</td></tr>
@@ -1438,7 +1493,7 @@
     <ul>
       <li><strong>Discord</strong> — inherent; they host everything the bot reads and writes.</li>
       <li><strong>Anthropic (Claude)</strong> — when you ask the in-server AI assistant a question, your question text is sent to Anthropic's API to answer it. Your Discord identity is not sent with it: no name, no user id. If an admin has switched on live server context, the channel names and topics you can see, server docs and recent announcements go with it, plus your role names so the answer matches what you're allowed to do. <strong>Nothing a member wrote or stored goes with it</strong> — no messages, bios, birthdays, confessions, wellness entries, DMs, balances or stats, for you or anyone else. Don't put anything in a question you wouldn't want leaving the server.</li>
-      <li><strong>Spotify</strong> — when you queue music by name or link, the track query is sent to Spotify's API to resolve it. No member identity is attached.</li>
+      <li><strong>Spotify</strong> — when you queue music by name or link, the track query is sent to Spotify's API to resolve it; and when you post a song in the <a href="#music-playlist">Music Playlist</a> channel, the search query and the playlist add/remove (track ids only) go to Spotify's API. No member identity is attached to any of it — Spotify never learns who posted a song.</li>
     </ul>
 
     <h4>What you can do</h4>

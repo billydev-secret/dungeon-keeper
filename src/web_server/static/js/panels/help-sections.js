@@ -69,6 +69,8 @@ export const HELP_GROUPS = [
   { heading: "Voice & Music", items: [
     { page: "help-voice", anchor: "voice",     label: "Voice Control" },
     { page: "help-music", anchor: "music",     label: "Music" },
+    { page: "help-music-playlist", anchor: "music-playlist", label: "Music Playlist",
+      keywords: "spotify rolling playlist songs tracks watched channel youtube links review unmatched window" },
   ]},
   { heading: "Moderation", items: [
     { page: "help-moderation",  anchor: "moderation",  label: "Moderation Core" },

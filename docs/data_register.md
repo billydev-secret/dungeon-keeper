@@ -73,6 +73,8 @@ exempts deletion, not disclosure.
 | audit_log, incident_events, role_events, role_prune_events | Mod/audit misc | actor/target ids | ? | role_events YES, others **NO** | — | |
 | voice_transcription_config | Voice transcription | config only — transcripts never stored | n/a | n/a | local faster-whisper | ✓ no personal data |
 | mention_award_rules | Mention Awards | guild config (channel, amount, conditions JSON) + `created_by` admin id; **a `from_user` chip names a member** inside the JSON (migration 157) | until deleted by an admin | **SPLIT.** `from_user` chips: **YES** — purge strips the erased member's chips, deleting a rule left empty (`privacy_service.py`, mention_award_rules step); also in `LIST_VALUED_MEMBER_COLUMNS` so the export discloses the JSON blind spot. `created_by`: preserved, Art 17(3)(e) — the record of who opened a currency faucet, counterpart to the `econ_ledger` rows it produces | — | Awards land in `econ_ledger` (preserved, registered) and dedupe via `games_external_payouts`. **Message content is never stored**: chips are matched live off the gateway and discarded |
+| music_playlist_tracks | Music Playlist | `added_by` poster id + track/title/artist + source link + message pointer (migration 165) | indefinite by design — rolled-off rows are the "what did we listen to in July" history (kept, no ageing-out yet) | **YES — purge** (decided in the spec: no Art 17(3) ground — "who posted a song" carries no legal-claims or integrity weight, and the Spotify playlist is keyed by track id, not poster). Deleted by `music_playlist_store.purge_member_rows`, called from `privacy_service.purge_user_data` | Spotify Web API (track ids only, no member identity) | Member column is `added_by`, already in `privacy_service.SUBJECT_ID_COLUMNS` (`privacy_service.py:272`), so the access export sees the table with no code change |
+| music_playlist_unmatched | Music Playlist | `added_by` poster id + posted link, extracted title, best-candidate track + score; `reviewed_by` mod id | indefinite (reviewed rows kept as queue history) | **YES — purge**, same decision and same function (called from `privacy_service.purge_user_data`): the member's rows are deleted; rows they merely *reviewed* survive with `reviewed_by` nulled (a review is a mod action, not the reviewer's personal record) | — (queue rows never leave the box; only an approval's playlist add reaches Spotify) | `added_by` deliberately chosen over the spec's `posted_by` so `SUBJECT_ID_COLUMNS` covers it for free |
 | _(bundles append below)_ | | | | | | |
 
 ### Note — `nsfw_detections` scope widening, 2026-08-15
@@ -112,6 +114,7 @@ tweak.
 | Table | What it holds | Why it stays out |
 |---|---|---|
 | `casino_win_history` (migration 162, 2026-08-15) | `(guild_id, payout, ts)` — a rolling `WIN_HISTORY_KEEP`-row window of the payouts this guild has publicly announced, powering the big-win broadcast's top-3% `@here` tier | No `user_id` and no other member identifier. It answers only "how big is a big win in this guild lately", which never needs to know who won. The cheaper option was raising `casino_ticker`'s retention 25 → 500, and it was rejected precisely because those rows *do* carry `user_id`: it would have retained 20× more per-member play history to power a header. Pinned by a schema assertion in `tests/test_casino_service.py` |
+| `music_playlist_messages` (migration 165, 2026-08-17) | `(guild_id, message_id, channel_id, status, processed_at)` — the processed-message ledger that makes a restart or a channel re-scan idempotent | No member column. Authorship joins through `messages` (already registered, purged with `keep_messages` semantics); the ledger itself records only that a message id was seen, which must survive erasure or a re-scan would re-process — and re-credit — messages the purge just cleared |
 
 ## Processors (running inventory)
 
@@ -139,7 +142,11 @@ tweak.
   pointer back to this register.
   Privacy-notice line: **shipped** — `manual.html` §Where your data goes now
   itemises what is and is not sent.
-- Lavalink: local (127.0.0.1) ✓. **Spotify Web API (cloud)**: track queries only, no member identity; OAuth token storage → security sweep. Discord CDN: inherent.
+- Lavalink: local (127.0.0.1) ✓. **Spotify Web API (cloud)**: track queries,
+  and — since Music Playlist (2026-08-17) — playlist add/remove calls carrying
+  track ids only. No member identity in either direction; Spotify never learns
+  who posted a song. OAuth token storage → security sweep. Discord CDN:
+  inherent.
 
 ## Known context (seeded from loose-ends audit)
 

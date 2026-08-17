@@ -38,6 +38,7 @@ from bot_modules.games_rushmore import embeds as rushmore_embeds
 from bot_modules.games_traditional import embeds as traditional_embeds
 from bot_modules.games_ttl import embeds as ttl_embeds
 from bot_modules.games_wyr import embeds as wyr_embeds
+from bot_modules.music_playlist import embeds as music_playlist_embeds
 from bot_modules.services import branding_service
 from bot_modules.services import casino_service
 from bot_modules.services import dm_branding
@@ -608,6 +609,26 @@ CASES = [
             discord.Embed(title="A DM"), guild_name="Test Guild", **kw
         ),
         discord.Color(services_embeds.DM_PRIMARY),
+    ),
+    # ── music playlist (passthrough-only: `color` is a required keyword) ─
+    case(
+        "music_playlist.window",
+        lambda **kw: music_playlist_embeds.build_window_embed(
+            [], window_size=30, color=kw["color"]
+        ),
+        None,
+    ),
+    case(
+        "music_playlist.my_posts",
+        lambda **kw: music_playlist_embeds.build_my_posts_embed(
+            [], window_size=30, color=kw["color"]
+        ),
+        None,
+    ),
+    case(
+        "music_playlist.my_review",
+        lambda **kw: music_playlist_embeds.build_my_review_embed([], color=kw["color"]),
+        None,
     ),
 ]
 
