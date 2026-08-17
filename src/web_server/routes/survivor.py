@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from bot_modules.services import survivor_espn as espn
 from bot_modules.services import survivor_service as svc
+from bot_modules.services.moderation import write_audit
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from web_server.helpers import mirror_admin_action_to_mod_log
@@ -197,6 +198,14 @@ async def create_season(
         with ctx.open_db() as conn:
             season_id = svc.create_season(conn, guild_id, body.name, body.season_year)
             seeded = svc.seed_default_flavor(conn, guild_id)
+            # Durable audit row in the same transaction (the Discord mirror
+            # is best-effort and log.txt is wiped every boot).
+            write_audit(
+                conn, guild_id=guild_id, action="survivor_season_create",
+                actor_id=int(user.user_id),
+                extra={"season_id": season_id, "name": body.name,
+                       "year": body.season_year, "via": "web"},
+            )
             conn.commit()
         return season_id, seeded
 
@@ -285,7 +294,8 @@ async def _ingest_season_schedule(ctx: Any, season_year: int) -> str:
         return counts
 
     counts = await run_query(_q)
-    report = f"schedule ingested ({counts['inserted']} games)"
+    total = counts["inserted"] + counts["updated"]
+    report = f"schedule ingested ({total} games, {counts['inserted']} new)"
     if failed_weeks:
         report += f"; weeks failed, refresh will heal: {failed_weeks}"
     if skipped:
@@ -304,6 +314,11 @@ async def end_season(request: Request, user: AuthenticatedUser = _ADMIN):
             if season is None:
                 raise svc.SeasonError("No live season to end.")
             svc.end_season(conn, season["id"])
+            write_audit(
+                conn, guild_id=guild_id, action="survivor_season_end",
+                actor_id=int(user.user_id),
+                extra={"season_id": season["id"], "via": "web"},
+            )
             conn.commit()
         return season
 
@@ -335,6 +350,12 @@ async def update_config(
             if season is None:
                 raise svc.SeasonError("No live season — create one first.")
             merged = svc.update_config(conn, season["id"], coerced)
+            write_audit(
+                conn, guild_id=guild_id, action="survivor_config_update",
+                actor_id=int(user.user_id),
+                extra={"season_id": season["id"],
+                       "keys": sorted(coerced), "via": "web"},
+            )
             conn.commit()
         return merged
 
@@ -443,6 +464,13 @@ async def eliminate_player(
             if season is None:
                 raise svc.SeasonError("No live season.")
             done = svc.eliminate_player(conn, season["id"], user_id, body.week)
+            if done:
+                write_audit(
+                    conn, guild_id=guild_id, action="survivor_eliminate",
+                    actor_id=int(user.user_id), target_id=user_id,
+                    extra={"season_id": season["id"], "week": body.week,
+                           "via": "web"},
+                )
             conn.commit()
         return done, season
 
@@ -477,6 +505,12 @@ async def revive_player(
             if season is None:
                 raise svc.SeasonError("No live season.")
             done = svc.revive_player(conn, season["id"], user_id)
+            if done:
+                write_audit(
+                    conn, guild_id=guild_id, action="survivor_revive",
+                    actor_id=int(user.user_id), target_id=user_id,
+                    extra={"season_id": season["id"], "via": "web"},
+                )
             conn.commit()
         return done, season
 

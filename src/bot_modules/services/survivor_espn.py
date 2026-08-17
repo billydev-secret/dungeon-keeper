@@ -22,6 +22,7 @@ Field notes from the captured fixtures (2026-08-17):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -72,7 +73,11 @@ def parse_scoreboard(payload: dict) -> tuple[list[ParsedGame], int]:
     for event in payload.get("events") or []:
         try:
             parsed = _parse_event(event)
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
+        except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
+            # AttributeError included deliberately: a null where a string
+            # belongs ("date": null → None.replace) or a list where a dict
+            # is .get-guarded are exactly the shape drift this catch exists
+            # to absorb.
             skipped += 1
             log.warning(
                 "survivor espn: skipping malformed event %s (%s)",
@@ -248,8 +253,14 @@ def ingest_games(
         sets = ["week = ?", "kickoff_utc = ?", "status = ?"]
         params: list[object] = [game.week, game.kickoff_utc, game.status]
         if game.status == "scheduled" and game.favorite is not None:
-            sets += ["favorite = ?", "favorite_prob = ?"]
-            params += [game.favorite, game.favorite_prob]
+            # A poll with the favorite flag but an unreadable moneyline
+            # parses as (abbr, None). Same favorite → keep the stored number
+            # (a blip must not null the value that freezes at kickoff);
+            # flipped favorite → the old number belongs to the wrong team,
+            # so write the flip with an honest NULL.
+            if game.favorite_prob is not None or game.favorite != row["favorite"]:
+                sets += ["favorite = ?", "favorite_prob = ?"]
+                params += [game.favorite, game.favorite_prob]
         if game.winner is not None and row["winner"] is None:
             sets.append("winner = ?")
             params.append(game.winner)
@@ -288,17 +299,30 @@ async def fetch_season(
     partial success beats none. Network and DB stay separated: the caller
     ingests the returned games on its own connection.
     """
+    async def _week(week: int) -> tuple[int, list[ParsedGame], int] | None:
+        # Fetch AND parse inside the guard: a payload weird enough to escape
+        # parse_scoreboard's per-event catch costs one week, never the sweep.
+        try:
+            payload = await fetch_scoreboard(session, week, season_year)
+            week_games, week_skipped = parse_scoreboard(payload)
+        except Exception as exc:  # noqa: BLE001 — unversioned API, fail soft
+            log.warning("survivor espn: week %s fetch failed (%s)", week, exc)
+            return None
+        return week, week_games, week_skipped
+
+    # Concurrent: 18 serial fetches at a 30s timeout each could hold a
+    # create-season request for minutes; gathered, the sweep is bounded by
+    # the slowest single week.
+    results = await asyncio.gather(*(_week(w) for w in REGULAR_SEASON_WEEKS))
+
     games: list[ParsedGame] = []
     skipped = 0
     failed_weeks: list[int] = []
-    for week in REGULAR_SEASON_WEEKS:
-        try:
-            payload = await fetch_scoreboard(session, week, season_year)
-        except Exception as exc:  # noqa: BLE001 — unversioned API, fail soft
-            log.warning("survivor espn: week %s fetch failed (%s)", week, exc)
+    for week, result in zip(REGULAR_SEASON_WEEKS, results):
+        if result is None:
             failed_weeks.append(week)
             continue
-        week_games, week_skipped = parse_scoreboard(payload)
+        _, week_games, week_skipped = result
         games.extend(week_games)
         skipped += week_skipped
     return games, skipped, failed_weeks

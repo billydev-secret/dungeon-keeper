@@ -132,9 +132,22 @@ def test_status_mapping(pregame, espn_status, ours):
     assert games[0].status == ours
 
 
-def test_malformed_event_is_skipped_not_fatal(pregame):
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda ev: ev.pop("competitions"), id="missing-competitions"),
+        # AttributeError shapes — regressions from the 08-17 review: a null
+        # where a string belongs, and a list where a dict is .get-guarded.
+        pytest.param(lambda ev: ev.update(date=None), id="null-date"),
+        pytest.param(
+            lambda ev: ev["competitions"][0]["odds"][0].update(moneyline=["?"]),
+            id="list-valued-moneyline",
+        ),
+    ],
+)
+def test_malformed_event_is_skipped_not_fatal(pregame, mutate):
     mutated, event = _first_event(pregame)
-    del event["competitions"]
+    mutate(event)
     games, skipped = parse_scoreboard(mutated)
     assert skipped == 1
     assert len(games) == 15  # the rest of the slate survives
@@ -186,6 +199,22 @@ def test_favorite_freezes_at_last_prekickoff_poll(db, pregame):
         ingest_games(conn, 2026, [moved])
         row = _game_row(conn, opener.game_id)
         assert (row["favorite"], row["favorite_prob"]) == ("NE", 0.51)
+
+        # A still-scheduled poll with the favorite flag but an unreadable
+        # moneyline parses as (abbr, None): the stored number must survive
+        # the blip — it may be the last poll before kickoff freezes it.
+        blip = _replace(opener, favorite="NE", favorite_prob=None)
+        ingest_games(conn, 2026, [blip])
+        row = _game_row(conn, opener.game_id)
+        assert (row["favorite"], row["favorite_prob"]) == ("NE", 0.51)
+
+        # But a flipped favorite with no number writes the flip honestly —
+        # the old probability belongs to the wrong team.
+        flip = _replace(opener, favorite="SEA", favorite_prob=None)
+        ingest_games(conn, 2026, [flip])
+        row = _game_row(conn, opener.game_id)
+        assert (row["favorite"], row["favorite_prob"]) == ("SEA", None)
+        ingest_games(conn, 2026, [_replace(opener, favorite="NE", favorite_prob=0.51)])
 
         # Kickoff: post-kickoff payloads carry no odds. Frozen value stays.
         live = _replace(opener, status="in", favorite=None, favorite_prob=None)
@@ -268,9 +297,10 @@ class _StubResponse:
 class _StubSession:
     """Serves the pregame fixture for every week, erroring on chosen ones."""
 
-    def __init__(self, payload, fail_weeks=()):
+    def __init__(self, payload, fail_weeks=(), poison_weeks=()):
         self._payload = payload
         self._fail_weeks = set(fail_weeks)
+        self._poison_weeks = set(poison_weeks)
         self.urls: list[str] = []
 
     def get(self, url, **kwargs):
@@ -278,16 +308,20 @@ class _StubSession:
         week = int(url.split("week=")[1].split("&")[0])
         if week in self._fail_weeks:
             raise ConnectionError(f"week {week} boom")
+        if week in self._poison_weeks:
+            return _StubResponse(None)  # parse-time explosion, not fetch-time
         return _StubResponse(self._payload)
 
 
 async def test_fetch_season_sweeps_all_weeks_and_fails_soft(pregame):
     from bot_modules.services.survivor_espn import fetch_season
 
-    session = _StubSession(pregame, fail_weeks={7, 12})
+    # Week 3's *payload* is poison (parse explodes, not the fetch) — it must
+    # cost one week, never the sweep: the 08-17 review's abort regression.
+    session = _StubSession(pregame, fail_weeks={7, 12}, poison_weeks={3})
     games, skipped, failed = await fetch_season(session, 2026)
-    assert failed == [7, 12]
-    assert len(games) == 16 * 16  # 18 weeks minus the two failures
+    assert failed == [3, 7, 12]
+    assert len(games) == 15 * 16  # 18 weeks minus the three failures
     assert skipped == 0
     # The season-year selector must be dates=, not year= — ESPN silently
     # ignores year and serves the current season (found the hard way).

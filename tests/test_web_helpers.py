@@ -9,7 +9,7 @@ from __future__ import annotations
 import discord
 import pytest
 
-from web_server.helpers import build_admin_mirror_embed
+from bot_modules.services.embeds import build_admin_mirror_embed
 
 
 def _embed(**overrides) -> discord.Embed:

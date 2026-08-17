@@ -133,9 +133,13 @@ function renderSeasonCard(zone, overview, refresh) {
           name: fd.get("name"),
           season_year: parseInt(fd.get("season_year"), 10),
         });
-        const report = (res.role_report || []).join("; ");
+        // Both reports matter: roles AND the schedule ingest — a failed
+        // ingest with nothing on the panel would leave nfl_games empty and
+        // nobody the wiser until the slate doesn't post.
+        const report = [...(res.role_report || []), res.schedule_report]
+          .filter(Boolean).join("; ");
         showStatus(status, true, report || undefined);
-        setTimeout(refresh, report ? 2500 : 600);
+        setTimeout(refresh, report ? 4000 : 600);
       } catch (err) {
         showStatus(status, false, err.message);
       }
@@ -197,6 +201,14 @@ function renderRulesCards(zone, season, roles, channels) {
   const c = season.config;
   zone.innerHTML = `
     <form class="form form-cards" data-rules-form>
+      <div class="card" style="border-color: var(--gold-solid, #e6b84c);">
+        <div class="section-label">⚠️ Under Construction</div>
+        <p class="field-hint">The game engine is still being built (picks,
+          settling, gauntlet, ghosts — landing in stages before Week 1).
+          Every dial below <strong>stores now</strong> and takes effect as its
+          logic ships; until then nothing here is live for members. This
+          notice comes down when the season engine does the enforcing.</p>
+      </div>
       <div class="card">
         <div class="section-label">Wiring</div>
         <div class="field">
@@ -228,7 +240,7 @@ function renderRulesCards(zone, season, roles, channels) {
     "Share of the seed carved off for the Ghost Streak side-pot.", { max: 100 })}
         ${numField("gauntlet_fee_per_week", "Gauntlet Fee / Week", c.gauntlet_fee_per_week,
     "× replayed weeks, charged on late entry. Alive arrivals feed the main " +
-    "pot; dead-on-arrival fees feed the ghost pot.")}
+    "pot; dead-on-arrival fees feed the ghost pot.", { max: 10000 })}
       </div>
 
       <div class="card">
@@ -248,13 +260,13 @@ function renderRulesCards(zone, season, roles, channels) {
         ${numField("double_pick_start_week", "Double-Pick From Week", c.double_pick_start_week,
     "0 = never.", { max: 18 })}
         ${numField("double_pick_min_alive", "…Only If This Many Alive", c.double_pick_min_alive,
-    "", { min: 2 })}
+    "", { min: 2, max: 1000 })}
         ${numField("wipeout_annul_through_week", "Wipeout Annuls Through Week",
     c.wipeout_annul_through_week,
     "A week that kills everyone is annulled through this week; afterwards " +
     "it's an equal split.", { max: 18 })}
         ${numField("accord_max_alive", "Accord Available At ≤", c.accord_max_alive,
-    "Living players needed before /survivor accord can be invoked.", { min: 2 })}
+    "Living players needed before /survivor accord can be invoked.", { min: 2, max: 1000 })}
         <div class="field">
           <label style="display:flex; gap:8px; align-items:center;">
             <input type="checkbox" name="ghost_streak"

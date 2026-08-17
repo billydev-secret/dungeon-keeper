@@ -7,6 +7,7 @@ import os
 
 import discord
 
+from bot_modules.services.embeds import build_admin_mirror_embed
 from bot_modules.services.message_store import get_known_users_bulk
 
 
@@ -50,21 +51,6 @@ async def mirror_admin_action_to_mod_log(
         await channel.send(embed=embed)
     except (discord.Forbidden, discord.HTTPException):
         log.exception("failed to mirror web admin action to mod-log")
-
-
-def build_admin_mirror_embed(
-    *, domain: str, action: str, summary: str, actor_name: str, actor_id: int
-) -> discord.Embed:
-    """The mirror's embed, pure for testing. Orange is semantic here — the
-    mod-audit color, exempt from the accent contract like every sanction
-    surface (moved from voice_master.embeds when the mirror was shared)."""
-    embed = discord.Embed(
-        title=f"{domain} — {action}",
-        description=summary,
-        color=discord.Color.orange(),
-    )
-    embed.set_footer(text=f"by {actor_name} ({actor_id})")
-    return embed
 
 
 def public_base_url() -> str:

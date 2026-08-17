@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import re
 
+import discord
+
 # ──────────────────────────────────────────────────────────────────
 # Dashboard palette (mirrors web/static/app.css :root tokens 1:1)
 # ──────────────────────────────────────────────────────────────────
@@ -140,3 +142,23 @@ def fit_lines(lines: list[str], limit: int = EMBED_FIELD_LIMIT) -> str:
 def rel_ts(ts: float) -> str:
     """A Discord relative timestamp — ticks live in every client."""
     return f"<t:{int(ts)}:R>"
+
+
+def build_admin_mirror_embed(
+    *, domain: str, action: str, summary: str, actor_name: str, actor_id: int
+) -> discord.Embed:
+    """The web admin mod-log mirror's embed (sent by web_server.helpers).
+
+    Lives here rather than in web_server so the embed-accent contract's
+    bot_modules walk can see it — it rides KNOWN_UNCOVERED as a semantic
+    exemption: orange is the mod-audit color on every sanction surface and
+    never takes the guild accent. Moved from voice_master.embeds when the
+    mirror was shared with Survivor (2026-08-17).
+    """
+    embed = discord.Embed(
+        title=f"{domain} — {action}",
+        description=summary,
+        color=discord.Color.orange(),
+    )
+    embed.set_footer(text=f"by {actor_name} ({actor_id})")
+    return embed
