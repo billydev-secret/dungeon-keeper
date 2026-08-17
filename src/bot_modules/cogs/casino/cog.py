@@ -1928,7 +1928,17 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                     return step, None
                 return step, load_econ_settings(conn, guild.id)
 
-        step, econ = await asyncio.to_thread(_deal)
+        try:
+            step, econ = await asyncio.to_thread(_deal)
+        except sqlite3.IntegrityError:
+            # The one-live-grid index caught a double-submitted modal that
+            # raced past the pre-check. The stake rolled back with the
+            # transaction; what's left is telling them why.
+            await safe_ephemeral(
+                interaction,
+                "❌ You already have a grid open — finish that one first.",
+            )
+            return
         if step.err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {step.err}")
             return
@@ -1982,30 +1992,52 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         the same state. The service claim is the real guard; this keeps the
         render honest too.
         """
-        guild = interaction.guild
-        if guild is None:
+        if interaction.guild is None:
             return
-        uid = interaction.user.id
         lock = self._mines_locks.setdefault(hand_id, asyncio.Lock())
         async with lock:
-
-            def _act() -> tuple[svc.MinesStep, EconSettings | None, int]:
-                with self.ctx.open_db() as conn:
-                    step = act(conn, guild.id, uid)
-                    if step.err is not None:
-                        return step, None, 0
-                    settings = svc.load_casino_settings(conn, guild.id)
-                    return (
-                        step, load_econ_settings(conn, guild.id),
-                        settings.broadcast_min_payout,
-                    )
-
-            step, econ, broadcast_min = await asyncio.to_thread(_act)
-        if step.outcome is not None:
+            done = await self._mines_press(interaction, hand_id, act)
+        if done:
             self._mines_locks.pop(hand_id, None)
+
+    async def _mines_press(
+        self,
+        interaction: discord.Interaction,
+        hand_id: int,
+        act: Callable[..., svc.MinesStep],
+    ) -> bool:
+        """One press, rules in the service. True once the grid is terminally
+        gone (settled now, or found already settled) so the caller drops its
+        lock — presses on the stale buttons a boot sweep leaves behind must
+        not grow the lock dict for the life of the process.
+
+        The whole press — settle, render and repaint — runs under the
+        caller's lock. The service claim is what protects the money, but
+        two tiles pressed together would otherwise race on the EDIT and
+        could repaint the board backwards, showing an opened tile as
+        pressable and Cash Out at a rung the player has already passed.
+        """
+        guild = interaction.guild
+        assert guild is not None
+        uid = interaction.user.id
+
+        def _act() -> tuple[svc.MinesStep, EconSettings | None, int]:
+            with self.ctx.open_db() as conn:
+                step = act(conn, guild.id, uid)
+                if step.err is not None:
+                    return step, None, 0
+                settings = svc.load_casino_settings(conn, guild.id)
+                return (
+                    step, load_econ_settings(conn, guild.id),
+                    settings.broadcast_min_payout,
+                )
+
+        step, econ, broadcast_min = await asyncio.to_thread(_act)
         if step.err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {step.err}")
-            return
+            # "Not your grid" and "already opened that tile" both leave a
+            # LIVE row whose lock its owner still needs.
+            return step.err == svc.MINES_FINISHED_ERR
         embed, view = self._mines_render(
             econ, uid, step, await self._accent(guild),
             await self._names(guild, [uid]), unit=econ.currency_plural,
@@ -2020,12 +2052,13 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             message = interaction.message
             if message is not None:
                 self._remember_mines_handle(interaction, hand_id, message.id)
-            return
+            return False
         self._mines_followups.pop(hand_id, None)
         await self._after_instant(
             interaction, payout=step.payout, threshold=broadcast_min,
             stake=step.stake, embed=embed, game_label="Mines",
         )
+        return True
 
     async def _auto_cash(self, hand_id: int) -> None:
         """The idle sweep's resolve — bank the rung the player reached.

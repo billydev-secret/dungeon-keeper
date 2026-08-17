@@ -2555,6 +2555,13 @@ def refund_all_live_hands(
 # player could walk away from, so the row lives for the whole round.
 
 
+# The one Mines refusal that means the row is terminally gone, named
+# because the cog drops its per-hand lock on it: a click on a stale
+# button must not grow the lock dict forever, and string-matching the
+# message from two files would rot the moment the copy is reworded.
+MINES_FINISHED_ERR = "That grid is already finished."
+
+
 class MinesStep(NamedTuple):
     """One deal, reveal or cash-out, ready to render. err = nothing happened."""
 
@@ -2652,7 +2659,7 @@ def _settle_mines(
     if not _settle_hand(
         conn, MINES_HANDS, hand_id, payout, outcome, kind=kind, now=now
     ):
-        return MinesStep(err="That grid is already finished.")
+        return MinesStep(err=MINES_FINISHED_ERR)
     stats = member_casino_stats(conn, guild_id, user_id)
     pot_after = 0
     if payout < stake:  # the settle fed the pot with the lost slice
@@ -2754,7 +2761,7 @@ def _mines_claim_error(conn: sqlite3.Connection, hand_id: int) -> str:
     ).fetchone()
     if other is not None and other["settled_at"] is None:
         return "That's not your grid — open your own!"
-    return "That grid is already finished."
+    return MINES_FINISHED_ERR
 
 
 def reveal_mines_tile(

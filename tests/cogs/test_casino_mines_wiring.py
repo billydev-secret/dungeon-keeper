@@ -20,6 +20,7 @@ logic and service layers (``tests/test_casino_logic.py``,
 
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -83,3 +84,92 @@ def test_the_auto_cash_handle_is_refreshed_on_every_press(presses):
     assert stored_at >= dealt[2]
     # Monotonic: a press can only ever make the handle younger.
     assert stamps == sorted(stamps)
+
+
+# ── the lock the grid is pressed under ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("terminal", "kept"),
+    [
+        pytest.param(True, False, id="settled-press-drops-the-lock"),
+        pytest.param(False, True, id="live-press-keeps-it-for-the-owner"),
+    ],
+)
+async def test_the_per_hand_lock_is_dropped_once_the_grid_is_gone(terminal, kept):
+    """Otherwise ``_mines_locks`` grows for the life of the process.
+
+    The heaviest source is a restart: the boot sweep settles every live grid,
+    but the ephemeral messages survive with 20 live-looking tile buttons, and
+    every press on one used to mint a lock nothing ever reclaimed.
+    """
+    cog = SimpleNamespace(_mines_locks={})
+
+    async def press(interaction, hand_id, act):
+        return terminal
+
+    cog._mines_press = press
+    await CasinoCog._mines_step(
+        cog, SimpleNamespace(guild=object()), 77, lambda *a: None
+    )
+    assert (77 in cog._mines_locks) is kept
+
+
+@pytest.mark.asyncio
+async def test_the_whole_press_runs_under_the_lock():
+    """Settle AND repaint, not just the settle.
+
+    The service claim is what protects the money, but two tiles pressed
+    together would otherwise race on the message edit and could repaint the
+    board backwards — showing an opened tile as pressable, and Cash Out at a
+    rung the player has already climbed past.
+    """
+    cog = SimpleNamespace(_mines_locks={})
+    held: list[bool] = []
+
+    async def press(interaction, hand_id, act):
+        held.append(cog._mines_locks[77].locked())
+        return True
+
+    cog._mines_press = press
+    await CasinoCog._mines_step(
+        cog, SimpleNamespace(guild=object()), 77, lambda *a: None
+    )
+    assert held == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_raced_second_deal_apologizes_instead_of_exploding(monkeypatch):
+    """The one-live-grid index is the real guard, so the pre-check can lose a
+    race — a double-submitted bet modal must land on the same refusal the
+    pre-check gives, not Discord's bare "This interaction failed"."""
+    from bot_modules.cogs.casino import cog as cog_module
+
+    def _boom(*args, **kwargs):
+        raise sqlite3.IntegrityError("UNIQUE constraint failed")
+
+    monkeypatch.setattr(cog_module.svc, "deal_mines_hand", _boom)
+    said: list[str] = []
+
+    async def _say(interaction, text):
+        said.append(text)
+
+    monkeypatch.setattr(cog_module, "safe_ephemeral", _say)
+
+    cog = SimpleNamespace(
+        ctx=SimpleNamespace(open_db=lambda: _NullDB()), _last_bets={},
+    )
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=1), user=SimpleNamespace(id=2), channel_id=3,
+    )
+    await CasinoCog.deal_mines(cog, interaction, 3, 20)
+    assert said == ["❌ You already have a grid open — finish that one first."]
+
+
+class _NullDB:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *exc):
+        return False

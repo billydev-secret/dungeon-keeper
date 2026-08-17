@@ -418,7 +418,7 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   before rounding — 43 rungs pinned in [0.9480, 0.9540] by exact enumeration
   written independently of the generator. The ladder **stops at the last rung
   paying ≤ 25×** (uncapped, a 10-bomb clear pays 175,518×), which lands all
-  four bomb counts at a 19–22× ceiling reachable ~5% of the time: the risk
+  four bomb counts at an 18.6–21.9× ceiling reachable ~5% of the time: the risk
   dial changes the road (19 nervous presses vs 4 brutal ones), not the
   destination. Clearing the top rung **auto-cashes** — the ceiling ends the
   round, so there is no infinite climb to press into.

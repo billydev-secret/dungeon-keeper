@@ -823,7 +823,7 @@ _MINES_RTP_NUM = 95
 # 10-bomb full clear pays 175,518× — not a paytable but an unbounded
 # liability against a five-figure float. The cap bends no RTP (every rung
 # it keeps is paid at its own in-band multiplier; the rung it drops is
-# simply not offered) and lands all four bomb counts within 19–22×, each
+# simply not offered) and lands all four bomb counts within 18.6–21.9×, each
 # reachable ~5% of the time. The risk dial changes the road, not the
 # destination: 19 nervous presses or 4 brutal ones.
 MINES_MAX_MULT_HUNDREDTHS = 2500

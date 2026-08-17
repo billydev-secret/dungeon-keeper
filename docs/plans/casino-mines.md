@@ -142,7 +142,7 @@ is unexpectedly tidy:
 | 5 | 8 | 18.60× | 5.11% | 25% |
 | 10 | 4 | 21.92× | 4.33% | 50% |
 
-**All four ceilings are ~19–22× and all four have a ~5% chance of being
+**All four ceilings land in 18.6–21.9× and all four have a ~5% chance of being
 reached** — which is not a coincidence but the identity above (`P(top) =
 0.95 / pay(top)`) showing through. The risk dial therefore changes *the road,
 not the destination*: same ceiling, 19 nervous presses or 4 brutal ones. That
