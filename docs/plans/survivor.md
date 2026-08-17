@@ -85,8 +85,9 @@ Per CLAUDE.md, the unit under test is the logic/service layer — no Discord moc
   function of stored `favorite` values and stored winners. Two joiners entering the
   same week must inherit byte-identical lines; that gets pinned explicitly, and a
   replay must never re-fetch.
-- **§6's twelve edge cases are a test checklist**, not prose. #10 (joiner with no
-  legal team) is explicitly *must not crash* and gets a named test.
+- **§6's fourteen edge cases are a test checklist**, not prose. #10 (joiner with
+  no legal team) and #13 (auto-assign dead end) are explicitly *must not crash*
+  and get named tests.
 - **ESPN parsing is fixture-based** on saved JSON. No network calls in the suite, ever.
 - Lock enforcement per game, no-reuse across the satchel, strike accounting,
   tie-as-loss, void handling, auto-assign cap, double-pick slot independence,

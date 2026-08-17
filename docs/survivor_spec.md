@@ -15,19 +15,19 @@
 - Enrollment opens when an admin creates a season and **never closes** — the door is always open; the road is real.
 - **One entry per person. Season one is free entry** (`buyin_coins: 0`) with a **house-seeded pot** — the largest audience is coin-poor newcomers, and the entry fee shouldn't gate them. Buy-in remains a config for future seasons.
 - **Late entry — the Gauntlet.** Join any week; the bot retroactively plays every eligible missed week, assigning each week's chalk (highest win-probability team by closing odds, no reuse) and grading it against real results. You inherit that line's full fate: those teams are burned from your satchel, one chalk loss burns your strike, two and you arrive dead — landing directly in Ghost Streak, picking from day one like everyone else. The gauntlet's toll is structural: chalk torches the elite teams, so survivors arrive alive but poor.
-- **The gauntlet fee (anti-free-option):** the receipt shows your inherited fate *before* you pay — which would make waiting free information. So late entry costs `gauntlet_fee_per_week × weeks elapsed` (default 50 coins/week), **independent of the base buy-in** — this is what closes the exploit even in a free-entry season. Alive arrivals' fees feed the main pot; **dead-on-arrival fees route to the Ghost Streak side-pot** — you pay into the game you're actually playing.
+- **The gauntlet fee (anti-free-option):** the receipt shows your inherited fate *before* you pay — which would make waiting free information. So late entry costs `gauntlet_fee_per_week × weeks elapsed` (default 50 coins/week), **independent of the base buy-in** — this is what closes the exploit even in a free-entry season. *(Clarified 2026-08-17: "weeks elapsed" = the number of gauntlet-replayed weeks, i.e. fully-kicked-off ones. The partial week a mid-week joiner picks live is free, joining before Week 1 kickoff costs 0, and the fee can never disagree with the replay.)* Alive arrivals' fees feed the main pot; **dead-on-arrival fees route to the Ghost Streak side-pot** — you pay into the game you're actually playing.
 - **Mid-week joins:** weeks where any games haven't kicked off yet are picked live from the remaining slate; only fully-kicked-off weeks are gauntlet-replayed.
 
 ### 1.2 Weekly pick
 - One team per week to **win, straight up**. Each team usable once per season.
 - **Per-game locking:** your pick locks at *that team's* kickoff. Until then you can change freely. After your team kicks off you're locked, even if other games haven't started.
 - **Total darkness, loose lips:** the *bot* never reveals a pick to anyone (admins excepted, mod-log only) until the Tuesday Reckoning — no reactions, no "X has picked" notices. Players, however, may say anything. **Table talk is legal; lying is encouraged.** The bot keeps the secrets; the bluffing is yours.
-- **Missed pick → auto-assign:** at the week's final kickoff, anyone pickless is assigned the highest win-probability available team still unplayed (ESPN odds; fallback best record), marked `📎 assigned by the groundskeeper` on reveal. Dignified, mildly embarrassing, fully survivable.
+- **Missed pick → auto-assign:** at the week's final kickoff, anyone pickless is assigned the highest win-probability available team still unplayed (ESPN odds; fallback best record), marked `📎 assigned by the groundskeeper` on reveal. Dignified, mildly embarrassing, fully survivable. *(Clarified 2026-08-17: "still unplayed" means the game has not kicked off — assigning from a game in progress or final would be a pick made with the result known. At the final kickoff that pool is the final game(s) of the week. If every legal team there is already burned for that player, the week is voided for them — survive, mirroring §6.10 — and it does **not** count against the auto-assign cap.)*
 - **Auto-assign cap (anti-AFK):** three auto-assigns per season (config), counting one per week even in double-pick weeks and even when only one slot was missing. The fourth time the groundskeeper is needed, he declines — elimination, with its own flavor line: *"the groundskeeper stopped covering for X."*
 
 ### 1.3 Results
 - Win → survive. **Loss → strike/elimination. Tie → loss.** ("Your team must win" — one sentence, no asterisks.)
-- Postponed/cancelled game → pick voided, player survives, team returns to their pool.
+- Postponed/cancelled game → pick voided, player survives, team returns to their pool. *(Clarified 2026-08-17: a postponement announced before the week's final kickoff frees the slot — the player may re-pick from the remaining not-yet-kicked-off slate rather than sitting the week out.)*
 
 ### 1.4 Lives
 - **One strike** (config: 0–2). First wrong week burns it 💛→🖤; second is the end. Research is unambiguous that sudden death at 20–50 players routinely ends leagues by Halloween — the strike is the longevity buffer.
@@ -42,10 +42,11 @@
   - Week 14+ → **equal split** among that week's players.
 - **The Accord (legalized collusion):** once ≤6 remain (config), any living player may invoke `/survivor accord` in the Tuesday-to-Thursday-kickoff window. The bot posts a public vote; if **every** living player accepts within 24h, the season ends immediately in an equal split, with its own ceremony: *"the meadow chose peace."* Any decline (or silence) dissolves it — one invocation per player per season, so it can't become a weekly nag. Final tables deal openly here; nobody has to sneak a wipeout.
 - **Multiple survivors after the final week** → equal split. No margin-of-victory tiebreakers in v1.
+- **Any season end settles both pots** *(decided 2026-08-17)*: sole survivor, final-week split, wipeout split, or Accord — the Ghost Streak side-pot pays out the same day, on that day's standings.
 
 ### 1.7 The dead
-- Elimination = `👻 Ghost` role, channel access unchanged, one warm condolence DM. Heckling from the graveyard is a feature.
-- **Ghost Streak (v1 core — promoted):** ghosts keep picking via the identical flow; longest post-death correct streak takes the side-pot (funded by `ghost_pot_pct` of the seed — **20%, decided 2026-08-17** — plus DOA gauntlet fees; streak-length ties split it). **Your satchel follows you into death** — no-reuse continues, so early ghosts are rich in teams and late ghosts scrape. **Ghosts always pick one team**, even in double-pick weeks — the escalation exists to end the main game, and the streak game stays simple for casuals. Load-bearing by design: gauntlet joiners who arrive dead land here, so anyone can join any week and always have a live game to play.
+- Elimination = `👻 Ghost` role, channel access unchanged, one warm condolence DM. Heckling from the graveyard is a feature. *(Decided 2026-08-17: death **swaps** the roles — `🏈 Survivor` comes off, `👻 Ghost` goes on — so the member list shows the state at a glance. Both weekly posts ping `@🏈 Survivor` **and** `@👻 Ghost` (§2.3), so the dead keep hearing about the game they're still playing.)*
+- **Ghost Streak (v1 core — promoted):** ghosts keep picking via the identical flow; longest post-death correct streak takes the side-pot (funded by `ghost_pot_pct` of the seed — **20%, decided 2026-08-17** — plus DOA gauntlet fees; streak-length ties split it). **Your satchel follows you into death** — no-reuse continues, so early ghosts are rich in teams and late ghosts scrape. **Ghosts always pick one team**, even in double-pick weeks — the escalation exists to end the main game, and the streak game stays simple for casuals. **The groundskeeper never touches the dead** *(decided 2026-08-17)*: no auto-assign for ghosts, no cap — a missed week simply **breaks the streak** (resets to 0; best-ever streak stays on record), and a voided game leaves it untouched, neither extending nor breaking. The side-pot rewards showing up; auto-assigned streaks would accrue to people who stopped playing. Load-bearing by design: gauntlet joiners who arrive dead land here, so anyone can join any week and always have a live game to play.
 
 ---
 
@@ -60,12 +61,12 @@ Season announced → Join (coins) → [Wed slate → pick → sweat → Tue Reck
 Pinned embed in #survivor: hero copy (~3 lines), buy-in, live entrant counter, five one-line rules, link to full rules thread, **[🌾 Join the Season]** button → ephemeral confirm (coin balance, debit, one-sentence rules) → role grant. At Week 1 kickoff the button stays live but the copy flips to gauntlet mode: *"the season is underway. the door is open; the road is real. 🌾 N souls walking."* Joins from here run the gauntlet receipt flow (§4.2) before charging the buy-in.
 
 ### 2.3 Weekly cadence
-- **Wed ~9am — Slate post** (pings `@🏈 Survivor`): the week's games with `<t:...:f>` timestamps (local time for free), plus the **[🏈 Make your pick]** button. Footer: picks close at each kickoff · X of N alive have picked.
+- **Wed ~9am — Slate post** (`slate_hour`, guild-local; pings `@🏈 Survivor` + `@👻 Ghost`): the week's games with `<t:...:f>` timestamps (local time for free), plus the **[🏈 Make your pick]** button. Footer: picks close at each kickoff · X of N alive have picked.
 - **Sat 6pm — Last call:** DM only to the pickless (opt-out honored; fallback channel mention): *"you haven't picked. `/survivor pick` — or I'll pick for you, and I have terrible taste. 🌙"*
 - **Sun–Mon:** the bot posts nothing. The channel does the sweating.
-- **Tue 9am — THE RECKONING** (pings role; see 2.5).
+- **Tue 9am — THE RECKONING** (pings both roles; see 2.5).
 
-The role gets pinged exactly twice a week. Restraint is the brand.
+The roles get pinged exactly twice a week. Restraint is the brand.
 
 ### 2.4 Pick flow
 - **Primary — `/survivor pick`:** autocomplete filtered to unburned ∩ playing ∩ not-yet-kicked-off, options like `49ers (vs SEA, Sun 1:25)`. Confirmation (ephemeral): team + opponent, lock time `<t:...:R>`, satchel count with wealth signal (`🟢 24 teams left` → `🟡` under 12 — ambient scarcity awareness, never advice), strike status, **[Change pick]** / **[My season]** buttons.
@@ -147,7 +148,7 @@ than failing.
 ### 4.2 Bootstrap & polling
 - `create-season` ingests the full season schedule into `nfl_games`; daily refresh (flex scheduling moves kickoffs — validate locks against *current* times).
 - **Poll every 10 min during game windows** derived from the ingested schedule (not hardcoded days — catches international 9:30am ET games and late-season Saturdays); one daily off-window refresh.
-- Settle each game as it goes final (idempotent: result already set → no-op). Week settles when all its games are final; the Reckoning fires Tuesday 9am regardless, flagging stragglers.
+- Settle each game as it goes final (idempotent: result already set → no-op). Week settles when all its games are final; the Reckoning fires Tuesday 9am regardless, flagging stragglers. *(Clarified 2026-08-17: when a flagged straggler settles after the Reckoning has posted, a short addendum goes out and any resulting death applies then — flagged results are neither silently resolved nor held for the next Reckoning.)*
 - **Gauntlet replay is deterministic:** it reads only stored `favorite` values (frozen at last pre-kickoff poll) and stored winners — two joiners entering the same week always inherit identical lines, and replays never re-fetch odds. A join posts a private "gauntlet receipt" embed (week-by-week: team, result, strike events) before the confirm button, so nobody buys in blind.
 
 ### 4.3 Schema (SQLite, DK conventions)
@@ -191,13 +192,17 @@ CREATE TABLE nfl_games (
   home TEXT NOT NULL, away TEXT NOT NULL,
   kickoff_utc TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'scheduled',
-  favorite TEXT,                              -- abbr + win prob, captured at last poll before kickoff
+  favorite TEXT,                              -- abbr, captured at last poll before kickoff
+  favorite_prob REAL,                         -- its win probability (split from `favorite` 2026-08-17:
+                                              -- gauntlet determinism + auto-assign ranking need the number)
   winner TEXT,                                -- abbr | 'TIE' | null
   PRIMARY KEY (season_year, game_id)
 );
 
 CREATE TABLE survivor_flavor (
   id INTEGER PRIMARY KEY,
+  guild_id INTEGER NOT NULL,                  -- added 2026-08-17: the bot runs two live guilds;
+                                              -- defaults seed per guild at first create-season
   category TEXT NOT NULL,                     -- eulogy|toll|no_death|annul
   line TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1
@@ -224,7 +229,7 @@ CREATE TABLE survivor_flavor (
 | `wipeout_annul_through_week` | 13 | After: equal split |
 | `accord_max_alive` | 6 | `/survivor accord` available at ≤ this many living |
 | `ghost_streak` | on | Side-pot % of main pot + DOA fees |
-| `lastcall_hour`, `reckoning_hour` | Sat 18 / Tue 9 | Guild-local, via `tz_offset_hours` |
+| `slate_hour`, `lastcall_hour`, `reckoning_hour` | Wed 9 / Sat 18 / Tue 9 | Guild-local, via `tz_offset_hours`. `slate_hour` added 2026-08-17 — §2.3 schedules three tasks; the table only had hours for two |
 
 ### 5.1 The seed is a faucet — say so out loud
 
@@ -272,6 +277,8 @@ raising the float, so a pot that grows past the seed is not extra faucet.
 10. **Joiner with no legal team in their entry week** (e.g., joins Sunday night and every unplayed team is gauntlet-burned): that week is voided for them — survive, pick next week. Rare, but must not crash or auto-kill.
 11. **Accord discipline:** invocations outside the Tue–Thu window are rejected with the window shown; a player who leaves the server during a vote counts as a decline; accord during a locked pick voids nothing retroactively — the split is computed on invocation-day standings.
 12. **One active season per guild;** archives queryable.
+13. **Auto-assign dead end** *(added 2026-08-17)*: at the final kickoff every legal not-yet-kicked-off team is burned for the player → week voided (survive), no auto-assign charged. Mirrors #10; must not crash or auto-kill.
+14. **Member leaves the server mid-season** *(added 2026-08-17)*: eliminated at the next Reckoning with its own flavor line (*"walked out of the meadow"*); ghost streak frozen at its best; no further picks accepted. Rejoining the server reactivates nothing for the living game — dead is dead — but a rejoined ghost may resume Ghost Streak picking. Inside an Accord vote, leaving still counts as a decline (#11).
 
 ---
 
