@@ -183,10 +183,13 @@ def _parse_meta(raw: object) -> dict:
 def _anon_quest_ids(conn: sqlite3.Connection, guild_id: int) -> list[int]:
     """Quest ids the register must never post a payout for.
 
-    Quests on an anonymous trigger kind (:data:`quests.ANON_KINDS`): posting
-    "**X** earned *Send a Whisper*" seconds after an anonymous whisper lands in
-    the feed names the whisperer by timing correlation, which is the whole
-    thing the anonymity is for. The member still sees the credit on every
+    Quests on a privacy-suppressed trigger kind (:data:`quests.ANON_KINDS`):
+    posting "**X** earned *Send a Whisper*" seconds after an anonymous whisper
+    lands in the feed names the whisperer by timing correlation, which is the
+    whole thing the anonymity is for. The set covers more than anonymity now —
+    ``pen_pal`` pays both halves of a pairing at once, so two adjacent cards
+    name who was matched with whom, and a ``guess_post`` card names the answer
+    to a live Guess Who round. The member still sees the credit on every
     private surface — their own ``/quests`` log and ``/bank wallet`` read the
     ledger directly, and neither goes through here.
     """

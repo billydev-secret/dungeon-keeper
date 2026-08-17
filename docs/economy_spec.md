@@ -669,11 +669,13 @@ the board always shows up to 2 goals rather than 1:
   `econ_community_tier_payouts` (tier 0 reserves the **top-contributor
   bonus**: `reward // 2` to the top 3 by contribution). Contribution and
   tier-payout rows reset at the next activation, so a re-run pays afresh;
-  idempotency only has to hold within a run. **Anonymous kinds**
-  (`quests.ANON_KINDS`: confession, confession_reply, whisper)
+  idempotency only has to hold within a run. **Privacy-suppressed kinds**
+  (`quests.ANON_KINDS`: confession, confession_reply, whisper, ama_ask,
+  guess_post, pen_pal, pen_pal_complete)
   pay flat tiers only — no bonus, an empty top list in the settle summary,
   and a name-free resolution beat sheet — because naming the most active
-  confessors/repliers/whisperers would deanonymize the feed. The same set
+  confessors/whisperers/askers would deanonymize the feed, and a top
+  `guess_post` list would spoil several live rounds at once. The same set
   now gates two further surfaces: the register feed drops these payouts
   (§10.1) and sign-off is refused at config time (a sign-off card names the
   claimant in the bank channel).
@@ -868,14 +870,16 @@ and community guild-wide sums — plan
 the xp_events-mirrored kinds is a stage-2 script job, not a migration
 (local-day bucketing needs per-guild tz offsets).
 
-Quests on an anonymous kind (`quests.ANON_KINDS`: `confession`,
-`confession_reply`, `whisper`) reject `signoff=1` at creation/update: a sign-off
+Quests on a privacy-suppressed kind (`quests.ANON_KINDS`: `confession`,
+`confession_reply`, `whisper`, `ama_ask`, `guess_post`, `pen_pal`,
+`pen_pal_complete`) reject `signoff=1` at creation/update: a sign-off
 claim posts a bank-channel card naming the claimant, timing-correlatable against
 the anonymous feed. (Community quests already forbid any trigger kind, so the
 only paths left for these kinds are the silent daily/weekly/event auto-claims,
 whose ledger rows the register feed also drops — §10.1.) Widened from
 `confession` alone on 2026-08-02; `whisper` and `confession_reply` were the same
-leak with no guard. `whisper_guess` stays outside the set — the whisper cog
+leak with no guard. Widened again on 2026-08-17 (see §10.1) to `guess_post`,
+`pen_pal`, `pen_pal_complete` and `ama_ask`. `whisper_guess` stays outside the set — the whisper cog
 already names the solver in the feed.
 
 **Monthly cadence (guild-wide, migration 125):** `qtype='monthly'` is a
@@ -1842,9 +1846,10 @@ skipped because a transfer writes two rows for one event: the register posts the
 neutral colour — the currency moved sideways rather than entering or leaving the
 economy) with the sender's resulting balance.
 
-**Anonymous quest payouts are never posted** (fixed 2026-08-02). A payout for a
-quest whose `trigger_kind` is in `quests.ANON_KINDS` (confession,
-confession_reply, whisper) is dropped from the drain entirely —
+**Anonymous quest payouts are never posted** (fixed 2026-08-02; widened
+2026-08-17). A payout for a quest whose `trigger_kind` is in
+`quests.ANON_KINDS` (confession, confession_reply, whisper, ama_ask,
+guess_post, pen_pal, pen_pal_complete) is dropped from the drain entirely —
 `register._anon_quest_ids` resolves the guild's anon quests and the collector
 excludes any row whose `meta.quest_id` matches, covering all three quest ledger
 kinds (`quest`, `quest_community`, `quest_community_bonus`). A card reading
@@ -1855,9 +1860,32 @@ would not be enough: the member is still named at the telltale moment, so the
 row has to go. The credit is unaffected on every **private** surface — the
 member's own `/quests` log and `/bank wallet` read the ledger directly and never
 route through the register — so a quiet payout never reads as a missing one.
-`whisper_guess` is deliberately *not* suppressed: the guesser is the whisper's
-recipient, and the whisper cog already posts "@target solved the whisper!" to
-the same feed by name.
+
+The set covers two harms. **Anonymity** — the member acted under a name the
+surface hides: `confession`, `confession_reply`, `whisper`, `ama_ask` (AMA
+questions post anonymously and the trigger fires immediately after, so the card
+names the asker by the same timing correlation). **Correlation** — the payout is
+public but pairing it with a second signal reveals what neither shows alone:
+`pen_pal` and `pen_pal_complete` fire for *both* halves of a pairing in one
+transaction, so two adjacent cards name not just who was matched but who *with*,
+while the room itself defaults to `room_visibility: mods`.
+
+`guess_post` is neither, and is the sharpest case: in Guess Who the submitter
+**is** the answer (both call sites pass `answer_id=submitter_id`), so "**X**
+earned *Submit a Guess Who Round*" hands the room the solution before anyone
+guesses. It went unsuppressed from the day Guess Who shipped until 2026-08-17
+and spoiled live rounds; the fix is drain-time, so cards already posted stay
+posted.
+
+Deliberately *not* suppressed, recorded so the next audit doesn't re-litigate
+them: `whisper_guess` (the guesser is the whisper's recipient, and the whisper
+cog already posts "@target solved the whisper!" to the same feed by name);
+`guess` (the guesser is never the answer, and the card names no round, so it
+reveals participation and nothing about the picture); `guess_win` (fires on the
+solve, which simultaneously edits the round into a public embed naming answer,
+submitter and solver); `bio_set` and `birthday_set` (both save data the bot then
+publishes itself — a bio post, a birthday announcement — and the `preference`
+column on `member_birthdays` is a gift wish, not a privacy dial).
 
 The skip list and the anon filter are both applied **in SQL, before the LIMIT** —
 filtering after it would let a midnight flood of login rows fill the batch and

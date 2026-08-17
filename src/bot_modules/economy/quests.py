@@ -220,7 +220,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "boost": "Starting a server boost. Event cadence: once per day it is detected.",
     "bio_set": "Saving or updating your member bio. Event cadence: once ever.",
     "media_post": "Posting a message with an image attached; set a trigger channel to scope it (e.g. #art). Event cadence: once per message — use daily/weekly for this one.",
-    "pen_pal": "Being paired into a Pen Pals session (both members fire). Event cadence: once per session.",
+    "pen_pal": "Being paired into a Pen Pals session (both members fire). Credited privately — no register-feed entry and no sign-off, since both halves fire together and two adjacent cards would name who was paired with whom. Event cadence: once per session.",
     "message_sent": "Any message in the server. Pair with a target count ('send 20 messages this week') — a target of 1 completes on the first message, and rewarding raw volume invites spam.",
     "reply_sent": "Using Discord's reply on someone ELSE's message (self-replies never count). Best with a target count.",
     "reaction_given": "Reacting to someone else's message — inherits the XP farm guard (one per message per reactor, ever; no self-reacts, no bots). Best with a target count.",
@@ -228,16 +228,16 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "duel_win": "Winning a duel/PvP match. Event cadence: once per match.",
     "duel_lose": "Not winning a duel/PvP match (every participant who wasn't the winner). Event cadence: once per match.",
     "confession": "Submitting an anonymous confession. The confessor is credited privately — no 'quest complete' message, no register-feed entry, and sign-off can't be turned on; the payout shows only on their own quest log and wallet (the sole other trace is the staff-side ledger row). Event cadence: once per confession — use daily/weekly with a target count.",
-    "ama_ask": "Asking a question in an AMA. Unfiltered questions fire on submit; screened questions fire only once the host approves (rejected ones never pay). Event cadence: once per question — use daily/weekly with a target count.",
+    "ama_ask": "Asking a question in an AMA. Unfiltered questions fire on submit; screened questions fire only once the host approves (rejected ones never pay). AMA questions are anonymous, so this is credited privately like `whisper` — no register-feed entry and no sign-off, or the card would name the asker seconds after their question posts. Event cadence: once per question — use daily/weekly with a target count.",
     "whisper": "Sending an anonymous whisper to another member. Credited privately like `confession` — no register-feed entry and no sign-off, so the payout can't be timed against the whisper landing in the feed. Event cadence: once per whisper — use daily/weekly with a target count.",
     "quote": "Turning someone's message into a quote card with the make-it-a-quote role (the quoter who invokes it is credited). Event cadence: once per quoted message — mildly farmable, so use daily/weekly with a target count.",
     "chat_revive": "Responding to a Chat Revive prompt while the lull window is open (the reply the revive service counts as an answer). Event cadence: once per prompt.",
     "bump": "Bumping the server on a listing site (the member who ran the bump command is credited). Event cadence: once per bump — bump cooldowns are the natural rate limit.",
     "voice_room_host": "Your Voice Control room reaching 2+ other members at once (bots and you excluded). Fires once per room lifetime, on the crossing. Event cadence: once per room.",
-    "pen_pal_complete": "A Pen Pals session you were in reaching its natural end — both members fire; sessions that end early don't. Event cadence: once per session.",
+    "pen_pal_complete": "A Pen Pals session you were in reaching its natural end — both members fire; sessions that end early don't. Credited privately like `pen_pal`, and for the same pair-correlation reason. Event cadence: once per session.",
     "whisper_guess": "Correctly guessing who sent you an anonymous whisper. Event cadence: once per whisper.",
     "guess_win": "Winning a Guess Who round. Event cadence: once per round.",
-    "guess_post": "Submitting a Guess Who round for others to solve (confession rounds count too). Event cadence: once per submitted round.",
+    "guess_post": "Submitting a Guess Who round for others to solve (confession rounds count too). The submitter IS the answer, so this is credited privately — no register-feed entry, no sign-off; a card naming the earner would solve the round for everyone reading. Event cadence: once per submitted round.",
     "quoted": "Someone ELSE turning your message into a quote card (the quoted author is credited; self-quotes never fire). Event cadence: once per quoted message.",
     "session_join": "Joining a scheduled game session. Event cadence: once per session.",
     "voice_message": "Posting a voice message (the transcription listener is the detector). Event cadence: once per message — use daily/weekly with a target count.",
@@ -285,10 +285,10 @@ _REWARD_BANDS: dict[str, tuple[int, int]] = {
 # direction). Scoped quests on other kinds keep unscaled sizing.
 CHANNEL_SHARE_KINDS = frozenset({"message_sent", "reply_sent", "media_post"})
 
-# Kinds whose member is never named on a public surface: the action itself is
-# anonymous, so anything that attaches a name to it deanonymizes the feed —
-# either directly, or by timing correlation ("X earned Send a Whisper" posted
-# seconds after an anonymous whisper appears names the whisperer).
+# Kinds whose member is never named on a public surface, because naming them
+# there gives away something the action itself was keeping — either directly,
+# or by timing correlation ("X earned Send a Whisper" posted seconds after an
+# anonymous whisper appears names the whisperer).
 #
 # Three surfaces enforce this, and a new one must opt in deliberately:
 #   * community quests pay flat tiers only — no top-contributor bonus, no
@@ -298,11 +298,44 @@ CHANNEL_SHARE_KINDS = frozenset({"message_sent", "reply_sent", "media_post"})
 #   * sign-off is refused at config time, since a sign-off card names the
 #     claimant in the bank channel (_check_trigger_config).
 #
-# ``whisper_guess`` is deliberately NOT here: the guesser is the whisper's
-# recipient, and the cog already posts "@target solved the whisper!" to the
-# feed, so naming them costs nothing the game hasn't already said. Only the
-# anonymous *sender* needs covering.
-ANON_KINDS = frozenset({"confession", "confession_reply", "whisper"})
+# Two distinct harms live here, and both are covered:
+#
+#   * anonymity — the member acted under a name the surface hides
+#     (`confession`, `confession_reply`, `whisper`, `ama_ask`);
+#   * correlation — the payout is public but pairing it with a second signal
+#     reveals something neither shows alone. `pen_pal`/`pen_pal_complete` fire
+#     for BOTH halves of a pairing in one transaction, so two adjacent cards
+#     name not just who was matched but who *with*, while the room itself
+#     defaults to mods-only visibility.
+#
+# `guess_post` is the sharpest case and is neither: in Guess Who the submitter
+# **is** the answer (both call sites pass answer_id=submitter_id), so a card
+# reading "**X** earned *Submit a Guess Who Round*" doesn't leak a private act
+# — it hands the room the solution before anyone guesses. Missed here until
+# 2026-08-17; live rounds were spoiled by it.
+#
+# Deliberately NOT here, so the next audit doesn't re-litigate them:
+#   * `whisper_guess` — the guesser is the whisper's recipient, and the cog
+#     already posts "@target solved the whisper!" to the feed, so naming them
+#     costs nothing the game hasn't already said. Only the anonymous *sender*
+#     needs covering.
+#   * `guess` — the guesser is never the answer, and the card names no round,
+#     so it reveals participation and nothing about the picture.
+#   * `guess_win` — fires on the solve, which simultaneously edits the round
+#     into a public embed naming answer, submitter and solver. Nothing left
+#     to protect by the time the card lands.
+#   * `bio_set` / `birthday_set` — both save data the bot then publishes
+#     itself (a bio post, a birthday announcement); the `preference` column on
+#     member_birthdays is a gift wish, not a privacy dial.
+ANON_KINDS = frozenset({
+    "confession",
+    "confession_reply",
+    "whisper",
+    "ama_ask",
+    "guess_post",
+    "pen_pal",
+    "pen_pal_complete",
+})
 
 # Community weekly milestone tiers, as fractions of the auto-sized target.
 # Tier 1 is sized to be near-certain, tier 3 a genuine stretch; each tier

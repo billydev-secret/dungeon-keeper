@@ -246,7 +246,30 @@ def _mk_quest(conn, *, trigger_kind, qtype="daily"):
     return qid
 
 
-@pytest.mark.parametrize("kind", sorted(quest_logic.ANON_KINDS))
+# Every trigger kind the register must never name, spelled out literally.
+# Parametrizing over ANON_KINDS itself proves the filter honours whatever the
+# set contains, but can never catch a kind *missing* from it — which is how
+# ``guess_post`` sat exposed from the day Guess Who shipped, spoiling live
+# rounds. This table is the enforcement; ANON_KINDS is the implementation, and
+# the two are pinned together by the closure test below.
+MUST_NEVER_POST = [
+    pytest.param("confession", id="confession-is-anonymous"),
+    pytest.param("confession_reply", id="confession-reply-is-anonymous"),
+    pytest.param("whisper", id="whisper-sender-is-anonymous"),
+    pytest.param("ama_ask", id="ama-question-is-anonymous"),
+    # Guess Who: the submitter *is* the answer (both call sites pass
+    # answer_id=submitter_id), so naming them doesn't merely expose a private
+    # act — it hands the room the solution before anyone guesses.
+    pytest.param("guess_post", id="guess-post-submitter-is-the-answer"),
+    # Pen Pals: both halves of a pairing fire in the same transaction, so two
+    # adjacent register cards name not just who was matched but who with —
+    # while the room itself defaults to mods-only visibility.
+    pytest.param("pen_pal", id="pen-pal-pairing-correlates"),
+    pytest.param("pen_pal_complete", id="pen-pal-complete-correlates"),
+]
+
+
+@pytest.mark.parametrize("kind", MUST_NEVER_POST)
 def test_anon_kind_quest_payouts_are_never_collected(db, kind):
     """The deanonymization-by-timing leak: a register card reading
     "**X** earned *Send a Whisper*" lands seconds after the anonymous whisper
@@ -258,6 +281,14 @@ def test_anon_kind_quest_payouts_are_never_collected(db, kind):
         entries = collect_register_entries(conn, GUILD_ID, 0, 10)
 
     assert entries == []
+
+
+def test_anon_kinds_covers_every_kind_the_register_must_hide(db):
+    """``MUST_NEVER_POST`` is the privacy contract; ANON_KINDS is how the three
+    enforcing surfaces read it. A kind in the contract but not the set would
+    leak on the *other* two surfaces (community top-contributor names, sign-off
+    cards) even with the register green, so pin them together here."""
+    assert set(quest_logic.ANON_KINDS) >= {p.values[0] for p in MUST_NEVER_POST}
 
 
 @pytest.mark.parametrize("ledger_kind", ["quest", "quest_community",
