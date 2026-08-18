@@ -232,7 +232,7 @@ def test_opposing_picks_same_game_are_fine(db):
     [
         pytest.param("XYZ", "Never heard of", id="unknown-team"),
         pytest.param("CHI", "isn't available", id="bye-team"),
-        pytest.param("SEA", "already burned", id="burned-team"),
+        pytest.param("SEA", "already used", id="burned-team"),
     ],
 )
 def test_pick_refusals_teach_the_rule(db, team, match):
@@ -285,7 +285,7 @@ def test_settled_results_are_immutable_but_void_frees(db, result, ok):
 def test_pick_guards_membership_week_and_season_state(db):
     with open_db(db) as conn:
         season = _season(conn)
-        with pytest.raises(PickError, match="join first"):
+        with pytest.raises(PickError, match="use the Join button"):
             place_pick(conn, season, 1, 1, "SEA", NOW)
         _join(conn, season, 1)
         with pytest.raises(PickError, match="week 1"):
@@ -310,7 +310,7 @@ def test_ghosts_pick_when_streak_on_and_rest_when_off(db):
         assert season2 is not None
         _join(conn, season2, 5)
         eliminate_player(conn, season2["id"], 5, week=1)
-        with pytest.raises(PickError, match="dead rest quietly"):
+        with pytest.raises(PickError, match="Ghost picks are disabled"):
             place_pick(conn, season2, 5, 1, "SEA", NOW)
 
 
@@ -344,7 +344,7 @@ def test_join_insufficient_balance_leaves_no_entry(db):
     with open_db(db) as conn:
         season = _season(conn, buyin_coins=100)
         economy_service.apply_credit(conn, GID, 1, 40, "test_seed")
-        with pytest.raises(PickError, match="came up short"):
+        with pytest.raises(PickError, match="balance is short"):
             _join(conn, season, 1)
         assert economy_service.get_balance(conn, GID, 1) == 40
         assert player_status(conn, season, 1, NOW) is None
@@ -484,15 +484,15 @@ def test_board_embed_fields_stay_under_discord_limit():
     for field in embed.fields:
         assert field.value is not None and len(field.value) <= 1024
     alive_field = embed.fields[0]
-    assert "more souls" in alive_field.value  # overflow is honest, not silent
+    assert "more players" in alive_field.value  # overflow is honest, not silent
 
 
 @pytest.mark.parametrize(
     ("late_entry", "needle"),
     [
-        pytest.param("gauntlet", "gauntlet replays", id="gauntlet"),
-        pytest.param("ghost_only", "ghost game", id="ghost-only"),
-        pytest.param("closed", "door shuts", id="closed"),
+        pytest.param("gauntlet", "auto-replay as the Gauntlet", id="gauntlet"),
+        pytest.param("ghost_only", "Ghost Streak side game", id="ghost-only"),
+        pytest.param("closed", "closes at Week 1 kickoff", id="closed"),
     ],
 )
 def test_announcement_late_entry_copy_matches_config(late_entry, needle):
@@ -504,5 +504,5 @@ def test_announcement_late_entry_copy_matches_config(late_entry, needle):
         season_name="S", entrants=1, buyin=0,
         gauntlet_mode=False, late_entry=late_entry,
     )
-    rules = next(f for f in embed.fields if f.name == "The rules, briefly")
+    rules = next(f for f in embed.fields if f.name == "The Rules")
     assert needle in rules.value

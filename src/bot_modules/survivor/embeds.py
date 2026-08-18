@@ -2,8 +2,12 @@
 
 Every builder takes ``color`` and falls back to the branding default, so it
 rides the shared accent contract (tests/test_embed_accent_contract.py — one
-``case()`` row each, never per-file accent copies). Copy voice: the meadow —
-lowercase warmth, wry, never sneering at the member.
+``case()`` row each, never per-file accent copies).
+
+Copy voice (decided 2026-08-18): **standard sports register** — Title Case
+labels per the style guide, scoreboard framing, light humor. These strings
+ship to every server; per-guild personality lives in the guild-scoped
+flavor corpus and the branding kit (accent + bot identity), never here.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ def strike_hearts(used: int, allowed: int) -> str:
 
 
 def _wealth(count: int, low: bool) -> str:
-    return f"{'🟡' if low else '🟢'} {count} teams left"
+    return f"{'🟡' if low else '🟢'} {count} teams available"
 
 
 def _rel(ts: float | None) -> str:
@@ -54,41 +58,41 @@ def build_status_embed(
     )
     dead = st["status"] == "ghost"
     state = (
-        f"👻 ghost since week {st['eliminated_week']}" if dead
-        else "🌾 alive"
+        f"👻 Eliminated — Week {st['eliminated_week']}" if dead
+        else "✅ Alive"
     )
     streak = st.get("streak")
     if dead and streak:
         state += (
-            f"\nstreak **{streak['current']}** · best {streak['best']}"
+            f"\nStreak **{streak['current']}** · Best {streak['best']}"
         )
-    embed.add_field(name="Standing", value=state, inline=True)
+    embed.add_field(name="Status", value=state, inline=True)
     embed.add_field(
         name="Strikes",
         value=strike_hearts(st["strikes_used"], st["strikes_allowed"]),
         inline=True,
     )
     embed.add_field(
-        name="Satchel",
+        name="Teams Left",
         value=_wealth(st["satchel_count"], st["satchel_low"]),
         inline=True,
     )
     if st["week"] is None:
-        pick_line = "the season is settling — no games left to pick."
+        pick_line = "No games left to pick — the season is wrapping up."
     elif st["pick"] is None:
-        pick_line = f"week {st['week']}: **no pick yet** — `/survivor pick`"
+        pick_line = f"Week {st['week']}: **no pick yet** — `/survivor pick`"
     else:
         lock = (
             "🔒 locked" if st["pick_locked"]
             else f"locks {_rel(st['pick_kickoff_ts'])}"
         )
         tag = " 📎" if st["pick"]["auto_assigned"] else ""
-        pick_line = f"week {st['week']}: **{st['pick']['team']}**{tag} · {lock}"
+        pick_line = f"Week {st['week']}: **{st['pick']['team']}**{tag} · {lock}"
     pending = st.get("pending")
     if pending:
         pick_line += (
-            f"\nweek {pending['week']}: **{pending['team']}** · "
-            "⏳ awaiting the reckoning"
+            f"\nWeek {pending['week']}: **{pending['team']}** · "
+            "⏳ awaiting results"
         )
     embed.add_field(name="Pick", value=pick_line, inline=False)
     embed.set_footer(text=season_name)
@@ -105,15 +109,16 @@ def build_pick_confirm_embed(
     """The ephemeral confirmation after a pick lands (§2.4)."""
     vs = f"{'vs' if game.is_home else 'at'} {game.opponent}"
     embed = discord.Embed(
-        title=f"🏈 {'Pick changed' if changed else 'Pick made'}: {game.team}",
+        title=f"🏈 {'Pick Changed' if changed else 'Pick Confirmed'}: {game.team}",
         description=(
             f"**{game.team}** {vs} · locks <t:{int(game.kickoff_ts)}:R>\n"
-            "change it freely until kickoff. the bot tells no one. 🤫"
+            "Change it any time before kickoff. Picks stay hidden until "
+            "the weekly results."
         ),
         color=color or discord.Color(DEFAULT_ACCENT),
     )
     embed.add_field(
-        name="Satchel",
+        name="Teams Left",
         value=_wealth(st["satchel_count"], st["satchel_low"]),
         inline=True,
     )
@@ -136,39 +141,39 @@ def build_board_embed(
     """The public board (§2.6). ``name_of(user_id) -> str`` is injected so
     the builder stays pure of Discord lookups."""
     embed = discord.Embed(
-        title=f"🏈 {season_name} — The Board",
+        title=f"🏈 {season_name} — Standings",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
     week = board["week"]
     pots = board["pots"]
     embed.description = (
-        f"week {week if week is not None else '—'} · "
-        f"pot **{pots['main']:,}** · ghost pot **{pots['ghost']:,}**"
+        f"Week {week if week is not None else '—'} · "
+        f"Pot **{pots['main']:,}** · Ghost Pot **{pots['ghost']:,}**"
     )
     if board["alive"]:
         lines = [
-            f"{name_of(p['user_id'])} · {p['weeks_survived']} wk · "
+            f"{name_of(p['user_id'])} · {p['weeks_survived']}W · "
             f"{strike_hearts(p['strikes_used'], strikes_allowed)}"
             for p in board["alive"]
         ]
         embed.add_field(
-            name=f"🌾 Alive ({len(board['alive'])})",
-            value=_clip_field(lines, "souls"),
+            name=f"✅ Alive ({len(board['alive'])})",
+            value=_clip_field(lines, "players"),
             inline=False,
         )
     if board["graveyard"]:
         lines = [
-            f"{name_of(p['user_id'])} · wk {p['eliminated_week'] or '?'}"
+            f"{name_of(p['user_id'])} · Week {p['eliminated_week'] or '?'}"
             for p in board["graveyard"]
         ]
         embed.add_field(
-            name=f"👻 Graveyard ({len(board['graveyard'])})",
-            value=_clip_field(lines, "ghosts"),
+            name=f"👻 Eliminated ({len(board['graveyard'])})",
+            value=_clip_field(lines, "players"),
             inline=False,
         )
     if board["most_burned"]:
         embed.add_field(
-            name="🔥 Most-burned teams",
+            name="🔥 Most-Picked Teams",
             value=" · ".join(f"{t} ({n})" for t, n in board["most_burned"]),
             inline=False,
         )
@@ -189,15 +194,16 @@ def build_announcement_embed(
     copy once Week 1 has kicked off — the button stays, the road gets real."""
     if gauntlet_mode:
         description = (
-            "the season is underway. the door is open; the road is real.\n"
-            f"🌾 **{entrants}** souls walking."
+            "The season is underway — late entry is open, and missed weeks "
+            "are auto-replayed through the Gauntlet.\n"
+            f"👥 **{entrants}** players in."
         )
     else:
         description = (
-            "pick one NFL team to win each week. no team twice. "
-            "your team loses, you're out.\n"
-            "last one standing takes the pot. the meadow watches.\n"
-            f"🌾 **{entrants}** souls enrolled."
+            "Pick one NFL team to win each week. No team twice. "
+            "Lose and you're out.\n"
+            "Last one standing takes the pot.\n"
+            f"👥 **{entrants}** players in."
         )
     embed = discord.Embed(
         title=f"🏈 {season_name}",
@@ -206,35 +212,35 @@ def build_announcement_embed(
     )
     embed.add_field(
         name="Entry",
-        value=f"{buyin:,} coins" if buyin else "free — walk in",
+        value=f"{buyin:,} coins" if buyin else "Free",
         inline=True,
     )
     # The late-entry bullet must match the season's actual config — a pin
     # promising "join any week" over a closed season is the bot lying.
     late_lines = {
-        "gauntlet": "• join any week: the gauntlet replays what you missed",
-        "ghost_only": "• join late and you haunt — late arrivals play the ghost game",
-        "closed": "• enrollment closes at Week 1 kickoff — after that, the door shuts",
+        "gauntlet": "• Join any week — missed weeks auto-replay as the Gauntlet",
+        "ghost_only": "• Late entry joins the Ghost Streak side game",
+        "closed": "• Entry closes at Week 1 kickoff",
     }
     # Config-accurate, like the late-entry bullet: strikes is a 0–2 dial and
     # a sudden-death season must not pin a promise of grace.
     strike_lines = {
-        0: "• sudden death ☠️ — one loss and you're gone",
-        1: "• one strike of grace 💛 — the second is the end",
-        2: "• two strikes of grace 💛💛 — the third is the end",
+        0: "• Sudden death ☠️ — one loss and you're out",
+        1: "• One strike of grace 💛 — the second ends your run",
+        2: "• Two strikes of grace 💛💛 — the third ends your run",
     }
     embed.add_field(
-        name="The rules, briefly",
+        name="The Rules",
         value=(
-            "• one team a week, straight up — win or die\n"
-            "• each team usable **once** all season\n"
-            "• picks lock at that game's kickoff; secret until Tuesday\n"
+            "• One team each week to **win**, straight up\n"
+            "• Each team usable **once** all season\n"
+            "• Picks lock at that game's kickoff — hidden until the results post\n"
             + strike_lines.get(strikes, strike_lines[1]) + "\n"
             + late_lines.get(late_entry, late_lines["gauntlet"])
         ),
         inline=False,
     )
-    embed.set_footer(text="picks are private acts; results are communal theater")
+    embed.set_footer(text="Picks stay secret until the weekly results post")
     return embed
 
 
@@ -247,35 +253,36 @@ def build_gauntlet_receipt_embed(
     """The private gauntlet receipt (§4.2): the inherited fate, week by week,
     shown BEFORE anyone pays — nobody buys in blind."""
     embed = discord.Embed(
-        title="🌾 The Gauntlet — your inherited road",
+        title="🏈 Late Entry — The Gauntlet",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
     lines = []
     for rw in fate.weeks:
         if rw.team is None:
-            lines.append(f"wk {rw.week} · — · 🌫️ void (no legal chalk)")
+            lines.append(f"Week {rw.week} · — · 🌫️ void (no eligible pick)")
             continue
         icon = _RESULT_ICON.get(rw.result, "·")
-        note = " 🕯️ **the road ends here**" if rw.fatal else ""
-        lines.append(f"wk {rw.week} · **{rw.team}** · {icon} {rw.result}{note}")
+        note = " 💀 **eliminated here**" if rw.fatal else ""
+        lines.append(f"Week {rw.week} · **{rw.team}** · {icon} {rw.result}{note}")
     embed.add_field(
-        name="The replay", value=_clip_field(lines, "weeks") or "—", inline=False
+        name="Missed Weeks (Auto-Replayed)",
+        value=_clip_field(lines, "weeks") or "—", inline=False,
     )
     if fate.dead:
         state = (
-            f"💀 you arrive **dead** (week {fate.death_week}) — straight to "
-            "Ghost Streak, picking from tonight like everyone else"
+            f"💀 You enter **eliminated** (Week {fate.death_week}) and join "
+            "the Ghost Streak side game immediately — keep picking"
         )
     else:
         hearts = strike_hearts(fate.strikes_used, max(fate.strikes_used, 1))
         state = (
-            f"🌾 you arrive **alive** · strikes {hearts or '—'} · "
-            f"{len(fate.burned)} teams burned from your satchel"
+            f"✅ You enter **alive** · Strikes {hearts or '—'} · "
+            f"{len(fate.burned)} teams already used"
         )
-    embed.add_field(name="Your arrival", value=state, inline=False)
-    cost = [f"gauntlet toll: **{fate.fee:,}** ({fate.elapsed_count} weeks walked)"]
+    embed.add_field(name="Where You Land", value=state, inline=False)
+    cost = [f"Late fee: **{fate.fee:,}** ({fate.elapsed_count} missed weeks)"]
     if buyin:
-        cost.append(f"buy-in: **{buyin:,}**")
-    embed.add_field(name="The toll", value=" · ".join(cost), inline=False)
-    embed.set_footer(text="the door is open; the road is real")
+        cost.append(f"Buy-in: **{buyin:,}**")
+    embed.add_field(name="Entry Cost", value=" · ".join(cost), inline=False)
+    embed.set_footer(text="Shown before you pay — no surprises")
     return embed

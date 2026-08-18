@@ -79,7 +79,17 @@ The roles get pinged exactly twice a week. Restraint is the brand.
 2. **The ledger:** the only place picks ever appear — every living player → team → `✅ / 💀 / 💛→🖤 / 📎 auto`, deaths sorted first. Ghost Streak standings get a compact strip beneath (current streaks, record holder).
 3. **Eulogies:** one flavor line per elimination, name-slotted (*"pour one out for **@Loaf**, who believed in the Jets the way children believe in summer. 🥀"*). Ghost roles applied on post. Zero deaths: *"everyone lives. suspicious. the meadow remembers."*
 
-**Flavor corpus:** DB table (~20 eulogies, ~10 no-death, ~10 toll lines), admin CRUD via `/survivor admin flavor`, seasonal drift encouraged — same rotating-corpus pattern as the ToD cooldowns.
+**Flavor corpus:** DB table (~20 eulogies, ~10 no-death, ~10 toll lines), admin CRUD on the dashboard panel, seasonal drift encouraged — same rotating-corpus pattern as the ToD cooldowns.
+
+> **Copy register (decided 2026-08-18).** All hardcoded copy — embeds, refusals,
+> buttons, DMs — is **standard sports register** (Title Case labels per the
+> style guide, scoreboard framing, light humor), because these strings ship to
+> every server. Per-guild personality lives in the two per-guild knobs: the
+> guild-scoped flavor corpus (each server writes its own eulogies/toll lines;
+> the seeded defaults are sports-desk neutral) and the branding kit (accent
+> color + bot identity). The spec's meadow-voiced sample lines survive as
+> TGM's corpus material, not as shipped defaults. The groundskeeper stays — he
+> is the auto-assign character in every server, spec-level.
 
 ### 2.6 Boards
 - `/survivor board` (public, auto-posted after each Reckoning): alive roster with weeks survived + strike hearts, graveyard with week-of-death, pot, most-burned teams meta-stat.

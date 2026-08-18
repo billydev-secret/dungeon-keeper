@@ -131,7 +131,7 @@ class SurvivorCog(commands.Cog):
         season, offset = await self._season_and_offset(interaction.guild.id)
         if season is None:
             await interaction.response.send_message(
-                "No Survivor season is running here. 🌾", ephemeral=True
+                "No Survivor season is running here.", ephemeral=True
             )
             return
         now = self._now()
@@ -164,15 +164,15 @@ class SurvivorCog(commands.Cog):
             return
         if not games:
             await interaction.response.send_message(
-                "Nothing legal left this week — every open team is burned "
-                "or playing. Rare, survivable, and week "
-                f"{week + 1} awaits.",
+                "No eligible team left this week — everything still to play "
+                f"is already used. You survive the week; Week {week + 1} "
+                "is next.",
                 ephemeral=True,
             )
             return
         await interaction.response.send_message(
-            f"week {week} — pick a team to **win**. locks at each game's "
-            "kickoff; secret until Tuesday.",
+            f"Week {week} — pick a team to **win**. Locks at that game's "
+            "kickoff; hidden until the results post.",
             view=PickPanel(
                 self.bot, season, interaction.user.id, week, games, offset
             ),
@@ -187,7 +187,7 @@ class SurvivorCog(commands.Cog):
         season, _ = await self._season_and_offset(interaction.guild.id)
         if season is None:
             await interaction.response.send_message(
-                "No Survivor season is running here. 🌾", ephemeral=True
+                "No Survivor season is running here.", ephemeral=True
             )
             return
         now = self._now()
@@ -199,8 +199,8 @@ class SurvivorCog(commands.Cog):
         st = await asyncio.to_thread(_q)
         if st is None:
             await interaction.response.send_message(
-                "You're not in this season — the Join button in the "
-                "announcement is the door. 🌾",
+                "You're not in this season — use the Join button on the "
+                "season post.",
                 ephemeral=True,
             )
             return
@@ -218,7 +218,7 @@ class SurvivorCog(commands.Cog):
         season, _ = await self._season_and_offset(interaction.guild.id)
         if season is None:
             await interaction.response.send_message(
-                "No Survivor season is running here. 🌾", ephemeral=True
+                "No Survivor season is running here.", ephemeral=True
             )
             return
         now = self._now()
@@ -265,7 +265,7 @@ class SurvivorCog(commands.Cog):
         season, _ = await self._season_and_offset(interaction.guild.id)
         if season is None:
             await interaction.response.send_message(
-                "No Survivor season is running here. 🌾", ephemeral=True
+                "No Survivor season is running here.", ephemeral=True
             )
             return
         target = member or interaction.user
@@ -284,7 +284,7 @@ class SurvivorCog(commands.Cog):
         if not rows:
             await interaction.response.send_message(
                 f"Nothing revealed for {discord.utils.escape_markdown(target.display_name)} "
-                "yet — picks appear only after their week's Reckoning. 🤫",
+                "yet — picks appear here after the weekly results post.",
                 ephemeral=True,
             )
             return
@@ -297,11 +297,11 @@ class SurvivorCog(commands.Cog):
         ]
         color = await resolve_accent_color(self.ctx.db_path, interaction.guild)
         embed = discord.Embed(
-            title=f"📜 {discord.utils.escape_markdown(target.display_name)} — the road so far",
+            title=f"📜 {discord.utils.escape_markdown(target.display_name)} — Pick History",
             description="\n".join(lines[-25:]),
             color=color,
         )
-        embed.set_footer(text="revealed picks only — nothing current ever leaks")
+        embed.set_footer(text="Revealed picks only — current picks stay hidden")
         await interaction.response.send_message(embed=embed)
 
 

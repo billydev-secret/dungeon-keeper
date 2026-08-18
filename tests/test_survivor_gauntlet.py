@@ -233,7 +233,7 @@ def test_execute_join_short_wallet_charges_nothing(db):
         season = _season(conn)
         economy_service.apply_credit(conn, GID, 1, 100, "test_seed")  # fee is 150
         fate = compute_fate(conn, season, NOW)
-        with pytest.raises(PickError, match="came up short"):
+        with pytest.raises(PickError, match="balance is short"):
             execute_gauntlet_join(conn, season, 1, fate, NOW)
         assert economy_service.get_balance(conn, GID, 1) == 100
         assert conn.execute(

@@ -156,7 +156,7 @@ def execute_gauntlet_join(
         (season["id"], user_id),
     ).fetchone()
     if already is not None:
-        raise PickError("One entry per person — and you're already in. 🌾")
+        raise PickError("One entry per person — and you're already in.")
 
     config = season["config"]
     buyin = int(config["buyin_coins"])
@@ -164,9 +164,9 @@ def execute_gauntlet_join(
     balance = economy_service.get_balance(conn, season["guild_id"], user_id)
     if total > 0 and balance < total:
         raise PickError(
-            f"The road costs {total:,} coins ({fate.fee:,} gauntlet toll"
+            f"Late entry costs {total:,} coins ({fate.fee:,} late fee"
             + (f" + {buyin:,} buy-in" if buyin else "")
-            + ") and your wallet came up short."
+            + ") — your balance is short."
         )
     if buyin > 0:
         economy_service.apply_debit(
@@ -183,7 +183,7 @@ def execute_gauntlet_join(
             },
         )
     if not add_player(conn, season, user_id, joined_at=now):
-        raise PickError("One entry per person — and you're already in. 🌾")
+        raise PickError("One entry per person — and you're already in.")
 
     for rw in fate.weeks:
         if rw.team is None:
@@ -234,7 +234,7 @@ def ghost_only_join(
     if season["status"] == "complete":
         raise PickError("This season is over.")
     if not add_player(conn, season, user_id, joined_at=now):
-        raise PickError("One entry per person — and you're already in. 🌾")
+        raise PickError("One entry per person — and you're already in.")
     elapsed = elapsed_weeks(conn, season["season_year"], now)
     conn.execute(
         "UPDATE survivor_players SET status = 'ghost', eliminated_week = ?, "

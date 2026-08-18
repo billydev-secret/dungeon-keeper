@@ -34,12 +34,12 @@ log = logging.getLogger("dungeonkeeper.survivor")
 WEDNESDAY, SATURDAY, TUESDAY = 2, 5, 1
 
 CONDOLENCE = (
-    "your run ended in week {week}. the meadow remembers. 🥀\n"
-    "-# the streak game is live — `/survivor pick` still works, and the "
-    "ghost pot is real. 👻"
+    "Your run ended in Week {week}. 🪦\n"
+    "-# You can keep playing: Ghost Streak is live — the longest win streak "
+    "after elimination takes the side pot. `/survivor pick` still works. 👻"
 )
 LAST_CALL = (
-    "you haven't picked for week {week}. `/survivor pick` — or I'll pick "
+    "You haven't picked for Week {week}. `/survivor pick` — or I'll pick "
     "for you, and I have terrible taste. 🌙"
 )
 
@@ -321,7 +321,7 @@ async def send_last_call(bot, db_path: Path, season: dict, week: int, now: float
         return
     text = LAST_CALL.replace("{week}", str(week))
     if early_lines:
-        text += "\n-# early games: " + " · ".join(early_lines)
+        text += "\n-# Early games this week: " + " · ".join(early_lines)
     fallback: list[int] = []
     for user_id in pickless:
         member = guild.get_member(user_id)
@@ -334,7 +334,7 @@ async def send_last_call(bot, db_path: Path, season: dict, week: int, now: float
     if fallback and channel is not None:
         mentions = " ".join(f"<@{uid}>" for uid in fallback)
         await channel.send(
-            f"🌙 last call, {mentions} — you haven't picked for week {week}. "
+            f"🌙 Last call, {mentions} — no pick yet for Week {week}. "
             "`/survivor pick`",
             allowed_mentions=discord.AllowedMentions(
                 everyone=False, roles=False,
@@ -370,9 +370,9 @@ async def post_addenda(bot, db_path: Path, reports: dict) -> None:
             continue
         names = ", ".join(f"<@{uid}>" for uid in recomputed[:10])
         await channel.send(
-            f"⏳ **addendum** — the league sorted itself out: week "
-            f"{', '.join(map(str, weeks))} straggler(s) settled"
-            + (f", touching {names}" if names else "")
-            + ". the record stands corrected.",
+            f"⏳ **Results update** — pending Week "
+            f"{', '.join(map(str, weeks))} result(s) are now final"
+            + (f", affecting {names}" if names else "")
+            + ". Standings updated.",
             allowed_mentions=discord.AllowedMentions.none(),
         )

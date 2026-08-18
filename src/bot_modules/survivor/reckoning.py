@@ -26,10 +26,13 @@ from bot_modules.survivor.logic import (
     pot_totals,
 )
 
-# Fixed lines for deaths that aren't the corpus's job (§1.2, §6.14).
+# Fixed lines for deaths that aren't the corpus's job (§1.2, §6.14). The
+# groundskeeper survives the 2026-08-18 standard-sports copy pass — he is
+# the spec's own auto-pick character and travels fine; the other two lines
+# are server-neutral.
 GROUNDSKEEPER_LINE = "the groundskeeper stopped covering for **{name}**."
-MISSED_LINE = "the meadow waited. **{name}** never picked."
-LEAVER_LINE = "**{name}** walked out of the meadow mid-game. 🚪"
+MISSED_LINE = "**{name}** never picked. Eliminated."
+LEAVER_LINE = "**{name}** left the server mid-season. 🚪"
 
 _RESULT_ICON = {
     "win": "✅", "loss": "💀", "tie": "🤝", "void": "🌫️", None: "⏳",
@@ -225,36 +228,37 @@ def build_reckoning_embed(
 
     week = data["week"]
     embed = discord.Embed(
-        title=f"⚖️ THE RECKONING — week {week}",
+        title=f"🏈 Week {week} — THE RECKONING",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
     # Act 1 — the toll.
     toll = (
         f"{data['toll_line']}\n"
-        f"🌾 **{data['before']} → {data['after']}** souls · "
-        f"pot **{data['pots']['main']:,}** · ghost pot **{data['pots']['ghost']:,}**"
+        f"👥 Survivors **{data['before']} → {data['after']}** · "
+        f"Pot **{data['pots']['main']:,}** · Ghost Pot **{data['pots']['ghost']:,}**"
     )
     if data["stragglers"]:
         toll += (
-            f"\n⏳ {data['stragglers']} pick(s) still ungraded — an addendum "
-            "follows when the league sorts itself out"
+            f"\n⏳ {data['stragglers']} result(s) still pending — an update "
+            "follows when they're final"
         )
     embed.description = toll
     if data["arrivals"]:
         breathing = sum(1 for a in data["arrivals"] if not a["dead"])
         lines = [
             f"{name_of(a['user_id'])} — "
-            + ("👻 arrived dead" if a["dead"] else "🌾 arrived breathing")
+            + ("💀 arrived eliminated" if a["dead"] else "✅ arrived alive")
             for a in data["arrivals"]
         ]
-        word = "soul" if len(data["arrivals"]) == 1 else "souls"
+        word = "player" if len(data["arrivals"]) == 1 else "players"
         lines.insert(
             0,
-            f"{len(data['arrivals'])} {word} walked the gauntlet this week. "
-            f"{breathing} arrived breathing.",
+            f"{len(data['arrivals'])} {word} joined through the Gauntlet "
+            f"this week — {breathing} arrived alive.",
         )
         embed.add_field(
-            name="🚪 The gate", value=_clip_field(lines, "arrivals"), inline=False
+            name="🚪 New Entries", value=_clip_field(lines, "arrivals"),
+            inline=False,
         )
     # Act 2 — the ledger, deaths sorted first.
     rows = data["deaths"] + data["ledger"]
@@ -264,14 +268,14 @@ def build_reckoning_embed(
             for e in rows
         ]
         embed.add_field(
-            name="📜 The ledger", value=_clip_field(lines, "souls"), inline=False
+            name="📜 The Ledger", value=_clip_field(lines, "players"), inline=False
         )
     if data["streak_strip"] or data["streak_record"]:
         lines = [
             f"👻 {name_of(uid)} · {st['current']} straight"
             for uid, st in data["streak_strip"]
-        ] or ["the graveyard rests this week"]
-        lines.append(f"record: {data['streak_record']}")
+        ] or ["No active streaks"]
+        lines.append(f"Season record: {data['streak_record']}")
         embed.add_field(
             name="Ghost Streak", value="\n".join(lines), inline=False
         )
@@ -282,9 +286,10 @@ def build_reckoning_embed(
             for i, e in enumerate(data["deaths"])
         ]
         embed.add_field(
-            name="🥀 Eulogies", value=_clip_field(lines, "the fallen"), inline=False
+            name="🪦 Eliminations", value=_clip_field(lines, "eliminated"),
+            inline=False,
         )
-    embed.set_footer(text=f"{season_name} · the meadow gathers on Tuesdays")
+    embed.set_footer(text=f"{season_name} · results post every Tuesday")
     return embed
 
 
@@ -300,9 +305,9 @@ def build_slate_embed(
     """The Wednesday slate (§2.3): the week's games with Discord timestamps
     (local time for free), pick counts in the footer."""
     embed = discord.Embed(
-        title=f"🏈 Week {week} — the slate",
-        description="pick one team to **win**. locks at that game's kickoff. "
-        "the bot tells no one. 🤫",
+        title=f"🏈 Week {week} Slate",
+        description="Pick one team to **win**. Picks lock at each game's "
+        "kickoff and stay hidden until the results post.",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
     from bot_modules.survivor.embeds import _clip_field
@@ -311,9 +316,11 @@ def build_slate_embed(
         f"**{g['away']}** @ **{g['home']}** · <t:{int(g['kickoff_ts'])}:f>"
         for g in games
     ]
-    embed.add_field(name="The games", value=_clip_field(lines, "games"), inline=False)
+    embed.add_field(
+        name="This Week's Games", value=_clip_field(lines, "games"), inline=False
+    )
     embed.set_footer(
-        text=f"{season_name} · picks close at each kickoff · "
+        text=f"{season_name} · Picks close at kickoff · "
         f"{picked} of {alive} alive have picked"
     )
     return embed

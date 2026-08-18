@@ -153,7 +153,7 @@ def test_reckoning_no_deaths_uses_no_death_corpus(db):
     [
         pytest.param("cap", "groundskeeper", id="cap-fixed-line"),
         pytest.param("missed", "never picked", id="missed-fixed-line"),
-        pytest.param("left", "walked out", id="leaver-fixed-line"),
+        pytest.param("left", "left the server", id="leaver-fixed-line"),
     ],
 )
 def test_eulogy_fixed_lines_by_source(source, needle):

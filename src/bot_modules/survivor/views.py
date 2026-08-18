@@ -153,12 +153,12 @@ class JoinSeasonButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=r"survivor_join:(?P<season_id>\d+)",
 ):
-    """The 🌾 Join button on the pinned season announcement (§2.2)."""
+    """The 🏈 Join button on the pinned season announcement (§2.2)."""
 
     def __init__(self, season_id: int) -> None:
         super().__init__(
             discord.ui.Button(
-                label="🌾 Join the Season",
+                label="🏈 Join the Season",
                 style=discord.ButtonStyle.success,
                 custom_id=f"survivor_join:{season_id}",
             )
@@ -211,7 +211,7 @@ class JoinSeasonButton(
         if entered:
             await interaction.response.send_message(
                 "You're already in. One entry per person — `/survivor status` "
-                "for where you stand. 🌾",
+                "for where you stand.",
                 ephemeral=True,
             )
             return
@@ -227,8 +227,8 @@ class JoinSeasonButton(
             color = await branding.resolve_accent_color(db_path, interaction.guild)
             total = fate.fee + buyin
             content = (
-                f"the receipt below is your inherited fate — read it before "
-                f"you pay. your balance: **{balance:,}**"
+                "Your catch-up results are below — review before you pay. "
+                f"Balance: **{balance:,}**"
                 + (" ⚠️ (short)" if balance < total else "")
             )
             await interaction.response.send_message(
@@ -239,12 +239,12 @@ class JoinSeasonButton(
             )
             return
         lines = [
-            "**one sentence of rules:** pick one team to win each week, no "
-            "team twice — your team loses, you're out.",
-            f"entry: **{buyin:,} coins**" if buyin else "entry: **free**",
+            "**The rules in one line:** pick one team to win each week, no "
+            "team twice — lose and you're out.",
+            f"Entry: **{buyin:,} coins**" if buyin else "Entry: **free**",
         ]
         if buyin:
-            lines.append(f"your balance: {balance:,}")
+            lines.append(f"Your balance: {balance:,}")
         await interaction.response.send_message(
             "\n".join(lines),
             view=JoinConfirmView(self.season_id),
@@ -262,7 +262,7 @@ class JoinConfirmView(discord.ui.View):
         self.season_id = season_id
         self.gauntlet = gauntlet
 
-    @discord.ui.button(label="🌾 I'm in", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ I'm In", style=discord.ButtonStyle.success)
     async def confirm(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -321,19 +321,20 @@ class JoinConfirmView(discord.ui.View):
         charged = f" ({result.charged:,} coins paid)" if result.charged else ""
         if fate is not None and fate.dead:
             content = (
-                f"the gauntlet took you at week {fate.death_week}{charged}. "
-                "you arrive a ghost — pick tonight; the streak game is live "
-                "and the side-pot is real. 👻"
+                f"The Gauntlet caught you at Week {fate.death_week}{charged}. "
+                "You enter in the Ghost Streak side game — keep picking; the "
+                "longest streak takes the side pot. 👻"
             )
         elif fate is not None:
             content = (
-                f"you walked the gauntlet and lived{charged}. "
-                f"{len(fate.burned)} teams are ash; pick from what remains. 🌾"
+                f"You made it through the Gauntlet alive{charged}. "
+                f"{len(fate.burned)} teams are already used — pick from "
+                "the rest. 🏈"
             )
         else:
             content = (
-                f"you're in{charged}. the slate posts Wednesdays; "
-                "your first pick awaits. 🌾"
+                f"You're in{charged}. The weekly slate posts Wednesday — "
+                "`/survivor pick` any time before kickoff. 🏈"
             )
         await interaction.response.edit_message(content=content, view=None)
         note = await _grant_survivor_role(interaction, season, fate=fate)
@@ -419,20 +420,20 @@ class SlatePickButton(
         season, week, games, offset = await asyncio.to_thread(_q)
         if season is None or week is None:
             await interaction.response.send_message(
-                "Nothing to pick right now — the season is settling. 🌾",
+                "No games left to pick right now.",
                 ephemeral=True,
             )
             return
         if not games:
             await interaction.response.send_message(
-                "Nothing legal left this week — every open team is burned or "
-                "playing. Rare, survivable.",
+                "No eligible team left this week — everything still to play "
+                "is already used. You survive the week.",
                 ephemeral=True,
             )
             return
         await interaction.response.send_message(
-            f"week {week} — pick a team to **win**. locks at each game's "
-            "kickoff; secret until Tuesday.",
+            f"Week {week} — pick a team to **win**. Locks at that game's "
+            "kickoff; hidden until the results post.",
             view=PickPanel(bot, season, user_id, week, games, offset),  # pyright: ignore[reportArgumentType]
             ephemeral=True,
         )

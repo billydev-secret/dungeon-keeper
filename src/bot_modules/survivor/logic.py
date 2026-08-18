@@ -216,20 +216,20 @@ def place_pick(
     """Place or change a pick, enforcing every §1.2 guard. Returns the game
     picked, for the confirmation embed. Raises PickError with the reason."""
     if season["status"] == "complete":
-        raise PickError("This season is over — the meadow rests.")
+        raise PickError("This season is over.")
 
     player = conn.execute(
         "SELECT status FROM survivor_players WHERE season_id = ? AND user_id = ?",
         (season["id"], user_id),
     ).fetchone()
     if player is None:
-        raise PickError("You're not in this season — join first. 🌾")
+        raise PickError("You're not in this season — use the Join button on the season post.")
     if player["status"] == "ghost" and not season["config"]["ghost_streak"]:
-        raise PickError("The dead rest quietly this season.")
+        raise PickError("Ghost picks are disabled this season.")
 
     current = pick_week(conn, season["season_year"], now)
     if current is None:
-        raise PickError("No games left to pick — the season is settling.")
+        raise PickError("No games left to pick this season.")
     if week != current:
         raise PickError(f"Picks are open for week {current}, not week {week}.")
 
@@ -264,7 +264,7 @@ def place_pick(
         if team not in ALL_TEAMS:
             raise PickError(f"Never heard of {team!r}.")
         if team in burned_teams(conn, season["id"], user_id):
-            raise PickError(f"{team} is already burned from your satchel.")
+            raise PickError(f"{team} is already used — one team per season.")
         raise PickError(
             f"{team} isn't available this week — bye, already kicked off, "
             "or your other slot."
@@ -310,8 +310,8 @@ def join_season(
         if config["late_entry"] == "closed":
             raise PickError("Enrollment closed at Week 1 kickoff this season.")
         raise GauntletPendingError(
-            "The season is underway — late entry runs the gauntlet, and the "
-            "gauntlet is still being dug. Days, not weeks. 🌾"
+            "The season is underway — late entry runs through the Gauntlet. "
+            "Use the Join button on the season post."
         )
 
     already = conn.execute(
@@ -319,7 +319,7 @@ def join_season(
         (season["id"], user_id),
     ).fetchone()
     if already is not None:
-        raise PickError("One entry per person — and you're already in. 🌾")
+        raise PickError("One entry per person — and you're already in.")
 
     buyin = int(config["buyin_coins"])
     if buyin > 0:
@@ -329,14 +329,14 @@ def join_season(
         )
         if not ok:
             raise PickError(
-                f"The buy-in is {buyin} coins and your wallet came up short."
+                f"The buy-in is {buyin} coins — your balance is short."
             )
     if not add_player(conn, season, user_id, joined_at=now):
         # Race loser: the duplicate SELECT above passed before the winner
         # committed. Raising here rolls this transaction back, debit and
         # all — the caller must be on open_db_immediate (the views are) so
         # two confirms serialize instead of double-charging.
-        raise PickError("One entry per person — and you're already in. 🌾")
+        raise PickError("One entry per person — and you're already in.")
     return JoinResult(charged=buyin)
 
 
