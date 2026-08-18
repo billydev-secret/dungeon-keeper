@@ -344,3 +344,39 @@ failures. Test against the real system unit or not at all.
 
 Ports: 8322 (8321 belongs to the Truth-or-Dare server at `/opt/tod`).
 Logs: `journalctl -u dk-mcp -f`.
+
+### The tunnel ingress rule has to be exactly `http://127.0.0.1:8322`
+
+Not `https://`, and not `localhost`. Both were wrong on the first setup and
+each fails differently:
+
+- `https://` — the origin speaks plain HTTP, so cloudflared's TLS handshake
+  gets plain text back: `tls: first record does not look like a TLS handshake`.
+- `localhost` — resolves to `::1` first, and the service binds IPv4 only:
+  `dial tcp [::1]:8322: connect: connection refused`.
+
+Both surface publicly as a Cloudflare **502**, and claude.ai reports *that* as
+"Couldn't register with the sign-in service" — because a 502 body is not a
+valid MCP response, so the client falls back to OAuth discovery. The auth error
+is a symptom; check the origin first.
+
+Diagnose from the origin outwards, in this order:
+
+```bash
+# 1. Is the service up and listening?
+systemctl is-active dk-mcp && ss -ltn | grep 8322
+
+# 2. Does it answer MCP locally? (expect status=200)
+set -a; . /opt/dk-mcp/dk-mcp.env; set +a
+curl -s -o /dev/null -w 'status=%{http_code}\n' -X POST "http://127.0.0.1:8322${DK_MCP_PATH}" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"p","version":"1"}}}'
+
+# 3. If that is 200 and the public URL is not, it is the tunnel. cloudflared
+#    logs the rule it actually used, including the scheme and host:
+journalctl -u cloudflared -n 50 | grep -i originService
+```
+
+Note that step 3 prints request paths, so the secret endpoint path ends up in
+cloudflared's journal. That is another reason to treat it as rotatable rather
+than permanent.
