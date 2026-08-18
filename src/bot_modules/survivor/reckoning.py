@@ -141,7 +141,20 @@ def build_reckoning_data(
     flavor_none = [f["line"] for f in list_flavor(conn, season["guild_id"], "no_death")]
     flavor_eulogy = [f["line"] for f in list_flavor(conn, season["guild_id"], "eulogy")]
 
+    # The gate reports gauntlet walkers only: joins since the last Reckoning
+    # AND after the season's first kickoff. Pre-kickoff enrollees never
+    # walked anything — the week-1 gate saying they did was the mockup's
+    # catch (2026-08-18).
     last_at = int(season["config"].get("last_reckoned_at") or 0)
+    first = conn.execute(
+        "SELECT MIN(kickoff_utc) AS k FROM nfl_games WHERE season_year = ?",
+        (season["season_year"],),
+    ).fetchone()
+    from bot_modules.survivor.logic import kickoff_ts
+
+    gate_after = max(
+        float(last_at), kickoff_ts(first["k"]) if first and first["k"] else 0.0
+    )
     arrivals = [
         {"user_id": int(r["user_id"]), "dead": r["status"] == "ghost"}
         for r in conn.execute(
@@ -149,7 +162,7 @@ def build_reckoning_data(
             "WHERE season_id = ?",
             (season["id"],),
         ).fetchall()
-        if _joined_ts(r["joined_at"]) > last_at
+        if _joined_ts(r["joined_at"]) > gate_after
     ]
 
     streaks = ghost_streaks(conn, season, now)

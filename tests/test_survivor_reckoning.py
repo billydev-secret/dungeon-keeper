@@ -191,12 +191,13 @@ def test_leavers_die_at_the_reckoning(db):
         assert {e["user_id"] for e in data["deaths"]} == {1, 2}
 
 
-def test_arrivals_gate_since_last_reckoning(db):
+def test_arrivals_gate_counts_gauntlet_walkers_only(db):
     with open_db(db) as conn:
         season = _season(conn)
-        update_config(conn, season["id"], {"last_reckoned_at": int(NOW) - 100})
-        season = get_season(conn, season["id"])
-        join_season(conn, season, 7, NOW)  # joined after the marker
+        # Enrolled before the first kickoff: never walked anything.
+        join_season(conn, season, 6, NOW)
+        # Mid-week join after Thursday kicked: a real gate arrival.
+        join_season(conn, season, 7, THU + HOUR)
         data = build_reckoning_data(conn, season, 1, AFTER_W1)
         assert [a["user_id"] for a in data["arrivals"]] == [7]
 
