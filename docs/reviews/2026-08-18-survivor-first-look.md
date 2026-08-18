@@ -370,3 +370,30 @@ resolves the season's guild off the bot and falls back to the default
 accent — so every panel-button flow now survives being clicked from a DM,
 not just the pick. Wiring test covers the DM view, the copy change, and
 the fallback-with-button path.
+
+---
+
+## 9. The panel should stay at the bottom of the channel
+
+> "The game panel doesn't drop to the bottom of the channel"
+
+**Diagnosis first:** not a defect in what shipped — the reposts all fired
+(no failures logged, the stored message id advanced), but the design as
+specced reposted only at the weekly slate moment, and the sim had consumed
+all four weeks, so nothing would ever repost it again. Between weeks the
+panel only edited in place and drifted up under chat.
+
+**Billy's pick: sticky — always at the bottom.** Wired the panel into
+`core.sticky.StickyPanel` (the todo/chore-board machinery) with
+`restick_on_bot=True`, since the bot's own Reckoning and last-call posts
+are the panel's main buriers in a dedicated channel. The Wednesday
+`repost_panel` stays separate (ping content + pin, which sticky placements
+don't carry); the machinery's under-lock at-bottom check and placed
+registry keep the two from chasing each other, and a stale id cache can't
+orphan a fresh repost because `_place_locked` re-reads ids under the lock.
+
+Panel ids stay in the season config, now through
+`survivor_service.panel_ids()/set_panel_ids()` — `(0,0)` with no live
+season, and `set_panel_ids` refuses writes without one so a late restick
+can't resurrect ids onto an archived season. Service tests cover the
+roundtrip, the empty case, and the refusal.

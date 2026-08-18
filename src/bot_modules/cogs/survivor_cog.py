@@ -19,7 +19,12 @@ from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
-from bot_modules.services.survivor_service import get_active_season
+from bot_modules.core.sticky import PanelContent, StickyPanel
+from bot_modules.services.survivor_service import (
+    get_active_season,
+    panel_ids,
+    set_panel_ids,
+)
 from bot_modules.survivor import logic
 from bot_modules.survivor.embeds import (
     build_board_embed,
@@ -30,7 +35,9 @@ from bot_modules.survivor.views import (
     JoinSeasonButton,
     PickPanel,
     SlatePickButton,
+    build_live_panel,
     kickoff_label,
+    panel_view,
     submit_pick,
 )
 
@@ -52,6 +59,65 @@ class SurvivorCog(commands.Cog):
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
         self.bot = bot
         self.ctx = ctx
+        # The channel panel is sticky (Billy, 2026-08-18: "the game panel
+        # doesn't drop to the bottom") — chat under it reposts it below,
+        # debounced by the house machinery. restick_on_bot because the
+        # bot's own posts (Reckoning, last call) are the panel's main
+        # buriers in a dedicated Survivor channel; the machinery's placed
+        # registry and at-bottom check stop it chasing the Wednesday
+        # repost_panel, which stays separate (it carries the ping content
+        # and the pin, which sticky placements don't).
+        self.panel = StickyPanel(
+            "survivor panel",
+            bot,
+            load_ids=self._read_panel_ids,
+            save_ids=self._write_panel_ids,
+            build=self._build_panel,
+            restick_on_bot=True,
+        )
+
+    async def cog_unload(self) -> None:
+        self.panel.cancel_all()
+
+    # ── sticky plumbing ────────────────────────────────────────────────
+
+    def _read_panel_ids(self, guild_id: int) -> tuple[int, int]:
+        with open_db(self.ctx.db_path) as conn:
+            return panel_ids(conn, guild_id)
+
+    def _write_panel_ids(
+        self, guild_id: int, channel_id: int, message_id: int
+    ) -> None:
+        with open_db(self.ctx.db_path) as conn:
+            set_panel_ids(conn, guild_id, channel_id, message_id)
+            conn.commit()
+
+    async def _build_panel(self, guild: discord.Guild) -> PanelContent:
+        def _q():
+            with open_db(self.ctx.db_path) as conn:
+                return get_active_season(conn, guild.id)
+
+        season = await asyncio.to_thread(_q)
+        built = (
+            await build_live_panel(self.bot, self.ctx.db_path, season["id"])
+            if season is not None else None
+        )
+        if built is None:
+            # Season ended between the trigger and the debounce — the ids
+            # read (0, 0) on the next pass, so this is a one-off, not a loop.
+            raise RuntimeError("no live season to restick")
+        _season, embed, join_open = built
+        return PanelContent(
+            embed=embed, view=panel_view(_season["id"], join_open=join_open)
+        )
+
+    @commands.Cog.listener("on_message")
+    async def _sticky_on_message(self, message: discord.Message) -> None:
+        await self.panel.on_message(message)
+
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _sticky_on_channel_delete(self, channel) -> None:
+        await self.panel.on_channel_delete(channel)
 
     async def cog_load(self) -> None:
         # The Join button on the pinned announcement and the slate's pick

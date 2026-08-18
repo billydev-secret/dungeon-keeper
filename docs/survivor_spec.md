@@ -75,6 +75,15 @@ The roles get pinged exactly twice a week. Restraint is the brand.
 - `/survivor status` (ephemeral): pick state, lock countdown, satchel, strike, ghost stats if dead.
 
 ### 2.5 The Reckoning — one post, three acts
+0a. **The panel is sticky (added 2026-08-18, Billy's first-look #9):** the
+   channel panel rides `core.sticky.StickyPanel` — any message beneath it
+   (member or bot; the Reckoning is its main burier) reposts it to the
+   channel bottom after the house debounce. The Wednesday `repost_panel`
+   stays separate: it carries the week-open ping and the pin, which sticky
+   placements don't; the machinery's at-bottom check keeps the two from
+   chasing each other. Panel ids live where they always did
+   (`announcement_*` in the season config, via
+   `survivor_service.panel_ids/set_panel_ids`); no live season → no restick.
 0. **The channel panel roster (added 2026-08-18):** the pinned panel lists who is
    alive and who is eliminated **by name**, not just counts — at most
    `ROSTER_DISPLAY_CAP` (30) names per list, dot-separated, with an honest

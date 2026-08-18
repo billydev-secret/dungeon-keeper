@@ -170,6 +170,36 @@ def get_active_season(conn: sqlite3.Connection, guild_id: int) -> dict | None:
     return _season_dict(row) if row else None
 
 
+
+def panel_ids(conn: sqlite3.Connection, guild_id: int) -> tuple[int, int]:
+    """The live channel panel's (channel_id, message_id) for the sticky
+    machinery — (0, 0) when there is no live season or no posted panel."""
+    season = get_active_season(conn, guild_id)
+    if season is None:
+        return 0, 0
+    cfg = season["config"]
+    return (
+        int(cfg.get("announcement_channel_id") or 0),
+        int(cfg.get("announcement_message_id") or 0),
+    )
+
+
+def set_panel_ids(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int, message_id: int
+) -> bool:
+    """Persist the panel's location after a sticky repost (or clear it with
+    (0, 0) when its channel is deleted). No live season → no-op False, so a
+    late restick can't resurrect ids onto an archived season."""
+    season = get_active_season(conn, guild_id)
+    if season is None:
+        return False
+    update_config(conn, season["id"], {
+        "announcement_channel_id": channel_id,
+        "announcement_message_id": message_id,
+    })
+    return True
+
+
 def list_seasons(conn: sqlite3.Connection, guild_id: int) -> list[dict]:
     rows = conn.execute(
         "SELECT id, guild_id, name, season_year, status, config "
