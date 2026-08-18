@@ -276,6 +276,11 @@ class JoinConfirmView(discord.ui.View):
             # (duplicate check → debit → entry row). Two double-clicked
             # confirms serialize on the write lock instead of both passing
             # the duplicate check and double-charging the buy-in.
+            # No conn.commit() in here: open_db_immediate drives the
+            # transaction by hand, so an inner commit leaves its exit-time
+            # COMMIT with nothing to commit and raises — which is how the
+            # first live join enrolled and charged the member but never
+            # refreshed the panel, echoed, or granted the role (2026-08-18).
             with open_db_immediate(db_path) as conn:
                 season = get_season(conn, self.season_id)
                 if season is None:
@@ -295,15 +300,12 @@ class JoinConfirmView(discord.ui.View):
                         )
                     if mode == "ghost_only":
                         ghost_only_join(conn, season, user_id, now)
-                        conn.commit()
                         return season, logic.JoinResult(charged=0), None
                     fate = compute_fate(conn, season, now)
                     execute_gauntlet_join(conn, season, user_id, fate, now)
-                    conn.commit()
                     charged = fate.fee + int(season["config"]["buyin_coins"])
                     return season, logic.JoinResult(charged=charged), fate
                 result = logic.join_season(conn, season, user_id, now)
-                conn.commit()
             return season, result, None
 
         try:
@@ -674,17 +676,25 @@ async def build_live_panel(
             ).fetchone()[0]
             pots = logic.pot_totals(conn, season)
             gauntlet_mode = bool(logic.elapsed_weeks(conn, year, now))
+            roster = [
+                (int(r["user_id"]), r["status"])
+                for r in conn.execute(
+                    "SELECT user_id, status FROM survivor_players "
+                    "WHERE season_id = ?",
+                    (season_id,),
+                ).fetchall()
+            ]
         return (
             season, week, games, int(counts["alive"] or 0),
             int(counts["ghost"] or 0), int(counts["total"] or 0),
-            int(picked), pots, gauntlet_mode,
+            int(picked), pots, gauntlet_mode, roster,
         )
 
     loaded = await asyncio.to_thread(_q)
     if loaded is None:
         return None
     (season, week, games, alive, ghost, total, picked, pots,
-     gauntlet_mode) = loaded
+     gauntlet_mode, roster) = loaded
     guild = bot.get_guild(season["guild_id"])
     if guild is None:
         return None
@@ -697,6 +707,22 @@ async def build_live_panel(
         gauntlet_mode=gauntlet_mode,
     ) is not None
     color = await branding.resolve_accent_color(db_path, guild)
+
+    def _display(user_id: int) -> str:
+        member = guild.get_member(user_id)
+        return (
+            discord.utils.escape_markdown(member.display_name)
+            if member else f"soul {user_id}"
+        )
+
+    # Sorted by name so the list is scannable and stable between edits —
+    # join order would reshuffle nothing but still read as arbitrary.
+    alive_names = sorted(
+        (_display(uid) for uid, st in roster if st == "alive"), key=str.casefold
+    )
+    eliminated_names = sorted(
+        (_display(uid) for uid, st in roster if st != "alive"), key=str.casefold
+    )
     # Enrolling seasons show the pre-kickoff face (week=None hides the
     # slate section even if the schedule is loaded but week 1 is far off?
     # No — the slate section shows as soon as a pick week exists; enrolling
@@ -716,6 +742,8 @@ async def build_live_panel(
         picked=picked,
         pot=pots["main"],
         ghost_pot=pots["ghost"],
+        alive_names=alive_names,
+        eliminated_names=eliminated_names,
         color=color,
     )
     return season, embed, join_open

@@ -75,6 +75,12 @@ The roles get pinged exactly twice a week. Restraint is the brand.
 - `/survivor status` (ephemeral): pick state, lock countdown, satchel, strike, ghost stats if dead.
 
 ### 2.5 The Reckoning — one post, three acts
+0. **The channel panel roster (added 2026-08-18):** the pinned panel lists who is
+   alive and who is eliminated **by name**, not just counts — at most
+   `ROSTER_DISPLAY_CAP` (30) names per list, dot-separated, with an honest
+   "…and N more" tail. Length binds before the count when display names are
+   long, so the field can never exceed Discord's 1024-char cap. The graveyard
+   field is omitted until someone is in it.
 1. **The toll:** week number, survivors before → after, pot, one rotating flavor line (*"week 7 came for the overconfident. the meadow is quieter now."*) Plus **the gate**, when anyone joined since last Tuesday: arrivals announced with their gauntlet fate — *"two souls walked the gauntlet this week. one arrived breathing."*
 2. **The ledger:** the only place picks ever appear — every living player → team → `✅ / 💀 / 💛→🖤 / 📎 auto`, deaths sorted first. Ghost Streak standings get a compact strip beneath (current streaks, record holder).
 3. **Eulogies:** one flavor line per elimination, name-slotted (*"pour one out for **@Loaf**, who believed in the Jets the way children believe in summer. 🥀"*). Ghost roles applied on post. Zero deaths: *"everyone lives. suspicious. the meadow remembers."*
@@ -346,3 +352,20 @@ raising the float, so a pot that grows past the seed is not extra faucet.
    forces the Reckoning/panel-repost past their clock gates while the
    once-per-week state keys still prevent double-posts. A whole season runs in
    an evening in a test channel; the rig hard-refuses real season years.
+   ▶ Run Weekly Tasks shipped on the Season card by mistake and **moved to the
+   Simulator card 2026-08-18**, where this section always placed it: the weekly
+   cadence is automatic in production (the poll loop fires each task at or
+   after its guild-local hour and catches up if the bot slept), so a manual
+   force is a rig affordance, not an operator control. A real season therefore
+   has no force button at all.
+10. **A forced run reports what it did (added 2026-08-18):** every gate routes
+   through the week lookup, so a season whose year has no ingested schedule is
+   indistinguishable from a quiet week — all three gates return `None` and the
+   forced run posts nothing. `run_weekly_tasks` therefore returns one record
+   per season (`fired`, `blocked`, `reason`) and the dashboard shows it: what
+   posted, or why nothing was due ("no schedule ingested for 2035…", "already
+   run for this week", "…was due but couldn't post"). The `post_*` helpers
+   return a bool so the report can't claim a task fired when its channel was
+   unreachable. The route also **scopes the run to the caller's guild** — a
+   forced run is an admin acting on their own server, and the unscoped call
+   dragged every other guild's live season past its clock gates too.

@@ -647,13 +647,22 @@ async def run_tasks_now(request: Request, user: AuthenticatedUser = _ADMIN):
 
     from bot_modules.survivor.tasks import run_weekly_tasks
 
-    await run_weekly_tasks(bot, ctx.db_path, time.time(), force=True)
+    report = await run_weekly_tasks(
+        bot, ctx.db_path, time.time(), force=True, guild_id=guild_id
+    )
+    # Scoped to this guild: a forced run is an admin acting on their own
+    # server, and the unscoped call dragged every other guild's season past
+    # its clock gates too (2026-08-18).
+    fired = [task for row in report for task in row["fired"]]
     await _mirror_mod_log(
         ctx, guild_id, action="weekly tasks forced",
-        summary="clock gates bypassed; once-per-week state still applies",
+        summary=(
+            f"clock gates bypassed; posted {', '.join(fired)}"
+            if fired else "clock gates bypassed; nothing was due"
+        ),
         user=user,
     )
-    return {"ok": True}
+    return {"ok": True, "report": report}
 
 
 # ── announcement ──────────────────────────────────────────────────────
