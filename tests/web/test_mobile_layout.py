@@ -459,3 +459,90 @@ def test_mod_engagement_populated_fits_on_phone(dashboard, browser):
         f"stat-tile headings collapsed: widths {label_widths} on a 390px phone"
     )
     _assert_fits(res, "Mod engagement report (populated)")
+
+
+# A live-season survivor panel is invisible to the plain sweep: the test DB has
+# no season, so the sweep only ever sees the create card. Stubbing the overview
+# renders the full surface — season + simulator (year >= 2090), the week table
+# (four settle buttons per row is the widest thing here), the roster, and the
+# rules form — and the dial hints live behind a details toggle now, so opening
+# one is part of the scenario (2026-08-18 formatting pass).
+_SURVIVOR_SEASON_STUB = {
+    "season": {
+        "id": 1, "name": "The Golden League", "season_year": 2100,
+        "status": "active",
+        "config": {
+            "channel_id": "0", "role_survivor_id": "0", "role_ghost_id": "0",
+            "role_sole_survivor_id": "0", "buyin_coins": 100,
+            "pot_seed": 10000, "ghost_pot_pct": 20,
+            "gauntlet_fee_per_week": 50, "weekly_win_coins": 25,
+            "strikes": 2, "tie_rule": "loss", "late_entry": "gauntlet",
+            "missed_pick": "auto_assign", "max_auto_assigns": 3,
+            "double_pick_start_week": 14, "double_pick_min_alive": 5,
+            "wipeout_annul_through_week": 13, "accord_max_alive": 6,
+            "ghost_streak": True, "slate_hour": 9, "lastcall_hour": 18,
+            "reckoning_hour": 9,
+        },
+    },
+    "players": [
+        {"user_id": "1234567890123456789", "status": "alive",
+         "strikes_used": 1, "eliminated_week": None},
+        {"user_id": "2234567890123456789", "status": "ghost",
+         "strikes_used": 2, "eliminated_week": 3},
+    ],
+    "flavor": [],
+    "archived_seasons": [],
+}
+
+_SURVIVOR_WEEK_STUB = {
+    "week": 3, "picked": 1, "alive": 1,
+    "games": [
+        {"game_id": "sim-3-1", "week": 3, "home": "Jaguars",
+         "away": "Commanders", "kickoff_ts": 1700000000,
+         "status": "scheduled", "winner": None, "kicked": True},
+        {"game_id": "sim-3-2", "week": 3, "home": "49ers", "away": "Cardinals",
+         "kickoff_ts": 1700003600, "status": "final", "winner": "49ers",
+         "kicked": True},
+    ],
+}
+
+
+def test_survivor_live_season_fits_on_phone(dashboard, browser):
+    import json
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        page.route(
+            "**/api/survivor/overview",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(_SURVIVOR_SEASON_STUB),
+            ),
+        )
+        page.route(
+            "**/api/survivor/week",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(_SURVIVOR_WEEK_STUB),
+            ),
+        )
+        _goto_panel(page, f"{dashboard.base}/#/survivor")
+        page.wait_for_selector("[data-rules-form]", timeout=15_000)
+        # The dial explanations are collapsed by default — open every card's
+        # details so the widest hidden content is part of the audit.
+        for d in page.query_selector_all("[data-rules-form] details"):
+            d.evaluate("el => el.open = true")
+        _settle(page)
+        res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+        # The settle row must have rendered — it is the widest content here.
+        settle_buttons = page.evaluate(
+            "() => document.querySelectorAll('[data-settle]').length"
+        )
+    finally:
+        context.close()
+    assert settle_buttons == 8, (
+        f"expected 2 games x 4 settle buttons, got {settle_buttons} — did the "
+        "week stub shape drift?"
+    )
+    _assert_fits(res, "Survivor live-season panel")
