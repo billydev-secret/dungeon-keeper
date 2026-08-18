@@ -31,8 +31,10 @@ from bot_modules.services.survivor_service import (
     list_flavor,
     list_players,
     list_seasons,
+    panel_ids,
     revive_player,
     seed_default_flavor,
+    set_panel_ids,
     set_season_status,
     update_config,
     update_flavor,
@@ -336,3 +338,35 @@ def test_purge_clears_survivor_rows_guild_scoped(db):
             "SELECT season_id FROM survivor_picks WHERE user_id = 1"
         ).fetchall()
         assert [r["season_id"] for r in remaining] == [season_b]
+
+
+# ── sticky panel id plumbing (2026-08-18) ─────────────────────────────
+#
+# The channel panel is sticky now; the machinery stores its location via
+# these two. The (0, 0) rules matter: no live season must read as "no
+# panel", and a late restick after season end must not resurrect ids onto
+# an archived season.
+
+def test_panel_ids_empty_without_a_season(db):
+    with open_db(db) as conn:
+        assert panel_ids(conn, GID) == (0, 0)
+
+
+def test_panel_ids_roundtrip(db):
+    with open_db(db) as conn:
+        create_season(conn, GID, "S", 2026)
+        assert set_panel_ids(conn, GID, 123, 456) is True
+        assert panel_ids(conn, GID) == (123, 456)
+        # Clearing (channel deleted) round-trips too.
+        assert set_panel_ids(conn, GID, 0, 0) is True
+        assert panel_ids(conn, GID) == (0, 0)
+
+
+def test_set_panel_ids_refuses_without_live_season(db):
+    with open_db(db) as conn:
+        sid = create_season(conn, GID, "S", 2026)
+        set_panel_ids(conn, GID, 123, 456)
+        end_season(conn, sid)
+        # The archived season keeps whatever it had; the write is refused.
+        assert set_panel_ids(conn, GID, 789, 999) is False
+        assert panel_ids(conn, GID) == (0, 0)  # no live season → no panel
