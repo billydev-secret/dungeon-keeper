@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
+import requests
 import spotipy
 from spotipy.exceptions import SpotifyException
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -167,18 +168,26 @@ class SpotifyResolver:
         auth_value = base64.b64encode(
             f"{self._client_id}:{self._client_secret}".encode("utf-8")
         ).decode("ascii")
-        async with httpx.AsyncClient(timeout=10.0) as session:
-            resp = await session.post(
-                "https://accounts.spotify.com/api/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                },
-                headers={
-                    "Authorization": f"Basic {auth_value}",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            )
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as session:
+                resp = await session.post(
+                    "https://accounts.spotify.com/api/token",
+                    data={
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh_token,
+                    },
+                    headers={
+                        "Authorization": f"Basic {auth_value}",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                )
+        except httpx.HTTPError as exc:
+            # Transport failure, not a rejected token — wrapped so
+            # _get_user_client's except clause catches it and falls back to
+            # client credentials instead of letting it escape unhandled.
+            raise SpotifyResolveError(
+                f"Spotify token refresh failed: {exc}"
+            ) from exc
         if resp.status_code != 200:
             raise SpotifyResolveError(
                 f"Spotify refresh failed: {resp.status_code} {resp.text[:200]}"
@@ -490,6 +499,14 @@ class SpotifyResolver:
         Status codes are passed through unwrapped; callers translate them into
         kind-specific messages (a generic 404 here previously mislabeled
         editorial-playlist restrictions as "private or doesn't exist").
+
+        Transport failures (spotipy speaks requests, so a connection reset
+        arrives as ``requests.exceptions.ConnectionError``, not a
+        ``SpotifyException``) retry on the same backoff ladder as a 429 and
+        exhaust into ``SpotifyResolveError``. Anything escaping here unwrapped
+        blows past every caller's error handling — in the message pipeline
+        that meant no ledger row, no reaction, no review-queue entry: the
+        song vanished silently.
         """
         for attempt, backoff in enumerate((*_RETRY_BACKOFF_S, None)):
             try:
@@ -505,6 +522,20 @@ class SpotifyResolver:
                     continue
                 raise SpotifyResolveError(
                     f"Spotify API error: {exc.http_status} {exc.msg}"
+                ) from exc
+            except requests.exceptions.RequestException as exc:
+                if backoff is not None:
+                    log.warning(
+                        "spotify transport error (%s), backing off %.1fs "
+                        "(attempt %d)",
+                        exc,
+                        backoff,
+                        attempt + 1,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                raise SpotifyResolveError(
+                    f"Spotify connection error: {exc}"
                 ) from exc
         raise SpotifyResolveError("Spotify rate-limited; gave up after retries")
 

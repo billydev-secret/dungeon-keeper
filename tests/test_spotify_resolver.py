@@ -11,7 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+import requests
 from spotipy.exceptions import SpotifyException
 
 from bot_modules.core.db_utils import open_db, set_config_value
@@ -215,6 +217,80 @@ async def test_spotify_other_errors_pass_through():
 
     with pytest.raises(SpotifyResolveError, match="Spotify API error: 500"):
         await resolver.add_tracks_to_playlist("pl123", ["t1"])
+
+
+# ── transport failures reach callers as SpotifyResolveError ──────────
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    """Neutralize the backoff sleeps and record what was requested."""
+    slept: list[float] = []
+
+    async def _instant(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(
+        "bot_modules.services.spotify_resolver.asyncio.sleep", _instant
+    )
+    return slept
+
+
+async def test_connection_error_retries_then_wraps(no_sleep):
+    """A transport failure must never escape _call unwrapped.
+
+    The prod incident: a connection reset from Spotify raised
+    requests.ConnectionError, which skipped both the retry ladder and the
+    SpotifyResolveError translation — so the pipeline's error handling never
+    ran and the message vanished with no ledger row, reaction, or queue entry.
+    """
+    client = MagicMock()
+    client.playlist_add_items.side_effect = requests.exceptions.ConnectionError(
+        "Connection reset by peer"
+    )
+    resolver = _writable_resolver(client)
+
+    with pytest.raises(SpotifyResolveError, match="Spotify connection error"):
+        await resolver.add_tracks_to_playlist("pl123", ["t1"])
+    # Retried on the full backoff ladder before giving up.
+    assert client.playlist_add_items.call_count == 4
+    assert no_sleep == [1.0, 2.0, 4.0]
+
+
+async def test_transient_connection_error_recovers(no_sleep):
+    client = MagicMock()
+    client.playlist_add_items.side_effect = [
+        requests.exceptions.ConnectionError("reset"),
+        {"snapshot_id": "s1"},
+    ]
+    resolver = _writable_resolver(client)
+    assert await resolver.add_tracks_to_playlist("pl123", ["t1"]) == 1
+
+
+async def test_token_refresh_transport_error_falls_back(sync_db_path, monkeypatch):
+    # A network blip during the OAuth refresh must degrade to the
+    # client-credentials fallback, not escape as a raw httpx error.
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, "spotify_bot_refresh_token", "rt123")
+
+    class _BoomClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc) -> bool:
+            return False
+
+        async def post(self, *args, **kwargs):
+            raise httpx.ConnectError("Connection reset by peer")
+
+    monkeypatch.setattr(
+        "bot_modules.services.spotify_resolver.httpx.AsyncClient", _BoomClient
+    )
+    resolver = _resolver(sync_db_path)
+    assert await resolver._get_user_client() is None  # noqa: SLF001
 
 
 # ── playlist_track_ids (the reconcile action's read half) ────────────
