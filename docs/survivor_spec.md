@@ -364,6 +364,13 @@ raising the float, so a pot that grows past the seed is not extra faucet.
    after its guild-local hour and catches up if the bot slept), so a manual
    force is a rig affordance, not an operator control. A real season therefore
    has no force button at all.
+9b. **Role reconcile (added 2026-08-18, Billy's #10):** every weekly-task
+   decision pass also repairs life-state roles — alive players hold 🏈
+   Survivor, ghosts hold 👻 Ghost, enforced through the idempotent
+   `swap_member_roles`, which checks the gateway role cache first, so a
+   no-drift pass costs zero Discord calls. Exists for drift: a join that
+   crashed after charging but before its grant, a hand-removed role, a
+   rejoin. Best-effort per member, never blocks the pass.
 10. **A forced run reports what it did (added 2026-08-18):** every gate routes
    through the week lookup, so a season whose year has no ingested schedule is
    indistinguishable from a quiet week — all three gates return `None` and the

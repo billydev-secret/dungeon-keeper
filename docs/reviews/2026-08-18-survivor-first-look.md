@@ -403,3 +403,17 @@ Panel ids stay in the season config, now through
 season, and `set_panel_ids` refuses writes without one so a late restick
 can't resurrect ids onto an archived season. Service tests cover the
 roundtrip, the empty case, and the refusal.
+
+
+---
+
+## 10. "The bot should make the roles right?" — role self-heal
+
+Yes — it creates all three roles at season creation and grants/swaps on
+join and elimination. The gap was that a grant lost to a crash (his own
+join, bug #3) could never retry. **Shipped:** `reconcile_roles` runs in
+every weekly-task decision pass — alive → 🏈 Survivor, ghost → 👻 Ghost —
+through the idempotent, cache-checked `swap_member_roles`, so no drift
+means zero API calls and any drift heals on the next tick. This also
+retroactively fixes Billy's missing role at the first pass after restart,
+so the manual grant is no longer needed.
