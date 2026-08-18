@@ -71,13 +71,16 @@ async function render(container) {
       <div data-season-zone></div>
       <div data-sim-zone></div>
       <div data-week-zone></div>
-      <div data-rules-zone></div>
       <div data-roster-zone></div>
+      <div data-rules-zone></div>
       <div data-flavor-zone></div>
     </div>
   `;
 
   const refresh = () => refreshAll(container);
+  // Zone order is operational-first (2026-08-18): the cards that change
+  // weekly (season, sim, games, roster) sit above the set-once rules form,
+  // which previously split them in half.
   renderSeasonCard(container.querySelector("[data-season-zone]"), overview, refresh);
   if (season) {
     if (season.season_year >= 2090) {
@@ -105,26 +108,32 @@ function renderSimulatorCard(zone, refresh) {
         and pick in the channel, then settle kicked games and run the weekly
         tasks to advance. Everything flows through the real engine.</div>
       <form data-sim-form class="form">
-        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div class="field-row" style="align-items:end;">
           <div class="field"><label for="sim-weeks">Weeks</label>
             <input type="number" id="sim-weeks" name="weeks" min="1" max="18"
-              value="4" style="width:80px;" /></div>
+              value="4" /></div>
           <div class="field"><label for="sim-mpw">Minutes per Week</label>
             <input type="number" id="sim-mpw" name="minutes_per_week" min="2"
-              max="1440" value="15" style="width:100px;" /></div>
-          <button type="submit" class="btn btn-primary">Generate Schedule</button>
+              max="1440" value="15" /></div>
+          <div class="field">
+            <button type="submit" class="btn btn-primary">Generate Schedule</button>
+          </div>
         </div>
       </form>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
-        settle kicked games:
-        <button type="button" class="btn btn-small" data-sim-settle="chalk">favorites win</button>
-        <button type="button" class="btn btn-small" data-sim-settle="random">random</button>
-        <button type="button" class="btn btn-small" data-sim-settle="upset">upsets</button>
+      <div class="field mt-8">
+        <label>Settle Kicked Games</label>
+        <div class="row-8" style="flex-wrap:wrap;">
+          <button type="button" class="btn btn-small" data-sim-settle="chalk">favorites win</button>
+          <button type="button" class="btn btn-small" data-sim-settle="random">random</button>
+          <button type="button" class="btn btn-small" data-sim-settle="upset">upsets</button>
+        </div>
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
-        advance the week:
-        <button type="button" class="btn btn-small" data-tasks-btn>▶ Run Weekly Tasks</button>
-        <span data-status></span>
+      <div class="field mt-8">
+        <label>Advance the Week</label>
+        <div class="row-8" style="flex-wrap:wrap;">
+          <button type="button" class="btn btn-small" data-tasks-btn>▶ Run Weekly Tasks</button>
+          <span data-status></span>
+        </div>
       </div>
       <div class="field-hint">The weekly tasks run themselves on the clock —
         slate Wednesday, last call Saturday, the Reckoning Tuesday, in the
@@ -221,7 +230,8 @@ async function renderWeekCard(zone) {
         <td><strong>${esc(g.away)}</strong> @ <strong>${esc(g.home)}</strong></td>
         <td>${esc(kick)}</td>
         <td>${state}</td>
-        <td style="white-space:nowrap;">${verb}
+        <td style="white-space:nowrap;">
+          <span class="field-hint" style="display:inline;">${verb}</span>
           ${btn(g.home, g.home)} ${btn(g.away, g.away)}
           ${btn("TIE", "tie")} ${btn("VOID", "void")}
         </td>
@@ -242,7 +252,7 @@ async function renderWeekCard(zone) {
           <tbody>${rows || `<tr><td class="field-hint">no games in view</td></tr>`}</tbody>
         </table>
       </div>
-      <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+      <div class="row-8 mt-8">
         <button type="button" class="btn" data-preview-btn>👁 Preview Reckoning</button>
         <span data-status></span>
       </div>
@@ -255,10 +265,10 @@ async function renderWeekCard(zone) {
     try {
       const p = await api("/api/survivor/reckoning-preview");
       const fields = (p.fields || []).map((f) =>
-        `<h4 style="margin:8px 0 2px;">${esc(f.name)}</h4>
+        `<div class="mt-8"><strong>${esc(f.name)}</strong></div>
          <div style="white-space:pre-wrap;">${esc(f.value)}</div>`).join("");
       target.innerHTML = `
-        <div class="card" style="margin-top:8px;">
+        <div class="card mt-8">
           <div class="section-label">${esc(p.title)}${p.pending
             ? " <em>(not due yet — current state)</em>" : ""}</div>
           <div style="white-space:pre-wrap;">${esc(p.description || "")}</div>
@@ -311,12 +321,12 @@ function renderSeasonCard(zone, overview, refresh) {
               min="2020" max="2100" value="${new Date().getFullYear()}"
               style="max-width:140px;" />
           </div>
-          <div style="display:flex; gap:8px; align-items:center;">
+          <div class="row-8">
             <button type="submit" class="btn btn-primary">Create Season</button>
             <span data-status></span>
           </div>
         </form>
-        ${archived.length ? `<div class="field-hint" style="margin-top:8px;">
+        ${archived.length ? `<div class="field-hint mt-8">
           Archived: ${archived.map((s) => `${esc(s.name)} (${s.season_year})`).join(", ")}
         </div>` : ""}
       </div>
@@ -350,11 +360,12 @@ function renderSeasonCard(zone, overview, refresh) {
       <div class="section-label">Season</div>
       <p><strong>${esc(season.name)}</strong> (${season.season_year}) —
         <code>${esc(season.status)}</code></p>
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <div class="row-8" style="flex-wrap:wrap;">
         <button type="button" class="btn btn-primary" data-announce-btn>
           📌 Post Panel</button>
-        <button type="button" class="btn btn-danger" data-end-btn>End Season</button>
         <span data-status></span>
+        <span class="act-spacer"></span>
+        <button type="button" class="btn btn-danger" data-end-btn>End Season</button>
       </div>
       <div class="field-hint">Post Panel pins the channel's one updating
         message — slate, standings, join and pick buttons — in the configured
@@ -385,18 +396,21 @@ function renderSeasonCard(zone, overview, refresh) {
 }
 
 // ── the §5 dials ──────────────────────────────────────────────────────
+// Each rules card is one spec: compact dial rows up top, and the dials'
+// explanations collapsed behind a "What do these dials do?" details below
+// (decided 2026-08-18 — the always-visible per-dial prose made the page
+// mostly scroll). A dial with no hint just doesn't appear in the details.
 
-function numField(name, label, value, hint, { min = 0, max = 1000000 } = {}) {
+function numField(name, label, value, { min = 0, max = 1000000 } = {}) {
   return `
     <div class="field">
       <label for="sv-${name}">${label}</label>
       <input type="number" id="sv-${name}" name="${name}" required
-        min="${min}" max="${max}" step="1" value="${value}" style="max-width:140px;" />
-      ${hint ? `<div class="field-hint">${hint}</div>` : ""}
+        min="${min}" max="${max}" step="1" value="${value}" />
     </div>`;
 }
 
-function selectField(name, label, value, hint) {
+function selectField(name, label, value) {
   const opts = ENUMS[name]
     .map(([v, text]) =>
       `<option value="${v}"${v === value ? " selected" : ""}>${text}</option>`)
@@ -404,8 +418,92 @@ function selectField(name, label, value, hint) {
   return `
     <div class="field">
       <label for="sv-${name}">${label}</label>
-      <select id="sv-${name}" name="${name}" style="max-width:280px;">${opts}</select>
-      ${hint ? `<div class="field-hint">${hint}</div>` : ""}
+      <select id="sv-${name}" name="${name}">${opts}</select>
+    </div>`;
+}
+
+// [kind, name, label, hint, opts] — kind picks the widget; hint feeds only
+// the collapsed explanations block.
+const RULES_CARDS = [
+  ["Money", [
+    ["num", "buyin_coins", "Buy-In (coins)",
+      "0 = free entry (season one). Debited on join."],
+    ["num", "pot_seed", "House Pot Seed",
+      "Booked at creation, minted once at payout as <code>survivor_payout</code>. "
+      + "This is a faucet — 10,000 ≈ 13% of the current float."],
+    ["num", "ghost_pot_pct", "Ghost Side-Pot %",
+      "Share of the seed carved off for the Ghost Streak side-pot.", { max: 100 }],
+    ["num", "gauntlet_fee_per_week", "Gauntlet Fee / Week",
+      "× replayed weeks, charged on late entry. Alive arrivals feed the main "
+      + "pot; dead-on-arrival fees feed the ghost pot.", { max: 10000 }],
+    ["num", "weekly_win_coins", "Weekly Win Prize",
+      "Paid at the Reckoning to everyone whose picks all won that week "
+      + "(ghosts included). A real faucet — <code>survivor_weekly_win</code> in "
+      + "the ledger. 0 = off.", { max: 10000 }],
+  ]],
+  ["Lives & Picks", [
+    ["num", "strikes", "Strikes",
+      "Wrong weeks a player survives. 0 = sudden death.", { max: 2 }],
+    ["select", "tie_rule", "Ties", ""],
+    ["select", "late_entry", "Late Entry",
+      "Gauntlet replays missed weeks as the favorite each week — the joiner "
+      + "inherits that line's full fate before paying."],
+    ["select", "missed_pick", "Missed Pick", ""],
+    ["num", "max_auto_assigns", "Auto-Assign Cap",
+      "Groundskeeper covers this many missed weeks per season; the next one "
+      + "is an elimination.", { max: 18 }],
+  ]],
+  ["Escalation & Endgame", [
+    ["num", "double_pick_start_week", "Double-Pick From Week",
+      "0 = never.", { max: 18 }],
+    ["num", "double_pick_min_alive", "…Only If This Many Alive", "",
+      { min: 2, max: 1000 }],
+    ["num", "wipeout_annul_through_week", "Wipeout Annuls Through Week",
+      "A week that kills everyone is annulled through this week; afterwards "
+      + "it's an equal split.", { max: 18 }],
+    ["num", "accord_max_alive", "Accord Available At ≤",
+      "Living players needed before /survivor accord can be invoked.",
+      { min: 2, max: 1000 }],
+    ["check", "ghost_streak", "Ghost Streak side-game",
+      "The dead keep picking for a side-pot. Load-bearing for late entry — "
+      + "gauntlet joiners who arrive dead land here."],
+  ]],
+  ["Weekly Schedule (guild-local hours)", [
+    ["num", "slate_hour", "Slate Post — Wednesday", "", { max: 23 }],
+    ["num", "lastcall_hour", "Last Call — Saturday", "", { max: 23 }],
+    ["num", "reckoning_hour", "The Reckoning — Tuesday", "", { max: 23 }],
+  ]],
+];
+
+function checkField(name, label, value) {
+  return `
+    <div class="field">
+      <label class="row-8">
+        <input type="checkbox" name="${name}" ${value ? "checked" : ""} />
+        ${label}
+      </label>
+    </div>`;
+}
+
+function renderRulesCard(title, fields, c) {
+  const dials = fields.map(([kind, name, label, , opts]) => {
+    if (kind === "select") return selectField(name, label, c[name]);
+    if (kind === "check") return checkField(name, label, c[name]);
+    return numField(name, label, c[name], opts);
+  }).join("");
+  const notes = fields
+    .filter(([, , , hint]) => hint)
+    .map(([, , label, hint]) =>
+      `<div class="note"><strong>${label}</strong> — ${hint}</div>`).join("");
+  return `
+    <div class="card">
+      <div class="section-label">${title}</div>
+      <div class="field-row">${dials}</div>
+      ${notes ? `
+        <details class="panel-about">
+          <summary>What do these dials do?</summary>
+          ${notes}
+        </details>` : ""}
     </div>`;
 }
 
@@ -413,14 +511,13 @@ function renderRulesCards(zone, season, roles, channels) {
   const c = season.config;
   zone.innerHTML = `
     <form class="form form-cards" data-rules-form>
-      <div class="card" style="border-color: var(--gold-solid, #e6b84c);">
-        <div class="section-label">⚠️ Under Construction</div>
-        <p class="field-hint">The Week-1 game is fully live: picks, results,
-          strikes, the groundskeeper, the gauntlet, ghosts, and the weekly
-          posts. Still to come (each before its own in-season deadline):
-          wipeout/annul handling, double-pick weeks (wk 14), the Accord, the
-          endgame payouts, and the member notification toggles — their dials
-          store now and bind when that logic ships.</p>
+      <div class="notice-banner mb-8">
+        <strong>Under construction:</strong> the Week-1 game is fully live —
+        picks, results, strikes, the groundskeeper, the gauntlet, ghosts, and
+        the weekly posts. Still to come (each before its own in-season
+        deadline): wipeout/annul handling, double-pick weeks (wk 14), the
+        Accord, the endgame payouts, and the member notification toggles —
+        their dials store now and bind when that logic ships.
       </div>
       <div class="card">
         <div class="section-label">Wiring</div>
@@ -430,78 +527,26 @@ function renderRulesCards(zone, season, roles, channels) {
           <div class="field-hint">Where the slate, the Reckoning, and the season
             announcement post. Nothing posts until this is set.</div>
         </div>
-        <div class="field"><label>🏈 Survivor Role</label>
-          <span data-picker="role_survivor_id"></span></div>
-        <div class="field"><label>👻 Ghost Role</label>
-          <span data-picker="role_ghost_id"></span></div>
-        <div class="field"><label>🏈 Sole Survivor Role</label>
-          <span data-picker="role_sole_survivor_id"></span>
-          <div class="field-hint">All three are created automatically at
-            season creation if missing; repoint them here if you'd rather use
-            your own. Death swaps Survivor → Ghost; both roles are pinged by
-            the two weekly posts.</div></div>
-      </div>
-
-      <div class="card">
-        <div class="section-label">Money</div>
-        ${numField("buyin_coins", "Buy-In (coins)", c.buyin_coins,
-    "0 = free entry (season one). Debited on join.")}
-        ${numField("pot_seed", "House Pot Seed", c.pot_seed,
-    "Booked at creation, minted once at payout as <code>survivor_payout</code>. " +
-    "This is a faucet — 10,000 ≈ 13% of the current float.")}
-        ${numField("ghost_pot_pct", "Ghost Side-Pot %", c.ghost_pot_pct,
-    "Share of the seed carved off for the Ghost Streak side-pot.", { max: 100 })}
-        ${numField("gauntlet_fee_per_week", "Gauntlet Fee / Week", c.gauntlet_fee_per_week,
-    "× replayed weeks, charged on late entry. Alive arrivals feed the main " +
-    "pot; dead-on-arrival fees feed the ghost pot.", { max: 10000 })}
-        ${numField("weekly_win_coins", "Weekly Win Prize", c.weekly_win_coins,
-    "Paid at the Reckoning to everyone whose picks all won that week " +
-    "(ghosts included). A real faucet — <code>survivor_weekly_win</code> in " +
-    "the ledger. 0 = off.", { max: 10000 })}
-      </div>
-
-      <div class="card">
-        <div class="section-label">Lives &amp; Picks</div>
-        ${numField("strikes", "Strikes", c.strikes,
-    "Wrong weeks a player survives. 0 = sudden death.", { max: 2 })}
-        ${selectField("tie_rule", "Ties", c.tie_rule)}
-        ${selectField("late_entry", "Late Entry", c.late_entry)}
-        ${selectField("missed_pick", "Missed Pick", c.missed_pick)}
-        ${numField("max_auto_assigns", "Auto-Assign Cap", c.max_auto_assigns,
-    "Groundskeeper covers this many missed weeks per season; the next one " +
-    "is an elimination.", { max: 18 })}
-      </div>
-
-      <div class="card">
-        <div class="section-label">Escalation &amp; Endgame</div>
-        ${numField("double_pick_start_week", "Double-Pick From Week", c.double_pick_start_week,
-    "0 = never.", { max: 18 })}
-        ${numField("double_pick_min_alive", "…Only If This Many Alive", c.double_pick_min_alive,
-    "", { min: 2, max: 1000 })}
-        ${numField("wipeout_annul_through_week", "Wipeout Annuls Through Week",
-    c.wipeout_annul_through_week,
-    "A week that kills everyone is annulled through this week; afterwards " +
-    "it's an equal split.", { max: 18 })}
-        ${numField("accord_max_alive", "Accord Available At ≤", c.accord_max_alive,
-    "Living players needed before /survivor accord can be invoked.", { min: 2, max: 1000 })}
-        <div class="field">
-          <label style="display:flex; gap:8px; align-items:center;">
-            <input type="checkbox" name="ghost_streak"
-              ${c.ghost_streak ? "checked" : ""} /> Ghost Streak side-game
-          </label>
-          <div class="field-hint">The dead keep picking for a side-pot. Load-bearing
-            for late entry — gauntlet joiners who arrive dead land here.</div>
+        <div class="field-row">
+          <div class="field"><label>🏈 Survivor Role</label>
+            <span data-picker="role_survivor_id"></span></div>
+          <div class="field"><label>👻 Ghost Role</label>
+            <span data-picker="role_ghost_id"></span></div>
+          <div class="field"><label>🏈 Sole Survivor Role</label>
+            <span data-picker="role_sole_survivor_id"></span></div>
         </div>
+        <details class="panel-about">
+          <summary>How the roles behave</summary>
+          <div class="note">All three are created automatically at season
+            creation if missing; repoint them here if you'd rather use your
+            own. Death swaps Survivor → Ghost; both roles are pinged by the
+            two weekly posts.</div>
+        </details>
       </div>
 
-      <div class="card">
-        <div class="section-label">Weekly Schedule (guild-local hours)</div>
-        ${numField("slate_hour", "Slate Post — Wednesday", c.slate_hour, "", { max: 23 })}
-        ${numField("lastcall_hour", "Last Call — Saturday", c.lastcall_hour, "", { max: 23 })}
-        ${numField("reckoning_hour", "The Reckoning — Tuesday", c.reckoning_hour, "", { max: 23 })}
-      </div>
+      ${RULES_CARDS.map(([title, fields]) => renderRulesCard(title, fields, c)).join("")}
 
-      <div style="display:flex; gap:8px; align-items:center;">
+      <div class="row-8">
         <button type="submit" class="btn btn-primary">Save Rules</button>
         <span data-status></span>
       </div>
@@ -670,8 +715,8 @@ function renderFlavorCard(zone, flavor) {
         <code>{week}</code> the week number. Retired lines stay for later;
         the starter corpus seeds itself at season creation.</div>
       ${sections}
-      <form data-flavor-form class="form" style="margin-top:10px;">
-        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <form data-flavor-form class="form mt-8">
+        <div class="row-8" style="flex-wrap:wrap;">
           <select name="category">
             ${FLAVOR_CATEGORIES.map((cat) => `<option value="${cat}">${cat}</option>`).join("")}
           </select>

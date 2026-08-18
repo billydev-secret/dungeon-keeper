@@ -318,3 +318,45 @@ Simulator card from the start; it shipped on the Season card by mistake.
 all** — the clock plus catch-up is the whole production story. The Season
 card is left with Post Panel and End Season, which also thins out the
 undifferentiated button row from #2.
+
+---
+
+## 2 (resolved). Dashboard panel formatting pass
+
+Shipped 2026-08-18. What changed, against the diagnosis:
+
+- **Zone order is operational-first:** Season → Simulator → This Week's
+  Games → Roster → Rules → Flavor. The set-once rules block no longer
+  splits the cards that change weekly.
+- **Rules dials are data-driven and compact** (`RULES_CARDS` spec): dials
+  sit side-by-side in `.field-row`s like economy-sinks, and the per-dial
+  prose is collapsed behind a "What do these dials do?" `.panel-about`
+  details per card (Billy's pick: hints collapse behind the label).
+  Ghost Streak folded into Escalation & Endgame as a checkbox row.
+- **Under Construction** is a `.notice-banner`, not a look-alike card.
+- **Buttons group by consequence:** End Season pushed right of an
+  `.act-spacer` away from Post Panel; the Simulator's action rows carry
+  proper labels (Settle Kicked Games / Advance the Week) instead of loose
+  prefix text; the week table's settle/correct verb is muted.
+- **Stray `<h4>`s gone**; inline flex/margin styles swapped for house
+  utilities (`.row-8`, `.mt-8`, `.field-row`). Remaining inline styles are
+  the sanctioned ones (table `overflow-x:auto`, retired-line opacity, the
+  simulator's semantic gold border).
+- **Flavor card untouched** beyond one layout-class swap — slated for
+  removal under #1.
+- **New browser interaction scenario** `test_survivor_live_season_fits_on_phone`:
+  stubs a live sim season + week so the full surface (invisible to the
+  plain sweep, whose DB has no season) lays out on phone with every
+  details block forced open and the 8-button settle rows rendered.
+
+## 8. Last-call DM should offer the pick right there
+
+> "In the nag mess for bot picking, can it offer to pick there?"
+
+Read as: the Saturday last-call DM ("You haven't picked for Week {week}…")
+should carry the 🏈 Make your pick button instead of pointing at
+`/survivor pick`. **Feasible cleanly** — `SlatePickButton` is a persistent
+`DynamicItem` keyed by season id, and the team picker is DB-only. One DM
+blocker found: the pick-confirm path asserts `interaction.guild` for the
+accent color (`views.py:126`), which is None in a DM — must resolve the
+guild off the season instead. In progress.
