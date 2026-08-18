@@ -180,7 +180,7 @@ def build_board_embed(
     return embed
 
 
-def build_announcement_embed(
+def build_panel_embed(
     *,
     season_name: str,
     entrants: int,
@@ -188,46 +188,68 @@ def build_announcement_embed(
     gauntlet_mode: bool,
     late_entry: str = "gauntlet",
     strikes: int = 1,
+    week: int | None = None,
+    games: list[dict] | None = None,
+    alive: int = 0,
+    eliminated: int = 0,
+    picked: int = 0,
+    pot: int = 0,
+    ghost_pot: int = 0,
     color: discord.Color | None = None,
 ) -> discord.Embed:
-    """The pinned season announcement (§2.2). ``gauntlet_mode`` flips the
-    copy once Week 1 has kicked off — the button stays, the road gets real."""
-    if gauntlet_mode:
+    """THE channel panel — the one updating message (decided 2026-08-18).
+
+    Replaces the separate announcement and slate posts: season pitch, the
+    current week's games, a standings line, and the joining door in one
+    embed. The bot edits it in place on joins and settles, and reposts it
+    to the channel bottom each Wednesday with the week-open ping — that
+    repost IS the slate moment. Enrolling seasons (no week yet) show the
+    pre-kickoff face.
+    """
+    from bot_modules.survivor.reckoning import slate_join_line
+
+    active = week is not None
+    title = f"🏈 {season_name}"
+    if active:
+        title += f" — Week {week}"
+    if active:
         description = (
-            "The season is underway — late entry is open, and missed weeks "
-            "are auto-replayed through the Gauntlet.\n"
-            f"👥 **{entrants}** players in."
+            "Pick one team to **win**. Picks lock at each game's kickoff "
+            "and stay hidden until the results post.\n"
+            f"✅ Alive **{alive}** · 👻 Eliminated **{eliminated}** · "
+            f"Pot **{pot:,}** · Ghost Pot **{ghost_pot:,}**"
         )
     else:
         description = (
             "Pick one NFL team to win each week. No team twice. "
             "Lose and you're out.\n"
             "Last one standing takes the pot.\n"
-            f"👥 **{entrants}** players in."
+            f"👥 **{entrants}** players in · Pot **{pot:,}**"
         )
     embed = discord.Embed(
-        title=f"🏈 {season_name}",
+        title=title,
         description=description,
         color=color or discord.Color(DEFAULT_ACCENT),
     )
-    embed.add_field(
-        name="Entry",
-        value=f"{buyin:,} coins" if buyin else "Free",
-        inline=True,
-    )
-    # The late-entry bullet must match the season's actual config — a pin
-    # promising "join any week" over a closed season is the bot lying.
-    late_lines = {
-        "gauntlet": "• Join any week — missed weeks auto-replay as the Gauntlet",
-        "ghost_only": "• Late entry joins the Ghost Streak side game",
-        "closed": "• Entry closes at Week 1 kickoff",
-    }
-    # Config-accurate, like the late-entry bullet: strikes is a 0–2 dial and
-    # a sudden-death season must not pin a promise of grace.
+    if active and games:
+        lines = [
+            f"**{g['away']}** @ **{g['home']}** · <t:{int(g['kickoff_ts'])}:f>"
+            for g in games
+        ]
+        embed.add_field(
+            name="This Week's Games",
+            value=_clip_field(lines, "games"),
+            inline=False,
+        )
     strike_lines = {
         0: "• Sudden death ☠️ — one loss and you're out",
         1: "• One strike of grace 💛 — the second ends your run",
         2: "• Two strikes of grace 💛💛 — the third ends your run",
+    }
+    late_lines = {
+        "gauntlet": "• Join any week — missed weeks auto-replay as the Gauntlet",
+        "ghost_only": "• Late entry joins the Ghost Streak side game",
+        "closed": "• Entry closes at Week 1 kickoff",
     }
     embed.add_field(
         name="The Rules",
@@ -240,7 +262,17 @@ def build_announcement_embed(
         ),
         inline=False,
     )
-    embed.set_footer(text="Picks stay secret until the weekly results post")
+    join_line = slate_join_line(
+        buyin=buyin, late_entry=late_entry, gauntlet_mode=gauntlet_mode
+    )
+    if join_line:
+        embed.add_field(name="New Here?", value=join_line, inline=False)
+    if active:
+        embed.set_footer(
+            text=f"Picks close at kickoff · {picked} of {alive} alive have picked"
+        )
+    else:
+        embed.set_footer(text="Picks stay secret until the weekly results post")
     return embed
 
 

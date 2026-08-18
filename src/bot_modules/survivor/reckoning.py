@@ -293,55 +293,6 @@ def build_reckoning_embed(
     return embed
 
 
-def build_slate_embed(
-    games: list[dict],
-    *,
-    week: int,
-    picked: int,
-    alive: int,
-    season_name: str,
-    entrants: int = 0,
-    pot: int = 0,
-    buyin: int = 0,
-    late_entry: str = "gauntlet",
-    gauntlet_mode: bool = False,
-    color: discord.Color | None = None,
-) -> discord.Embed:
-    """The Wednesday slate — and, since 2026-08-18, the weekly
-    mini-announcement (§2.2/§2.3 as amended): the week's games plus a
-    compact joining line, so the door rides the post people actually see
-    instead of a weeks-old pin. Entry-closed gauntlet-era seasons show no
-    join line (the task also drops the button)."""
-    embed = discord.Embed(
-        title=f"🏈 Week {week} Slate",
-        description="Pick one team to **win**. Picks lock at each game's "
-        "kickoff and stay hidden until the results post.",
-        color=color or discord.Color(DEFAULT_ACCENT),
-    )
-    from bot_modules.survivor.embeds import _clip_field
-
-    lines = [
-        f"**{g['away']}** @ **{g['home']}** · <t:{int(g['kickoff_ts'])}:f>"
-        for g in games
-    ]
-    embed.add_field(
-        name="This Week's Games", value=_clip_field(lines, "games"), inline=False
-    )
-    join_line = slate_join_line(
-        buyin=buyin, late_entry=late_entry, gauntlet_mode=gauntlet_mode
-    )
-    if join_line:
-        status = f"Pot **{pot:,}** · 👥 **{entrants}** playing"
-        embed.add_field(
-            name="New Here?", value=f"{join_line}\n{status}", inline=False
-        )
-    embed.set_footer(
-        text=f"{season_name} · Picks close at kickoff · "
-        f"{picked} of {alive} alive have picked"
-    )
-    return embed
-
-
 def slate_join_line(
     *, buyin: int, late_entry: str, gauntlet_mode: bool
 ) -> str | None:

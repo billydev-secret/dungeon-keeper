@@ -22,7 +22,7 @@ from bot_modules.core.db_utils import open_db, open_db_immediate
 from bot_modules.services.survivor_service import get_season
 from bot_modules.survivor import logic
 from bot_modules.survivor.embeds import (
-    build_announcement_embed,
+    build_panel_embed,
     build_pick_confirm_embed,
 )
 
@@ -343,7 +343,7 @@ class JoinConfirmView(discord.ui.View):
                 await interaction.followup.send(f"-# {note}", ephemeral=True)
             except discord.HTTPException:
                 log.warning("survivor: join followup failed for %s", user_id)
-        await refresh_announcement(bot, db_path, season["id"])
+        await refresh_panel(bot, db_path, season["id"])
 
 
 async def _grant_survivor_role(
@@ -467,57 +467,120 @@ async def swap_member_roles(
     return None
 
 
-async def build_live_announcement(
+class PanelError(RuntimeError):
+    """A panel post/repost couldn't happen; message is presentable."""
+
+
+async def build_live_panel(
     bot, db_path, season_id: int
-) -> tuple[dict, discord.Embed] | None:
-    """The single source of the announcement payload — live entrant count,
-    gauntlet mode, accent color. Shared by the dashboard post/repost route
-    and the post-join counter refresh, so the pinned message can never flip
-    content depending on which path touched it last."""
+) -> tuple[dict, discord.Embed, bool] | None:
+    """The single source of the channel panel: season pitch, current week's
+    games, standings line, joining door — assembled from live data. Returns
+    (season, embed, join_open); None when season/guild is gone. Shared by
+    the dashboard post route, the Wednesday repost, and every in-place edit,
+    so the panel can never fork content by path."""
+    now = discord.utils.utcnow().timestamp()
 
     def _q():
         with open_db(db_path) as conn:
             season = get_season(conn, season_id)
             if season is None:
-                return None, 0, []
-            entrants = conn.execute(
-                "SELECT COUNT(*) FROM survivor_players WHERE season_id = ?",
+                return None
+            year = season["season_year"]
+            week = logic.pick_week(conn, year, now)
+            games = [
+                {
+                    "home": r["home"], "away": r["away"],
+                    "kickoff_ts": logic.kickoff_ts(r["kickoff_utc"]),
+                }
+                for r in conn.execute(
+                    "SELECT home, away, kickoff_utc FROM nfl_games "
+                    "WHERE season_year = ? AND week = ? AND status != 'postponed' "
+                    "ORDER BY kickoff_utc",
+                    (year, week if week is not None else -1),
+                ).fetchall()
+            ]
+            counts = conn.execute(
+                "SELECT "
+                " SUM(CASE WHEN status = 'alive' THEN 1 ELSE 0 END) AS alive,"
+                " SUM(CASE WHEN status = 'ghost' THEN 1 ELSE 0 END) AS ghost,"
+                " COUNT(*) AS total "
+                "FROM survivor_players WHERE season_id = ?",
                 (season_id,),
+            ).fetchone()
+            picked = conn.execute(
+                "SELECT COUNT(DISTINCT p.user_id) FROM survivor_picks p "
+                "JOIN survivor_players pl ON pl.season_id = p.season_id "
+                "AND pl.user_id = p.user_id "
+                "WHERE p.season_id = ? AND p.week = ? AND pl.status = 'alive'",
+                (season_id, week if week is not None else -1),
             ).fetchone()[0]
-            elapsed = logic.elapsed_weeks(
-                conn, season["season_year"], discord.utils.utcnow().timestamp()
-            )
-        return season, int(entrants), elapsed
+            pots = logic.pot_totals(conn, season)
+            gauntlet_mode = bool(logic.elapsed_weeks(conn, year, now))
+        return (
+            season, week, games, int(counts["alive"] or 0),
+            int(counts["ghost"] or 0), int(counts["total"] or 0),
+            int(picked), pots, gauntlet_mode,
+        )
 
-    season, entrants, elapsed = await asyncio.to_thread(_q)
-    if season is None:
+    loaded = await asyncio.to_thread(_q)
+    if loaded is None:
         return None
+    (season, week, games, alive, ghost, total, picked, pots,
+     gauntlet_mode) = loaded
     guild = bot.get_guild(season["guild_id"])
     if guild is None:
         return None
+    config = season["config"]
+    from bot_modules.survivor.reckoning import slate_join_line
+
+    join_open = slate_join_line(
+        buyin=int(config["buyin_coins"]),
+        late_entry=str(config["late_entry"]),
+        gauntlet_mode=gauntlet_mode,
+    ) is not None
     color = await branding.resolve_accent_color(db_path, guild)
-    embed = build_announcement_embed(
+    # Enrolling seasons show the pre-kickoff face (week=None hides the
+    # slate section even if the schedule is loaded but week 1 is far off?
+    # No — the slate section shows as soon as a pick week exists; enrolling
+    # status just means week 1 hasn't kicked yet, which is exactly when
+    # members want the games list. week is None only with no open games.
+    embed = build_panel_embed(
         season_name=season["name"],
-        entrants=entrants,
-        buyin=int(season["config"]["buyin_coins"]),
-        gauntlet_mode=bool(elapsed),
-        late_entry=str(season["config"]["late_entry"]),
-        strikes=int(season["config"]["strikes"]),
+        entrants=total,
+        buyin=int(config["buyin_coins"]),
+        gauntlet_mode=gauntlet_mode,
+        late_entry=str(config["late_entry"]),
+        strikes=int(config["strikes"]),
+        week=week,
+        games=games,
+        alive=alive,
+        eliminated=ghost,
+        picked=picked,
+        pot=pots["main"],
+        ghost_pot=pots["ghost"],
         color=color,
     )
-    return season, embed
+    return season, embed, join_open
 
 
-async def refresh_announcement(bot, db_path, season_id: int) -> None:
-    """Best-effort entrant-counter refresh on the pinned announcement."""
-    built = await build_live_announcement(bot, db_path, season_id)
+def panel_view(season_id: int, *, join_open: bool) -> discord.ui.View:
+    """The panel's buttons — persistent DynamicItems, so every past copy of
+    the panel keeps working across restarts."""
+    view = discord.ui.View(timeout=None)
+    view.add_item(SlatePickButton(season_id))
+    if join_open:
+        view.add_item(JoinSeasonButton(season_id))
+    return view
+
+
+async def refresh_panel(bot, db_path, season_id: int) -> None:
+    """Best-effort in-place edit of the pinned panel (joins, settles)."""
+    built = await build_live_panel(bot, db_path, season_id)
     if built is None:
         return
-    season, embed = built
+    season, embed, join_open = built
     config = season["config"]
-    # The channel the pin was POSTED to, not the (re-pointable) current
-    # Survivor channel — the route's retire path already resolves this way,
-    # and diverging froze the counter after a re-point (stage-4 review).
     channel_id = int(
         config.get("announcement_channel_id") or config["channel_id"] or 0
     )
@@ -529,7 +592,80 @@ async def refresh_announcement(bot, db_path, season_id: int) -> None:
     if not isinstance(channel, discord.TextChannel):
         return
     try:
-        message = channel.get_partial_message(message_id)
-        await message.edit(embed=embed)
+        await channel.get_partial_message(message_id).edit(
+            embed=embed, view=panel_view(season["id"], join_open=join_open)
+        )
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-        log.warning("survivor: announcement refresh failed for %s", message_id)
+        log.warning("survivor: panel refresh failed for %s", message_id)
+
+
+async def repost_panel(
+    bot,
+    db_path,
+    season_id: int,
+    *,
+    content: str | None = None,
+    allowed_mentions: discord.AllowedMentions | None = None,
+) -> tuple[discord.Message, bool, bool]:
+    """Post the panel fresh at the channel bottom, pin it, retire the
+    previous copy, and store the new ids. The Wednesday week-open repost
+    passes ping ``content``; the dashboard post passes none. Returns
+    (message, pinned, retired_previous); raises PanelError when it can't.
+    """
+    built = await build_live_panel(bot, db_path, season_id)
+    if built is None:
+        raise PanelError("Bot offline or the season/guild is gone.")
+    season, embed, join_open = built
+    config = season["config"]
+    guild = bot.get_guild(season["guild_id"])
+    channel = (
+        guild.get_channel(int(config["channel_id"] or 0)) if guild else None
+    )
+    if not isinstance(channel, discord.TextChannel):
+        raise PanelError(
+            "The configured channel isn't a text channel the bot can see."
+        )
+    try:
+        message = await channel.send(
+            content=content,
+            embed=embed,
+            view=panel_view(season["id"], join_open=join_open),
+            allowed_mentions=allowed_mentions or discord.AllowedMentions.none(),
+        )
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        raise PanelError(f"Couldn't post the panel: {exc}") from exc
+    try:
+        await message.pin(reason="Survivor channel panel")
+        pinned = True
+    except (discord.Forbidden, discord.HTTPException):
+        pinned = False
+
+    # Retire the previous copy in the channel it actually lives in.
+    old_message_id = int(config.get("announcement_message_id") or 0)
+    old_channel_id = int(
+        config.get("announcement_channel_id") or 0
+    ) or int(config["channel_id"] or 0)
+    retired = False
+    if old_message_id:
+        old_channel = guild.get_channel(old_channel_id) if guild else None
+        if isinstance(old_channel, discord.TextChannel):
+            try:
+                await old_channel.get_partial_message(old_message_id).delete()
+                retired = True
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                log.warning(
+                    "survivor: couldn't retire old panel %s", old_message_id
+                )
+
+    def _store():
+        with open_db(db_path) as conn:
+            from bot_modules.services.survivor_service import update_config
+
+            update_config(conn, season["id"], {
+                "announcement_message_id": message.id,
+                "announcement_channel_id": channel.id,
+            })
+            conn.commit()
+
+    await asyncio.to_thread(_store)
+    return message, pinned, retired

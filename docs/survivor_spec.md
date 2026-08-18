@@ -61,7 +61,7 @@ Season announced → Join (coins) → [Wed slate → pick → sweat → Tue Reck
 Pinned embed in #survivor: hero copy (~3 lines), buy-in, live entrant counter, five one-line rules, link to full rules thread, **[🌾 Join the Season]** button → ephemeral confirm (coin balance, debit, one-sentence rules) → role grant. At Week 1 kickoff the button stays live but the copy flips to gauntlet mode: *"the season is underway. the door is open; the road is real. 🌾 N souls walking."* Joins from here run the gauntlet receipt flow (§4.2) before charging the buy-in.
 
 ### 2.3 Weekly cadence
-- **Wed ~9am — Slate post** (`slate_hour`, guild-local; pings `@🏈 Survivor` + `@👻 Ghost`): the week's games with `<t:...:f>` timestamps (local time for free), plus the **[🏈 Make your pick]** button. Footer: picks close at each kickoff · X of N alive have picked. *(Amended 2026-08-18: the slate doubles as the **weekly mini-announcement** — a compact "New Here?" line with the pot, player count, and entry terms, plus the **[Join the Season]** button riding next to the pick button. The door lives on the post people actually see, not on a weeks-old pin; the §2.2 announcement remains the one-time season opener. Entry-closed seasons drop both the line and the button.)*
+- **Wed ~9am — Slate post** (`slate_hour`, guild-local; pings `@🏈 Survivor` + `@👻 Ghost`): the week's games with `<t:...:f>` timestamps (local time for free), plus the **[🏈 Make your pick]** button. Footer: picks close at each kickoff · X of N alive have picked. *(Amended 2026-08-18, twice: first the slate absorbed the join door; then Billy collapsed further — **the channel has exactly ONE updating panel**. Season pitch, current week's slate, standings line (alive/eliminated/pots), the rules, the "New Here?" door, and both buttons live in a single pinned message. The bot edits it in place on joins and settles, and **reposts it to the channel bottom every Wednesday with the week-open ping** — that repost IS the slate moment, so the twice-weekly ping budget holds. Entry-closed seasons drop the door. The §2.2 announcement post and this panel are the same message; §2.6's board auto-post is retired — standings live on the panel, and `/survivor board` remains on demand. The Tuesday Reckoning stays a real post: it is the payoff, not furniture.)*
 - **Sat 6pm — Last call:** DM only to the pickless (opt-out honored; fallback channel mention): *"you haven't picked. `/survivor pick` — or I'll pick for you, and I have terrible taste. 🌙"*
 - **Sun–Mon:** the bot posts nothing. The channel does the sweating.
 - **Tue 9am — THE RECKONING** (pings both roles; see 2.5).
@@ -92,7 +92,7 @@ The roles get pinged exactly twice a week. Restraint is the brand.
 > is the auto-assign character in every server, spec-level.
 
 ### 2.6 Boards
-- `/survivor board` (public, auto-posted after each Reckoning): alive roster with weeks survived + strike hearts, graveyard with week-of-death, pot, most-burned teams meta-stat.
+- `/survivor board` (public; ~~auto-posted after each Reckoning~~ *amended 2026-08-18: the auto-post is retired — the channel panel carries the standings line, and the full board stays on demand*): alive roster with weeks survived + strike hearts, graveyard with week-of-death, pot, most-burned teams meta-stat.
 - `/survivor history [@player]`: revealed picks only. Nothing current ever leaks.
 
 ### 2.7 Endgame ceremony

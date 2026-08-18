@@ -331,21 +331,36 @@ def test_slate_join_line_closed_is_none():
     ) is None
 
 
-def test_slate_embed_carries_the_door_unless_closed():
-    from bot_modules.survivor.reckoning import build_slate_embed
+def test_panel_embed_carries_the_door_unless_closed():
+    from bot_modules.survivor.embeds import build_panel_embed
 
     games = [{"home": "SEA", "away": "NE", "kickoff_ts": 1_700_000_000.0}]
-    open_embed = build_slate_embed(
-        games, week=3, picked=5, alive=8, season_name="S",
-        entrants=9, pot=8150, buyin=0, late_entry="gauntlet",
-        gauntlet_mode=True,
+    kwargs = dict(
+        season_name="S", entrants=9, buyin=0, gauntlet_mode=True,
+        week=3, games=games, alive=7, eliminated=2, picked=5,
+        pot=8150, ghost_pot=2000,
     )
-    door = next(f for f in open_embed.fields if f.name == "New Here?")
-    assert "Pot **8,150**" in door.value and "**9** playing" in door.value
+    open_embed = build_panel_embed(**{**kwargs, "late_entry": "gauntlet"})
+    assert any(f.name == "New Here?" for f in open_embed.fields)
+    assert "Alive **7**" in open_embed.description
+    assert "Pot **8,150**" in open_embed.description
+    games_field = next(
+        f for f in open_embed.fields if f.name == "This Week's Games"
+    )
+    assert "**NE** @ **SEA**" in games_field.value
 
-    closed_embed = build_slate_embed(
-        games, week=3, picked=5, alive=8, season_name="S",
-        entrants=9, pot=8150, buyin=0, late_entry="closed",
-        gauntlet_mode=True,
-    )
+    closed_embed = build_panel_embed(**{**kwargs, "late_entry": "closed"})
     assert all(f.name != "New Here?" for f in closed_embed.fields)
+
+
+def test_panel_embed_enrolling_face():
+    # No pick week yet (schedule empty/finished): the pre-kickoff pitch,
+    # no games section, entrant count front and center.
+    from bot_modules.survivor.embeds import build_panel_embed
+
+    embed = build_panel_embed(
+        season_name="S", entrants=4, buyin=0, gauntlet_mode=False, pot=8000,
+    )
+    assert "**4** players in" in embed.description
+    assert all(f.name != "This Week's Games" for f in embed.fields)
+    assert any(f.name == "New Here?" for f in embed.fields)

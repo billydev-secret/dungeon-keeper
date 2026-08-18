@@ -209,8 +209,12 @@ async def survivor_poll_loop(bot, db_path: Path) -> None:
             result = await run_poll_cycle(db_path, state, time.time(), _fetch)
             if result.reports:
                 from bot_modules.survivor.tasks import post_addenda
+                from bot_modules.survivor.views import refresh_panel
 
                 await post_addenda(bot, db_path, result.reports)
+                # Settles change the panel's standings line — edit in place.
+                for season_id in result.reports:
+                    await refresh_panel(bot, db_path, season_id)
         except Exception:
             log.exception("survivor poll loop tick failed")
         try:

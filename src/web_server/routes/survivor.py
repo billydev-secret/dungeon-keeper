@@ -514,10 +514,10 @@ async def reckoning_preview(request: Request, _: AuthenticatedUser = _ADMIN):
 
 @router.post("/survivor/announcement")
 async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
-    """Post (and pin) the §2.2 season announcement with its Join button in
-    the configured channel. A repost retires the previous pin first — the
-    old message's Join button would otherwise stay live under a frozen
-    counter and stale entry terms, accreting toward the 50-pin cap."""
+    """Post (or repost) THE channel panel — the one updating message
+    (decided 2026-08-18): season pitch, current week's slate, standings
+    line, join + pick buttons. Reposting retires the previous copy; weekly
+    reposts with the ping are the Wednesday task's job."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
@@ -535,83 +535,39 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
     season = await _service_call(run_query(_q))
 
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-    channel = (
-        guild.get_channel(int(season["config"]["channel_id"])) if guild else None
-    )
-    if not isinstance(channel, discord.TextChannel):
+    if bot is None:
         raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Bot offline or the configured channel isn't a text channel.",
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Bot offline."
         )
-    assert guild is not None
 
-    from bot_modules.survivor.views import JoinSeasonButton, build_live_announcement
+    from bot_modules.survivor.views import PanelError, repost_panel
 
-    built = await build_live_announcement(bot, ctx.db_path, season["id"])
-    if built is None:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "Couldn't build the announcement."
-        )
-    _, embed = built
-
-    view = discord.ui.View(timeout=None)
-    view.add_item(JoinSeasonButton(season["id"]))
     try:
-        message = await channel.send(embed=embed, view=view)
-        try:
-            await message.pin(reason="Survivor season announcement")
-            pinned = True
-        except (discord.Forbidden, discord.HTTPException):
-            pinned = False
-    except (discord.Forbidden, discord.HTTPException) as exc:
+        message, pinned, retired = await repost_panel(
+            ctx.bot, ctx.db_path, season["id"]
+        )
+    except PanelError as exc:
         raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"Couldn't post: {exc}"
+            status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)
         ) from exc
 
-    # Retire the previous announcement, best-effort, in the channel it was
-    # actually posted to (which may not be the current one).
-    old_message_id = int(season["config"].get("announcement_message_id") or 0)
-    old_channel_id = int(
-        season["config"].get("announcement_channel_id") or 0
-    ) or int(season["config"]["channel_id"])
-    retired = False
-    if old_message_id:
-        old_channel = guild.get_channel(old_channel_id)
-        if isinstance(old_channel, discord.TextChannel):
-            try:
-                await old_channel.get_partial_message(old_message_id).delete()
-                retired = True
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                log.warning(
-                    "survivor: couldn't retire old announcement %s", old_message_id
-                )
-
-    def _store():
+    def _audit():
         with ctx.open_db() as conn:
-            svc.update_config(
-                conn, season["id"],
-                {
-                    "announcement_message_id": message.id,
-                    "announcement_channel_id": channel.id,
-                },
-            )
             write_audit(
                 conn, guild_id=guild_id, action="survivor_announcement_post",
                 actor_id=int(user.user_id),
                 extra={"season_id": season["id"], "message_id": str(message.id),
-                       "retired_message_id": str(old_message_id) if old_message_id else None,
-                       "via": "web"},
+                       "retired_previous": retired, "via": "web"},
             )
             conn.commit()
 
-    await run_query(_store)
+    await run_query(_audit)
     await _mirror_mod_log(
         ctx, guild_id,
-        action="announcement posted",
-        summary=f"in <#{channel.id}>"
+        action="panel posted",
+        summary=f"in <#{message.channel.id}>"
         + ("" if pinned else " (pin failed)")
-        + (" · previous pin retired" if retired else ""),
+        + (" · previous copy retired" if retired else ""),
         user=user,
     )
     return {

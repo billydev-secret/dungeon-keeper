@@ -498,9 +498,9 @@ def test_board_embed_fields_stay_under_discord_limit():
 def test_announcement_late_entry_copy_matches_config(late_entry, needle):
     # Regression (08-17 review): the pin promised "join any week" over a
     # closed season — the bullet must tell the season's actual truth.
-    from bot_modules.survivor.embeds import build_announcement_embed
+    from bot_modules.survivor.embeds import build_panel_embed
 
-    embed = build_announcement_embed(
+    embed = build_panel_embed(
         season_name="S", entrants=1, buyin=0,
         gauntlet_mode=False, late_entry=late_entry,
     )

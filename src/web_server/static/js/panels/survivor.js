@@ -258,14 +258,16 @@ function renderSeasonCard(zone, overview, refresh) {
         <code>${esc(season.status)}</code></p>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <button type="button" class="btn btn-primary" data-announce-btn>
-          📌 Post Announcement</button>
+          📌 Post Panel</button>
         <button type="button" class="btn btn-danger" data-end-btn>End Season</button>
         <span data-status></span>
       </div>
-      <div class="field-hint">Post Announcement pins the season embed with its
-        Join button in the configured Survivor channel (repost re-points the
-        counter). Ending archives the season — history stays queryable, and a
-        new season can then be created.</div>
+      <div class="field-hint">Post Panel pins the channel's one updating
+        message — slate, standings, join and pick buttons — in the configured
+        Survivor channel; reposting retires the previous copy, and the bot
+        reposts it itself every Wednesday with the week-open ping. Ending
+        archives the season — history stays queryable, and a new season can
+        then be created.</div>
     </div>
   `;
   const status = zone.querySelector("[data-status]");

@@ -655,14 +655,6 @@ CASES = [
         discord.Color(branding_service.DEFAULT_ACCENT),
     ),
     case(
-        "survivor.slate",
-        lambda **kw: survivor_reckoning.build_slate_embed(
-            [{"home": "SEA", "away": "NE", "kickoff_ts": 1_700_000_000.0}],
-            week=1, picked=1, alive=2, season_name="S", **kw,
-        ),
-        discord.Color(branding_service.DEFAULT_ACCENT),
-    ),
-    case(
         "survivor.gauntlet_receipt",
         lambda **kw: survivor_embeds.build_gauntlet_receipt_embed(
             _Fate(
@@ -675,9 +667,19 @@ CASES = [
         discord.Color(branding_service.DEFAULT_ACCENT),
     ),
     case(
-        "survivor.announcement",
-        lambda **kw: survivor_embeds.build_announcement_embed(
+        "survivor.panel_enrolling",
+        lambda **kw: survivor_embeds.build_panel_embed(
             season_name="S", entrants=3, buyin=0, gauntlet_mode=False, **kw
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.panel_active",
+        lambda **kw: survivor_embeds.build_panel_embed(
+            season_name="S", entrants=9, buyin=0, gauntlet_mode=True,
+            week=3, games=[{"home": "SEA", "away": "NE",
+                            "kickoff_ts": 1_700_000_000.0}],
+            alive=7, eliminated=2, picked=5, pot=8150, ghost_pot=2000, **kw
         ),
         discord.Color(branding_service.DEFAULT_ACCENT),
     ),

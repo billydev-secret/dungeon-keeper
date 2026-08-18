@@ -26,8 +26,7 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.services.survivor_service import update_config
 from bot_modules.survivor import logic, reckoning
-from bot_modules.survivor.embeds import build_board_embed
-from bot_modules.survivor.views import SlatePickButton, swap_member_roles
+from bot_modules.survivor.views import swap_member_roles
 
 log = logging.getLogger("dungeonkeeper.survivor")
 
@@ -179,13 +178,10 @@ async def post_reckoning(bot, db_path: Path, season: dict, week: int, now: float
                 "last_reckoned_week": week,
                 "last_reckoned_at": int(now),
             })
-            from bot_modules.survivor.logic import board_data
-
-            board = board_data(conn, season, now)
             conn.commit()
-        return data, board
+        return data
 
-    data, board = await asyncio.to_thread(_q)
+    data = await asyncio.to_thread(_q)
 
     def name_of(user_id: int) -> str:
         member = guild.get_member(user_id)
@@ -201,11 +197,11 @@ async def post_reckoning(bot, db_path: Path, season: dict, week: int, now: float
     content, allowed = _pings(bot, season)
     await channel.send(content=content or None, embed=embed, allowed_mentions=allowed)
 
-    # The board auto-posts after each Reckoning (§2.6).
-    await channel.send(embed=build_board_embed(
-        board, name_of, season_name=season["name"],
-        strikes_allowed=int(season["config"]["strikes"]), color=color,
-    ))
+    # §2.6 as amended 2026-08-18: standings live on the ONE panel, which
+    # gets refreshed here instead of posting a separate board.
+    from bot_modules.survivor.views import refresh_panel
+
+    await refresh_panel(bot, db_path, season["id"])
 
     # Ghost roles applied on post (§2.5) + one warm condolence DM (§1.7).
     for entry in data["deaths"]:
@@ -222,79 +218,31 @@ async def post_reckoning(bot, db_path: Path, season: dict, week: int, now: float
 
 
 async def post_slate(bot, db_path: Path, season: dict, week: int, now: float) -> None:
-    channel = _channel(bot, season)
-    if channel is None:
-        return
+    """Wednesday's moment (§2.3 as amended 2026-08-18): repost the ONE
+    channel panel to the bottom with the week-open ping — the panel already
+    carries the slate, the standings line, and both buttons. In between
+    Wednesdays the panel only gets edited, never reposted."""
+    from bot_modules.survivor.views import PanelError, repost_panel
 
-    def _q():
+    content, allowed = _pings(bot, season)
+    ping = f"Week {week} is open — pick a team to win. ⬇️"
+    if content:
+        ping = f"{content} {ping}"
+
+    def _mark():
         with open_db(db_path) as conn:
-            rows = conn.execute(
-                "SELECT game_id, home, away, kickoff_utc FROM nfl_games "
-                "WHERE season_year = ? AND week = ? AND status != 'postponed' "
-                "ORDER BY kickoff_utc",
-                (season["season_year"], week),
-            ).fetchall()
-            games = [
-                {
-                    "home": r["home"], "away": r["away"],
-                    "kickoff_ts": logic.kickoff_ts(r["kickoff_utc"]),
-                }
-                for r in rows
-            ]
-            alive = conn.execute(
-                "SELECT COUNT(*) FROM survivor_players "
-                "WHERE season_id = ? AND status = 'alive'",
-                (season["id"],),
-            ).fetchone()[0]
-            entrants = conn.execute(
-                "SELECT COUNT(*) FROM survivor_players WHERE season_id = ?",
-                (season["id"],),
-            ).fetchone()[0]
-            picked = conn.execute(
-                "SELECT COUNT(DISTINCT p.user_id) FROM survivor_picks p "
-                "JOIN survivor_players pl ON pl.season_id = p.season_id "
-                "AND pl.user_id = p.user_id "
-                "WHERE p.season_id = ? AND p.week = ? AND pl.status = 'alive'",
-                (season["id"], week),
-            ).fetchone()[0]
-            pot = logic.pot_totals(conn, season)["main"]
-            gauntlet_mode = bool(
-                logic.elapsed_weeks(conn, season["season_year"], now)
-            )
             update_config(conn, season["id"], {"last_slate_week": week})
             conn.commit()
-        return games, int(alive), int(entrants), int(picked), pot, gauntlet_mode
 
-    games, alive, entrants, picked, pot, gauntlet_mode = await asyncio.to_thread(_q)
-    if not games:
+    try:
+        await repost_panel(
+            bot, db_path, season["id"],
+            content=ping, allowed_mentions=allowed,
+        )
+    except PanelError as exc:
+        log.warning("survivor: weekly panel repost failed: %s", exc)
         return
-    guild = channel.guild
-    color = await resolve_accent_color(db_path, guild)
-    config = season["config"]
-    embed = reckoning.build_slate_embed(
-        games, week=week, picked=picked, alive=alive,
-        season_name=season["name"],
-        entrants=entrants, pot=pot, buyin=int(config["buyin_coins"]),
-        late_entry=str(config["late_entry"]), gauntlet_mode=gauntlet_mode,
-        color=color,
-    )
-    # The slate doubles as the weekly mini-announcement (2026-08-18): the
-    # Join button rides alongside the pick button — unless entry is closed.
-    view = discord.ui.View(timeout=None)
-    view.add_item(SlatePickButton(season["id"]))
-    join_line = reckoning.slate_join_line(
-        buyin=int(config["buyin_coins"]),
-        late_entry=str(config["late_entry"]),
-        gauntlet_mode=gauntlet_mode,
-    )
-    if join_line is not None:
-        from bot_modules.survivor.views import JoinSeasonButton
-
-        view.add_item(JoinSeasonButton(season["id"]))
-    content, allowed = _pings(bot, season)
-    await channel.send(
-        content=content or None, embed=embed, view=view, allowed_mentions=allowed
-    )
+    await asyncio.to_thread(_mark)
 
 
 async def send_last_call(bot, db_path: Path, season: dict, week: int, now: float) -> None:
