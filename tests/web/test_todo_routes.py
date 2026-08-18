@@ -14,6 +14,7 @@ from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services.todo_service import (
     BOARD_ALL,
     BOARD_CHORES,
+    UNPOSTED_ALL_COST,
     clear_board,
     create_todo,
     save_board,
@@ -218,6 +219,26 @@ def _make(client, **over):
     return client.post("/api/todos/recurring", json=body)
 
 
+def _make_unspawned(fake_ctx, **over) -> int:
+    """A recurring definition with nothing outstanding behind it.
+
+    The create route spawns today's instance when the chore's time of day has
+    already gone by, which for a 09:00 daily depends on what time the suite is
+    run — so the run-now tests, which are about what *that* button reaches,
+    insert the definition directly with create-time spawning off.
+    """
+    import time as _time
+
+    from bot_modules.services.todo_recurring_service import create_recurring
+
+    kwargs = {"task": "Post QOTD", "recurrence": "daily", "time_of_day": 540}
+    kwargs.update(over)
+    with open_db(fake_ctx.db_path) as conn:
+        return create_recurring(
+            conn, GUILD, now_ts=_time.time(), spawn_if_slot_passed=False, **kwargs
+        )
+
+
 def test_create_and_list_recurring(authed_client):
     assert _make(authed_client).status_code == 200
     data = authed_client.get("/api/todos/recurring").json()
@@ -314,7 +335,7 @@ def test_unknown_action_is_a_404(authed_client):
 
 def test_run_now_spawns_a_task(authed_client, fake_ctx):
     cog = _attach_bot(fake_ctx)
-    rid = _make(authed_client).json()["id"]
+    rid = _make_unspawned(fake_ctx)
     resp = authed_client.post(f"/api/todos/recurring/{rid}/run-now")
     assert resp.status_code == 200
     assert resp.json()["spawned"] is True
@@ -323,14 +344,23 @@ def test_run_now_spawns_a_task(authed_client, fake_ctx):
     cog.refresh_boards.assert_awaited()
 
 
-def test_run_now_twice_does_not_duplicate(authed_client):
+def test_run_now_twice_does_not_duplicate(authed_client, fake_ctx):
     """Skip-if-pending: the same chore must not stack two identical rows."""
-    rid = _make(authed_client).json()["id"]
+    rid = _make_unspawned(fake_ctx)
     authed_client.post(f"/api/todos/recurring/{rid}/run-now")
     resp = authed_client.post(f"/api/todos/recurring/{rid}/run-now")
     assert resp.json()["spawned"] is False
     assert "already on the list" in resp.json()["detail"]
     assert authed_client.get("/api/todos").json()["pending_count"] == 1
+
+
+def test_chore_added_after_its_time_is_tickable_immediately(authed_client):
+    """A chore whose slot has gone by arrives with today's instance already on
+    the list, instead of sitting ⬜ open on the board with nothing to tick."""
+    # 00:00 — always behind whatever time the suite runs at.
+    _make(authed_client, task="Overnight sweep", time_of_day=0)
+    todos = authed_client.get("/api/todos").json()["todos"]
+    assert [t["task"] for t in todos] == ["Overnight sweep"]
 
 
 def test_recurring_is_scoped_to_the_active_guild(authed_client, fake_ctx):
@@ -346,9 +376,9 @@ def test_moderator_can_manage_recurring(mod_client):
     assert mod_client.get("/api/todos/recurring").status_code == 200
 
 
-def test_run_now_does_not_resume_a_paused_entry(authed_client):
+def test_run_now_does_not_resume_a_paused_entry(authed_client, fake_ctx):
     """Adding one instance by hand must not silently restart the schedule."""
-    rid = _make(authed_client).json()["id"]
+    rid = _make_unspawned(fake_ctx)
     authed_client.post(f"/api/todos/recurring/{rid}/pause")
     resp = authed_client.post(f"/api/todos/recurring/{rid}/run-now")
     assert resp.status_code == 200
@@ -358,8 +388,8 @@ def test_run_now_does_not_resume_a_paused_entry(authed_client):
     assert authed_client.get("/api/todos").json()["pending_count"] == 1
 
 
-def test_run_now_leaves_the_schedule_alone(authed_client):
-    rid = _make(authed_client).json()["id"]
+def test_run_now_leaves_the_schedule_alone(authed_client, fake_ctx):
+    rid = _make_unspawned(fake_ctx)
     before = authed_client.get("/api/todos/recurring").json()["items"][0]["next_run_at"]
     authed_client.post(f"/api/todos/recurring/{rid}/run-now")
     after = authed_client.get("/api/todos/recurring").json()["items"][0]["next_run_at"]
@@ -444,7 +474,11 @@ def test_the_two_boards_are_refused_the_same_channel(authed_client, fake_ctx):
         "/api/todos/board", json={"channel_id": "555", "kind": "chores"}
     )
     assert resp.status_code == 409
-    assert "server todo board" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "server todo board" in detail
+    # Clearing the resident is the way through this refusal — and the way the
+    # all-todos board went unposted in prod — so the 409 has to price it.
+    assert UNPOSTED_ALL_COST in detail
     cog.place_chore_board.assert_not_awaited()
 
 

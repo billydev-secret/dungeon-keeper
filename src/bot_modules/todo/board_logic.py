@@ -216,6 +216,54 @@ def render_chore_rows(
     return "\n".join(lines)
 
 
+def tickable_chores(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The rows the Mark Done button can actually offer.
+
+    A chore needs a todo row behind it to tick, and it has to still be open: a
+    done one has nothing to tick and a missed one is closed business that
+    ``complete_todo`` refuses anyway. Lives here, next to ``chore_state``, so
+    the button and the board are reading the same rows through the same rule —
+    they disagreed for as long as this filter lived alone in the cog.
+    """
+    return [
+        row
+        for row in rows
+        if row.get("todo_id") is not None and chore_state(row) == "open"
+    ]
+
+
+def nothing_to_tick_message(rows: Sequence[Mapping[str, Any]]) -> str:
+    """What Mark Done says when it has nothing to offer.
+
+    Three different truths, and saying the wrong one is how a mod concludes the
+    button is broken:
+
+    * no chores configured at all;
+    * chores exist but none has come round yet — a weekly chore set up on a day
+      it doesn't run has no instance and no miss, it simply isn't due;
+    * everything due really is ticked off.
+
+    Only the third was ever said. The middle case used to appear over a board
+    drawing those chores ⬜ open, which reads as the button refusing work that
+    is plainly visible above it.
+    """
+    if not rows:
+        return EMPTY_CHORES
+    waiting = [
+        row
+        for row in rows
+        if row.get("todo_id") is None and row.get("next_run_at")
+    ]
+    if waiting:
+        soonest = min(waiting, key=lambda r: float(r["next_run_at"]))
+        task = _flatten(soonest["task"])
+        return (
+            f"Nothing due yet — **{task}** first lands "
+            f"{rel_ts(float(soonest['next_run_at']))}. ⏳"
+        )
+    return "Every chore is already ticked off. ✨"
+
+
 def render_chore_footer(rows: Sequence[Mapping[str, Any]]) -> str:
     """``2 of 3 done · updates automatically`` — the scoreboard's score.
 

@@ -17,10 +17,12 @@ from bot_modules.todo.board_logic import (
     chore_signature,
     chore_state,
     complete_option_label,
+    nothing_to_tick_message,
     render_chore_footer,
     render_chore_rows,
     render_footer,
     render_rows,
+    tickable_chores,
 )
 
 NOW = 1_800_000_000.0
@@ -220,6 +222,7 @@ def _chore(
     streak=0,
     todo_id=1,
     missed_previous=False,
+    next_run_at=None,
 ):
     return {
         "recurring_id": recurring_id,
@@ -230,6 +233,7 @@ def _chore(
         "missed_at": missed_at,
         "streak": streak,
         "missed_previous": missed_previous,
+        "next_run_at": next_run_at,
     }
 
 
@@ -429,3 +433,50 @@ def test_chore_signature_tracks_a_previous_miss():
     assert chore_signature([_chore(1, "A")]) != chore_signature(
         [_chore(1, "A", missed_previous=True)]
     )
+
+
+# ── what Mark Done can offer, and what it says when it can't ──────────
+
+
+def test_tickable_chores_excludes_a_definition_with_no_instance():
+    """The disagreement this pins: the board draws a chore with no instance ⬜
+    open (it has simply not come round), and the button cannot tick it because
+    there is no todo row behind it. Both readings are right — what was wrong
+    was the button then claiming everything was done."""
+    waiting = _chore(1, "Monday prompt", todo_id=None, next_run_at=NOW)
+    assert chore_state(waiting) == "open"
+    assert tickable_chores([waiting]) == []
+
+
+def test_tickable_chores_offers_only_open_instances():
+    rows = [
+        _chore(1, "Open", todo_id=10),
+        _chore(2, "Done", todo_id=11, completed_at=NOW),
+        _chore(3, "Missed", todo_id=12, missed_at=NOW),
+        _chore(4, "Waiting", todo_id=None, next_run_at=NOW),
+    ]
+    assert [r["task"] for r in tickable_chores(rows)] == ["Open"]
+
+
+def test_nothing_to_tick_says_when_the_first_one_lands():
+    """Not "already ticked off" — nothing has come round yet, and a mod reading
+    that over a board full of ⬜ concludes the button is broken."""
+    rows = [
+        _chore(1, "Run any game somewhere", todo_id=None, next_run_at=NOW + 7200),
+        _chore(2, "Do a QOTD", todo_id=None, next_run_at=NOW + 3600),
+    ]
+    message = nothing_to_tick_message(rows)
+    assert "Nothing due yet" in message
+    # The soonest of them, not whichever the query happened to return first.
+    assert "Do a QOTD" in message
+    assert f"<t:{int(NOW + 3600)}:R>" in message
+
+
+def test_nothing_to_tick_still_says_done_when_everything_is_done():
+    rows = [_chore(1, "Do a QOTD", todo_id=10, completed_at=NOW)]
+    assert nothing_to_tick_message(rows) == "Every chore is already ticked off. ✨"
+
+
+def test_nothing_to_tick_on_an_empty_board_points_at_the_dashboard():
+    """No chores at all is not "all ticked off" either."""
+    assert nothing_to_tick_message([]) == EMPTY_CHORES

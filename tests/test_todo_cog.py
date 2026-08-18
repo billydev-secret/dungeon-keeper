@@ -43,7 +43,11 @@ def _interaction(user: MagicMock) -> MagicMock:
 
 
 def _cog() -> TodoCog:
-    return TodoCog(MagicMock(), MagicMock())
+    ctx = MagicMock()
+    ctx.is_mod = lambda ix: bool(
+        getattr(ix.user.guild_permissions, "administrator", False)
+    )
+    return TodoCog(MagicMock(), ctx)
 
 
 @pytest.mark.asyncio
@@ -56,6 +60,24 @@ async def test_todo_rejects_non_mods():
     create.assert_not_called()
     msg = interaction.response.send_message.await_args.args[0]
     assert "moderator" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_mod_gate_delegates_to_app_context():
+    """The one wiring assertion: the gate asks ctx.is_mod, nothing else.
+
+    It used to ask the *games* cogs' has_mod_or_admin_permissions, which knows
+    nothing about the guild's configured mod role and refused real moderators
+    the dashboard let in. Pinning the delegation here keeps the rule in one
+    place; what that rule decides is tests/test_todo_mod_tier_parity.py.
+    """
+    cog = _cog()
+    cog.ctx.is_mod = MagicMock(return_value=False)
+    interaction = _interaction(_member(mod=True))  # elevated bits, not on the team
+    with patch("bot_modules.cogs.todo_cog.create_todo") as create:
+        await cog.todo.callback(cog, interaction, "clean up the channels")
+    cog.ctx.is_mod.assert_called_once_with(interaction)
+    create.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -84,7 +106,8 @@ async def test_add_button_rejects_non_mods():
     """The board is public in its channel — the Add button must gate on mod."""
     view = TodoBoardView()
     interaction = _button_interaction(_member(mod=False))
-    await view._add.callback(interaction)
+    with patch("bot_modules.cogs.todo_cog._resolve_cog", return_value=_cog()):
+        await view._add.callback(interaction)
     interaction.response.send_modal.assert_not_awaited()
     assert "moderator" in interaction.response.send_message.await_args.args[0].lower()
 
@@ -93,7 +116,8 @@ async def test_add_button_rejects_non_mods():
 async def test_add_button_opens_modal_for_mods():
     view = TodoBoardView()
     interaction = _button_interaction(_member(mod=True))
-    await view._add.callback(interaction)
+    with patch("bot_modules.cogs.todo_cog._resolve_cog", return_value=_cog()):
+        await view._add.callback(interaction)
     interaction.response.send_modal.assert_awaited_once()
     assert isinstance(
         interaction.response.send_modal.await_args.args[0], TodoAddModal
@@ -104,7 +128,8 @@ async def test_add_button_opens_modal_for_mods():
 async def test_complete_button_rejects_non_mods():
     view = TodoBoardView()
     interaction = _button_interaction(_member(mod=False))
-    with patch("bot_modules.cogs.todo_cog.pending_todos") as pending:
+    with patch("bot_modules.cogs.todo_cog._resolve_cog", return_value=_cog()), \
+         patch("bot_modules.cogs.todo_cog.pending_todos") as pending:
         await view._complete.callback(interaction)
     pending.assert_not_called()
     assert "moderator" in interaction.response.send_message.await_args.args[0].lower()
@@ -134,6 +159,16 @@ class _FakeCtx:
 
     def open_db(self):
         return open_db(self.db_path)
+
+    def is_mod(self, interaction):
+        """Stand in for AppContext.is_mod, which the todo gate delegates to.
+
+        The real rule (elevated bits, then the guild's configured mod/admin
+        roles) and its agreement with the dashboard are pinned in
+        tests/test_todo_mod_tier_parity.py. Here it only has to answer for the
+        ``_member(mod=...)`` fakes, so the cog tests stay glue tests.
+        """
+        return bool(getattr(interaction.user.guild_permissions, "administrator", False))
 
 
 def _board_cog(db_path, guild):
@@ -389,7 +424,8 @@ async def test_chore_button_rejects_non_mods():
     """The safety gate on the second board's only button."""
     view = TodoChoreBoardView()
     interaction = _button_interaction(_member(mod=False))
-    with patch("bot_modules.cogs.todo_cog.chore_board_rows") as rows:
+    with patch("bot_modules.cogs.todo_cog._resolve_cog", return_value=_cog()), \
+         patch("bot_modules.cogs.todo_cog.chore_board_rows") as rows:
         await view._complete.callback(interaction)
     rows.assert_not_called()
     assert "moderator" in interaction.response.send_message.await_args.args[0].lower()

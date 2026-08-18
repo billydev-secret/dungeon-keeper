@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -95,6 +96,11 @@ _MOD_BITS = (
 def resolve_discord_perms(permission_bits: int) -> frozenset[str]:
     """Map a Discord permission bitfield to dashboard permission strings.
 
+    **Bits only** — no knowledge of the guild's configured staff roles, so it
+    no longer decides the ``moderator`` tier by itself. It stays as the bit half
+    of :func:`resolve_guild_perms` and for the login log line, which has nothing
+    but a bitfield in hand. Nothing that gates a request calls it directly.
+
     * ``admin``         — user has the Discord ADMINISTRATOR bit.
     * ``moderator``     — user has ADMINISTRATOR *or* any of MANAGE_GUILD,
       KICK_MEMBERS, BAN_MEMBERS, MANAGE_MESSAGES, MANAGE_ROLES,
@@ -112,6 +118,62 @@ def resolve_discord_perms(permission_bits: int) -> frozenset[str]:
             perms.add("moderator")
         if permission_bits & _MANAGE_GUILD:
             perms.add("manage_server")
+    return frozenset(perms)
+
+
+def staff_role_ids(ctx, guild_id: int) -> tuple[frozenset[int], frozenset[int]]:
+    """``(mod_role_ids, admin_role_ids)`` for a guild, or empty sets.
+
+    Reads the same cached ``GuildConfig`` snapshot the bot gates on, so the two
+    surfaces can never drift out of sync on a config edit. Defensive because
+    the dashboard also runs against a context stub in standalone mode, where an
+    unreadable config must mean "no configured roles" (bits-only, today's
+    behaviour) rather than a 500 on every authenticated request.
+    """
+    try:
+        cfg = ctx.guild_config(int(guild_id))
+        return (frozenset(cfg.mod_role_ids), frozenset(cfg.admin_role_ids))
+    except Exception:  # pragma: no cover - defensive
+        _log.debug("Could not read staff roles for guild %s", guild_id, exc_info=True)
+        return (frozenset(), frozenset())
+
+
+def resolve_guild_perms(
+    permission_bits: int,
+    *,
+    role_ids: Iterable[int] = (),
+    mod_role_ids: Iterable[int] = (),
+    admin_role_ids: Iterable[int] = (),
+) -> frozenset[str]:
+    """Dashboard permission strings for a member of a specific guild.
+
+    The ``moderator`` tier is **the guild's configured staff roles**, not a
+    permission bit — deliberately the same rule the bot enforces in Discord
+    (``AppContext.is_mod``: administrator/manage_guild short-circuit, then
+    ``mod_role_ids | admin_role_ids``). Before this existed the two surfaces
+    disagreed in both directions: a mod with Timeout Members but no Manage
+    Server passed here and was refused by the todo board's buttons, while
+    Manage Channels opened those buttons and granted nothing here.
+
+    A configured role is what a server *means* by "moderator"; the permission
+    bits are an implementation detail of what that role can do, and a bot or a
+    category-manager holding Manage Messages is not on the mod team. Guilds
+    that have configured no staff roles at all fall back to the two elevated
+    bits, so they are never locked out of their own dashboard.
+
+    ``admin`` and ``manage_server`` are unchanged and stay bit-only:
+    administrator is Discord's own ceiling, and widening it through a config
+    row would let anyone who can edit that row hand themselves the keys.
+    """
+    perms = set(resolve_discord_perms(permission_bits))
+    staff = set(mod_role_ids) | set(admin_role_ids)
+    if staff:
+        held = staff & set(role_ids)
+        # Rebuild rather than mutate: "moderator" is now earned by the role or
+        # by the two elevated bits, and the wider bit set no longer counts.
+        perms.discard("moderator")
+        if held or permission_bits & (_ADMINISTRATOR | _MANAGE_GUILD):
+            perms.add("moderator")
     return frozenset(perms)
 
 
@@ -388,11 +450,17 @@ class DiscordOAuthAuth:
                         avatar_url=avatar_url,
                     )
                 return None  # User no longer in guild
-            perms = resolve_discord_perms(member.guild_permissions.value)
+            rids = tuple(r.id for r in member.roles if not r.is_default())
+            staff = staff_role_ids(ctx, active_guild_id)
+            perms = resolve_guild_perms(
+                member.guild_permissions.value,
+                role_ids=rids,
+                mod_role_ids=staff[0],
+                admin_role_ids=staff[1],
+            )
             # Elevate support user to full admin when the guild has opted in
             if is_support and self._support_access_enabled(ctx, active_guild_id):
                 perms = _SUPPORT_PERMS
-            rids = tuple(r.id for r in member.roles if not r.is_default())
             rnames = tuple(r.name for r in member.roles if not r.is_default())
             return AuthenticatedUser(
                 user_id=user_id,
@@ -430,7 +498,17 @@ class DiscordOAuthAuth:
                 active_guild_id,
                 perms_guild_id,
             )
-        fallback_perms = resolve_discord_perms(perms_bits)
+        # The stored role ids carry the same guild qualification as the bits
+        # (both are cleared on a guild switch), so the configured-role rule
+        # applies here too — a mod whose only claim is the role must not lose
+        # the dashboard the moment the bot's guild cache is cold.
+        fallback_staff = staff_role_ids(ctx, active_guild_id)
+        fallback_perms = resolve_guild_perms(
+            perms_bits,
+            role_ids=stored_rids,
+            mod_role_ids=fallback_staff[0],
+            admin_role_ids=fallback_staff[1],
+        )
         if is_support and self._support_access_enabled(ctx, active_guild_id):
             fallback_perms = _SUPPORT_PERMS
         return AuthenticatedUser(

@@ -252,6 +252,36 @@ def guilds_with_board(
     return [r["guild_id"] for r in rows]
 
 
+#: What is lost while the all-todos board is unposted. The chore board's Mark
+#: Done only ever offers *recurring* instances, so with the all-todos board
+#: gone there is no Discord surface that can complete an ordinary todo at all —
+#: a mod can still add one with /todo and then find nowhere to tick it off.
+#: This went unsaid for three days in prod, and was discovered by failing to
+#: tick anything off rather than by anything the dashboard reported.
+UNPOSTED_ALL_COST = (
+    "no one can complete an ordinary todo from Discord while it is unposted —"
+    " the chore board's Mark Done only offers recurring chores"
+)
+
+
+def board_conflict_detail(resident_kind: str) -> str:
+    """The 409 a mod sees when two sticky boards would share a channel.
+
+    Names the resident and, when it is the all-todos board, what clearing it to
+    make room would cost. Removing it *is* the way through this refusal, so the
+    price belongs in the sentence that sends them to do it.
+    """
+    name = BOARD_NAMES.get(resident_kind, "another todo board")
+    detail = (
+        f"{name.capitalize()} is already in that channel. Two sticky boards"
+        " can't share one — they'd take turns being buried. Move that one"
+        " first, or pick a different channel."
+    )
+    if resident_kind == BOARD_ALL:
+        detail += f" Note: if you clear it instead of moving it, {UNPOSTED_ALL_COST}."
+    return detail
+
+
 def conflicting_board(
     conn: sqlite3.Connection, guild_id: int, kind: str, channel_id: int
 ) -> str | None:
@@ -269,7 +299,9 @@ def conflicting_board(
 
     So the collision is refused at configuration time, which is the only place
     it is legible to a human. Returns ``None`` when the channel is free, or the
-    resident's display name when it is not.
+    resident's *kind* when it is not — the caller renders it through
+    ``board_conflict_detail``, which needs to know which board it is and not
+    only what to call it.
     """
     if not channel_id:
         return None  # unposting can never collide with anything
@@ -280,4 +312,4 @@ def conflicting_board(
     ).fetchone()
     if row is None:
         return None
-    return BOARD_NAMES.get(row["kind"], "another todo board")
+    return str(row["kind"])

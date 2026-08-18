@@ -12,7 +12,6 @@ from discord.ext import commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
 from bot_modules.core.sticky import PanelContent, StickyPanel
-from bot_modules.games_config.logic import has_mod_or_admin_permissions
 from bot_modules.services.todo_recurring_service import (
     chore_board_rows,
     due_recurring,
@@ -35,12 +34,13 @@ from bot_modules.todo.board_logic import (
     MAX_BOARD_ROWS,
     board_signature,
     chore_signature,
-    chore_state,
     complete_option_label,
+    nothing_to_tick_message,
     render_chore_footer,
     render_chore_rows,
     render_footer,
     render_rows,
+    tickable_chores,
 )
 
 if TYPE_CHECKING:
@@ -169,7 +169,11 @@ class TodoBoardView(discord.ui.View):
     async def _add(
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ) -> None:
-        if not await _require_mod(interaction):
+        cog = _resolve_cog(interaction)
+        if cog is None:
+            await _unavailable(interaction)
+            return
+        if not await _require_mod(interaction, cog.ctx):
             return
         await interaction.response.send_modal(TodoAddModal())
 
@@ -182,11 +186,11 @@ class TodoBoardView(discord.ui.View):
     async def _complete(
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ) -> None:
-        if not await _require_mod(interaction):
-            return
         cog = _resolve_cog(interaction)
         if cog is None or interaction.guild is None:
             await _unavailable(interaction)
+            return
+        if not await _require_mod(interaction, cog.ctx):
             return
         guild_id = interaction.guild.id
 
@@ -230,35 +234,33 @@ class TodoChoreBoardView(discord.ui.View):
     async def _complete(
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ) -> None:
-        if not await _require_mod(interaction, "tick off chores"):
-            return
         cog = _resolve_cog(interaction)
         if cog is None or interaction.guild is None:
             await _unavailable(interaction)
             return
+        if not await _require_mod(interaction, cog.ctx, "tick off chores"):
+            return
         guild_id = interaction.guild.id
 
-        def _load() -> list[dict]:
+        def _load() -> tuple[list[dict], str]:
             with cog.ctx.open_db() as conn:
                 # The same slice the board renders. Reading fewer than the
                 # board shows lets "Every chore is already ticked off" appear
                 # while open rows are visible in the message above it.
                 # TodoCompleteSelect caps the options at Discord's 25.
                 rows = chore_board_rows(conn, guild_id, limit=_CHORE_FETCH)
-            # Only what is actually still open: a done chore has nothing to
-            # tick, and a missed one is closed business that complete_todo
-            # refuses anyway — offering either would be a button that lies.
-            return [
+            # Both the filter and the empty-case wording come from board_logic,
+            # alongside the chore_state the board renders with — the two used
+            # to disagree about a definition with no instance behind it.
+            options = [
                 {"id": row["todo_id"], "task": row["task"], "description": None}
-                for row in rows
-                if row["todo_id"] is not None and chore_state(row) == "open"
+                for row in tickable_chores(rows)
             ]
+            return options, nothing_to_tick_message(rows)
 
-        rows = await asyncio.to_thread(_load)
+        rows, empty_message = await asyncio.to_thread(_load)
         if not rows:
-            await interaction.response.send_message(
-                "Every chore is already ticked off. ✨", ephemeral=True
-            )
+            await interaction.response.send_message(empty_message, ephemeral=True)
             return
         view = discord.ui.View(timeout=180)
         view.add_item(TodoCompleteSelect(rows))
@@ -280,14 +282,25 @@ async def _unavailable(interaction: discord.Interaction) -> None:
 
 
 async def _require_mod(
-    interaction: discord.Interaction, action: str = "manage the todo list"
+    interaction: discord.Interaction,
+    ctx: AppContext,
+    action: str = "manage the todo list",
 ) -> bool:
     """The one moderator gate for every Discord surface of the todo list —
-    `/todo` and both board buttons. The web routes enforce the same tier."""
+    `/todo` and both board buttons.
+
+    Delegates to ``AppContext.is_mod``: Discord's administrator/manage_guild
+    short-circuit, then the guild's configured ``mod_role_ids``/
+    ``admin_role_ids``. That is the bot's house definition of a moderator, and
+    ``web_server.auth.resolve_guild_perms`` resolves the dashboard's
+    ``moderator`` tier the same way — so a mod refused here is refused there,
+    and a mod who can tick a chore off on the dashboard can tick it off in the
+    channel. This gate used to read the games cogs'
+    ``has_mod_or_admin_permissions`` (administrator/manage_guild/manage_channels
+    and nothing else), which refused real moderators the dashboard let in.
+    """
     user = interaction.user
-    if not isinstance(user, discord.Member) or not has_mod_or_admin_permissions(
-        user.guild_permissions
-    ):
+    if not isinstance(user, discord.Member) or not ctx.is_mod(interaction):
         await interaction.response.send_message(
             f"❌ Only moderators can {action}.", ephemeral=True
         )
@@ -337,7 +350,7 @@ class TodoCog(commands.Cog):
             return
         # The todo list is a mod worklist, curated from the dashboard — only
         # moderators may add to it (the web endpoints are mod-gated too).
-        if not await _require_mod(interaction, "add to the todo list"):
+        if not await _require_mod(interaction, self.ctx, "add to the todo list"):
             return
         task = task.strip()
         if not task:

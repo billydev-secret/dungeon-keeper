@@ -571,14 +571,17 @@ def test_run_now_does_not_touch_other_guilds(db):
     guilds' due chores and rewrote their next_run_at to the wrong wall clock."""
     now = _epoch(2026, 7, 26, 12, 0)
     with open_db(db) as conn:
+        # Both opt out of create-time spawning: this is about what *run_now*
+        # reaches, so each definition has to start with nothing outstanding.
         mine = create_recurring(
             conn, GUILD, task="Mine", recurrence="daily",
-            time_of_day=540, now_ts=now,
+            time_of_day=540, now_ts=now, spawn_if_slot_passed=False,
         )
         # Another guild with a chore that is already due, on a +10 offset.
         theirs = create_recurring(
             conn, 999, task="Theirs", recurrence="daily",
             time_of_day=540, offset_hours=10.0, now_ts=now - 86400,
+            spawn_if_slot_passed=False,
         )
         before = get_recurring(conn, theirs, 999).next_run_at
 
@@ -587,6 +590,116 @@ def test_run_now_does_not_touch_other_guilds(db):
         assert [r["task"] for r in pending_todos(conn, GUILD)] == ["Mine"]
         assert pending_todos(conn, 999) == []
         assert get_recurring(conn, theirs, 999).next_run_at == before
+
+
+# ── created after its own time of day ──────────────────────────────────
+
+
+def _tickable(conn, guild_id=GUILD):
+    """What the chore board's Mark Done button offers, verbatim.
+
+    Mirrors ``TodoChoreBoardView._complete``'s ``_load`` closure: the rows the
+    board itself renders, filtered to the ones that have a todo row behind them
+    and are still open. Kept here rather than reaching into the cog because the
+    disagreement being pinned is between the board's data and this filter.
+    """
+    from bot_modules.todo.board_logic import chore_state
+
+    return [
+        row
+        for row in chore_board_rows(conn, guild_id, limit=50)
+        if row["todo_id"] is not None and chore_state(row) == "open"
+    ]
+
+
+def test_chore_created_after_its_slot_is_tickable_today(db):
+    """The 12:16 bug: two 09:00 dailies added at midday rendered ⬜ open on the
+    board while Mark Done answered "Every chore is already ticked off", because
+    a definition that has not spawned has no todo row to offer."""
+    noon = _epoch(2026, 8, 18, 12, 16)
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Do a QOTD", recurrence="daily",
+            time_of_day=540, created_by=USER, now_ts=noon,
+        )
+
+        board = chore_board_rows(conn, GUILD)
+        assert len(board) == 1
+        # The board draws it as outstanding...
+        from bot_modules.todo.board_logic import chore_state
+
+        assert chore_state(board[0]) == "open"
+        # ...and the button now has exactly that row to offer.
+        assert [r["task"] for r in _tickable(conn)] == ["Do a QOTD"]
+
+
+def test_create_time_spawn_leaves_the_schedule_alone(db):
+    """Spawning on create must not move the cadence or fabricate a miss.
+
+    It borrows run_now's semantics, not the daily reset's: ``next_run_at`` still
+    points at tomorrow's real occurrence, and nothing is written off.
+    """
+    noon = _epoch(2026, 8, 18, 12, 16)
+    with open_db(db) as conn:
+        rid = create_recurring(
+            conn, GUILD, task="Do a QOTD", recurrence="daily",
+            time_of_day=540, created_by=USER, now_ts=noon,
+        )
+        task = get_recurring(conn, rid, GUILD)
+        assert task.next_run_at == _epoch(2026, 8, 19, 9, 0)
+        assert task.status == "active"
+        rows = chore_board_rows(conn, GUILD)
+        assert rows[0]["missed_at"] is None
+        assert rows[0]["completed_at"] is None
+
+
+def test_chore_created_before_its_slot_waits_for_the_loop(db):
+    """The slot is still ahead today, so the scheduled fire owns it.
+
+    Spawning here would hand a mod a 21:00 chore to tick at breakfast.
+    """
+    dawn = _epoch(2026, 8, 18, 6, 0)
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Evening sweep", recurrence="daily",
+            time_of_day=1260, created_by=USER, now_ts=dawn,
+        )
+        assert pending_todos(conn, GUILD) == []
+
+
+def test_weekly_chore_only_spawns_on_one_of_its_own_days(db):
+    """A weekly chore created off-schedule has no occurrence today to have missed."""
+    # 2026-08-18 is a Tuesday.
+    tuesday_noon = _epoch(2026, 8, 18, 12, 0)
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Monday prompt", recurrence="weekly",
+            time_of_day=540, recur_days=[0], created_by=USER,
+            now_ts=tuesday_noon,
+        )
+        assert pending_todos(conn, GUILD) == []
+
+        create_recurring(
+            conn, GUILD, task="Tuesday prompt", recurrence="weekly",
+            time_of_day=540, recur_days=[1], created_by=USER,
+            now_ts=tuesday_noon,
+        )
+        assert [r["task"] for r in pending_todos(conn, GUILD)] == ["Tuesday prompt"]
+
+
+def test_create_time_spawn_respects_the_guild_offset(db):
+    """"Today" is the guild's local day, not UTC's.
+
+    At 02:00 UTC on a +10 guild it is already noon locally, so a 09:00 chore's
+    slot has gone by — reading the day in UTC would say it hasn't.
+    """
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Local morning", recurrence="daily",
+            time_of_day=540, offset_hours=10.0, created_by=USER,
+            now_ts=_epoch(2026, 8, 18, 2, 0),
+        )
+        assert [r["task"] for r in pending_todos(conn, GUILD)] == ["Local morning"]
 
 
 def test_run_now_missing_returns_none(db):

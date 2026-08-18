@@ -25,9 +25,23 @@ channel** — see "Two boards, never one channel" below.
 | `PUT/DELETE /api/todos/recurring/{id}` | Web | Mod | Edit / delete a definition |
 | `POST /api/todos/recurring/{id}/{pause,resume,run-now}` | Web | Mod | Row actions |
 
-The list is a moderator worklist end to end. `/todo` and both board buttons use
-the same `has_mod_or_admin_permissions` rule as the other mod-tier commands
-(administrator, manage_guild, or manage_channels).
+The list is a moderator worklist end to end, and both surfaces resolve
+"moderator" the same way: **`AppContext.is_mod`** — administrator or
+manage_guild, otherwise a role in the guild's configured
+`mod_role_ids`/`admin_role_ids`. The dashboard applies that rule through
+`web_server.auth.resolve_guild_perms`, which the `moderator` tier resolves
+through for **every** panel, not only this one.
+
+Until 2026-08-18 the two disagreed. Discord gated on the games cogs'
+`has_mod_or_admin_permissions` (administrator, manage_guild, manage_channels)
+while the web resolved `moderator` from a wider bit set (adding kick, ban,
+manage_messages, manage_roles, moderate_members). A mod with Timeout Members
+and no Manage Server passed on the dashboard and was refused by the chore
+board's buttons; Manage Channels did the reverse. The configured mod role — the
+thing a server actually means by "moderator" — was consulted by neither. Roles
+now decide, with the two elevated bits kept as a short-circuit and a bits-only
+fallback for a guild that has configured no staff roles at all. `admin` and
+`manage_server` stay bit-only: a config row must not be a path to the ceiling.
 
 Board *placement* is the one admin-gated action: choosing a channel makes the
 bot post into it, which is server configuration rather than worklist curation.
@@ -111,6 +125,15 @@ asks "what is outstanding?"; this one asks **"did we do it today?"**
 - **Footer.** `N of M done`, plus `· K missed last run` when any are. Counts
   every active chore including those past the visible window, so it can't
   disagree with the dashboard about how the day went.
+- **What the button can offer.** `board_logic.tickable_chores` — a row with a
+  todo behind it, still open. A done chore has nothing to tick and a missed one
+  is closed business `complete_todo` refuses anyway. It lives beside
+  `chore_state` rather than in the cog so the button and the board read the
+  same rows through the same rule; while the filter lived alone in the cog the
+  two disagreed about a definition with no instance. When it offers nothing,
+  `nothing_to_tick_message` distinguishes three cases that used to be spoken as
+  one: no chores configured, none due yet (naming the soonest and when it
+  lands), and genuinely all ticked off.
 - **One button, `todo_chore_board_complete`.** No Add: a chore is a *recurring
   definition* with a cadence, created on the dashboard — the thing the other
   board's Add button makes is a one-off task, which is exactly what this board
@@ -178,6 +201,19 @@ Definitions live on the dashboard and materialise a normal todo row when due.
   writes off *one* instance, not three. Downtime is not evidence that a chore
   was skipped; the record deliberately covers only the days the bot was
   watching.
+- **Created after its own time of day (2026-08-18).** A chore whose slot has
+  already gone by on the guild's current local day materialises **one instance
+  immediately**, so it is tickable from the moment it exists. It borrows *Run
+  now*'s semantics, not the reset's: `next_run_at` is untouched (still the real
+  next occurrence) and nothing is written off as missed — creating a chore is
+  not a day boundary. A weekly chore created on a day it does not run gets
+  nothing, because it has no occurrence today to have missed.
+
+  Without this, a chore added at 12:16 for an 09:00 daily had no instance until
+  the next morning, while the chore board drew it ⬜ open — correctly, per
+  `chore_state` — and **Mark Done** answered "Every chore is already ticked
+  off" over a board showing open work. Two prod dailies sat like that from
+  2026-08-18 12:16 until the next 09:00.
 - **Resume** recomputes `next_run_at` from now, so a long pause doesn't come
   back and immediately fire a stale slot.
 - **Run now** adds one instance immediately and changes nothing else: not the
@@ -206,6 +242,18 @@ and is excluded from the Pending filter — the same rule the boards and
 three states independently rather than deriving one by subtraction, and a
 **Missed** tile appears only when there is something in it.
 
+**Board placement is visible.** Each board card states whether it is posted,
+and the all-todos card carries a warning while it is not: it is the only
+Discord surface that can complete an ordinary todo, since the chore board's
+**Mark Done** offers recurring instances and nothing else. The same cost is
+spelled out in that card's remove confirmation and appended to the 409 when the
+all-todos board is the resident of a channel another board is being placed in —
+clearing it is the way through that refusal, so the price belongs in the
+sentence that sends a mod to do it. In prod the all-todos board was unposted at
+12:15 on 2026-08-18 to free ✅│todo for the chore board, and the loss of every
+Discord completion path went unannounced; it was found by failing to tick
+anything off.
+
 Creating, editing, deleting, pausing or resuming a **definition** repaints the
 chore board directly. The 60s loop is not a backstop for it: that only repaints
 guilds where a spawn or a write-off happened, and the chore board is one row per
@@ -215,11 +263,13 @@ daily and a week for a weekly.
 
 ## Permissions
 
-- Discord: moderator-gated. `/todo` and both board buttons require
-  administrator, manage_guild, or manage_channels; `/todo` rejects DMs.
-- Web: every endpoint requires `moderator`; `PUT /api/todos/board` additionally
-  requires `admin`, for either `kind`. The panel disables both board cards off
-  `can_manage_board`.
+- Discord: moderator-gated through `AppContext.is_mod` — administrator or
+  manage_guild, otherwise a configured mod/admin role. `/todo` rejects DMs.
+- Web: every endpoint requires `moderator`, resolved by `resolve_guild_perms`
+  from the same rule; `PUT /api/todos/board` additionally requires `admin`, for
+  either `kind`. The panel disables both board cards off `can_manage_board`.
+- The parity between the two is pinned by `tests/test_todo_mod_tier_parity.py`,
+  which asserts both surfaces agree case by case.
 
 ## User-visible errors
 
@@ -233,8 +283,10 @@ daily and a week for a weekly.
 | Web completion targets a missing or already-completed row | HTTP 404: "Todo not found or already completed." |
 | Board channel doesn't exist in the guild | HTTP 400: "That channel doesn't exist here." |
 | Board `kind` is neither `all` nor `chores` | HTTP 400: "Unknown board." |
-| The other todo board already holds the chosen channel | HTTP 409: "The server todo board is already in that channel. Two sticky boards can't share one — they'd take turns being buried. Move that one first, or pick a different channel." |
-| Chore board **Mark Done** with nothing open | "Every chore is already ticked off. ✨" |
+| The other todo board already holds the chosen channel | HTTP 409: "The server todo board is already in that channel. Two sticky boards can't share one — they'd take turns being buried. Move that one first, or pick a different channel." When the resident is the all-todos board the refusal adds what clearing it costs (see *Board placement is visible*). |
+| Chore board **Mark Done** with everything ticked | "Every chore is already ticked off. ✨" |
+| Chore board **Mark Done** with chores configured but none yet due | "Nothing due yet — **&lt;chore&gt;** first lands &lt;relative timestamp&gt;. ⏳" |
+| Chore board **Mark Done** with no chores configured at all | "No recurring chores set up yet — add them on the dashboard. ✨" |
 | Chore board button clicked by a non-moderator | "Only moderators can tick off chores." |
 | Bot can't post in the chosen channel | HTTP 400: "I can't post in that channel — check my Send Messages and Embed Links permissions." |
 | Board action while the bot is disconnected | HTTP 503: "The bot isn't connected right now — try again in a moment." |
