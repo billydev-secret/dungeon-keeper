@@ -120,10 +120,17 @@ function renderSimulatorCard(zone, refresh) {
         <button type="button" class="btn btn-small" data-sim-settle="chalk">favorites win</button>
         <button type="button" class="btn btn-small" data-sim-settle="random">random</button>
         <button type="button" class="btn btn-small" data-sim-settle="upset">upsets</button>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+        advance the week:
+        <button type="button" class="btn btn-small" data-tasks-btn>▶ Run Weekly Tasks</button>
         <span data-status></span>
       </div>
-      <div class="field-hint">Then ▶ Run Weekly Tasks (Season card) posts the
-        Reckoning and reposts the panel without waiting for Tuesday.</div>
+      <div class="field-hint">The weekly tasks run themselves on the clock —
+        slate Wednesday, last call Saturday, the Reckoning Tuesday, in the
+        guild's own hours. This forces them now so a simulated week doesn't
+        wait for Tuesday; the once-per-week state still prevents double
+        posts, and only this server's season is touched.</div>
     </div>
   `;
   const status = zone.querySelector("[data-status]");
@@ -137,6 +144,28 @@ function renderSimulatorCard(zone, refresh) {
       });
       showStatus(status, true, `${res.games} games laid down — first kickoff in ~1 minute`);
       setTimeout(refresh, 1500);
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  });
+  zone.querySelector("[data-tasks-btn]").addEventListener("click", async () => {
+    if (!window.confirm(
+      "Run the weekly tasks now, skipping the day/hour gates? "
+      + "Once-per-week still holds — nothing double-posts.")) return;
+    try {
+      const res = await apiPost("/api/survivor/tasks/run", {});
+      // Report what actually posted: with no schedule ingested every gate
+      // returns "not due", and a flat success message hid that entirely.
+      const row = (res.report || [])[0];
+      if (!row) {
+        showStatus(status, false, "no live season on this server");
+      } else if (row.error) {
+        showStatus(status, false, `task failed: ${row.error}`);
+      } else if (row.fired && row.fired.length) {
+        showStatus(status, true, `posted ${row.fired.join(", ")} — check the channel`);
+      } else {
+        showStatus(status, false, `nothing was due — ${row.reason}`);
+      }
     } catch (err) {
       showStatus(status, false, err.message);
     }
@@ -324,7 +353,6 @@ function renderSeasonCard(zone, overview, refresh) {
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <button type="button" class="btn btn-primary" data-announce-btn>
           📌 Post Panel</button>
-        <button type="button" class="btn" data-tasks-btn>▶ Run Weekly Tasks</button>
         <button type="button" class="btn btn-danger" data-end-btn>End Season</button>
         <span data-status></span>
       </div>
@@ -341,28 +369,6 @@ function renderSeasonCard(zone, overview, refresh) {
     try {
       const res = await apiPost("/api/survivor/announcement", {});
       showStatus(status, true, res.pinned ? "posted and pinned" : "posted (pin failed — check Manage Messages)");
-    } catch (err) {
-      showStatus(status, false, err.message);
-    }
-  });
-  zone.querySelector("[data-tasks-btn]").addEventListener("click", async () => {
-    if (!window.confirm(
-      "Run the weekly tasks now, skipping the day/hour gates? "
-      + "Once-per-week still holds — nothing double-posts.")) return;
-    try {
-      const res = await apiPost("/api/survivor/tasks/run", {});
-      // Report what actually posted: with no schedule ingested every gate
-      // returns "not due", and a flat success message hid that entirely.
-      const row = (res.report || [])[0];
-      if (!row) {
-        showStatus(status, false, "no live season on this server");
-      } else if (row.error) {
-        showStatus(status, false, `task failed: ${row.error}`);
-      } else if (row.fired && row.fired.length) {
-        showStatus(status, true, `posted ${row.fired.join(", ")} — check the channel`);
-      } else {
-        showStatus(status, false, `nothing was due — ${row.reason}`);
-      }
     } catch (err) {
       showStatus(status, false, err.message);
     }

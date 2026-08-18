@@ -270,3 +270,51 @@ gates. Not observed live only because no other guild has a season yet.
   **Simulator card**, as part of the rig. It shipped on the **Season card**
   instead. So the fix is to move it where the spec says, unless #2's
   reorganization decides otherwise.
+
+---
+
+## 7. List alive and eliminated by name on the panel, capped at 30
+
+> "can you list who is alive and eliminated on the panel but limit at 30
+> names displayed"
+
+Read as the **pinned Discord channel panel** — the dashboard's Roster card
+already lists players, and the 30-name cap is a Discord-embed concern. The
+panel previously carried only `✅ Alive N · 👻 Eliminated N` in its
+description.
+
+**Built.** `build_panel_embed` takes `alive_names` / `eliminated_names` and
+renders two fields under This Week's Games; `build_live_panel` reads the
+roster in the same query pass and resolves display names off the guild
+(`escape_markdown`, `soul {id}` when the member has left), sorted
+case-insensitively so the list is stable between in-place edits. Names are
+dot-separated rather than one per line — 30 lines would push the games and
+the rules off the bottom of the panel.
+
+`ROSTER_DISPLAY_CAP = 30` is the count cap, but **length binds first**: 30
+unusually long display names would blow Discord's 1024-char field limit, so
+`_roster_value` trims to whichever hits first and always says how many it
+hid. The graveyard field is omitted entirely until someone is in it.
+
+**Cap is per list, not shared** — 30 alive *and* 30 eliminated. A shared
+budget would starve the graveyard as the season goes on. Say so if you
+meant 30 across both.
+
+---
+
+## 4 (resolved). Run Weekly Tasks moved to the Simulator card
+
+> "the run weekly tasks should normally be automated and the manual one
+> should be part of the simulator right?"
+
+Yes on both counts, and it already was automated — `survivor_loop.py:243`
+calls `run_weekly_tasks` on every poll tick, and each task fires at or after
+its guild-local hour and catches up if the bot slept through it. The button
+was only ever the manual force, and spec §"Testing rig" placed it on the
+Simulator card from the start; it shipped on the Season card by mistake.
+
+**Moved.** The Simulator card renders only for synthetic seasons
+(`season_year >= 2090`), so a real season now has **no force button at
+all** — the clock plus catch-up is the whole production story. The Season
+card is left with Post Panel and End Season, which also thins out the
+undifferentiated button row from #2.

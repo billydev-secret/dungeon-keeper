@@ -506,3 +506,57 @@ def test_announcement_late_entry_copy_matches_config(late_entry, needle):
     )
     rules = next(f for f in embed.fields if f.name == "The Rules")
     assert needle in rules.value
+
+
+# ── panel roster lists (2026-08-18) ───────────────────────────────────
+#
+# The panel showed only counts, which made the pool abstract. Names now
+# ride along, capped so a big pool can't push the games and rules off the
+# bottom or blow Discord's 1024-char field limit.
+
+def _panel(**kw):
+    from bot_modules.survivor.embeds import build_panel_embed
+
+    return build_panel_embed(
+        season_name="S", entrants=kw.pop("entrants", 3), buyin=0,
+        gauntlet_mode=False, **kw
+    )
+
+
+def _field(embed, prefix):
+    return next((f for f in embed.fields if f.name.startswith(prefix)), None)
+
+
+def test_panel_lists_alive_and_eliminated_by_name():
+    embed = _panel(
+        alive=2, eliminated=1,
+        alive_names=["Ana", "Bo"], eliminated_names=["Cy"],
+    )
+    assert _field(embed, "✅ Alive").name == "✅ Alive (2)"
+    assert _field(embed, "✅ Alive").value == "Ana · Bo"
+    assert _field(embed, "👻 Eliminated").value == "Cy"
+
+
+def test_panel_omits_the_graveyard_until_someone_is_in_it():
+    embed = _panel(alive=2, alive_names=["Ana", "Bo"], eliminated_names=[])
+    assert _field(embed, "👻 Eliminated") is None
+
+
+def test_panel_caps_the_roster_at_thirty_names():
+    from bot_modules.survivor.embeds import ROSTER_DISPLAY_CAP
+
+    names = [f"p{i:02d}" for i in range(42)]
+    value = _field(_panel(alive=42, alive_names=names), "✅ Alive").value
+    shown = value.split("\n")[0].split(" · ")
+    assert len(shown) == ROSTER_DISPLAY_CAP == 30
+    assert "…and 12 more alive" in value
+    assert "p41" not in value
+
+
+def test_panel_roster_trims_on_the_field_limit_before_the_count():
+    # 30 names is the *count* cap; 30 very long ones would still blow
+    # Discord's 1024-char field, so length binds first and stays honest.
+    names = ["N" * 60 for _ in range(30)]
+    value = _field(_panel(alive=30, alive_names=names), "✅ Alive").value
+    assert len(value) <= 1024
+    assert "more alive" in value

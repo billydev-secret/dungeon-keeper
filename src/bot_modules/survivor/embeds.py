@@ -48,6 +48,30 @@ def _clip_field(lines: list[str], noun: str) -> str:
     return "\n".join(out)
 
 
+ROSTER_DISPLAY_CAP = 30
+"""Names shown per roster list on the channel panel (2026-08-18). Both the
+count *and* Discord's 1024-char field cap bind — a pool of 30 unusually long
+display names would blow the field before the count ran out, so
+:func:`_roster_value` trims on whichever hits first and says how many it
+hid."""
+
+
+def _roster_value(names: list[str], noun: str) -> str:
+    """One roster list, dot-separated: 30 names at most, honest about the
+    rest. Dots rather than one-per-line because 30 lines would push the
+    games and the rules off the bottom of the panel."""
+    if not names:
+        return "—"
+    shown = names[:ROSTER_DISPLAY_CAP]
+    while shown and len(" · ".join(shown)) > 984:
+        shown.pop()
+    hidden = len(names) - len(shown)
+    text = " · ".join(shown) if shown else ""
+    if hidden > 0:
+        text += f"{chr(10) if text else ''}…and {hidden} more {noun}"
+    return text
+
+
 def build_status_embed(
     st: dict, *, season_name: str, color: discord.Color | None = None
 ) -> discord.Embed:
@@ -195,6 +219,8 @@ def build_panel_embed(
     picked: int = 0,
     pot: int = 0,
     ghost_pot: int = 0,
+    alive_names: list[str] | None = None,
+    eliminated_names: list[str] | None = None,
     color: discord.Color | None = None,
 ) -> discord.Embed:
     """THE channel panel — the one updating message (decided 2026-08-18).
@@ -239,6 +265,22 @@ def build_panel_embed(
         embed.add_field(
             name="This Week's Games",
             value=_clip_field(lines, "games"),
+            inline=False,
+        )
+    # Who's in, by name (2026-08-18): the counts alone made the pool
+    # abstract. Alive always shows once anyone has joined; the graveyard
+    # only once it has an occupant, so a fresh season isn't padded with an
+    # empty field.
+    if alive_names:
+        embed.add_field(
+            name=f"✅ Alive ({alive or len(alive_names)})",
+            value=_roster_value(alive_names, "alive"),
+            inline=False,
+        )
+    if eliminated_names:
+        embed.add_field(
+            name=f"👻 Eliminated ({eliminated or len(eliminated_names)})",
+            value=_roster_value(eliminated_names, "eliminated"),
             inline=False,
         )
     strike_lines = {

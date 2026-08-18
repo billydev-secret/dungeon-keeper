@@ -676,17 +676,25 @@ async def build_live_panel(
             ).fetchone()[0]
             pots = logic.pot_totals(conn, season)
             gauntlet_mode = bool(logic.elapsed_weeks(conn, year, now))
+            roster = [
+                (int(r["user_id"]), r["status"])
+                for r in conn.execute(
+                    "SELECT user_id, status FROM survivor_players "
+                    "WHERE season_id = ?",
+                    (season_id,),
+                ).fetchall()
+            ]
         return (
             season, week, games, int(counts["alive"] or 0),
             int(counts["ghost"] or 0), int(counts["total"] or 0),
-            int(picked), pots, gauntlet_mode,
+            int(picked), pots, gauntlet_mode, roster,
         )
 
     loaded = await asyncio.to_thread(_q)
     if loaded is None:
         return None
     (season, week, games, alive, ghost, total, picked, pots,
-     gauntlet_mode) = loaded
+     gauntlet_mode, roster) = loaded
     guild = bot.get_guild(season["guild_id"])
     if guild is None:
         return None
@@ -699,6 +707,22 @@ async def build_live_panel(
         gauntlet_mode=gauntlet_mode,
     ) is not None
     color = await branding.resolve_accent_color(db_path, guild)
+
+    def _display(user_id: int) -> str:
+        member = guild.get_member(user_id)
+        return (
+            discord.utils.escape_markdown(member.display_name)
+            if member else f"soul {user_id}"
+        )
+
+    # Sorted by name so the list is scannable and stable between edits —
+    # join order would reshuffle nothing but still read as arbitrary.
+    alive_names = sorted(
+        (_display(uid) for uid, st in roster if st == "alive"), key=str.casefold
+    )
+    eliminated_names = sorted(
+        (_display(uid) for uid, st in roster if st != "alive"), key=str.casefold
+    )
     # Enrolling seasons show the pre-kickoff face (week=None hides the
     # slate section even if the schedule is loaded but week 1 is far off?
     # No — the slate section shows as soon as a pick week exists; enrolling
@@ -718,6 +742,8 @@ async def build_live_panel(
         picked=picked,
         pot=pots["main"],
         ghost_pot=pots["ghost"],
+        alive_names=alive_names,
+        eliminated_names=eliminated_names,
         color=color,
     )
     return season, embed, join_open
