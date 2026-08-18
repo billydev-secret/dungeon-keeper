@@ -130,12 +130,26 @@ cases — traversal in every dialect, absolute paths, URL-encoding, symlinks in
 and out of the tree, fifos, directories, dangling links — plus an invariant
 over the real checkout.
 
-**The systemd unit enforces the same allowlist independently.**
-`TemporaryFileSystem=/home/ben` replaces the home directory with an empty
-tmpfs and only `docs/`, `src/` and `CLAUDE.md` are bound back in read-only, so
-`.env`, the database and `.git/` do not exist in the service's mount
-namespace. If the Python has a bug the kernel still refuses; if the unit is
-wrong the Python still refuses.
+**The systemd unit adds a second, independent layer** — coarser than the
+application's allowlist, deliberately. `ProtectHome=tmpfs` empties `/home`,
+`/root` and `/run/user`, so `~/.ssh`, the dev worktrees and everything else in
+the home directory do not exist for this process; only the DK checkout is
+bound back in, read-only; and `.env`, `.git/`, the database, `backups/`,
+`lavalink/`, `guess_cache/` and `log.txt` are masked inside it.
+
+It is not the pure `docs/` + `src/` + `CLAUDE.md` allowlist it was first
+written as, because **single-file bind mounts fail on this host** — binding
+`CLAUDE.md` dies at `226/NAMESPACE` with a "Permission denied" creating the
+destination node, whose follow-on message misleadingly blames the source file.
+Bisected with transient units on 2026-08-17: directory binds OK, file binds
+FAIL, no other property involved. The only directory containing `CLAUDE.md` is
+the repo root, which also holds `.env` — hence bind-the-root-and-mask.
+
+That carries the usual denylist weakness: a new secret dropped in the repo root
+is not masked until someone adds it to the unit. What stops it being *served*
+is the application allowlist, which only ever resolves `docs/**.md`, `src/**`
+and `CLAUDE.md`. The kernel layer is defence in depth; `paths_service.py` is
+the boundary.
 
 There is **no write path and no database tool**, by design.
 

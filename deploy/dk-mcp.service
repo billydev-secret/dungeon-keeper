@@ -18,31 +18,50 @@
 #   lavalink/         config with interpolated credentials
 #
 # The application enforces an allowlist (src/dk_mcp/paths_service.py: resolve
-# symlinks and '..' FIRST, then prove containment in docs/ or src/). The mount
-# namespace below enforces the SAME allowlist independently, at the kernel
-# level: ProtectHome=tmpfs replaces /home (and /root, /run/user) with empty
-# tmpfs, and only the three allowed paths are bound back in, read-only.
-# Everything else in the checkout does not exist as far as this process is
-# concerned.
+# symlinks and '..' FIRST, then prove containment in docs/ or src/, extension
+# allowlist per root, regular files only). That is the actual security
+# boundary, and it is the part with 74 adversarial tests behind it.
 #
-# ProtectHome=tmpfs, NOT ProtectHome=read-only plus a hand-rolled
-# TemporaryFileSystem=/home/ben. That combination looks equivalent and fails at
-# 226/NAMESPACE: ProtectHome=read-only remounts the /home hierarchy read-only,
-# including the tmpfs mounted underneath it, so systemd can no longer create
-# the mount-point nodes the binds need. It surfaces as
+# The mount namespace below is the second, independent layer. It is coarser
+# than the application's allowlist, and that is a deliberate retreat rather
+# than an oversight -- see the note on file binds.
+#
+#   ProtectHome=tmpfs    empties /home, /root and /run/user, so ~/.ssh, the
+#                        dev worktrees under dk-sessions/ and everything else
+#                        in Billy's home simply do not exist here.
+#   BindReadOnlyPaths=   binds ONLY the DK checkout back in, read-only.
+#   InaccessiblePaths=   masks the secrets inside it.
+#
+# WHY NOT A PURE ALLOWLIST OF docs/ + src/ + CLAUDE.md
+#
+# That was the first design and it cannot work on this host: systemd fails to
+# create the destination mount-point node for a SINGLE-FILE bind, so binding
+# CLAUDE.md dies at 226/NAMESPACE with
 #
 #   Failed to create destination mount point node
 #     '/run/systemd/mount-rootfs/home/ben/.../CLAUDE.md', ignoring: Permission denied
 #   Failed to set up mount namespacing: .../CLAUDE.md: No such file or directory
 #
-# which reads as a missing source file and is not one -- CLAUDE.md is right
-# there. The single-file bind is the first to fail simply because systemd sorts
-# the mounts by path and 'CLAUDE.md' sorts ahead of 'docs' and 'src'.
+# The second line blames the source and is a red herring -- CLAUDE.md is a
+# regular file, right there, same SELinux label as docs/ and src/. Bisected
+# with transient units (2026-08-17):
 #
-# That is deliberately an allowlist and not InaccessiblePaths= for each secret:
-# a denylist protects only the secrets someone remembered to name, and the next
-# one added to the repo would be served. If the Python has a bug, the kernel
-# still refuses. If this unit is wrong, the Python still refuses.
+#   ProtectHome=tmpfs + bind a FILE                       FAIL
+#   ProtectHome=tmpfs + bind a DIRECTORY                  OK
+#   ...both together                                      FAIL
+#   ...file bind + ProtectSystem=strict                   FAIL
+#   ...file bind + CapabilityBoundingSet=                 FAIL
+#
+# So: directory binds work, file binds do not, and no other property is
+# involved. CLAUDE.md is the working agreement and has to be served, and the
+# only directory containing it is the repo root -- which also contains .env.
+# Hence bind the root and mask, instead of binding the three allowed paths.
+#
+# The cost is the usual denylist weakness: a NEW secret dropped in the repo
+# root would not be masked until it is added below. What stops it being served
+# is the application allowlist, which only ever resolves docs/**.md, src/**
+# and CLAUDE.md -- so a new root-level secret is unreachable regardless of
+# whether anyone remembers this list. Keep it updated anyway.
 
 [Unit]
 Description=Dungeon Keeper docs/source MCP server (read-only)
@@ -70,10 +89,22 @@ RestartSec=5s
 # -- filesystem: the allowlist, enforced by the kernel ----------------------
 ProtectSystem=strict
 ProtectHome=tmpfs
-BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper/docs
-BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper/src
-BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper/CLAUDE.md
-BindReadOnlyPaths=/opt/dk-mcp
+BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper
+
+# Masked inside the bound checkout. '-' means "skip if absent", so a missing
+# WAL file cannot stop the service booting.
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/.env
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/.git
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/dungeonkeeper.db
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/dungeonkeeper.db-wal
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/dungeonkeeper.db-shm
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/backups
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/lavalink
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/guess_cache
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/log.txt
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/.claude
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/.cache
+
 PrivateTmp=yes
 PrivateDevices=yes
 
