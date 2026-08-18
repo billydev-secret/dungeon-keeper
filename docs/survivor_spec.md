@@ -23,7 +23,7 @@
 - **Per-game locking:** your pick locks at *that team's* kickoff. Until then you can change freely. After your team kicks off you're locked, even if other games haven't started.
 - **Total darkness, loose lips:** the *bot* never reveals a pick to anyone (admins excepted, mod-log only) until the Tuesday Reckoning — no reactions, no "X has picked" notices. Players, however, may say anything. **Table talk is legal; lying is encouraged.** The bot keeps the secrets; the bluffing is yours.
 - **Missed pick → auto-assign:** at the week's final kickoff, anyone pickless is assigned the highest win-probability available team still unplayed (ESPN odds; fallback best record), marked `📎 assigned by the groundskeeper` on reveal. Dignified, mildly embarrassing, fully survivable. *(Clarified 2026-08-17: "still unplayed" means the game has not kicked off — assigning from a game in progress or final would be a pick made with the result known. At the final kickoff that pool is the final game(s) of the week. If every legal team there is already burned for that player, the week is voided for them — survive, mirroring §6.10 — and it does **not** count against the auto-assign cap.)*
-- **Auto-assign cap (anti-AFK):** three auto-assigns per season (config), counting one per week even in double-pick weeks and even when only one slot was missing. The fourth time the groundskeeper is needed, he declines — elimination, with its own flavor line: *"the groundskeeper stopped covering for X."*
+- **Auto-assign cap (anti-AFK):** three auto-assigns per season (config), counting one per week even in double-pick weeks and even when only one slot was missing. The fourth time the groundskeeper is needed, he declines — elimination, with its own fixed line (*amended 2026-08-18, just-the-facts*): *"**X** — out of auto-assigns, no pick made. Eliminated."*
 
 ### 1.3 Results
 - Win → survive. **Loss → strike/elimination. Tie → loss.** ("Your team must win" — one sentence, no asterisks.)
@@ -90,21 +90,25 @@ The roles get pinged exactly twice a week. Restraint is the brand.
    "…and N more" tail. Length binds before the count when display names are
    long, so the field can never exceed Discord's 1024-char cap. The graveyard
    field is omitted until someone is in it.
-1. **The toll:** week number, survivors before → after, pot, one rotating flavor line (*"week 7 came for the overconfident. the meadow is quieter now."*) Plus **the gate**, when anyone joined since last Tuesday: arrivals announced with their gauntlet fate — *"two souls walked the gauntlet this week. one arrived breathing."*
+1. **The toll** (*amended 2026-08-18: numbers only — the rotating flavor line went with the corpus*)**:** week number, survivors before → after, pot. Plus **the gate**, when anyone joined since last Tuesday: arrivals announced with their gauntlet fate — *"two souls walked the gauntlet this week. one arrived breathing."*
 2. **The ledger:** the only place picks ever appear — every living player → team → `✅ / 💀 / 💛→🖤 / 📎 auto`, deaths sorted first. Ghost Streak standings get a compact strip beneath (current streaks, record holder).
-3. **Eulogies:** one flavor line per elimination, name-slotted (*"pour one out for **@Loaf**, who believed in the Jets the way children believe in summer. 🥀"*). Ghost roles applied on post. Zero deaths: *"everyone lives. suspicious. the meadow remembers."*
+3. **Eliminations** (*amended 2026-08-18: factual, no corpus*)**:** one line per elimination stating team, result and week. Ghost roles applied on post. Zero deaths: no special line — the toll's unchanged survivor count says it.
 
-**Flavor corpus:** DB table (~20 eulogies, ~10 no-death, ~10 toll lines), admin CRUD on the dashboard panel, seasonal drift encouraged — same rotating-corpus pattern as the ToD cooldowns.
+~~**Flavor corpus:** DB table (~20 eulogies, ~10 no-death, ~10 toll lines), admin CRUD on the dashboard panel, seasonal drift encouraged.~~ *Removed 2026-08-18 (first-look review) — table dropped in migration 172, CRUD and dashboard card deleted.*
 
-> **Copy register (decided 2026-08-18).** All hardcoded copy — embeds, refusals,
-> buttons, DMs — is **standard sports register** (Title Case labels per the
-> style guide, scoreboard framing, light humor), because these strings ship to
-> every server. Per-guild personality lives in the two per-guild knobs: the
-> guild-scoped flavor corpus (each server writes its own eulogies/toll lines;
-> the seeded defaults are sports-desk neutral) and the branding kit (accent
-> color + bot identity). The spec's meadow-voiced sample lines survive as
-> TGM's corpus material, not as shipped defaults. The groundskeeper stays — he
-> is the auto-assign character in every server, spec-level.
+> **Copy register (decided 2026-08-18, revised same day).** All hardcoded copy —
+> embeds, refusals, buttons, DMs — is **standard sports register**. **Revision
+> (first-look review, Billy: "just the facts"):** the flavor corpus is
+> **removed entirely** — table (migration 172), CRUD, dashboard card, and
+> rotation. The Reckoning's copy is hardcoded and factual: Act 1 is the
+> numbers alone (the survivors delta says whether the week took anyone), and
+> each elimination states its cause — `FATAL_LINE`
+> ("**{name}** — {team} lost. Eliminated in Week {week}.") for football
+> deaths, with plain fixed lines for the auto-assign cap, the missed pick,
+> and the leaver. This closes the per-guild voice route the corpus carried;
+> per-guild personality is the branding kit (accent + bot identity) alone.
+> The meadow-voiced sample lines below are historical color, not shipped
+> copy. The groundskeeper survives as a mechanic; his line is factual now.
 
 ### 2.6 Boards
 - `/survivor board` (public; ~~auto-posted after each Reckoning~~ *amended 2026-08-18: the auto-post is retired — the channel panel carries the standings line, and the full board stays on demand*): alive roster with weeks survived + strike hearts, graveyard with week-of-death, pot, most-burned teams meta-stat.
@@ -145,7 +149,7 @@ Route id `survivor` (bare feature name, per CLAUDE.md's frozen-id convention).
 - **Season lifecycle** — create a season (name, year, config), and end it
   (archives; history stays queryable). One active season per guild (§6.12).
 - **Config** — every dial in §5, laid out as one page rather than paginated.
-- **Flavor corpus CRUD** — eulogy / toll / no_death / annul lines, active toggle.
+- ~~**Flavor corpus CRUD**~~ *removed 2026-08-18 with the corpus.*
 - **Roster table** — one row per player with per-row **eliminate** / **revive**
   buttons. A table beats a command signature you have to remember, and it shows
   you the state you're editing before you edit it.
@@ -252,14 +256,7 @@ CREATE TABLE nfl_games (
   PRIMARY KEY (season_year, game_id)
 );
 
-CREATE TABLE survivor_flavor (
-  id INTEGER PRIMARY KEY,
-  guild_id INTEGER NOT NULL,                  -- added 2026-08-17: the bot runs two live guilds;
-                                              -- defaults seed per guild at first create-season
-  category TEXT NOT NULL,                     -- eulogy|toll|no_death|annul
-  line TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1
-);
+-- survivor_flavor: dropped 2026-08-18 (migration 172) with the corpus feature
 ```
 
 ---
@@ -334,7 +331,7 @@ raising the float, so a pot that grows past the seed is not extra faucet.
 11. **Accord discipline:** invocations outside the Tue–Thu window are rejected with the window shown; a player who leaves the server during a vote counts as a decline; accord during a locked pick voids nothing retroactively — the split is computed on invocation-day standings.
 12. **One active season per guild;** archives queryable.
 13. **Auto-assign dead end** *(added 2026-08-17)*: at the final kickoff every legal not-yet-kicked-off team is burned for the player → week voided (survive), no auto-assign charged. Mirrors #10; must not crash or auto-kill.
-14. **Member leaves the server mid-season** *(added 2026-08-17)*: eliminated at the next Reckoning with its own flavor line (*"walked out of the meadow"*); ghost streak frozen at its best; no further picks accepted. Rejoining the server reactivates nothing for the living game — dead is dead — but a rejoined ghost may resume Ghost Streak picking. Inside an Accord vote, leaving still counts as a decline (#11).
+14. **Member leaves the server mid-season** *(added 2026-08-17)*: eliminated at the next Reckoning with its own fixed line (*"left the server mid-season. Eliminated."*); ghost streak frozen at its best; no further picks accepted. Rejoining the server reactivates nothing for the living game — dead is dead — but a rejoined ghost may resume Ghost Streak picking. Inside an Accord vote, leaving still counts as a decline (#11).
 
 ---
 
@@ -343,7 +340,7 @@ raising the float, so a pot that grows past the seed is not extra faucet.
 2. Schedule ingest + ESPN parser (fixture-based tests on saved JSON)
 3. Join / pick / status / board — lock + validation logic
 4. Polling loop + idempotent settle engine + manual settle
-5. Reckoning, slate, last-call tasks + flavor corpus CRUD
+5. Reckoning, slate, last-call tasks ~~+ flavor corpus CRUD~~ *(corpus removed 2026-08-18)*
 5b. Gauntlet replay engine + receipt flow
 6. Ghost roles + Ghost Streak (v1 core), wipeout/annul logic, Accord vote flow, endgame + coin payouts (main + ghost pots)
 7. **v2 backlog:** buyback window (escalating coin cost — natural sink), dead pool, loser-pool & underdog off-season variants, playoff survivor capstone

@@ -1,7 +1,7 @@
 """Tests for services/survivor_service.py over the real migration schema.
 
 Stage 1 of docs/plans/survivor.md: season lifecycle, config validation, the
-flavor corpus, roster admin actions, and the erasure path. Game logic (locks,
+roster admin actions, and the erasure path. Game logic (locks,
 settle, gauntlet) arrives in later stages with its own suites.
 """
 
@@ -16,28 +16,21 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.privacy_service import purge_user_data
 from bot_modules.services.survivor_service import (
     DEFAULT_CONFIG,
-    DEFAULT_FLAVOR,
-    FLAVOR_CATEGORIES,
     SeasonError,
-    add_flavor,
     add_player,
     create_season,
-    delete_flavor,
     eliminate_player,
     end_season,
     get_active_season,
     get_config,
     get_season,
-    list_flavor,
     list_players,
     list_seasons,
     panel_ids,
     revive_player,
-    seed_default_flavor,
     set_panel_ids,
     set_season_status,
     update_config,
-    update_flavor,
     validate_config,
 )
 from tests.db_template import migrated_db
@@ -228,85 +221,6 @@ def test_roster_lifecycle(db):
         assert players[1]["eliminated_week"] is None
         # Reviving the living is likewise a refusal.
         assert not revive_player(conn, season_id, 2)
-
-
-# ── flavor corpus ──────────────────────────────────────────────────────
-
-
-def test_seed_flavor_idempotent_and_guild_scoped(db):
-    with open_db(db) as conn:
-        expected = sum(len(v) for v in DEFAULT_FLAVOR.values())
-        assert seed_default_flavor(conn, GID) == expected
-        # Second seed is a no-op — a curated corpus is never diluted.
-        assert seed_default_flavor(conn, GID) == 0
-        # Even a fully-retired corpus blocks re-seeding.
-        conn.execute("UPDATE survivor_flavor SET active = 0 WHERE guild_id = ?", (GID,))
-        assert seed_default_flavor(conn, GID) == 0
-        # The other guild seeds independently.
-        assert seed_default_flavor(conn, GID2) == expected
-        assert len(list_flavor(conn, GID2)) == expected
-        assert {f["category"] for f in list_flavor(conn, GID2)} == set(
-            FLAVOR_CATEGORIES
-        )
-
-
-def test_flavor_crud_and_guild_isolation(db):
-    with open_db(db) as conn:
-        line_id = add_flavor(conn, GID, "eulogy", "  {name} fell.  ")
-        (row,) = list_flavor(conn, GID, "eulogy")
-        assert row["line"] == "{name} fell."  # stripped
-
-        # The other guild can neither see nor touch it.
-        assert list_flavor(conn, GID2) == []
-        assert not update_flavor(conn, GID2, line_id, active=False)
-        assert not delete_flavor(conn, GID2, line_id)
-
-        # Retire → hidden by default, visible with include_inactive.
-        assert update_flavor(conn, GID, line_id, active=False)
-        assert list_flavor(conn, GID, "eulogy") == []
-        assert len(list_flavor(conn, GID, "eulogy", include_inactive=True)) == 1
-
-        assert update_flavor(conn, GID, line_id, line="{name} rose.", active=True)
-        (row,) = list_flavor(conn, GID, "eulogy")
-        assert row["line"] == "{name} rose."
-
-        assert delete_flavor(conn, GID, line_id)
-        assert list_flavor(conn, GID, "eulogy", include_inactive=True) == []
-
-
-def test_update_flavor_with_no_fields_is_an_error_not_a_missing_row(db):
-    # Regression: an empty update returned the same False as a missing row,
-    # which the route translated to a 404 for a line that exists.
-    with open_db(db) as conn:
-        line_id = add_flavor(conn, GID, "toll", "week {week} tolls.")
-        with pytest.raises(SeasonError, match="Nothing to update"):
-            update_flavor(conn, GID, line_id)
-        # The line is untouched.
-        (row,) = list_flavor(conn, GID, "toll")
-        assert row["line"] == "week {week} tolls."
-
-
-@pytest.mark.parametrize(
-    "call",
-    [
-        pytest.param(lambda conn: add_flavor(conn, GID, "limerick", "x"), id="add"),
-        pytest.param(lambda conn: list_flavor(conn, GID, "limerick"), id="list"),
-    ],
-)
-def test_flavor_rejects_unknown_category(db, call):
-    with open_db(db) as conn:
-        with pytest.raises(SeasonError):
-            call(conn)
-
-
-def test_flavor_slots_are_well_formed():
-    # Renderers fill {name}/{team}/{week} by str.replace; a typo'd slot would
-    # ship verbatim into a Reckoning, so pin the vocabulary here.
-    import re
-
-    for lines in DEFAULT_FLAVOR.values():
-        for line in lines:
-            assert set(re.findall(r"\{(\w+)\}", line)) <= {"name", "team", "week"}, line
 
 
 # ── erasure ────────────────────────────────────────────────────────────

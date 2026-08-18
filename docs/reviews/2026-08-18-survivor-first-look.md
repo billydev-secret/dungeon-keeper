@@ -20,6 +20,12 @@ preserve, so shipped defaults can be changed outright.
 no_death 10 / annul 4), seeded per-guild by `seed_default_flavor()` from the
 dashboard's create-season route (`src/web_server/routes/survivor.py:186`).
 
+**Decided 2026-08-18, deferred, then SHIPPED later the same day.** The
+removal below is done: migration 172 drops `survivor_flavor`, the service
+CRUD / routes / dashboard card / rotation are deleted, and the Reckoning is
+hardcoded factual (`FATAL_LINE` per football death; Act 1 numbers only; the
+groundskeeper's line rewritten factual). Original record follows.
+
 **Decided 2026-08-18, then deferred.** Billy's call: *"let's drop it, just
 the facts"* → **full removal, table included** — DEFAULT_FLAVOR, the service
 CRUD, rotation, the dashboard Flavor Corpus card and the `survivor_flavor`
