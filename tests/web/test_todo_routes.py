@@ -487,3 +487,55 @@ def test_removing_one_board_frees_its_channel_for_the_other(authed_client, fake_
     )
     assert resp.status_code == 200
     cog.place_chore_board.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("post", "/api/todos/recurring", {"task": "Post QOTD"}),
+        ("post", "/api/todos/recurring/{id}/pause", None),
+        ("post", "/api/todos/recurring/{id}/resume", None),
+        ("delete", "/api/todos/recurring/{id}", None),
+    ],
+)
+def test_changing_a_definition_repaints_the_chore_board(
+    authed_client, fake_ctx, method, path, body
+):
+    """The chore board is one row per *definition*, so a CRUD change alters it
+    even though no todo row moved — and the 60s loop is no backstop, since it
+    only repaints guilds where a spawn or a write-off happened. Without this an
+    added chore stays invisible and a deleted one leaves a ghost row until the
+    next scheduled fire: a day away for a daily, a week for a weekly."""
+    cog = _attach_bot(fake_ctx)
+    existing = authed_client.post(
+        "/api/todos/recurring", json={"task": "Seed", "recurrence": "daily"}
+    ).json()["id"]
+    cog.refresh_chore_board.reset_mock()
+
+    url = path.format(id=existing)
+    resp = getattr(authed_client, method)(url, **({"json": body} if body else {}))
+
+    assert resp.status_code == 200
+    cog.refresh_chore_board.assert_awaited()
+
+
+def test_editing_a_definition_repaints_the_chore_board(authed_client, fake_ctx):
+    cog = _attach_bot(fake_ctx)
+    rid = authed_client.post(
+        "/api/todos/recurring", json={"task": "Seed", "recurrence": "daily"}
+    ).json()["id"]
+    cog.refresh_chore_board.reset_mock()
+
+    resp = authed_client.put(
+        f"/api/todos/recurring/{rid}",
+        json={"task": "Renamed", "recurrence": "daily"},
+    )
+    assert resp.status_code == 200
+    cog.refresh_chore_board.assert_awaited()
+
+
+def test_a_failed_definition_change_does_not_repaint(authed_client, fake_ctx):
+    """A 404 changed nothing, so it should cost no Discord edit."""
+    cog = _attach_bot(fake_ctx)
+    assert authed_client.delete("/api/todos/recurring/9999").status_code == 404
+    cog.refresh_chore_board.assert_not_awaited()

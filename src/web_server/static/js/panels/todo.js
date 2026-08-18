@@ -621,11 +621,20 @@ export function mount(container, initialParams = {}) {
   }
 
   function renderStats() {
-    const pending = state.todos.filter((t) => !t.completed_at).length;
-    const completed = state.todos.length - pending;
+    // Three states, not two. A row the daily reset wrote off is neither
+    // pending nor completed, so deriving one count from the other would put
+    // missed chores in whichever tile was computed by subtraction — and the
+    // Pending tile would disagree with the Pending list directly below it.
+    const pending = state.todos.filter(FILTERS.pending).length;
+    const completed = state.todos.filter(FILTERS.completed).length;
+    const missed = state.todos.filter((t) => !!t.missed_at).length;
+    const missedTile = missed
+      ? `<div class="mod-stat"><div class="lbl">Missed</div><div class="v">${missed}</div></div>`
+      : "";
     statsEl.innerHTML = `
       <div class="mod-stat open"><div class="lbl">Pending</div><div class="v">${pending}</div></div>
-      <div class="mod-stat resolved"><div class="lbl">Completed</div><div class="v">${completed}</div></div>`;
+      <div class="mod-stat resolved"><div class="lbl">Completed</div><div class="v">${completed}</div></div>
+      ${missedTile}`;
   }
 
   async function refresh() {

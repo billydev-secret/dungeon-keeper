@@ -219,6 +219,7 @@ def _chore(
     missed_at=None,
     streak=0,
     todo_id=1,
+    missed_previous=False,
 ):
     return {
         "recurring_id": recurring_id,
@@ -228,6 +229,7 @@ def _chore(
         "completed_by_name": completed_by_name,
         "missed_at": missed_at,
         "streak": streak,
+        "missed_previous": missed_previous,
     }
 
 
@@ -380,3 +382,50 @@ def test_chore_signature_tracks_chores_past_the_visible_window():
     """A chore added below the fold still changes the footer's total."""
     rows = [_chore(n, f"Chore {n}") for n in range(MAX_BOARD_ROWS)]
     assert chore_signature(rows) != chore_signature(rows + [_chore(99, "Extra")])
+
+
+def test_render_chore_rows_reports_a_previous_miss_on_an_open_row():
+    """The only way a miss reaches the board.
+
+    The reset closes yesterday's row and opens today's in one call, so the row
+    being rendered is always the fresh one. Before this, three consecutive
+    undone days rendered as a plain ⬜ and the footer's missed count was
+    structurally always zero.
+    """
+    body = render_chore_rows([_chore(1, "Post the QOTD", missed_previous=True)])
+    assert CHORE_OPEN in body
+    assert CHORE_MISSED in body
+    assert "missed last run" in body
+
+
+def test_a_previous_miss_is_not_shown_once_the_chore_is_done_again():
+    """Ticking it today answers the nag — leaving it up would shame a fixed row."""
+    body = render_chore_rows([
+        _chore(1, "Post the QOTD", completed_at=NOW,
+               completed_by_name="Billy", missed_previous=True)
+    ])
+    assert CHORE_DONE in body
+    assert "missed last run" not in body
+
+
+def test_chore_footer_counts_previous_misses():
+    rows = [
+        _chore(1, "A", completed_at=NOW),
+        _chore(2, "B", missed_previous=True),
+        _chore(3, "C"),
+    ]
+    footer = render_chore_footer(rows)
+    assert "1 of 3 done" in footer
+    assert "1 missed last run" in footer
+
+
+def test_chore_footer_ignores_a_previous_miss_that_was_since_done():
+    rows = [_chore(1, "A", completed_at=NOW, missed_previous=True)]
+    assert "missed" not in render_chore_footer(rows)
+
+
+def test_chore_signature_tracks_a_previous_miss():
+    """A miss appearing or clearing changes the row, so it must repaint."""
+    assert chore_signature([_chore(1, "A")]) != chore_signature(
+        [_chore(1, "A", missed_previous=True)]
+    )

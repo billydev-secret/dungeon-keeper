@@ -240,7 +240,11 @@ class TodoChoreBoardView(discord.ui.View):
 
         def _load() -> list[dict]:
             with cog.ctx.open_db() as conn:
-                rows = chore_board_rows(conn, guild_id, limit=25)
+                # The same slice the board renders. Reading fewer than the
+                # board shows lets "Every chore is already ticked off" appear
+                # while open rows are visible in the message above it.
+                # TodoCompleteSelect caps the options at Discord's 25.
+                rows = chore_board_rows(conn, guild_id, limit=_CHORE_FETCH)
             # Only what is actually still open: a done chore has nothing to
             # tick, and a missed one is closed business that complete_todo
             # refuses anyway — offering either would be a button that lies.

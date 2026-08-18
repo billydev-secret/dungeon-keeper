@@ -85,8 +85,8 @@ asks "what is outstanding?"; this one asks **"did we do it today?"**
 - **Contents.** One row per *active* recurring definition — its **latest**
   instance, done or not — in `time_of_day` order, so it reads like a shift
   checklist rather than by an id nobody thinks in. Each row is a state box
-  (✅ / ⬜ / ❌) plus the chore in a padded monospace cell, then who ticked it
-  and a live `<t:…:R>`, then a 🔥 streak. Paused definitions are left out: a
+  (✅ / ⬜) plus the chore in a padded monospace cell, then who ticked it and a
+  live `<t:…:R>`, then a 🔥 streak. Paused definitions are left out: a
   chore parked for the holidays is not one the team is failing, and showing it
   with a dead streak reads as a reproach.
 - **A scoreboard, not a pending list.** A ticked chore *stays* on the board
@@ -97,9 +97,20 @@ asks "what is outstanding?"; this one asks **"did we do it today?"**
   hides a real run. **Today does not count against you:** the newest instance is
   skipped while it is still outstanding, or a chore due at 09:00 would read as a
   broken streak every morning until someone ticked it.
-- **Footer.** `N of M done`, plus `· K missed` when any are. Counts every active
-  chore including those past the visible window, so it can't disagree with the
-  dashboard about how the day went.
+- **How a miss reaches the board — `missed_previous`, not `chore_state`.** The
+  reset writes the old instance off and spawns its replacement *in the same
+  call*, so the latest instance — the only one this board renders — is never
+  the missed one. Rendering `chore_state == "missed"` therefore showed three
+  consecutive undone days as a plain ⬜ with the footer's missed count
+  structurally pinned at zero, while `missed_at` was being written correctly
+  the whole time. So each row also carries whether the instance *before* it was
+  written off, rendered as `❌ missed last run` on a still-open row and cleared
+  the moment the chore is ticked again. `chore_state`'s `missed` branch stays
+  as defence for a row `mark_missed` closed with nothing spawned behind it,
+  which the service permits.
+- **Footer.** `N of M done`, plus `· K missed last run` when any are. Counts
+  every active chore including those past the visible window, so it can't
+  disagree with the dashboard about how the day went.
 - **One button, `todo_chore_board_complete`.** No Add: a chore is a *recurring
   definition* with a cadence, created on the dashboard — the thing the other
   board's Add button makes is a one-off task, which is exactly what this board
@@ -191,7 +202,16 @@ guild. Completion records the moderator who clicked complete.
 
 A written-off recurring row shows a **Missed** chip and no Mark Complete button,
 and is excluded from the Pending filter — the same rule the boards and
-`pending_count` use, so the three can't disagree.
+`pending_count` use, so the three can't disagree. The stat tiles count all
+three states independently rather than deriving one by subtraction, and a
+**Missed** tile appears only when there is something in it.
+
+Creating, editing, deleting, pausing or resuming a **definition** repaints the
+chore board directly. The 60s loop is not a backstop for it: that only repaints
+guilds where a spawn or a write-off happened, and the chore board is one row per
+definition — so without the explicit repaint an added chore stays invisible and
+a deleted one leaves a ghost row until the next scheduled fire, a day away for a
+daily and a week for a weekly.
 
 ## Permissions
 

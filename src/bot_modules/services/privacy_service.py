@@ -201,6 +201,19 @@ def purge_user_data(
             table=f"todos.{col}",
         )
 
+    # …and the recurring definitions behind them, or the erasure undoes itself.
+    # `_spawn_one` stamps the definition's `created_by` onto every row it
+    # materialises, so a member who set up "Post QOTD" and then asked to be
+    # erased would have their id written straight back into `todos.added_by` at
+    # the next fire, and every day after. Blanking the definition is what makes
+    # the scrub above durable rather than a one-off.
+    _scrub(
+        conn,
+        "UPDATE todo_recurring SET created_by = 0 WHERE guild_id = ? AND created_by = ?",
+        (guild_id, user_id),
+        table="todo_recurring.created_by",
+    )
+
     # Mention Awards: a `from_user` condition chip names the member inside the
     # rule's conditions JSON — the list-column blind spot, so SUBJECT_ID_COLUMNS
     # can't see it. Strip the member's chips; a rule left with no chips is

@@ -492,6 +492,63 @@ def describe_cadence(task: RecurringTask) -> str:
 STREAK_LOOKBACK = 400
 
 
+def _chore_history(
+    conn: sqlite3.Connection, guild_id: int, *, lookback: int
+) -> dict[int, dict]:
+    """Per definition: ``{"streak": int, "missed_previous": bool}``.
+
+    Both answers come off one newest-first walk of that definition's instances,
+    which is the only reason a chore board refresh is one query rather than two.
+
+    **Today does not count against you.** The newest instance is skipped while
+    it is still outstanding — the day is not over, and a chore due at 09:00
+    would otherwise show a zeroed streak every morning until someone ticked it.
+    A missed instance ends the walk; a completed one extends it.
+
+    ``missed_previous`` is whether the instance *before* the current one was
+    written off. It exists because the board can otherwise never show a miss:
+    the reset marks the old row missed and spawns its replacement in the same
+    breath, so the latest instance — the only one the board renders — is always
+    open or done, never missed.
+
+    The read is bounded per definition by ``ROW_NUMBER()``, not just the walk,
+    so a chore with years of history costs the same as a new one.
+    """
+    rows = conn.execute(
+        "SELECT rid, completed_at, missed_at FROM ("
+        "  SELECT t.recurring_id AS rid, t.completed_at, t.missed_at,"
+        "         ROW_NUMBER() OVER ("
+        "           PARTITION BY t.recurring_id"
+        "           ORDER BY t.created_at DESC, t.id DESC"
+        "         ) AS rn"
+        "  FROM todos t JOIN todo_recurring r ON r.id = t.recurring_id"
+        "  WHERE r.guild_id = ? AND t.recurring_id IS NOT NULL"
+        ") WHERE rn <= ? ORDER BY rid, rn",
+        (guild_id, int(lookback)),
+    ).fetchall()
+
+    out: dict[int, dict] = {}
+    depth: dict[int, int] = {}
+    ended: set[int] = set()
+    for row in rows:
+        rid = row["rid"]
+        entry = out.setdefault(rid, {"streak": 0, "missed_previous": False})
+        seen = depth.get(rid, 0)
+        depth[rid] = seen + 1
+        if rid in ended:
+            continue
+        if seen == 1 and row["missed_at"] is not None:
+            # The instance directly behind the current one was written off.
+            entry["missed_previous"] = True
+        if row["completed_at"] is not None:
+            entry["streak"] += 1
+        elif seen == 0 and row["missed_at"] is None:
+            pass  # today, still undecided — neither extends nor breaks
+        else:
+            ended.add(rid)  # missed, or an older row left outstanding
+    return out
+
+
 def chore_streaks(
     conn: sqlite3.Connection, guild_id: int, *, lookback: int = STREAK_LOOKBACK
 ) -> dict[int, int]:
@@ -500,39 +557,11 @@ def chore_streaks(
     A streak is only meaningful because the reset writes off the days a chore
     did not happen: under the old skip-if-pending rule an undone chore left no
     row at all for the day it was skipped, so "6 days running" was unknowable.
-
-    **Today does not count against you.** The newest instance is skipped when
-    it is still outstanding — the day is not over, and a chore due at 09:00
-    would otherwise show a zeroed streak every morning until someone ticked it.
-    A missed instance ends the walk; a completed one extends it.
     """
-    rows = conn.execute(
-        "SELECT t.recurring_id AS rid, t.completed_at, t.missed_at FROM todos t"
-        " JOIN todo_recurring r ON r.id = t.recurring_id"
-        " WHERE r.guild_id = ? AND t.recurring_id IS NOT NULL"
-        " ORDER BY t.recurring_id, t.created_at DESC, t.id DESC",
-        (guild_id,),
-    ).fetchall()
-
-    streaks: dict[int, int] = {}
-    depth: dict[int, int] = {}
-    ended: set[int] = set()
-    for row in rows:
-        rid = row["rid"]
-        if rid in ended:
-            continue
-        seen = depth.get(rid, 0)
-        depth[rid] = seen + 1
-        streaks.setdefault(rid, 0)
-        if seen >= lookback:
-            ended.add(rid)
-        elif row["completed_at"] is not None:
-            streaks[rid] += 1
-        elif seen == 0 and row["missed_at"] is None:
-            pass  # today, still undecided — neither extends nor breaks
-        else:
-            ended.add(rid)  # missed, or an older row left outstanding
-    return streaks
+    return {
+        rid: entry["streak"]
+        for rid, entry in _chore_history(conn, guild_id, lookback=lookback).items()
+    }
 
 
 def chore_board_rows(
@@ -567,11 +596,17 @@ def chore_board_rows(
         (guild_id, int(limit)),
     ).fetchall()
 
-    streaks = chore_streaks(conn, guild_id)
+    history = _chore_history(conn, guild_id, lookback=STREAK_LOOKBACK)
     out: list[dict] = []
     for row in rows:
         item = dict(row)
+        entry = history.get(row["recurring_id"]) or {}
         item["recur_days"] = _parse_days(row["recur_days"])
-        item["streak"] = streaks.get(row["recurring_id"], 0)
+        item["streak"] = entry.get("streak", 0)
+        # Whether the instance before the current one was written off. Without
+        # this the board could never show a miss at all: the reset closes the
+        # old row and opens its replacement in one call, so the latest instance
+        # — the only one rendered — is never the missed one.
+        item["missed_previous"] = bool(entry.get("missed_previous"))
         out.append(item)
     return out

@@ -141,11 +141,18 @@ EMPTY_CHORES = "No recurring chores set up yet — add them on the dashboard. �
 
 
 def chore_state(row: Mapping[str, Any]) -> str:
-    """``'done' | 'missed' | 'open'`` for one chore's latest instance.
+    """``'done' | 'missed' | 'open'`` for one chore's **latest** instance.
 
     A definition with no instance yet reads as ``open``: it has simply not come
     round, which is indistinguishable to a mod from due-and-not-done-yet, and
     inventing a fourth state for it would earn nothing.
+
+    ``'missed'`` is defensive rather than routine. The daily reset closes the
+    old instance and opens its replacement in a single call, so the latest
+    instance is normally open or done and never missed — a *previous* miss
+    reaches the board through ``missed_previous`` instead (see
+    ``render_chore_rows``). This branch covers a row written off by
+    ``mark_missed`` with nothing spawned behind it, which the service permits.
     """
     if row.get("completed_at"):
         return "done"
@@ -188,6 +195,13 @@ def render_chore_rows(
             # Say it in words as well as in the box: a lone ❌ in a channel
             # reads as an error, not as a day that was skipped.
             trailing.append("missed")
+        elif row.get("missed_previous"):
+            # The reachable miss. The reset spawns today's row the moment it
+            # writes yesterday's off, so the board's row is always the fresh
+            # one — without this the three days nobody did the chore would show
+            # as a plain ⬜ and the record the reset exists to keep would be
+            # invisible on the surface built to display it.
+            trailing.append(f"{CHORE_MISSED} missed last run")
 
         streak = int(row.get("streak") or 0)
         if streak >= STREAK_MIN:
@@ -212,10 +226,19 @@ def render_chore_footer(rows: Sequence[Mapping[str, Any]]) -> str:
     if not total:
         return "no chores yet · configure on the dashboard"
     done = sum(1 for row in rows if chore_state(row) == "done")
-    missed = sum(1 for row in rows if chore_state(row) == "missed")
+    # Counts the same thing the rows show: a chore still open whose previous
+    # run was written off. Counting ``chore_state == "missed"`` instead would
+    # be a number that is always zero, because the reset never leaves the
+    # latest instance in that state.
+    missed = sum(
+        1
+        for row in rows
+        if chore_state(row) == "missed"
+        or (chore_state(row) == "open" and row.get("missed_previous"))
+    )
     text = f"{done} of {total} done"
     if missed:
-        text += f" · {missed} missed"
+        text += f" · {missed} missed last run"
     return f"{text} · updates automatically"
 
 
@@ -236,6 +259,7 @@ def chore_signature(
             row["recurring_id"],
             _flatten(row["task"]),
             chore_state(row),
+            bool(row.get("missed_previous")),
             _flatten(row.get("completed_by_name") or ""),
             int(row.get("streak") or 0),
         )

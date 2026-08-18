@@ -792,7 +792,49 @@ def test_chore_board_shows_the_latest_instance_only(db):
     assert rows[0]["missed_at"] is None
 
 
-def test_chore_board_shows_a_missed_chore_as_missed(db):
+def test_chore_board_reports_a_miss_through_the_real_reset_path(db):
+    """Regression: the board showed nothing at all when a chore was missed.
+
+    The reset writes the old instance off and spawns its replacement in one
+    call, so the *latest* instance — the only one the board renders — is never
+    the missed one. The first cut of this feature therefore rendered three
+    consecutive undone days as a plain ⬜ with no indication anything had been
+    missed, while `missed_at` was being set correctly in the DB the whole time.
+    The original test missed it by calling `mark_missed` directly, which is not
+    a path the scheduler ever takes.
+    """
+    with open_db(db) as conn:
+        _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        # Day one: nothing before it, so nothing to have missed.
+        spawn_due(conn, now_ts=_epoch(2026, 7, 26, 9, 0), offset_hours_for=_zero_offset)
+        assert chore_board_rows(conn, GUILD)[0]["missed_previous"] is False
+
+        # Day two, with day one left untouched.
+        spawn_due(conn, now_ts=_epoch(2026, 7, 27, 9, 0), offset_hours_for=_zero_offset)
+        row = chore_board_rows(conn, GUILD)[0]
+
+    # The rendered row is the fresh, open one …
+    assert row["completed_at"] is None
+    assert row["missed_at"] is None
+    # … and it still carries the fact that the run before it was written off.
+    assert row["missed_previous"] is True
+
+
+def test_missed_previous_clears_once_the_chore_is_done_again(db):
+    """The nag has to stop, or every chore reads as missed forever."""
+    with open_db(db) as conn:
+        _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        _run_days(conn, [False, True])  # missed, then done
+        assert chore_board_rows(conn, GUILD)[0]["missed_previous"] is True
+
+        # The next occurrence's predecessor is the completed one.
+        spawn_due(conn, now_ts=_epoch(2026, 7, 28, 9, 0), offset_hours_for=_zero_offset)
+        assert chore_board_rows(conn, GUILD)[0]["missed_previous"] is False
+
+
+def test_chore_board_still_renders_a_directly_written_off_row(db):
+    """`mark_missed` with nothing spawned behind it is a state the service
+    permits, so the board's ❌ branch stays covered."""
     with open_db(db) as conn:
         _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
         spawn_due(conn, now_ts=_epoch(2026, 7, 26, 9, 0), offset_hours_for=_zero_offset)
@@ -854,3 +896,33 @@ def test_chore_board_is_scoped_to_its_guild(db):
         rows = chore_board_rows(conn, GUILD)
 
     assert [r["recurring_id"] for r in rows] == [mine]
+
+
+def test_streak_read_is_bounded_per_definition_not_just_the_walk(db):
+    """The lookback has to bound the SQL, not only the Python loop.
+
+    This runs on every chore-board repaint — each tick, each completion, each
+    restick after channel chat — so an unbounded read grows with the guild's
+    whole history forever.
+    """
+    with open_db(db) as conn:
+        _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        _run_days(conn, [True] * 6)
+
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN "
+            "SELECT rid, completed_at, missed_at FROM ("
+            "  SELECT t.recurring_id AS rid, t.completed_at, t.missed_at,"
+            "         ROW_NUMBER() OVER (PARTITION BY t.recurring_id"
+            "           ORDER BY t.created_at DESC, t.id DESC) AS rn"
+            "  FROM todos t JOIN todo_recurring r ON r.id = t.recurring_id"
+            "  WHERE r.guild_id = ? AND t.recurring_id IS NOT NULL"
+            ") WHERE rn <= ? ORDER BY rid, rn",
+            (GUILD, 2),
+        ).fetchall()
+        assert plan  # the window-function form is valid SQL on this sqlite
+
+        # And it still answers correctly under the bound.
+        assert chore_streaks(conn, GUILD, lookback=2) == {
+            r["recurring_id"]: 2 for r in chore_board_rows(conn, GUILD)
+        }

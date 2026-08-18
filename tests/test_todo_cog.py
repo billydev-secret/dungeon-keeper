@@ -438,3 +438,37 @@ async def test_channel_delete_is_forwarded_to_both_panels(board_db):
 
     cog.board.on_channel_delete.assert_awaited_once_with(deleted)
     cog.chore_board.on_channel_delete.assert_awaited_once_with(deleted)
+
+
+@pytest.mark.asyncio
+async def test_mark_done_sees_every_chore_the_board_renders(board_db):
+    """The button read a shorter slice than the board drew, so a guild whose
+    first 25 chores were all done got "everything is ticked off" while open
+    rows were visible in the message directly above it."""
+    from bot_modules.services.todo_recurring_service import create_recurring, run_now
+    from bot_modules.services.todo_service import complete_todo
+
+    with open_db(board_db) as conn:
+        for n in range(30):
+            rid = create_recurring(
+                conn, 123, task=f"Chore {n:02d}", recurrence="daily",
+                time_of_day=n, created_by=1, now_ts=0.0,
+            )
+            run_now(conn, rid, 123, now_ts=0.0)
+        # Tick off the first 25 by time_of_day — the board's own ordering.
+        for row in conn.execute(
+            "SELECT id FROM todos ORDER BY id LIMIT 25"
+        ).fetchall():
+            complete_todo(conn, row["id"], 123, 42)
+
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    view = TodoChoreBoardView()
+    interaction = _button_interaction(_member(mod=True))
+    with patch("bot_modules.cogs.todo_cog._resolve_cog", return_value=cog):
+        await view._complete.callback(interaction)
+
+    # A picker, not "everything is done".
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert "Which chore" in interaction.response.send_message.await_args.args[0]
+    assert len(kwargs["view"].children[0].options) == 5

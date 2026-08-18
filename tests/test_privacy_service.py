@@ -664,3 +664,53 @@ def test_export_sees_a_task_the_member_completed(db):
 
     tasks = result["tables"]["todos"]["rows"]
     assert [r["id"] for r in tasks] == [todo_id]
+
+
+def test_purge_blanks_the_recurring_definition_so_it_stays_erased(db):
+    """Regression: the anonymisation used to undo itself.
+
+    `_spawn_one` stamps a definition's `created_by` onto every todos row it
+    materialises. Scrubbing only `todos` left the id in `todo_recurring`, so
+    the next scheduled fire wrote it straight back into `todos.added_by` — and
+    every day after. The register's "nothing identifying survives" claim
+    depends on this.
+    """
+    from bot_modules.services.todo_recurring_service import create_recurring, spawn_due
+
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Post QOTD", recurrence="daily",
+            time_of_day=0, created_by=USER, now_ts=0.0,
+        )
+        purge_user_data(conn, GUILD, USER)
+
+        assert conn.execute(
+            "SELECT created_by FROM todo_recurring"
+        ).fetchone()["created_by"] == 0
+
+        # The next fire must not resurrect the id.
+        spawn_due(conn, now_ts=86_400.0, offset_hours_for=lambda _g: 0.0)
+        added = [r["added_by"] for r in conn.execute("SELECT added_by FROM todos")]
+
+    assert added and all(a == 0 for a in added)
+
+
+def test_purge_of_definitions_is_scoped_to_the_guild(db):
+    from bot_modules.services.todo_recurring_service import create_recurring
+
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Mine", recurrence="daily",
+            time_of_day=0, created_by=USER, now_ts=0.0,
+        )
+        create_recurring(
+            conn, 999, task="Theirs", recurrence="daily",
+            time_of_day=0, created_by=USER, now_ts=0.0,
+        )
+        purge_user_data(conn, GUILD, USER)
+        rows = {
+            r["task"]: r["created_by"]
+            for r in conn.execute("SELECT task, created_by FROM todo_recurring")
+        }
+    assert rows["Mine"] == 0
+    assert rows["Theirs"] == USER

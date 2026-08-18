@@ -223,3 +223,42 @@ all postable panels get it.
 | `todo_cog.py` | second `StickyPanel`, `TodoChoreBoardView`, `refresh_boards`, per-kind `_tick` |
 | `routes/todo.py` | `kind` on the board body, 409 guard, `chore_board` in the list payload |
 | `panels/todo.js` | second board card off a shared descriptor; Missed chip; Pending filter agrees with the boards |
+
+### Stage 6 follow-up — six defects from code review (same day)
+
+A review of `e68ca2d1` found six; all fixed in the commit that follows it. The
+first is the one that mattered.
+
+**The board could never show a miss.** `chore_board_rows` renders the *latest*
+instance per definition, and `_spawn_one` writes the old row off and spawns its
+replacement in the same call — so the latest instance is always open or done and
+`chore_state` never returned `missed` on the real path. Four consecutive undone
+days rendered as a plain ⬜, and `render_chore_footer`'s missed count was
+structurally pinned at zero, while `missed_at` was being written correctly in the
+DB the whole time. The feature's entire premise — that the reset exists to record
+the days a chore did not happen — was invisible on the surface built to show it.
+
+The test that should have caught this called `mark_missed` directly, which is not
+a path the scheduler ever takes: it proved the renderer worked and said nothing
+about whether the state was reachable. Replaced with one that drives `spawn_due`
+over consecutive days and asserts on the rendered row. Rows now carry
+`missed_previous` (was the instance *before* this one written off?), shown as
+`❌ missed last run` on a still-open row and cleared as soon as the chore is
+ticked again.
+
+The other five:
+
+| Where | Defect |
+|---|---|
+| `panels/todo.js` `renderStats` | Pending tile still counted written-off rows and derived Completed by subtraction, so the tile disagreed with the list directly beneath it. Now counts all three states independently, with a Missed tile that appears only when non-empty |
+| `routes/todo.py` recurring CRUD | Create/edit/delete/pause/resume never repainted the chore board, and the 60s loop is no backstop — it only repaints guilds where a spawn or write-off happened. A new chore stayed invisible, a deleted one left a ghost row, for up to a day (daily) or a week (weekly) |
+| `todo_recurring_service.chore_streaks` | `lookback` bounded the Python walk but not the SQL, so every chore-board repaint read the guild's entire recurring-todo history. Now bounded per definition with `ROW_NUMBER()`, which also makes the docstring true |
+| `privacy_service` | The anonymisation undid itself: `_spawn_one` stamps `todo_recurring.created_by` onto every row it materialises, so an erased member's id was written back into `todos.added_by` at the next fire. `created_by` is now swept too, and the register row corrected — it had claimed the column was deliberately not swept |
+| `todo_cog` Mark Done | Read `limit=25` where the board renders `_CHORE_FETCH` (50), so a guild whose first 25 chores were done got "Every chore is already ticked off" with open rows visible above it |
+
+Reported but **not** fixed: `conflicting_board` only knows about the two todo
+boards, so posting either into a channel already holding some *other*
+`StickyPanel` (economy leaderboard, pen pals, quest board, auction card) is still
+accepted silently. That is the pre-existing gap this stage deliberately scoped
+out and filed as todo #103, not a regression — but the review is right that a
+mod channel is exactly where those panels live, so the odds of hitting it went up.

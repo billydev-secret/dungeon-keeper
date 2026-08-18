@@ -241,6 +241,25 @@ async def _refresh_board(ctx, guild_id: int) -> None:
         pass
 
 
+async def _refresh_chore_board(ctx, guild_id: int) -> None:
+    """Repaint the chore board after a *definition* changed.
+
+    The chore board is one row per definition, so adding, renaming, deleting,
+    pausing or resuming one changes what it shows even though no todo row
+    moved. The 60s loop is not a backstop here — it only repaints guilds where
+    a spawn or a write-off happened — so without this an added chore stays
+    invisible and a deleted one leaves a ghost row until the next scheduled
+    fire, up to a day away for a daily and a week for a weekly.
+    """
+    cog = _todo_cog(ctx)
+    if cog is None:
+        return
+    try:
+        await cog.refresh_chore_board(guild_id)
+    except Exception:  # pragma: no cover - defensive, same as _refresh_board
+        pass
+
+
 @router.put("/todos/board")
 async def set_board(
     request: Request,
@@ -358,6 +377,7 @@ async def create_recurring_endpoint(
         new_id = await run_query(_q)
     except RecurringValidationError as err:
         raise HTTPException(status_code=400, detail=str(err)) from None
+    await _refresh_chore_board(ctx, guild_id)
     return {"ok": True, "id": new_id}
 
 
@@ -393,6 +413,7 @@ async def update_recurring_endpoint(
         raise HTTPException(status_code=400, detail=str(err)) from None
     if not ok:
         raise HTTPException(status_code=404, detail="That recurring task no longer exists.")
+    await _refresh_chore_board(ctx, guild_id)
     return {"ok": True}
 
 
@@ -411,6 +432,7 @@ async def delete_recurring_endpoint(
 
     if not await run_query(_q):
         raise HTTPException(status_code=404, detail="That recurring task no longer exists.")
+    await _refresh_chore_board(ctx, guild_id)
     return {"ok": True}
 
 
@@ -435,6 +457,7 @@ async def _set_recurring_status(request: Request, recurring_id: int, status: str
 
     if not await run_query(_q):
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    await _refresh_chore_board(ctx, guild_id)
     return {"ok": True}
 
 
