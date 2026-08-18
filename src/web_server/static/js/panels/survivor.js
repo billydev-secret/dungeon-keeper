@@ -350,8 +350,19 @@ function renderSeasonCard(zone, overview, refresh) {
       "Run the weekly tasks now, skipping the day/hour gates? "
       + "Once-per-week still holds — nothing double-posts.")) return;
     try {
-      await apiPost("/api/survivor/tasks/run", {});
-      showStatus(status, true, "tasks ran — check the channel");
+      const res = await apiPost("/api/survivor/tasks/run", {});
+      // Report what actually posted: with no schedule ingested every gate
+      // returns "not due", and a flat success message hid that entirely.
+      const row = (res.report || [])[0];
+      if (!row) {
+        showStatus(status, false, "no live season on this server");
+      } else if (row.error) {
+        showStatus(status, false, `task failed: ${row.error}`);
+      } else if (row.fired && row.fired.length) {
+        showStatus(status, true, `posted ${row.fired.join(", ")} — check the channel`);
+      } else {
+        showStatus(status, false, `nothing was due — ${row.reason}`);
+      }
     } catch (err) {
       showStatus(status, false, err.message);
     }

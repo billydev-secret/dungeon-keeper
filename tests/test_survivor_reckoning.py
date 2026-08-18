@@ -490,3 +490,38 @@ def test_join_echo_detail_line():
 
     line = join_echo_detail(14, 8150)
     assert "14 players in" in line and "pot 8,150" in line
+
+# ── why nothing was due (2026-08-18) ──────────────────────────────────
+#
+# Every gate routes through pick_week, so a season on a year with no
+# ingested schedule looks exactly like a quiet week: all three return None
+# and the forced run posts nothing. idle_reason is what the dashboard says
+# instead of reporting success — the silence is what cost a debugging round
+# when the first live season was created on year 2035.
+
+def test_idle_reason_names_a_missing_schedule(db):
+    with open_db(db) as conn:
+        season = get_season(
+            conn, create_season(conn, GID + 1, "No Schedule", 2035)
+        )
+        assert tasks.idle_reason(conn, season, NOW) == (
+            "no schedule ingested for 2035 — generate or ingest one "
+            "before any weekly task can be due"
+        )
+
+
+def test_idle_reason_names_the_once_per_week_state(db):
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        update_config(conn, season["id"], {"last_slate_week": 1})
+        season = get_season(conn, season["id"])
+        assert "already run for this week" in tasks.idle_reason(conn, season, NOW)
+
+
+def test_idle_reason_names_the_gap_between_weeks(db):
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        after_everything = NOW + 60 * DAY
+        assert "between weeks" in tasks.idle_reason(
+            conn, season, after_everything
+        )

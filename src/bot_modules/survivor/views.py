@@ -276,6 +276,11 @@ class JoinConfirmView(discord.ui.View):
             # (duplicate check → debit → entry row). Two double-clicked
             # confirms serialize on the write lock instead of both passing
             # the duplicate check and double-charging the buy-in.
+            # No conn.commit() in here: open_db_immediate drives the
+            # transaction by hand, so an inner commit leaves its exit-time
+            # COMMIT with nothing to commit and raises — which is how the
+            # first live join enrolled and charged the member but never
+            # refreshed the panel, echoed, or granted the role (2026-08-18).
             with open_db_immediate(db_path) as conn:
                 season = get_season(conn, self.season_id)
                 if season is None:
@@ -295,15 +300,12 @@ class JoinConfirmView(discord.ui.View):
                         )
                     if mode == "ghost_only":
                         ghost_only_join(conn, season, user_id, now)
-                        conn.commit()
                         return season, logic.JoinResult(charged=0), None
                     fate = compute_fate(conn, season, now)
                     execute_gauntlet_join(conn, season, user_id, fate, now)
-                    conn.commit()
                     charged = fate.fee + int(season["config"]["buyin_coins"])
                     return season, logic.JoinResult(charged=charged), fate
                 result = logic.join_season(conn, season, user_id, now)
-                conn.commit()
             return season, result, None
 
         try:

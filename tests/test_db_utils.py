@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import ast
+import sqlite3
+from pathlib import Path
+
 import pytest
 
 from bot_modules.core.db_utils import (
@@ -7,6 +11,7 @@ from bot_modules.core.db_utils import (
     get_config_value,
     init_config_db,
     open_db,
+    open_db_immediate,
     parse_bool,
 )
 
@@ -181,3 +186,84 @@ def test_get_config_id_set_strict_mode_still_returns_guild_specific(config_db):
             conn, "roles", guild_id=100, allow_legacy_fallback=False
         )
         assert result == {77}
+
+
+# ── open_db_immediate's hand-driven transaction ───────────────────────
+#
+# open_db_immediate opens with isolation_level=None and issues BEGIN
+# IMMEDIATE / COMMIT itself. A conn.commit() inside the block therefore
+# ends the transaction early and leaves the exit-time COMMIT with nothing
+# to commit — sqlite3 raises "cannot commit - no transaction is active",
+# and the handler's ROLLBACK raises on top, masking it. The write has
+# already landed by then, so the caller sees a half-finished operation:
+# survivor's first live join charged and enrolled the member, then threw
+# before refreshing the panel, echoing, or granting the role (2026-08-18).
+
+def test_open_db_immediate_commits_on_clean_exit(tmp_path):
+    db = tmp_path / "t.db"
+    with open_db_immediate(db) as conn:
+        conn.execute("CREATE TABLE t (v INTEGER)")
+        conn.execute("INSERT INTO t VALUES (1)")
+    with open_db(db) as conn:
+        assert [r["v"] for r in conn.execute("SELECT v FROM t")] == [1]
+
+
+def test_open_db_immediate_rolls_back_on_error(tmp_path):
+    db = tmp_path / "t.db"
+    with open_db_immediate(db) as conn:
+        conn.execute("CREATE TABLE t (v INTEGER)")
+    with pytest.raises(ValueError):
+        with open_db_immediate(db) as conn:
+            conn.execute("INSERT INTO t VALUES (1)")
+            raise ValueError("boom")
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+
+
+def test_inner_commit_breaks_open_db_immediate(tmp_path):
+    """The failure mode the contract test below exists to prevent."""
+    db = tmp_path / "t.db"
+    with pytest.raises(sqlite3.OperationalError):
+        with open_db_immediate(db) as conn:
+            conn.execute("CREATE TABLE t (v INTEGER)")
+            conn.commit()
+
+
+def test_no_source_commits_inside_open_db_immediate():
+    """No `with open_db_immediate(...)` block in src/ may commit itself.
+
+    Static because the breakage only surfaces at runtime, deep inside a
+    view callback, where the write has already succeeded and only the
+    follow-up work is lost.
+    """
+    src = Path(__file__).resolve().parents[1] / "src"
+    offenders = []
+    for path in src.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "open_db_immediate" not in text:
+            continue
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.With):
+                continue
+            names = {
+                item.context_expr.func.id
+                for item in node.items
+                if isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+            }
+            if "open_db_immediate" not in names:
+                continue
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr == "commit"
+                ):
+                    offenders.append(
+                        f"{path.relative_to(src)}:{inner.lineno}"
+                    )
+    assert not offenders, (
+        "commit() inside an open_db_immediate block (the context manager "
+        f"already commits): {', '.join(offenders)}"
+    )

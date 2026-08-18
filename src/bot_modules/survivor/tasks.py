@@ -138,12 +138,51 @@ def _pings(bot, season: dict) -> tuple[str, discord.AllowedMentions]:
     )
 
 
-async def run_weekly_tasks(bot, db_path: Path, now: float, *, force: bool = False) -> None:
+def idle_reason(conn: sqlite3.Connection, season: dict, now: float) -> str:
+    """Why a season with nothing due has nothing due — the sentence the
+    dashboard's run-now button shows instead of claiming success.
+
+    The gates all route through the week lookup, so an un-ingested schedule
+    is indistinguishable from a quiet week unless we say so (2026-08-18:
+    a season on a year ESPN has no schedule for looked identical to one
+    that had already posted, and the button reported success for both).
+    """
+    year = season["season_year"]
+    games = conn.execute(
+        "SELECT COUNT(*) FROM nfl_games WHERE season_year = ?", (year,)
+    ).fetchone()[0]
+    if not games:
+        return (
+            f"no schedule ingested for {year} — generate or ingest one "
+            "before any weekly task can be due"
+        )
+    if logic.pick_week(conn, year, now) is None:
+        return f"no open week in {year} right now — the season is between weeks"
+    return "already run for this week — the once-per-week state still holds"
+
+
+async def run_weekly_tasks(
+    bot,
+    db_path: Path,
+    now: float,
+    *,
+    force: bool = False,
+    guild_id: int | None = None,
+) -> list[dict]:
     """One decision pass for every live season. Cheap when nothing is due.
 
     ``force`` skips the guild-local day/hour gates — the dashboard's
     run-now button and the simulator use it. The per-week state keys still
     guarantee once-per-week, so forcing can never double-post.
+
+    ``guild_id`` scopes the pass to one guild. The dashboard passes it: a
+    forced run is an admin acting on *their* server, and without the filter
+    one admin's button press dragged every other guild's season past its
+    clock gates too (2026-08-18).
+
+    Returns one record per season considered — ``fired`` lists the tasks
+    that posted, ``reason`` explains an empty ``fired`` — so a caller can
+    report what actually happened instead of a blind success.
     """
 
     def _seasons():
@@ -152,44 +191,86 @@ async def run_weekly_tasks(bot, db_path: Path, now: float, *, force: bool = Fals
             # only turns 'active' at the FIRST KICKOFF, so an active-only
             # filter would silently skip week 1's Wednesday panel ping and
             # Saturday last call. The Reckoning gates on elapsed weeks anyway.
-            rows = conn.execute(
-                "SELECT DISTINCT guild_id FROM survivor_seasons "
-                "WHERE status != 'complete'"
-            ).fetchall()
+            if guild_id is None:
+                rows = conn.execute(
+                    "SELECT DISTINCT guild_id FROM survivor_seasons "
+                    "WHERE status != 'complete'"
+                ).fetchall()
+                guild_ids = [int(r["guild_id"]) for r in rows]
+            else:
+                guild_ids = [int(guild_id)]
             from bot_modules.services.survivor_service import get_active_season
 
             out = []
-            for r in rows:
-                season = get_active_season(conn, int(r["guild_id"]))
-                if season and int(season["config"]["channel_id"] or 0):
-                    offset = get_tz_offset_hours(conn, season["guild_id"])
-                    out.append((
-                        season,
-                        offset,
-                        reckoning_due(conn, season, now, offset, force=force),
-                        slate_due(conn, season, now, offset, force=force),
-                        lastcall_due(conn, season, now, offset, force=force),
-                    ))
+            for gid in guild_ids:
+                season = get_active_season(conn, gid)
+                if season is None:
+                    continue
+                if not int(season["config"]["channel_id"] or 0):
+                    out.append((season, 0.0, None, None, None, "no channel configured"))
+                    continue
+                offset = get_tz_offset_hours(conn, season["guild_id"])
+                reck = reckoning_due(conn, season, now, offset, force=force)
+                slate = slate_due(conn, season, now, offset, force=force)
+                last = lastcall_due(conn, season, now, offset, force=force)
+                reason = (
+                    idle_reason(conn, season, now)
+                    if reck is None and slate is None and last is None
+                    else ""
+                )
+                out.append((season, offset, reck, slate, last, reason))
             return out
 
-    for season, offset, reck_wk, slate_wk, lastcall_wk in await asyncio.to_thread(_seasons):
+    report: list[dict] = []
+    for season, offset, reck_wk, slate_wk, lastcall_wk, reason in (
+        await asyncio.to_thread(_seasons)
+    ):
+        fired: list[str] = []
+        blocked: list[str] = []
+        failed = ""
         try:
             if reck_wk is not None:
-                await post_reckoning(bot, db_path, season, reck_wk, now)
+                ok = await post_reckoning(bot, db_path, season, reck_wk, now)
+                (fired if ok else blocked).append("reckoning")
             if slate_wk is not None:
-                await post_slate(bot, db_path, season, slate_wk, now)
+                ok = await post_slate(bot, db_path, season, slate_wk, now)
+                (fired if ok else blocked).append("slate")
             if lastcall_wk is not None:
-                await send_last_call(bot, db_path, season, lastcall_wk, now)
-        except Exception:
+                ok = await send_last_call(
+                    bot, db_path, season, lastcall_wk, now
+                )
+                (fired if ok else blocked).append("last call")
+        except Exception as exc:
+            failed = str(exc) or exc.__class__.__name__
             log.exception(
                 "survivor weekly task failed for season %s", season["id"]
             )
+        if blocked and not reason:
+            reason = (
+                f"{', '.join(blocked)} was due but couldn't post — check the "
+                "Survivor channel and the bot's permissions there"
+            )
+        report.append({
+            "season_id": season["id"],
+            "guild_id": season["guild_id"],
+            "name": season["name"],
+            "week": reck_wk or slate_wk or lastcall_wk,
+            "fired": fired,
+            "blocked": blocked,
+            "reason": reason,
+            "error": failed,
+        })
+    return report
 
 
-async def post_reckoning(bot, db_path: Path, season: dict, week: int, now: float) -> None:
+async def post_reckoning(
+    bot, db_path: Path, season: dict, week: int, now: float
+) -> bool:
+    """Returns True when the Reckoning actually posted — the run report
+    must not claim a task fired when its channel was unreachable."""
     channel = _channel(bot, season)
     if channel is None:
-        return
+        return False
     guild = channel.guild
     present = {m.id for m in guild.members}
 
@@ -246,9 +327,12 @@ async def post_reckoning(bot, db_path: Path, season: dict, week: int, now: float
                 await member.send(CONDOLENCE.replace("{week}", str(week)))
             except (discord.Forbidden, discord.HTTPException):
                 pass  # closed DMs: the eulogy already said it publicly
+    return True
 
 
-async def post_slate(bot, db_path: Path, season: dict, week: int, now: float) -> None:
+async def post_slate(
+    bot, db_path: Path, season: dict, week: int, now: float
+) -> bool:
     """Wednesday's moment (§2.3 as amended 2026-08-18): repost the ONE
     channel panel to the bottom with the week-open ping — the panel already
     carries the slate, the standings line, and both buttons. In between
@@ -272,17 +356,23 @@ async def post_slate(bot, db_path: Path, season: dict, week: int, now: float) ->
         )
     except PanelError as exc:
         log.warning("survivor: weekly panel repost failed: %s", exc)
-        return
+        return False
     await asyncio.to_thread(_mark)
+    return True
 
 
-async def send_last_call(bot, db_path: Path, season: dict, week: int, now: float) -> None:
+async def send_last_call(
+    bot, db_path: Path, season: dict, week: int, now: float
+) -> bool:
     """Saturday's nudge: DM only the pickless alive (§2.3); closed DMs fall
-    back to one channel mention. Early-window games get named (§6.3)."""
+    back to one channel mention. Early-window games get named (§6.3).
+
+    Returns True when the week's last call was handled — including the
+    everyone-has-picked case, which is a real outcome, not a failure."""
     channel = _channel(bot, season)
     guild = channel.guild if channel else bot.get_guild(season["guild_id"])
     if guild is None:
-        return
+        return False
 
     def _q():
         with open_db(db_path) as conn:
@@ -320,7 +410,7 @@ async def send_last_call(bot, db_path: Path, season: dict, week: int, now: float
 
     pickless, early_lines = await asyncio.to_thread(_q)
     if not pickless:
-        return
+        return True  # everybody picked — the nudge was due and is now done
     text = LAST_CALL.replace("{week}", str(week))
     if early_lines:
         text += "\n-# Early games this week: " + " · ".join(early_lines)
@@ -343,6 +433,7 @@ async def send_last_call(bot, db_path: Path, season: dict, week: int, now: float
                 users=[discord.Object(id=uid) for uid in fallback],
             ),
         )
+    return True
 
 
 async def post_addenda(bot, db_path: Path, reports: dict) -> None:

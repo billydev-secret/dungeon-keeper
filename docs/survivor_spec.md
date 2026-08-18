@@ -346,3 +346,16 @@ raising the float, so a pot that grows past the seed is not extra faucet.
    forces the Reckoning/panel-repost past their clock gates while the
    once-per-week state keys still prevent double-posts. A whole season runs in
    an evening in a test channel; the rig hard-refuses real season years.
+   *Built on the **Season** card, not the Simulator card — noted 2026-08-18,
+   placement still open (first-look comment #4).*
+10. **A forced run reports what it did (added 2026-08-18):** every gate routes
+   through the week lookup, so a season whose year has no ingested schedule is
+   indistinguishable from a quiet week — all three gates return `None` and the
+   forced run posts nothing. `run_weekly_tasks` therefore returns one record
+   per season (`fired`, `blocked`, `reason`) and the dashboard shows it: what
+   posted, or why nothing was due ("no schedule ingested for 2035…", "already
+   run for this week", "…was due but couldn't post"). The `post_*` helpers
+   return a bool so the report can't claim a task fired when its channel was
+   unreachable. The route also **scopes the run to the caller's guild** — a
+   forced run is an admin acting on their own server, and the unscoped call
+   dragged every other guild's live season past its clock gates too.
