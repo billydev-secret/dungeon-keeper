@@ -417,10 +417,19 @@ class SpotifyResolver:
         The reconcile action's read half: prefers the bot-owner client (it
         sees their private playlists), falls back to Client Credentials.
         Local files (no catalog id) are skipped — they can't be written back.
+
+        Raises instead of returning [] when the read is unusable: Spotify can
+        report items while nulling every ``track`` object (observed on
+        Development-mode apps, which get no track data on playlist reads).
+        Treating that as "the playlist is empty" made reconcile re-add its
+        entire window on every click. Local files and episodes carry non-null
+        track objects, so an all-null page is never a real playlist shape.
         """
         client = await self._get_user_client() or self._ensure_client()
         ids: list[str] = []
         offset = 0
+        items_seen = 0
+        null_tracks = 0
         while True:
             page = await self._call(
                 client.playlist_items,
@@ -430,13 +439,24 @@ class SpotifyResolver:
                 additional_types=("track",),
             )
             for item in page.get("items", []):
-                track = item.get("track") or {}
+                items_seen += 1
+                track = item.get("track")
+                if track is None:
+                    null_tracks += 1
+                    continue
                 track_id = track.get("id")
                 if track_id and not track.get("is_local"):
                     ids.append(str(track_id))
             if not page.get("next"):
                 break
             offset += _PLAYLIST_PAGE_SIZE
+        if items_seen and null_tracks == items_seen:
+            raise SpotifyResolveError(
+                f"Spotify returned {items_seen} playlist item(s) but no track "
+                "data for any of them — this app can't read playlist contents "
+                "(Development-mode apps get null tracks here). Aborting "
+                "instead of treating the playlist as empty."
+            )
         return ids
 
     async def _write_call(self, fn, *args, **kwargs):

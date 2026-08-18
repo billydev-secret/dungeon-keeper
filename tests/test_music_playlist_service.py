@@ -745,6 +745,9 @@ async def test_reconcile_surfaces_spotify_errors(sync_db_path):
     svc = make_service(sync_db_path, spotify)
     result = await svc.reconcile(GUILD)
     assert result == {"ok": False, "error": "Spotify API error: 500 boom"}
+    # An unusable read (500, or the resolver's all-null-tracks abort) must
+    # change nothing — neither half of the sync may run on a blind read.
+    assert spotify.add_calls == [] and spotify.remove_calls == []
 
 
 # ── Review queue: approve / reject ────────────────────────────────────

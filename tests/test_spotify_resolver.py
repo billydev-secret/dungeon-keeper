@@ -242,6 +242,44 @@ async def test_playlist_track_ids_pages_and_skips_locals():
     assert offsets == [0, 100]
 
 
+async def test_playlist_track_ids_rejects_an_all_null_read():
+    """Items reported but every track null = unusable read, not an empty list.
+
+    The prod incident: Development-mode apps get ``track: null`` on every
+    playlist item, ``playlist_track_ids`` returned [], and reconcile re-added
+    its whole window as duplicates on each click. An unusable read must abort.
+    """
+    client = MagicMock()
+    client.playlist_items.side_effect = [
+        {"items": [{"track": None}] * 3, "next": "page2"},
+        {"items": [{"track": None}] * 2, "next": None},
+    ]
+    resolver = _writable_resolver(client)
+
+    with pytest.raises(SpotifyResolveError, match="no track data"):
+        await resolver.playlist_track_ids("pl123")
+
+
+async def test_playlist_track_ids_empty_playlist_is_empty():
+    client = MagicMock()
+    client.playlist_items.return_value = {"items": [], "next": None}
+    resolver = _writable_resolver(client)
+    assert await resolver.playlist_track_ids("pl123") == []
+
+
+async def test_playlist_track_ids_all_local_files_is_not_an_error():
+    # Local files carry a real track object (id null, is_local true) — an
+    # all-local playlist is a readable playlist with nothing writable, not
+    # the null-track failure shape.
+    client = MagicMock()
+    client.playlist_items.return_value = {
+        "items": [_item(None, is_local=True), _item(None, is_local=True)],
+        "next": None,
+    }
+    resolver = _writable_resolver(client)
+    assert await resolver.playlist_track_ids("pl123") == []
+
+
 async def test_playlist_track_ids_falls_back_without_user_client():
     fallback = MagicMock()
     fallback.playlist_items.return_value = {"items": [_item("t1")], "next": None}
