@@ -200,7 +200,6 @@ function render(container, status, channels) {
   const behaviorToggles = document.createElement("div");
   behaviorToggles.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
   behaviorToggles.append(
-    checkbox("expand_albums", s.expand_albums === true, "Expand album & playlist links"),
     checkbox("remove_on_delete", s.remove_on_delete !== false, "Remove when the message is deleted"),
   );
   cardBehavior.appendChild(field(
@@ -215,11 +214,9 @@ function render(container, status, channels) {
   cardBehavior.appendChild(field(
     "Options",
     behaviorToggles,
-    "Expanding albums adds every track from an album or playlist link — " +
-      "one post can flush the whole window, which is why it ships off and " +
-      "album links are skipped. Remove-on-delete drops a track when its " +
-      "source message is deleted, unless another live message still " +
-      "references it.",
+    "Remove-on-delete drops a track when its source message is deleted, " +
+      "unless another live message still references it. Album and playlist " +
+      "links always contribute their single most popular track.",
   ));
 
   const saveRow = document.createElement("div");
@@ -262,7 +259,6 @@ function render(container, status, channels) {
         playlist_id: playlistInput.value.trim(),
         window_size: windowSize,
         match_threshold: threshold,
-        expand_albums: fd.has("expand_albums"),
         remove_on_delete: fd.has("remove_on_delete"),
         rescan_depth: rescanDepth,
       });

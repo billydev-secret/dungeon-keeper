@@ -8,9 +8,11 @@ bot-owner Spotify client (``services/spotify_resolver``). Per message:
 1. **Parse** every supported link (``music_playlist_logic.extract_links``).
 2. **Resolve** each to a Spotify track id — direct for track links/URIs,
    by *search* for YouTube (title+channel via the keyless oEmbed endpoint,
-   cleaned and scored by ``select_best_match``). Album/playlist links are
-   skipped unless the ``expand_albums`` dial is on — one album post must not
-   flush the whole window.
+   cleaned and scored by ``select_best_match``). An album or playlist link
+   contributes exactly its **single most-popular track** — one collection
+   post must not flush the whole window, but it shouldn't contribute
+   nothing either. A collection the app cannot read (editorial playlist,
+   Development-mode null-track reads) goes to the review queue instead.
 3. **Dedupe** against the live window; duplicate posts are recorded as
    references (the 🔁 case) so the deletion rule stays honest.
 4. **Write** the survivors to Spotify, then **trim** back to ``window_size``.
@@ -64,6 +66,7 @@ from bot_modules.music_playlist.music_playlist_logic import (
 from bot_modules.services.spotify_resolver import (
     SpotifyResolveError,
     SpotifyResolver,
+    SpotifyUnusableReadError,
 )
 
 log = logging.getLogger("dungeonkeeper.music_playlist")
@@ -74,6 +77,11 @@ SETTINGS_PREFIX = "music_playlist_"
 REASON_NO_METADATA = "youtube_metadata_unavailable"
 REASON_NO_CANDIDATES = "no_spotify_candidates"
 REASON_LOW_CONFIDENCE = "confidence_below_threshold"
+# An album/playlist link whose contents this app cannot read (editorial
+# playlist, or the Development-mode null-track shape). Queued rather than
+# ledgered retryable: the condition is lasting, and the auto-retry sweep
+# re-firing it every backoff step would never converge.
+REASON_COLLECTION_UNREADABLE = "collection_unreadable"
 
 # Ledger statuses. Aliased from the store so the retryable-vs-terminal
 # classification has exactly one definition (the store's ledger reads it).
@@ -134,9 +142,6 @@ class MusicPlaylistSettings:
     window_size: int = 30
     # YouTube→Spotify confidence gate; below it the link goes to review.
     match_threshold: float = 0.74
-    # Expand album/playlist links into their tracks. Default off — one album
-    # post would flush the whole window.
-    expand_albums: bool = False
     # Deleting the source message pulls the track (unless another live
     # message still references it).
     remove_on_delete: bool = True
@@ -149,7 +154,7 @@ class MusicPlaylistSettings:
 
 DEFAULT_MUSIC_PLAYLIST_SETTINGS = MusicPlaylistSettings()
 
-_BOOL_KEYS = ["enabled", "expand_albums", "remove_on_delete"]
+_BOOL_KEYS = ["enabled", "remove_on_delete"]
 _FLOAT_KEYS = ["match_threshold"]
 _STR_KEYS = ["playlist_id"]
 # Everything else on the dataclass is a plain int.
@@ -238,8 +243,6 @@ class ProcessingSummary:
     added_track_ids: list[str] = field(default_factory=list)
     duplicate_count: int = 0
     unmatched_ids: list[int] = field(default_factory=list)
-    # Album/playlist links skipped by the expand_albums dial.
-    skipped_collections: int = 0
     rolled_off_track_ids: list[str] = field(default_factory=list)
     # Nothing was attempted: feature off, wrong channel, or already in the
     # ledger. Distinct from a processed message that merely found no links.
@@ -658,23 +661,45 @@ class MusicPlaylistService:
             )]
 
         if link.link_type in (LinkType.SPOTIFY_ALBUM, LinkType.SPOTIFY_PLAYLIST):
-            if not settings.expand_albums:
-                summary.skipped_collections += 1
+            # A collection contributes exactly its most-popular track: one
+            # album post must not flush the window, but it shouldn't
+            # contribute nothing either. (popularity is Spotify's 0-100
+            # recency-weighted score, not a play count; while the app lacks
+            # popularity data the pick degrades to the opening track.)
+            try:
+                if link.link_type is LinkType.SPOTIFY_ALBUM:
+                    track = await self._spotify.album_top_track(link.item_id)
+                else:
+                    track = await self._spotify.playlist_top_track(link.item_id)
+            except SpotifyUnusableReadError as exc:
+                # Lasting condition (editorial playlist, unreadable contents)
+                # — visible in the review queue, terminal for the ledger. A
+                # retryable status here would put it on the auto-retry sweep
+                # forever with no chance of a different outcome.
+                unmatched_id = await asyncio.to_thread(
+                    self._queue_unmatched, guild_id,
+                    channel_id=channel_id, message_id=message_id,
+                    source_url=link.raw_url, added_by=added_by,
+                    reason=REASON_COLLECTION_UNREADABLE,
+                )
+                summary.unmatched_ids.append(unmatched_id)
+                log.info(
+                    "music playlist: collection unreadable (%s): %s",
+                    link.raw_url, exc,
+                )
                 return []
-            result = await self._spotify.resolve(link.raw_url)
-            infos: list[_TrackInfo] = []
-            for track in result.tracks:
-                # The resolver's track model carries the URL, not the id.
-                parsed = parse_spotify_url(track.spotify_url or "")
-                if parsed is None or parsed.link_type is not LinkType.SPOTIFY_TRACK:
-                    continue
-                infos.append(_TrackInfo(
-                    track_id=parsed.item_id,
-                    title=track.title,
-                    artist=", ".join(track.artists),
-                    source_url=link.raw_url,
-                ))
-            return infos
+            if track is None:  # empty collection
+                return []
+            # The resolver's track model carries the URL, not the id.
+            parsed = parse_spotify_url(track.spotify_url or "")
+            if parsed is None or parsed.link_type is not LinkType.SPOTIFY_TRACK:
+                return []
+            return [_TrackInfo(
+                track_id=parsed.item_id,
+                title=track.title,
+                artist=", ".join(track.artists),
+                source_url=link.raw_url,
+            )]
 
         # YouTube: fetch metadata, search Spotify, gate on confidence.
         metadata = await self._fetch_youtube(link.item_id)
