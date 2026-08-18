@@ -95,6 +95,19 @@ class PickPanel(discord.ui.View):
         return _cb
 
 
+async def _accent(
+    interaction: discord.Interaction, db_path, guild_id: int
+) -> discord.Color | None:
+    """Accent color resolved DM-safely. The pick button rides the last-call
+    DM (2026-08-18), where ``interaction.guild`` is None — resolve the
+    season's guild instead, and fall back to the branding default (None →
+    the builders' own fallback) if the guild is gone."""
+    guild = interaction.guild or interaction.client.get_guild(guild_id)
+    if guild is None:
+        return None
+    return await branding.resolve_accent_color(db_path, guild)
+
+
 async def submit_pick(
     interaction: discord.Interaction,
     season: dict,
@@ -123,8 +136,7 @@ async def submit_pick(
         await _respond(interaction, content=f"❌ {str(exc)}", edit=edit)
         return
     assert st is not None  # the pick just landed, so the player exists
-    assert interaction.guild is not None
-    color = await branding.resolve_accent_color(db_path, interaction.guild)
+    color = await _accent(interaction, db_path, season["guild_id"])
     embed = build_pick_confirm_embed(game, st, changed=changed, color=color)
     await _respond(interaction, embed=embed, edit=edit)
 
@@ -223,8 +235,7 @@ class JoinSeasonButton(
         if fate is not None:
             from bot_modules.survivor.embeds import build_gauntlet_receipt_embed
 
-            assert interaction.guild is not None
-            color = await branding.resolve_accent_color(db_path, interaction.guild)
+            color = await _accent(interaction, db_path, season["guild_id"])
             total = fate.fee + buyin
             content = (
                 "Your catch-up results are below — review before you pay. "
@@ -579,8 +590,7 @@ class HistoryButton(
             return
         from bot_modules.survivor.embeds import build_history_embed
 
-        assert interaction.guild is not None
-        color = await branding.resolve_accent_color(db_path, interaction.guild)
+        color = await _accent(interaction, db_path, season["guild_id"])
         name = (
             interaction.user.display_name
             if isinstance(interaction.user, discord.Member)

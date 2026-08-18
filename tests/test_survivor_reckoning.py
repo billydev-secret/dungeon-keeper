@@ -525,3 +525,94 @@ def test_idle_reason_names_the_gap_between_weeks(db):
         assert "between weeks" in tasks.idle_reason(
             conn, season, after_everything
         )
+
+
+# ── last call carries the pick button (2026-08-18) ────────────────────
+#
+# The Saturday nudge used to point at /survivor pick; now the DM (and the
+# closed-DM channel fallback) carries the same persistent SlatePickButton
+# as the channel panel — the nudge is the door, not directions to one.
+# This is deliberate wiring, so it gets the one wiring assertion.
+
+class _FakeMember:
+    def __init__(self, uid, fail=False):
+        self.id = uid
+        self._fail = fail
+        self.sent = []
+
+    async def send(self, content=None, **kwargs):
+        import discord as _d
+
+        if self._fail:
+            resp = type("R", (), {"status": 403, "reason": "Forbidden"})()
+            raise _d.Forbidden(resp, "closed DMs")
+        self.sent.append((content, kwargs))
+
+
+class _FakeChannel:
+    def __init__(self, guild):
+        self.guild = guild
+        self.sent = []
+
+    async def send(self, content=None, **kwargs):
+        self.sent.append((content, kwargs))
+
+
+class _FakeGuild:
+    def __init__(self, members, channel_id):
+        self._members = {m.id: m for m in members}
+        self._channel_id = channel_id
+        self.channel = _FakeChannel(self)
+
+    def get_member(self, uid):
+        return self._members.get(uid)
+
+    def get_channel(self, cid):
+        return self.channel if cid == self._channel_id else None
+
+
+class _FakeBot:
+    def __init__(self, guild):
+        self._guild = guild
+
+    def get_guild(self, gid):
+        return self._guild
+
+
+def _pick_button_ids(view):
+    return [
+        c.custom_id for c in view.children
+        if getattr(c, "custom_id", "").startswith("survivor_slate:")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_last_call_dm_carries_the_pick_button(db, monkeypatch):
+    import discord  # noqa: F401 — fakes raise discord errors
+
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        join_season(conn, season, 1, NOW)
+        join_season(conn, season, 2, NOW)
+        season = get_season(conn, season["id"])
+    member_ok = _FakeMember(1)
+    member_closed = _FakeMember(2, fail=True)
+    guild = _FakeGuild(
+        [member_ok, member_closed], int(season["config"]["channel_id"] or 0)
+    )
+    bot = _FakeBot(guild)
+    # _channel() isinstance-checks discord.TextChannel, which a test fake
+    # can't be — route it to the fake so the closed-DM fallback is reachable.
+    monkeypatch.setattr(tasks, "_channel", lambda b, se: guild.channel)
+
+    handled = await tasks.send_last_call(bot, db, season, 1, NOW)
+
+    assert handled is True
+    # The open-DM member got the nudge with the button attached.
+    (content, kwargs), = member_ok.sent
+    assert "Week 1" in content and "/survivor pick" not in content
+    assert _pick_button_ids(kwargs["view"]) == [f"survivor_slate:{season['id']}"]
+    # The closed-DM member fell back to the channel — with the button too.
+    (fb_content, fb_kwargs), = guild.channel.sent
+    assert "<@2>" in fb_content
+    assert _pick_button_ids(fb_kwargs["view"]) == [f"survivor_slate:{season['id']}"]

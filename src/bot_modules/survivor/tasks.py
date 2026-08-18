@@ -26,7 +26,7 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.services.survivor_service import update_config
 from bot_modules.survivor import logic, reckoning
-from bot_modules.survivor.views import swap_member_roles
+from bot_modules.survivor.views import SlatePickButton, swap_member_roles
 
 log = logging.getLogger("dungeonkeeper.survivor")
 
@@ -38,8 +38,8 @@ CONDOLENCE = (
     "after elimination takes the side pot. `/survivor pick` still works. 👻"
 )
 LAST_CALL = (
-    "You haven't picked for Week {week}. `/survivor pick` — or I'll pick "
-    "for you, and I have terrible taste. 🌙"
+    "You haven't picked for Week {week}. Make your pick below — or I'll "
+    "pick for you, and I have terrible taste. 🌙"
 )
 
 
@@ -420,20 +420,34 @@ async def send_last_call(
         if member is None:
             continue
         try:
-            await member.send(text)
+            # The pick button rides the DM (2026-08-18) — same persistent
+            # DynamicItem as the channel panel, so the nudge IS the door,
+            # not directions to one. pick_view builds it fresh per send;
+            # a view instance can't be reused across messages.
+            await member.send(text, view=pick_view(season["id"]))
         except (discord.Forbidden, discord.HTTPException):
             fallback.append(user_id)
     if fallback and channel is not None:
         mentions = " ".join(f"<@{uid}>" for uid in fallback)
         await channel.send(
             f"🌙 Last call, {mentions} — no pick yet for Week {week}. "
-            "`/survivor pick`",
+            "Make your pick below.",
+            view=pick_view(season["id"]),
             allowed_mentions=discord.AllowedMentions(
                 everyone=False, roles=False,
                 users=[discord.Object(id=uid) for uid in fallback],
             ),
         )
     return True
+
+
+def pick_view(season_id: int) -> discord.ui.View:
+    """One 🏈 Make your pick button — the last-call DM's door. Persistent
+    (DynamicItem), so it keeps working across restarts like every panel
+    button."""
+    view = discord.ui.View(timeout=None)
+    view.add_item(SlatePickButton(season_id))
+    return view
 
 
 async def post_addenda(bot, db_path: Path, reports: dict) -> None:

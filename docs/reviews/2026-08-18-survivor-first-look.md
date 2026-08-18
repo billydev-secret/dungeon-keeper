@@ -359,4 +359,14 @@ should carry the 🏈 Make your pick button instead of pointing at
 `DynamicItem` keyed by season id, and the team picker is DB-only. One DM
 blocker found: the pick-confirm path asserts `interaction.guild` for the
 accent color (`views.py:126`), which is None in a DM — must resolve the
-guild off the season instead. In progress.
+guild off the season instead.
+
+**Shipped.** The last-call DM (and the closed-DM channel fallback) now
+carries `SlatePickButton` via `tasks.pick_view()`; DM copy says "Make your
+pick below" instead of naming the slash command. All three
+`assert interaction.guild` sites in the survivor views (pick confirm,
+gauntlet receipt, history) were replaced with a DM-safe `_accent()` that
+resolves the season's guild off the bot and falls back to the default
+accent — so every panel-button flow now survives being clicked from a DM,
+not just the pick. Wiring test covers the DM view, the copy change, and
+the fallback-with-button path.
