@@ -1,0 +1,90 @@
+# Dungeon Keeper docs+source MCP server (read-only), for developing feature
+# specs in claude.ai against the bot's real specs, conventions and code.
+#
+# Install: see deploy/README.md ("DK MCP server").
+# Logs:    journalctl -u dk-mcp
+#
+# ---------------------------------------------------------------------------
+# THE THREAT MODEL, because it drives every hardening line below
+# ---------------------------------------------------------------------------
+# This process is reachable from the internet through a Cloudflare Tunnel, and
+# the connector is UNAUTHENTICATED -- the only thing protecting it is a long
+# random URL path acting as a shared secret. It reads the PRODUCTION checkout,
+# which contains:
+#
+#   .env              Discord token, LAVALINK_PASSWORD, SPOTIFY_CLIENT_SECRET
+#   dungeonkeeper.db  the live database, full of per-user data
+#   .git/             every secret ever committed, in full history
+#   lavalink/         config with interpolated credentials
+#
+# The application enforces an allowlist (src/dk_mcp/paths_service.py: resolve
+# symlinks and '..' FIRST, then prove containment in docs/ or src/). The mount
+# namespace below enforces the SAME allowlist independently, at the kernel
+# level: TemporaryFileSystem= replaces /home/ben with an empty tmpfs, and only
+# the three allowed paths are bound back in, read-only. Everything else in the
+# checkout does not exist as far as this process is concerned.
+#
+# That is deliberately an allowlist and not InaccessiblePaths= for each secret:
+# a denylist protects only the secrets someone remembered to name, and the next
+# one added to the repo would be served. If the Python has a bug, the kernel
+# still refuses. If this unit is wrong, the Python still refuses.
+
+[Unit]
+Description=Dungeon Keeper docs/source MCP server (read-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ben
+Group=ben
+WorkingDirectory=/opt/dk-mcp
+
+# The secret URL path lives in a 0600 file, NOT in Environment=. `systemctl
+# show` prints Environment= to any local user without sudo, which would leak
+# the one credential this service has.
+EnvironmentFile=/opt/dk-mcp/dk-mcp.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/tmp
+
+ExecStart=/opt/dk-mcp/.venv/bin/python -m dk_mcp.server
+Restart=on-failure
+RestartSec=5s
+
+# -- filesystem: the allowlist, enforced by the kernel ----------------------
+ProtectSystem=strict
+ProtectHome=read-only
+TemporaryFileSystem=/home/ben
+BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper/docs
+BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper/src
+BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper/CLAUDE.md
+BindReadOnlyPaths=/opt/dk-mcp
+PrivateTmp=yes
+PrivateDevices=yes
+
+# -- privilege and kernel surface ------------------------------------------
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=yes
+
+# Binds loopback for the tunnel; AF_UNIX is needed by the Python runtime.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

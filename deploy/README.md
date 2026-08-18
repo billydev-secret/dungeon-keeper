@@ -288,3 +288,59 @@ ssh admin@192.168.174.3 \
 - The bot's own `backups/` sit beside the DB on the same disk, which defends
   against logical damage but not disk failure. The off-device copy that closes
   that gap is the NAS timer below.
+
+## DK MCP server
+
+A read-only MCP server exposing this repo's specs and source to claude.ai, so
+feature specs are developed against how the bot actually works. Source lives in
+`src/dk_mcp/` (versioned with the docs it serves, covered by `scripts/gate.py`);
+it runs from `/opt/dk-mcp`, so a network-facing process is not executing out of
+the production checkout. Spec: `docs/dk_mcp_server.md`.
+
+Install:
+
+```bash
+# 1. Create the deploy directory once, as root.
+sudo install -d -o ben -g ben /opt/dk-mcp
+
+# 2. Sync the package, build its venv, and generate the endpoint secret.
+#    Re-run this after any change to src/dk_mcp/. It never restarts anything.
+./scripts/deploy_dk_mcp.sh
+
+# 3. Install the unit.
+sudo install -m 644 deploy/dk-mcp.service /etc/systemd/system/dk-mcp.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now dk-mcp
+
+# 4. Point a Cloudflare Tunnel hostname at it (Cloudflare dashboard):
+#      dkmcp.billy-bots.com  ->  http://127.0.0.1:8322
+```
+
+The connector URL is printed by the deploy script; it is
+`https://dkmcp.billy-bots.com` plus the random path in `/opt/dk-mcp/dk-mcp.env`.
+Add it in claude.ai as a custom connector.
+
+**That random path is the only credential.** The connector is unauthenticated,
+so the path is a shared secret: it lives in a 0600 `EnvironmentFile` rather than
+in the unit's `Environment=`, because `systemctl show` prints `Environment=` to
+any local user without sudo. Don't paste it anywhere it will be logged, and
+don't rotate it casually — the connector then 404s with no explanation.
+
+Verifying the sandbox after install (worth doing once, since the unit's mount
+namespace is the backstop for the application's own path allowlist):
+
+```bash
+# The service must be able to read docs/ and src/ ...
+sudo systemd-run --uid=ben --property=JoinsNamespaceOf=dk-mcp.service \
+  --pty /bin/ls /home/ben/discord-bots/dungeon-keeper/
+
+# ... and .env, dungeonkeeper.db and .git must not exist in its namespace at
+# all. `ls` above should show only docs, src and CLAUDE.md.
+```
+
+Note `systemd-run --user` is *not* a substitute for testing this: user-manager
+uid remapping makes root-owned files read as `nobody` and produces false
+failures. Test against the real system unit or not at all.
+
+Ports: 8322 (8321 belongs to the Truth-or-Dare server at `/opt/tod`).
+Logs: `journalctl -u dk-mcp -f`.

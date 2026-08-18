@@ -1,0 +1,9 @@
+# Direct dependencies for the read-only docs/source MCP server
+# (src/dk_mcp/, deployed to /opt/dk-mcp by scripts/deploy_dk_mcp.sh).
+#
+# Deliberately NOT part of requirements.txt: the bot does not import dk_mcp and
+# must not carry its dependencies. Same arrangement as requirements-local-llm.
+#
+# Regenerate the lock after editing:
+#   uv pip compile requirements-mcp.txt -o requirements-mcp.lock --universal -p 3.14
+mcp>=2.0
