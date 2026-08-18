@@ -26,6 +26,7 @@ from bot_modules.survivor.embeds import (
     build_status_embed,
 )
 from bot_modules.survivor.views import (
+    HistoryButton,
     JoinSeasonButton,
     PickPanel,
     SlatePickButton,
@@ -57,6 +58,7 @@ class SurvivorCog(commands.Cog):
         # button must survive restarts.
         self.bot.add_dynamic_items(JoinSeasonButton)
         self.bot.add_dynamic_items(SlatePickButton)
+        self.bot.add_dynamic_items(HistoryButton)
         # The §4.2 poll/settle loop: 10-min cadence inside game windows,
         # one daily full refresh, settle sweep after any ingest.
         from bot_modules.services.survivor_loop import survivor_poll_loop
@@ -288,21 +290,25 @@ class SurvivorCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        icons = {"win": "✅", "loss": "💀", "tie": "🤝", "void": "🌫️", None: "⏳"}
-        lines = [
-            f"wk {r['week']}: **{r['team']}**"
-            + (" 📎" if r["auto_assigned"] else "")
-            + f" {icons.get(r['result'], '·')}"
-            for r in rows
-        ]
+        from bot_modules.survivor.embeds import build_history_embed
+
         color = await resolve_accent_color(self.ctx.db_path, interaction.guild)
-        embed = discord.Embed(
-            title=f"📜 {discord.utils.escape_markdown(target.display_name)} — Pick History",
-            description="\n".join(lines[-25:]),
-            color=color,
+        await interaction.response.send_message(
+            embed=build_history_embed(
+                [
+                    {
+                        "week": int(r["week"]), "team": r["team"],
+                        "result": r["result"],
+                        "auto_assigned": bool(r["auto_assigned"]),
+                    }
+                    for r in rows
+                ],
+                display_name=discord.utils.escape_markdown(target.display_name),
+                revealed_week=revealed,
+                own=False,
+                color=color,
+            )
         )
-        embed.set_footer(text="Revealed picks only — current picks stay hidden")
-        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: Bot) -> None:

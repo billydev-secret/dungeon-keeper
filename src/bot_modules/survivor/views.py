@@ -439,6 +439,99 @@ class SlatePickButton(
         )
 
 
+class HistoryButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"survivor_history:(?P<season_id>\d+)",
+):
+    """📜 My History on the channel panel — ephemeral and personal, so it
+    shows the clicker their FULL history including the current week's
+    still-secret pick (tagged as hidden from others). The public
+    /survivor history remains revealed-only; both render through one
+    builder so the faces can't drift."""
+
+    def __init__(self, season_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="📜 My History",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"survivor_history:{season_id}",
+            )
+        )
+        self.season_id = season_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+        /,
+    ) -> HistoryButton:
+        return cls(int(match["season_id"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        db_path = bot.ctx.db_path  # type: ignore[attr-defined]
+        user_id = interaction.user.id
+
+        def _q():
+            with open_db(db_path) as conn:
+                season = get_season(conn, self.season_id)
+                if season is None:
+                    return None, [], 0
+                rows = [
+                    {
+                        "week": int(r["week"]), "team": r["team"],
+                        "result": r["result"],
+                        "auto_assigned": bool(r["auto_assigned"]),
+                    }
+                    for r in conn.execute(
+                        "SELECT week, team, result, auto_assigned "
+                        "FROM survivor_picks "
+                        "WHERE season_id = ? AND user_id = ? "
+                        "ORDER BY week, slot",
+                        (self.season_id, user_id),
+                    ).fetchall()
+                ]
+                revealed = int(
+                    season["config"].get("last_reckoned_week") or 0
+                )
+            return season, rows, revealed
+
+        season, rows, revealed = await asyncio.to_thread(_q)
+        if season is None:
+            await interaction.response.send_message(
+                "This season no longer exists.", ephemeral=True
+            )
+            return
+        if not rows:
+            await interaction.response.send_message(
+                "No picks on record yet — your history starts with your "
+                "first pick. `/survivor pick`",
+                ephemeral=True,
+            )
+            return
+        from bot_modules.survivor.embeds import build_history_embed
+
+        assert interaction.guild is not None
+        color = await branding.resolve_accent_color(db_path, interaction.guild)
+        name = (
+            interaction.user.display_name
+            if isinstance(interaction.user, discord.Member)
+            else interaction.user.name
+        )
+        await interaction.response.send_message(
+            embed=build_history_embed(
+                rows,
+                display_name=discord.utils.escape_markdown(name),
+                revealed_week=revealed,
+                own=True,
+                color=color,
+            ),
+            ephemeral=True,
+        )
+
+
 async def swap_member_roles(
     bot, guild_id: int, config: dict, user_id: int, *, to_ghost: bool
 ) -> str | None:
@@ -571,6 +664,7 @@ def panel_view(season_id: int, *, join_open: bool) -> discord.ui.View:
     view.add_item(SlatePickButton(season_id))
     if join_open:
         view.add_item(JoinSeasonButton(season_id))
+    view.add_item(HistoryButton(season_id))
     return view
 
 

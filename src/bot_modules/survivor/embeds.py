@@ -318,3 +318,39 @@ def build_gauntlet_receipt_embed(
     embed.add_field(name="Entry Cost", value=" · ".join(cost), inline=False)
     embed.set_footer(text="Shown before you pay — no surprises")
     return embed
+
+
+def build_history_embed(
+    rows: list[dict],
+    *,
+    display_name: str,
+    revealed_week: int,
+    own: bool,
+    color: discord.Color | None = None,
+) -> discord.Embed:
+    """Pick history, one builder for both faces (§2.6): the public
+    /survivor history shows revealed weeks only; the panel's My History
+    button is ephemeral and personal, so the viewer's own unrevealed picks
+    appear too — tagged as hidden from everyone else. ``rows``:
+    ``{week, team, result, auto_assigned}`` ascending."""
+    icons = {"win": "✅", "loss": "💀", "tie": "🤝", "void": "🌫️", None: "⏳"}
+    lines = []
+    for r in rows:
+        if not own and int(r["week"]) > revealed_week:
+            continue  # secrecy: the public face never shows a live pick
+        tag = " 📎" if r["auto_assigned"] else ""
+        line = f"Week {r['week']}: **{r['team']}**{tag} {icons.get(r['result'], '·')}"
+        if own and int(r["week"]) > revealed_week:
+            line += " · 🤫 hidden from others"
+        lines.append(line)
+    embed = discord.Embed(
+        title=f"📜 {display_name} — Pick History",
+        description=_clip_field(lines, "weeks") if lines else
+        "No picks on record yet.",
+        color=color or discord.Color(DEFAULT_ACCENT),
+    )
+    embed.set_footer(
+        text="Only you can see this — including your current pick" if own
+        else "Revealed picks only — current picks stay hidden"
+    )
+    return embed

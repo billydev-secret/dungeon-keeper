@@ -655,6 +655,15 @@ CASES = [
         discord.Color(branding_service.DEFAULT_ACCENT),
     ),
     case(
+        "survivor.history",
+        lambda **kw: survivor_embeds.build_history_embed(
+            [{"week": 1, "team": "SEA", "result": "win",
+              "auto_assigned": False}],
+            display_name="Loaf", revealed_week=1, own=False, **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
         "survivor.gauntlet_receipt",
         lambda **kw: survivor_embeds.build_gauntlet_receipt_embed(
             _Fate(

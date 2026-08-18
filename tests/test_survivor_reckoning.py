@@ -364,3 +364,40 @@ def test_panel_embed_enrolling_face():
     assert "**4** players in" in embed.description
     assert all(f.name != "This Week's Games" for f in embed.fields)
     assert any(f.name == "New Here?" for f in embed.fields)
+
+
+# ── history (panel button + public command share one builder) ──────────
+
+
+def test_history_embed_public_hides_unrevealed_own_shows_tagged():
+    from bot_modules.survivor.embeds import build_history_embed
+
+    rows = [
+        {"week": 1, "team": "SEA", "result": "win", "auto_assigned": False},
+        {"week": 2, "team": "KC", "result": "loss", "auto_assigned": True},
+        {"week": 3, "team": "SF", "result": None, "auto_assigned": False},
+    ]
+    public = build_history_embed(
+        rows, display_name="Loaf", revealed_week=2, own=False
+    )
+    assert "SF" not in public.description          # secrecy holds
+    assert "Week 2: **KC** 📎 💀" in public.description
+    assert "Revealed picks only" in public.footer.text
+
+    own = build_history_embed(
+        rows, display_name="Loaf", revealed_week=2, own=True
+    )
+    assert "Week 3: **SF**" in own.description     # your own eyes only
+    assert "hidden from others" in own.description
+    assert "Only you can see this" in own.footer.text
+
+
+def test_panel_view_button_roster():
+    from bot_modules.survivor.views import panel_view
+
+    ids = [c.custom_id for c in panel_view(7, join_open=True).children]
+    assert ids == [
+        "survivor_slate:7", "survivor_join:7", "survivor_history:7"
+    ]
+    ids = [c.custom_id for c in panel_view(7, join_open=False).children]
+    assert ids == ["survivor_slate:7", "survivor_history:7"]
