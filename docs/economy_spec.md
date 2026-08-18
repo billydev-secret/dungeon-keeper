@@ -690,7 +690,7 @@ the board always shows up to 2 goals rather than 1:
   has to notice a DM and write it up is how it goes stale. The copy is the
   "Suggested post" line that sheet used to carry (`quests.tier_echo_line`), so
   the voice is unchanged — only the middleman is gone. The echo links the
-  leaderboard panel and is skipped when none is posted.
+  economy panel and is skipped when none is posted.
 - Tier crossings and the final-24h nudge are both detected hourly
   (`community_hourly_pulse` → `HourlyPulse.crossings` / `.beats`;
   `notified_tier` / `final_notice_sent` advance in the same transaction, so
@@ -722,7 +722,7 @@ used to gate an in-channel reply vs. a DM); it still gates other recurring
 engagement DMs — the daily digest (§3.1) and the weekly raffle-winner notice.
 
 Members toggle the role themselves with the **🔔 Notifications** button on the
-guide panel (§ channel guide panel) — a persistent static-`custom_id` view
+economy panel (§ the economy panel) — a persistent static-`custom_id` view
 (`econ_guide_notify`) re-registered via `bot.add_view` at cog load. The
 button answers ephemerally with whichever way it flipped; the toggle decision
 is the pure `economy/logic.py::resolve_notify_toggle`.
@@ -1118,14 +1118,14 @@ fragments mid-period.
   quests are up" (+ the pool size and the ⚡ spotlight reveal) **to main chat
   as an Event Echo** (`quest_flip` source — see
   [event_echo_spec.md](event_echo_spec.md)); `_echo_quest_flip` loads the
-  numbers, `flip_echo_detail` renders them. It links the leaderboard panel and
+  numbers, `flip_echo_detail` renders them. It links the economy panel and
   is skipped when none is posted.
   **Changed 2026-07-29.** It used to post its own message to the leaderboard
   channel (bank channel as fallback) and **ping the economy game role**
   (`game_role_id`, the notifications opt-in). Both are gone: one announcement
   beats two, and Event Echo is silent by design, so the ping went with the
   post rather than becoming a per-source exception. Guilds with a bank channel
-  but no leaderboard panel used to get the fallback post and now get nothing.
+  but no economy panel used to get the fallback post and now get nothing.
 
 **Dynamic target band:** a counted quest may carry a target *band*
 (`0 < target_min < target_max`) instead of a fixed `target_count`. Each
@@ -1365,7 +1365,7 @@ re-read price differs from the previous cycle's **DMs the owner** the old and ne
 | Sponsored emoji | 60/wk (animated 90) | **Sinks round 3, stage 4.** `/bank emoji image: name:` escrows week one (`emoji_sponsor` kind); mod approves on the Sinks page queue → two-phase claim-then-upload opens a real `econ_rentals` row (perk `emoji`, meta carries `animated` so renewals bill the right rate); deny/cancel/expiry refund exactly-once (`emoji_sponsor_refund`, `refunded_at` predicate); lapse deletes the emoji and frees the slot + name. Caps: `emoji_sponsor_slots` (default 5) + never the guild's last free emoji slot of that kind. One in flight per member and one claim per name via partial unique indexes (migration 092). Names: 2–32 `[A-Za-z0-9_]` + the shared blocklist. `price_emoji` 0 disables new sponsorships; pending reviews auto-refund after `emoji_sponsor_expire_days` (default 14, QOTD-sponsor sweep pattern) |
 | Voice room lease | **0 (dark)**, suggested 30 | Leases Voice Control **rename + user limit** (sinks round 3, stage 3). Shown on the Sinks page as "Voice room lease" (the `price_voice_style` field); this is the price the shop charges for a voice room — distinct from the dormant stage-6 `price_voice_room` (private rooms), which is not wired to anything and is not shown on the dashboard. Price 0 = paywall off (the shipped default AND the per-guild opt-out); pricing it on the Sinks page is the launch switch — announce first. Armed only while the economy is enabled. Entitlement is beneficiary-based (giftable); saved VM profiles stay stored but only re-apply while leased; lapse best-effort walks a live temp channel back to the template name + default limit (no role involved). Access dial / invite / kick / transfer / reset stay free. Verdict is pure (`voice_master/logic.style_lease_blocks`), enforced in `_apply_rename`/`_apply_limit` (one choke point for slash + panel) and the spawn profile loader |
 | PvP game wager | player-chosen, uncapped | **Sinks round 2, stage 4b** (built 2026-07-20). Optional `wager:` on all six duel/group games: equal ante, winner takes the pot minus the optional house rake — `wager_rake_pct`, default **0 (dark)**, capped 50, added 2026-07-20 revising the round's original no-rake stance (at 0 a wager is still the pure transfer that made the games matter; a priced rake evaporates its cut of every settled pot, read at settlement time like rental renewals, never snapshotted). Refunds are never raked, nor is a single-stake pot (a winner reclaiming their own ante isn't a contest); the payout announcement and register memo both name the cut (`meta.rake`) so the arithmetic visibly adds up. Escrow in `econ_game_wagers` (migration 094) keyed to (game_type, game_id, user_id); duels declare at challenge and debit both sides at accept (decline/timeout costs nothing), lobbies debit on join and refund on leave. Settlement/refund rides the stage-4a terminal seam, exactly-once via `settled_at`. Every non-settling terminal state (ABANDONED / VOID / EXPIRED_LOBBY / DECLINED) and a `winner_id` of None refunds; a guild-leaver's stake is refunded by the economy cog's member-remove listener. Ledger kinds `wager_stake` / `wager_payout` / `wager_refund`, payout and refund unboosted so a wager can never mint |
-| Raffle ticket | 10 each, ≤10/member/week | **Sinks round 3, stage 5.** Week-scoped tickets (`raffle_ticket` burn, no refunds); weighted draw at the ISO-week roll, exactly-once via the `econ_raffle_draws` PK (claim-before-side-effect). Prize is NEVER coins: a `free_week` voucher (28-day expiry) auto-covers the winner's next rental debit — renewal or first week of a new rent — as a 0-amount `rental` ledger row (`meta.voucher_id`). Winner DMed (opt-in-role gated) and **named** on the leaderboard panel's raffle section (the deliberate anonymous-ticker carve-out — buying in is opting in). `raffle_enabled` default **off**; enabling is a comms decision, announce first. Shop: ticket row + quantity modal (ephemeral + persistent panel). Migration 093 |
+| Raffle ticket | 10 each, ≤10/member/week | **Sinks round 3, stage 5.** Week-scoped tickets (`raffle_ticket` burn, no refunds); weighted draw at the ISO-week roll, exactly-once via the `econ_raffle_draws` PK (claim-before-side-effect). Prize is NEVER coins: a `free_week` voucher (28-day expiry) auto-covers the winner's next rental debit — renewal or first week of a new rent — as a 0-amount `rental` ledger row (`meta.voucher_id`). Winner DMed (opt-in-role gated) and **named** on the economy panel's raffle section (the deliberate anonymous-ticker carve-out — buying in is opting in). `raffle_enabled` default **off**; enabling is a comms decision, announce first. Shop: ticket row + quantity modal (ephemeral + persistent panel). Migration 093 |
 | Hoard tax (demurrage) | **0% (dark)**, suggested 2%/wk over a 500 floor | **Built 2026-07-20 (migration 100).** The only sink that needs no buyer: at the ISO-week roll, every wallet above `demurrage_threshold` loses `demurrage_rate_pct`% of the **excess** only — the floor is protected, so nobody is taxed below it and 100% is a hard wealth cap, not a wipe. Floor-division grace: a tax that rounds to 0 goes uncollected. Exactly-once via the `econ_demurrage_sweeps` (guild, week) PK — claim-before-debit, the raffle-draw pattern — with per-sweep totals recorded for metrics. Ledger kind `demurrage` (meta: closed week + pre-tax balance) narrated by the register feed (🐉 "Hoard tax") — no separate announcement. Rate 0 default = off; both knobs on the Sinks page; enabling is a comms decision, announce first (`economy_demurrage_service.py`, swept from the week roll beside the raffle draw) |
 | Casino | fixed paytables, not priced | **Built 2026-07-22** — house gambling (coinflip, slots, blackjack, roulette) in one configured channel; net sink via tested house edges, bounded by a per-member daily wager cap. Kinds `casino_stake`/`casino_payout`/`casino_refund`, payouts never boosted. Own spec: [casino_spec.md](casino_spec.md) (dashboard: Economy → Casino) |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
@@ -1559,32 +1559,38 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
     file uploads, so image icons (256KB max) still arrive via slash command. The
     former `name`/`color`/`gradient` subcommands are removed in favour of the shop's
     modals.
-- **Channel guide panel (shipped):** posted from **Economy → Settings → Post to Discord on the dashboard (replaced the slash command 2026-07-28)** [admin] —
+- **How-it-works guide (shipped; a button since 2026-08-18):** raised by the
+  ❓ **How it Works** button on the economy panel (`HowItWorksButton`, static
+  custom_id `econ_guide_howto`) as an **ephemeral** reply. It was a posted
+  channel panel of its own until the merge below; the *builder* did not change
+  —
   single branded "how it works" embed (a **Notifications** field explaining the
   panel's own 🔔 toggle for the opt-in DM role — it replaced a **Joining** field
   that pointed at `<id:customize>` back when that role also gated the channels —
   then an **Earning** table — aligned what-pays-what rows in
   the leaderboard's fixed-width-cell style — and a **Spending** command table,
   with streak/booster/rental fine print collapsed into the footer — all
-  templated from `EconSettings`) into a channel. Panel ids
-  persist as `econ_guide_channel_id` / `econ_guide_message_id` (Voice Control
-  panel pattern): re-running in the same channel edits the panel in place (use after
-  re-pricing/re-branding); pointing at another channel deletes the old panel and
-  reposts. Builder in `economy/guide.py`; the two ids are bot-managed and not
-  dashboard-editable. **Sticky:** an `on_message` listener keeps the panel as the
-  last message in its channel — a **member** message there (bot messages are ignored:
-  re-sticking under our own repost self-loops) arms a debounced delete-and-repost (`_GUIDE_STICKY_DELAY`s of
-  quiet), so a busy channel re-sticks once activity pauses. The panel skips its own
-  repost by id (`should_restick_guide`), and the repost shares `_place_guide_panel`
-  with the command under a per-guild lock. All three channel panels (guide, shop,
-  leaderboard) stick to the bottom this way, each with its own ref cache, debounce
-  task, and lock.
+  templated from `EconSettings`), read fresh on every click so it can never
+  quote last week's payouts. Builder in `economy/guide.py`, shared with nothing
+  else — one definition, one surface. Ephemeral rather than a second permanent
+  message because the copy is identical for every member and changes only when
+  an admin retunes a dial.
+
+  Its ids outlived it: `econ_guide_channel_id` / `econ_guide_message_id` are
+  now **the economy panel's** ids (see the panel below), because the message
+  they name is the one the merge kept. Both remain bot-managed and not
+  dashboard-editable.
+
+  The 🔔 **Notifications** toggle moved with it, onto the panel's button row,
+  keeping its custom_id `econ_guide_notify` so clicks on messages posted before
+  the merge still route.
 - **Shop panel (shipped):** posted from **Economy → Settings → Post to Discord on the dashboard (replaced the slash command 2026-07-28)** [admin] —
   perk-shop listing as a persistent panel: the same embed `/bank shop` shows
   minus the per-member bits (no ✅ rented marks — the panel is member-agnostic;
   prices templated from `EconSettings`, feature-gated rows annotated) with a
   **single 🛍️ Open Shop button** (`ShopPanelView`, static custom_id
-  `econ_shop_open`, re-registered in `cog_load` — the GuideView pattern).
+  `econ_shop_open`, re-registered in `cog_load` — the static-custom_id view
+  pattern the economy panel's own buttons use).
   Clicking it serves the clicker's exact `/bank shop` ephemeral menu
   (`open_personal_shop`, shared with the slash command), so the panel and
   the personal menu are one code path — rent, customise, and Cancel & Refund
@@ -1595,7 +1601,7 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   the personal menu — a repost replaces them. Panel ids persist as
   `econ_shop_channel_id` / `econ_shop_message_id` (guide-panel pattern:
   same-channel repost edits in place — embed **and** view — another channel
-  deletes + reposts). **Bottom-sticky:** like the guide panel, a member message
+  deletes + reposts). **Bottom-sticky:** like the economy panel, a member message
   in the panel's channel arms a debounced repost (`_restick_shop_panel` →
   `_place_shop_panel`, delete + repost fresh at the bottom, 6 s debounce,
   per-guild lock), so the one panel members are meant to tap never scrolls away.
@@ -1604,9 +1610,14 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   can't serve a staler panel than a fresh post from Economy → Settings would.
   Gifting stays command-only (`/bank gift` needs a
   target member, which a button can't carry).
-- **Leaderboard panel (shipped, live):** posted from Economy → Settings → Post to Discord (**`/bank post-leaderboard
-  [channel]`** [mod] posts a single live status embed — the economy's
-  centerpiece surface. Content, top to bottom: **today's pulse** (guild-local
+- **The economy panel (shipped, live):** posted from Economy → Settings → Post
+  to Discord (one poster, `economy-panel`, since the guide and leaderboard
+  panels merged on 2026-08-18; `/bank post-leaderboard` had already gone on
+  2026-07-28). A single live status embed titled *"{plural} — The Bank"* — the
+  economy's centerpiece and, since the merge, its only permanent surface. The
+  description points at the ❓ button, because the panel's home is the
+  how-it-works channel and the reader arriving may be a newcomer rather than
+  someone checking standings. Content, top to bottom: **today's pulse** (guild-local
   coins paid / quests completed / distinct earners, plus dailies-reset and
   new-weeklies clocks as Discord relative timestamps, which tick client-side
   between edits); top 5 earners over a rolling 7 days (income = positive
@@ -1636,12 +1647,17 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   summary follows, and because one field now carries both bodies, blocks pack
   into "… (cont.)" fields past Discord's 1024-char value cap (`_pack_board`,
   the `quest_digest._pack` pattern) instead of 400ing the embed.
-  The panel carries two persistent buttons in a static-id `QuestBoardView`
-  (re-registered at cog load, re-attached on every repaint): **Show my quests**
+  The panel carries four persistent buttons in a static-id `QuestBoardView`
+  (re-registered at cog load, re-attached on every repaint) — the whole
+  member-facing economy surface, which is what let the guide panel go:
+  **Show my quests**
   (`econ:show_my_quests`) opening the same ephemeral panel as `/bank quests` —
   the members' door from the anonymous board into their own personal draw —
   and **Wallet** (`econ:show_my_wallet`) opening the same view as `/bank
-  wallet` via the shared `send_wallet_panel`. The buttons replaced a trailing
+  wallet` via the shared `send_wallet_panel`; **❓ How it Works**
+  (`econ_guide_howto`) and **🔔 Notifications** (`econ_guide_notify`), both
+  imported from `economy/guide.py` rather than reimplemented. The first two
+  replaced a trailing
   field that spelled out both commands in prose (2026-07-27): the affordance
   belongs under the embed, not in its field budget. With that field gone,
   whichever section lands last sheds its own trailing zero-width spacer, which
@@ -1653,16 +1669,30 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   cadence | description | payment, feed title | count | when) while
   emoji, bold, and live `<t:…:R>` timestamps stay outside the backticks,
   where Discord still renders them (code blocks would freeze both). Panel ids persist as
-  `econ_leaderboard_channel_id` / `econ_leaderboard_message_id` (guide-panel
-  pattern: same-channel repost edits in place, another channel deletes +
-  reposts). **Refresh is event-driven:** every economy credit
+  `econ_guide_channel_id` / `econ_guide_message_id` — the guide's pair, kept
+  because the merged panel *is* the guide's old message (same-channel repost
+  edits in place, another channel deletes + reposts).
+  `econ_leaderboard_channel_id` / `econ_leaderboard_message_id` are **retired**:
+  zeroed on the first boot after the merge by `EconomyCog._merge_panels_once`,
+  and read by nothing.
+
+  **The changeover (2026-08-18).** Merging in code leaves two messages in
+  Discord, and only the running bot can remove one — so a startup one-shot
+  does it, per guild, deciding with the pure `plan_panel_merge`
+  (`economy/logic.py`): both posted ⇒ delete the board message and clear its
+  ids, the guide's message staying put and repainting as the panel; guide only
+  ⇒ nothing to do; board only (not a prod shape) ⇒ adopt its ids rather than
+  orphan a live panel. Self-clearing, so every later boot plans nothing; not
+  gated on `econ_enabled`, or a guild that switched its economy off would keep
+  the stale board forever; and the ids clear even when the delete fails, so it
+  cannot retry forever. **Refresh is event-driven:** every economy credit
   (`apply_credit`), community-counter bump, and dashboard progress edit
   marks the guild dirty in `economy/live_signal.py` (process-local,
   import-free), and `leaderboard_live_loop` (20 s poll) repaints a dirty
   panel at most once per 120 s — so the panel moves within ~2 minutes of
   the action while a busy hour stays ≤30 edits. The hourly economy-loop
   pass (`run_guild_leaderboard`) remains the backstop for restarts and
-  quiet drift. **Bottom-sticky:** like the guide panel, a member message in
+  quiet drift. **Bottom-sticky:** a member message in
   the panel's channel arms a debounced repost (`_restick_leaderboard_panel` →
   `_place_leaderboard_panel`, delete + repost fresh at the bottom, 6 s
   debounce, per-guild lock), so the stats panel stays the channel's last
@@ -1754,7 +1784,7 @@ every active daily/weekly/monthly quest (+ counted-quest in-flight counts),
 event-quest totals (7d / ever), quests-done-today / this-week tickers, and
 day/week reset countdowns. Aggregates only, never member names (2026-07-18
 decision). The leaderboard embed mirrors this live view in-channel — see
-the leaderboard panel bullet in §7 for its content and its event-driven
+the economy panel bullet in §7 for its content and its event-driven
 refresh (a tier-crossing bump repaints the panel within ~2 minutes, not on
 the next hourly tick).
 
@@ -1966,7 +1996,7 @@ guild's next drop, and open pouches survive because their Claim button is
 a stateless `DynamicItem`.
 
 A second, lightweight startup task — `leaderboard_live_loop` — gives the
-leaderboard panel its near-real-time cadence: a 20 s poll over the
+economy panel its near-real-time cadence: a 20 s poll over the
 process-local dirty-guild set (`economy/live_signal.py`, marked by
 `apply_credit` / community bumps / dashboard progress edits), repainting each
 dirty panel at most once per 120 s. Deliberately in-memory: a mark lost to a

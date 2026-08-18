@@ -12,6 +12,10 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.guide import (
+    HOW_IT_WORKS_CUSTOM_ID,
+    NOTIFY_CUSTOM_ID,
+)
 from bot_modules.economy.quest_views import (
     _quest_line_reward,
     _quest_line_status,
@@ -264,12 +268,18 @@ def test_quest_board_view_is_persistent_and_stable():
     """A fixed custom_id + no timeout is what lets clicks route after a restart."""
     view = QuestBoardView()
     assert view.timeout is None
-    # Both buttons, in panel order — Wallet replaced the embed's trailing
-    # "/bank quests … /bank wallet …" explainer field.
+    # All four buttons, in panel order. Wallet replaced the embed's trailing
+    # "/bank quests … /bank wallet …" explainer field; the two on the right
+    # arrived from the guide panel when it merged into this one (2026-08-18).
     assert [getattr(c, "custom_id", None) for c in view.children] == [
         QUEST_BOARD_CUSTOM_ID,
         WALLET_CUSTOM_ID,
+        HOW_IT_WORKS_CUSTOM_ID,
+        NOTIFY_CUSTOM_ID,
     ]
+    # Asserted by value: messages posted before the merge carry this id, and
+    # changing it would silently kill the 🔔 toggle on every one of them.
+    assert NOTIFY_CUSTOM_ID == "econ_guide_notify"
 
 
 @pytest.mark.asyncio

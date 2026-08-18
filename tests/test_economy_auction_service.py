@@ -537,8 +537,13 @@ def test_attach_card_to_latest_is_a_no_op_without_an_auction(db):
 
 
 def test_sticky_panel_channels_lists_configured_panels(db):
-    """The three panels that only re-stick under human messages, so an auction
-    sharing their channel is warned about rather than refused."""
+    """The two panels that only re-stick under human messages, so an auction
+    sharing their channel is warned about rather than refused.
+
+    A retired ``leaderboard_channel_id`` must not resurface as a resident: the
+    panel it named merged into the economy panel on 2026-08-18, so warning
+    about it would name a channel that no longer holds anything.
+    """
     with open_db(db) as conn:
         save_econ_settings(conn, GUILD, {
             "guide_channel_id": 11,
@@ -547,8 +552,7 @@ def test_sticky_panel_channels_lists_configured_panels(db):
         })
         found = sticky_panel_channels(conn, GUILD)
     assert {cid: r.name for cid, r in found.items()} == {
-        11: "the economy guide panel",
-        22: "the leaderboard panel",
+        11: "the economy panel",
         33: "the shop panel",
     }
     assert not any(r.restick_on_bot for r in found.values())

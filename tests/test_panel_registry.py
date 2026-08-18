@@ -64,10 +64,10 @@ def test_panel_keys_are_unique():
 
 
 def test_lookup_returns_the_matching_spec():
-    spec = get_panel_spec("economy-guide")
+    spec = get_panel_spec("economy-panel")
     assert spec is not None
     assert spec.cog == "EconomyCog"
-    assert spec.method == "post_guide_panel"
+    assert spec.method == "post_economy_panel"
 
 
 def test_lookup_returns_none_for_an_unknown_key():
@@ -87,8 +87,9 @@ def test_registry_covers_the_commands_it_replaced():
     """Guards against a panel quietly losing its dashboard route — the command
     that used to post it is gone, so the route is the only way left."""
     assert {spec.key for spec in PANEL_SPECS} == {
-        "economy-guide",      # /bank post-guide
-        "economy-leaderboard",  # /bank post-leaderboard
+        # One key for the two merged panels (/bank post-guide and
+        # /bank post-leaderboard, both long gone) since 2026-08-18.
+        "economy-panel",
         "economy-shop",       # /bank post-shop
         "economy-bounty",     # /bounty
         "voice-control",      # /voice-admin post-panel
@@ -112,7 +113,7 @@ def _second_argument(text: str, start: int) -> str | None:
     """The second argument of a call, given the index just past its ``(``.
 
     Deliberately a small scanner rather than a regex. Every call site's first
-    argument is itself a call — ``slot("economy-guide")``,
+    argument is itself a call — ``slot("economy-panel")``,
     ``container.querySelector('[data-poster="grant-audit"]')`` — and a regex
     cheap enough to write inline stops at the first quote it meets, which is
     *inside* that first argument. It then reads the slot selector while
@@ -203,7 +204,7 @@ def test_the_call_site_scanner_reads_the_key_not_the_slot():
     """The scanner is the whole basis of the two checks below, and its first
     version read the first argument while looking like it read the second — so
     a mismatched key passed. This is that bug, frozen."""
-    mismatched = 'mountPanelPoster(slot("economy-guide"), "economy-shop");'
+    mismatched = 'mountPanelPoster(slot("economy-panel"), "economy-shop");'
     assert _second_argument(mismatched, mismatched.index("(") + 1) == "economy-shop"
 
     selector_form = (
@@ -273,13 +274,13 @@ async def test_economy_panels_refuse_while_the_economy_is_disabled(monkeypatch):
     cog._require_economy_enabled = AsyncMock(  # type: ignore[method-assign]
         side_effect=ValueError("The economy is disabled for this server — …")
     )
-    for panel in ("guide_panel", "leaderboard_panel", "shop_panel"):
+    for panel in ("economy_panel", "shop_panel"):
         setattr(cog, panel, MagicMock(place_or_refresh=AsyncMock()))
 
     guild = MagicMock(id=1)
-    for method in ("post_guide_panel", "post_leaderboard_panel", "post_shop_panel"):
+    for method in ("post_economy_panel", "post_shop_panel"):
         with pytest.raises(ValueError, match="disabled"):
             await getattr(cog, method)(guild, MagicMock())
 
-    for panel in ("guide_panel", "leaderboard_panel", "shop_panel"):
+    for panel in ("economy_panel", "shop_panel"):
         getattr(cog, panel).place_or_refresh.assert_not_awaited()

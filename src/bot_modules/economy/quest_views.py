@@ -35,6 +35,7 @@ import discord
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.logic import is_economy_manager, local_day_for
+from bot_modules.economy.guide import GuideNotifyButton, HowItWorksButton
 from bot_modules.economy.leaderboard import bar_fill, progress_bar
 from bot_modules.economy.view_helpers import unit as _unit
 from bot_modules.economy.quests import quest_period
@@ -1144,9 +1145,24 @@ class WalletButton(discord.ui.Button):
 
 
 class QuestBoardView(discord.ui.View):
-    """The persistent view attached to the leaderboard/quest-board panel."""
+    """The persistent view attached to the one economy panel.
+
+    Four buttons, and between them the whole member-facing economy surface that
+    used to be spread over two posted panels: your quests, your wallet, how any
+    of it works, and whether it DMs you. The two on the right came from the
+    guide panel when it was folded into this one on 2026-08-18 — imported from
+    ``economy.guide`` rather than reimplemented, so the guide's copy and the
+    notify toggle each still have exactly one definition.
+
+    Every custom_id is static (no per-message state), so ``bot.add_view`` on a
+    bare instance at cog load is enough to keep clicks routing after a restart
+    — including clicks on messages posted before the merge, since
+    ``NOTIFY_CUSTOM_ID`` was deliberately left unchanged.
+    """
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
         self.add_item(ShowMyQuestsButton())
         self.add_item(WalletButton())
+        self.add_item(HowItWorksButton())
+        self.add_item(GuideNotifyButton())

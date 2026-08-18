@@ -845,11 +845,13 @@ async def _echo_quest_flip(
     exception is a feature to design, not a flag to leave lying around (see
     ``event_echo_logic``'s module docstring).
 
-    Requires a **posted leaderboard panel**: that is what the echo links at,
-    and it is the only surface that renders the week's quests. "New quests are
-    up" pointing nowhere is the empty alarm ``raffle_last_call`` refuses to
-    send for the same reason. Guilds with a bank channel but no panel, which
-    used to get the fallback post, now get nothing.
+    Requires a **posted economy panel**: that is what the echo links at, and
+    it is the only surface that renders the week's quests. "New quests are up"
+    pointing nowhere is the empty alarm ``raffle_last_call`` refuses to send
+    for the same reason. Guilds with a bank channel but no panel, which used to
+    get the fallback post, now get nothing. The ids are the guide pair because
+    the merged panel kept them (see ``economy.logic.plan_panel_merge``), not
+    because the guide is what gets linked.
     """
 
     def _load():
@@ -865,7 +867,7 @@ async def _echo_quest_flip(
     guild = bot.get_guild(guild_id)
     if guild is None:
         return
-    if not settings.leaderboard_channel_id or not settings.leaderboard_message_id:
+    if not settings.guide_channel_id or not settings.guide_message_id:
         return
     spot_label = quests.TRIGGER_KINDS.get(spot, spot) if spot else None
     await echo_svc.echo_quest_flip(
@@ -873,8 +875,8 @@ async def _echo_quest_flip(
         guild,
         week=week,
         detail=flip_echo_detail(pool, spot_label),
-        channel_id=settings.leaderboard_channel_id,
-        message_id=settings.leaderboard_message_id,
+        channel_id=settings.guide_channel_id,
+        message_id=settings.guide_message_id,
         now=now_ts,
     )
 
@@ -887,8 +889,8 @@ async def _echo_tier_crossings(
 ) -> None:
     """Echo each milestone a community goal crossed this tick.
 
-    Gated on the leaderboard panel for the same reason as the flip: the panel
-    is where the progress bar lives, so it is the only thing worth linking a
+    Gated on the economy panel for the same reason as the flip: the panel is
+    where the progress bar lives, so it is the only thing worth linking a
     reader at. One settings load for the whole batch — a goal crossing two
     tiers in one pass is rare but must not cost two reads.
     """
@@ -901,7 +903,7 @@ async def _echo_tier_crossings(
             return load_econ_settings(conn, gid)
 
     settings = await asyncio.to_thread(_load)
-    if not settings.leaderboard_channel_id or not settings.leaderboard_message_id:
+    if not settings.guide_channel_id or not settings.guide_message_id:
         return
     for cross in crossings:
         await echo_svc.echo_community_tier(
@@ -913,8 +915,8 @@ async def _echo_tier_crossings(
             detail=quests.tier_echo_line(
                 cross.tier, cross.current, cross.target, cross.contributors
             ),
-            channel_id=settings.leaderboard_channel_id,
-            message_id=settings.leaderboard_message_id,
+            channel_id=settings.guide_channel_id,
+            message_id=settings.guide_message_id,
         )
 
 
@@ -1491,7 +1493,7 @@ async def run_guild_leaderboard(
     same way.
     """
     del db_path, now_ts  # the panel's build callback sources both itself
-    panel = _leaderboard_panel(bot)
+    panel = _economy_panel(bot)
     if panel is None:  # cog unloaded, or a harness without it
         return
     # No local error handling: refresh() swallows HTTPException itself (queueing
@@ -1500,11 +1502,11 @@ async def run_guild_leaderboard(
     await panel.refresh(guild_id, repost_if_missing=False)
 
 
-def _leaderboard_panel(bot: discord.Client) -> StickyPanel | None:
-    """The economy cog's leaderboard panel, if the cog is loaded."""
+def _economy_panel(bot: discord.Client) -> StickyPanel | None:
+    """The economy cog's one channel panel, if the cog is loaded."""
     get_cog = getattr(bot, "get_cog", None)
     cog = get_cog("EconomyCog") if get_cog is not None else None
-    panel = getattr(cog, "leaderboard_panel", None)
+    panel = getattr(cog, "economy_panel", None)
     return panel if isinstance(panel, StickyPanel) else None
 
 

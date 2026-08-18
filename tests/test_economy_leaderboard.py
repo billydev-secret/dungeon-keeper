@@ -453,19 +453,24 @@ def test_embed_empty_states_and_drops_the_command_explainer():
 # ── settings round-trip ─────────────────────────────────────────────────────
 
 
-def test_leaderboard_ids_round_trip(db):
+def test_panel_ids_round_trip(db):
+    """The merged panel stores its ids in the *guide* pair (2026-08-18).
+
+    Named for the guide because that is the message the merge kept, not
+    because the guide is what the panel renders — see plan_panel_merge.
+    """
     with open_db(db) as conn:
         save_econ_settings(
             conn,
             GUILD_ID,
-            {"leaderboard_channel_id": 123, "leaderboard_message_id": 456},
+            {"guide_channel_id": 123, "guide_message_id": 456},
         )
         settings = load_econ_settings(conn, GUILD_ID)
-    assert settings.leaderboard_channel_id == 123
-    assert settings.leaderboard_message_id == 456
+    assert settings.guide_channel_id == 123
+    assert settings.guide_message_id == 456
 
 
-# ── /bank post-leaderboard ──────────────────────────────────────────────────
+# ── posting the panel ───────────────────────────────────────────────────────
 
 
 @pytest.fixture
@@ -516,7 +521,7 @@ def _admin() -> MagicMock:
 def _stored(db) -> tuple[int, int]:
     with open_db(db) as conn:
         s = load_econ_settings(conn, GUILD_ID)
-    return s.leaderboard_channel_id, s.leaderboard_message_id
+    return s.guide_channel_id, s.guide_message_id
 
 
 @pytest.mark.asyncio
@@ -535,7 +540,7 @@ async def test_post_leaderboard_posts_and_saves_ids(ctx, db):
     interaction.user = _admin()
     interaction.channel = channel
 
-    await cog.post_leaderboard_panel(interaction.guild, channel)
+    await cog.post_economy_panel(interaction.guild, channel)
 
     embed = channel.send.await_args.kwargs["embed"]
     top = next(f.value for f in embed.fields if "Top earners" in (f.name or ""))
@@ -544,31 +549,10 @@ async def test_post_leaderboard_posts_and_saves_ids(ctx, db):
     assert _stored(db) == (CHANNEL_ID, 8888)
 
 
-@pytest.mark.asyncio
-async def test_post_leaderboard_refreshes_in_place(ctx, db):
-    with open_db(db) as conn:
-        save_econ_settings(
-            conn,
-            GUILD_ID,
-            {
-                "enabled": True,
-                "leaderboard_channel_id": CHANNEL_ID,
-                "leaderboard_message_id": 4444,
-            },
-        )
-    cog = _make_cog(ctx)
-    channel = _channel(CHANNEL_ID)
-    old = MagicMock(edit=AsyncMock(), delete=AsyncMock(), id=4444)
-    channel.get_partial_message = MagicMock(return_value=old)
-    interaction = fake_interaction(guild=FakeGuild(id=GUILD_ID))
-    interaction.user = _admin()
-    interaction.channel = channel
-
-    await cog.post_leaderboard_panel(interaction.guild, channel)
-
-    old.edit.assert_awaited_once()
-    channel.send.assert_not_awaited()
-    assert _stored(db) == (CHANNEL_ID, 4444)
+# Edit-in-place, moving channel, a 403, and the disabled gate are the same one
+# method for the same one panel since the merge; they live with the ids they
+# read, in tests/test_economy_guide.py. What stays here is what is specific to
+# this half: the content the panel renders, and the loops that refresh it.
 
 
 # ── hourly loop refresh ─────────────────────────────────────────────────────
@@ -598,8 +582,8 @@ def _seed_panel(db, *, message_id: int = 4444) -> None:
             GUILD_ID,
             {
                 "enabled": True,
-                "leaderboard_channel_id": CHANNEL_ID,
-                "leaderboard_message_id": message_id,
+                "guide_channel_id": CHANNEL_ID,
+                "guide_message_id": message_id,
             },
         )
 
@@ -658,8 +642,8 @@ async def test_loop_refresh_clears_ids_when_panel_deleted(db, ctx):
 
     with open_db(db) as conn:
         settings = load_econ_settings(conn, GUILD_ID)
-    assert settings.leaderboard_channel_id == 0
-    assert settings.leaderboard_message_id == 0
+    assert settings.guide_channel_id == 0
+    assert settings.guide_message_id == 0
     channel.send.assert_not_awaited()  # retired, not resurrected
 
 
@@ -677,9 +661,9 @@ async def test_loop_refresh_keeps_ids_on_transient_error(db, ctx):
 
     with open_db(db) as conn:
         settings = load_econ_settings(conn, GUILD_ID)
-    assert settings.leaderboard_message_id == 4444  # untouched, retried next tick
+    assert settings.guide_message_id == 4444  # untouched, retried next tick
     # And the guild is queued, so a caller with a loop can re-apply the edit.
-    assert cog.leaderboard_panel.take_retries() == {GUILD_ID}
+    assert cog.economy_panel.take_retries() == {GUILD_ID}
 
 
 def test_embed_auto_goal_tier_marker():

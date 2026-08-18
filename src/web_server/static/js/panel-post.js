@@ -45,7 +45,7 @@ function isAdmin() {
  * Draw the post control for one registry panel into `slotEl`.
  *
  * @param {Element} slotEl   Where to render. Emptied first.
- * @param {string}  key      Registry key, e.g. "economy-guide".
+ * @param {string}  key      Registry key, e.g. "economy-panel".
  * @param {object}  opts
  * @param {string}  [opts.heading]     Section label. Defaults to the spec's label.
  * @param {string}  [opts.buttonLabel] Button text. Defaults to "Post".

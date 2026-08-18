@@ -1,4 +1,13 @@
-"""Economy guide panel — embed builder + /bank post-guide command."""
+"""Economy guide — the embed builder, the ❓ button, and the 🔔 toggle.
+
+Also the economy panel's **id wiring**, which lives here rather than with the
+board it renders because the ids are the guide's: when the two panels merged on
+2026-08-18 the surviving message was the guide's, so ``guide_channel_id`` /
+``guide_message_id`` are what the one panel reads and writes. The placement
+paths (edit in place, move, a refused post, the disabled gate) come along with
+them; the panel's *content* and refresh loops are in
+tests/test_economy_leaderboard.py.
+"""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -9,13 +18,14 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.economy.guide import (
+    HOW_IT_WORKS_CUSTOM_ID,
     NOTIFY_CUSTOM_ID,
     NOTIFY_FAILED_MSG,
     NOTIFY_OFF_MSG,
     NOTIFY_ON_MSG,
     NOTIFY_UNCONFIGURED_MSG,
     GuideNotifyButton,
-    GuideView,
+    HowItWorksButton,
     build_guide_embed,
 )
 from bot_modules.economy.logic import resolve_notify_toggle
@@ -214,14 +224,15 @@ def _interaction(actor, channel, guild=None):
 
 
 async def _post_guide(cog, interaction, channel=None):
-    """Post the guide panel.
+    """Post the economy panel.
 
-    /bank post-guide was replaced by a dashboard post control on 2026-07-28, so
-    this drives the cog method the route calls. ``interaction`` is kept in the
+    /bank post-guide was replaced by a dashboard post control on 2026-07-28,
+    and the panel it placed absorbed the leaderboard on 2026-08-18, so this
+    drives the one cog method the route calls. ``interaction`` is kept in the
     signature to leave the call sites alone — only its guild is used now, since
     permission is the route's job.
     """
-    return await cog.post_guide_panel(
+    return await cog.post_economy_panel(
         interaction.guild, channel or interaction.channel
     )
 
@@ -248,20 +259,20 @@ async def test_panel_ids_are_zero_when_the_economy_is_disabled(ctx, db):
     with open_db(db) as conn:
         save_econ_settings(conn, GUILD_ID, {"enabled": "0"})
     cog = _make_cog(ctx)
-    assert cog._panel_ids(GUILD_ID, "guide") == (0, 0)
+    assert cog._panel_ids(GUILD_ID, "panel") == (0, 0)
 
 
 @pytest.mark.asyncio
 async def test_panel_ids_read_the_guide_fields(ctx, db):
     _enable(db, guide_channel_id=CHANNEL_ID, guide_message_id=4444)
     cog = _make_cog(ctx)
-    assert cog._panel_ids(GUILD_ID, "guide") == (CHANNEL_ID, 4444)
+    assert cog._panel_ids(GUILD_ID, "panel") == (CHANNEL_ID, 4444)
 
 
 def test_save_panel_ids_writes_only_the_guide_fields(ctx, db):
     _enable(db, shop_channel_id=777, shop_message_id=888)
     cog = _make_cog(ctx)
-    cog._save_panel_ids(GUILD_ID, "guide", CHANNEL_ID, 4444)
+    cog._save_panel_ids(GUILD_ID, "panel", CHANNEL_ID, 4444)
     with open_db(db) as conn:
         s = load_econ_settings(conn, GUILD_ID)
     assert (s.guide_channel_id, s.guide_message_id) == (CHANNEL_ID, 4444)
@@ -282,7 +293,7 @@ async def test_post_guide_disabled_gate(ctx, db):
 
 
 # "Plain member refused" and "rejects a non-text channel" moved with the
-# command: post_guide_panel is unguarded by design, and its only caller is
+# command: post_economy_panel is unguarded by design, and its only caller is
 # POST /api/panels/{key}/post, which is admin-gated and does the channel-type
 # check (tests/web/test_panels_routes.py, plus the authz sweep).
 
@@ -522,14 +533,14 @@ async def test_notify_button_rejects_a_dm_click(db):
     assert "only works in a server" in inter.response.send_message.await_args.args[0]
 
 
-def test_guide_view_carries_the_persistent_toggle():
-    view = GuideView()
-    assert view.timeout is None  # persistent across restarts
-    assert [item.custom_id for item in view.children] == [NOTIFY_CUSTOM_ID]
+# The button row's own contract (order, ids, no timeout) lives with the view
+# in tests/test_economy_quest_views.py. What is asserted here is the wiring —
+# that the panel the cog sends carries the guide's two buttons at all.
 
 
 @pytest.mark.asyncio
-async def test_post_guide_attaches_the_notify_button(ctx, db):
+async def test_posting_the_panel_attaches_the_guide_buttons(ctx, db):
+    """The wiring assertion: the panel the cog actually sends carries them."""
     _enable(db, game_role_id=NOTIFY_ROLE_ID)
     cog = _make_cog(ctx)
     channel = _channel(CHANNEL_ID)
@@ -538,4 +549,40 @@ async def test_post_guide_attaches_the_notify_button(ctx, db):
     await _post_guide(cog, interaction)
 
     view = channel.send.await_args.kwargs["view"]
-    assert [item.custom_id for item in view.children] == [NOTIFY_CUSTOM_ID]
+    ids = [item.custom_id for item in view.children]
+    assert HOW_IT_WORKS_CUSTOM_ID in ids
+    assert NOTIFY_CUSTOM_ID in ids
+
+
+@pytest.mark.asyncio
+async def test_how_it_works_serves_the_guide_ephemerally(ctx, db):
+    """The ❓ button is the only route to the guide now, so it renders the same
+    builder the panel used to be — privately, and off live settings."""
+    _enable(db, currency_plural="Gems", currency_emoji="💎")
+    guild = FakeGuild(id=GUILD_ID)
+    inter = fake_interaction(guild=guild)
+    inter.client = SimpleNamespace(ctx=ctx)
+    inter.response.send_message = AsyncMock()
+
+    with patch(
+        "bot_modules.economy.guide.resolve_accent_color",
+        AsyncMock(return_value=discord.Color(0x123456)),
+    ):
+        await HowItWorksButton().callback(inter)
+
+    kwargs = inter.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+    embed = kwargs["embed"]
+    assert "Gems" in embed.title and "How It Works" in embed.title
+    assert embed.color == discord.Color(0x123456)
+
+
+@pytest.mark.asyncio
+async def test_how_it_works_outside_a_guild_says_so(ctx, db):
+    inter = fake_interaction()
+    inter.guild = None  # fake_interaction substitutes a guild for None
+    inter.client = SimpleNamespace(ctx=ctx)
+
+    await HowItWorksButton().callback(inter)
+
+    assert "only works in a server" in inter.response.send_message.await_args.args[0]

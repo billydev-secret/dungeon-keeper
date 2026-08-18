@@ -23,16 +23,12 @@ from discord.ext import commands, tasks
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, parse_bool
 from bot_modules.core.sticky import PanelContent, StickyPanel
-from bot_modules.economy.guide import (
-    GuideView,
-    build_guide_embed,
-)
 from bot_modules.economy.leaderboard import (
     build_leaderboard_embed,
     collect_leaderboard_data,
 )
 from bot_modules.economy import quests as quest_rules
-from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.logic import local_day_for, plan_panel_merge
 from bot_modules.economy.view_helpers import (
     unit as _unit,
 )
@@ -1218,7 +1214,7 @@ class ShopPanelView(discord.ui.View):
     """The channel shop panel's single persistent Open Shop button.
 
     Carries no per-message state, so it's a static-custom_id view (the
-    GuideView pattern) re-registered in ``cog_load`` rather than a
+    economy panel's own buttons) re-registered in ``cog_load`` rather than a
     DynamicItem. The button serves the clicker's exact `/bank shop` menu as
     an ephemeral reply — one shop menu, so the panel can't drift from it.
     """
@@ -1335,19 +1331,18 @@ class EconomyCog(commands.Cog):
         # Four channel-bottom panels, all on the shared machinery in
         # core.sticky (locks, debounce, id cache, post-before-delete). This cog
         # only says where each panel's ids live and what it should look like.
-        self.guide_panel = StickyPanel(
-            "econ guide", bot,
-            load_ids=lambda gid: self._panel_ids(gid, "guide"),
-            save_ids=lambda gid, cid, mid: self._save_panel_ids(gid, "guide", cid, mid),
-            build=self._build_guide_panel,
-        )
-        self.leaderboard_panel = StickyPanel(
-            "econ leaderboard", bot,
-            load_ids=lambda gid: self._panel_ids(gid, "leaderboard"),
+        #
+        # There were five until 2026-08-18, when the static how-it-works guide
+        # was folded into the live board: one panel, one message, with the
+        # guide behind an ❓ button on it. It kept the *guide's* ids (see
+        # _PANEL_FIELDS) and the *board's* content and refresh loops.
+        self.economy_panel = StickyPanel(
+            "econ panel", bot,
+            load_ids=lambda gid: self._panel_ids(gid, "panel"),
             save_ids=lambda gid, cid, mid: self._save_panel_ids(
-                gid, "leaderboard", cid, mid
+                gid, "panel", cid, mid
             ),
-            build=self._build_leaderboard_panel,
+            build=self._build_economy_panel,
         )
         self.shop_panel = StickyPanel(
             "econ shop", bot,
@@ -1417,13 +1412,7 @@ class EconomyCog(commands.Cog):
 
     async def cog_unload(self) -> None:
         self._auction_settle_loop.cancel()
-        for panel in (
-            self.guide_panel,
-            self.leaderboard_panel,
-            self.shop_panel,
-            self.auction_panel,
-            self.bounty_panel,
-        ):
+        for panel in self._panels:
             panel.cancel_all()
 
     @tasks.loop(seconds=30)
@@ -4038,23 +4027,24 @@ class EconomyCog(commands.Cog):
                 "Economy → Settings before posting its panels."
             )
 
-    async def post_guide_panel(self, guild, channel):
-        """Place the how-to panel. Entry point for the dashboard's panel poster
-        (``panel_registry``); replaced /bank post-guide on 2026-07-28.
+    async def post_economy_panel(self, guild, channel):
+        """Place the economy panel. Entry point for the dashboard's panel poster
+        (``panel_registry``); replaced /bank post-guide on 2026-07-28, and
+        absorbed /bank post-leaderboard's successor on 2026-08-18.
 
         Edits in place when the panel is already this channel's, so a re-brand
         refresh doesn't hop it to the bottom. Returns None only when Discord
         refused the post.
 
         The disabled-economy check lives here rather than in the route because
-        it is a domain rule, not an access rule: posting a currency guide for a
+        it is a domain rule, not an access rule: posting a currency panel for a
         currency that doesn't exist would be wrong however you got here. It
         *raises* rather than returning None so the admin is told to turn the
         economy on — a bare None reads as "Discord rejected it" and sends them
         to check bot permissions instead.
         """
         await self._require_economy_enabled(guild.id)
-        return await self.guide_panel.place_or_refresh(guild, channel)
+        return await self.economy_panel.place_or_refresh(guild, channel)
 
     # ── channel-bottom panels ────────────────────────────────────────────
     #
@@ -4062,12 +4052,19 @@ class EconomyCog(commands.Cog):
     # ids live, and what it should look like. A panel is treated as unposted
     # while the economy is disabled, so a disabled guild never re-sticks.
     #
-    # _PANEL_FIELDS covers the three permanent panels; the auction card keeps
+    # _PANEL_FIELDS covers the two permanent panels; the auction card keeps
     # its ids elsewhere and supplies its own callbacks (see below).
+    #
+    # The merged economy panel reads the *guide's* pair, which looks backwards
+    # for a panel rendering the leaderboard and isn't: the message those ids
+    # name is the one that survived the merge, in the channel the panel now
+    # calls home, so every guild was already pointing at the right message on
+    # changeover day and no id had to be copied. ``leaderboard_channel_id`` /
+    # ``leaderboard_message_id`` are retired — cleared by the one-shot in
+    # ``_merge_panels_once`` and read by nothing.
 
     _PANEL_FIELDS = {
-        "guide": ("guide_channel_id", "guide_message_id"),
-        "leaderboard": ("leaderboard_channel_id", "leaderboard_message_id"),
+        "panel": ("guide_channel_id", "guide_message_id"),
         "shop": ("shop_channel_id", "shop_message_id"),
     }
 
@@ -4230,20 +4227,14 @@ class EconomyCog(commands.Cog):
             return
         await self.bounty_panel.place_or_refresh(guild, channel)
 
-    async def _build_guide_panel(self, guild: discord.Guild) -> PanelContent:
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
-        return PanelContent(
-            embed=build_guide_embed(settings, color=accent), view=GuideView()
-        )
-
-    async def _build_leaderboard_panel(self, guild: discord.Guild) -> PanelContent:
+    async def _build_economy_panel(self, guild: discord.Guild) -> PanelContent:
         now_ts = time.time()
 
         def _collect():
             # Settings ride the connection the board data already needs; this
             # runs on every sticky repost, so a second connect+PRAGMA for one
             # settings row was the most-repeated waste in the cog.
+            #
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild.id)
                 data = collect_leaderboard_data(conn, guild.id, now_ts)
@@ -4295,7 +4286,7 @@ class EconomyCog(commands.Cog):
         def _read() -> tuple[
             EconSettings, tuple[int, int, int] | None, tuple[int, int, int] | None
         ]:
-            # One connection for all three, like _build_leaderboard_panel — this
+            # One connection for all three, like _build_economy_panel — this
             # runs on every debounced sticky repost.
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild.id)
@@ -4347,13 +4338,12 @@ class EconomyCog(commands.Cog):
 
     @commands.Cog.listener("on_message")
     async def _restick_panels(self, message: discord.Message) -> None:
-        """Keep all five panels at the bottom of their channels.
+        """Keep all four panels at the bottom of their channels.
 
-        One listener for five panels: each ignores activity outside its own
+        One listener for four panels: each ignores activity outside its own
         channel, so a message usually arms at most one repost. The auction
-        card is the exception — it can share a channel with the guide,
-        leaderboard or shop panel, in which case both re-stick and one ends up
-        second. ``/bank auction start`` warns the mod before that happens, and
+        card is the exception — it can share a channel with the economy or
+        shop panel, in which case both re-stick and one ends up second. ``/bank auction start`` warns the mod before that happens, and
         refuses outright for the two channels whose resident panel chases bot
         posts (the casino hub and the bounty board) because there the card
         would never surface at all — see ``_sticky_check`` in
@@ -4370,8 +4360,7 @@ class EconomyCog(commands.Cog):
     @property
     def _panels(self) -> tuple[StickyPanel, ...]:
         return (
-            self.guide_panel,
-            self.leaderboard_panel,
+            self.economy_panel,
             self.shop_panel,
             self.auction_panel,
             self.bounty_panel,
@@ -4390,17 +4379,10 @@ class EconomyCog(commands.Cog):
         for panel in self._panels:
             await panel.on_channel_delete(channel)
 
-    # ── auto-updating leaderboard panel ──────────────────────────────────
-
-    async def post_leaderboard_panel(self, guild, channel):
-        """Place the auto-updating leaderboard panel. See post_guide_panel."""
-        await self._require_economy_enabled(guild.id)
-        return await self.leaderboard_panel.place_or_refresh(guild, channel)
-
     # ── persistent shop panel ────────────────────────────────────────────
 
     async def post_shop_panel(self, guild, channel):
-        """Place the perk-shop panel. See post_guide_panel."""
+        """Place the perk-shop panel. See post_economy_panel."""
         await self._require_economy_enabled(guild.id)
         return await self.shop_panel.place_or_refresh(guild, channel)
 
@@ -4426,22 +4408,108 @@ class EconomyCog(commands.Cog):
             BountyHubChipButton,
             AuctionBidButton,
         )
-        # The guide panel's 🔔 toggle, the quest board's "Show my quests"
-        # button, and the shop panel's Open Shop button carry no per-message
-        # state, so they are plain static-custom_id views, not dynamic items.
-        self.bot.add_view(GuideView())
+        # The economy panel's four buttons and the shop panel's Open Shop
+        # button carry no per-message state, so they are plain static-custom_id
+        # views, not dynamic items. QuestBoardView is what re-registers the
+        # guide's two buttons since the merge — registering a second view for
+        # them would be two persistent views claiming one custom_id.
         self.bot.add_view(QuestBoardView())
         self.bot.add_view(ShopPanelView())
         await self._publish_panel_guilds()
         self._auction_settle_loop.start()
+        self.bot.startup_task_factories.append(self._merge_panels_once)
+
+    # ── the guide/leaderboard changeover (2026-08-18) ─────────────────────
+
+    async def _merge_panels_once(self) -> None:
+        """Retire the old leaderboard message, once, on the first boot after
+        the merge.
+
+        The two panels became one in code; in Discord there are still two
+        messages until something deletes one, and only the running bot can.
+        Hence a startup task rather than a migration: SQL can clear the ids but
+        would leave a live board sitting in a channel nobody updates again.
+
+        Self-clearing rather than flagged — the work is keyed on
+        ``leaderboard_message_id``, which this zeroes, so every later boot
+        plans nothing (``PanelMergePlan.is_noop``) and costs one settings read
+        per guild. Deliberately *not* gated on ``econ_enabled``: a guild that
+        switched its economy off still has the stale message, and skipping it
+        would strand the board there for as long as the economy stayed off.
+
+        Every failure is swallowed per-guild. A missing channel, a message
+        somebody already deleted by hand, or a permission the bot lost all mean
+        the same thing — the board is not there any more — and the ids clear
+        regardless so this cannot retry forever.
+
+        The repaint at the end is not part of the cleanup and runs for every
+        guild, including the ones with nothing to clean: on changeover day the
+        surviving message still *shows* the old guide embed, and without this it
+        would go on showing it until the hourly tick — a guild that only ever
+        had a guide panel has no cleanup to trigger a repaint at all. One edit
+        per configured guild per boot is the standing cost, and ``refresh``
+        no-ops where no panel is posted or the economy is off.
+        """
+        await self.bot.wait_until_ready()
+        for guild in list(self.bot.guilds):
+            try:
+                await self._merge_panels_for_guild(guild)
+                await self.economy_panel.refresh(guild.id, repost_if_missing=False)
+            except Exception:  # noqa: BLE001 — one guild must not stop the rest
+                log.exception(
+                    "econ panel merge: changeover failed for guild %s", guild.id
+                )
+
+    async def _merge_panels_for_guild(self, guild: discord.Guild) -> None:
+        """Apply ``plan_panel_merge`` to one guild. See _merge_panels_once."""
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        plan = plan_panel_merge(
+            panel_channel_id=settings.guide_channel_id,
+            panel_message_id=settings.guide_message_id,
+            board_channel_id=settings.leaderboard_channel_id,
+            board_message_id=settings.leaderboard_message_id,
+        )
+        if plan.is_noop:
+            return
+
+        if plan.delete is not None:
+            channel_id, message_id = plan.delete
+            channel = guild.get_channel(channel_id)
+            if isinstance(channel, discord.TextChannel):
+                try:
+                    await channel.get_partial_message(message_id).delete()
+                    log.info(
+                        "econ panel merge: removed the old leaderboard message "
+                        "%s in guild %s", message_id, guild.id,
+                    )
+                except discord.HTTPException:
+                    log.debug(
+                        "econ panel merge: old leaderboard message already gone",
+                        exc_info=True,
+                    )
+
+        updates: dict[str, object] = {}
+        if plan.adopt is not None:
+            # No guide panel to keep, so the board's message *becomes* the
+            # economy panel where it stands rather than being orphaned.
+            updates["guide_channel_id"], updates["guide_message_id"] = plan.adopt
+        if plan.clear:
+            updates["leaderboard_channel_id"] = 0
+            updates["leaderboard_message_id"] = 0
+        await asyncio.to_thread(self._save_settings, guild.id, updates)
+        # The panel's cached ids predate the write on the adopt path; drop them
+        # so the next restick reads what we just stored.
+        self.economy_panel.forget(guild.id)
+        await self._publish_panel_guilds()
 
     # ── the listener's fast path ──────────────────────────────────────────
 
     #: Which config key names the channel each permanent panel lives in. The
-    #: auction card is deliberately absent — see _publish_panel_guilds.
+    #: auction card is deliberately absent — see _publish_panel_guilds. The
+    #: economy panel's key still reads ``guide`` for the reason _PANEL_FIELDS
+    #: gives: it is the surviving message's own id, not a stale name.
     _PANEL_CHANNEL_KEYS = {
-        "guide": "econ_guide_channel_id",
-        "leaderboard": "econ_leaderboard_channel_id",
+        "panel": "econ_guide_channel_id",
         "shop": "econ_shop_channel_id",
         "bounty": "econ_bounty_channel_id",
     }
@@ -4449,7 +4517,7 @@ class EconomyCog(commands.Cog):
     def _panel_guilds(self) -> dict[str, set[int]]:
         """Guilds whose economy is on and which have each panel's channel set.
 
-        One query for all four rather than four ``load_econ_settings`` calls:
+        One query for all three rather than three ``load_econ_settings`` calls:
         this exists to keep work *off* the message path, so paying five
         settings loads to save five settings loads would be silly.
         """
@@ -4475,11 +4543,11 @@ class EconomyCog(commands.Cog):
         return out
 
     async def _publish_panel_guilds(self) -> None:
-        """Give the four permanent panels their known-guilds fast path.
+        """Give the three permanent panels their known-guilds fast path.
 
         Without this ``_known`` stays None and every message in every guild
-        costs a cached id lookup per panel — five sequential ones, since
-        ``_restick_panels`` forwards to each in turn — plus five separate
+        costs a cached id lookup per panel — four sequential ones, since
+        ``_restick_panels`` forwards to each in turn — plus four separate
         ``load_econ_settings`` reads whenever the TTL lapses. Every other
         migrated cog published this from the start; this one never did (found
         2026-08-06).
@@ -4492,14 +4560,17 @@ class EconomyCog(commands.Cog):
         gate, and ``forget`` is what keeps it honest.
         """
         by_kind = await asyncio.to_thread(self._panel_guilds)
-        self.guide_panel.set_known_guilds(by_kind["guide"])
-        self.leaderboard_panel.set_known_guilds(by_kind["leaderboard"])
+        self.economy_panel.set_known_guilds(by_kind["panel"])
         self.shop_panel.set_known_guilds(by_kind["shop"])
         self.bounty_panel.set_known_guilds(by_kind["bounty"])
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:
             return load_econ_settings(conn, guild_id)
+
+    def _save_settings(self, guild_id: int, values: dict[str, object]) -> None:
+        with self.ctx.open_db() as conn:
+            save_econ_settings(conn, guild_id, values)
 
     def _claim_sponsored(self, guild_id: int):
         with self.ctx.open_db() as conn:

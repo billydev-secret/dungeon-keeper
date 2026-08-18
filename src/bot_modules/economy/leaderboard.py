@@ -1,16 +1,20 @@
-"""Economy leaderboard panel — the live, auto-updating channel embed.
+"""The economy panel — the live, auto-updating channel embed.
 
 One branded embed showing today's pulse, the top earners over a rolling
 window, community goal progress with pace, a per-cadence quest-board
 summary (members draw personal boards, so no full-pool menu), and an
-anonymous live feed of today's completions. Posted by ``/bank
-post-leaderboard``; refreshed in place by the hourly economy loop AND by the
-debounced live loop (``leaderboard_live_loop``) whenever economy activity
-marks the guild dirty — so the panel moves within a couple of minutes of the
-action. The panel's channel and message ids live in the ``econ_`` config
-(``leaderboard_channel_id`` / ``leaderboard_message_id``, same pattern as
-the how-to guide panel) so a repost replaces the old panel instead of
-stacking duplicates.
+anonymous live feed of today's completions. Placed from the dashboard's panel
+poster; refreshed in place by the hourly economy loop AND by the debounced
+live loop (``leaderboard_live_loop``) whenever economy activity marks the
+guild dirty — so the panel moves within a couple of minutes of the action.
+
+Since 2026-08-18 this is the guild's **only** economy panel: the how-it-works
+guide it used to sit alongside became the ❓ button under this embed, and the
+merged panel kept the guide's home and the guide's stored ids
+(``guide_channel_id`` / ``guide_message_id`` in the ``econ_`` config — see
+``plan_panel_merge`` in ``economy.logic`` for why that pair won). This module
+still owns the content and both refresh loops; only the message it edits
+changed.
 
 Pure collector + builder — all Discord I/O stays in the cog and the loops.
 The builder takes a ``resolve_name`` callable so it never touches the
@@ -576,10 +580,17 @@ def build_leaderboard_embed(
     emoji = settings.currency_emoji
     plural = settings.currency_plural
 
+    # Titled as *the* economy panel rather than as a board, because since the
+    # guide panel folded into this one (2026-08-18) it is the only economy
+    # message in the channel — and it sits in the how-it-works channel, where
+    # the reader arriving is as likely to be a confused newcomer as someone
+    # checking the standings. The ❓ pointer earns its line for that reader:
+    # the button is the only remaining route to the guide.
     embed = discord.Embed(
-        title=f"{emoji} {plural} — Leaderboard & Quest Board",
+        title=f"{emoji} {plural} — The Bank",
         description=(
-            "Who's earning, what's running, and what there is to do — live."
+            "How it all works, who's earning, and what there is to do — live. "
+            "Tap **❓ How it Works** below for the full guide."
             "\n\u200b"
         ),
         color=color,

@@ -290,13 +290,19 @@ class EconSettings:
     # promise, so announce before setting it. Never raked: refunds, or a pot
     # holding a single stake (the winner's own ante back is not a contest).
     wager_rake_pct: int = 0
-    # Bot-managed bookkeeping for the channel how-to panel (/bank post-guide);
-    # readable via GET /economy/config but deliberately absent from the
-    # dashboard's editable-field whitelist.
+    # Bot-managed bookkeeping for the guild's one economy panel; readable via
+    # GET /economy/config but deliberately absent from the dashboard's
+    # editable-field whitelist. Named for the how-to guide it used to carry:
+    # the guide and leaderboard panels merged on 2026-08-18 and this pair, the
+    # surviving message's own ids, is what the merged panel kept. The panel
+    # renders the live board (economy/leaderboard.py) and the guide is an ❓
+    # button on it.
     guide_channel_id: int = 0
     guide_message_id: int = 0
-    # Same pattern for the auto-updating leaderboard panel
-    # (/bank post-leaderboard, refreshed hourly by the economy loop).
+    # RETIRED 2026-08-18 by the merge above: zeroed on first boot after it
+    # (EconomyCog._merge_panels_once) and read by nothing. Kept as fields so a
+    # guild whose bot has not restarted yet still loads, and so the one-shot
+    # can see what it has to clean up.
     leaderboard_channel_id: int = 0
     leaderboard_message_id: int = 0
     # Same pattern for the persistent perk-shop panel (/bank post-shop;

@@ -75,10 +75,11 @@ so there is nothing finer to bucket by.
 **The two "happened" sources are pushed, not swept.** `economy_loop` calls
 `echo_quest_flip` / `echo_community_tier` at the moment it commits the thing
 being announced, the way `events_cog` calls `echo_discord_event`. Both link at
-the **leaderboard panel** (`econ_leaderboard_channel_id` /
-`econ_leaderboard_message_id`) — the one surface rendering a week's quests and
-a goal's progress bar — and both skip entirely when no panel is posted, the
-same gate the raffle applies to the shop panel and for the same reason.
+the **economy panel** (`econ_guide_channel_id` / `econ_guide_message_id` —
+the guide's pair, which the panel kept when the two merged on 2026-08-18) —
+the one surface rendering a week's quests and a goal's progress bar — and both
+skip entirely when no panel is posted, the same gate the raffle applies to the
+shop panel and for the same reason.
 
 Neither passes an origin channel: the quests aren't *in* a channel, and naming
 the panel's channel next to a link to the panel is the same fact twice.
