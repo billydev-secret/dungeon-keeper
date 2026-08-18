@@ -300,10 +300,18 @@ def build_slate_embed(
     picked: int,
     alive: int,
     season_name: str,
+    entrants: int = 0,
+    pot: int = 0,
+    buyin: int = 0,
+    late_entry: str = "gauntlet",
+    gauntlet_mode: bool = False,
     color: discord.Color | None = None,
 ) -> discord.Embed:
-    """The Wednesday slate (§2.3): the week's games with Discord timestamps
-    (local time for free), pick counts in the footer."""
+    """The Wednesday slate — and, since 2026-08-18, the weekly
+    mini-announcement (§2.2/§2.3 as amended): the week's games plus a
+    compact joining line, so the door rides the post people actually see
+    instead of a weeks-old pin. Entry-closed gauntlet-era seasons show no
+    join line (the task also drops the button)."""
     embed = discord.Embed(
         title=f"🏈 Week {week} Slate",
         description="Pick one team to **win**. Picks lock at each game's "
@@ -319,8 +327,34 @@ def build_slate_embed(
     embed.add_field(
         name="This Week's Games", value=_clip_field(lines, "games"), inline=False
     )
+    join_line = slate_join_line(
+        buyin=buyin, late_entry=late_entry, gauntlet_mode=gauntlet_mode
+    )
+    if join_line:
+        status = f"Pot **{pot:,}** · 👥 **{entrants}** playing"
+        embed.add_field(
+            name="New Here?", value=f"{join_line}\n{status}", inline=False
+        )
     embed.set_footer(
         text=f"{season_name} · Picks close at kickoff · "
         f"{picked} of {alive} alive have picked"
     )
     return embed
+
+
+def slate_join_line(
+    *, buyin: int, late_entry: str, gauntlet_mode: bool
+) -> str | None:
+    """The one-line door for the weekly slate. None = entry is closed and
+    neither line nor button belongs on the post."""
+    entry = f"{buyin:,} coins to enter" if buyin else "free entry"
+    if not gauntlet_mode:
+        return f"Join below — {entry}."
+    if late_entry == "gauntlet":
+        return (
+            f"Join any week — missed weeks auto-replay as the Gauntlet. "
+            f"({entry} + late fee)"
+        )
+    if late_entry == "ghost_only":
+        return "Late entry joins the Ghost Streak side game — join below."
+    return None  # closed

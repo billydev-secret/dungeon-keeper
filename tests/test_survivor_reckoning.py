@@ -294,3 +294,58 @@ def test_lastcall_due_saturday(db):
         sat_evening = NOW + 3 * DAY + 7 * HOUR  # Sat 19:00 UTC, hour 18 due
         assert tasks.lastcall_due(conn, season, NOW, 0.0) is None  # Wednesday
         assert tasks.lastcall_due(conn, season, sat_evening, 0.0) == 1
+
+
+# ── the slate as weekly mini-announcement (2026-08-18) ─────────────────
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param(
+            {"buyin": 0, "late_entry": "gauntlet", "gauntlet_mode": False},
+            "free entry", id="pre-kickoff-free",
+        ),
+        pytest.param(
+            {"buyin": 100, "late_entry": "gauntlet", "gauntlet_mode": True},
+            "auto-replay as the Gauntlet", id="gauntlet-era",
+        ),
+        pytest.param(
+            {"buyin": 0, "late_entry": "ghost_only", "gauntlet_mode": True},
+            "Ghost Streak side game", id="ghost-only",
+        ),
+    ],
+)
+def test_slate_join_line_variants(kwargs, expected):
+    from bot_modules.survivor.reckoning import slate_join_line
+
+    line = slate_join_line(**kwargs)
+    assert line is not None and expected in line
+
+
+def test_slate_join_line_closed_is_none():
+    from bot_modules.survivor.reckoning import slate_join_line
+
+    assert slate_join_line(
+        buyin=0, late_entry="closed", gauntlet_mode=True
+    ) is None
+
+
+def test_slate_embed_carries_the_door_unless_closed():
+    from bot_modules.survivor.reckoning import build_slate_embed
+
+    games = [{"home": "SEA", "away": "NE", "kickoff_ts": 1_700_000_000.0}]
+    open_embed = build_slate_embed(
+        games, week=3, picked=5, alive=8, season_name="S",
+        entrants=9, pot=8150, buyin=0, late_entry="gauntlet",
+        gauntlet_mode=True,
+    )
+    door = next(f for f in open_embed.fields if f.name == "New Here?")
+    assert "Pot **8,150**" in door.value and "**9** playing" in door.value
+
+    closed_embed = build_slate_embed(
+        games, week=3, picked=5, alive=8, season_name="S",
+        entrants=9, pot=8150, buyin=0, late_entry="closed",
+        gauntlet_mode=True,
+    )
+    assert all(f.name != "New Here?" for f in closed_embed.fields)

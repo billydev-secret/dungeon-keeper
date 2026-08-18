@@ -246,6 +246,10 @@ async def post_slate(bot, db_path: Path, season: dict, week: int, now: float) ->
                 "WHERE season_id = ? AND status = 'alive'",
                 (season["id"],),
             ).fetchone()[0]
+            entrants = conn.execute(
+                "SELECT COUNT(*) FROM survivor_players WHERE season_id = ?",
+                (season["id"],),
+            ).fetchone()[0]
             picked = conn.execute(
                 "SELECT COUNT(DISTINCT p.user_id) FROM survivor_picks p "
                 "JOIN survivor_players pl ON pl.season_id = p.season_id "
@@ -253,21 +257,40 @@ async def post_slate(bot, db_path: Path, season: dict, week: int, now: float) ->
                 "WHERE p.season_id = ? AND p.week = ? AND pl.status = 'alive'",
                 (season["id"], week),
             ).fetchone()[0]
+            pot = logic.pot_totals(conn, season)["main"]
+            gauntlet_mode = bool(
+                logic.elapsed_weeks(conn, season["season_year"], now)
+            )
             update_config(conn, season["id"], {"last_slate_week": week})
             conn.commit()
-        return games, int(alive), int(picked)
+        return games, int(alive), int(entrants), int(picked), pot, gauntlet_mode
 
-    games, alive, picked = await asyncio.to_thread(_q)
+    games, alive, entrants, picked, pot, gauntlet_mode = await asyncio.to_thread(_q)
     if not games:
         return
     guild = channel.guild
     color = await resolve_accent_color(db_path, guild)
+    config = season["config"]
     embed = reckoning.build_slate_embed(
         games, week=week, picked=picked, alive=alive,
-        season_name=season["name"], color=color,
+        season_name=season["name"],
+        entrants=entrants, pot=pot, buyin=int(config["buyin_coins"]),
+        late_entry=str(config["late_entry"]), gauntlet_mode=gauntlet_mode,
+        color=color,
     )
+    # The slate doubles as the weekly mini-announcement (2026-08-18): the
+    # Join button rides alongside the pick button — unless entry is closed.
     view = discord.ui.View(timeout=None)
     view.add_item(SlatePickButton(season["id"]))
+    join_line = reckoning.slate_join_line(
+        buyin=int(config["buyin_coins"]),
+        late_entry=str(config["late_entry"]),
+        gauntlet_mode=gauntlet_mode,
+    )
+    if join_line is not None:
+        from bot_modules.survivor.views import JoinSeasonButton
+
+        view.add_item(JoinSeasonButton(season["id"]))
     content, allowed = _pings(bot, season)
     await channel.send(
         content=content or None, embed=embed, view=view, allowed_mentions=allowed
