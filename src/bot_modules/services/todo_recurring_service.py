@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from bot_modules.services.scheduled_games_service import compute_next_run
-from bot_modules.services.todo_service import TASK_MAX_LEN, create_todo
+from bot_modules.services.todo_service import TASK_MAX_LEN, create_todo, mark_missed
 
 log = logging.getLogger(__name__)
 
@@ -290,15 +290,30 @@ class SpawnResult:
     guild_id: int
     status: str  # 'spawned' | 'skipped_pending'
     todo_id: int | None = None
+    #: Set when a scheduled fire wrote off the previous instance to make room
+    #: for this one — the daily reset's audit trail.
+    missed_todo_id: int | None = None
+
+
+def open_instance_id(conn: sqlite3.Connection, recurring_id: int) -> int | None:
+    """This definition's outstanding instance, if it has one.
+
+    Outstanding means neither ticked nor written off: a row the reset already
+    marked missed is closed, and must not keep the next occurrence from
+    spawning — that would reinstate skip-if-pending through the back door.
+    """
+    row = conn.execute(
+        "SELECT id FROM todos"
+        " WHERE recurring_id = ? AND completed_at IS NULL AND missed_at IS NULL"
+        " ORDER BY created_at DESC, id DESC LIMIT 1",
+        (recurring_id,),
+    ).fetchone()
+    return row["id"] if row is not None else None
 
 
 def has_open_instance(conn: sqlite3.Connection, recurring_id: int) -> bool:
     """Whether this definition's last spawned row is still outstanding."""
-    row = conn.execute(
-        "SELECT 1 FROM todos WHERE recurring_id = ? AND completed_at IS NULL LIMIT 1",
-        (recurring_id,),
-    ).fetchone()
-    return row is not None
+    return open_instance_id(conn, recurring_id) is not None
 
 
 def due_recurring(conn: sqlite3.Connection, now_ts: float) -> list[RecurringTask]:
@@ -319,18 +334,28 @@ def spawn_due(
 ) -> list[SpawnResult]:
     """Materialise every due recurring definition into a todo row.
 
-    **Skip-if-pending:** when the previous instance is still outstanding no
-    second row is created — the definition just advances. Otherwise a chore
-    nobody did all week stacks five identical rows on the board; one
-    increasingly-old row is the signal you actually want.
+    **Reset, not skip-if-pending.** When the occurrence comes round and the
+    previous instance is still outstanding, that instance is written off
+    (``missed_at``) and a fresh row spawns in its place. Exactly one row per
+    definition is ever outstanding, so nothing stacks — but unlike the
+    skip-if-pending rule this replaced, the day that did not happen leaves a
+    durable record instead of Monday's untouched row quietly masquerading as
+    Tuesday's, where one tick credited both and no streak was computable.
 
     ``next_run_at`` advances via ``compute_next_run(after=...)``, which jumps
     past *all* missed occurrences to the next future slot. So a bot that was
-    down for three days spawns one row on boot, not three.
+    down for three days spawns one row on boot, not three — and writes off one
+    instance, not three. Downtime is not evidence that a chore was skipped, so
+    the register is deliberately conservative here: it records the days the bot
+    was watching.
     """
     return [
         _spawn_one(
-            conn, task, now_ts=now_ts, offset_hours=offset_hours_for(task.guild_id)
+            conn,
+            task,
+            now_ts=now_ts,
+            offset_hours=offset_hours_for(task.guild_id),
+            reset_open=True,
         )
         for task in due_recurring(conn, now_ts)
     ]
@@ -343,14 +368,32 @@ def _spawn_one(
     now_ts: float,
     offset_hours: float,
     advance: bool = True,
+    reset_open: bool = False,
 ) -> SpawnResult:
-    """Materialise one definition, honouring skip-if-pending.
+    """Materialise one definition.
 
     ``advance`` rewrites ``next_run_at`` past this occurrence — true for a
     natural fire, false for a manual "Run now", which must not disturb the
     schedule the mod configured.
+
+    ``reset_open`` decides what an outstanding previous instance means, and the
+    two callers genuinely want opposite things:
+
+    * A **scheduled fire** (``True``) is a day boundary. Yesterday's untouched
+      row is written off and today gets its own, which is what makes the chore
+      board a "did we do it today?" scoreboard.
+    * **"Run now"** (``False``) is a mod adding one more instance by hand. It
+      keeps skip-if-pending, because pressing the button twice must not mark
+      the first press missed — that would fabricate a failure out of a double
+      click, and the streak would wear it.
     """
-    if has_open_instance(conn, task.id):
+    open_id = open_instance_id(conn, task.id)
+    missed_id: int | None = None
+    if open_id is not None and reset_open:
+        if mark_missed(conn, open_id, now_ts=now_ts):
+            missed_id = open_id
+        open_id = None
+    if open_id is not None:
         status = "skipped_pending"
         todo_id = None
     else:
@@ -390,6 +433,7 @@ def _spawn_one(
         guild_id=task.guild_id,
         status=status,
         todo_id=todo_id,
+        missed_todo_id=missed_id,
     )
 
 
@@ -405,7 +449,9 @@ def run_now(
 
     Deliberately narrow: it touches **only this definition**, and changes
     neither its ``status`` nor its ``next_run_at``. Skip-if-pending still
-    applies, so pressing it twice can't stack duplicates.
+    applies here (``reset_open=False``), so pressing it twice can neither stack
+    duplicates nor write the first press off as missed — a manual add is not a
+    day boundary.
 
     It does not go through ``spawn_due``: that scans every guild, so driving it
     from one guild's request would spawn other guilds' due tasks *and* rewrite
@@ -418,7 +464,12 @@ def run_now(
     if task is None:
         return None
     return _spawn_one(
-        conn, task, now_ts=now_ts, offset_hours=offset_hours, advance=False
+        conn,
+        task,
+        now_ts=now_ts,
+        offset_hours=offset_hours,
+        advance=False,
+        reset_open=False,
     )
 
 
@@ -430,3 +481,97 @@ def describe_cadence(task: RecurringTask) -> str:
         days = ", ".join(WEEKDAY_NAMES[d] for d in task.recur_days) or "no days"
         return f"Weekly on {days} at {when}"
     return f"Daily at {when}"
+
+
+# ── What the chore board reads ──────────────────────────────────────────────
+
+
+#: How many instances back the streak walk reads per definition. A streak ends
+#: at the first missed day, so in practice the walk stops within a few rows;
+#: this is only a ceiling against a chore with years of unbroken history.
+STREAK_LOOKBACK = 400
+
+
+def chore_streaks(
+    conn: sqlite3.Connection, guild_id: int, *, lookback: int = STREAK_LOOKBACK
+) -> dict[int, int]:
+    """``recurring_id -> consecutive completed instances``, most recent first.
+
+    A streak is only meaningful because the reset writes off the days a chore
+    did not happen: under the old skip-if-pending rule an undone chore left no
+    row at all for the day it was skipped, so "6 days running" was unknowable.
+
+    **Today does not count against you.** The newest instance is skipped when
+    it is still outstanding — the day is not over, and a chore due at 09:00
+    would otherwise show a zeroed streak every morning until someone ticked it.
+    A missed instance ends the walk; a completed one extends it.
+    """
+    rows = conn.execute(
+        "SELECT t.recurring_id AS rid, t.completed_at, t.missed_at FROM todos t"
+        " JOIN todo_recurring r ON r.id = t.recurring_id"
+        " WHERE r.guild_id = ? AND t.recurring_id IS NOT NULL"
+        " ORDER BY t.recurring_id, t.created_at DESC, t.id DESC",
+        (guild_id,),
+    ).fetchall()
+
+    streaks: dict[int, int] = {}
+    depth: dict[int, int] = {}
+    ended: set[int] = set()
+    for row in rows:
+        rid = row["rid"]
+        if rid in ended:
+            continue
+        seen = depth.get(rid, 0)
+        depth[rid] = seen + 1
+        streaks.setdefault(rid, 0)
+        if seen >= lookback:
+            ended.add(rid)
+        elif row["completed_at"] is not None:
+            streaks[rid] += 1
+        elif seen == 0 and row["missed_at"] is None:
+            pass  # today, still undecided — neither extends nor breaks
+        else:
+            ended.add(rid)  # missed, or an older row left outstanding
+    return streaks
+
+
+def chore_board_rows(
+    conn: sqlite3.Connection, guild_id: int, *, limit: int = 25
+) -> list[dict]:
+    """One row per **active** definition: its latest instance, plus its streak.
+
+    The chore board is a scoreboard, not a pending list, so a ticked chore stays
+    on it — greyed but present — until the next reset replaces it. That is the
+    whole point of the surface: "did we do it today?" cannot be answered by a
+    board that removes the answer the moment it is yes.
+
+    Paused definitions are left out. A chore a mod deliberately paused for the
+    holidays is not a chore the team is failing to do, and showing it with a
+    dead streak reads as a reproach.
+    """
+    rows = conn.execute(
+        "SELECT r.id AS recurring_id, r.task AS task, r.recurrence,"
+        "       r.time_of_day, r.recur_days,"
+        "       t.id AS todo_id, t.created_at, t.completed_at,"
+        "       t.completed_by, t.missed_at"
+        " FROM todo_recurring r"
+        " LEFT JOIN todos t ON t.id = ("
+        "     SELECT id FROM todos WHERE recurring_id = r.id"
+        "     ORDER BY created_at DESC, id DESC LIMIT 1"
+        " )"
+        " WHERE r.guild_id = ? AND r.status = 'active'"
+        # Reading order is the order of the day, so the board scans like a
+        # shift checklist rather than by an id nobody thinks in.
+        " ORDER BY r.time_of_day ASC, r.id ASC"
+        " LIMIT ?",
+        (guild_id, int(limit)),
+    ).fetchall()
+
+    streaks = chore_streaks(conn, guild_id)
+    out: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        item["recur_days"] = _parse_days(row["recur_days"])
+        item["streak"] = streaks.get(row["recurring_id"], 0)
+        out.append(item)
+    return out

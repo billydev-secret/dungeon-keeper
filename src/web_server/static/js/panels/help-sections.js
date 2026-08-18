@@ -83,7 +83,7 @@ export const HELP_GROUPS = [
     { page: "help-usage-telemetry", anchor: "usage-telemetry", label: "Command & Panel Usage" },
     { page: "help-ai",          anchor: "ai-tools",    label: "AI Moderation Tools" },
     { page: "help-rules-watch", anchor: "rules-watch", label: "Rules Watch" },
-    { page: "help-todo",        anchor: "todo",        label: "Todo List & Board" },
+    { page: "help-todo",        anchor: "todo",        label: "Todo List & Boards" },
   ]},
   { heading: "Server Admin", items: [
     { page: "help-setup",          anchor: "setup",             label: "Setup & Permissions" },

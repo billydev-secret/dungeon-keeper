@@ -15,13 +15,27 @@ from dataclasses import dataclass
 
 TASK_MAX_LEN = 500
 
+#: The two sticky boards. ``all`` is the original everything-board; ``chores``
+#: lists only rows a recurring definition spawned. They are separate rows in
+#: ``todo_board`` keyed ``(guild_id, kind)``.
+BOARD_ALL = "all"
+BOARD_CHORES = "chores"
+BOARD_KINDS = (BOARD_ALL, BOARD_CHORES)
+
+#: How each board is named to a human — used by the collision error, so the mod
+#: is told *which* board already sits in the channel they picked.
+BOARD_NAMES = {
+    BOARD_ALL: "the server todo board",
+    BOARD_CHORES: "the mod chore board",
+}
+
 #: Ceiling on a single list query — the dashboard paginates visually, not by
 #: query, and the board renders far fewer than this.
 LIST_LIMIT = 200
 
 _TODO_COLS = (
     "id, guild_id, added_by, task, description, source_message_url,"
-    " created_at, completed_at, completed_by, recurring_id"
+    " created_at, completed_at, completed_by, recurring_id, missed_at"
 )
 
 
@@ -70,7 +84,7 @@ def list_todos(
     where = "guild_id = ?"
     params: list = [guild_id]
     if status == "pending":
-        where += " AND completed_at IS NULL"
+        where += f" AND {_OPEN}"
     elif status == "completed":
         where += " AND completed_at IS NOT NULL"
     return conn.execute(
@@ -85,6 +99,11 @@ def list_todos(
 #: out of SQLite every refresh to render fifteen short lines.
 _BOARD_COLS = "id, task, description, created_at, recurring_id"
 
+#: A row is outstanding only while it is neither ticked nor written off. The
+#: ``missed_at`` half is what stops a chore the daily reset closed yesterday
+#: from lingering on the all-todos board forever.
+_OPEN = "completed_at IS NULL AND missed_at IS NULL"
+
 
 def pending_todos(
     conn: sqlite3.Connection, guild_id: int, *, limit: int = LIST_LIMIT
@@ -93,7 +112,7 @@ def pending_todos(
     task that has been waiting longest sits at the top."""
     return conn.execute(
         f"SELECT {_BOARD_COLS} FROM todos"
-        f" WHERE guild_id = ? AND completed_at IS NULL"
+        f" WHERE guild_id = ? AND {_OPEN}"
         f" ORDER BY created_at ASC LIMIT ?",
         (guild_id, int(limit)),
     ).fetchall()
@@ -102,7 +121,7 @@ def pending_todos(
 def pending_count(conn: sqlite3.Connection, guild_id: int) -> int:
     """How many todos are outstanding, uncapped by any list limit."""
     return conn.execute(
-        "SELECT COUNT(*) FROM todos WHERE guild_id = ? AND completed_at IS NULL",
+        f"SELECT COUNT(*) FROM todos WHERE guild_id = ? AND {_OPEN}",
         (guild_id,),
     ).fetchone()[0]
 
@@ -115,27 +134,47 @@ def complete_todo(
     *,
     now_ts: float | None = None,
 ) -> bool:
-    """Mark a todo complete. Returns False when it's missing or already done.
+    """Mark a todo complete. Returns False when it's missing or already closed.
 
     The ``completed_at IS NULL`` guard makes this idempotent under a race
-    between the board button and the dashboard.
+    between the board button and the dashboard. The ``missed_at IS NULL`` half
+    refuses a row the daily reset already wrote off: yesterday's chore is
+    finished business, and letting a late tick credit it would both invent a
+    completion that never happened and corrupt the streak either side of it.
     """
     cur = conn.execute(
-        "UPDATE todos SET completed_at = ?, completed_by = ?"
-        " WHERE id = ? AND guild_id = ? AND completed_at IS NULL",
+        f"UPDATE todos SET completed_at = ?, completed_by = ?"
+        f" WHERE id = ? AND guild_id = ? AND {_OPEN}",
         (time.time() if now_ts is None else now_ts, completed_by, todo_id, guild_id),
     )
     return cur.rowcount > 0
 
 
-# ── Board placement ─────────────────────────────────────────────────────────
+def mark_missed(
+    conn: sqlite3.Connection, todo_id: int, *, now_ts: float
+) -> bool:
+    """Close an outstanding row *without* crediting it. Returns False if already closed.
+
+    The daily reset's other half: the next occurrence of a recurring chore can
+    only spawn once the previous instance stops being outstanding, and this is
+    how it stops without pretending anyone did it.
+    """
+    cur = conn.execute(
+        f"UPDATE todos SET missed_at = ? WHERE id = ? AND {_OPEN}",
+        (now_ts, todo_id),
+    )
+    return cur.rowcount > 0
+
+
+# ── Board placement ─────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class TodoBoard:
-    """Where the guild's sticky board currently lives. Zeroes mean unposted."""
+    """Where one of the guild's sticky boards lives. Zeroes mean unposted."""
 
     guild_id: int
+    kind: str = BOARD_ALL
     channel_id: int = 0
     message_id: int = 0
     updated_at: float = 0.0
@@ -145,15 +184,19 @@ class TodoBoard:
         return bool(self.channel_id and self.message_id)
 
 
-def get_board(conn: sqlite3.Connection, guild_id: int) -> TodoBoard:
+def get_board(
+    conn: sqlite3.Connection, guild_id: int, kind: str = BOARD_ALL
+) -> TodoBoard:
     row = conn.execute(
-        "SELECT channel_id, message_id, updated_at FROM todo_board WHERE guild_id = ?",
-        (guild_id,),
+        "SELECT channel_id, message_id, updated_at FROM todo_board"
+        " WHERE guild_id = ? AND kind = ?",
+        (guild_id, kind),
     ).fetchone()
     if row is None:
-        return TodoBoard(guild_id=guild_id)
+        return TodoBoard(guild_id=guild_id, kind=kind)
     return TodoBoard(
         guild_id=guild_id,
+        kind=kind,
         channel_id=row["channel_id"] or 0,
         message_id=row["message_id"] or 0,
         updated_at=row["updated_at"] or 0.0,
@@ -166,27 +209,75 @@ def save_board(
     channel_id: int,
     message_id: int,
     *,
+    kind: str = BOARD_ALL,
     now_ts: float | None = None,
 ) -> None:
     conn.execute(
-        "INSERT INTO todo_board (guild_id, channel_id, message_id, updated_at)"
-        " VALUES (?, ?, ?, ?)"
-        " ON CONFLICT(guild_id) DO UPDATE SET"
+        "INSERT INTO todo_board (guild_id, kind, channel_id, message_id, updated_at)"
+        " VALUES (?, ?, ?, ?, ?)"
+        " ON CONFLICT(guild_id, kind) DO UPDATE SET"
         "   channel_id = excluded.channel_id,"
         "   message_id = excluded.message_id,"
         "   updated_at = excluded.updated_at",
-        (guild_id, channel_id, message_id, time.time() if now_ts is None else now_ts),
+        (
+            guild_id,
+            kind,
+            channel_id,
+            message_id,
+            time.time() if now_ts is None else now_ts,
+        ),
     )
 
 
-def clear_board(conn: sqlite3.Connection, guild_id: int, *, now_ts: float | None = None) -> None:
+def clear_board(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    kind: str = BOARD_ALL,
+    now_ts: float | None = None,
+) -> None:
     """Forget the placement without dropping the row, so a later post reuses it."""
-    save_board(conn, guild_id, 0, 0, now_ts=now_ts)
+    save_board(conn, guild_id, 0, 0, kind=kind, now_ts=now_ts)
 
 
-def guilds_with_board(conn: sqlite3.Connection) -> list[int]:
-    """Guild ids with a live board — the refresh loop's work list."""
+def guilds_with_board(
+    conn: sqlite3.Connection, kind: str = BOARD_ALL
+) -> list[int]:
+    """Guild ids with a live board of this kind — the refresh loop's work list."""
     rows = conn.execute(
-        "SELECT guild_id FROM todo_board WHERE channel_id != 0 AND message_id != 0"
+        "SELECT guild_id FROM todo_board"
+        " WHERE kind = ? AND channel_id != 0 AND message_id != 0",
+        (kind,),
     ).fetchall()
     return [r["guild_id"] for r in rows]
+
+
+def conflicting_board(
+    conn: sqlite3.Connection, guild_id: int, kind: str, channel_id: int
+) -> str | None:
+    """The name of the *other* todo board already in ``channel_id``, if any.
+
+    Discord gives a channel one bottom slot, and two sticky panels cannot both
+    hold it. Neither todo board sets ``restick_on_bot``, so they cannot storm
+    the way the two opted-in economy panels could
+    (docs/reviews/2026-08-06-sticky-panel-machinery.md F1) — but the fix for
+    that storm is what makes sharing a channel *quietly* broken here. Both
+    boards wake on the same human message, race for the slot, and the one that
+    loses hits ``core.sticky.was_placed`` and yields. Deterministically, and
+    for as long as the other keeps winning: the loser is left buried with
+    nothing anyone does in the channel able to bring it back.
+
+    So the collision is refused at configuration time, which is the only place
+    it is legible to a human. Returns ``None`` when the channel is free, or the
+    resident's display name when it is not.
+    """
+    if not channel_id:
+        return None  # unposting can never collide with anything
+    row = conn.execute(
+        "SELECT kind FROM todo_board"
+        " WHERE guild_id = ? AND kind != ? AND channel_id = ?",
+        (guild_id, kind, int(channel_id)),
+    ).fetchone()
+    if row is None:
+        return None
+    return BOARD_NAMES.get(row["kind"], "another todo board")

@@ -2,7 +2,7 @@
 
 Recurring definitions are reminders: when one comes due it spawns an ordinary
 todo row. The behaviour that matters is the *cadence* math and the
-skip-if-pending rule, so everything here injects ``now_ts`` rather than sleeping.
+daily-reset rule, so everything here injects ``now_ts`` rather than sleeping.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ from bot_modules.services.todo_recurring_service import (
     delete_recurring,
     describe_cadence,
     get_recurring,
+    chore_board_rows,
+    chore_streaks,
     has_open_instance,
     list_recurring,
     normalize_days,
@@ -27,7 +29,11 @@ from bot_modules.services.todo_recurring_service import (
     update_recurring,
     validate,
 )
-from bot_modules.services.todo_service import complete_todo, pending_todos
+from bot_modules.services.todo_service import (
+    complete_todo,
+    mark_missed,
+    pending_todos,
+)
 from tests.db_template import migrated_db
 
 GUILD = 123
@@ -266,8 +272,14 @@ def test_spawn_creates_todo_and_advances(db):
     assert task.last_status == "spawned"
 
 
-def test_spawn_skips_when_previous_instance_still_pending(db):
-    """Skip-if-pending: a chore nobody did all week must not stack five rows."""
+def test_scheduled_fire_writes_off_the_undone_instance_and_spawns_fresh(db):
+    """The daily reset, which replaced skip-if-pending.
+
+    Midnight is a day boundary, not a reason to keep yesterday's row: the
+    untouched instance is written off and today gets its own. Exactly one row is
+    outstanding either way — nothing stacks — but the board can now say *which
+    day* it is asking about, and one tick can no longer credit two days.
+    """
     day1 = _epoch(2026, 7, 26, 9, 0)
     day2 = _epoch(2026, 7, 27, 9, 0)
     with open_db(db) as conn:
@@ -276,15 +288,115 @@ def test_spawn_skips_when_previous_instance_still_pending(db):
             time_of_day=540, now_ts=day1 - 60,
         )
         spawn_due(conn, now_ts=day1, offset_hours_for=_zero_offset)
+        yesterday = pending_todos(conn, GUILD)[0]["id"]
         results = spawn_due(conn, now_ts=day2, offset_hours_for=_zero_offset)
         rows = pending_todos(conn, GUILD)
         task = get_recurring(conn, rid, GUILD)
+        written_off = conn.execute(
+            "SELECT missed_at, completed_at FROM todos WHERE id = ?", (yesterday,)
+        ).fetchone()
 
-    assert [r.status for r in results] == ["skipped_pending"]
-    assert len(rows) == 1  # still just the one, now a day old
-    assert task.last_status == "skipped_pending"
-    # The definition still advances, so it retries tomorrow.
+    assert [r.status for r in results] == ["spawned"]
+    assert [r.missed_todo_id for r in results] == [yesterday]
+    # Still exactly one outstanding row — but a *new* one.
+    assert len(rows) == 1
+    assert rows[0]["id"] != yesterday
+    assert rows[0]["created_at"] == day2
+    # Yesterday is closed, and closed without being credited to anyone.
+    assert written_off["missed_at"] == day2
+    assert written_off["completed_at"] is None
+    assert task.last_status == "spawned"
     assert task.next_run_at == _epoch(2026, 7, 28, 9, 0)
+
+
+def test_a_written_off_day_survives_as_a_record(db):
+    """The reset's whole payoff: the days it did not happen are still there.
+
+    Under skip-if-pending a skipped day left no trace at all — the same single
+    row simply aged — so "we missed Monday and Tuesday" was unanswerable and no
+    streak could be computed. Three unattended days must leave three rows.
+    """
+    days = [_epoch(2026, 7, 26 + n, 9, 0) for n in range(4)]
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Post QOTD", recurrence="daily",
+            time_of_day=540, now_ts=days[0] - 60,
+        )
+        for day in days:
+            spawn_due(conn, now_ts=day, offset_hours_for=_zero_offset)
+        missed = conn.execute(
+            "SELECT COUNT(*) FROM todos WHERE missed_at IS NOT NULL"
+        ).fetchone()[0]
+        assert missed == 3  # the first three days; the fourth is still open
+        assert len(pending_todos(conn, GUILD)) == 1
+
+
+def test_a_written_off_row_cannot_be_ticked_later(db):
+    """Yesterday's box is not tickable today.
+
+    Crediting a written-off row would invent a completion that never happened
+    and put a hole in the middle of the streak either side of it.
+    """
+    day1 = _epoch(2026, 7, 26, 9, 0)
+    day2 = _epoch(2026, 7, 27, 9, 0)
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Post QOTD", recurrence="daily",
+            time_of_day=540, now_ts=day1 - 60,
+        )
+        spawn_due(conn, now_ts=day1, offset_hours_for=_zero_offset)
+        yesterday = pending_todos(conn, GUILD)[0]["id"]
+        spawn_due(conn, now_ts=day2, offset_hours_for=_zero_offset)
+
+        assert complete_todo(conn, yesterday, GUILD, USER, now_ts=day2 + 60) is False
+        row = conn.execute(
+            "SELECT completed_at, completed_by FROM todos WHERE id = ?", (yesterday,)
+        ).fetchone()
+    assert row["completed_at"] is None
+    assert not row["completed_by"]
+
+
+def test_a_written_off_row_leaves_the_all_todos_board(db):
+    """The reset also has to clear the *other* board.
+
+    A missed chore is closed. If ``pending_todos`` still returned it, the
+    all-todos board would carry a growing pile of dead chore rows nobody can
+    tick — the exact stacking the old rule existed to prevent, reintroduced by
+    the fix for it.
+    """
+    day1 = _epoch(2026, 7, 26, 9, 0)
+    day2 = _epoch(2026, 7, 27, 9, 0)
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Post QOTD", recurrence="daily",
+            time_of_day=540, now_ts=day1 - 60,
+        )
+        spawn_due(conn, now_ts=day1, offset_hours_for=_zero_offset)
+        spawn_due(conn, now_ts=day2, offset_hours_for=_zero_offset)
+        rows = pending_todos(conn, GUILD)
+    assert len(rows) == 1
+    assert rows[0]["created_at"] == day2
+
+
+def test_reset_does_not_write_off_a_completed_instance(db):
+    """A ticked chore is already closed — the reset must not touch it."""
+    day1 = _epoch(2026, 7, 26, 9, 0)
+    day2 = _epoch(2026, 7, 27, 9, 0)
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Post QOTD", recurrence="daily",
+            time_of_day=540, now_ts=day1 - 60,
+        )
+        spawn_due(conn, now_ts=day1, offset_hours_for=_zero_offset)
+        done = pending_todos(conn, GUILD)[0]["id"]
+        complete_todo(conn, done, GUILD, USER, now_ts=day1 + 60)
+        results = spawn_due(conn, now_ts=day2, offset_hours_for=_zero_offset)
+        row = conn.execute(
+            "SELECT missed_at FROM todos WHERE id = ?", (done,)
+        ).fetchone()
+
+    assert [r.missed_todo_id for r in results] == [None]
+    assert row["missed_at"] is None
 
 
 def test_spawn_resumes_after_the_instance_is_completed(db):
@@ -535,3 +647,210 @@ def test_concurrent_spawners_cannot_double_insert(db):
     with open_db(db) as conn:
         assert len(pending_todos(conn, GUILD)) == 1
         assert get_recurring(conn, rid, GUILD).next_run_at == _epoch(2026, 7, 27, 9, 0)
+
+
+# ── "Run now" keeps skip-if-pending ─────────────────────────────────────
+
+
+def test_run_now_never_writes_off_the_open_instance(db):
+    """A double click is not a day boundary.
+
+    ``run_now`` is a mod adding one more instance by hand. If it reset like a
+    scheduled fire does, pressing the button twice would mark the first press
+    missed — fabricating a failure out of a double click, and putting a break
+    in a streak that nothing actually broke.
+    """
+    now = _epoch(2026, 7, 26, 9, 0)
+    with open_db(db) as conn:
+        rid = create_recurring(
+            conn, GUILD, task="Post QOTD", recurrence="daily",
+            time_of_day=540, now_ts=now - 60,
+        )
+        first = run_now(conn, rid, GUILD, now_ts=now)
+        second = run_now(conn, rid, GUILD, now_ts=now + 5)
+        missed = conn.execute(
+            "SELECT COUNT(*) FROM todos WHERE missed_at IS NOT NULL"
+        ).fetchone()[0]
+
+    assert first is not None and first.status == "spawned"
+    assert second is not None and second.status == "skipped_pending"
+    assert second.missed_todo_id is None
+    assert missed == 0
+
+
+# ── streaks ─────────────────────────────────────────────────────────────
+
+
+def _daily_chore(conn, *, start: float, task: str = "Post QOTD") -> int:
+    return create_recurring(
+        conn, GUILD, task=task, recurrence="daily",
+        time_of_day=540, now_ts=start - 60,
+    )
+
+
+def _run_days(conn, outcomes: list[bool], start_day: int = 26) -> None:
+    """Drive N daily occurrences, ticking the ones flagged True.
+
+    Each occurrence spawns, and the previous one is written off by the reset
+    unless it was ticked — which is exactly the history a streak reads.
+    """
+    for offset, did_it in enumerate(outcomes):
+        day = _epoch(2026, 7, start_day + offset, 9, 0)
+        spawn_due(conn, now_ts=day, offset_hours_for=_zero_offset)
+        if did_it:
+            row = pending_todos(conn, GUILD)[0]
+            complete_todo(conn, row["id"], GUILD, USER, now_ts=day + 60)
+
+
+def test_streak_counts_consecutive_completed_days(db):
+    with open_db(db) as conn:
+        rid = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        _run_days(conn, [True, True, True])
+        assert chore_streaks(conn, GUILD) == {rid: 3}
+
+
+def test_streak_breaks_at_a_missed_day(db):
+    """Only the run since the last miss counts — that is what a streak is."""
+    with open_db(db) as conn:
+        rid = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        _run_days(conn, [True, True, False, True, True])
+        assert chore_streaks(conn, GUILD) == {rid: 2}
+
+
+def test_todays_open_row_does_not_zero_the_streak(db):
+    """A chore due at 09:00 must not read as a broken streak all morning.
+
+    The newest instance is still outstanding — the day is undecided, not
+    failed. Counting it as a break would show 🔥 0 on every chore every day
+    until someone ticked it, which makes the number worthless.
+    """
+    with open_db(db) as conn:
+        rid = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        _run_days(conn, [True, True])
+        # One more occurrence, left untouched: today.
+        spawn_due(conn, now_ts=_epoch(2026, 7, 28, 9, 0), offset_hours_for=_zero_offset)
+        assert chore_streaks(conn, GUILD) == {rid: 2}
+
+
+def test_streak_is_zero_before_anything_is_ticked(db):
+    with open_db(db) as conn:
+        rid = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        _run_days(conn, [False, False])
+        assert chore_streaks(conn, GUILD) == {rid: 0}
+
+
+def test_streaks_are_per_definition(db):
+    with open_db(db) as conn:
+        good = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0), task="QOTD")
+        bad = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0), task="Mod queue")
+        for offset in range(3):
+            day = _epoch(2026, 7, 26 + offset, 9, 0)
+            spawn_due(conn, now_ts=day, offset_hours_for=_zero_offset)
+            for row in pending_todos(conn, GUILD):
+                if row["task"] == "QOTD":
+                    complete_todo(conn, row["id"], GUILD, USER, now_ts=day + 60)
+        streaks = chore_streaks(conn, GUILD)
+    assert streaks[good] == 3
+    assert streaks[bad] == 0
+
+
+def test_streak_lookback_bounds_the_walk(db):
+    """The walk is capped, so a chore with years of history stays cheap."""
+    with open_db(db) as conn:
+        rid = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        _run_days(conn, [True] * 5)
+        assert chore_streaks(conn, GUILD, lookback=2) == {rid: 2}
+
+
+# ── the chore board's rows ──────────────────────────────────────────────
+
+
+def test_chore_board_rows_carry_state_and_streak(db):
+    with open_db(db) as conn:
+        rid = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        _run_days(conn, [True, True])
+        rows = chore_board_rows(conn, GUILD)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["recurring_id"] == rid
+    assert row["task"] == "Post QOTD"
+    assert row["completed_at"] is not None
+    assert row["completed_by"] == USER
+    assert row["streak"] == 2
+
+
+def test_chore_board_shows_the_latest_instance_only(db):
+    """A scoreboard shows today, not the whole history."""
+    with open_db(db) as conn:
+        _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        _run_days(conn, [True, False, True])
+        rows = chore_board_rows(conn, GUILD)
+
+    assert len(rows) == 1
+    assert rows[0]["completed_at"] is not None  # the most recent day, ticked
+    assert rows[0]["missed_at"] is None
+
+
+def test_chore_board_shows_a_missed_chore_as_missed(db):
+    with open_db(db) as conn:
+        _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        spawn_due(conn, now_ts=_epoch(2026, 7, 26, 9, 0), offset_hours_for=_zero_offset)
+        open_id = pending_todos(conn, GUILD)[0]["id"]
+        mark_missed(conn, open_id, now_ts=_epoch(2026, 7, 27, 9, 0))
+        rows = chore_board_rows(conn, GUILD)
+
+    assert len(rows) == 1
+    assert rows[0]["missed_at"] is not None
+    assert rows[0]["completed_at"] is None
+
+
+def test_chore_board_omits_paused_definitions(db):
+    """A chore paused for the holidays is not a chore the team is failing."""
+    with open_db(db) as conn:
+        live = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0), task="QOTD")
+        parked = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0), task="Newsletter")
+        set_status(conn, parked, GUILD, "paused", now_ts=_epoch(2026, 7, 26, 9, 0))
+        rows = chore_board_rows(conn, GUILD)
+
+    assert [r["recurring_id"] for r in rows] == [live]
+
+
+def test_chore_board_includes_a_definition_that_has_never_run(db):
+    """Configured but not yet due still belongs on the board, as not-done."""
+    with open_db(db) as conn:
+        rid = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0))
+        rows = chore_board_rows(conn, GUILD)
+
+    assert [r["recurring_id"] for r in rows] == [rid]
+    assert rows[0]["todo_id"] is None
+    assert rows[0]["streak"] == 0
+
+
+def test_chore_board_reads_in_time_of_day_order(db):
+    """The board scans like a shift checklist, not by id."""
+    now = _epoch(2026, 7, 26, 0, 0)
+    with open_db(db) as conn:
+        evening = create_recurring(
+            conn, GUILD, task="Evening sweep", recurrence="daily",
+            time_of_day=1200, now_ts=now,
+        )
+        morning = create_recurring(
+            conn, GUILD, task="Post QOTD", recurrence="daily",
+            time_of_day=540, now_ts=now,
+        )
+        rows = chore_board_rows(conn, GUILD)
+
+    assert [r["recurring_id"] for r in rows] == [morning, evening]
+
+
+def test_chore_board_is_scoped_to_its_guild(db):
+    with open_db(db) as conn:
+        mine = _daily_chore(conn, start=_epoch(2026, 7, 26, 9, 0), task="Mine")
+        create_recurring(
+            conn, 999, task="Theirs", recurrence="daily",
+            time_of_day=540, now_ts=_epoch(2026, 7, 26, 9, 0),
+        )
+        rows = chore_board_rows(conn, GUILD)
+
+    assert [r["recurring_id"] for r in rows] == [mine]

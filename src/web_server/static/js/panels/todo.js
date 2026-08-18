@@ -29,12 +29,15 @@ function renderList(todos, activeId, filter) {
   }
   return todos
     .map((t) => {
-      const cls = (t.completed_at ? "low" : "med") + (t.id === activeId ? " active" : "");
+      const cls = (t.completed_at || t.missed_at ? "low" : "med")
+        + (t.id === activeId ? " active" : "");
       const age = fmtAge(Date.now() / 1000 - t.created_at) + " ago";
       const preview = t.task.length > 80 ? t.task.slice(0, 77) + "…" : t.task;
       const chip = t.completed_at
         ? '<span class="t-chip closed" style="margin-left:4px">Done</span>'
-        : '<span class="t-chip open" style="margin-left:4px">Pending</span>';
+        : t.missed_at
+          ? '<span class="t-chip closed" style="margin-left:4px">Missed</span>'
+          : '<span class="t-chip open" style="margin-left:4px">Pending</span>';
       return `
       <div class="ticket-item ${esc(cls)}" data-todo-id="${esc(t.id)}">
         <div class="pri"></div>
@@ -64,7 +67,15 @@ function renderDetail(t, completing) {
          ${esc(fmtTs(t.completed_at))} by <b>${esc(t.completed_by_name || t.completed_by || "unknown")}</b>
        </div>`
     : "";
-  const completeBtn = !t.completed_at
+  const missedLine = t.missed_at
+    ? `<div class="td-section">Missed</div>
+       <div style="padding:4px 8px 8px;font-size:14px;color:var(--ink)">
+         Written off at ${esc(fmtTs(t.missed_at))} when the next one came round.
+         A recurring task resets rather than carrying over, so this day stays on
+         the record as one nobody got to.
+       </div>`
+    : "";
+  const completeBtn = !t.completed_at && !t.missed_at
     ? `<div class="td-actions">
         <span class="act-spacer"></span>
         <button class="act-btn" data-action="complete" ${completing ? "disabled" : ""}>
@@ -74,7 +85,9 @@ function renderDetail(t, completing) {
     : "";
   const statusChip = t.completed_at
     ? '<span class="t-chip closed">Done</span>'
-    : '<span class="t-chip open">Pending</span>';
+    : t.missed_at
+      ? '<span class="t-chip closed">Missed</span>'
+      : '<span class="t-chip open">Pending</span>';
   const descriptionBlock = t.description
     ? `<div class="td-section">Description</div>
        <div style="font-size:14px;color:var(--ink);line-height:1.5;white-space:pre-wrap;word-break:break-word;padding:4px 8px 8px">${esc(t.description)}</div>`
@@ -101,12 +114,15 @@ function renderDetail(t, completing) {
       ${descriptionBlock}
       ${sourceBlock}
       ${completedLine}
+      ${missedLine}
     </div>
     ${completeBtn}`;
 }
 
 const FILTERS = {
-  pending:   (t) => !t.completed_at,
+  // A written-off recurring row is closed, not outstanding — the same rule the
+  // boards and the API's pending_count use.
+  pending:   (t) => !t.completed_at && !t.missed_at,
   completed: (t) => !!t.completed_at,
   all:       () => true,
 };
@@ -117,8 +133,11 @@ function recurringRow(item) {
   const next = item.next_run_at && !paused
     ? `next ${esc(fmtTs(item.next_run_at))}`
     : paused ? "paused" : "not scheduled";
+  // Scheduled fires never skip any more — they reset, writing the old one off
+  // and spawning fresh. So this can only come from a Run now that found a copy
+  // already on the list, which is deliberately the one path that still skips.
   const skipped = item.last_status === "skipped_pending"
-    ? ' <span class="t-chip" title="The previous one is still on the list, so no duplicate was added.">last run skipped</span>'
+    ? ' <span class="t-chip" title="Run now found a copy already on the list, so nothing was added. Scheduled runs reset instead.">run now skipped</span>'
     : "";
   return `
     <tr data-recurring-id="${esc(item.id)}"${paused ? ' style="opacity:.6"' : ""}>
@@ -255,14 +274,27 @@ export function mount(container, initialParams = {}) {
         <div data-board-body>${renderLoading("Loading board…")}</div>
       </section>
 
+      <section class="card" data-chore-board-card style="margin-top:20px">
+        <div class="section-label">Mod Chore Board</div>
+        <div class="field-hint" style="margin-bottom:8px">
+          A second board for the mod team, showing <b>only</b> recurring chores —
+          today's list, who ticked each one, and how many days running it has been
+          done. Put it in a mod channel so a daily “post the QOTD” isn't buried in
+          the main list. It needs its own channel: two sticky boards can't share
+          one, because only one of them can sit at the bottom.
+        </div>
+        <div data-chore-board-body>${renderLoading("Loading chore board…")}</div>
+      </section>
+
       <section class="card" style="margin-top:20px">
         <div class="section-label">Recurring Tasks</div>
         <div class="field-hint" style="margin-bottom:8px">
           Chores that land on the list on a schedule — “Post QOTD” every morning,
           “Photo challenge prompt” every Monday. These are <b>reminders</b>: the bot
-          adds the task, a moderator does it and ticks it off. If the last one is
-          still outstanding no duplicate is added, so a missed day shows as one
-          ageing task rather than a pile.
+          adds the task, a moderator does it and ticks it off. Each one
+          <b>resets</b>: when the next is due, an untouched one is written off as
+          missed and a fresh task takes its place — so nothing piles up, and the
+          days it didn't happen stay on the record.
         </div>
         <div data-recurring-body>${renderLoading("Loading recurring tasks…")}</div>
       </section>
@@ -278,7 +310,6 @@ export function mount(container, initialParams = {}) {
   const addBtn = container.querySelector("[data-add-btn]");
   const addStatus = container.querySelector("[data-add-status]");
 
-  const boardBody = container.querySelector("[data-board-body]");
   const recurringBody = container.querySelector("[data-recurring-body]");
 
   const state = {
@@ -287,6 +318,7 @@ export function mount(container, initialParams = {}) {
     activeId: initialParams.task ? Number(initialParams.task) : null,
     completing: false,
     board: null,
+    choreBoard: null,
     canManageBoard: false,
     channels: [],
     recurring: [],
@@ -321,83 +353,131 @@ export function mount(container, initialParams = {}) {
     pushHash();
   }
 
-  // ── board card ──────────────────────────────────────────────────────
+  // ── board cards ─────────────────────────────────────────────────────
+  //
+  // Two sticky boards of the same shape: the all-todos board and the mod chore
+  // board. They are configured identically and can never share a channel — the
+  // API answers that with a 409, because a Discord channel has exactly one
+  // bottom slot and two sticky panels in it leave one of them buried.
 
-  let boardPicker = null;
+  const BOARD_CARDS = [
+    {
+      kind: "all",
+      stateKey: "board",
+      selector: "[data-board-body]",
+      pickerLabel: "Board Channel",
+      postLabel: "Post Board",
+      moveLabel: "Move / Repost Board",
+      removeLabel: "Remove Board",
+      removeTitle: "Remove the board?",
+      removeBody:
+        "The board message will be deleted from its channel. Tasks themselves are untouched.",
+      postedToast: "Board posted.",
+      removedToast: "Board removed.",
+      lockedHint: "Only administrators can post or move the board.",
+      jumpLabel: "jump to the board ↗",
+    },
+    {
+      kind: "chores",
+      stateKey: "choreBoard",
+      selector: "[data-chore-board-body]",
+      pickerLabel: "Chore Board Channel",
+      postLabel: "Post Chore Board",
+      moveLabel: "Move / Repost Chore Board",
+      removeLabel: "Remove Chore Board",
+      removeTitle: "Remove the chore board?",
+      removeBody:
+        "The chore board message will be deleted from its channel. The chores themselves are untouched.",
+      postedToast: "Chore board posted.",
+      removedToast: "Chore board removed.",
+      lockedHint: "Only administrators can post or move the chore board.",
+      jumpLabel: "jump to the chore board ↗",
+    },
+  ].map((card) => ({ ...card, body: container.querySelector(card.selector) }));
 
-  function renderBoard() {
-    const board = state.board || { posted: false, channel_id: "0" };
+  const boardPickers = {};
+
+  function renderBoardCard(card) {
+    const board = state[card.stateKey] || { posted: false, channel_id: "0" };
     const locked = !state.canManageBoard;
     // Keep a half-made selection across re-renders — refresh() also runs when
     // a task is added or completed, and resetting the picker under the admin
     // then reports "Pick a channel first" on a channel they had just chosen.
-    const selected = boardPicker?.getValue?.() ?? String(board.channel_id || "0");
+    const selected = boardPickers[card.kind]?.getValue?.()
+      ?? String(board.channel_id || "0");
     const where = board.posted && board.jump_url
       ? `Posted — <a href="${esc(board.jump_url)}" target="_blank" rel="noopener noreferrer"
-           style="color:var(--accent,#5af)">jump to the board ↗</a>`
+           style="color:var(--accent,#5af)">${esc(card.jumpLabel)}</a>`
       : "Not posted yet.";
-    boardBody.innerHTML = `
+    card.body.innerHTML = `
       <div class="field">
-        <label>Board Channel</label>
+        <label>${esc(card.pickerLabel)}</label>
         <span data-picker="board-channel"></span>
       </div>
       <div class="td-actions">
         <button class="btn btn-primary" data-act="board-save" ${locked ? "disabled" : ""}>
-          ${board.posted ? "Move / Repost Board" : "Post Board"}
+          ${esc(board.posted ? card.moveLabel : card.postLabel)}
         </button>
         ${board.posted
-          ? `<button class="act-btn" data-act="board-remove" ${locked ? "disabled" : ""}>Remove Board</button>`
+          ? `<button class="act-btn" data-act="board-remove" ${locked ? "disabled" : ""}>${esc(card.removeLabel)}</button>`
           : ""}
         <span data-board-status style="font-size:12px"></span>
       </div>
       <div class="field-hint" style="margin-top:6px">
-        ${locked ? "Only administrators can post or move the board." : where}
+        ${locked ? esc(card.lockedHint) : where}
       </div>`;
 
-    boardPicker = mountChannelPicker(
-      boardBody.querySelector('[data-picker="board-channel"]'),
+    boardPickers[card.kind] = mountChannelPicker(
+      card.body.querySelector('[data-picker="board-channel"]'),
       state.channels,
       selected,
-      { label: "Board Channel" }
+      { label: card.pickerLabel }
     );
     if (locked) {
-      boardBody.querySelectorAll("input,select,button").forEach((el) => { el.disabled = true; });
+      card.body.querySelectorAll("input,select,button").forEach((el) => { el.disabled = true; });
     }
   }
 
-  boardBody.addEventListener("click", async (e) => {
-    const btn = e.target.closest("button[data-act]");
-    if (!btn || btn.disabled || state.busy) return;
-    const status = boardBody.querySelector("[data-board-status]");
-    const remove = btn.dataset.act === "board-remove";
+  function renderBoard() {
+    BOARD_CARDS.forEach(renderBoardCard);
+  }
 
-    if (remove) {
-      const ok = await confirmDialog(
-        "The board message will be deleted from its channel. Tasks themselves are untouched.",
-        { danger: true, title: "Remove the board?", confirmLabel: "Remove" }
-      );
-      if (!ok) return;
-    }
-    const channelId = remove ? "0" : (boardPicker?.getValue?.() || "0");
-    if (!remove && channelId === "0") {
-      showStatus(status, false, "Pick a channel first.");
-      return;
-    }
-    state.busy = true;
-    btn.disabled = true;
-    try {
-      await apiPut("/api/todos/board", { channel_id: channelId });
-      toast(remove ? "Board removed." : "Board posted.", "success");
-      await refresh();
-    } catch (err) {
-      showStatus(status, false, err.message);
-    } finally {
-      state.busy = false;
-      // The success path re-renders this button away; the error path doesn't,
-      // so re-enable or a failed post leaves it dead until a page reload.
-      btn.disabled = false;
-    }
-  });
+  for (const card of BOARD_CARDS) {
+    card.body.addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-act]");
+      if (!btn || btn.disabled || state.busy) return;
+      const status = card.body.querySelector("[data-board-status]");
+      const remove = btn.dataset.act === "board-remove";
+
+      if (remove) {
+        const ok = await confirmDialog(card.removeBody, {
+          danger: true, title: card.removeTitle, confirmLabel: "Remove",
+        });
+        if (!ok) return;
+      }
+      const channelId = remove ? "0" : (boardPickers[card.kind]?.getValue?.() || "0");
+      if (!remove && channelId === "0") {
+        showStatus(status, false, "Pick a channel first.");
+        return;
+      }
+      state.busy = true;
+      btn.disabled = true;
+      try {
+        await apiPut("/api/todos/board", { channel_id: channelId, kind: card.kind });
+        toast(remove ? card.removedToast : card.postedToast, "success");
+        await refresh();
+      } catch (err) {
+        // A 409 here is the same-channel refusal, and its message explains
+        // why — surface it rather than a generic failure.
+        showStatus(status, false, err.message);
+      } finally {
+        state.busy = false;
+        // The success path re-renders this button away; the error path doesn't,
+        // so re-enable or a failed post leaves it dead until a page reload.
+        btn.disabled = false;
+      }
+    });
+  }
 
   // ── recurring card ──────────────────────────────────────────────────
 
@@ -553,6 +633,7 @@ export function mount(container, initialParams = {}) {
       const data = await api("/api/todos");
       state.todos = data.todos || [];
       state.board = data.board || null;
+      state.choreBoard = data.chore_board || null;
       state.canManageBoard = !!data.can_manage_board;
       renderStats();
       render();

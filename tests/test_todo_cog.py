@@ -7,9 +7,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from bot_modules.cogs.todo_cog import TodoAddModal, TodoBoardView, TodoCog
+from bot_modules.cogs.todo_cog import (
+    TodoAddModal,
+    TodoBoardView,
+    TodoChoreBoardView,
+    TodoCog,
+)
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.todo_service import create_todo, get_board, save_board
+from bot_modules.services.todo_service import (
+    BOARD_ALL,
+    BOARD_CHORES,
+    create_todo,
+    get_board,
+    save_board,
+)
 from tests.db_template import migrated_db
 
 
@@ -368,3 +379,62 @@ async def test_todo_answers_the_interaction_before_repainting():
                       new=AsyncMock(side_effect=lambda _g: order.append("repaint"))):
         await cog.todo.callback(cog, interaction, "clean up the channels")
     assert order == ["reply", "repaint"]
+
+
+# ── the chore board (glue only — rendering is covered in board_logic) ──
+
+
+@pytest.mark.asyncio
+async def test_chore_button_rejects_non_mods():
+    """The safety gate on the second board's only button."""
+    view = TodoChoreBoardView()
+    interaction = _button_interaction(_member(mod=False))
+    with patch("bot_modules.cogs.todo_cog.chore_board_rows") as rows:
+        await view._complete.callback(interaction)
+    rows.assert_not_called()
+    assert "moderator" in interaction.response.send_message.await_args.args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_the_two_boards_keep_separate_placements(board_db):
+    """The wiring the widened key exists for: one cog, two independent panels."""
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+
+    cog._write_ids(123, 111, 222)
+    cog._write_chore_ids(123, 333, 444)
+
+    assert cog._read_ids(123) == (111, 222)
+    assert cog._read_chore_ids(123) == (333, 444)
+    with open_db(board_db) as conn:
+        assert get_board(conn, 123, BOARD_ALL).channel_id == 111
+        assert get_board(conn, 123, BOARD_CHORES).channel_id == 333
+
+
+@pytest.mark.asyncio
+async def test_on_message_is_forwarded_to_both_panels(board_db):
+    """A miss here leaves one board unable to re-stick at all."""
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    cog.board.on_message = AsyncMock()
+    cog.chore_board.on_message = AsyncMock()
+
+    message = MagicMock(spec=discord.Message)
+    await cog._restick_board(message)
+
+    cog.board.on_message.assert_awaited_once_with(message)
+    cog.chore_board.on_message.assert_awaited_once_with(message)
+
+
+@pytest.mark.asyncio
+async def test_channel_delete_is_forwarded_to_both_panels(board_db):
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    cog.board.on_channel_delete = AsyncMock()
+    cog.chore_board.on_channel_delete = AsyncMock()
+
+    deleted = MagicMock(spec=discord.TextChannel)
+    await cog._forget_deleted_board_channel(deleted)
+
+    cog.board.on_channel_delete.assert_awaited_once_with(deleted)
+    cog.chore_board.on_channel_delete.assert_awaited_once_with(deleted)
