@@ -573,6 +573,14 @@
       </div>
     </div>
 
+    <div class="callout callout-info">
+      <span class="callout-icon">🤫</span>
+      <div class="callout-body">
+        <strong>AMA question quests pay you quietly</strong>
+        <p>If your server runs a quest like <em>Ask in an AMA</em>, the payout stays off the server's transaction feed, and such a quest can't be set to require staff sign-off. AMA questions post anonymously, so a card naming you seconds after one appeared would give you away by timing alone. You still get paid: the credit shows on your own <code>/quests</code> board and <code>/bank wallet</code> ledger. Answering questions in your <em>own</em> AMA is not treated this way — the hot seat is public.</p>
+      </div>
+    </div>
+
     <h3 id="games-duels">Duels &amp; Group Games</h3>
     <p>Real-time button games built on the same framework — duels are 1-v-1 challenges, group games run an open lobby then eliminate players each round. All <span class="perm perm-all">Everyone</span>.</p>
     <table>
@@ -754,6 +762,14 @@
     </table>
     <p style="font-size:0.82rem;color:var(--muted)">The <code>/guess submit</code> and <code>/guess confess</code> commands need the configured Guess role; if no role is set they refuse with a configuration error. The Guess channel and submitter role are set on the <a href="/#/config-guess">web dashboard</a>. Any channel may be used — the bot does not require the age-restricted flag and does not check submissions against it, so mark the channel age-restricted in Discord if NSFW submissions are expected, and let your moderators police what gets posted where.</p>
 
+    <div class="callout callout-info">
+      <span class="callout-icon">🤫</span>
+      <div class="callout-body">
+        <strong>Guess Who quests pay you quietly</strong>
+        <p>If your server runs a quest like <em>Submit a Guess Who Round</em>, the payout never appears in the server's transaction feed, and such a quest can't be set to require staff sign-off. In Guess Who you are the answer to your own round, so a card naming you moments after a round went up would not just expose you — it would solve the round for everyone reading. You still get paid: the credit shows on your own <code>/quests</code> board and <code>/bank wallet</code> ledger. <em>Making</em> a guess and <em>winning</em> a round are not treated this way — neither says anything the round has not already revealed.</p>
+      </div>
+    </div>
+
     <!-- ══════════════════════════════════════════════════════════
          6. WHISPER
     ═══════════════════════════════════════════════════════════ -->
@@ -867,6 +883,14 @@
         <strong>Configure via the <a href="/#/pen-pals">web dashboard</a></strong>
         <p>The <strong>Social → Pen Pals</strong> panel holds the whole feature on one page: the enable toggle and wiring (channel category), session length, and the re-match cooldown, with the conversation-starter question bank below them. Moderators can change both halves — Pen Pals settings are moderator-level rather than admin-only, so whoever curates the prompts can also set the channel they post in. <strong>Pairing Mode</strong> picks how matches happen — <em>Instant</em> (the default) matches the moment a partner is waiting, or <em>Once a day</em> to queue everyone and pair the whole pool in a single batch at 8:00 AM Eastern instead. <strong>Who Can See Each Chat</strong> controls how much staff oversight the private rooms get — <em>Admins only</em>, <em>Admins and mods</em> (the default), or <em>Everyone</em> (anyone can read the chat but only the two members can post). It applies to chats opened after you save; chats already running keep their original visibility. <strong>Session Opening Message</strong> is an optional note you write once — it's shown at the top of the pinned intro embed every time a chat opens, above who's matched and when the chat ends. Leave it blank for no message. Under <strong>Timing &amp; Limits</strong>, <strong>Nudge A Quiet Partner After</strong> sets how many hours a message can go unanswered before the bot reminds the member who owes a reply — it pings that one member, fires once per silence, and is skipped once the closing-soon warning is out. It ships at 0 (no reminders); 6 hours is a sensible starting point on a 24-hour session.</p>
         <p><strong>Pool Activity</strong>, below the settings, is the log of who joined or left the matching pool and why — signed up, matched, chat ended, left the server, or left out for never posting. It exists because the pool itself only shows who is waiting <em>right now</em>: a pool that has quietly stopped moving looks exactly like one nobody has ever joined, which is how a five-day stall went unnoticed. If matching seems to have stopped, read this list first.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">🤫</span>
+      <div class="callout-body">
+        <strong>Pen Pals quests pay you quietly</strong>
+        <p>If your server runs quests like <em>Get Matched with a Pen Pal</em> or <em>Finish a Pen Pals Session</em>, the payouts stay off the server's transaction feed, and such a quest can't be set to require staff sign-off. Both of you are paid at the same moment, so two cards side by side would announce not only that you were matched but <em>who with</em> — which your server may well have set the chat itself up to keep quiet (see <strong>Who Can See Each Chat</strong> above). You still get paid: the credit shows on your own <code>/quests</code> board and <code>/bank wallet</code> ledger.</p>
       </div>
     </div>
 

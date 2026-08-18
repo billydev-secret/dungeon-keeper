@@ -10,6 +10,7 @@ delete refusal on paid claims.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 
@@ -1049,6 +1050,19 @@ def test_anon_kind_quests_reject_signoff(db, kind):
             _make(conn, qtype="daily", trigger_kind=kind, signoff=1)
         # Without sign-off the same quest is fine.
         _make(conn, qtype="daily", trigger_kind=kind, signoff=0)
+
+
+@pytest.mark.parametrize("kind", sorted(ANON_KINDS))
+def test_anon_kind_quests_reject_signoff_turned_on_later(db, kind):
+    # Creating it without sign-off and switching sign-off on afterwards is the
+    # same card in the bank channel. `update_quest` only re-validates when a
+    # trigger-shaped field is in the patch, so a body of nothing but
+    # {"signoff": true} — which the API accepts, since the route sends only
+    # what changed — used to walk straight past the guard.
+    with open_db(db) as conn:
+        qid = _make(conn, qtype="daily", trigger_kind=kind, signoff=0)
+        with pytest.raises(ValueError, match="deanonymize"):
+            update_quest(conn, GUILD, qid, {"signoff": 1})
 
 
 def test_whisper_guess_still_allows_signoff(db):
@@ -2458,6 +2472,78 @@ def test_set_bonus_pays_on_clearing_the_daily_board(db):
                 period="2026-07-15", booster=False,
             )
         assert get_balance(conn, GUILD, USER) == 40
+
+
+def test_set_bonus_off_an_anon_claim_is_marked_anon(db):
+    """Clearing your board with the anonymous quest is the leak the register
+    suppression was supposed to close, coming back through the side door: the
+    `quest_bonus` row carries no quest_id, so the anon filter can't see it, and
+    "**X** earned Quest board clear" still lands the same second the anonymous
+    action did. For `guess_post` that card still names the round's answer.
+    The row is stamped instead, and the drain reads the stamp."""
+    with open_db(db) as conn:
+        loud = _make(conn, qtype="daily", reward=5, title="A")
+        quiet = _make(
+            conn, qtype="daily", reward=5, title="B", trigger_kind="guess_post"
+        )
+        day = "2026-07-14"
+        claim_quest(conn, BONUS_SETTINGS, GUILD, loud, USER, period=day, booster=False)
+        claim_quest(conn, BONUS_SETTINGS, GUILD, quiet, USER, period=day, booster=False)
+        row = conn.execute(
+            "SELECT meta FROM econ_ledger WHERE guild_id = ? AND user_id = ? "
+            "AND kind = 'quest_bonus'",
+            (GUILD, USER),
+        ).fetchone()
+
+    assert json.loads(row["meta"]).get("anon") == 1
+
+
+def test_set_bonus_off_an_ordinary_claim_is_not_marked(db):
+    """The stamp is only for boards closed out by a suppressed quest — an
+    everyday board clear is exactly the celebration the feed exists for."""
+    with open_db(db) as conn:
+        a = _make(conn, qtype="daily", reward=5, title="A")
+        b = _make(conn, qtype="daily", reward=5, title="B", trigger_kind="qotd_reply")
+        day = "2026-07-14"
+        claim_quest(conn, BONUS_SETTINGS, GUILD, a, USER, period=day, booster=False)
+        claim_quest(conn, BONUS_SETTINGS, GUILD, b, USER, period=day, booster=False)
+        row = conn.execute(
+            "SELECT meta FROM econ_ledger WHERE guild_id = ? AND user_id = ? "
+            "AND kind = 'quest_bonus'",
+            (GUILD, USER),
+        ).fetchone()
+
+    assert "anon" not in json.loads(row["meta"])
+
+
+def test_daily_complete_tick_off_an_anon_claim_is_marked_anon(db):
+    """The second side door: a paid daily also ticks the weekly
+    ``daily_complete`` progression, and *that* payout carries the progression
+    quest's id — not the anonymous one — so the anon filter waves it through.
+    If the anonymous daily was the one that finished the count, the card posts
+    at the telltale second like any other."""
+    with open_db(db) as conn:
+        loud = _make(conn, qtype="daily", reward=5, title="A")
+        quiet = _make(
+            conn, qtype="daily", reward=5, title="B", trigger_kind="guess_post"
+        )
+        weekly = _make(
+            conn, qtype="weekly", reward=20, title="Two dailies",
+            trigger_kind="daily_complete", target_count=2,
+        )
+        day = "2026-07-14"
+        # The ordinary daily ticks it to 1/2; the anonymous one finishes it,
+        # so the payout lands in the same transaction as the suppressed claim.
+        claim_quest(conn, BONUS_SETTINGS, GUILD, loud, USER, period=day, booster=False)
+        claim_quest(conn, BONUS_SETTINGS, GUILD, quiet, USER, period=day, booster=False)
+        row = conn.execute(
+            "SELECT meta FROM econ_ledger WHERE guild_id = ? AND user_id = ? "
+            "AND kind = 'quest' AND meta LIKE ?",
+            (GUILD, USER, f'%"quest_id": {weekly}%'),
+        ).fetchone()
+
+    assert row is not None, "the daily_complete payout never landed"
+    assert json.loads(row["meta"]).get("anon") == 1
 
 
 def test_set_bonus_waits_for_signoff_approval(db):
