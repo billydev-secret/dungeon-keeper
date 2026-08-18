@@ -206,7 +206,17 @@ async def survivor_poll_loop(bot, db_path: Path) -> None:
     await bot.wait_until_ready()
     while True:
         try:
-            await run_poll_cycle(db_path, state, time.time(), _fetch)
+            result = await run_poll_cycle(db_path, state, time.time(), _fetch)
+            if result.reports:
+                from bot_modules.survivor.tasks import post_addenda
+
+                await post_addenda(bot, db_path, result.reports)
         except Exception:
             log.exception("survivor poll loop tick failed")
+        try:
+            from bot_modules.survivor.tasks import run_weekly_tasks
+
+            await run_weekly_tasks(bot, db_path, time.time())
+        except Exception:
+            log.exception("survivor weekly tasks tick failed")
         await asyncio.sleep(TICK_SECONDS)

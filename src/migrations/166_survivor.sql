@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS survivor_players (
     --   'cap'    the groundskeeper stopped covering (§1.2 auto-assign cap)
     --   'missed' missed_pick='eliminate' seasons: pickless at final kickoff
     --   'admin'  dashboard eliminate
-    --   'left'   walked out of the meadow (§6.14, stage 5)
+    --   'left'   walked out of the meadow (§6.14)
+    --   'entry'  late_entry='ghost_only' arrival — born a ghost
     -- Non-'picks' deaths survive recomputation; NULL while alive.
     elimination_source TEXT,
     joined_at TEXT NOT NULL,

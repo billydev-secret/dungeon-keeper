@@ -378,6 +378,9 @@ def player_status(
         (season["id"], user_id, week),
     ).fetchone()
     bag = satchel(conn, season["id"], user_id)
+    streak = None
+    if player["status"] == "ghost":
+        streak = ghost_streaks(conn, season, now).get(user_id)
     return {
         "status": player["status"],
         "strikes_used": int(player["strikes_used"]),
@@ -393,6 +396,7 @@ def player_status(
         ),
         "satchel_count": len(bag),
         "satchel_low": len(bag) < SATCHEL_LOW_WATER,
+        "streak": streak,
     }
 
 
@@ -482,3 +486,55 @@ def pot_totals(conn: sqlite3.Connection, season: dict) -> dict[str, int]:
         pot = "ghost" if (r["meta"] and '"pot": "ghost"' in r["meta"]) else "main"
         pots[pot] += int(r["total"] or 0)
     return pots
+
+
+# ── ghost streak (§1.7, stage 6a) ─────────────────────────────────────
+
+
+def ghost_streaks(
+    conn: sqlite3.Connection, season: dict, now: float
+) -> dict[int, dict]:
+    """Per-ghost streak stats: ``{user_id: {current, best}}``.
+
+    A streak is consecutive CORRECT picks in elapsed weeks after death. A
+    missed elapsed week breaks it (decided 2026-08-17: the side-pot rewards
+    showing up); a void leaves it untouched; an unsettled pick is pending —
+    neither extends nor breaks until it grades.
+    """
+    ghosts = conn.execute(
+        "SELECT user_id, eliminated_week FROM survivor_players "
+        "WHERE season_id = ? AND status = 'ghost' "
+        "AND eliminated_week IS NOT NULL",
+        (season["id"],),
+    ).fetchall()
+    if not ghosts:
+        return {}
+    elapsed = elapsed_weeks(conn, season["season_year"], now)
+    picks = {
+        (int(r["user_id"]), int(r["week"])): r["result"]
+        for r in conn.execute(
+            "SELECT user_id, week, result FROM survivor_picks "
+            "WHERE season_id = ? AND slot = 1",
+            (season["id"],),
+        ).fetchall()
+    }
+    out: dict[int, dict] = {}
+    for g in ghosts:
+        user_id = int(g["user_id"])
+        death = int(g["eliminated_week"])
+        run = best = 0
+        for week in elapsed:
+            if week <= death:
+                continue
+            result = picks.get((user_id, week), "MISS")
+            if result == "MISS":
+                run = 0
+            elif result == "win":
+                run += 1
+                best = max(best, run)
+            elif result in ("void", None):
+                pass  # untouched
+            else:
+                run = 0
+        out[user_id] = {"current": run, "best": best}
+    return out

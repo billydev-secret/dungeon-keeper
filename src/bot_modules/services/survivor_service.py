@@ -51,6 +51,14 @@ DEFAULT_CONFIG: dict[str, object] = {
     # Survivor channel has since been re-pointed. Set by the post route.
     "announcement_message_id": 0,
     "announcement_channel_id": 0,
+    # Weekly-task state, not rules: which week each Tuesday/Wednesday/
+    # Saturday task last ran for, so a restart never double-posts and a
+    # missed hour catches up. Stored here because the season's config JSON
+    # is the one per-season store and every key must have a reader.
+    "last_reckoned_week": 0,
+    "last_slate_week": 0,
+    "last_lastcall_week": 0,
+    "last_reckoned_at": 0,
 }
 
 _ENUM_KEYS: dict[str, tuple[str, ...]] = {
@@ -81,6 +89,10 @@ _INT_RANGES: dict[str, tuple[int, int]] = {
     "role_sole_survivor_id": (0, 1 << 63),
     "announcement_message_id": (0, 1 << 63),
     "announcement_channel_id": (0, 1 << 63),
+    "last_reckoned_week": (0, 30),
+    "last_slate_week": (0, 30),
+    "last_lastcall_week": (0, 30),
+    "last_reckoned_at": (0, 1 << 63),
 }
 
 _BOOL_KEYS = frozenset({"ghost_streak"})

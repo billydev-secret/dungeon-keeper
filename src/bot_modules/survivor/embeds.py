@@ -57,6 +57,11 @@ def build_status_embed(
         f"👻 ghost since week {st['eliminated_week']}" if dead
         else "🌾 alive"
     )
+    streak = st.get("streak")
+    if dead and streak:
+        state += (
+            f"\nstreak **{streak['current']}** · best {streak['best']}"
+        )
     embed.add_field(name="Standing", value=state, inline=True)
     embed.add_field(
         name="Strikes",
@@ -230,4 +235,47 @@ def build_announcement_embed(
         inline=False,
     )
     embed.set_footer(text="picks are private acts; results are communal theater")
+    return embed
+
+
+_RESULT_ICON = {"win": "✅", "loss": "💀", "tie": "🤝", "void": "🌫️"}
+
+
+def build_gauntlet_receipt_embed(
+    fate, *, buyin: int, color: discord.Color | None = None
+) -> discord.Embed:
+    """The private gauntlet receipt (§4.2): the inherited fate, week by week,
+    shown BEFORE anyone pays — nobody buys in blind."""
+    embed = discord.Embed(
+        title="🌾 The Gauntlet — your inherited road",
+        color=color or discord.Color(DEFAULT_ACCENT),
+    )
+    lines = []
+    for rw in fate.weeks:
+        if rw.team is None:
+            lines.append(f"wk {rw.week} · — · 🌫️ void (no legal chalk)")
+            continue
+        icon = _RESULT_ICON.get(rw.result, "·")
+        note = " 🕯️ **the road ends here**" if rw.fatal else ""
+        lines.append(f"wk {rw.week} · **{rw.team}** · {icon} {rw.result}{note}")
+    embed.add_field(
+        name="The replay", value=_clip_field(lines, "weeks") or "—", inline=False
+    )
+    if fate.dead:
+        state = (
+            f"💀 you arrive **dead** (week {fate.death_week}) — straight to "
+            "Ghost Streak, picking from tonight like everyone else"
+        )
+    else:
+        hearts = strike_hearts(fate.strikes_used, max(fate.strikes_used, 1))
+        state = (
+            f"🌾 you arrive **alive** · strikes {hearts or '—'} · "
+            f"{len(fate.burned)} teams burned from your satchel"
+        )
+    embed.add_field(name="Your arrival", value=state, inline=False)
+    cost = [f"gauntlet toll: **{fate.fee:,}** ({fate.elapsed_count} weeks walked)"]
+    if buyin:
+        cost.append(f"buy-in: **{buyin:,}**")
+    embed.add_field(name="The toll", value=" · ".join(cost), inline=False)
+    embed.set_footer(text="the door is open; the road is real")
     return embed

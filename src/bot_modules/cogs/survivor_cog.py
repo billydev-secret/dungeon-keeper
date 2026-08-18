@@ -28,6 +28,7 @@ from bot_modules.survivor.embeds import (
 from bot_modules.survivor.views import (
     JoinSeasonButton,
     PickPanel,
+    SlatePickButton,
     kickoff_label,
     submit_pick,
 )
@@ -52,8 +53,10 @@ class SurvivorCog(commands.Cog):
         self.ctx = ctx
 
     async def cog_load(self) -> None:
-        # The Join button on the pinned announcement must survive restarts.
+        # The Join button on the pinned announcement and the slate's pick
+        # button must survive restarts.
         self.bot.add_dynamic_items(JoinSeasonButton)
+        self.bot.add_dynamic_items(SlatePickButton)
         # The §4.2 poll/settle loop: 10-min cadence inside game windows,
         # one daily full refresh, settle sweep after any ingest.
         from bot_modules.services.survivor_loop import survivor_poll_loop
@@ -245,6 +248,61 @@ class SurvivorCog(commands.Cog):
                 color=color,
             )
         )
+
+
+    # ── /survivor history ─────────────────────────────────────────────
+
+    @survivor.command(
+        name="history", description="Revealed picks only — nothing current leaks."
+    )
+    @app_commands.describe(member="Whose road to read (default: yours).")
+    async def history(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        season, _ = await self._season_and_offset(interaction.guild.id)
+        if season is None:
+            await interaction.response.send_message(
+                "No Survivor season is running here. 🌾", ephemeral=True
+            )
+            return
+        target = member or interaction.user
+        revealed = int(season["config"].get("last_reckoned_week") or 0)
+
+        def _q():
+            with open_db(self.ctx.db_path) as conn:
+                return conn.execute(
+                    "SELECT week, slot, team, result, auto_assigned "
+                    "FROM survivor_picks WHERE season_id = ? AND user_id = ? "
+                    "AND week <= ? ORDER BY week, slot",
+                    (season["id"], target.id, revealed),
+                ).fetchall()
+
+        rows = await asyncio.to_thread(_q)
+        if not rows:
+            await interaction.response.send_message(
+                f"Nothing revealed for {discord.utils.escape_markdown(target.display_name)} "
+                "yet — picks appear only after their week's Reckoning. 🤫",
+                ephemeral=True,
+            )
+            return
+        icons = {"win": "✅", "loss": "💀", "tie": "🤝", "void": "🌫️", None: "⏳"}
+        lines = [
+            f"wk {r['week']}: **{r['team']}**"
+            + (" 📎" if r["auto_assigned"] else "")
+            + f" {icons.get(r['result'], '·')}"
+            for r in rows
+        ]
+        color = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        embed = discord.Embed(
+            title=f"📜 {discord.utils.escape_markdown(target.display_name)} — the road so far",
+            description="\n".join(lines[-25:]),
+            color=color,
+        )
+        embed.set_footer(text="revealed picks only — nothing current ever leaks")
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: Bot) -> None:

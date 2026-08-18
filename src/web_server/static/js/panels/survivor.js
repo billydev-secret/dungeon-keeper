@@ -148,13 +148,36 @@ async function renderWeekCard(zone) {
           <tbody>${rows || `<tr><td class="field-hint">no games in view</td></tr>`}</tbody>
         </table>
       </div>
-      <span data-status></span>
+      <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+        <button type="button" class="btn" data-preview-btn>👁 Preview Reckoning</button>
+        <span data-status></span>
+      </div>
+      <div data-preview></div>
     </div>
   `;
   const status = zone.querySelector("[data-status]");
+  zone.querySelector("[data-preview-btn]").addEventListener("click", async () => {
+    const target = zone.querySelector("[data-preview]");
+    try {
+      const p = await api("/api/survivor/reckoning-preview");
+      const fields = (p.fields || []).map((f) =>
+        `<h4 style="margin:8px 0 2px;">${esc(f.name)}</h4>
+         <div style="white-space:pre-wrap;">${esc(f.value)}</div>`).join("");
+      target.innerHTML = `
+        <div class="card" style="margin-top:8px;">
+          <div class="section-label">${esc(p.title)}${p.pending
+            ? " <em>(not due yet — current state)</em>" : ""}</div>
+          <div style="white-space:pre-wrap;">${esc(p.description || "")}</div>
+          ${fields}
+        </div>`;
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  });
   zone.onclick = async (e) => {
     const btn = e.target.closest("[data-settle]");
     if (!btn) return;
+    if (e.target.closest("[data-preview-btn]")) return;
     const outcome = btn.dataset.outcome;
     if (!window.confirm(
       `Settle ${btn.dataset.settle} as ${outcome}? This grades picks `
@@ -296,11 +319,12 @@ function renderRulesCards(zone, season, roles, channels) {
     <form class="form form-cards" data-rules-form>
       <div class="card" style="border-color: var(--gold-solid, #e6b84c);">
         <div class="section-label">⚠️ Under Construction</div>
-        <p class="field-hint">Picks, results, strikes, and the groundskeeper
-          are live. Still landing before Week 1: the weekly posts (slate,
-          Reckoning, last call), the gauntlet, and ghost machinery — dials
-          for those <strong>store now</strong> and bind when their logic
-          ships. This notice comes down with the last of them.</p>
+        <p class="field-hint">The Week-1 game is fully live: picks, results,
+          strikes, the groundskeeper, the gauntlet, ghosts, and the weekly
+          posts. Still to come (each before its own in-season deadline):
+          wipeout/annul handling, double-pick weeks (wk 14), the Accord, the
+          endgame payouts, and the member notification toggles — their dials
+          store now and bind when that logic ships.</p>
       </div>
       <div class="card">
         <div class="section-label">Wiring</div>

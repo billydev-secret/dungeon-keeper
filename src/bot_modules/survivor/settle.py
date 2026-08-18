@@ -51,6 +51,7 @@ class SettleReport:
     cap_eliminated: list[int] = field(default_factory=list)
     no_legal_team: list[int] = field(default_factory=list)
     locked: int = 0
+    graded_weeks: set[int] = field(default_factory=set)  # for the addendum
 
     def any_change(self) -> bool:
         return bool(
@@ -145,7 +146,7 @@ def apply_game_result(
     """Grade every pick on one game per its current stored state, recomputing
     any player whose result changed. Safe to call any number of times."""
     game = conn.execute(
-        "SELECT status, winner, kickoff_utc FROM nfl_games "
+        "SELECT week, status, winner, kickoff_utc FROM nfl_games "
         "WHERE season_year = ? AND game_id = ?",
         (season["season_year"], game_id),
     ).fetchone()
@@ -171,6 +172,7 @@ def apply_game_result(
             ),
         )
         changed.add(int(pick["user_id"]))
+        report.graded_weeks.add(int(game["week"]))
         if exp == "void":
             report.voided += 1
         else:

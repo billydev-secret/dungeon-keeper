@@ -48,6 +48,9 @@ from bot_modules.services import welcome_service
 from bot_modules.services.risky_roll import formatters as risky_formatters
 from bot_modules.services.risky_roll import models as risky_models
 from bot_modules.survivor import embeds as survivor_embeds
+from bot_modules.survivor import reckoning as survivor_reckoning
+from bot_modules.survivor.gauntlet import GauntletFate as _Fate
+from bot_modules.survivor.gauntlet import ReplayWeek as _ReplayWeek
 from bot_modules.survivor.logic import OpenGame as _SurvivorGame
 
 # Deliberately no builder defaults to this value.
@@ -628,6 +631,46 @@ CASES = [
                 "most_burned": [("SEA", 2)],
             },
             lambda uid: f"soul {uid}", season_name="S", **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.reckoning",
+        lambda **kw: survivor_reckoning.build_reckoning_embed(
+            {
+                "week": 1, "before": 3, "after": 2,
+                "pots": {"main": 8000, "ghost": 2000},
+                "toll_line": "the toll", "stragglers": 0,
+                "arrivals": [], "eulogy_lines": ["{name} fell."],
+                "deaths": [{"user_id": 2, "teams": "NE 💀", "state": "💀",
+                            "died": True, "source": "picks",
+                            "fatal_team": "NE"}],
+                "ledger": [{"user_id": 1, "teams": "SEA ✅", "state": "",
+                            "died": False, "source": None,
+                            "fatal_team": None}],
+                "streak_strip": [], "streak_record": 0,
+            },
+            lambda uid: f"soul {uid}", season_name="S", **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.slate",
+        lambda **kw: survivor_reckoning.build_slate_embed(
+            [{"home": "SEA", "away": "NE", "kickoff_ts": 1_700_000_000.0}],
+            week=1, picked=1, alive=2, season_name="S", **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.gauntlet_receipt",
+        lambda **kw: survivor_embeds.build_gauntlet_receipt_embed(
+            _Fate(
+                weeks=(_ReplayWeek(1, "KC", "g1", "win", 0, False),),
+                elapsed_count=1, strikes_used=0, dead=False,
+                death_week=None, burned=("KC",), fee=50,
+            ),
+            buyin=0, **kw,
         ),
         discord.Color(branding_service.DEFAULT_ACCENT),
     ),

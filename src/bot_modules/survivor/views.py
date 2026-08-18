@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core import branding
 from bot_modules.core.db_utils import open_db, open_db_immediate
 from bot_modules.services.survivor_service import get_season
 from bot_modules.survivor import logic
@@ -124,7 +124,7 @@ async def submit_pick(
         return
     assert st is not None  # the pick just landed, so the player exists
     assert interaction.guild is not None
-    color = await resolve_accent_color(db_path, interaction.guild)
+    color = await branding.resolve_accent_color(db_path, interaction.guild)
     embed = build_pick_confirm_embed(game, st, changed=changed, color=color)
     await _respond(interaction, embed=embed, edit=edit)
 
@@ -180,22 +180,29 @@ class JoinSeasonButton(
         db_path = bot.ctx.db_path  # type: ignore[attr-defined]
         user_id = interaction.user.id
 
+        now = discord.utils.utcnow().timestamp()
+
         def _q():
             with open_db(db_path) as conn:
                 season = get_season(conn, self.season_id)
                 if season is None or season["status"] == "complete":
-                    return None, None, 0
+                    return None, None, 0, None
                 entered = conn.execute(
                     "SELECT 1 FROM survivor_players "
                     "WHERE season_id = ? AND user_id = ?",
                     (season["id"], user_id),
                 ).fetchone()
                 from bot_modules.services.economy_service import get_balance
+                from bot_modules.survivor.gauntlet import compute_fate
 
                 balance = get_balance(conn, season["guild_id"], user_id)
-                return season, entered is not None, balance
+                fate = None
+                if logic.elapsed_weeks(conn, season["season_year"], now):
+                    if season["config"]["late_entry"] == "gauntlet":
+                        fate = compute_fate(conn, season, now)
+                return season, entered is not None, balance, fate
 
-        season, entered, balance = await asyncio.to_thread(_q)
+        season, entered, balance, fate = await asyncio.to_thread(_q)
         if season is None:
             await interaction.response.send_message(
                 "This season has ended — the pin outlived it.", ephemeral=True
@@ -208,7 +215,29 @@ class JoinSeasonButton(
                 ephemeral=True,
             )
             return
-        buyin = int(season["config"]["buyin_coins"])
+        config = season["config"]
+        buyin = int(config["buyin_coins"])
+
+        # Season under way + gauntlet mode: the receipt flow (§4.2) — the
+        # inherited fate shown before anyone pays.
+        if fate is not None:
+            from bot_modules.survivor.embeds import build_gauntlet_receipt_embed
+
+            assert interaction.guild is not None
+            color = await branding.resolve_accent_color(db_path, interaction.guild)
+            total = fate.fee + buyin
+            content = (
+                f"the receipt below is your inherited fate — read it before "
+                f"you pay. your balance: **{balance:,}**"
+                + (" ⚠️ (short)" if balance < total else "")
+            )
+            await interaction.response.send_message(
+                content,
+                embed=build_gauntlet_receipt_embed(fate, buyin=buyin, color=color),
+                view=JoinConfirmView(self.season_id, gauntlet=True),
+                ephemeral=True,
+            )
+            return
         lines = [
             "**one sentence of rules:** pick one team to win each week, no "
             "team twice — your team loses, you're out.",
@@ -224,11 +253,14 @@ class JoinSeasonButton(
 
 
 class JoinConfirmView(discord.ui.View):
-    """The ephemeral confirm step behind the Join button."""
+    """The ephemeral confirm step behind the Join button. In gauntlet mode
+    the fate is recomputed inside the transaction — the receipt was a
+    preview; the moment of payment is the source of truth."""
 
-    def __init__(self, season_id: int) -> None:
+    def __init__(self, season_id: int, *, gauntlet: bool = False) -> None:
         super().__init__(timeout=180)
         self.season_id = season_id
+        self.gauntlet = gauntlet
 
     @discord.ui.button(label="🌾 I'm in", style=discord.ButtonStyle.success)
     async def confirm(
@@ -248,12 +280,34 @@ class JoinConfirmView(discord.ui.View):
                 season = get_season(conn, self.season_id)
                 if season is None:
                     raise logic.PickError("This season no longer exists.")
+                elapsed = logic.elapsed_weeks(conn, season["season_year"], now)
+                if elapsed:
+                    from bot_modules.survivor.gauntlet import (
+                        compute_fate,
+                        execute_gauntlet_join,
+                        ghost_only_join,
+                    )
+
+                    mode = season["config"]["late_entry"]
+                    if mode == "closed":
+                        raise logic.PickError(
+                            "Enrollment closed at Week 1 kickoff this season."
+                        )
+                    if mode == "ghost_only":
+                        ghost_only_join(conn, season, user_id, now)
+                        conn.commit()
+                        return season, logic.JoinResult(charged=0), None
+                    fate = compute_fate(conn, season, now)
+                    execute_gauntlet_join(conn, season, user_id, fate, now)
+                    conn.commit()
+                    charged = fate.fee + int(season["config"]["buyin_coins"])
+                    return season, logic.JoinResult(charged=charged), fate
                 result = logic.join_season(conn, season, user_id, now)
                 conn.commit()
-            return season, result
+            return season, result, None
 
         try:
-            season, result = await asyncio.to_thread(_q)
+            season, result, fate = await asyncio.to_thread(_q)
         except logic.PickError as exc:
             await interaction.response.edit_message(
                 content=f"❌ {str(exc)}", view=None
@@ -265,14 +319,24 @@ class JoinConfirmView(discord.ui.View):
         # 3-second interaction window and turn a successful join into
         # "This interaction failed".
         charged = f" ({result.charged:,} coins paid)" if result.charged else ""
-        await interaction.response.edit_message(
-            content=(
+        if fate is not None and fate.dead:
+            content = (
+                f"the gauntlet took you at week {fate.death_week}{charged}. "
+                "you arrive a ghost — pick tonight; the streak game is live "
+                "and the side-pot is real. 👻"
+            )
+        elif fate is not None:
+            content = (
+                f"you walked the gauntlet and lived{charged}. "
+                f"{len(fate.burned)} teams are ash; pick from what remains. 🌾"
+            )
+        else:
+            content = (
                 f"you're in{charged}. the slate posts Wednesdays; "
                 "your first pick awaits. 🌾"
-            ),
-            view=None,
-        )
-        note = await _grant_survivor_role(interaction, season)
+            )
+        await interaction.response.edit_message(content=content, view=None)
+        note = await _grant_survivor_role(interaction, season, fate=fate)
         if note:
             try:
                 await interaction.followup.send(f"-# {note}", ephemeral=True)
@@ -282,13 +346,17 @@ class JoinConfirmView(discord.ui.View):
 
 
 async def _grant_survivor_role(
-    interaction: discord.Interaction, season: dict
+    interaction: discord.Interaction, season: dict, *, fate=None
 ) -> str | None:
+    """Grant the arrival role: 👻 Ghost for the dead-on-arrival (role swap at
+    death, §1.7 as decided), 🏈 Survivor for the living."""
     guild = interaction.guild
     member = interaction.user
     if guild is None or not isinstance(member, discord.Member):
         return None
-    role = guild.get_role(int(season["config"]["role_survivor_id"] or 0))
+    dead = fate is not None and fate.dead
+    key = "role_ghost_id" if dead else "role_survivor_id"
+    role = guild.get_role(int(season["config"][key] or 0))
     if role is None:
         return "role not configured — an admin can grant it later"
     try:
@@ -296,6 +364,105 @@ async def _grant_survivor_role(
     except (discord.Forbidden, discord.HTTPException):
         log.exception("survivor: role grant failed for %s", member.id)
         return "couldn't grant the role — an admin will sort it"
+    return None
+
+
+class SlatePickButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"survivor_slate:(?P<season_id>\d+)",
+):
+    """The [🏈 Make your pick] button on the Wednesday slate (§2.3) — opens
+    the same ephemeral AFC/NFC panel as bare /survivor pick, so casuals never
+    touch slash syntax. Persistent across restarts like the Join button."""
+
+    def __init__(self, season_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="🏈 Make your pick",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"survivor_slate:{season_id}",
+            )
+        )
+        self.season_id = season_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+        /,
+    ) -> SlatePickButton:
+        return cls(int(match["season_id"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        db_path = bot.ctx.db_path  # type: ignore[attr-defined]
+        user_id = interaction.user.id
+        now = discord.utils.utcnow().timestamp()
+
+        def _q():
+            with open_db(db_path) as conn:
+                season = get_season(conn, self.season_id)
+                if season is None or season["status"] == "complete":
+                    return None, None, [], 0.0
+                week = logic.pick_week(conn, season["season_year"], now)
+                games = (
+                    logic.legal_teams(conn, season, user_id, week, now)
+                    if week is not None else []
+                )
+                from bot_modules.core.db_utils import get_tz_offset_hours
+
+                offset = get_tz_offset_hours(conn, season["guild_id"])
+            return season, week, games, offset
+
+        season, week, games, offset = await asyncio.to_thread(_q)
+        if season is None or week is None:
+            await interaction.response.send_message(
+                "Nothing to pick right now — the season is settling. 🌾",
+                ephemeral=True,
+            )
+            return
+        if not games:
+            await interaction.response.send_message(
+                "Nothing legal left this week — every open team is burned or "
+                "playing. Rare, survivable.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            f"week {week} — pick a team to **win**. locks at each game's "
+            "kickoff; secret until Tuesday.",
+            view=PickPanel(bot, season, user_id, week, games, offset),  # pyright: ignore[reportArgumentType]
+            ephemeral=True,
+        )
+
+
+async def swap_member_roles(
+    bot, guild_id: int, config: dict, user_id: int, *, to_ghost: bool
+) -> str | None:
+    """Best-effort Survivor↔Ghost swap (§1.7 as decided) — shared by the
+    Reckoning's death march, the admin roster buttons, and any future path.
+    Returns a note when skipped or failed; never raises."""
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        return "role swap skipped — bot offline"
+    member = guild.get_member(user_id)
+    if member is None:
+        return "role swap skipped — member not in guild"
+    survivor = guild.get_role(int(config.get("role_survivor_id") or 0))
+    ghost = guild.get_role(int(config.get("role_ghost_id") or 0))
+    add, remove = (ghost, survivor) if to_ghost else (survivor, ghost)
+    if add is None and remove is None:
+        return "role swap skipped — roles not configured"
+    try:
+        if remove is not None and remove in member.roles:
+            await member.remove_roles(remove, reason="Survivor: life-state change")
+        if add is not None and add not in member.roles:
+            await member.add_roles(add, reason="Survivor: life-state change")
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception("survivor: role swap failed for %s", user_id)
+        return "role swap failed — check Manage Roles"
     return None
 
 
@@ -327,7 +494,7 @@ async def build_live_announcement(
     guild = bot.get_guild(season["guild_id"])
     if guild is None:
         return None
-    color = await resolve_accent_color(db_path, guild)
+    color = await branding.resolve_accent_color(db_path, guild)
     embed = build_announcement_embed(
         season_name=season["name"],
         entrants=entrants,

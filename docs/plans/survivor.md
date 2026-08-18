@@ -7,14 +7,18 @@ captured fixtures; create-season ingests the full schedule) plus its own fix
 pass; stage 3 (survivor/logic.py locks + joins + satchel, /survivor
 pick|status|board, the AFC/NFC pick panel, the pinned announcement with its
 persistent Join button posted from the dashboard, buy-in via
-`survivor_buyin`); stage 4 (2026-08-18: settle engine in survivor/settle.py
-— derived grading, so manual corrections unwind strikes and resurrect;
-elimination_source column distinguishes picks/cap/admin/left deaths; the
-groundskeeper with cap + dead-end handling; the poll loop in
-services/survivor_loop.py with schedule-derived windows and the daily
-refresh; panel This Week's Games card with manual settle). The Reckoning
-preview button rides with stage 5's renderer. Late entry still raises
-"gauntlet pending" until 5b. Stage 5 next.
+`survivor_buyin`); stage 4 (2026-08-18: settle engine — derived grading so
+corrections resurrect; the groundskeeper; the poll loop; panel manual
+settle); stages 5+5b+6a (2026-08-18: the gauntlet replay + receipt flow
+with the fee routed by arrival state; THE RECKONING in three acts with
+deterministic corpus rotation, the gate, the ghost strip, and eulogies;
+Wednesday slate with its persistent pick button; Saturday last call with
+DM-fallback mentions and §6.3 early-game naming; leaver elimination at the
+Reckoning; ghost streaks (miss breaks, void neither); Ghost role swaps +
+condolence DMs on post; the straggler addendum; /survivor history; the
+panel's Reckoning preview). **All of Tier 1 is built.** Remaining: Tier 2
+(6b wipeout/annul — Wk 2; 6c double-pick — Wk 14; 6d Accord — Nov; 6e
+endgame payouts — Jan; 7 notification toggles — Wk 2) and Tier 3.
 
 **Spec:** [`docs/survivor_spec.md`](../survivor_spec.md) (v2.2, amended 2026-08-17)
 **Deadline:** NFL Week 1 kickoff — **Thursday Sept 10 2026**, ~24 days out from 08-17.

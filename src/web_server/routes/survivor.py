@@ -118,31 +118,13 @@ async def _mirror_mod_log(
 async def _swap_member_roles(
     ctx: Any, guild_id: int, config: dict, user_id: int, *, to_ghost: bool
 ) -> str | None:
-    """Best-effort Survivor↔Ghost swap for an admin eliminate/revive — the
-    same swap the settle engine performs on a game death (spec §1.7), so the
-    weekly role pings match the roster the panel shows. Returns a note when
-    the swap was skipped or failed, for the mod-log mirror; never raises."""
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-    if guild is None:
-        return "role swap skipped — bot offline"
-    member = guild.get_member(user_id)
-    if member is None:
-        return "role swap skipped — member not in guild"
-    survivor = guild.get_role(int(config.get("role_survivor_id") or 0))
-    ghost = guild.get_role(int(config.get("role_ghost_id") or 0))
-    add, remove = (ghost, survivor) if to_ghost else (survivor, ghost)
-    if add is None and remove is None:
-        return "role swap skipped — roles not configured"
-    try:
-        if remove is not None and remove in member.roles:
-            await member.remove_roles(remove, reason="Survivor: web admin action")
-        if add is not None and add not in member.roles:
-            await member.add_roles(add, reason="Survivor: web admin action")
-    except (discord.Forbidden, discord.HTTPException):
-        log.exception("survivor: role swap failed for %s", user_id)
-        return "role swap failed — check Manage Roles"
-    return None
+    """Thin delegate: the swap lives once in survivor/views.py, shared with
+    the Reckoning's death march (stage 6a)."""
+    from bot_modules.survivor.views import swap_member_roles
+
+    return await swap_member_roles(
+        getattr(ctx, "bot", None), guild_id, config, user_id, to_ghost=to_ghost
+    )
 
 
 async def _service_call(coro):
@@ -474,6 +456,56 @@ async def settle_game(
             }
             for season_id, r in out["reports"].items()
         },
+    }
+
+
+@router.get("/survivor/reckoning-preview")
+async def reckoning_preview(request: Request, _: AuthenticatedUser = _ADMIN):
+    """Render the next Reckoning exactly as Tuesday will post it (rotation
+    is deterministic), without posting, mutating, or marking anything —
+    leaver detection is deliberately skipped here."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        import time
+
+        from bot_modules.survivor import reckoning as reck
+
+        now = time.time()
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season.")
+            week = reck.next_reckoning_week(conn, season, now)
+            pending = week is None
+            if pending:
+                # Nothing reckonable yet: preview the upcoming week's state
+                # anyway so the button always shows something honest.
+                week = int(season["config"].get("last_reckoned_week") or 0) + 1
+            data = reck.build_reckoning_data(conn, season, week, now)
+        return season, data, pending
+
+    season, data, pending = await _service_call(run_query(_q))
+
+    from bot_modules.survivor.reckoning import build_reckoning_embed
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+
+    def name_of(user_id: int) -> str:
+        member = guild.get_member(user_id) if guild else None
+        return member.display_name if member else f"soul {user_id}"
+
+    embed = build_reckoning_embed(data, name_of, season_name=season["name"])
+    return {
+        "pending": pending,
+        "week": data["week"],
+        "title": embed.title,
+        "description": embed.description,
+        "fields": [
+            {"name": f.name, "value": f.value} for f in embed.fields
+        ],
     }
 
 
