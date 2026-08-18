@@ -866,6 +866,50 @@ async def test_two_restick_on_bot_panels_in_one_channel_settle():
 
 
 @pytest.mark.asyncio
+async def test_two_default_panels_cannot_both_hold_the_channel_bottom():
+    """Why a second todo board may never share the first one's channel.
+
+    Neither todo board sets ``restick_on_bot``, so the storm above is not the
+    risk here — they cannot chase each other's reposts at all. The risk is
+    simpler and permanent: **a channel has one bottom slot.** Both panels wake
+    on the same member message, both repost, and whichever lands second owns
+    the bottom while the other sits above it. Being buried is the one state a
+    sticky panel exists to avoid, and no amount of activity in the channel
+    fixes it — the next message just re-runs the same race.
+
+    Measured with this harness at 10 member messages: the two panels split the
+    placements unevenly and *which* one loses varies run to run (3/7 in one
+    run, 9/10 in another, and with three panels one took 0 of 10). So the
+    assertion here is the part that does not vary — one bottom, one winner —
+    rather than a send count that would make this test flaky.
+
+    The fix is refusal at configuration time
+    (``todo_service.conflicting_board``), because this is not something the
+    sticky layer can arbitrate: someone has to be buried, and the only good
+    answer is not to put them there.
+    """
+    live = _LiveChannel()
+    bot = _live_bot(live)
+    sa, sb = _Store(CHANNEL, 1), _Store(CHANNEL, 2)
+    a = _panel(bot, sa, delay=0.02)
+    b = _panel(bot, sb, delay=0.02)
+    live.mock.last_message_id = 2
+    live.listeners = [a, b]
+
+    for _ in range(5):
+        await live.member_says()
+        await asyncio.sleep(0.02 * 4)
+    a.cancel_all()
+    b.cancel_all()
+
+    at_bottom = [s for s in (sa, sb) if s.ids[1] == live.mock.last_message_id]
+    assert len(at_bottom) == 1, "a channel has one bottom slot"
+    # And the loser really is buried — it is not merely un-refreshed.
+    buried = sb if at_bottom[0] is sa else sa
+    assert buried.ids[1] != live.mock.last_message_id
+
+
+@pytest.mark.asyncio
 async def test_an_opted_in_panel_still_chases_a_real_bot_post():
     """Guard on the fix above: ``was_placed`` must only skip *placements*.
 

@@ -6,12 +6,16 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.todo_service import (
+    BOARD_ALL,
+    BOARD_CHORES,
     clear_board,
     complete_todo,
     create_todo,
     get_board,
+    conflicting_board,
     guilds_with_board,
     list_todos,
+    mark_missed,
     pending_count,
     pending_todos,
     save_board,
@@ -255,3 +259,182 @@ def test_guilds_with_board_lists_only_posted(db):
         save_board(conn, GUILD, 1, 2)
         save_board(conn, 999, 0, 0)
         assert guilds_with_board(conn) == [GUILD]
+
+
+# ── The two boards are separate rows ────────────────────────────────────
+
+
+def test_the_two_boards_are_independent(db):
+    """Widening the key must not let one board's placement clobber the other's."""
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 111, 222, kind=BOARD_ALL)
+        save_board(conn, GUILD, 333, 444, kind=BOARD_CHORES)
+
+        assert get_board(conn, GUILD, BOARD_ALL).channel_id == 111
+        assert get_board(conn, GUILD, BOARD_ALL).message_id == 222
+        assert get_board(conn, GUILD, BOARD_CHORES).channel_id == 333
+        assert get_board(conn, GUILD, BOARD_CHORES).message_id == 444
+
+
+def test_get_board_defaults_to_the_all_todos_board(db):
+    """The original board is the default kind, so pre-existing callers are unmoved."""
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 111, 222)
+        assert get_board(conn, GUILD).kind == BOARD_ALL
+        assert get_board(conn, GUILD).channel_id == 111
+        assert not get_board(conn, GUILD, BOARD_CHORES).posted
+
+
+def test_clearing_one_board_leaves_the_other_posted(db):
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 111, 222, kind=BOARD_ALL)
+        save_board(conn, GUILD, 333, 444, kind=BOARD_CHORES)
+        clear_board(conn, GUILD, kind=BOARD_CHORES)
+
+        assert get_board(conn, GUILD, BOARD_ALL).posted
+        assert not get_board(conn, GUILD, BOARD_CHORES).posted
+
+
+def test_guilds_with_board_is_scoped_by_kind(db):
+    """The refresh loop drives each panel from its own work list.
+
+    A guild running only the chore board must not be handed to the all-todos
+    panel's refresh, and vice versa.
+    """
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 111, 222, kind=BOARD_ALL)
+        save_board(conn, 999, 333, 444, kind=BOARD_CHORES)
+
+        assert guilds_with_board(conn, BOARD_ALL) == [GUILD]
+        assert guilds_with_board(conn, BOARD_CHORES) == [999]
+
+
+# ── Two boards can never share a channel ────────────────────────────────
+
+
+def test_conflicting_board_names_the_other_resident(db):
+    """The guard that keeps the second sticky panel out of the first's channel.
+
+    Neither board sets ``restick_on_bot``, so they cannot storm the way the two
+    opted-in economy panels did (F1,
+    docs/reviews/2026-08-06-sticky-panel-machinery.md). What they do instead is
+    the *fix* for that storm turned against us: both wake on the same human
+    message, race for the channel's one bottom slot, and the loser yields to
+    ``core.sticky.was_placed`` — permanently, while the other keeps winning.
+    So the collision is refused where a human can still read the reason.
+    """
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
+        assert conflicting_board(conn, GUILD, BOARD_CHORES, 555) == (
+            "the server todo board"
+        )
+
+
+def test_conflicting_board_catches_the_collision_from_either_side(db):
+    """Whichever board is placed second is the one refused."""
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 555, 222, kind=BOARD_CHORES)
+        assert conflicting_board(conn, GUILD, BOARD_ALL, 555) == "the mod chore board"
+
+
+def test_conflicting_board_allows_a_free_channel(db):
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
+        assert conflicting_board(conn, GUILD, BOARD_CHORES, 777) is None
+
+
+def test_a_board_does_not_conflict_with_itself(db):
+    """Re-posting a board into the channel it already occupies is a move, not a clash."""
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
+        assert conflicting_board(conn, GUILD, BOARD_ALL, 555) is None
+
+
+def test_an_unposted_board_frees_its_channel(db):
+    """Removing one board must let the other take the channel it vacated."""
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
+        clear_board(conn, GUILD, kind=BOARD_ALL)
+        assert conflicting_board(conn, GUILD, BOARD_CHORES, 555) is None
+
+
+def test_unposting_can_never_conflict(db):
+    """channel_id 0 means "take it down" — there is nothing to collide with."""
+    with open_db(db) as conn:
+        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
+        assert conflicting_board(conn, GUILD, BOARD_CHORES, 0) is None
+
+
+def test_conflicting_board_is_scoped_by_guild(db):
+    """Another server's board in the same channel id is not this server's problem."""
+    with open_db(db) as conn:
+        save_board(conn, 999, 555, 222, kind=BOARD_ALL)
+        assert conflicting_board(conn, GUILD, BOARD_CHORES, 555) is None
+
+
+# ── The third state ─────────────────────────────────────────────────────
+
+
+def test_mark_missed_closes_a_row_without_crediting_it(db):
+    with open_db(db) as conn:
+        todo_id = create_todo(conn, GUILD, USER, "Post QOTD")
+        assert mark_missed(conn, todo_id, now_ts=1000.0) is True
+        row = _read(conn, todo_id)
+    assert row["missed_at"] == 1000.0
+    assert row["completed_at"] is None
+    assert not row["completed_by"]
+
+
+def test_mark_missed_is_idempotent(db):
+    with open_db(db) as conn:
+        todo_id = create_todo(conn, GUILD, USER, "Post QOTD")
+        assert mark_missed(conn, todo_id, now_ts=1000.0) is True
+        assert mark_missed(conn, todo_id, now_ts=2000.0) is False
+        assert _read(conn, todo_id)["missed_at"] == 1000.0
+
+
+def test_mark_missed_refuses_a_completed_row(db):
+    with open_db(db) as conn:
+        todo_id = create_todo(conn, GUILD, USER, "Post QOTD")
+        complete_todo(conn, todo_id, GUILD, USER, now_ts=500.0)
+        assert mark_missed(conn, todo_id, now_ts=1000.0) is False
+        assert _read(conn, todo_id)["missed_at"] is None
+
+
+def test_complete_refuses_a_missed_row(db):
+    """Yesterday's box is not tickable today."""
+    with open_db(db) as conn:
+        todo_id = create_todo(conn, GUILD, USER, "Post QOTD")
+        mark_missed(conn, todo_id, now_ts=1000.0)
+        assert complete_todo(conn, todo_id, GUILD, USER, now_ts=2000.0) is False
+        assert _read(conn, todo_id)["completed_at"] is None
+
+
+def test_missed_rows_leave_the_pending_list_and_count(db):
+    with open_db(db) as conn:
+        keep = create_todo(conn, GUILD, USER, "Still open")
+        drop = create_todo(conn, GUILD, USER, "Written off")
+        mark_missed(conn, drop, now_ts=1000.0)
+
+        assert [r["id"] for r in pending_todos(conn, GUILD)] == [keep]
+        assert pending_count(conn, GUILD) == 1
+
+
+def test_missed_rows_are_not_pending_in_the_dashboard_filter(db):
+    """The dashboard's "pending" tab has to agree with the board."""
+    with open_db(db) as conn:
+        create_todo(conn, GUILD, USER, "Still open")
+        drop = create_todo(conn, GUILD, USER, "Written off")
+        mark_missed(conn, drop, now_ts=1000.0)
+
+        pending = list_todos(conn, GUILD, status="pending")
+        assert [r["task"] for r in pending] == ["Still open"]
+
+
+def test_missed_rows_are_not_completed_either(db):
+    """A written-off chore is closed, but nobody did it — it is not a completion."""
+    with open_db(db) as conn:
+        drop = create_todo(conn, GUILD, USER, "Written off")
+        mark_missed(conn, drop, now_ts=1000.0)
+        assert list_todos(conn, GUILD, status="completed") == []
+        assert len(list_todos(conn, GUILD)) == 1

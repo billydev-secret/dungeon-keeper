@@ -598,3 +598,119 @@ def test_purge_strips_from_user_chips_from_mention_award_rules(db):
         assert str(USER) not in rows[a]["conditions"]
         assert "your turn" in rows[a]["conditions"]
         assert str(OTHER_USER) in rows[c]["conditions"]
+
+
+def test_purge_anonymises_todos_rather_than_deleting_them(db):
+    """A todos row is the team's work plus two ids naming a person.
+
+    Deleting it to erase the ids would take real outstanding work off other
+    people's list — a task someone else is part-way through vanishing because
+    an unrelated member left. Clearing the ids erases everything identifying
+    while the work stands (register: docs/data_register.md).
+    """
+    from bot_modules.services.todo_service import complete_todo, create_todo
+
+    with open_db(db) as conn:
+        mine = create_todo(conn, GUILD, USER, "Post the QOTD")
+        theirs = create_todo(conn, GUILD, OTHER_USER, "Rotate the tunnel token")
+        ticked = create_todo(conn, GUILD, OTHER_USER, "Check the mod queue")
+        complete_todo(conn, ticked, GUILD, USER)
+
+        purge_user_data(conn, GUILD, USER)
+
+        rows = {
+            r["id"]: r
+            for r in conn.execute(
+                "SELECT id, task, added_by, completed_by FROM todos"
+            ).fetchall()
+        }
+
+    # Nothing was removed — the work survives the erasure.
+    assert set(rows) == {mine, theirs, ticked}
+    assert rows[mine]["task"] == "Post the QOTD"
+    # …but nothing still names the erased member.
+    assert rows[mine]["added_by"] == 0
+    assert rows[ticked]["completed_by"] is None
+    # Another member's rows are untouched.
+    assert rows[theirs]["added_by"] == OTHER_USER
+    assert rows[ticked]["added_by"] == OTHER_USER
+
+
+def test_purge_of_todos_is_scoped_to_the_guild(db):
+    from bot_modules.services.todo_service import create_todo
+
+    with open_db(db) as conn:
+        here = create_todo(conn, GUILD, USER, "Post the QOTD")
+        elsewhere = create_todo(conn, 999, USER, "Their chore")
+        purge_user_data(conn, GUILD, USER)
+        rows = {
+            r["id"]: r["added_by"]
+            for r in conn.execute("SELECT id, added_by FROM todos").fetchall()
+        }
+    assert rows[here] == 0
+    assert rows[elsewhere] == USER
+
+
+def test_export_sees_a_task_the_member_completed(db):
+    """`completed_by` had to join SUBJECT_ID_COLUMNS or an access request would
+    show the tasks a member *added* and silently omit the ones they did."""
+    from bot_modules.services.todo_service import complete_todo, create_todo
+
+    assert "completed_by" in SUBJECT_ID_COLUMNS
+    with open_db(db) as conn:
+        todo_id = create_todo(conn, GUILD, OTHER_USER, "Check the mod queue")
+        complete_todo(conn, todo_id, GUILD, USER)
+        result = export_user_data(conn, GUILD, USER)
+
+    tasks = result["tables"]["todos"]["rows"]
+    assert [r["id"] for r in tasks] == [todo_id]
+
+
+def test_purge_blanks_the_recurring_definition_so_it_stays_erased(db):
+    """Regression: the anonymisation used to undo itself.
+
+    `_spawn_one` stamps a definition's `created_by` onto every todos row it
+    materialises. Scrubbing only `todos` left the id in `todo_recurring`, so
+    the next scheduled fire wrote it straight back into `todos.added_by` — and
+    every day after. The register's "nothing identifying survives" claim
+    depends on this.
+    """
+    from bot_modules.services.todo_recurring_service import create_recurring, spawn_due
+
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Post QOTD", recurrence="daily",
+            time_of_day=0, created_by=USER, now_ts=0.0,
+        )
+        purge_user_data(conn, GUILD, USER)
+
+        assert conn.execute(
+            "SELECT created_by FROM todo_recurring"
+        ).fetchone()["created_by"] == 0
+
+        # The next fire must not resurrect the id.
+        spawn_due(conn, now_ts=86_400.0, offset_hours_for=lambda _g: 0.0)
+        added = [r["added_by"] for r in conn.execute("SELECT added_by FROM todos")]
+
+    assert added and all(a == 0 for a in added)
+
+
+def test_purge_of_definitions_is_scoped_to_the_guild(db):
+    from bot_modules.services.todo_recurring_service import create_recurring
+
+    with open_db(db) as conn:
+        create_recurring(
+            conn, GUILD, task="Mine", recurrence="daily",
+            time_of_day=0, created_by=USER, now_ts=0.0,
+        )
+        create_recurring(
+            conn, 999, task="Theirs", recurrence="daily",
+            time_of_day=0, created_by=USER, now_ts=0.0,
+        )
+        purge_user_data(conn, GUILD, USER)
+        rows = {
+            r["task"]: r["created_by"]
+            for r in conn.execute("SELECT task, created_by FROM todo_recurring")
+        }
+    assert rows["Mine"] == 0
+    assert rows["Theirs"] == USER

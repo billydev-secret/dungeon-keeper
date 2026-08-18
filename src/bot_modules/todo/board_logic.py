@@ -114,3 +114,155 @@ def complete_option_label(row: Mapping[str, Any]) -> tuple[str, str]:
     if len(desc) > 100:
         desc = desc[:99] + "…"
     return label, desc
+
+
+# ── The chore board ─────────────────────────────────────────────────────────
+#
+# A second board, scoped to rows a recurring definition spawned. It is a
+# *scoreboard*, not a pending list: a ticked chore stays visible until the next
+# reset replaces it, because "did we do the QOTD today?" cannot be answered by
+# a board that deletes the answer the moment it is yes.
+
+CHORE_DONE = "✅"
+CHORE_OPEN = "⬜"
+CHORE_MISSED = "❌"
+
+#: Shown only from two consecutive days up — a "🔥 1" on every chore that
+#: happened once is noise, and makes a real run harder to spot.
+STREAK_MARKER = "🔥"
+STREAK_MIN = 2
+
+#: Narrower than the all-todos board's cell: these rows carry a state box in
+#: front and a name plus a timestamp behind, and the line still has to survive
+#: a phone.
+_CHORE_WIDTH = 34
+
+EMPTY_CHORES = "No recurring chores set up yet — add them on the dashboard. ✨"
+
+
+def chore_state(row: Mapping[str, Any]) -> str:
+    """``'done' | 'missed' | 'open'`` for one chore's **latest** instance.
+
+    A definition with no instance yet reads as ``open``: it has simply not come
+    round, which is indistinguishable to a mod from due-and-not-done-yet, and
+    inventing a fourth state for it would earn nothing.
+
+    ``'missed'`` is defensive rather than routine. The daily reset closes the
+    old instance and opens its replacement in a single call, so the latest
+    instance is normally open or done and never missed — a *previous* miss
+    reaches the board through ``missed_previous`` instead (see
+    ``render_chore_rows``). This branch covers a row written off by
+    ``mark_missed`` with nothing spawned behind it, which the service permits.
+    """
+    if row.get("completed_at"):
+        return "done"
+    if row.get("missed_at"):
+        return "missed"
+    return "open"
+
+
+_CHORE_BOXES = {"done": CHORE_DONE, "missed": CHORE_MISSED, "open": CHORE_OPEN}
+
+
+def render_chore_rows(
+    rows: Sequence[Mapping[str, Any]], *, limit: int = MAX_BOARD_ROWS
+) -> str:
+    """The chore board body: a state box, the chore, then who and when.
+
+    ``rows`` come from ``todo_recurring_service.chore_board_rows`` in
+    time-of-day order, each already carrying its ``streak`` and (resolved by
+    the cog, which is the only layer that may touch Discord) a
+    ``completed_by_name``.
+    """
+    if not rows:
+        return EMPTY_CHORES
+
+    shown = rows[:limit]
+    if not shown:  # limit <= 0
+        return EMPTY_CHORES
+
+    lines: list[str] = []
+    for row in shown:
+        state = chore_state(row)
+        cell = _CHORE_BOXES[state] + " " + pad_cell(_flatten(row["task"]), _CHORE_WIDTH)
+
+        trailing: list[str] = []
+        if state == "done":
+            who = _flatten(row.get("completed_by_name") or "")
+            when = rel_ts(row["completed_at"])
+            trailing.append(f"{who} · {when}" if who else when)
+        elif state == "missed":
+            # Say it in words as well as in the box: a lone ❌ in a channel
+            # reads as an error, not as a day that was skipped.
+            trailing.append("missed")
+        elif row.get("missed_previous"):
+            # The reachable miss. The reset spawns today's row the moment it
+            # writes yesterday's off, so the board's row is always the fresh
+            # one — without this the three days nobody did the chore would show
+            # as a plain ⬜ and the record the reset exists to keep would be
+            # invisible on the surface built to display it.
+            trailing.append(f"{CHORE_MISSED} missed last run")
+
+        streak = int(row.get("streak") or 0)
+        if streak >= STREAK_MIN:
+            trailing.append(f"{STREAK_MARKER} {streak}")
+
+        suffix = ("  " + "  ".join(trailing)) if trailing else ""
+        lines.append(f"`{cell}`{suffix}")
+
+    hidden = len(rows) - len(shown)
+    if hidden > 0:
+        lines.append(f"\n…and **{hidden}** more on the dashboard.")
+    return "\n".join(lines)
+
+
+def render_chore_footer(rows: Sequence[Mapping[str, Any]]) -> str:
+    """``2 of 3 done · updates automatically`` — the scoreboard's score.
+
+    Counts every active chore, including any past the visible limit, so the
+    footer never disagrees with the dashboard about how the day went.
+    """
+    total = len(rows)
+    if not total:
+        return "no chores yet · configure on the dashboard"
+    done = sum(1 for row in rows if chore_state(row) == "done")
+    # Counts the same thing the rows show: a chore still open whose previous
+    # run was written off. Counting ``chore_state == "missed"`` instead would
+    # be a number that is always zero, because the reset never leaves the
+    # latest instance in that state.
+    missed = sum(
+        1
+        for row in rows
+        if chore_state(row) == "missed"
+        or (chore_state(row) == "open" and row.get("missed_previous"))
+    )
+    text = f"{done} of {total} done"
+    if missed:
+        text += f" · {missed} missed last run"
+    return f"{text} · updates automatically"
+
+
+def chore_signature(
+    rows: Iterable[Mapping[str, Any]], *, limit: int = MAX_BOARD_ROWS
+) -> tuple:
+    """A fingerprint of what the chore board *shows*.
+
+    Same rule as ``board_signature``: excludes the completion timestamp itself,
+    because ``<t:…:R>`` re-renders client-side and an age ticking over is not a
+    reason to spend an API call. The *state* is in, so a tick repaints; so is
+    ``completed_by_name``, since a row can change hands without changing state
+    if a completion is undone and redone by someone else.
+    """
+    rows = list(rows)
+    shown = tuple(
+        (
+            row["recurring_id"],
+            _flatten(row["task"]),
+            chore_state(row),
+            bool(row.get("missed_previous")),
+            _flatten(row.get("completed_by_name") or ""),
+            int(row.get("streak") or 0),
+        )
+        for row in rows[:limit]
+    )
+    return (shown, len(rows))

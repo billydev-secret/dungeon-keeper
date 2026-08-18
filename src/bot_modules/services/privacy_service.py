@@ -44,6 +44,19 @@ def _delete(
         log.warning("Purge: failed on %s (%s)", table, exc)
 
 
+def _scrub(
+    conn: sqlite3.Connection, sql: str, params: tuple, *, table: str
+) -> None:
+    """One tolerated anonymising UPDATE.
+
+    Same schema-drift tolerance as ``_delete``; separate name because erasing a
+    member *from* a shared row is a different act from removing the row, and a
+    reader scanning this file for what the purge deletes should not have to
+    read the SQL to find out that these two are not deletions.
+    """
+    _delete(conn, sql, params, table=table)
+
+
 def purge_user_data(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -165,6 +178,42 @@ def purge_user_data(
         table="role_events",
     )
 
+    # Shared todo list — ANONYMISED, NOT DELETED, and deliberately so.
+    #
+    # A todos row is two different things at once: the task text, which is the
+    # mod team's shared work product and belongs to the server, and the two
+    # Discord ids naming who added it and who ticked it, which are the member's
+    # personal data. Deleting the row to erase the ids would take real
+    # outstanding work off other people's list — a task someone else is
+    # part-way through vanishing because an unrelated member left. Clearing the
+    # ids erases everything that identifies a person while leaving the work
+    # standing, which is the minimisation the erasure right actually asks for.
+    #
+    # `added_by` becomes 0 and `completed_by` NULL — the same "unknown" the
+    # board and the dashboard already render for an unresolvable member, so no
+    # surface needs to learn a new state. `missed_at` rows name nobody by
+    # definition and are untouched.
+    for col, blank in (("added_by", 0), ("completed_by", None)):
+        _scrub(
+            conn,
+            f"UPDATE todos SET {col} = ? WHERE guild_id = ? AND {col} = ?",
+            (blank, guild_id, user_id),
+            table=f"todos.{col}",
+        )
+
+    # …and the recurring definitions behind them, or the erasure undoes itself.
+    # `_spawn_one` stamps the definition's `created_by` onto every row it
+    # materialises, so a member who set up "Post QOTD" and then asked to be
+    # erased would have their id written straight back into `todos.added_by` at
+    # the next fire, and every day after. Blanking the definition is what makes
+    # the scrub above durable rather than a one-off.
+    _scrub(
+        conn,
+        "UPDATE todo_recurring SET created_by = 0 WHERE guild_id = ? AND created_by = ?",
+        (guild_id, user_id),
+        table="todo_recurring.created_by",
+    )
+
     # Mention Awards: a `from_user` condition chip names the member inside the
     # rule's conditions JSON — the list-column blind spot, so SUBJECT_ID_COLUMNS
     # can't see it. Strip the member's chips; a rule left with no chips is
@@ -281,7 +330,8 @@ SUBJECT_ID_COLUMNS = frozenset(
     {
         "actor_id", "added_by", "approved_by", "asker_id", "author_id",
         "beneficiary_id", "blocked_user_id", "challenger_id", "claimed_by",
-        "claimer_id", "created_by", "creator_id", "done_by", "editor_id",
+        "claimer_id", "completed_by", "created_by", "creator_id", "done_by",
+        "editor_id",
         "extra_questioner_id", "from_user_id", "guessed_id", "guessed_user_id",
         "guesser_id", "high_bidder_id", "highest_user", "holder_id", "host_id",
         "invitee_id", "inviter_id", "last_winner_id", "loser_id", "lowest_user",

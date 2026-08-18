@@ -7,9 +7,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from bot_modules.cogs.todo_cog import TodoAddModal, TodoBoardView, TodoCog
+from bot_modules.cogs.todo_cog import (
+    TodoAddModal,
+    TodoBoardView,
+    TodoChoreBoardView,
+    TodoCog,
+)
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.todo_service import create_todo, get_board, save_board
+from bot_modules.services.todo_service import (
+    BOARD_ALL,
+    BOARD_CHORES,
+    create_todo,
+    get_board,
+    save_board,
+)
 from tests.db_template import migrated_db
 
 
@@ -368,3 +379,96 @@ async def test_todo_answers_the_interaction_before_repainting():
                       new=AsyncMock(side_effect=lambda _g: order.append("repaint"))):
         await cog.todo.callback(cog, interaction, "clean up the channels")
     assert order == ["reply", "repaint"]
+
+
+# ── the chore board (glue only — rendering is covered in board_logic) ──
+
+
+@pytest.mark.asyncio
+async def test_chore_button_rejects_non_mods():
+    """The safety gate on the second board's only button."""
+    view = TodoChoreBoardView()
+    interaction = _button_interaction(_member(mod=False))
+    with patch("bot_modules.cogs.todo_cog.chore_board_rows") as rows:
+        await view._complete.callback(interaction)
+    rows.assert_not_called()
+    assert "moderator" in interaction.response.send_message.await_args.args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_the_two_boards_keep_separate_placements(board_db):
+    """The wiring the widened key exists for: one cog, two independent panels."""
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+
+    cog._write_ids(123, 111, 222)
+    cog._write_chore_ids(123, 333, 444)
+
+    assert cog._read_ids(123) == (111, 222)
+    assert cog._read_chore_ids(123) == (333, 444)
+    with open_db(board_db) as conn:
+        assert get_board(conn, 123, BOARD_ALL).channel_id == 111
+        assert get_board(conn, 123, BOARD_CHORES).channel_id == 333
+
+
+@pytest.mark.asyncio
+async def test_on_message_is_forwarded_to_both_panels(board_db):
+    """A miss here leaves one board unable to re-stick at all."""
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    cog.board.on_message = AsyncMock()
+    cog.chore_board.on_message = AsyncMock()
+
+    message = MagicMock(spec=discord.Message)
+    await cog._restick_board(message)
+
+    cog.board.on_message.assert_awaited_once_with(message)
+    cog.chore_board.on_message.assert_awaited_once_with(message)
+
+
+@pytest.mark.asyncio
+async def test_channel_delete_is_forwarded_to_both_panels(board_db):
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    cog.board.on_channel_delete = AsyncMock()
+    cog.chore_board.on_channel_delete = AsyncMock()
+
+    deleted = MagicMock(spec=discord.TextChannel)
+    await cog._forget_deleted_board_channel(deleted)
+
+    cog.board.on_channel_delete.assert_awaited_once_with(deleted)
+    cog.chore_board.on_channel_delete.assert_awaited_once_with(deleted)
+
+
+@pytest.mark.asyncio
+async def test_mark_done_sees_every_chore_the_board_renders(board_db):
+    """The button read a shorter slice than the board drew, so a guild whose
+    first 25 chores were all done got "everything is ticked off" while open
+    rows were visible in the message directly above it."""
+    from bot_modules.services.todo_recurring_service import create_recurring, run_now
+    from bot_modules.services.todo_service import complete_todo
+
+    with open_db(board_db) as conn:
+        for n in range(30):
+            rid = create_recurring(
+                conn, 123, task=f"Chore {n:02d}", recurrence="daily",
+                time_of_day=n, created_by=1, now_ts=0.0,
+            )
+            run_now(conn, rid, 123, now_ts=0.0)
+        # Tick off the first 25 by time_of_day — the board's own ordering.
+        for row in conn.execute(
+            "SELECT id FROM todos ORDER BY id LIMIT 25"
+        ).fetchall():
+            complete_todo(conn, row["id"], 123, 42)
+
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    view = TodoChoreBoardView()
+    interaction = _button_interaction(_member(mod=True))
+    with patch("bot_modules.cogs.todo_cog._resolve_cog", return_value=cog):
+        await view._complete.callback(interaction)
+
+    # A picker, not "everything is done".
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert "Which chore" in interaction.response.send_message.await_args.args[0]
+    assert len(kwargs["view"].children[0].options) == 5
