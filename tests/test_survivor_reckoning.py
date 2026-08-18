@@ -601,3 +601,70 @@ async def test_last_call_dm_carries_the_pick_button(db, monkeypatch):
     (fb_content, fb_kwargs), = guild.channel.sent
     assert "<@2>" in fb_content
     assert _pick_button_ids(fb_kwargs["view"]) == [f"survivor_slate:{season['id']}"]
+
+
+# ── role reconcile (2026-08-18, Billy's #10) ──────────────────────────
+#
+# Every decision pass repairs life-state roles: alive holds Survivor,
+# ghost holds Ghost. The point is drift — the a41e70e2 join crash left a
+# member charged but roleless, and nothing would ever have granted it.
+# swap_member_roles checks the cached roles first, so the no-drift case
+# must make zero API calls.
+
+class _FakeRole:
+    def __init__(self, rid):
+        self.id = rid
+
+
+class _RoleMember:
+    def __init__(self, uid, roles):
+        self.id = uid
+        self.roles = list(roles)
+        self.calls = []
+
+    async def add_roles(self, role, reason=None):
+        self.calls.append(("add", role.id))
+        self.roles.append(role)
+
+    async def remove_roles(self, role, reason=None):
+        self.calls.append(("remove", role.id))
+        self.roles.remove(role)
+
+
+class _RoleGuild:
+    def __init__(self, members, roles):
+        self._members = {m.id: m for m in members}
+        self._roles = {r.id: r for r in roles}
+
+    def get_member(self, uid):
+        return self._members.get(uid)
+
+    def get_role(self, rid):
+        return self._roles.get(rid)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_roles_heals_drift_and_skips_the_settled(db):
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        update_config(conn, season["id"], {
+            "role_survivor_id": 11, "role_ghost_id": 22,
+        })
+        season = get_season(conn, season["id"])
+        join_season(conn, season, 1, NOW)   # alive, roleless (crashed join)
+        join_season(conn, season, 2, NOW)   # alive, already correct
+        join_season(conn, season, 3, NOW)
+        eliminate_player(conn, season["id"], 3, week=1)  # ghost, still 🏈
+
+    survivor, ghost = _FakeRole(11), _FakeRole(22)
+    roleless = _RoleMember(1, [])
+    settled = _RoleMember(2, [survivor])
+    stale_ghost = _RoleMember(3, [survivor])
+    guild = _RoleGuild([roleless, settled, stale_ghost], [survivor, ghost])
+    bot = _FakeBot(guild)
+
+    await tasks.reconcile_roles(bot, db, season)
+
+    assert roleless.calls == [("add", 11)]          # the crashed-join heal
+    assert settled.calls == []                       # no drift → zero API calls
+    assert stale_ghost.calls == [("remove", 11), ("add", 22)]

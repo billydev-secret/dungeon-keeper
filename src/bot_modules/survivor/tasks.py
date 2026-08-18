@@ -240,6 +240,7 @@ async def run_weekly_tasks(
                     bot, db_path, season, lastcall_wk, now
                 )
                 (fired if ok else blocked).append("last call")
+            await reconcile_roles(bot, db_path, season)
         except Exception as exc:
             failed = str(exc) or exc.__class__.__name__
             log.exception(
@@ -261,6 +262,35 @@ async def run_weekly_tasks(
             "error": failed,
         })
     return report
+
+
+async def reconcile_roles(bot, db_path: Path, season: dict) -> None:
+    """Life-state role repair, every decision pass: alive players hold the
+    Survivor role, ghosts the Ghost role (2026-08-18, Billy's #10).
+
+    swap_member_roles is idempotent and checks the gateway role cache before
+    calling Discord, so a no-drift pass costs zero API calls — this exists
+    for the drift cases: a join that crashed after charging but before its
+    grant (the a41e70e2 bug left exactly that), a mod removing a role by
+    hand, a member rejoining after a leave. Best-effort per member; a
+    failure is logged by the swap itself and never blocks the pass."""
+
+    def _q():
+        with open_db(db_path) as conn:
+            return [
+                (int(r["user_id"]), r["status"])
+                for r in conn.execute(
+                    "SELECT user_id, status FROM survivor_players "
+                    "WHERE season_id = ?",
+                    (season["id"],),
+                ).fetchall()
+            ]
+
+    for user_id, player_status in await asyncio.to_thread(_q):
+        await swap_member_roles(
+            bot, season["guild_id"], season["config"], user_id,
+            to_ghost=player_status != "alive",
+        )
 
 
 async def post_reckoning(
