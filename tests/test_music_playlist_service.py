@@ -240,7 +240,6 @@ def test_settings_defaults(sync_db_path):
     assert settings == DEFAULT_MUSIC_PLAYLIST_SETTINGS
     assert settings.enabled is False
     assert settings.window_size == 30
-    assert settings.match_threshold == 0.74
     assert settings.remove_on_delete is True
 
 
@@ -250,24 +249,31 @@ def test_settings_roundtrip_and_unknown_key(sync_db_path):
             "enabled": True,
             "channel_id": CHANNEL,
             "playlist_id": PLAYLIST,
-            "match_threshold": 0.81,
+            "rescan_depth": 500,
         })
         settings = load_music_playlist_settings(conn, GUILD)
         assert settings.enabled is True
         assert settings.channel_id == CHANNEL
         assert settings.playlist_id == PLAYLIST
-        assert settings.match_threshold == 0.81
+        assert settings.rescan_depth == 500
         # Untouched keys keep their defaults.
         assert settings.window_size == 30
         with pytest.raises(KeyError):
             save_music_playlist_settings(conn, GUILD, {"widow_size": 5})
 
 
-def test_settings_ignore_a_stale_retired_key(sync_db_path):
-    # Prod still holds music_playlist_expand_albums until migration 170
-    # sweeps it; a leftover row must not break or leak into the loader.
+@pytest.mark.parametrize(
+    "stale_key",
+    [
+        pytest.param("music_playlist_expand_albums", id="expand-albums"),
+        pytest.param("music_playlist_match_threshold", id="match-threshold"),
+    ],
+)
+def test_settings_ignore_a_stale_retired_key(sync_db_path, stale_key):
+    # Retired dials linger in prod config until their sweep migration (170,
+    # 171) runs; a leftover row must not break or leak into the loader.
     with open_db(sync_db_path) as conn:
-        set_config_value(conn, "music_playlist_expand_albums", "1", GUILD)
+        set_config_value(conn, stale_key, "1", GUILD)
         settings = load_music_playlist_settings(conn, GUILD)
     assert settings == DEFAULT_MUSIC_PLAYLIST_SETTINGS
 
@@ -275,10 +281,10 @@ def test_settings_ignore_a_stale_retired_key(sync_db_path):
 def test_settings_unparseable_values_fall_back(sync_db_path):
     with open_db(sync_db_path) as conn:
         set_config_value(conn, "music_playlist_window_size", "banana", GUILD)
-        set_config_value(conn, "music_playlist_match_threshold", "high", GUILD)
+        set_config_value(conn, "music_playlist_enabled", "sideways", GUILD)
         settings = load_music_playlist_settings(conn, GUILD)
     assert settings.window_size == 30
-    assert settings.match_threshold == 0.74
+    assert settings.enabled is False
 
 
 # ── Happy path: direct links, window, trim ────────────────────────────
@@ -558,22 +564,23 @@ async def test_confident_youtube_match_adds(sync_db_path):
         assert row["source_url"] == YT_URL
 
 
-async def test_below_threshold_queues_and_adds_nothing(sync_db_path):
+async def test_low_scoring_match_still_adds_best_candidate(sync_db_path):
+    """Best-effort policy (2026-08-18): no confidence gate, no review stop.
+
+    Before, a candidate scoring under the threshold queued for review; now
+    the best-scoring candidate is added outright — a wrong pick in a rolling
+    window is cheap, a review queue someone has to work is not.
+    """
     seed_settings(sync_db_path)
     spotify = FakeSpotify()
     svc = make_service(
         sync_db_path, spotify, meta=GOOD_META, candidates=[BAD_CANDIDATE]
     )
     summary = await svc.process_message(GUILD, CHANNEL, 101, YT_URL, ALICE)
-    assert summary.added_track_ids == []
-    assert not spotify.add_calls
-    assert len(summary.unmatched_ids) == 1
-    (row,) = pending_rows(sync_db_path)
-    assert row["reason"] == REASON_LOW_CONFIDENCE
-    assert row["candidate_track_id"] == "tWrong"
-    assert row["confidence"] < 0.74
-    assert row["extracted_title"] == GOOD_META.title
-    assert row["added_by"] == ALICE
+    assert summary.added_track_ids == ["tWrong"]
+    assert summary.unmatched_ids == []
+    assert pending_rows(sync_db_path) == []
+    assert window_ids(sync_db_path) == ["tWrong"]
 
 
 @pytest.mark.parametrize(

@@ -126,7 +126,6 @@ def test_status_defaults(open_client):
         "channel_id": None,
         "playlist_id": "",
         "window_size": 30,
-        "match_threshold": 0.74,
         "remove_on_delete": True,
         "rescan_depth": 200,
     }
@@ -176,12 +175,10 @@ def test_settings_roundtrip_and_snowflake_string(open_client):
         open_client,
         channel_id=str(BIG),
         window_size=15,
-        match_threshold=0.5,
         remove_on_delete=False,
     )
     assert settings["channel_id"] == str(BIG)
     assert settings["window_size"] == 15
-    assert settings["match_threshold"] == 0.5
     assert settings["remove_on_delete"] is False
     # And it reads back identically through status.
     again = open_client.get("/api/music-playlist/status").json()["settings"]
@@ -191,10 +188,10 @@ def test_settings_roundtrip_and_snowflake_string(open_client):
 def test_settings_partial_update_leaves_the_rest(open_client):
     _configure(open_client, window_size=12)
     r = open_client.put(
-        "/api/music-playlist/settings", json={"match_threshold": 0.9}
+        "/api/music-playlist/settings", json={"rescan_depth": 500}
     )
     settings = r.json()["settings"]
-    assert settings["match_threshold"] == 0.9
+    assert settings["rescan_depth"] == 500
     assert settings["window_size"] == 12
     assert settings["playlist_id"] == "pl1"
     assert settings["enabled"] is True
@@ -223,8 +220,8 @@ def test_settings_accepts_playlist_link_and_uri(open_client):
     [
         pytest.param({"window_size": 0}, id="window-too-small"),
         pytest.param({"window_size": 201}, id="window-too-big"),
-        pytest.param({"match_threshold": -0.1}, id="threshold-negative"),
-        pytest.param({"match_threshold": 1.01}, id="threshold-above-one"),
+        pytest.param({"rescan_depth": 0}, id="rescan-too-small"),
+        pytest.param({"rescan_depth": 2001}, id="rescan-too-big"),
         pytest.param({"channel_id": "general"}, id="channel-not-an-id"),
         pytest.param({"channel_id": "-5"}, id="channel-negative"),
         pytest.param({"playlist_id": "not a playlist!!"}, id="playlist-garbage"),
@@ -240,7 +237,7 @@ def test_settings_validation_bounds(open_client, body):
     # Nothing was persisted — defaults still stand.
     settings = open_client.get("/api/music-playlist/status").json()["settings"]
     assert settings["window_size"] == 30
-    assert settings["match_threshold"] == 0.74
+    assert settings["rescan_depth"] == 200
 
 
 # ── window ────────────────────────────────────────────────────────────

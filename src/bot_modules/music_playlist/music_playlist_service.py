@@ -17,9 +17,10 @@ bot-owner Spotify client (``services/spotify_resolver``). Per message:
    references (the 🔁 case) so the deletion rule stays honest.
 4. **Write** the survivors to Spotify, then **trim** back to ``window_size``.
 
-Confidence gates step 2: at or above ``match_threshold`` the track is added
-silently; below it nothing is added and the link lands in the unmatched
-review queue with its best candidate and score.
+There is no confidence gate (removed 2026-08-18): the best-scoring candidate
+is always added, and reviewer verdicts are remembered per link. The review
+queue only receives links with nothing to add — no metadata, no candidates,
+or an unreadable collection.
 
 Every Spotify write tolerates :class:`SpotifyResolveError` — a read-only
 grant, a 403, or an exhausted 429 surfaces as ``write_blocked`` + an error
@@ -76,6 +77,8 @@ SETTINGS_PREFIX = "music_playlist_"
 # Unmatched-queue reasons (stored in the ``reason`` column, shown on review).
 REASON_NO_METADATA = "youtube_metadata_unavailable"
 REASON_NO_CANDIDATES = "no_spotify_candidates"
+# No longer produced (the confidence gate was removed 2026-08-18 — the best
+# candidate is always added); kept so historical queue rows still label.
 REASON_LOW_CONFIDENCE = "confidence_below_threshold"
 # An album/playlist link whose contents this app cannot read (editorial
 # playlist, or the Development-mode null-track shape). Queued rather than
@@ -140,8 +143,6 @@ class MusicPlaylistSettings:
     playlist_id: str = ""
     # Rolling window: song N+1 pushes the oldest out.
     window_size: int = 30
-    # YouTube→Spotify confidence gate; below it the link goes to review.
-    match_threshold: float = 0.74
     # Deleting the source message pulls the track (unless another live
     # message still references it).
     remove_on_delete: bool = True
@@ -155,7 +156,7 @@ class MusicPlaylistSettings:
 DEFAULT_MUSIC_PLAYLIST_SETTINGS = MusicPlaylistSettings()
 
 _BOOL_KEYS = ["enabled", "remove_on_delete"]
-_FLOAT_KEYS = ["match_threshold"]
+_FLOAT_KEYS: list[str] = []
 _STR_KEYS = ["playlist_id"]
 # Everything else on the dataclass is a plain int.
 _INT_KEYS = [
@@ -756,33 +757,23 @@ class MusicPlaylistService:
             summary.unmatched_ids.append(unmatched_id)
             return []
 
-        decision = select_best_match(
-            metadata, candidates_by_id.values(), settings.match_threshold
-        )
-        if decision.best_candidate and decision.is_confident:
-            track = decision.best_candidate.track
-            return [_TrackInfo(
-                track_id=track.track_id,
-                title=track.name,
-                artist=", ".join(track.artists),
-                source_url=link.raw_url,
-            )]
-
+        # Best-effort policy (Billy, 2026-08-18): the best-scoring candidate
+        # is always added — no confidence gate. A wrong pick in a rolling
+        # window is cheap to fix (delete the message, or remove the row on
+        # the dashboard); a review queue someone has to work is not. The
+        # scoring still matters: it picks WHICH candidate wins. Candidates
+        # exist here (the empty case queued above), so best is never None.
+        decision = select_best_match(metadata, candidates_by_id.values(), 0.0)
         best = decision.best_candidate
-        unmatched_id = await asyncio.to_thread(
-            self._queue_unmatched, guild_id,
-            channel_id=channel_id, message_id=message_id,
-            source_url=link.raw_url, added_by=added_by,
-            extracted_title=metadata.title,
-            extracted_channel=metadata.channel_name,
-            candidate_track_id=best.track.track_id if best else None,
-            candidate_name=best.track.name if best else None,
-            candidate_artist=", ".join(best.track.artists) if best else None,
-            confidence=best.confidence if best else None,
-            reason=REASON_LOW_CONFIDENCE,
-        )
-        summary.unmatched_ids.append(unmatched_id)
-        return []
+        if best is None:
+            return []
+        track = best.track
+        return [_TrackInfo(
+            track_id=track.track_id,
+            title=track.name,
+            artist=", ".join(track.artists),
+            source_url=link.raw_url,
+        )]
 
     # -- review queue ------------------------------------------------------
 

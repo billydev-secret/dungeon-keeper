@@ -40,10 +40,11 @@ consent. The dashboard's connection chip reports this state in words
 ## Shape
 
 One listener on a single dashboard-picked channel. Each message with music
-links runs the pipeline: **parse → resolve → dedupe → write → trim**, with a
-confidence gate feeding an unmatched **review queue** on the dashboard. The
-playlist is a **rolling window** (default 30): the newest add pushes the
-oldest live row out.
+links runs the pipeline: **parse → resolve → dedupe → write → trim**; links
+the resolver has nothing to add for feed an unmatched **review queue** on
+the dashboard, whose verdicts are remembered per link. The playlist is a
+**rolling window** (default 30): the newest add pushes the oldest live row
+out.
 
 ### Files
 
@@ -69,12 +70,13 @@ table), guild-scoped keys under the `music_playlist_` prefix:
 | `channel_id` | `0` | The one watched channel |
 | `playlist_id` | `""` | Spotify playlist id; the settings route also accepts an `open.spotify.com/playlist` link or `spotify:playlist:` URI and normalizes |
 | `window_size` | `30` | Dashboard bounds 1–200 |
-| `match_threshold` | `0.74` | Confidence gate for search-resolved (YouTube) links |
 | `remove_on_delete` | `true` | Deleting the source message pulls the track |
 | `rescan_depth` | `200` | How far back Re-scan reads (dashboard bounds 1–2000) |
 
-(`expand_albums` existed at launch and was retired 2026-08-18 — collection
-links now always contribute one track; migration 170 deletes the stored key.)
+(Two launch dials were retired 2026-08-18, their stored keys swept by
+migration: `expand_albums` — collection links now always contribute one
+track, migration 170 — and `match_threshold` — the best-scoring candidate is
+now always added, so a confidence gate would be unenforced, migration 171.)
 
 The owning Spotify account is a config concern (the OAuth grant), not schema
 — swapping it is a re-consent, never a migration.
@@ -106,13 +108,19 @@ previously-configured playlist are the incident that surfaced this.
 3. **Resolve:** direct by id for Spotify tracks; YouTube goes
    oEmbed metadata → cleaned search queries → Spotify search →
    `select_best_match` (title/artist blend with live/remaster mismatch
-   penalties, ported from OpenMusicBot's `matching.py`).
-4. **Confidence gate:** at or above `match_threshold` the track is added
-   silently; below it (or on no metadata / no candidates) the link lands in
-   `music_playlist_unmatched` with its best candidate, score, and a reason
-   (`youtube_metadata_unavailable` / `no_spotify_candidates` /
-   `confidence_below_threshold`; unreadable collections arrive as
-   `collection_unreadable` with no candidate — reject is the only resolution).
+   penalties, ported from OpenMusicBot's `matching.py`) — and the
+   **best-scoring candidate is always added** (Billy, 2026-08-18: a wrong
+   pick in a rolling window is cheap; the scoring still decides *which*
+   candidate wins). Before any of that, **reviewer verdicts are remembered
+   per link**: a URL with a resolved review row reuses that answer — an
+   approved link re-adds the reviewer's exact track with no fetch at all,
+   a rejected link contributes nothing and never re-queues.
+4. **Review queue:** only links with nothing to add reach
+   `music_playlist_unmatched` — no metadata
+   (`youtube_metadata_unavailable`), no candidates
+   (`no_spotify_candidates`), or an unreadable collection
+   (`collection_unreadable`, no candidate — reject is the only resolution).
+   `confidence_below_threshold` appears on historical rows only.
 5. **Dedupe** against the *window*, not all time: a duplicate records a
    reference row born dead (`removal_reason='duplicate'`) and adds nothing —
    the reference is what keeps deletion honest (below). A song that rolled
@@ -139,7 +147,14 @@ previously-configured playlist are the incident that surfaced this.
   no Spotify write; a **failed Spotify write reopens the item to pending**
   (retryable — surfaced as HTTP 409 on the dashboard).
 - `reject_unmatched` flips `pending → rejected`. Reviewed rows are kept as
-  queue history.
+  queue history — and as **verdict memory**
+  (`store.latest_review_verdict`, newest resolved row per guild+URL): any
+  re-processing of that link, or the same URL posted again, reuses the
+  reviewer's answer instead of re-asking. Pending rows are the open
+  question and don't count.
+- Migration 171 (2026-08-18, the policy change) re-fired every message that
+  had a pending queue row and deleted the pending rows: remembered approvals
+  re-added the reviewer's exact tracks, the rest added their best candidate.
 
 ### Deletions
 
@@ -195,7 +210,7 @@ instead would have been wrong (see the read guard below). Unlike Re-scan, a
 successful retry delivers the source-message reaction the original failure
 swallowed.
 
-## Storage (migrations 165, 169, 170)
+## Storage (migrations 165, 169–171)
 
 - **`music_playlist_tracks`** — window + history. Removals *mark* rows
   (`removed_at` + `removal_reason` ∈ `rolled_off` / `message_deleted` /
@@ -206,9 +221,11 @@ swallowed.
 - **`music_playlist_unmatched`** — the review queue (partial index on
   pending).
 - **`music_playlist_messages`** — the idempotency ledger; migration 169 adds
-  `attempts` (the retry sweep's counter and backoff exponent). Migration 170
-  is data-only: it deletes the retired `music_playlist_expand_albums` config
-  key.
+  `attempts` (the retry sweep's counter and backoff exponent). Migrations
+  170 and 171 are data-only: each deletes a retired dial's config key
+  (`expand_albums`, `match_threshold`), and 171 also re-fired the pending
+  review backlog through the best-effort pipeline (see the review queue
+  section).
 
 The member column is **`added_by` in both user-data tables** — deliberately
 not the plan's `posted_by`, because `added_by` is already in
