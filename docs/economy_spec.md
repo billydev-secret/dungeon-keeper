@@ -874,9 +874,11 @@ Quests on a privacy-suppressed kind (`quests.ANON_KINDS`: `confession`,
 `confession_reply`, `whisper`, `ama_ask`, `guess_post`, `pen_pal`,
 `pen_pal_complete`) reject `signoff=1` at creation/update: a sign-off
 claim posts a bank-channel card naming the claimant, timing-correlatable against
-the anonymous feed. (Community quests already forbid any trigger kind, so the
-only paths left for these kinds are the silent daily/weekly/event auto-claims,
-whose ledger rows the register feed also drops — §10.1.) Widened from
+the anonymous feed. (Community and monthly quests take a kind but already
+forbid sign-off on their own account — tier settlement is automatic — so the
+paths left for these kinds are all silent: the daily/weekly/event auto-claims
+and automatic tier settlement, whose ledger rows the register feed also
+drops — §10.1.) Widened from
 `confession` alone on 2026-08-02; `whisper` and `confession_reply` were the same
 leak with no guard. Widened again on 2026-08-17 (see §10.1) to `guess_post`,
 `pen_pal`, `pen_pal_complete` and `ama_ask`. `whisper_guess` stays outside the set — the whisper cog
@@ -1852,7 +1854,20 @@ economy) with the sender's resulting balance.
 guess_post, pen_pal, pen_pal_complete) is dropped from the drain entirely —
 `register._anon_quest_ids` resolves the guild's anon quests and the collector
 excludes any row whose `meta.quest_id` matches, covering all three quest ledger
-kinds (`quest`, `quest_community`, `quest_community_bonus`). A card reading
+kinds (`quest`, `quest_community`, `quest_community_bonus`).
+
+The quest id is not enough on its own, because a claim writes more than its own
+payout in the same transaction. `maybe_pay_set_bonus` credits `quest_bonus` with
+no quest id at all ("🎉 Quest board clear"), and `_fire_daily_completion` ticks
+the weekly `daily_complete` progression, whose payout carries *that* quest's id
+rather than the suppressed one. Either would post at the exact second the
+suppressed payout was hidden for — the timing correlation restated, one hop out,
+and for `guess_post` still naming the round's answer. So `claim_quest` derives
+an `anon` flag (its own kind, or inherited from the claim that triggered it) and
+stamps `meta.anon = 1` on everything it writes downstream, including the payout
+itself; the collector drops any stamped row whatever its kind. Stamping the
+payout too is deliberate belt-and-braces: `_anon_quest_ids` resolves quests
+live, so deleting an anon quest would otherwise let its undrained rows surface. A card reading
 "**X** earned *Send a Whisper*" posts seconds after the anonymous whisper lands
 in its feed, so the pair names the sender by timing correlation — the exact
 deanonymization the silent auto-claim exists to prevent. Redacting the title

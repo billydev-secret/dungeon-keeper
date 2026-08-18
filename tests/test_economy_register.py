@@ -291,6 +291,24 @@ def test_anon_kinds_covers_every_kind_the_register_must_hide(db):
     assert set(quest_logic.ANON_KINDS) >= {p.values[0] for p in MUST_NEVER_POST}
 
 
+@pytest.mark.parametrize("ledger_kind", ["quest_bonus", "quest"])
+def test_rows_stamped_anon_are_never_collected(db, ledger_kind):
+    """Not every row a suppressed claim writes carries its quest id. The
+    board-clear bonus carries none at all, and the ``daily_complete`` tick
+    carries the *progression* quest's id — both would post at the second the
+    anonymous action happened, which is the whole leak. The claim path stamps
+    ``meta.anon`` on anything it writes downstream of a suppressed quest, and
+    the drain honours the stamp whatever the ledger kind."""
+    with open_db(db) as conn:
+        _row(conn, USER_ID, 10, kind=ledger_kind, meta={"anon": 1})
+        _row(conn, USER_ID, 40, kind="grant")
+        entries = collect_register_entries(conn, GUILD_ID, 0, 10)
+
+    assert [e.amount for e in entries] == [40]
+    # Still real money: the next posted entry's balance has to include it.
+    assert [e.balance_after for e in entries] == [50]
+
+
 @pytest.mark.parametrize("ledger_kind", ["quest", "quest_community",
                                          "quest_community_bonus"])
 def test_anon_suppression_covers_every_quest_ledger_kind(db, ledger_kind):
