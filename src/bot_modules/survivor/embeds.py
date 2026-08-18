@@ -79,6 +79,12 @@ def build_status_embed(
         )
         tag = " 📎" if st["pick"]["auto_assigned"] else ""
         pick_line = f"week {st['week']}: **{st['pick']['team']}**{tag} · {lock}"
+    pending = st.get("pending")
+    if pending:
+        pick_line += (
+            f"\nweek {pending['week']}: **{pending['team']}** · "
+            "⏳ awaiting the reckoning"
+        )
     embed.add_field(name="Pick", value=pick_line, inline=False)
     embed.set_footer(text=season_name)
     return embed
@@ -171,6 +177,7 @@ def build_announcement_embed(
     buyin: int,
     gauntlet_mode: bool,
     late_entry: str = "gauntlet",
+    strikes: int = 1,
     color: discord.Color | None = None,
 ) -> discord.Embed:
     """The pinned season announcement (§2.2). ``gauntlet_mode`` flips the
@@ -204,13 +211,20 @@ def build_announcement_embed(
         "ghost_only": "• join late and you haunt — late arrivals play the ghost game",
         "closed": "• enrollment closes at Week 1 kickoff — after that, the door shuts",
     }
+    # Config-accurate, like the late-entry bullet: strikes is a 0–2 dial and
+    # a sudden-death season must not pin a promise of grace.
+    strike_lines = {
+        0: "• sudden death ☠️ — one loss and you're gone",
+        1: "• one strike of grace 💛 — the second is the end",
+        2: "• two strikes of grace 💛💛 — the third is the end",
+    }
     embed.add_field(
         name="The rules, briefly",
         value=(
             "• one team a week, straight up — win or die\n"
             "• each team usable **once** all season\n"
             "• picks lock at that game's kickoff; secret until Tuesday\n"
-            "• one strike of grace 💛 — the second is the end\n"
+            + strike_lines.get(strikes, strike_lines[1]) + "\n"
             + late_lines.get(late_entry, late_lines["gauntlet"])
         ),
         inline=False,

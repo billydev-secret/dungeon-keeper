@@ -231,7 +231,7 @@ def ingest_games(
     counts = {"inserted": 0, "updated": 0}
     for game in games:
         row = conn.execute(
-            "SELECT status, favorite, winner FROM nfl_games "
+            "SELECT status, favorite, winner, result_source FROM nfl_games "
             "WHERE season_year = ? AND game_id = ?",
             (season_year, game.game_id),
         ).fetchone()
@@ -249,6 +249,19 @@ def ingest_games(
                 ),
             )
             counts["inserted"] += 1
+            continue
+
+        if row["result_source"] == "manual":
+            # A hand-settled result (including VOID) is an admin decision the
+            # feed must never cross: no status flip, no winner, no favorite —
+            # only schedule facts. Reverting to feed truth is another manual
+            # settle, not a poll.
+            conn.execute(
+                "UPDATE nfl_games SET week = ?, kickoff_utc = ? "
+                "WHERE season_year = ? AND game_id = ?",
+                (game.week, game.kickoff_utc, season_year, game.game_id),
+            )
+            counts["updated"] += 1
             continue
 
         sets = ["week = ?", "kickoff_utc = ?", "status = ?"]

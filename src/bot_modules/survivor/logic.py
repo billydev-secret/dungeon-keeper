@@ -146,12 +146,16 @@ def legal_teams(
     In a double-pick week the other slot's team is excluded too (no pairing
     a team with itself)."""
     burned = burned_teams(conn, season["id"], user_id)
-    other_slot_team = conn.execute(
-        "SELECT team FROM survivor_picks "
+    other_slot = conn.execute(
+        "SELECT team, game_id FROM survivor_picks "
         "WHERE season_id = ? AND user_id = ? AND week = ? AND slot != ?",
         (season["id"], user_id, week, slot),
     ).fetchone()
-    excluded = burned | ({other_slot_team["team"]} if other_slot_team else set())
+    # The other slot excludes its WHOLE game, not just its team — picking
+    # both sides of one matchup would be a deterministic hedge buying
+    # exactly one strike (stage-4 review).
+    excluded = burned | ({other_slot["team"]} if other_slot else set())
+    excluded_games = {other_slot["game_id"]} if other_slot else set()
 
     rows = conn.execute(
         "SELECT game_id, week, home, away, kickoff_utc FROM nfl_games "
@@ -160,6 +164,8 @@ def legal_teams(
     ).fetchall()
     out: list[OpenGame] = []
     for r in rows:
+        if r["game_id"] in excluded_games:
+            continue
         ts = kickoff_ts(r["kickoff_utc"])
         if ts <= now:
             continue
@@ -265,12 +271,14 @@ def place_pick(
         )
 
     conn.execute(
-        "INSERT INTO survivor_picks (season_id, user_id, week, slot, team, game_id) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
+        "INSERT INTO survivor_picks "
+        "(season_id, guild_id, user_id, week, slot, team, game_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(season_id, user_id, week, slot) DO UPDATE SET "
         "team = excluded.team, game_id = excluded.game_id, "
         "auto_assigned = 0, locked_at = NULL, result = NULL",
-        (season["id"], user_id, week, slot, team, choice.game_id),
+        (season["id"], season["guild_id"], user_id, week, slot, team,
+         choice.game_id),
     )
     return choice
 
@@ -323,7 +331,7 @@ def join_season(
             raise PickError(
                 f"The buy-in is {buyin} coins and your wallet came up short."
             )
-    if not add_player(conn, season["id"], user_id, joined_at=now):
+    if not add_player(conn, season, user_id, joined_at=now):
         # Race loser: the duplicate SELECT above passed before the winner
         # committed. Raising here rolls this transaction back, debit and
         # all — the caller must be on open_db_immediate (the views are) so
@@ -359,6 +367,16 @@ def player_status(
         if game is not None:
             kickoff = kickoff_ts(game["kickoff_utc"])
             locked = kickoff <= now
+    # The just-played, still-ungraded pick (settle lag: MNF unfinished, the
+    # Reckoning not yet fired) must not vanish from the card — a last-strike
+    # member deserves better than a clean "no pick yet" minutes before the
+    # sweep grades their fate.
+    pending = conn.execute(
+        "SELECT week, team FROM survivor_picks "
+        "WHERE season_id = ? AND user_id = ? AND result IS NULL "
+        "AND week != COALESCE(?, -1) ORDER BY week DESC LIMIT 1",
+        (season["id"], user_id, week),
+    ).fetchone()
     bag = satchel(conn, season["id"], user_id)
     return {
         "status": player["status"],
@@ -369,6 +387,10 @@ def player_status(
         "pick": pick,
         "pick_locked": locked,
         "pick_kickoff_ts": kickoff,
+        "pending": (
+            {"week": int(pending["week"]), "team": pending["team"]}
+            if pending else None
+        ),
         "satchel_count": len(bag),
         "satchel_low": len(bag) < SATCHEL_LOW_WATER,
     }

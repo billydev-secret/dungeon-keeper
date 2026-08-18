@@ -285,16 +285,16 @@ def list_players(conn: sqlite3.Connection, season_id: int) -> list[dict]:
 
 
 def add_player(
-    conn: sqlite3.Connection, season_id: int, user_id: int, *, joined_at: float
+    conn: sqlite3.Connection, season: dict, user_id: int, *, joined_at: float
 ) -> bool:
     """Enroll a member; False if they already have an entry (one per person,
-    spec §1.1). The full join flow (buy-in, gauntlet) is later-stage logic
-    that calls this last."""
+    spec §1.1). Takes the season dict — guild_id is denormalized onto the
+    row so the access export's standard guild scoping covers it."""
     iso = datetime.fromtimestamp(joined_at, timezone.utc).isoformat()
     cur = conn.execute(
-        "INSERT OR IGNORE INTO survivor_players (season_id, user_id, joined_at) "
-        "VALUES (?, ?, ?)",
-        (season_id, user_id, iso),
+        "INSERT OR IGNORE INTO survivor_players "
+        "(season_id, guild_id, user_id, joined_at) VALUES (?, ?, ?, ?)",
+        (season["id"], season["guild_id"], user_id, iso),
     )
     return (cur.rowcount or 0) > 0
 

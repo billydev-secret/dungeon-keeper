@@ -106,6 +106,7 @@ async def run_poll_cycle(
 
     do_refresh = now - state.last_refresh >= REFRESH_INTERVAL
     ingested = False
+    attempted = False
 
     if do_refresh:
         # Daily full sweep: every week, catches flex moves and heals gaps.
@@ -117,7 +118,13 @@ async def run_poll_cycle(
                 except Exception as exc:  # noqa: BLE001 — fail-soft per week
                     log.warning("survivor poll: refresh week %s failed (%s)", week, exc)
             ingested |= await _ingest_payloads(db_path, year, payloads, result)
-        state.last_refresh = now
+        if ingested:
+            state.last_refresh = now
+        else:
+            # Total failure (ESPN outage) must not lock the schedule out for
+            # a day — with an empty nfl_games there are no poll windows to
+            # recover through either. Retry at the poll cadence instead.
+            state.last_refresh = now - REFRESH_INTERVAL + POLL_INTERVAL
         state.last_poll = now
         result.refreshed = True
     elif now - state.last_poll >= POLL_INTERVAL:
@@ -131,6 +138,7 @@ async def run_poll_cycle(
         windows = await asyncio.to_thread(_windows)
         wanted = [(y, w) for y, weeks in windows.items() for w in weeks]
         if wanted:
+            attempted = True
             state.last_poll = now
             for year, week in wanted:
                 try:
@@ -140,10 +148,10 @@ async def run_poll_cycle(
                     continue
                 ingested |= await _ingest_payloads(db_path, year, [payload], result)
 
-    # Settle runs whenever we ingested — and also on refresh-less ticks at
-    # most every POLL_INTERVAL when a window is open, so auto-assign fires
-    # near the final kickoff even if ESPN itself had nothing new.
-    if ingested or result.refreshed:
+    # Settle runs whenever we ingested — and also on any attempted window
+    # poll (even one whose fetches all failed), so the groundskeeper fires
+    # near the final kickoff from stored schedule during an ESPN outage.
+    if ingested or result.refreshed or attempted:
         def _settle():
             reports = {}
             with open_db(db_path) as conn:

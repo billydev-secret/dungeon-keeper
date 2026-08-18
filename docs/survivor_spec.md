@@ -175,6 +175,8 @@ CREATE TABLE survivor_seasons (
 
 CREATE TABLE survivor_players (
   season_id INTEGER NOT NULL REFERENCES survivor_seasons(id),
+  guild_id INTEGER NOT NULL,                  -- denormalized (stage-4 review): the access
+                                              -- export guild-scopes via this column
   user_id INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'alive',       -- alive|ghost
   strikes_used INTEGER NOT NULL DEFAULT 0,
@@ -189,6 +191,7 @@ CREATE TABLE survivor_players (
 
 CREATE TABLE survivor_picks (
   season_id INTEGER NOT NULL,
+  guild_id INTEGER NOT NULL,                  -- denormalized; see survivor_players
   user_id INTEGER NOT NULL,
   week INTEGER NOT NULL,
   slot INTEGER NOT NULL DEFAULT 1,            -- 2 in double-pick weeks

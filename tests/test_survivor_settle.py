@@ -203,9 +203,9 @@ def test_one_fate_per_week_across_sweeps(db):
         season = _season(conn)
         join_season(conn, season, 1, NOW)
         conn.execute(
-            "INSERT INTO survivor_picks (season_id, user_id, week, slot, team, game_id)"
-            " VALUES (?, 1, 1, 1, 'NE', 'g-thu'), (?, 1, 1, 2, 'ARI', 'g-sun1')",
-            (season["id"], season["id"]),
+            "INSERT INTO survivor_picks (season_id, guild_id, user_id, week, slot, team, game_id)"
+            " VALUES (?, ?, 1, 1, 1, 'NE', 'g-thu'), (?, ?, 1, 1, 2, 'ARI', 'g-sun1')",
+            (season["id"], GID, season["id"], GID),
         )
         _finalize(conn, "g-thu", "SEA")
         run_settle(conn, season, THU + 4 * HOUR)
@@ -297,7 +297,7 @@ def test_auto_assign_takes_best_closing_side(db):
         join_season(conn, season, 1, NOW)      # never picks
         _finalize(conn, "g-thu", "SEA")
         _finalize(conn, "g-sun1", "SF")
-        report = run_settle(conn, season, MON + HOUR)
+        report = run_settle(conn, season, MON + 600)
         assert report.auto_assigned == [(1, "KC")]  # 0.81 favorite of the closer
         row = conn.execute(
             "SELECT team, auto_assigned, locked_at FROM survivor_picks "
@@ -307,7 +307,7 @@ def test_auto_assign_takes_best_closing_side(db):
         assert (row["team"], row["auto_assigned"]) == ("KC", 1)
         assert row["locked_at"] is not None
         # Idempotent: the next sweep assigns nothing further.
-        again = run_settle(conn, season, MON + 2 * HOUR)
+        again = run_settle(conn, season, MON + 1200)
         assert again.auto_assigned == []
 
 
@@ -318,11 +318,11 @@ def test_auto_assign_skips_ghosts_and_late_joiners(db):
         eliminate_player(conn, season["id"], 1, week=1)   # ghost: never covered
         # Joins after the closing kickoff — not in this week's game.
         conn.execute(
-            "INSERT INTO survivor_players (season_id, user_id, joined_at)"
-            " VALUES (?, 2, ?)",
-            (season["id"], _iso(MON + 30 * 60)),
+            "INSERT INTO survivor_players (season_id, guild_id, user_id, joined_at)"
+            " VALUES (?, ?, 2, ?)",
+            (season["id"], GID, _iso(MON + 30 * 60)),
         )
-        report = run_settle(conn, season, MON + HOUR)
+        report = run_settle(conn, season, MON + 600)
         assert report.auto_assigned == []
         assert report.cap_eliminated == []
 
@@ -334,12 +334,12 @@ def test_auto_assign_dead_end_survives(db):
         season = _season(conn)
         join_season(conn, season, 1, NOW)
         conn.execute(
-            "INSERT INTO survivor_picks (season_id, user_id, week, slot, team, game_id, result)"
-            " VALUES (?, 1, 0, 1, 'KC', 'g-old', 'loss'),"
-            " (?, 1, 0, 2, 'LV', 'g-old2', 'loss')",
-            (season["id"], season["id"]),
+            "INSERT INTO survivor_picks (season_id, guild_id, user_id, week, slot, team, game_id, result)"
+            " VALUES (?, ?, 1, 0, 1, 'KC', 'g-old', 'loss'),"
+            " (?, ?, 1, 0, 2, 'LV', 'g-old2', 'loss')",
+            (season["id"], GID, season["id"], GID),
         )
-        report = run_settle(conn, season, MON + HOUR)
+        report = run_settle(conn, season, MON + 600)
         assert report.no_legal_team == [1]
         assert report.auto_assigned == []
         p = _player(conn, season, 1)
@@ -353,15 +353,70 @@ def test_groundskeeper_declines_the_fourth_time(db):
         # Three prior covered weeks.
         for week in (0, -1, -2):
             conn.execute(
-                "INSERT INTO survivor_picks (season_id, user_id, week, slot, team,"
-                " game_id, auto_assigned, result) VALUES (?, 1, ?, 1, 'X', 'g', 1, 'win')",
-                (season["id"], week),
+                "INSERT INTO survivor_picks (season_id, guild_id, user_id, week, slot, team,"
+                " game_id, auto_assigned, result) VALUES (?, ?, 1, ?, 1, 'X', 'g', 1, 'win')",
+                (season["id"], GID, week),
             )
-        report = run_settle(conn, season, MON + HOUR)
+        report = run_settle(conn, season, MON + 600)
         assert report.cap_eliminated == [1]
         p = _player(conn, season, 1)
         assert (p["status"], p["elimination_source"]) == ("ghost", "cap")
         assert p["eliminated_week"] == 1
+
+
+def test_auto_assign_never_reaches_into_a_live_game(db):
+    # Stage-4 review: a delayed sweep (restart, outage recovery) must not
+    # assign into a closer already deep in progress — past the grace bound
+    # the pickless simply survive.
+    with open_db(db) as conn:
+        season = _season(conn)
+        join_season(conn, season, 1, NOW)
+        conn.execute("UPDATE nfl_games SET status = 'in' WHERE game_id = 'g-mon'")
+        report = run_settle(conn, season, MON + 2 * HOUR)  # beyond the grace
+        assert report.auto_assigned == []
+        assert _player(conn, season, 1)["status"] == "alive"
+
+
+def test_missed_pick_eliminate_ruleset(db):
+    # Stage-4 review: the 'eliminate' dial was stored but nothing read it.
+    with open_db(db) as conn:
+        season = _season(conn, missed_pick="eliminate")
+        join_season(conn, season, 1, NOW)
+        report = run_settle(conn, season, MON + 600)
+        assert report.cap_eliminated == [1]
+        p = _player(conn, season, 1)
+        assert (p["status"], p["elimination_source"]) == ("ghost", "missed")
+        # And the decision survives a later recompute, like cap/admin deaths.
+        _finalize(conn, "g-thu", "SEA")
+        run_settle(conn, season, MON + 1200)
+        assert _player(conn, season, 1)["elimination_source"] == "missed"
+
+
+def test_manual_void_sticks_through_a_feed_poll(db):
+    # Stage-4 review headline: ingest must never cross a manual result.
+    from bot_modules.services.survivor_espn import ParsedGame, ingest_games
+
+    with open_db(db) as conn:
+        season = _season(conn)
+        join_season(conn, season, 1, NOW)
+        place_pick(conn, season, 1, 1, "SEA", NOW)
+        manual_settle(conn, YEAR, "g-thu", "VOID", [season])
+        assert _pick_result(conn, season, 1) == "void"
+
+        # The feed still thinks the game is on, then final.
+        feed_final = ParsedGame(
+            game_id="g-thu", week=1, home="SEA", away="NE",
+            kickoff_utc=_iso(THU), status="final", favorite=None,
+            favorite_prob=None, winner="SEA",
+        )
+        ingest_games(conn, YEAR, [feed_final])
+        row = conn.execute(
+            "SELECT status, winner FROM nfl_games WHERE game_id = 'g-thu'"
+        ).fetchone()
+        assert (row["status"], row["winner"]) == ("postponed", None)
+        run_settle(conn, season, MON + 600)
+        assert _pick_result(conn, season, 1) == "void"  # the void stands
+        assert _player(conn, season, 1)["strikes_used"] == 0
 
 
 def test_auto_assign_window_closes_when_the_closer_goes_final(db):

@@ -189,7 +189,7 @@ def test_overview_player_ids_are_strings(authed_client, fake_ctx, web_db):
     _create_season(authed_client)
     with open_db(web_db) as conn:
         season = svc.get_active_season(conn, fake_ctx.guild_id)
-        svc.add_player(conn, season["id"], BIG_ID, joined_at=1.0)
+        svc.add_player(conn, season, BIG_ID, joined_at=1.0)
         conn.commit()
     over = authed_client.get("/api/survivor/overview").json()
     assert over["players"][0]["user_id"] == str(BIG_ID)
@@ -243,7 +243,7 @@ def test_eliminate_and_revive_conflict_mapping(authed_client, fake_ctx, web_db):
     _create_season(authed_client)
     with open_db(web_db) as conn:
         season = svc.get_active_season(conn, fake_ctx.guild_id)
-        svc.add_player(conn, season["id"], BIG_ID, joined_at=1.0)
+        svc.add_player(conn, season, BIG_ID, joined_at=1.0)
         conn.commit()
 
     path = f"/api/survivor/player/{BIG_ID}"
@@ -388,11 +388,11 @@ def _seed_week(web_db, fake_ctx):
             " (2026, 1, 'g-b', 'KC', 'LV', '2099-09-13T17:00:00+00:00')"
         )
         season = svc.get_active_season(conn, fake_ctx.guild_id)
-        svc.add_player(conn, season["id"], BIG_ID, joined_at=1.0)
+        svc.add_player(conn, season, BIG_ID, joined_at=1.0)
         conn.execute(
-            "INSERT INTO survivor_picks (season_id, user_id, week, slot, team,"
-            " game_id) VALUES (?, ?, 1, 1, 'NE', 'g-a')",
-            (season["id"], BIG_ID),
+            "INSERT INTO survivor_picks (season_id, guild_id, user_id, week, slot,"
+            " team, game_id) VALUES (?, ?, ?, 1, 1, 'NE', 'g-a')",
+            (season["id"], season["guild_id"], BIG_ID),
         )
         conn.commit()
         return season

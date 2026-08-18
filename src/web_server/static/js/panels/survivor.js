@@ -115,9 +115,12 @@ async function renderWeekCard(zone) {
     // Settle for stuck games; correction stays available on finals — the
     // buttons feed the same derived pipeline either way.
     const verb = g.status === "final" ? "correct:" : "settle:";
+    // Feed-derived strings are escaped here like everywhere else — the
+    // parser accepts any string ESPN serves, so the buttons must not be
+    // the one unescaped column.
     const btn = (outcome, label) =>
-      `<button type="button" class="btn btn-small" data-settle="${g.game_id}"
-        data-outcome="${outcome}">${label}</button>`;
+      `<button type="button" class="btn btn-small" data-settle="${esc(g.game_id)}"
+        data-outcome="${esc(outcome)}">${esc(label)}</button>`;
     return `
       <tr>
         <td>wk ${g.week}</td>

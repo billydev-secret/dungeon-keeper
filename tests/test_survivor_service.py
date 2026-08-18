@@ -204,10 +204,11 @@ def test_get_config_ignores_unknown_stored_keys():
 def test_roster_lifecycle(db):
     with open_db(db) as conn:
         season_id = create_season(conn, GID, "S", 2026)
-        assert add_player(conn, season_id, 1, joined_at=NOW)
+        season = get_season(conn, season_id)
+        assert add_player(conn, season, 1, joined_at=NOW)
         # One entry per person (spec §1.1) — the second join is a no-op.
-        assert not add_player(conn, season_id, 1, joined_at=NOW + 60)
-        add_player(conn, season_id, 2, joined_at=NOW)
+        assert not add_player(conn, season, 1, joined_at=NOW + 60)
+        add_player(conn, season, 2, joined_at=NOW)
 
         assert eliminate_player(conn, season_id, 1, week=7)
         players = {p["user_id"]: p for p in list_players(conn, season_id)}
@@ -314,12 +315,13 @@ def test_purge_clears_survivor_rows_guild_scoped(db):
         season_a = create_season(conn, GID, "A", 2026)
         season_b = create_season(conn, GID2, "B", 2026)
         for season_id in (season_a, season_b):
-            add_player(conn, season_id, 1, joined_at=NOW)
+            season = get_season(conn, season_id)
+            add_player(conn, season, 1, joined_at=NOW)
             conn.execute(
                 "INSERT INTO survivor_picks "
-                "(season_id, user_id, week, slot, team, game_id) "
-                "VALUES (?, 1, 1, 1, 'SF', 'g1')",
-                (season_id,),
+                "(season_id, guild_id, user_id, week, slot, team, game_id) "
+                "VALUES (?, ?, 1, 1, 1, 'SF', 'g1')",
+                (season_id, season["guild_id"]),
             )
         # Archived seasons are purged too — erasure ignores season status.
         end_season(conn, season_a)

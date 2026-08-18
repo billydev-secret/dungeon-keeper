@@ -33,6 +33,12 @@ log = logging.getLogger("dungeonkeeper.survivor")
 # the flavor corpus; it is THE line for this one path.
 GROUNDSKEEPER_DECLINE = "the groundskeeper stopped covering for {name}."
 
+# How long past the final kickoff the groundskeeper may still assign. Covers
+# the 10-minute poll cadence plus restart slack; beyond it the closer is deep
+# in progress and an assignment would carry mid-game information no member's
+# own pick could — the pickless survive instead (stage-4 review).
+ASSIGN_GRACE_SECONDS = 30 * 60
+
 
 @dataclass
 class SettleReport:
@@ -106,7 +112,7 @@ def recompute_player(conn: sqlite3.Connection, season: dict, user_id: int) -> No
     stored_death = (
         int(row["eliminated_week"])
         if row["eliminated_week"] is not None
-        and row["elimination_source"] in ("cap", "admin", "left")
+        and row["elimination_source"] not in (None, "picks")
         else None
     )
     candidates = [w for w in (derived_death, stored_death) if w is not None]
@@ -240,7 +246,7 @@ def _weeks_at_final_kickoff(
     out = []
     for week, games in by_week.items():
         final_kick = max(kickoff_ts(g["kickoff_utc"]) for g in games)
-        if final_kick > now:
+        if not final_kick <= now <= final_kick + ASSIGN_GRACE_SECONDS:
             continue
         closers = [
             g for g in games if kickoff_ts(g["kickoff_utc"]) == final_kick
@@ -295,6 +301,17 @@ def _auto_assign_week(
     ).fetchall()
     if not pickless:
         return
+    if season["config"]["missed_pick"] == "eliminate":
+        # The harsher ruleset: no groundskeeper at all — pickless at the
+        # final kickoff is an elimination (source 'missed', a decision that
+        # survives recomputation like the cap's).
+        for row in pickless:
+            user_id = int(row["user_id"])
+            eliminate_player(
+                conn, season["id"], user_id, week, source="missed"
+            )
+            report.cap_eliminated.append(user_id)
+        return
     max_assigns = int(season["config"]["max_auto_assigns"])
     for row in pickless:
         user_id = int(row["user_id"])
@@ -320,9 +337,10 @@ def _auto_assign_week(
         team, game_id = choice
         conn.execute(
             "INSERT INTO survivor_picks "
-            "(season_id, user_id, week, slot, team, game_id, auto_assigned, locked_at) "
-            "VALUES (?, ?, ?, 1, ?, ?, 1, ?)",
-            (season["id"], user_id, week, team, game_id, final_kick_iso),
+            "(season_id, guild_id, user_id, week, slot, team, game_id,"
+            " auto_assigned, locked_at) VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?)",
+            (season["id"], season["guild_id"], user_id, week, team, game_id,
+             final_kick_iso),
         )
         report.auto_assigned.append((user_id, team))
 
@@ -355,16 +373,19 @@ def manual_settle(
             f"Outcome must be {game['home']}, {game['away']}, TIE, or VOID."
         )
     old = {"old_winner": game["winner"], "old_status": game["status"]}
+    # result_source='manual' is the marker the feed refuses to cross
+    # (survivor_espn.ingest_games) — without it the next poll would flip a
+    # VOID back to the feed's status and re-arm the winner guard.
     if outcome == "VOID":
         conn.execute(
-            "UPDATE nfl_games SET status = 'postponed', winner = NULL "
-            "WHERE season_year = ? AND game_id = ?",
+            "UPDATE nfl_games SET status = 'postponed', winner = NULL, "
+            "result_source = 'manual' WHERE season_year = ? AND game_id = ?",
             (season_year, game_id),
         )
     else:
         conn.execute(
-            "UPDATE nfl_games SET status = 'final', winner = ? "
-            "WHERE season_year = ? AND game_id = ?",
+            "UPDATE nfl_games SET status = 'final', winner = ?, "
+            "result_source = 'manual' WHERE season_year = ? AND game_id = ?",
             (outcome, season_year, game_id),
         )
     reports: dict[int, SettleReport] = {}

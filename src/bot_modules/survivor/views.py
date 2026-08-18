@@ -334,6 +334,7 @@ async def build_live_announcement(
         buyin=int(season["config"]["buyin_coins"]),
         gauntlet_mode=bool(elapsed),
         late_entry=str(season["config"]["late_entry"]),
+        strikes=int(season["config"]["strikes"]),
         color=color,
     )
     return season, embed
@@ -346,7 +347,12 @@ async def refresh_announcement(bot, db_path, season_id: int) -> None:
         return
     season, embed = built
     config = season["config"]
-    channel_id = int(config["channel_id"] or 0)
+    # The channel the pin was POSTED to, not the (re-pointable) current
+    # Survivor channel — the route's retire path already resolves this way,
+    # and diverging froze the counter after a re-point (stage-4 review).
+    channel_id = int(
+        config.get("announcement_channel_id") or config["channel_id"] or 0
+    )
     message_id = int(config.get("announcement_message_id") or 0)
     if not channel_id or not message_id:
         return

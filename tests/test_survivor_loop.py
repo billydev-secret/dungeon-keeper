@@ -124,12 +124,28 @@ async def test_no_live_season_no_fetches(db):
 async def test_first_cycle_is_a_full_refresh(db):
     with open_db(db) as conn:
         create_season(conn, GID, "S", YEAR)
-    fetch = Fetcher(fail_weeks={5})  # one dead week must not stop the sweep
+    payload = _payload(_event("g-thu", 1, "SEA", "NE", THU))
+    fetch = Fetcher(payloads={1: payload}, fail_weeks={5})  # one dead week is fine
     state = PollState()
     result = await run_poll_cycle(db, state, NOW, fetch)
     assert result.refreshed
     assert len(fetch.calls) == 18
     assert state.last_refresh == NOW
+
+
+async def test_fully_failed_refresh_retries_at_poll_cadence(db):
+    # Stage-4 review: a refresh that ingested NOTHING (ESPN outage) must not
+    # lock the schedule out for 24h — retry at the poll cadence instead.
+    from bot_modules.services.survivor_loop import REFRESH_INTERVAL
+
+    with open_db(db) as conn:
+        create_season(conn, GID, "S", YEAR)
+    fetch = Fetcher(fail_weeks=set(range(1, 19)))  # total outage
+    state = PollState()
+    result = await run_poll_cycle(db, state, NOW, fetch)
+    assert result.refreshed
+    retry_at = state.last_refresh + REFRESH_INTERVAL
+    assert retry_at == NOW + POLL_INTERVAL
 
 
 async def test_window_poll_fetches_only_live_weeks_and_settles(db):

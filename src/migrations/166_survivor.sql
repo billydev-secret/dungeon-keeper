@@ -50,6 +50,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_survivor_one_live_season
 
 CREATE TABLE IF NOT EXISTS survivor_players (
     season_id INTEGER NOT NULL REFERENCES survivor_seasons(id),
+    -- Denormalized from the season (stage-4 review): the access export
+    -- guild-scopes via a literal guild_id column, and without it a
+    -- single-guild export would disclose the member's rows from every guild.
+    guild_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'alive',       -- alive|ghost
     strikes_used INTEGER NOT NULL DEFAULT 0,
@@ -58,6 +62,7 @@ CREATE TABLE IF NOT EXISTS survivor_players (
     --   'picks'  derived from graded results — the settle engine recomputes
     --            it, so a corrected result can resurrect the player
     --   'cap'    the groundskeeper stopped covering (§1.2 auto-assign cap)
+    --   'missed' missed_pick='eliminate' seasons: pickless at final kickoff
     --   'admin'  dashboard eliminate
     --   'left'   walked out of the meadow (§6.14, stage 5)
     -- Non-'picks' deaths survive recomputation; NULL while alive.
@@ -72,6 +77,7 @@ CREATE INDEX IF NOT EXISTS idx_survivor_players_user
 
 CREATE TABLE IF NOT EXISTS survivor_picks (
     season_id INTEGER NOT NULL,
+    guild_id INTEGER NOT NULL,              -- denormalized; see survivor_players
     user_id INTEGER NOT NULL,
     week INTEGER NOT NULL,
     slot INTEGER NOT NULL DEFAULT 1,            -- 2 exists only in double-pick weeks
@@ -105,6 +111,11 @@ CREATE TABLE IF NOT EXISTS nfl_games (
                                                 -- gauntlet and auto-assign
                                                 -- rank by the number
     winner TEXT,                                -- abbr | 'TIE' | NULL
+    result_source TEXT,                         -- NULL = feed; 'manual' = settled by
+                                                -- hand on the panel. The feed never
+                                                -- overwrites a manual result — a poll
+                                                -- flipping a VOID back was the
+                                                -- stage-4 review's headline
     PRIMARY KEY (season_year, game_id)
 );
 

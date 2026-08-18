@@ -161,14 +161,14 @@ def test_legal_teams_excludes_burned_but_void_returns(db):
         season = _season(conn)
         _join(conn, season, 1)
         conn.execute(
-            "INSERT INTO survivor_picks (season_id, user_id, week, slot, team, game_id, result)"
-            " VALUES (?, 1, 0, 1, 'SEA', 'g-old', 'loss')",
-            (season["id"],),
+            "INSERT INTO survivor_picks (season_id, guild_id, user_id, week, slot, team, game_id, result)"
+            " VALUES (?, ?, 1, 0, 1, 'SEA', 'g-old', 'loss')",
+            (season["id"], GID),
         )
         conn.execute(
-            "INSERT INTO survivor_picks (season_id, user_id, week, slot, team, game_id, result)"
-            " VALUES (?, 1, 0, 2, 'KC', 'g-old2', 'void')",
-            (season["id"],),
+            "INSERT INTO survivor_picks (season_id, guild_id, user_id, week, slot, team, game_id, result)"
+            " VALUES (?, ?, 1, 0, 2, 'KC', 'g-old2', 'void')",
+            (season["id"], GID),
         )
         teams = {g.team for g in legal_teams(conn, season, 1, 1, NOW)}
         assert "SEA" not in teams   # burned by a loss
@@ -240,9 +240,9 @@ def test_pick_refusals_teach_the_rule(db, team, match):
         season = _season(conn)
         _join(conn, season, 1)
         conn.execute(
-            "INSERT INTO survivor_picks (season_id, user_id, week, slot, team, game_id, result)"
-            " VALUES (?, 1, 0, 1, 'SEA', 'g-old', 'loss')",
-            (season["id"],),
+            "INSERT INTO survivor_picks (season_id, guild_id, user_id, week, slot, team, game_id, result)"
+            " VALUES (?, ?, 1, 0, 1, 'SEA', 'g-old', 'loss')",
+            (season["id"], GID),
         )
         with pytest.raises(PickError, match=match):
             place_pick(conn, season, 1, 1, team, NOW)
@@ -264,9 +264,9 @@ def test_settled_results_are_immutable_but_void_frees(db, result, ok):
         season = _season(conn)
         _join(conn, season, 1)
         conn.execute(
-            "INSERT INTO survivor_picks (season_id, user_id, week, slot, team, game_id, result)"
-            " VALUES (?, 1, 1, 1, 'SEA', 'g-thu', ?)",
-            (season["id"], result),
+            "INSERT INTO survivor_picks (season_id, guild_id, user_id, week, slot, team, game_id, result)"
+            " VALUES (?, ?, 1, 1, 1, 'SEA', 'g-thu', ?)",
+            (season["id"], GID, result),
         )
         if ok:
             game = place_pick(conn, season, 1, 1, "SF", NOW)
