@@ -79,6 +79,14 @@ links now always contribute one track; migration 170 deletes the stored key.)
 The owning Spotify account is a config concern (the OAuth grant), not schema
 — swapping it is a re-consent, never a migration.
 
+**Repointing `playlist_id` strands the back catalogue, by design.** The
+processed-message ledger is playlist-agnostic, so messages already ledgered
+terminal never re-process into the new playlist, and nothing already added
+moves. Decided 2026-08-18 (warning over re-keying the ledger): the panel
+confirms a playlist change with exactly this caveat, and the field hint
+carries it statically. The 22 tracks the first Re-scan put into the
+previously-configured playlist are the incident that surfaced this.
+
 ## Pipeline (per message in the watched channel)
 
 1. **Gate:** DMs and bots are ignored; the cog pre-gates on
