@@ -20,9 +20,24 @@
 # The application enforces an allowlist (src/dk_mcp/paths_service.py: resolve
 # symlinks and '..' FIRST, then prove containment in docs/ or src/). The mount
 # namespace below enforces the SAME allowlist independently, at the kernel
-# level: TemporaryFileSystem= replaces /home/ben with an empty tmpfs, and only
-# the three allowed paths are bound back in, read-only. Everything else in the
-# checkout does not exist as far as this process is concerned.
+# level: ProtectHome=tmpfs replaces /home (and /root, /run/user) with empty
+# tmpfs, and only the three allowed paths are bound back in, read-only.
+# Everything else in the checkout does not exist as far as this process is
+# concerned.
+#
+# ProtectHome=tmpfs, NOT ProtectHome=read-only plus a hand-rolled
+# TemporaryFileSystem=/home/ben. That combination looks equivalent and fails at
+# 226/NAMESPACE: ProtectHome=read-only remounts the /home hierarchy read-only,
+# including the tmpfs mounted underneath it, so systemd can no longer create
+# the mount-point nodes the binds need. It surfaces as
+#
+#   Failed to create destination mount point node
+#     '/run/systemd/mount-rootfs/home/ben/.../CLAUDE.md', ignoring: Permission denied
+#   Failed to set up mount namespacing: .../CLAUDE.md: No such file or directory
+#
+# which reads as a missing source file and is not one -- CLAUDE.md is right
+# there. The single-file bind is the first to fail simply because systemd sorts
+# the mounts by path and 'CLAUDE.md' sorts ahead of 'docs' and 'src'.
 #
 # That is deliberately an allowlist and not InaccessiblePaths= for each secret:
 # a denylist protects only the secrets someone remembered to name, and the next
@@ -54,8 +69,7 @@ RestartSec=5s
 
 # -- filesystem: the allowlist, enforced by the kernel ----------------------
 ProtectSystem=strict
-ProtectHome=read-only
-TemporaryFileSystem=/home/ben
+ProtectHome=tmpfs
 BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper/docs
 BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper/src
 BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper/CLAUDE.md
