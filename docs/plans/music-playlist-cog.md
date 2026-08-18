@@ -10,8 +10,9 @@ of what people post, resolves them to Spotify tracks, dedupes, and keeps a
 record and the platform scoping (YouTube/Apple Music) that was deliberately
 deferred. The living reference is `docs/music_playlist_spec.md`; where this
 plan and the code disagree, the code wins. The four open questions at the
-end were resolved: albums/playlists skipped behind a default-off
-`expand_albums` dial; parsing is Spotify + YouTube only; rolled-off history
+end were resolved: an album or playlist link contributes its single
+most-popular track (decided 2026-08-17, superseding the earlier skip-behind-a-
+dial recommendation); parsing is Spotify + YouTube only; rolled-off history
 rows are kept; source-message reactions are on.
 
 ## What Billy decided
@@ -122,9 +123,23 @@ A fixed window isn't just "delete the oldest"; it changes three things:
 - **Album and playlist links have to be handled or they eat the window.**
   OpenMusicBot expands an album link into all its tracks
   (`message_processor.py:145-169`); one album post would flush 30 songs and
-  wipe everyone else's. **Recommendation: skip album/playlist links entirely**
-  (they aren't "a song someone posted"), behind a default-off `expand_albums`
-  dial for when he wants it. **This one needs a yes/no from Billy.**
+  wipe everyone else's. **Decided 2026-08-17: neither skip nor expand — take
+  the single most-listened track** and add only that, which keeps the intent of
+  the post without one album evicting everyone else's.
+
+  The API cost splits by link type. `playlist_items` returns *full* track
+  objects carrying `popularity`, so a playlist's pick is a fold over data
+  already being paged (`spotify_resolver._page_playlist_tracks`) and costs
+  nothing extra. `album_tracks` returns *simplified* objects which **omit
+  `popularity`**, so an album needs a second batched `GET /v1/tracks?ids=`
+  pass (50 ids per call) — one extra call for a normal album, and worth
+  caching by album id since the same album gets posted more than once.
+
+  `popularity` is Spotify's 0-100 recency-weighted score, **not** a play
+  count. Say so at the call site or someone will later "fix" it against a
+  play-count field that does not exist. Ties break on track number; null
+  entries (removed or local-file rows) filter out before the fold; and
+  `MAX_PLAYLIST_TRACKS` (500) still caps the paging.
 - **Trimming and deletion both remove**, so removals need a reason
   (`rolled_off` / `message_deleted` / `admin`) or the history is unreadable.
 
@@ -159,8 +174,9 @@ exactly the collision this note warned about.
 
 Settings ride the config KV behind a `MusicPlaylistSettings` dataclass, the
 way `CasinoSettings` does — no settings table: `enabled`, `channel_id`,
-`playlist_id`, `window_size` (30), `match_threshold` (0.74), `expand_albums`
-(false), `remove_on_delete` (true), `owner_account_label`. The owning Spotify
+`playlist_id`, `window_size` (30), `match_threshold` (0.74),
+`remove_on_delete` (true), `owner_account_label`. There is no `expand_albums`
+dial: an album or playlist link always contributes exactly one track. The owning Spotify
 account is a *config* concern, not schema, which is what makes "revisit later"
 cheap.
 
@@ -190,7 +206,7 @@ It is where the 18 admin commands go:
 |---|---|
 | Connection — scope chip, Connect/Re-consent button, owning account | `spotify` |
 | Watch — channel picker, target playlist, enable, pause | `channel`, `set`, `playlist`, `pause`, `resume` |
-| Behavior — window size, threshold, expand-albums, remove-on-delete | `ttl`, `set` |
+| Behavior — window size, threshold, remove-on-delete | `ttl`, `set` |
 | Window — the live 30, newest first, with a remove button per row | `list`, `show`, `remove` |
 | Review queue — pending unmatched, candidate + score, approve/reject | `unmatched`, `approve`, `reject` |
 | History — rolled-off and removed tracks, with reason | `history`, `summary`, `status` |
@@ -331,7 +347,9 @@ Each is a commit with its tests, per CLAUDE.md.
    and rolled-off-then-reposted.
 2. **Service + writes** — `music_playlist_service.py` (the pipeline);
    `add_tracks_to_playlist` / `remove_tracks_from_playlist` on the resolver.
-   Tests: happy path, below-threshold → queue, duplicate, album-link skip,
+   Tests: happy path, below-threshold → queue, duplicate, album/playlist link
+   yielding its most-popular track only (and the album path's extra
+   popularity fetch),
    delete-with-another-live-referrer, missing-scope, Spotify 403/429.
 3. **Cog** — listener, raw-delete handler, the one ephemeral member panel,
    optional source reactions.
@@ -353,8 +371,14 @@ second writer exists to shape it.
 
 ## Open questions for sign-off
 
-1. **Album and playlist links — skip, or expand?** Recommendation: skip,
-   with a default-off dial. Expanding flushes the 30-song window on one post.
+1. ~~**Album and playlist links — skip, or expand?**~~ **Resolved
+   2026-08-17: neither.** Contribute the single highest-`popularity` track
+   from the album or playlist. See the design note above for the per-type API
+   cost and the caveat that `popularity` is not a play count. One sub-question
+   left for Billy: when the pick is not the track the poster meant (an album
+   posted for its deep cut yields the hit single), should the bot react on the
+   source message naming the track it took, so the poster can correct it by
+   posting that track directly?
 2. **New parsing beyond Spotify + YouTube.** Billy asked for Apple Music and
    SoundCloud *links* to resolve into Spotify tracks. Upstream handles
    Spotify and YouTube only, so both are net-new parsing — cheap (a URL
