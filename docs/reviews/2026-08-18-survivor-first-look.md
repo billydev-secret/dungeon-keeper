@@ -20,7 +20,30 @@ preserve, so shipped defaults can be changed outright.
 no_death 10 / annul 4), seeded per-guild by `seed_default_flavor()` from the
 dashboard's create-season route (`src/web_server/routes/survivor.py:186`).
 
-**Open — scope not yet settled.** Three readings, not yet chosen:
+**Decided 2026-08-18, then deferred.** Billy's call: *"let's drop it, just
+the facts"* → **full removal, table included** — DEFAULT_FLAVOR, the service
+CRUD, rotation, the dashboard Flavor Corpus card and the `survivor_flavor`
+table (migration 169 `DROP TABLE`, safe at 0 prod rows), with the Reckoning
+copy hardcoded and factual. Work was started and **backed out unstarted**
+("nevermind let's leave it for now"); the tree is at `a41e70e2` with the
+feature fully intact. Nothing is half-removed.
+
+The agreed target copy, for whenever this resumes — Act 1 drops its rotating
+line entirely (the survivors/pot numbers already carry it) and Act 3 states
+the cause of death:
+
+```
+🪦 Eliminations
+**Loaf** — Jets lost. Eliminated in Week 3.
+```
+
+The three fixed death lines (`GROUNDSKEEPER_LINE`, `MISSED_LINE`,
+`LEAVER_LINE`, `reckoning.py:33`) are *not* in the corpus and survive on their
+own; only the groundskeeper line is non-factual and was to be rewritten with
+the rest. The `annul` category is already dead code — nothing reads it, and
+the wipeout/annul feature it belongs to is unbuilt Tier 2.
+
+The three readings considered, for the record:
 
 - **(a) Delete the shipped lines only.** Season starts with an empty corpus;
   admin writes their own in the panel's flavor CRUD. Feature, CRUD, rotation
@@ -238,7 +261,9 @@ gates. Not observed live only because no other guild has a season yet.
 
 **Still open:**
 
-- **#1 flavor corpus** — scope still unchosen (a/b/c above).
+- **#1 flavor corpus** — scope **decided** (full removal, table included),
+  work **deferred** at Billy's request. Nothing started; see #1 above for the
+  agreed target copy.
 - **#2 panel formatting** — needs a plan.
 - **#4 Run Weekly Tasks placement** — **the spec already answers this**:
   §"Testing rig (added 2026-08-18)" puts ▶ Run Weekly Tasks on the
