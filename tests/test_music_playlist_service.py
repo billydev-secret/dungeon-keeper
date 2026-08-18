@@ -459,6 +459,86 @@ async def test_unreadable_collection_queues_for_review(sync_db_path):
         assert store.is_message_processed(conn, GUILD, 101)
 
 
+# ── Verdict memory ────────────────────────────────────────────────────
+
+
+def _service_with_no_network(db_path, spotify):
+    """Any oEmbed fetch or Spotify search is a test failure."""
+
+    async def fetch_never(video_id):
+        raise AssertionError("verdict memory must answer before any fetch")
+
+    async def search_never(query, limit):
+        raise AssertionError("verdict memory must answer before any search")
+
+    return MusicPlaylistService(
+        db_path, spotify, youtube_fetcher=fetch_never, search_tracks=search_never
+    )
+
+
+async def test_approved_verdict_is_reused_without_refetching(sync_db_path):
+    """A link someone approved re-adds the reviewer's exact track.
+
+    The defect shape: recovery re-processing (re-scan / retry sweep) used to
+    re-search every YouTube link and re-queue it below threshold — six
+    already-answered links landed back in the review queue.
+    """
+    seed_settings(sync_db_path)
+    item_id = _queue_item(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        store.set_unmatched_status(
+            conn, GUILD, item_id, store.STATUS_APPROVED, reviewed_by=MOD
+        )
+    spotify = FakeSpotify()
+    svc = _service_with_no_network(sync_db_path, spotify)
+
+    summary = await svc.process_message(GUILD, CHANNEL, 301, YT_URL, BOB)
+
+    assert summary.added_track_ids == ["tRick"]
+    assert window_ids(sync_db_path) == ["tRick"]
+    assert pending_rows(sync_db_path) == []
+    with open_db(sync_db_path) as conn:
+        assert store.is_message_processed(conn, GUILD, 301)
+
+
+async def test_rejected_verdict_stays_rejected(sync_db_path):
+    seed_settings(sync_db_path)
+    item_id = _queue_item(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        store.set_unmatched_status(
+            conn, GUILD, item_id, store.STATUS_REJECTED, reviewed_by=MOD
+        )
+    spotify = FakeSpotify()
+    svc = _service_with_no_network(sync_db_path, spotify)
+
+    summary = await svc.process_message(GUILD, CHANNEL, 301, YT_URL, BOB)
+
+    assert summary.added_track_ids == []
+    assert summary.unmatched_ids == []
+    assert pending_rows(sync_db_path) == []  # no re-queue
+    with open_db(sync_db_path) as conn:
+        assert store.is_message_processed(conn, GUILD, 301)
+
+
+async def test_rejected_collection_does_not_requeue(sync_db_path):
+    """An unreadable collection link that was rejected stays answered."""
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    spotify.collection_error = SpotifyUnusableReadError("null tracks")
+    svc = make_service(sync_db_path, spotify)
+    url = "https://open.spotify.com/playlist/pl9"
+    summary = await svc.process_message(GUILD, CHANNEL, 101, url, ALICE)
+    (item,) = pending_rows(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        store.set_unmatched_status(
+            conn, GUILD, item["id"], store.STATUS_REJECTED, reviewed_by=MOD
+        )
+
+    summary = await svc.process_message(GUILD, CHANNEL, 102, url, BOB)
+    assert summary.unmatched_ids == []
+    assert pending_rows(sync_db_path) == []
+
+
 # ── YouTube resolution ────────────────────────────────────────────────
 
 

@@ -533,6 +533,24 @@ def list_pending(
     ).fetchall()
 
 
+def latest_review_verdict(
+    conn: sqlite3.Connection, guild_id: int, source_url: str
+) -> Mapping[str, Any] | None:
+    """The most recent resolved review row for a link, or None.
+
+    Verdict memory: re-processing a link a reviewer already answered
+    (re-scan, the retry sweep, or the same URL posted again) reuses that
+    answer instead of re-asking. Pending rows don't count — they are the
+    open question, not an answer.
+    """
+    return conn.execute(
+        "SELECT * FROM music_playlist_unmatched "
+        "WHERE guild_id = ? AND source_url = ? AND status IN (?, ?) "
+        "ORDER BY reviewed_at DESC, id DESC LIMIT 1",
+        (guild_id, source_url, STATUS_APPROVED, STATUS_REJECTED),
+    ).fetchone()
+
+
 def set_unmatched_status(
     conn: sqlite3.Connection,
     guild_id: int,

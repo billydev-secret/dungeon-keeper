@@ -660,6 +660,30 @@ class MusicPlaylistService:
                 source_url=link.raw_url,
             )]
 
+        # Reviewer verdicts are remembered per link, checked before any
+        # network work: an approved link re-adds the reviewer's exact track
+        # even if the source video has since gone private, and a rejected
+        # link stays rejected instead of re-queueing on every re-scan or
+        # retry. Track links skip this — a direct id needs no verdict.
+        verdict = await asyncio.to_thread(
+            self._latest_verdict, guild_id, link.raw_url
+        )
+        if verdict is not None:
+            if (
+                verdict["status"] == store.STATUS_APPROVED
+                and verdict["candidate_track_id"]
+            ):
+                return [_TrackInfo(
+                    track_id=str(verdict["candidate_track_id"]),
+                    title=verdict["candidate_name"] or "Unknown",
+                    artist=verdict["candidate_artist"] or "",
+                    source_url=link.raw_url,
+                )]
+            if verdict["status"] == store.STATUS_REJECTED:
+                return []
+            # Approved without a candidate can't be created today (approve
+            # refuses); fall through to a normal resolve if it ever exists.
+
         if link.link_type in (LinkType.SPOTIFY_ALBUM, LinkType.SPOTIFY_PLAYLIST):
             # A collection contributes exactly its most-popular track: one
             # album post must not flush the window, but it shouldn't
@@ -1046,6 +1070,12 @@ class MusicPlaylistService:
                 conn, guild_id, message_id, channel_id, status=status
             )
             return added, overflow
+
+    def _latest_verdict(
+        self, guild_id: int, source_url: str
+    ) -> Mapping[str, Any] | None:
+        with open_db(self._db_path) as conn:
+            return store.latest_review_verdict(conn, guild_id, source_url)
 
     def _queue_unmatched(self, guild_id: int, **kwargs: Any) -> int:
         with open_db(self._db_path) as conn:
