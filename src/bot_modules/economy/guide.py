@@ -1,18 +1,23 @@
-"""Economy guide panel — the "how it works" embed that sits in a channel.
+"""Economy guide — the "how it works" embed, and the buttons that reach it.
 
-One branded embed summarising how members earn and spend the guild's currency,
-posted (and refreshed in place) by ``/bank post-guide``. The panel's channel and
-message ids live in the ``econ_`` config (``guide_channel_id`` /
-``guide_message_id``, same pattern as Voice Control's persistent panel) so a
-repost replaces the old panel instead of stacking duplicates.
+One branded embed summarising how members earn and spend the guild's currency.
+Until 2026-08-18 it was a channel panel of its own; it is now **ephemeral**,
+raised by the ❓ How it Works button on the single economy panel, so the guide
+reaches a member without spending a permanent message on copy that never
+changes. ``build_guide_embed`` stayed exactly where it was — one builder, and
+only the surface that renders it moved.
 
-The panel also carries the economy's one member-facing self-service control: a
-**persistent** 🔔 Notifications button that toggles the opt-in role
-(``game_role_id``) on the clicker. Its ``custom_id`` is static — there is no
-per-message state to carry — so the cog re-registers a bare ``GuideView`` with
-``bot.add_view`` at load and clicks on the existing panel still route after a
-restart. That role is a DM preference only: it gates no channel and no payout,
-so opting out costs a member nothing but their DMs.
+The panel's ids outlived the panel: ``guide_channel_id`` / ``guide_message_id``
+are still the surviving pair, because the message they name is the one the
+merged panel kept (see ``plan_panel_merge`` in ``economy.logic``).
+
+Both buttons here — ❓ How it Works and the 🔔 Notifications toggle for the
+opt-in role (``game_role_id``) — carry static ``custom_id``s with no
+per-message state, and both now live on ``QuestBoardView`` rather than a view
+of their own. That is what the cog re-registers with ``bot.add_view`` at load,
+so clicks on the existing panel still route after a restart. The role is a DM
+preference only: it gates no channel and no payout, so opting out costs a
+member nothing but their DMs.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from typing import TYPE_CHECKING, cast
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.economy.leaderboard import _pad
 from bot_modules.economy.logic import resolve_notify_toggle
 from bot_modules.services.economy_service import load_econ_settings
@@ -34,6 +40,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.economy")
 
 NOTIFY_CUSTOM_ID = "econ_guide_notify"
+HOW_IT_WORKS_CUSTOM_ID = "econ_guide_howto"
 
 NOTIFY_ON_MSG = (
     "🔔 Notifications **on** — your daily streak digest and raffle wins will "
@@ -80,9 +87,9 @@ def build_guide_embed(
     embed.add_field(
         name="🔔 Notifications",
         value=(
-            "Hit **🔔 Notifications** below to have your daily streak digest "
-            "and raffle wins DMed to you. Toggle it off any time — it only "
-            "changes your DMs, never what you can see or earn."
+            "The **🔔 Notifications** button on the panel has your daily "
+            "streak digest and raffle wins DMed to you. Toggle it off any "
+            "time — it only changes your DMs, never what you can see or earn."
             "\n\u200b"
         ),
         inline=False,
@@ -179,6 +186,50 @@ async def _safe_ephemeral(interaction: discord.Interaction, message: str) -> Non
         log.debug("econ guide: failed to send ephemeral note", exc_info=True)
 
 
+class HowItWorksButton(discord.ui.Button):
+    """❓ How it Works — the guide embed, ephemerally.
+
+    The guide stopped being a posted panel on 2026-08-18 and became this: one
+    click, one private copy of ``build_guide_embed``. Ephemeral rather than a
+    second permanent message because the copy is identical for everyone and
+    changes only when an admin retunes a dial, so a member who wants it can
+    have it without the channel carrying it forever.
+
+    Reads settings fresh on every click for the same reason the panel does —
+    the rates in the embed are live config, and a cached guide would quietly
+    quote last week's payouts.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="How it Works",
+            emoji="❓",
+            style=discord.ButtonStyle.secondary,
+            custom_id=HOW_IT_WORKS_CUSTOM_ID,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await _safe_ephemeral(interaction, "This only works in a server.")
+            return
+
+        bot = cast("Bot", interaction.client)
+
+        def _read() -> EconSettings:
+            with bot.ctx.open_db() as conn:
+                return load_econ_settings(conn, guild.id)
+
+        settings = await asyncio.to_thread(_read)
+        accent = await resolve_accent_color(bot.ctx.db_path, guild)
+        embed = build_guide_embed(settings, color=accent)
+        try:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            log.debug("econ guide: failed to send the how-it-works embed",
+                      exc_info=True)
+
+
 class GuideNotifyButton(discord.ui.Button):
     """Persistent 🔔 toggle for the economy's opt-in DM role.
 
@@ -236,11 +287,3 @@ class GuideNotifyButton(discord.ui.Button):
         await _safe_ephemeral(
             interaction, NOTIFY_ON_MSG if action == "grant" else NOTIFY_OFF_MSG
         )
-
-
-class GuideView(discord.ui.View):
-    """The persistent view attached to the guide panel."""
-
-    def __init__(self) -> None:
-        super().__init__(timeout=None)
-        self.add_item(GuideNotifyButton())

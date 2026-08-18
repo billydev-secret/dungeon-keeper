@@ -34,7 +34,7 @@ def _bot(*, post_result="ok", cog_present=True):
     cog = MagicMock()
     message = MagicMock()
     message.jump_url = "https://discord.com/x/y/z"
-    cog.post_guide_panel = AsyncMock(
+    cog.post_economy_panel = AsyncMock(
         return_value=(message if post_result == "ok" else None)
     )
     cog.post_control_panel = AsyncMock(
@@ -60,7 +60,7 @@ def test_list_panels_returns_the_registry(authed_client):
     assert r.status_code == 200
     panels = r.json()["panels"]
     keys = {p["key"] for p in panels}
-    assert "economy-guide" in keys and "ticket-panel" in keys
+    assert "economy-panel" in keys and "ticket-panel" in keys
     assert all(p["label"] and p["description"] for p in panels)
 
 
@@ -76,7 +76,7 @@ def test_own_channel_panels_are_flagged(authed_client):
     panels = {p["key"]: p for p in authed_client.get("/api/panels").json()["panels"]}
     assert panels["voice-control"]["targets_own_channel"] is True
     assert panels["guess-prompt"]["targets_own_channel"] is True
-    assert panels["economy-guide"]["targets_own_channel"] is False
+    assert panels["economy-panel"]["targets_own_channel"] is False
 
 
 def test_unknown_panel_is_a_404(client_with_bot):
@@ -87,15 +87,15 @@ def test_unknown_panel_is_a_404(client_with_bot):
 
 def test_posting_a_panel_calls_the_cog_and_returns_the_jump_url(client_with_bot):
     client, bot, guild, channel = client_with_bot()
-    r = client.post("/api/panels/economy-guide/post", json={"channel_id": "123"})
+    r = client.post("/api/panels/economy-panel/post", json={"channel_id": "123"})
     assert r.status_code == 200, r.text
     assert r.json()["message_url"] == "https://discord.com/x/y/z"
-    bot.get_cog.return_value.post_guide_panel.assert_awaited_once()
+    bot.get_cog.return_value.post_economy_panel.assert_awaited_once()
 
 
 def test_channel_is_required_for_a_channel_picking_panel(client_with_bot):
     client, *_ = client_with_bot()
-    r = client.post("/api/panels/economy-guide/post", json={})
+    r = client.post("/api/panels/economy-panel/post", json={})
     assert r.status_code == 400
     assert "channel" in r.json()["detail"].lower()
 
@@ -113,7 +113,7 @@ def test_unpicked_channel_says_pick_one_not_wrong_channel_type(
     text channel in this guild" — sending the admin hunting for a channel
     problem when they simply never tapped a row in the filter dropdown."""
     client, *_ = client_with_bot()
-    r = client.post("/api/panels/economy-guide/post", json={"channel_id": unset})
+    r = client.post("/api/panels/economy-panel/post", json={"channel_id": unset})
     assert r.status_code == 400
     assert r.json()["detail"] == "Pick a channel for this panel"
 
@@ -121,7 +121,7 @@ def test_unpicked_channel_says_pick_one_not_wrong_channel_type(
 def test_non_text_channel_is_refused(client_with_bot):
     client, bot, guild, _ = client_with_bot()
     guild.get_channel.return_value = MagicMock(spec=discord.VoiceChannel)
-    r = client.post("/api/panels/economy-guide/post", json={"channel_id": "123"})
+    r = client.post("/api/panels/economy-panel/post", json={"channel_id": "123"})
     assert r.status_code == 400
     assert "text channel" in r.json()["detail"].lower()
 
@@ -133,7 +133,7 @@ def test_missing_bot_permissions_name_what_is_missing(client_with_bot):
     channel.permissions_for.return_value = MagicMock(
         view_channel=True, send_messages=False, embed_links=True
     )
-    r = client.post("/api/panels/economy-guide/post", json={"channel_id": "123"})
+    r = client.post("/api/panels/economy-panel/post", json={"channel_id": "123"})
     assert r.status_code == 400
     assert "Send Messages" in r.json()["detail"]
 
@@ -159,19 +159,19 @@ def test_own_channel_panel_with_no_configured_channel_explains_itself(client_wit
 
 def test_a_refused_post_is_reported_as_a_failure(client_with_bot):
     client, *_ = client_with_bot(post_result="none")
-    r = client.post("/api/panels/economy-guide/post", json={"channel_id": "123"})
+    r = client.post("/api/panels/economy-panel/post", json={"channel_id": "123"})
     assert r.status_code == 502
 
 
 def test_missing_cog_is_a_503(client_with_bot):
     client, *_ = client_with_bot(cog_present=False)
-    r = client.post("/api/panels/economy-guide/post", json={"channel_id": "123"})
+    r = client.post("/api/panels/economy-panel/post", json={"channel_id": "123"})
     assert r.status_code == 503
 
 
 def test_offline_bot_is_a_503(fake_ctx, authed_client):
     fake_ctx.bot = None
-    r = authed_client.post("/api/panels/economy-guide/post", json={"channel_id": "1"})
+    r = authed_client.post("/api/panels/economy-panel/post", json={"channel_id": "1"})
     assert r.status_code == 503
 
 
@@ -188,7 +188,7 @@ def test_option_specs_are_described_for_the_dashboard(authed_client):
     assert opts["min_level"]["kind"] == "int"
     assert opts["min_level"]["minimum"] == 1
     # Panels without options say so plainly rather than omitting the key.
-    assert panels["economy-guide"]["options"] == []
+    assert panels["economy-panel"]["options"] == []
 
 
 def test_options_reach_the_panel_method(client_with_bot):

@@ -341,8 +341,7 @@ class StickyResident:
 #: ``key`` is stable so a caller can exclude *itself* when asking who else is in
 #: a channel (see ``bot_chasing_resident``).
 _STICKY_PANEL_KEYS = (
-    ("guide", "the economy guide panel", False),
-    ("leaderboard", "the leaderboard panel", False),
+    ("panel", "the economy panel", False),
     ("shop", "the shop panel", False),
     # The bounty hub sits in the board channel itself, so that is the
     # collision — not where the panel was last recorded as posted. It
@@ -367,8 +366,9 @@ def _panel_channels(
     econ = load_econ_settings(conn, guild_id)
     casino = load_casino_settings(conn, guild_id)
     channel_for = {
-        "guide": int(econ.guide_channel_id or 0),
-        "leaderboard": int(econ.leaderboard_channel_id or 0),
+        # One entry where there were two: the guide and leaderboard panels
+        # merged on 2026-08-18, and the survivor lives on the guide's ids.
+        "panel": int(econ.guide_channel_id or 0),
         "shop": int(econ.shop_channel_id or 0),
         "bounty": int(econ.bounty_channel_id or 0),
         "casino": int(casino.panel_channel_id or 0),

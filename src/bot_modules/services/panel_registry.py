@@ -81,26 +81,19 @@ class PanelSpec:
 
 PANEL_SPECS: tuple[PanelSpec, ...] = (
     PanelSpec(
-        key="economy-guide",
-        label="Economy How-To",
+        # One spec where there were two ("economy-guide" and
+        # "economy-leaderboard"): the panels merged on 2026-08-18.
+        key="economy-panel",
+        label="Economy Panel",
         description=(
-            "Explains the currency, how to earn it, and what it buys, and carries "
-            "the 🔔 button members use to opt into economy DMs. Sticks to the "
-            "bottom of its channel."
+            "The guild's economy panel — today's pulse, top earners, quest and "
+            "community-goal progress, repainting itself after economy activity. "
+            "Its buttons carry the rest: a member's own quests and wallet, the "
+            "how-it-works guide, and the 🔔 opt-in for economy DMs. Sticks to "
+            "the bottom of its channel."
         ),
         cog="EconomyCog",
-        method="post_guide_panel",
-        host_page="economy-config",
-    ),
-    PanelSpec(
-        key="economy-leaderboard",
-        label="Economy Leaderboard",
-        description=(
-            "Auto-updating richest-members board — today's pulse, top earners, "
-            "quest and community-goal progress. Repaints itself after economy activity."
-        ),
-        cog="EconomyCog",
-        method="post_leaderboard_panel",
+        method="post_economy_panel",
         host_page="economy-config",
     ),
     PanelSpec(

@@ -20,7 +20,8 @@ import { mountPanelPoster } from "../panel-post.js";
 // All three economy channel panels are posted from here rather than from the
 // page that sets what each one shows: they're the same action three times over,
 // and an admin placing them does it once, in one sitting, when setting the
-// economy up.
+// economy up. There were four until 2026-08-18, when the how-to guide folded
+// into the leaderboard panel — one panel, with the guide behind an ❓ button.
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
@@ -291,8 +292,7 @@ function render(container, cfg, channels, roles, members) {
           different channel moves it. All of them need the economy switched on
           above, and the Bounty Board only goes in the bounty board channel set
           above (it's the channel its cards post to).</div>
-        <div class="field" data-poster="economy-guide"></div>
-        <div class="field" data-poster="economy-leaderboard"></div>
+        <div class="field" data-poster="economy-panel"></div>
         <div class="field" data-poster="economy-shop"></div>
         <div class="field" data-poster="economy-bounty"></div>
       </div>
@@ -302,8 +302,7 @@ function render(container, cfg, channels, roles, members) {
   // reads these call sites to check every registered panel is actually drawn
   // somewhere, and a computed key is invisible to it.
   const slot = (key) => container.querySelector(`[data-poster="${key}"]`);
-  mountPanelPoster(slot("economy-guide"), "economy-guide");
-  mountPanelPoster(slot("economy-leaderboard"), "economy-leaderboard");
+  mountPanelPoster(slot("economy-panel"), "economy-panel");
   mountPanelPoster(slot("economy-shop"), "economy-shop");
   mountPanelPoster(slot("economy-bounty"), "economy-bounty");
 

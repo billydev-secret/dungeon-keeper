@@ -3363,10 +3363,12 @@ def test_panel_guilds_lists_only_enabled_guilds_with_a_channel(ctx, db):
 
     by_kind = cog._panel_guilds()
 
-    assert by_kind["guide"] == {GUILD_ID}
+    assert by_kind["panel"] == {GUILD_ID}
     assert by_kind["bounty"] == {GUILD_ID}
-    assert by_kind["leaderboard"] == set()  # no channel set
-    assert by_kind["shop"] == set()
+    assert by_kind["shop"] == set()  # no channel set
+    # The retired leaderboard pair is not a panel kind any more, so a guild
+    # cannot land on the fast path through it.
+    assert "leaderboard" not in by_kind
 
 
 def test_panel_guilds_excludes_a_guild_with_the_economy_off(ctx, db):
@@ -3378,7 +3380,7 @@ def test_panel_guilds_excludes_a_guild_with_the_economy_off(ctx, db):
         )
     cog = _make_cog(ctx)
 
-    assert cog._panel_guilds()["guide"] == set()
+    assert cog._panel_guilds()["panel"] == set()
 
 
 @pytest.mark.asyncio
@@ -3393,7 +3395,7 @@ async def test_publishing_panel_guilds_leaves_the_auction_card_unpublished(ctx, 
 
     await cog._publish_panel_guilds()
 
-    assert cog.guide_panel._known == {GUILD_ID}
+    assert cog.economy_panel._known == {GUILD_ID}
     assert cog.auction_panel._known is None
 
 
@@ -3525,3 +3527,154 @@ async def test_posting_the_bounty_panel_does_not_delete_a_hub_in_the_current_boa
     channel.get_partial_message.assert_not_called()
     with open_db(db) as conn:
         assert load_econ_settings(conn, GUILD_ID).bounty_panel_message_id == 4242
+
+
+# ── the guide/leaderboard changeover (2026-08-18) ────────────────────────────
+#
+# plan_panel_merge decides; these cover the applying of it, which is the half
+# that touches Discord: the right message deleted, the ids written, and a
+# failure that must not leave the one-shot planning the same delete forever.
+
+
+def _merge_world(ctx, db, *, board_channel=None):
+    """A cog whose guild resolves ``board_channel`` by id, plus that channel."""
+    cog = _make_cog(ctx)
+    old = MagicMock(delete=AsyncMock())
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.get_partial_message = MagicMock(return_value=old)
+    guild = MagicMock(id=GUILD_ID)
+    guild.get_channel = MagicMock(
+        side_effect=lambda cid: channel if cid == board_channel else None
+    )
+    cog._publish_panel_guilds = AsyncMock()  # type: ignore[method-assign]
+    return cog, guild, old
+
+
+def _ids(db):
+    with open_db(db) as conn:
+        s = load_econ_settings(conn, GUILD_ID)
+    return (s.guide_channel_id, s.guide_message_id,
+            s.leaderboard_channel_id, s.leaderboard_message_id)
+
+
+@pytest.mark.asyncio
+async def test_merge_deletes_the_old_board_and_clears_its_ids(ctx, db):
+    """Main-guild shape: two channels, and only the board message goes."""
+    _enable(db, guide_channel_id=11, guide_message_id=22,
+            leaderboard_channel_id=33, leaderboard_message_id=44)
+    cog, guild, old = _merge_world(ctx, db, board_channel=33)
+
+    await cog._merge_panels_for_guild(guild)
+
+    old.delete.assert_awaited_once()
+    assert _ids(db) == (11, 22, 0, 0)  # the panel's own ids untouched
+
+
+@pytest.mark.asyncio
+async def test_merge_runs_for_a_guild_with_the_economy_switched_off(ctx, db):
+    """A disabled economy still has the stale message; skipping it would strand
+    the board in the channel for as long as the economy stayed off."""
+    _enable(db, guide_channel_id=11, guide_message_id=22,
+            leaderboard_channel_id=33, leaderboard_message_id=44)
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD_ID, {"enabled": False})
+    cog, guild, old = _merge_world(ctx, db, board_channel=33)
+
+    await cog._merge_panels_for_guild(guild)
+
+    old.delete.assert_awaited_once()
+    assert _ids(db)[2:] == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_merge_clears_the_ids_even_when_the_delete_fails(ctx, db):
+    """A message someone already removed, or a channel the bot lost access to,
+    both mean the board is gone — so the ids clear either way and the one-shot
+    cannot retry the same delete on every boot."""
+    _enable(db, guide_channel_id=11, guide_message_id=22,
+            leaderboard_channel_id=33, leaderboard_message_id=44)
+    cog, guild, old = _merge_world(ctx, db, board_channel=33)
+    old.delete = AsyncMock(
+        side_effect=discord.Forbidden(MagicMock(status=403), "no")
+    )
+
+    await cog._merge_panels_for_guild(guild)
+
+    assert _ids(db) == (11, 22, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_merge_clears_the_ids_when_the_channel_is_gone(ctx, db):
+    _enable(db, guide_channel_id=11, guide_message_id=22,
+            leaderboard_channel_id=33, leaderboard_message_id=44)
+    cog, guild, _old = _merge_world(ctx, db, board_channel=None)
+
+    await cog._merge_panels_for_guild(guild)
+
+    assert _ids(db) == (11, 22, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_merge_adopts_a_board_with_no_guide_and_deletes_nothing(ctx, db):
+    _enable(db, leaderboard_channel_id=33, leaderboard_message_id=44)
+    cog, guild, old = _merge_world(ctx, db, board_channel=33)
+
+    await cog._merge_panels_for_guild(guild)
+
+    old.delete.assert_not_awaited()
+    assert _ids(db) == (33, 44, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_merge_touches_nothing_for_a_guild_with_no_board(ctx, db):
+    """The `1358…` shape, and every boot after the first: no writes at all."""
+    _enable(db, guide_channel_id=11, guide_message_id=22)
+    cog, guild, old = _merge_world(ctx, db, board_channel=33)
+    cog._save_settings = MagicMock()  # type: ignore[method-assign]
+
+    await cog._merge_panels_for_guild(guild)
+
+    old.delete.assert_not_awaited()
+    cog._save_settings.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_merge_repaints_the_surviving_panel(ctx, db):
+    """The message survives the merge still showing the *guide* embed, so the
+    one-shot repaints it — including for a guild that had nothing to clean up,
+    which has no other trigger until the hourly tick."""
+    _enable(db, guide_channel_id=11, guide_message_id=22)
+    cog = _make_cog(ctx)
+    cog.bot.wait_until_ready = AsyncMock()
+    cog.bot.guilds = [MagicMock(id=GUILD_ID)]
+    cog.economy_panel.refresh = AsyncMock()  # type: ignore[method-assign]
+    cog._merge_panels_for_guild = AsyncMock()  # type: ignore[method-assign]
+
+    await cog._merge_panels_once()
+
+    cog.economy_panel.refresh.assert_awaited_once_with(
+        GUILD_ID, repost_if_missing=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_merge_survives_a_guild_that_raises(ctx, db):
+    """One guild's failure must not stop the rest — the sweep is the only
+    chance each guild gets, since the next boot sees ids already cleared."""
+    cog = _make_cog(ctx)
+    bad, good = MagicMock(id=1), MagicMock(id=2)
+    cog.bot.wait_until_ready = AsyncMock()
+    cog.bot.guilds = [bad, good]
+    seen = []
+
+    async def _one(guild):
+        seen.append(guild.id)
+        if guild is bad:
+            raise RuntimeError("boom")
+
+    cog._merge_panels_for_guild = _one  # type: ignore[method-assign]
+    cog.economy_panel.refresh = AsyncMock()  # type: ignore[method-assign]
+
+    await cog._merge_panels_once()
+
+    assert seen == [1, 2]

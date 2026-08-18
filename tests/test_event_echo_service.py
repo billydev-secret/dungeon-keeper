@@ -305,7 +305,7 @@ async def _tier(bot, guild, *, quest_id=5, tier=1, title="Send Messages", now=NO
 
 @pytest.mark.asyncio
 class TestQuestFlip:
-    async def test_links_the_leaderboard_panel_and_carries_the_detail(
+    async def test_links_the_economy_panel_and_carries_the_detail(
         self, bot, guild, sync_db_path
     ):
         configure(sync_db_path)

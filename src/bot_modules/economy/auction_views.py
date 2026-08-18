@@ -460,7 +460,7 @@ async def _sticky_check(
       moves. (Auctions in threads predate stickiness, so this warns rather
       than blocks — the capability isn't ours to take away.)
     * **a resident sticky panel that only moves under human messages** (the
-      guide, leaderboard and shop panels) — one bottom slot, two claimants, so
+      economy and shop panels) — one bottom slot, two claimants, so
       the two trade places as people chat. Intermittent and visible; the mod
       can judge it.
     * **a resident sticky panel that re-sticks under bot messages** (the casino

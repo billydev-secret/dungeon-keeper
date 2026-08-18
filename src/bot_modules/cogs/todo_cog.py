@@ -153,7 +153,7 @@ class TodoBoardView(discord.ui.View):
     """The board's persistent buttons.
 
     Carries no per-message state, so it's a static-custom_id view (the
-    GuideView/ShopPanelView pattern) re-registered in ``cog_load`` rather than a
+    ShopPanelView pattern) re-registered in ``cog_load`` rather than a
     DynamicItem — one board per guild, and the ids never vary.
     """
 
