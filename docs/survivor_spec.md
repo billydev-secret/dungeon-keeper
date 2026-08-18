@@ -325,3 +325,12 @@ raising the float, so a pot that grows past the seed is not extra faucet.
    live game, so the usual reason to soft-open a pool (miss the start, miss the
    season) doesn't apply here. Enrollment opens as soon as join/pick/slate is
    testable, ~Sept 3, with real stakes from Sept 10.
+9. **Testing rig (added 2026-08-18):** seasons with `season_year >= 2090` are
+   **synthetic** — the poller never calls ESPN for them (a nonsense year would
+   be served the *current* season and pollute the table), and the dashboard
+   grows a Simulator card: generate a compressed schedule (weeks measured in
+   minutes), settle kicked games (chalk/random/upset — through the same
+   manual-settle pipeline, so grading stays derived), and ▶ Run Weekly Tasks
+   forces the Reckoning/panel-repost past their clock gates while the
+   once-per-week state keys still prevent double-posts. A whole season runs in
+   an evening in a test channel; the rig hard-refuses real season years.

@@ -239,10 +239,17 @@ async def create_season(
     season = await _service_call(run_query(_finish))
     assert season is not None
 
-    # Full-season schedule ingest (spec §4.2), best-effort like the roles:
-    # 18 weeks of ESPN fetches, with failed weeks reported and healed by the
-    # daily refresh once the polling loop (stage 4) is running.
-    schedule_report = await _ingest_season_schedule(ctx, body.season_year)
+    # Full-season schedule ingest (spec §4.2), best-effort like the roles.
+    # Synthetic seasons (the testing rig, year >= SIM_YEAR_MIN) skip ESPN
+    # entirely — their schedule comes from the Simulator card.
+    from bot_modules.survivor.sim import is_sim_year
+
+    if is_sim_year(body.season_year):
+        schedule_report = (
+            "synthetic season — generate a schedule from the Simulator card"
+        )
+    else:
+        schedule_report = await _ingest_season_schedule(ctx, body.season_year)
 
     await _mirror_mod_log(
         ctx,
@@ -434,9 +441,16 @@ async def settle_game(
                 },
             )
             conn.commit()
-        return out
+        return out, season["id"]
 
-    out = await _service_call(run_query(_q))
+    out, season_id = await _service_call(run_query(_q))
+    # Standings changed — the channel panel's line should track (self-review
+    # 2026-08-18). Best-effort, like every panel touch.
+    bot = getattr(ctx, "bot", None)
+    if bot is not None:
+        from bot_modules.survivor.views import refresh_panel
+
+        await refresh_panel(bot, ctx.db_path, season_id)
     correction = out["old_winner"] is not None and out["old_winner"] != outcome
     await _mirror_mod_log(
         ctx, guild_id,
@@ -507,6 +521,139 @@ async def reckoning_preview(request: Request, _: AuthenticatedUser = _ADMIN):
             {"name": f.name, "value": f.value} for f in embed.fields
         ],
     }
+
+
+# ── simulator (synthetic seasons only) + force-run tasks ──────────────
+
+
+class SimScheduleBody(BaseModel):
+    weeks: int = Field(ge=1, le=18)
+    minutes_per_week: int = Field(ge=2, le=1440)
+
+
+class SimSettleBody(BaseModel):
+    mode: str = Field(pattern="^(chalk|random|upset)$")
+
+
+@router.post("/survivor/sim/schedule")
+async def sim_schedule(
+    request: Request, body: SimScheduleBody, user: AuthenticatedUser = _ADMIN
+):
+    """Lay down a compressed synthetic schedule. Refuses real season years —
+    the rig can never touch a real schedule."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        import time
+
+        from bot_modules.survivor.sim import SimError, generate_schedule
+
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season.")
+            try:
+                created = generate_schedule(
+                    conn, season, weeks=body.weeks,
+                    minutes_per_week=body.minutes_per_week, now=time.time(),
+                )
+            except SimError as exc:
+                raise svc.SeasonError(str(exc)) from exc
+            write_audit(
+                conn, guild_id=guild_id, action="survivor_sim_schedule",
+                actor_id=int(user.user_id),
+                extra={"season_id": season["id"], "weeks": body.weeks,
+                       "minutes_per_week": body.minutes_per_week, "via": "web"},
+            )
+            conn.commit()
+        return season, created
+
+    season, created = await _service_call(run_query(_q))
+    bot = getattr(ctx, "bot", None)
+    if bot is not None:
+        from bot_modules.survivor.views import refresh_panel
+
+        await refresh_panel(bot, ctx.db_path, season["id"])
+    return {"ok": True, "games": created}
+
+
+@router.post("/survivor/sim/settle")
+async def sim_settle(
+    request: Request, body: SimSettleBody, user: AuthenticatedUser = _ADMIN
+):
+    """Settle every kicked synthetic game through the real pipeline."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        import time
+
+        from bot_modules.survivor.sim import SimError, settle_kicked
+
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season.")
+            try:
+                settled = settle_kicked(
+                    conn, season, mode=body.mode, now=time.time(),
+                    live_seasons=[season],
+                )
+            except SimError as exc:
+                raise svc.SeasonError(str(exc)) from exc
+            write_audit(
+                conn, guild_id=guild_id, action="survivor_sim_settle",
+                actor_id=int(user.user_id),
+                extra={"season_id": season["id"], "mode": body.mode,
+                       "settled": len(settled), "via": "web"},
+            )
+            conn.commit()
+        return season, settled
+
+    season, settled = await _service_call(run_query(_q))
+    bot = getattr(ctx, "bot", None)
+    if bot is not None:
+        from bot_modules.survivor.views import refresh_panel
+
+        await refresh_panel(bot, ctx.db_path, season["id"])
+    return {
+        "ok": True,
+        "settled": [{"game_id": g, "outcome": o} for g, o in settled],
+    }
+
+
+@router.post("/survivor/tasks/run")
+async def run_tasks_now(request: Request, user: AuthenticatedUser = _ADMIN):
+    """Force the weekly tasks past their clock gates — the Reckoning if a
+    week is reckonable, the panel repost, last call. Once-per-week state
+    still holds, so this can never double-post; audited like everything."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Bot offline.")
+
+    def _audit():
+        with ctx.open_db() as conn:
+            write_audit(
+                conn, guild_id=guild_id, action="survivor_tasks_run",
+                actor_id=int(user.user_id), extra={"via": "web"},
+            )
+            conn.commit()
+
+    await run_query(_audit)
+    import time
+
+    from bot_modules.survivor.tasks import run_weekly_tasks
+
+    await run_weekly_tasks(bot, ctx.db_path, time.time(), force=True)
+    await _mirror_mod_log(
+        ctx, guild_id, action="weekly tasks forced",
+        summary="clock gates bypassed; once-per-week state still applies",
+        user=user,
+    )
+    return {"ok": True}
 
 
 # ── announcement ──────────────────────────────────────────────────────
@@ -727,6 +874,11 @@ async def eliminate_player(
     note = await _swap_member_roles(
         ctx, guild_id, season["config"], user_id, to_ghost=True
     )
+    bot = getattr(ctx, "bot", None)
+    if bot is not None:
+        from bot_modules.survivor.views import refresh_panel
+
+        await refresh_panel(bot, ctx.db_path, season["id"])
     await _mirror_mod_log(
         ctx, guild_id,
         action="player eliminated",
@@ -767,6 +919,11 @@ async def revive_player(
     note = await _swap_member_roles(
         ctx, guild_id, season["config"], user_id, to_ghost=False
     )
+    bot = getattr(ctx, "bot", None)
+    if bot is not None:
+        from bot_modules.survivor.views import refresh_panel
+
+        await refresh_panel(bot, ctx.db_path, season["id"])
     await _mirror_mod_log(
         ctx, guild_id,
         action="player revived",

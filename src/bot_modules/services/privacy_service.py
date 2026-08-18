@@ -165,7 +165,7 @@ def purge_user_data(
         table="role_events",
     )
 
-    # Survivor (migration 166): purged across every season, live or archived
+    # Survivor (migration 167): purged across every season, live or archived
     # — a game record has no Art 17(3) ground to outlive the member (register
     # rows: docs/data_register.md). guild_id is denormalized onto both tables
     # (so the export's standard guild scoping covers them too); coin

@@ -731,6 +731,18 @@ async def repost_panel(
     try:
         await message.pin(reason="Survivor channel panel")
         pinned = True
+        # The weekly repost would otherwise leave a "pinned a message"
+        # system notice every Wednesday — sweep it, best-effort.
+        try:
+            async for recent in channel.history(limit=5):
+                if (
+                    recent.type == discord.MessageType.pins_add
+                    and recent.author.id == getattr(bot.user, "id", 0)
+                ):
+                    await recent.delete()
+                    break
+        except (discord.Forbidden, discord.HTTPException):
+            pass
     except (discord.Forbidden, discord.HTTPException):
         pinned = False
 

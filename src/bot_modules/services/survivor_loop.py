@@ -102,7 +102,18 @@ async def run_poll_cycle(
     seasons = await asyncio.to_thread(_seasons)
     if not seasons:
         return result
-    years = sorted({s["season_year"] for s in seasons})
+    from bot_modules.survivor.sim import is_sim_year
+
+    # Synthetic seasons (the testing rig) have nothing to fetch — ESPN would
+    # serve the CURRENT season for a nonsense year and pollute the table —
+    # but their open windows still drive settle sweeps below, so locks and
+    # the groundskeeper run in compressed time.
+    years = sorted({
+        s["season_year"] for s in seasons if not is_sim_year(s["season_year"])
+    })
+    sim_years = sorted({
+        s["season_year"] for s in seasons if is_sim_year(s["season_year"])
+    })
 
     do_refresh = now - state.last_refresh >= REFRESH_INTERVAL
     ingested = False
@@ -135,8 +146,17 @@ async def run_poll_cycle(
                     year: live_game_weeks(conn, year, now) for year in years
                 }
 
+        def _sim_windows():
+            with open_db(db_path) as conn:
+                return any(
+                    live_game_weeks(conn, year, now) for year in sim_years
+                )
+
         windows = await asyncio.to_thread(_windows)
         wanted = [(y, w) for y, weeks in windows.items() for w in weeks]
+        if sim_years and await asyncio.to_thread(_sim_windows):
+            attempted = True
+            state.last_poll = now
         if wanted:
             attempted = True
             state.last_poll = now

@@ -69,6 +69,7 @@ async function render(container) {
       </header>
       ${renderMetaWarning()}
       <div data-season-zone></div>
+      <div data-sim-zone></div>
       <div data-week-zone></div>
       <div data-rules-zone></div>
       <div data-roster-zone></div>
@@ -79,6 +80,9 @@ async function render(container) {
   const refresh = () => refreshAll(container);
   renderSeasonCard(container.querySelector("[data-season-zone]"), overview, refresh);
   if (season) {
+    if (season.season_year >= 2090) {
+      renderSimulatorCard(container.querySelector("[data-sim-zone]"), refresh);
+    }
     await renderWeekCard(container.querySelector("[data-week-zone]"));
     renderRulesCards(
       container.querySelector("[data-rules-zone]"), season, roles, channels,
@@ -88,6 +92,67 @@ async function render(container) {
     );
   }
   renderFlavorCard(container.querySelector("[data-flavor-zone]"), overview.flavor);
+}
+
+// ── season simulator (synthetic seasons, year ≥ 2090) ─────────────────
+
+function renderSimulatorCard(zone, refresh) {
+  zone.innerHTML = `
+    <div class="card" style="border-color: var(--gold-solid, #e6b84c);">
+      <div class="section-label">🧪 Season Simulator</div>
+      <div class="field-hint">Synthetic season — ESPN is never touched. Lay
+        down a compressed schedule (weeks run in minutes), let people join
+        and pick in the channel, then settle kicked games and run the weekly
+        tasks to advance. Everything flows through the real engine.</div>
+      <form data-sim-form class="form">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+          <div class="field"><label for="sim-weeks">Weeks</label>
+            <input type="number" id="sim-weeks" name="weeks" min="1" max="18"
+              value="4" style="width:80px;" /></div>
+          <div class="field"><label for="sim-mpw">Minutes per Week</label>
+            <input type="number" id="sim-mpw" name="minutes_per_week" min="2"
+              max="1440" value="15" style="width:100px;" /></div>
+          <button type="submit" class="btn btn-primary">Generate Schedule</button>
+        </div>
+      </form>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+        settle kicked games:
+        <button type="button" class="btn btn-small" data-sim-settle="chalk">favorites win</button>
+        <button type="button" class="btn btn-small" data-sim-settle="random">random</button>
+        <button type="button" class="btn btn-small" data-sim-settle="upset">upsets</button>
+        <span data-status></span>
+      </div>
+      <div class="field-hint">Then ▶ Run Weekly Tasks (Season card) posts the
+        Reckoning and reposts the panel without waiting for Tuesday.</div>
+    </div>
+  `;
+  const status = zone.querySelector("[data-status]");
+  zone.querySelector("[data-sim-form]").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      const res = await apiPost("/api/survivor/sim/schedule", {
+        weeks: parseInt(fd.get("weeks"), 10),
+        minutes_per_week: parseInt(fd.get("minutes_per_week"), 10),
+      });
+      showStatus(status, true, `${res.games} games laid down — first kickoff in ~1 minute`);
+      setTimeout(refresh, 1500);
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  });
+  zone.onclick = async (e) => {
+    const btn = e.target.closest("[data-sim-settle]");
+    if (!btn) return;
+    try {
+      const res = await apiPost("/api/survivor/sim/settle", {
+        mode: btn.dataset.simSettle,
+      });
+      showStatus(status, true, `${res.settled.length} game(s) settled`);
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  };
 }
 
 // ── this week's games (manual settle) ─────────────────────────────────
@@ -259,6 +324,7 @@ function renderSeasonCard(zone, overview, refresh) {
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <button type="button" class="btn btn-primary" data-announce-btn>
           📌 Post Panel</button>
+        <button type="button" class="btn" data-tasks-btn>▶ Run Weekly Tasks</button>
         <button type="button" class="btn btn-danger" data-end-btn>End Season</button>
         <span data-status></span>
       </div>
@@ -275,6 +341,17 @@ function renderSeasonCard(zone, overview, refresh) {
     try {
       const res = await apiPost("/api/survivor/announcement", {});
       showStatus(status, true, res.pinned ? "posted and pinned" : "posted (pin failed — check Manage Messages)");
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  });
+  zone.querySelector("[data-tasks-btn]").addEventListener("click", async () => {
+    if (!window.confirm(
+      "Run the weekly tasks now, skipping the day/hour gates? "
+      + "Once-per-week still holds — nothing double-posts.")) return;
+    try {
+      await apiPost("/api/survivor/tasks/run", {});
+      showStatus(status, true, "tasks ran — check the channel");
     } catch (err) {
       showStatus(status, false, err.message);
     }

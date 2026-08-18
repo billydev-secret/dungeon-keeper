@@ -1,4 +1,4 @@
--- 167_econ_ledger_kind_index.sql
+-- 168_econ_ledger_kind_index.sql
 -- Survivor's pot math (survivor/logic.pot_totals) reads the ledger by
 -- (guild_id, kind) on every public /survivor board render, and the existing
 -- indexes (062: user- and time-oriented) leave that a guild-wide scan on the

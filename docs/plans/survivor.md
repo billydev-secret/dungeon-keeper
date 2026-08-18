@@ -1,7 +1,7 @@
 # Survivor — staging plan
 
 **Status (2026-08-17):** stages 1–3 shipped same-day. Stage 1 (schema —
-migration 166 after a renumber around main's 164 — service, panel, privacy
+migration 167 after three renumbers around main — service, panel, privacy
 wiring) plus a code-review fix pass; stage 2 (ESPN parser + ingest on real
 captured fixtures; create-season ingests the full schedule) plus its own fix
 pass; stage 3 (survivor/logic.py locks + joins + satchel, /survivor
@@ -16,7 +16,12 @@ Wednesday slate with its persistent pick button; Saturday last call with
 DM-fallback mentions and §6.3 early-game naming; leaver elimination at the
 Reckoning; ghost streaks (miss breaks, void neither); Ghost role swaps +
 condolence DMs on post; the straggler addendum; /survivor history; the
-panel's Reckoning preview). **All of Tier 1 is built.** Remaining: Tier 2
+panel's Reckoning preview). **All of Tier 1 is built.** Post-Tier-1 rounds (2026-08-18): standard
+sports copy register, the single updating channel panel (announcement +
+slate + board collapsed; Reckoning stays a post), the 📜 My History panel
+button, the season Simulator (spec §7.9), and a final self-review pass
+(week-1 weekly tasks on enrolling seasons, pin-notice sweep, panel refresh
+after manual settle/eliminate). Remaining: Tier 2
 (6b wipeout/annul — Wk 2; 6c double-pick — Wk 14; 6d Accord — Nov; 6e
 endgame payouts — Jan; 7 notification toggles — Wk 2) and Tier 3.
 

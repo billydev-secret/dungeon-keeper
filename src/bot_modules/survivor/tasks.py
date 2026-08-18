@@ -72,27 +72,42 @@ def past_weekly_moment(
     return frame > target or hour >= target_hour
 
 
-def slate_due(conn: sqlite3.Connection, season: dict, now: float, offset: float) -> int | None:
+def slate_due(
+    conn: sqlite3.Connection, season: dict, now: float, offset: float,
+    *, force: bool = False,
+) -> int | None:
     week = logic.pick_week(conn, season["season_year"], now)
     if week is None or int(season["config"].get("last_slate_week") or 0) >= week:
         return None
     hour = int(season["config"]["slate_hour"])
+    if force:
+        return week
     return week if past_weekly_moment(now, offset, WEDNESDAY, hour) else None
 
 
-def lastcall_due(conn: sqlite3.Connection, season: dict, now: float, offset: float) -> int | None:
+def lastcall_due(
+    conn: sqlite3.Connection, season: dict, now: float, offset: float,
+    *, force: bool = False,
+) -> int | None:
     week = logic.pick_week(conn, season["season_year"], now)
     if week is None or int(season["config"].get("last_lastcall_week") or 0) >= week:
         return None
     hour = int(season["config"]["lastcall_hour"])
+    if force:
+        return week
     return week if past_weekly_moment(now, offset, SATURDAY, hour) else None
 
 
-def reckoning_due(conn: sqlite3.Connection, season: dict, now: float, offset: float) -> int | None:
+def reckoning_due(
+    conn: sqlite3.Connection, season: dict, now: float, offset: float,
+    *, force: bool = False,
+) -> int | None:
     week = reckoning.next_reckoning_week(conn, season, now)
     if week is None:
         return None
     hour = int(season["config"]["reckoning_hour"])
+    if force:
+        return week
     return week if past_weekly_moment(now, offset, TUESDAY, hour) else None
 
 
@@ -123,14 +138,23 @@ def _pings(bot, season: dict) -> tuple[str, discord.AllowedMentions]:
     )
 
 
-async def run_weekly_tasks(bot, db_path: Path, now: float) -> None:
-    """One decision pass for every live season. Cheap when nothing is due."""
+async def run_weekly_tasks(bot, db_path: Path, now: float, *, force: bool = False) -> None:
+    """One decision pass for every live season. Cheap when nothing is due.
+
+    ``force`` skips the guild-local day/hour gates — the dashboard's
+    run-now button and the simulator use it. The per-week state keys still
+    guarantee once-per-week, so forcing can never double-post.
+    """
 
     def _seasons():
         with open_db(db_path) as conn:
+            # Enrolling seasons included (self-review 2026-08-18): the season
+            # only turns 'active' at the FIRST KICKOFF, so an active-only
+            # filter would silently skip week 1's Wednesday panel ping and
+            # Saturday last call. The Reckoning gates on elapsed weeks anyway.
             rows = conn.execute(
                 "SELECT DISTINCT guild_id FROM survivor_seasons "
-                "WHERE status = 'active'"
+                "WHERE status != 'complete'"
             ).fetchall()
             from bot_modules.services.survivor_service import get_active_season
 
@@ -142,9 +166,9 @@ async def run_weekly_tasks(bot, db_path: Path, now: float) -> None:
                     out.append((
                         season,
                         offset,
-                        reckoning_due(conn, season, now, offset),
-                        slate_due(conn, season, now, offset),
-                        lastcall_due(conn, season, now, offset),
+                        reckoning_due(conn, season, now, offset, force=force),
+                        slate_due(conn, season, now, offset, force=force),
+                        lastcall_due(conn, season, now, offset, force=force),
                     ))
             return out
 
