@@ -30,6 +30,7 @@ from bot_modules.music_playlist.music_playlist_store import (
     guilds_with_retryable,
     insert_track,
     is_message_processed,
+    latest_review_verdict,
     list_pending,
     list_retryable_messages,
     live_window,
@@ -447,6 +448,23 @@ def _queue(conn, message_id=9, *, added_by=ALICE):
         confidence=0.61,
         reason="below threshold",
     )
+
+
+def test_latest_review_verdict_ignores_pending_and_takes_newest(sync_db_path):
+    url = "https://youtu.be/dQw4w9WgXcQ"
+    with open_db(sync_db_path) as conn:
+        first = _queue(conn, message_id=9)
+        second = _queue(conn, message_id=10)
+        _queue(conn, message_id=11)  # stays pending — an open question
+        set_unmatched_status(conn, GUILD, first, STATUS_APPROVED,
+                             reviewed_by=MOD, reviewed_at=100.0)
+        set_unmatched_status(conn, GUILD, second, STATUS_REJECTED,
+                             reviewed_by=MOD, reviewed_at=200.0)
+        verdict = latest_review_verdict(conn, GUILD, url)
+        assert verdict is not None and verdict["status"] == STATUS_REJECTED
+        # Unknown link, or another guild's identical one: no verdict.
+        assert latest_review_verdict(conn, GUILD, "https://youtu.be/other") is None
+        assert latest_review_verdict(conn, GUILD + 1, url) is None
 
 
 def test_unmatched_pending_then_resolved(sync_db_path):

@@ -203,13 +203,6 @@ function render(container, status, channels) {
     "How many songs the rolling playlist holds. Song N+1 pushes the " +
       "oldest one out. Between 1 and 200; 30 is the default.",
   ));
-  cardBehavior.appendChild(field(
-    "Match Threshold",
-    numInput("match_threshold", s.match_threshold ?? 0.74, 0, "0.01", 1),
-    "Confidence needed to add a searched track (YouTube links and the " +
-      "like) without asking. Anything scoring below lands in the review " +
-      "queue instead. Between 0 and 1; 0.74 is the default.",
-  ));
   const behaviorToggles = document.createElement("div");
   behaviorToggles.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
   behaviorToggles.append(
@@ -253,12 +246,6 @@ function render(container, status, channels) {
       form.querySelector('[name="window_size"]').focus();
       return;
     }
-    const threshold = parseFloat(String(fd.get("match_threshold") ?? "").trim());
-    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
-      showStatus(saveStatus, false, "Match Threshold must be a number between 0 and 1.");
-      form.querySelector('[name="match_threshold"]').focus();
-      return;
-    }
     const rescanDepth = parseInt(String(fd.get("rescan_depth") ?? "").trim(), 10);
     if (!Number.isFinite(rescanDepth) || rescanDepth < 1 || rescanDepth > 2000) {
       showStatus(saveStatus, false, "Re-scan Depth must be a whole number between 1 and 2000.");
@@ -288,7 +275,6 @@ function render(container, status, channels) {
         channel_id: chanPicker.getValue() || "0", // string — snowflake rule
         playlist_id: playlistInput.value.trim(),
         window_size: windowSize,
-        match_threshold: threshold,
         remove_on_delete: fd.has("remove_on_delete"),
         rescan_depth: rescanDepth,
       });
@@ -382,10 +368,11 @@ function render(container, status, channels) {
   queueHint.className = "field-hint";
   queueHint.style.marginBottom = "8px";
   queueHint.textContent =
-    "Links that didn't match a track confidently enough to add on their " +
-    "own, with the best candidate and its score. Approving adds the " +
-    "candidate to the playlist; while the connection is read-only, " +
-    "approvals fail until re-consent and can simply be retried after.";
+    "Links the pipeline had nothing to add for — no metadata, no Spotify " +
+    "candidates, or an unreadable album/playlist. A decision here is " +
+    "remembered: the same link never comes back for review. While the " +
+    "connection is read-only, approvals fail until re-consent and can " +
+    "simply be retried after.";
   cardQueue.appendChild(queueHint);
   const queueHost = document.createElement("div");
   queueHost.style.overflowX = "auto";

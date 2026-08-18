@@ -73,7 +73,6 @@ def _settings_json(s: MusicPlaylistSettings) -> dict:
         "channel_id": str(s.channel_id) if s.channel_id else None,
         "playlist_id": s.playlist_id,
         "window_size": s.window_size,
-        "match_threshold": s.match_threshold,
         "remove_on_delete": s.remove_on_delete,
         "rescan_depth": s.rescan_depth,
     }
@@ -161,7 +160,6 @@ class SettingsBody(BaseModel):
     channel_id: str | None = None
     playlist_id: str | None = None
     window_size: int | None = Field(None, ge=1, le=200)
-    match_threshold: float | None = Field(None, ge=0.0, le=1.0)
     remove_on_delete: bool | None = None
     # Discord's history() tops out well above this; the ceiling is about not
     # letting one Re-scan click walk an entire channel.
@@ -214,8 +212,6 @@ async def put_settings(
         values["window_size"] = body.window_size
     if body.rescan_depth is not None:
         values["rescan_depth"] = body.rescan_depth
-    if body.match_threshold is not None:
-        values["match_threshold"] = body.match_threshold
     if body.remove_on_delete is not None:
         values["remove_on_delete"] = body.remove_on_delete
 
