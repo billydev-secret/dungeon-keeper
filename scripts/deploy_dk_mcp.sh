@@ -66,5 +66,19 @@ echo
 echo "Deployed to $TARGET."
 echo "Connector URL:  https://dkmcp.billy-bots.com$(grep '^DK_MCP_PATH=' "$ENV_FILE" | cut -d= -f2-)"
 echo
-echo "Not restarted — run that yourself when you're ready:"
-echo "  sudo systemctl restart dk-mcp"
+
+# On a first deploy the unit does not exist yet, and telling someone to restart
+# a unit systemd has never heard of just produces "Unit dk-mcp.service not
+# found." Print whichever step is actually next.
+if [[ -f /etc/systemd/system/dk-mcp.service ]]; then
+  echo "Not restarted — run that yourself when you're ready:"
+  echo "  sudo systemctl restart dk-mcp"
+else
+  echo "The systemd unit is not installed yet. Next:"
+  echo "  sudo install -m 644 $REPO/deploy/dk-mcp.service /etc/systemd/system/dk-mcp.service"
+  echo "  sudo systemctl daemon-reload"
+  echo "  sudo systemctl enable --now dk-mcp"
+  echo
+  echo "Then point a Cloudflare Tunnel hostname at it:"
+  echo "  dkmcp.billy-bots.com -> http://127.0.0.1:8322"
+fi
