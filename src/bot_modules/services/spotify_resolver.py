@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
+import requests
 import spotipy
 from spotipy.exceptions import SpotifyException
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -52,6 +53,17 @@ _ARTIST_TOP_TRACKS_MARKET = "US"
 
 class SpotifyResolveError(RuntimeError):
     pass
+
+
+class SpotifyUnusableReadError(SpotifyResolveError):
+    """The API answered, but with data that cannot be used.
+
+    The shapes: a playlist whose every item carries ``track: null`` (what
+    Development-mode apps get on playlist reads), or an editorial playlist id
+    (API access removed in late 2024). Distinct from the base class because
+    these are lasting conditions, not transient failures — a caller that
+    would otherwise ledger-and-retry should surface them for review instead.
+    """
 
 
 @dataclass(frozen=True)
@@ -89,6 +101,9 @@ class SpotifyResolver:
         # Bot-owner OAuth token cache (refreshed from DB-stored refresh token).
         self._user_client: spotipy.Spotify | None = None
         self._user_token_expires_at: float = 0.0
+        # album id → its top-track pick. Album contents are effectively
+        # immutable, so repeat posts of the same album cost nothing.
+        self._album_pick_cache: dict[str, SpotifyTrack] = {}
 
     def _ensure_client(self) -> spotipy.Spotify:
         if self._client is None:
@@ -167,18 +182,26 @@ class SpotifyResolver:
         auth_value = base64.b64encode(
             f"{self._client_id}:{self._client_secret}".encode("utf-8")
         ).decode("ascii")
-        async with httpx.AsyncClient(timeout=10.0) as session:
-            resp = await session.post(
-                "https://accounts.spotify.com/api/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                },
-                headers={
-                    "Authorization": f"Basic {auth_value}",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            )
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as session:
+                resp = await session.post(
+                    "https://accounts.spotify.com/api/token",
+                    data={
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh_token,
+                    },
+                    headers={
+                        "Authorization": f"Basic {auth_value}",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                )
+        except httpx.HTTPError as exc:
+            # Transport failure, not a rejected token — wrapped so
+            # _get_user_client's except clause catches it and falls back to
+            # client credentials instead of letting it escape unhandled.
+            raise SpotifyResolveError(
+                f"Spotify token refresh failed: {exc}"
+            ) from exc
         if resp.status_code != 200:
             raise SpotifyResolveError(
                 f"Spotify refresh failed: {resp.status_code} {resp.text[:200]}"
@@ -417,9 +440,145 @@ class SpotifyResolver:
         The reconcile action's read half: prefers the bot-owner client (it
         sees their private playlists), falls back to Client Credentials.
         Local files (no catalog id) are skipped — they can't be written back.
+
+        Raises instead of returning [] when the read is unusable: Spotify can
+        report items while nulling every ``track`` object (observed on
+        Development-mode apps, which get no track data on playlist reads).
+        Treating that as "the playlist is empty" made reconcile re-add its
+        entire window on every click. Local files and episodes carry non-null
+        track objects, so an all-null page is never a real playlist shape.
         """
         client = await self._get_user_client() or self._ensure_client()
         ids: list[str] = []
+        offset = 0
+        items_seen = 0
+        null_tracks = 0
+        while True:
+            page = await self._call(
+                client.playlist_items,
+                playlist_id,
+                limit=_PLAYLIST_PAGE_SIZE,
+                offset=offset,
+                additional_types=("track",),
+            )
+            for item in page.get("items", []):
+                items_seen += 1
+                track = item.get("track")
+                if track is None:
+                    null_tracks += 1
+                    continue
+                track_id = track.get("id")
+                if track_id and not track.get("is_local"):
+                    ids.append(str(track_id))
+            if not page.get("next"):
+                break
+            offset += _PLAYLIST_PAGE_SIZE
+        if items_seen and null_tracks == items_seen:
+            raise SpotifyUnusableReadError(
+                f"Spotify returned {items_seen} playlist item(s) but no track "
+                "data for any of them — this app can't read playlist contents "
+                "(Development-mode apps get null tracks here). Aborting "
+                "instead of treating the playlist as empty."
+            )
+        return ids
+
+    async def album_top_track(self, album_id: str) -> SpotifyTrack | None:
+        """The album's single most-popular track — the watched-channel pick.
+
+        ``album_tracks`` items are simplified objects with no ``popularity``,
+        so a batched ``GET /v1/tracks`` (50 ids/call) fills it in.
+        ``popularity`` is Spotify's 0-100 recency-weighted score, **not** a
+        play count. When it is unavailable — Development-mode apps 403 the
+        batch endpoint and carry ``popularity: null`` everywhere else —
+        every track ties at unknown and the tie-break (disc, then track
+        number) picks the album's opening track; the day the app gets its
+        quota extension the pick becomes genuinely popularity-ranked with no
+        code change. None for an empty album. Picks are cached per album id.
+        """
+        cached = self._album_pick_cache.get(album_id)
+        if cached is not None:
+            return cached
+        client = self._ensure_client()
+        items: list[dict] = []
+        offset = 0
+        while True:
+            page = await self._call(
+                client.album_tracks, album_id, limit=50, offset=offset
+            )
+            items.extend(
+                i for i in page.get("items", []) if i and i.get("id")
+            )
+            if not page.get("next") or len(items) >= MAX_PLAYLIST_TRACKS:
+                break
+            offset += 50
+        if not items:
+            return None
+        full_by_id: dict[str, dict] = {}
+        ids = [str(i["id"]) for i in items]
+        try:
+            for start in range(0, len(ids), 50):
+                batch = await self._call(client.tracks, ids[start:start + 50])
+                for track in (batch or {}).get("tracks") or []:
+                    if track and track.get("id"):
+                        full_by_id[str(track["id"])] = track
+        except SpotifyResolveError:
+            log.info(
+                "album %s: popularity lookup unavailable, "
+                "falling back to track order", album_id,
+            )
+            full_by_id = {}
+
+        def _rank(item: dict) -> tuple[int, int, int]:
+            popularity = (full_by_id.get(str(item["id"])) or {}).get("popularity")
+            return (
+                -(popularity if popularity is not None else -1),
+                int(item.get("disc_number") or 1),
+                int(item.get("track_number") or 0),
+            )
+
+        best = min(items, key=_rank)
+        full = full_by_id.get(str(best["id"]))
+        if full is not None:
+            pick = _track_from_api(full)
+        else:
+            pick = SpotifyTrack(
+                title=best.get("name", "Unknown"),
+                artists=[a["name"] for a in best.get("artists", [])],
+                duration_ms=int(best.get("duration_ms") or 0),
+                isrc=None,
+                spotify_url=best.get("external_urls", {}).get(
+                    "spotify",
+                    f"https://open.spotify.com/track/{best.get('id', '')}",
+                ),
+            )
+        if len(self._album_pick_cache) >= 256:
+            self._album_pick_cache.clear()
+        self._album_pick_cache[album_id] = pick
+        return pick
+
+    async def playlist_top_track(self, playlist_id: str) -> SpotifyTrack | None:
+        """A playlist link's single most-popular track (see album_top_track).
+
+        Full playlist-item track objects carry ``popularity`` directly, so
+        the pick is a fold over the pages — no second fetch. Ties (including
+        the all-null Development-mode-adjacent case where popularity is
+        missing on readable tracks) break on track number. Paging stops at
+        ``MAX_PLAYLIST_TRACKS``, matching resolve(). None for an empty
+        playlist; raises :class:`SpotifyUnusableReadError` for an editorial
+        playlist id or an all-null read — lasting conditions the caller
+        should queue for review, not retry.
+        """
+        if playlist_id.startswith("37i9"):
+            raise SpotifyUnusableReadError(
+                "Spotify restricted API access to editorial playlists "
+                "(Daily Mix, Discover Weekly, Song/Artist Radio) in late "
+                "2024. Use a user-created playlist instead."
+            )
+        client = await self._get_user_client() or self._ensure_client()
+        best: dict | None = None
+        best_key: tuple[int, int] | None = None
+        items_seen = 0
+        null_tracks = 0
         offset = 0
         while True:
             page = await self._call(
@@ -430,14 +589,32 @@ class SpotifyResolver:
                 additional_types=("track",),
             )
             for item in page.get("items", []):
-                track = item.get("track") or {}
-                track_id = track.get("id")
-                if track_id and not track.get("is_local"):
-                    ids.append(str(track_id))
-            if not page.get("next"):
+                items_seen += 1
+                track = item.get("track")
+                if track is None:
+                    null_tracks += 1
+                    continue
+                if not track.get("id") or track.get("is_local"):
+                    continue
+                popularity = track.get("popularity")
+                key = (
+                    -(popularity if popularity is not None else -1),
+                    int(track.get("track_number") or 0),
+                )
+                if best_key is None or key < best_key:
+                    best, best_key = track, key
+            if not page.get("next") or items_seen >= MAX_PLAYLIST_TRACKS:
                 break
             offset += _PLAYLIST_PAGE_SIZE
-        return ids
+        if items_seen and null_tracks == items_seen:
+            raise SpotifyUnusableReadError(
+                f"Spotify returned {items_seen} playlist item(s) but no track "
+                "data for any of them — this app can't read playlist contents "
+                "(Development-mode apps get null tracks here)."
+            )
+        if best is None:
+            return None
+        return _track_from_api(best)
 
     async def _write_call(self, fn, *args, **kwargs):
         """_call, translating write-denied statuses into actionable messages.
@@ -470,6 +647,14 @@ class SpotifyResolver:
         Status codes are passed through unwrapped; callers translate them into
         kind-specific messages (a generic 404 here previously mislabeled
         editorial-playlist restrictions as "private or doesn't exist").
+
+        Transport failures (spotipy speaks requests, so a connection reset
+        arrives as ``requests.exceptions.ConnectionError``, not a
+        ``SpotifyException``) retry on the same backoff ladder as a 429 and
+        exhaust into ``SpotifyResolveError``. Anything escaping here unwrapped
+        blows past every caller's error handling — in the message pipeline
+        that meant no ledger row, no reaction, no review-queue entry: the
+        song vanished silently.
         """
         for attempt, backoff in enumerate((*_RETRY_BACKOFF_S, None)):
             try:
@@ -485,6 +670,20 @@ class SpotifyResolver:
                     continue
                 raise SpotifyResolveError(
                     f"Spotify API error: {exc.http_status} {exc.msg}"
+                ) from exc
+            except requests.exceptions.RequestException as exc:
+                if backoff is not None:
+                    log.warning(
+                        "spotify transport error (%s), backing off %.1fs "
+                        "(attempt %d)",
+                        exc,
+                        backoff,
+                        attempt + 1,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                raise SpotifyResolveError(
+                    f"Spotify connection error: {exc}"
                 ) from exc
         raise SpotifyResolveError("Spotify rate-limited; gave up after retries")
 

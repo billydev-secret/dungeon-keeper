@@ -11,13 +11,16 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+import requests
 from spotipy.exceptions import SpotifyException
 
 from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services.spotify_resolver import (
     SpotifyResolveError,
     SpotifyResolver,
+    SpotifyUnusableReadError,
 )
 
 READ_SCOPES = "playlist-read-private playlist-read-collaborative"
@@ -217,6 +220,80 @@ async def test_spotify_other_errors_pass_through():
         await resolver.add_tracks_to_playlist("pl123", ["t1"])
 
 
+# ── transport failures reach callers as SpotifyResolveError ──────────
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    """Neutralize the backoff sleeps and record what was requested."""
+    slept: list[float] = []
+
+    async def _instant(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(
+        "bot_modules.services.spotify_resolver.asyncio.sleep", _instant
+    )
+    return slept
+
+
+async def test_connection_error_retries_then_wraps(no_sleep):
+    """A transport failure must never escape _call unwrapped.
+
+    The prod incident: a connection reset from Spotify raised
+    requests.ConnectionError, which skipped both the retry ladder and the
+    SpotifyResolveError translation — so the pipeline's error handling never
+    ran and the message vanished with no ledger row, reaction, or queue entry.
+    """
+    client = MagicMock()
+    client.playlist_add_items.side_effect = requests.exceptions.ConnectionError(
+        "Connection reset by peer"
+    )
+    resolver = _writable_resolver(client)
+
+    with pytest.raises(SpotifyResolveError, match="Spotify connection error"):
+        await resolver.add_tracks_to_playlist("pl123", ["t1"])
+    # Retried on the full backoff ladder before giving up.
+    assert client.playlist_add_items.call_count == 4
+    assert no_sleep == [1.0, 2.0, 4.0]
+
+
+async def test_transient_connection_error_recovers(no_sleep):
+    client = MagicMock()
+    client.playlist_add_items.side_effect = [
+        requests.exceptions.ConnectionError("reset"),
+        {"snapshot_id": "s1"},
+    ]
+    resolver = _writable_resolver(client)
+    assert await resolver.add_tracks_to_playlist("pl123", ["t1"]) == 1
+
+
+async def test_token_refresh_transport_error_falls_back(sync_db_path, monkeypatch):
+    # A network blip during the OAuth refresh must degrade to the
+    # client-credentials fallback, not escape as a raw httpx error.
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, "spotify_bot_refresh_token", "rt123")
+
+    class _BoomClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc) -> bool:
+            return False
+
+        async def post(self, *args, **kwargs):
+            raise httpx.ConnectError("Connection reset by peer")
+
+    monkeypatch.setattr(
+        "bot_modules.services.spotify_resolver.httpx.AsyncClient", _BoomClient
+    )
+    resolver = _resolver(sync_db_path)
+    assert await resolver._get_user_client() is None  # noqa: SLF001
+
+
 # ── playlist_track_ids (the reconcile action's read half) ────────────
 
 
@@ -242,6 +319,44 @@ async def test_playlist_track_ids_pages_and_skips_locals():
     assert offsets == [0, 100]
 
 
+async def test_playlist_track_ids_rejects_an_all_null_read():
+    """Items reported but every track null = unusable read, not an empty list.
+
+    The prod incident: Development-mode apps get ``track: null`` on every
+    playlist item, ``playlist_track_ids`` returned [], and reconcile re-added
+    its whole window as duplicates on each click. An unusable read must abort.
+    """
+    client = MagicMock()
+    client.playlist_items.side_effect = [
+        {"items": [{"track": None}] * 3, "next": "page2"},
+        {"items": [{"track": None}] * 2, "next": None},
+    ]
+    resolver = _writable_resolver(client)
+
+    with pytest.raises(SpotifyResolveError, match="no track data"):
+        await resolver.playlist_track_ids("pl123")
+
+
+async def test_playlist_track_ids_empty_playlist_is_empty():
+    client = MagicMock()
+    client.playlist_items.return_value = {"items": [], "next": None}
+    resolver = _writable_resolver(client)
+    assert await resolver.playlist_track_ids("pl123") == []
+
+
+async def test_playlist_track_ids_all_local_files_is_not_an_error():
+    # Local files carry a real track object (id null, is_local true) — an
+    # all-local playlist is a readable playlist with nothing writable, not
+    # the null-track failure shape.
+    client = MagicMock()
+    client.playlist_items.return_value = {
+        "items": [_item(None, is_local=True), _item(None, is_local=True)],
+        "next": None,
+    }
+    resolver = _writable_resolver(client)
+    assert await resolver.playlist_track_ids("pl123") == []
+
+
 async def test_playlist_track_ids_falls_back_without_user_client():
     fallback = MagicMock()
     fallback.playlist_items.return_value = {"items": [_item("t1")], "next": None}
@@ -254,3 +369,162 @@ async def test_playlist_track_ids_falls_back_without_user_client():
     resolver._client = fallback  # skip credential bootstrap
 
     assert await resolver.playlist_track_ids("pl123") == ["t1"]
+
+
+# ── album_top_track / playlist_top_track (collection-link picks) ──────
+
+
+def _album_item(track_id, name, *, disc=1, number=1):
+    return {
+        "id": track_id,
+        "name": name,
+        "disc_number": disc,
+        "track_number": number,
+        "artists": [{"name": "A"}],
+        "duration_ms": 1000,
+        "external_urls": {"spotify": f"https://open.spotify.com/track/{track_id}"},
+    }
+
+
+def _full_track(track_id, name, popularity):
+    return {
+        "id": track_id,
+        "name": name,
+        "popularity": popularity,
+        "artists": [{"name": "A"}],
+        "duration_ms": 1000,
+        "external_ids": {"isrc": f"ISRC{track_id}"},
+        "external_urls": {"spotify": f"https://open.spotify.com/track/{track_id}"},
+    }
+
+
+def _album_resolver(client) -> SpotifyResolver:
+    resolver = _resolver(None)
+    resolver._client = client  # skip credential bootstrap
+    return resolver
+
+
+async def test_album_top_track_picks_highest_popularity():
+    client = MagicMock()
+    client.album_tracks.return_value = {
+        "items": [_album_item("t1", "Opener"), _album_item("t2", "Hit", number=2)],
+        "next": None,
+    }
+    client.tracks.return_value = {
+        "tracks": [_full_track("t1", "Opener", 40), _full_track("t2", "Hit", 90)],
+    }
+    resolver = _album_resolver(client)
+
+    pick = await resolver.album_top_track("alb1")
+    assert pick is not None
+    assert pick.title == "Hit"
+    assert pick.isrc == "ISRCt2"  # full object used when the batch works
+
+
+async def test_album_top_track_null_popularity_falls_back_to_track_order():
+    # Development mode: the batch endpoint 403s, so every track ties at
+    # unknown popularity and the opening track (disc, then number) wins.
+    client = MagicMock()
+    client.album_tracks.return_value = {
+        "items": [
+            _album_item("t3", "Late", disc=2, number=1),
+            _album_item("t2", "Second", number=2),
+            _album_item("t1", "Opener", number=1),
+        ],
+        "next": None,
+    }
+    client.tracks.side_effect = SpotifyException(403, -1, "Forbidden")
+    resolver = _album_resolver(client)
+
+    pick = await resolver.album_top_track("alb1")
+    assert pick is not None
+    assert pick.title == "Opener"
+
+
+async def test_album_top_track_caches_by_album_id():
+    client = MagicMock()
+    client.album_tracks.return_value = {
+        "items": [_album_item("t1", "Only")], "next": None,
+    }
+    client.tracks.side_effect = SpotifyException(403, -1, "Forbidden")
+    resolver = _album_resolver(client)
+
+    await resolver.album_top_track("alb1")
+    await resolver.album_top_track("alb1")
+    assert client.album_tracks.call_count == 1
+
+
+async def test_album_top_track_empty_album_is_none():
+    client = MagicMock()
+    client.album_tracks.return_value = {"items": [], "next": None}
+    resolver = _album_resolver(client)
+    assert await resolver.album_top_track("alb1") is None
+
+
+def _playlist_item(track_id, name, *, popularity=None, number=1, is_local=False):
+    return {"track": {
+        "id": track_id,
+        "name": name,
+        "popularity": popularity,
+        "track_number": number,
+        "is_local": is_local,
+        "artists": [{"name": "A"}],
+        "duration_ms": 1000,
+        "external_urls": {"spotify": f"https://open.spotify.com/track/{track_id}"},
+    }}
+
+
+async def test_playlist_top_track_picks_highest_popularity():
+    client = MagicMock()
+    client.playlist_items.return_value = {
+        "items": [
+            _playlist_item("t1", "Meh", popularity=10),
+            _playlist_item("t2", "Hit", popularity=95, number=3),
+            _playlist_item(None, "Local", is_local=True),
+        ],
+        "next": None,
+    }
+    resolver = _writable_resolver(client)
+
+    pick = await resolver.playlist_top_track("pl123")
+    assert pick is not None
+    assert pick.title == "Hit"
+
+
+async def test_playlist_top_track_ties_break_on_track_number():
+    client = MagicMock()
+    client.playlist_items.return_value = {
+        "items": [
+            _playlist_item("t2", "Second", number=5),
+            _playlist_item("t1", "First", number=2),
+        ],
+        "next": None,
+    }
+    resolver = _writable_resolver(client)
+
+    pick = await resolver.playlist_top_track("pl123")
+    assert pick is not None
+    assert pick.title == "First"
+
+
+async def test_playlist_top_track_all_null_read_is_unusable():
+    client = MagicMock()
+    client.playlist_items.return_value = {
+        "items": [{"track": None}] * 4, "next": None,
+    }
+    resolver = _writable_resolver(client)
+    with pytest.raises(SpotifyUnusableReadError):
+        await resolver.playlist_top_track("pl123")
+
+
+async def test_playlist_top_track_editorial_id_is_unusable():
+    resolver = _writable_resolver(MagicMock())
+    with pytest.raises(SpotifyUnusableReadError, match="editorial"):
+        await resolver.playlist_top_track("37i9dQZF1DXcBWIGoYBM5M")
+
+
+async def test_playlist_top_track_empty_playlist_is_none():
+    client = MagicMock()
+    client.playlist_items.return_value = {"items": [], "next": None}
+    resolver = _writable_resolver(client)
+    assert await resolver.playlist_top_track("pl123") is None

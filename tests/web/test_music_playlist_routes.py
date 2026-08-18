@@ -127,7 +127,6 @@ def test_status_defaults(open_client):
         "playlist_id": "",
         "window_size": 30,
         "match_threshold": 0.74,
-        "expand_albums": False,
         "remove_on_delete": True,
         "rescan_depth": 200,
     }
@@ -178,13 +177,11 @@ def test_settings_roundtrip_and_snowflake_string(open_client):
         channel_id=str(BIG),
         window_size=15,
         match_threshold=0.5,
-        expand_albums=True,
         remove_on_delete=False,
     )
     assert settings["channel_id"] == str(BIG)
     assert settings["window_size"] == 15
     assert settings["match_threshold"] == 0.5
-    assert settings["expand_albums"] is True
     assert settings["remove_on_delete"] is False
     # And it reads back identically through status.
     again = open_client.get("/api/music-playlist/status").json()["settings"]

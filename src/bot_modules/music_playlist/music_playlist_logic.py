@@ -7,7 +7,7 @@ Ported from OpenMusicBot's ``message_parsing.py`` + ``matching.py``
   Spotify track/album/playlist URLs and ``spotify:`` URIs, plus YouTube
   watch/Shorts/youtu.be links. Album and playlist links are still
   *classified* (``LinkType`` keeps all four kinds) — whether to expand or
-  skip them is the service's call, behind the ``expand_albums`` dial.
+  reduce them to one track is the service's call.
 * **Matching** — turn a noisy YouTube title into a best-guess Spotify track:
   strip filler ("official video", "[HD]", "lyrics"), infer the artist from
   ``Artist - Title`` / ``Title by Artist`` / the ``… - Topic`` channel
@@ -193,7 +193,8 @@ def extract_links(content: str) -> list[ParsedLink]:
     """Extract all supported links from message content, first-seen order.
 
     Duplicate ids collapse to one link; album/playlist links come back
-    classified, not filtered — skipping them is service policy, not parsing.
+    classified, not filtered — reducing them to a single track is service
+    policy, not parsing.
     """
 
     extracted: list[ParsedLink] = []

@@ -4,8 +4,8 @@ Covers ``bot_modules/music_playlist/music_playlist_service.py`` with the
 Spotify client and the oEmbed fetch mocked — no network. The heart of the
 coverage, per the spec: happy path adds and trims, below-threshold goes to
 the review queue and adds nothing, duplicates within the live window, a
-rolled-off track re-adds, album links skip by default and expand on the
-dial, deletes respect the other-live-referrer rule, and every Spotify write
+rolled-off track re-adds, album/playlist links contribute exactly their
+top-track pick, deletes respect the other-live-referrer rule, and every Spotify write
 failure (missing modify scope, 403, exhausted 429) surfaces as a state
 instead of a crash.
 """
@@ -23,6 +23,7 @@ from bot_modules.music_playlist.music_playlist_logic import (
     parse_spotify_url,
 )
 from bot_modules.music_playlist.music_playlist_service import (
+    REASON_COLLECTION_UNREADABLE,
     REASON_LOW_CONFIDENCE,
     REASON_NO_CANDIDATES,
     REASON_NO_METADATA,
@@ -36,6 +37,7 @@ from bot_modules.music_playlist.music_playlist_service import (
 from bot_modules.services.spotify_resolver import (
     SpotifyResolveError,
     SpotifyResolveResult,
+    SpotifyUnusableReadError,
 )
 from bot_modules.services.spotify_resolver import (
     SpotifyTrack as ResolverTrack,
@@ -86,6 +88,8 @@ class FakeSpotify:
         self.remove_error: Exception | None = None
         self.read_error: Exception | None = None
         self.resolve_error: Exception | None = None
+        # Raised by the collection-pick methods (the unreadable-read shapes).
+        self.collection_error: Exception | None = None
         self.add_calls: list[tuple[str, list[str]]] = []
         self.remove_calls: list[tuple[str, list[str]]] = []
 
@@ -128,6 +132,23 @@ class FakeSpotify:
             name="Some Album",
             tracks=[self._resolver_track(t, n, a) for t, n, a in entries],
         )
+
+    async def _top_track(self, item_id: str) -> ResolverTrack | None:
+        # The fake's pick convention: first entry = "most popular". The
+        # ranking itself is the resolver's contract, tested there.
+        if self.collection_error is not None:
+            raise self.collection_error
+        entries = self.collections.get(item_id, [])
+        if not entries:
+            return None
+        track_id, title, artists = entries[0]
+        return self._resolver_track(track_id, title, artists)
+
+    async def album_top_track(self, album_id: str) -> ResolverTrack | None:
+        return await self._top_track(album_id)
+
+    async def playlist_top_track(self, playlist_id: str) -> ResolverTrack | None:
+        return await self._top_track(playlist_id)
 
     def _check_write(self) -> None:
         # Mirrors _get_write_client: scope gate first, worded in re-consent
@@ -220,7 +241,6 @@ def test_settings_defaults(sync_db_path):
     assert settings.enabled is False
     assert settings.window_size == 30
     assert settings.match_threshold == 0.74
-    assert settings.expand_albums is False
     assert settings.remove_on_delete is True
 
 
@@ -231,18 +251,25 @@ def test_settings_roundtrip_and_unknown_key(sync_db_path):
             "channel_id": CHANNEL,
             "playlist_id": PLAYLIST,
             "match_threshold": 0.81,
-            "expand_albums": True,
         })
         settings = load_music_playlist_settings(conn, GUILD)
         assert settings.enabled is True
         assert settings.channel_id == CHANNEL
         assert settings.playlist_id == PLAYLIST
         assert settings.match_threshold == 0.81
-        assert settings.expand_albums is True
         # Untouched keys keep their defaults.
         assert settings.window_size == 30
         with pytest.raises(KeyError):
             save_music_playlist_settings(conn, GUILD, {"widow_size": 5})
+
+
+def test_settings_ignore_a_stale_retired_key(sync_db_path):
+    # Prod still holds music_playlist_expand_albums until migration 170
+    # sweeps it; a leftover row must not break or leak into the loader.
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, "music_playlist_expand_albums", "1", GUILD)
+        settings = load_music_playlist_settings(conn, GUILD)
+    assert settings == DEFAULT_MUSIC_PLAYLIST_SETTINGS
 
 
 def test_settings_unparseable_values_fall_back(sync_db_path):
@@ -377,7 +404,9 @@ async def test_unresolvable_link_does_not_sink_the_message(sync_db_path):
 # ── Album / playlist links ────────────────────────────────────────────
 
 
-async def test_album_link_skipped_by_default(sync_db_path):
+@pytest.mark.parametrize("kind", ["album", "playlist"])
+async def test_collection_link_contributes_its_top_track(sync_db_path, kind):
+    """An album/playlist link adds exactly one track — the resolver's pick."""
     seed_settings(sync_db_path)
     spotify = FakeSpotify()
     spotify.collections["alb1"] = [
@@ -385,26 +414,49 @@ async def test_album_link_skipped_by_default(sync_db_path):
     ]
     svc = make_service(sync_db_path, spotify)
     summary = await svc.process_message(
-        GUILD, CHANNEL, 101, "https://open.spotify.com/album/alb1", ALICE
+        GUILD, CHANNEL, 101, f"https://open.spotify.com/{kind}/alb1", ALICE
     )
-    assert summary.skipped_collections == 1
-    assert summary.added_track_ids == []
-    assert not spotify.add_calls
-    assert pending_rows(sync_db_path) == []  # skipped, not queued
+    assert summary.added_track_ids == ["t1"]
+    assert window_ids(sync_db_path) == ["t1"]
+    assert pending_rows(sync_db_path) == []
 
 
-async def test_album_link_expands_when_dial_on(sync_db_path):
-    seed_settings(sync_db_path, expand_albums=True)
+async def test_empty_collection_contributes_nothing(sync_db_path):
+    seed_settings(sync_db_path)
     spotify = FakeSpotify()
-    spotify.collections["alb1"] = [
-        ("t1", "Song 1", ["A"]), ("t2", "Song 2", ["A"]),
-    ]
+    spotify.collections["alb1"] = []
     svc = make_service(sync_db_path, spotify)
     summary = await svc.process_message(
         GUILD, CHANNEL, 101, "https://open.spotify.com/album/alb1", ALICE
     )
-    assert summary.added_track_ids == ["t1", "t2"]
-    assert window_ids(sync_db_path) == ["t2", "t1"]
+    assert summary.added_track_ids == []
+    assert summary.errors == []
+    # Nothing to add, nothing to review — the message is terminally ledgered.
+    with open_db(sync_db_path) as conn:
+        assert store.is_message_processed(conn, GUILD, 101)
+
+
+async def test_unreadable_collection_queues_for_review(sync_db_path):
+    """Editorial/unreadable playlists surface for review, terminally.
+
+    A retryable ledger status here would put the message on the auto-retry
+    sweep with no chance of a different outcome — the condition is lasting
+    (Development-mode read restriction, or an editorial playlist id).
+    """
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    spotify.collection_error = SpotifyUnusableReadError("null tracks")
+    svc = make_service(sync_db_path, spotify)
+    summary = await svc.process_message(
+        GUILD, CHANNEL, 101, "https://open.spotify.com/playlist/pl9", ALICE
+    )
+    assert summary.errors == []
+    (item,) = pending_rows(sync_db_path)
+    assert item["reason"] == REASON_COLLECTION_UNREADABLE
+    assert item["candidate_track_id"] is None
+    assert summary.unmatched_ids == [item["id"]]
+    with open_db(sync_db_path) as conn:
+        assert store.is_message_processed(conn, GUILD, 101)
 
 
 # ── YouTube resolution ────────────────────────────────────────────────
@@ -745,6 +797,174 @@ async def test_reconcile_surfaces_spotify_errors(sync_db_path):
     svc = make_service(sync_db_path, spotify)
     result = await svc.reconcile(GUILD)
     assert result == {"ok": False, "error": "Spotify API error: 500 boom"}
+    # An unusable read (500, or the resolver's all-null-tracks abort) must
+    # change nothing — neither half of the sync may run on a blind read.
+    assert spotify.add_calls == [] and spotify.remove_calls == []
+
+
+# ── The auto-retry sweep ──────────────────────────────────────────────
+
+
+def _age_ledger_row(db_path, message_id, *, to=0.0, attempts=None):
+    """Backdate a ledger row past its backoff window (and set attempts)."""
+    with open_db(db_path) as conn:
+        conn.execute(
+            "UPDATE music_playlist_messages SET processed_at = ? "
+            "WHERE guild_id = ? AND message_id = ?",
+            (to, GUILD, message_id),
+        )
+        if attempts is not None:
+            conn.execute(
+                "UPDATE music_playlist_messages SET attempts = ? "
+                "WHERE guild_id = ? AND message_id = ?",
+                (attempts, GUILD, message_id),
+            )
+
+
+def _ledger_row(db_path, message_id):
+    with open_db(db_path) as conn:
+        return conn.execute(
+            "SELECT * FROM music_playlist_messages "
+            "WHERE guild_id = ? AND message_id = ?",
+            (GUILD, message_id),
+        ).fetchone()
+
+
+def _fetcher_returning(content, author_id=ALICE):
+    async def fetch(channel_id: int, message_id: int):
+        return (content, author_id)
+    return fetch
+
+
+async def _failed_write(db_path, spotify, svc, message_id=101, track="t1"):
+    """Drive a real message into a write_failed ledger row."""
+    spotify.catalog[track] = ("Song", ["A"])
+    spotify.add_error = SpotifyResolveError("Spotify API error: 503 down")
+    summary = await svc.process_message(
+        GUILD, CHANNEL, message_id, track_url(track), ALICE
+    )
+    assert summary.write_blocked
+    assert _ledger_row(db_path, message_id)["status"] == store.STATUS_WRITE_FAILED
+    spotify.add_error = None
+
+
+async def test_retry_recovers_a_failed_write(sync_db_path):
+    """The defect: retryable rows existed, and nothing ever re-fired them."""
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101)
+
+    result = await svc.retry_failed_messages(
+        GUILD, _fetcher_returning(track_url("t1"))
+    )
+
+    assert (result.attempted, result.recovered) == (1, 1)
+    assert result.still_failing == 0
+    assert window_ids(sync_db_path) == ["t1"]
+    assert spotify.playlists[PLAYLIST] == ["t1"]
+    assert _ledger_row(sync_db_path, 101)["status"] == store.STATUS_PROCESSED
+    # The cog gets the summary to finally deliver the swallowed ✅.
+    [(channel_id, message_id, summary)] = result.results
+    assert (channel_id, message_id) == (CHANNEL, 101)
+    assert summary.added_track_ids == ["t1"]
+
+
+async def test_retry_waits_out_the_backoff_window(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)  # processed_at = now
+
+    result = await svc.retry_failed_messages(
+        GUILD, _fetcher_returning(track_url("t1"))
+    )
+    assert result.attempted == 0
+    assert window_ids(sync_db_path) == []
+
+
+async def test_retry_still_failing_keeps_row_and_backoff(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101)
+    spotify.add_error = SpotifyResolveError("Spotify API error: 503 still down")
+
+    result = await svc.retry_failed_messages(
+        GUILD, _fetcher_returning(track_url("t1"))
+    )
+
+    assert (result.attempted, result.still_failing) == (1, 1)
+    row = _ledger_row(sync_db_path, 101)
+    assert row["status"] == store.STATUS_WRITE_FAILED
+    # Attempts bumped and the failure re-timestamped: backoff window doubled.
+    assert row["attempts"] == 1
+    assert row["processed_at"] > 0.0
+
+
+async def test_retry_gone_message_ledgers_terminally(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101)
+
+    async def fetch_gone(channel_id: int, message_id: int):
+        return None
+
+    result = await svc.retry_failed_messages(GUILD, fetch_gone)
+    assert (result.attempted, result.gone) == (1, 1)
+    assert _ledger_row(sync_db_path, 101)["status"] == store.STATUS_MESSAGE_GONE
+    # Terminal: the next sweep has nothing to do.
+    result = await svc.retry_failed_messages(GUILD, fetch_gone)
+    assert result.attempted == 0
+
+
+async def test_retry_transient_fetch_failure_leaves_row_retryable(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101)
+
+    async def fetch_boom(channel_id: int, message_id: int):
+        raise RuntimeError("discord hiccup")
+
+    result = await svc.retry_failed_messages(GUILD, fetch_boom)
+    assert (result.attempted, result.still_failing) == (1, 1)
+    row = _ledger_row(sync_db_path, 101)
+    assert row["status"] == store.STATUS_WRITE_FAILED
+    assert row["attempts"] == 1
+
+
+async def test_retry_gives_up_after_the_attempt_cap(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101, attempts=8)
+
+    result = await svc.retry_failed_messages(
+        GUILD, _fetcher_returning(track_url("t1"))
+    )
+    assert result.attempted == 0
+    # The row stays retryable — a manual Re-scan still picks it up.
+    with open_db(sync_db_path) as conn:
+        assert not store.is_message_processed(conn, GUILD, 101)
+
+
+async def test_retry_respects_the_settings_gates(sync_db_path):
+    seed_settings(sync_db_path, enabled=False)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+
+    async def fetch_never(channel_id: int, message_id: int):
+        raise AssertionError("sweep must not fetch when the feature is off")
+
+    result = await svc.retry_failed_messages(GUILD, fetch_never)
+    assert result.attempted == 0
 
 
 # ── Review queue: approve / reject ────────────────────────────────────

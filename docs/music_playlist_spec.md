@@ -1,17 +1,33 @@
 # Music Playlist — a watched channel becomes a rolling Spotify playlist
 
-**Reference spec.** Describes the feature as built (2026-08-17). The design
-history, the port analysis of OpenMusicBot, and the platform scoping
-(YouTube-as-destination, Apple Music) live in the plan:
+**Reference spec.** Describes the feature as built (2026-08-17, defect fixes
+2026-08-18). The design history, the port analysis of OpenMusicBot, and the
+platform scoping (YouTube-as-destination, Apple Music) live in the plan:
 [plans/music-playlist-cog.md](plans/music-playlist-cog.md). Where that plan
 left questions open, this build resolved them:
 
-1. Album/playlist links are **skipped**, behind a default-off `expand_albums`
-   dial.
+1. An album or playlist link contributes exactly its **single most-popular
+   track** (2026-08-18, superseding the launch build's skip-behind-a-dial;
+   the `expand_albums` dial is retired, migration 170 sweeps the key).
+   `popularity` is Spotify's 0-100 recency-weighted score, *not* a play
+   count — and while the app is in Development mode Spotify nulls it
+   everywhere, so every track ties and the tie-break (disc, then track
+   number; playlist picks tie-break on track number) selects the opening
+   track. The pick self-upgrades to genuinely popularity-ranked when the
+   app's quota extension is granted, with no code change.
 2. Link parsing covers **Spotify + YouTube only** (no Apple Music /
    SoundCloud parsing this round).
 3. Rolled-off history rows are **kept** — no ageing-out yet.
 4. Source-message reactions are **on**: ✅ added, 🔁 duplicate, ❓ queued.
+
+**Development-mode caveat (as of 2026-08-18):** the Spotify app has no quota
+extension, and Spotify returns `track: null` for every playlist item read,
+403s the batched `GET /v1/tracks`, and nulls `popularity` on every surface.
+The resolver refuses to treat an all-null playlist read as an empty playlist
+(`SpotifyUnusableReadError`) — that guard is what keeps Reconcile from
+re-adding its whole window — and a playlist *link* posted in the channel
+lands in the review queue as `collection_unreadable`. Album reads
+(`album_tracks`) work.
 
 **Activation:** the feature is inert until (a) the service restarts with this
 code, and (b) the bot's Spotify account re-consents at `/spotify/authorize` —
@@ -37,10 +53,10 @@ oldest live row out.
 | `src/bot_modules/music_playlist/music_playlist_store.py` | SQL over the three tables (window reads, trims, dedupe, ledger, purge) |
 | `src/bot_modules/music_playlist/music_playlist_service.py` | The pipeline + `MusicPlaylistSettings` (config KV, `CasinoSettings` pattern, prefix `music_playlist_`) |
 | `src/bot_modules/music_playlist/embeds.py` | Pure embed builders for the member panel (accent color passed in) |
-| `src/bot_modules/cogs/music_playlist_cog.py` | Thin glue: `on_message`, `on_raw_message_delete`, `/playlist`, source reactions |
+| `src/bot_modules/cogs/music_playlist_cog.py` | Thin glue: `on_message`, `on_raw_message_delete`, `/playlist`, source reactions, the 5-minute retry sweep loop |
 | `src/web_server/routes/music_playlist.py` | Admin-gated dashboard API under `/api/music-playlist/*` |
 | `src/web_server/static/js/panels/music-playlist.js` | The dashboard panel (route id `music-playlist`, Config → Channels & Messages) |
-| `src/migrations/165_music_playlist.sql` | The three tables |
+| `src/migrations/165_music_playlist.sql` | The three tables (169 adds the ledger's `attempts`; 170 sweeps the retired dial key) |
 
 ## Settings
 
@@ -54,11 +70,22 @@ table), guild-scoped keys under the `music_playlist_` prefix:
 | `playlist_id` | `""` | Spotify playlist id; the settings route also accepts an `open.spotify.com/playlist` link or `spotify:playlist:` URI and normalizes |
 | `window_size` | `30` | Dashboard bounds 1–200 |
 | `match_threshold` | `0.74` | Confidence gate for search-resolved (YouTube) links |
-| `expand_albums` | `false` | Off = album/playlist links are skipped entirely |
 | `remove_on_delete` | `true` | Deleting the source message pulls the track |
+| `rescan_depth` | `200` | How far back Re-scan reads (dashboard bounds 1–2000) |
+
+(`expand_albums` existed at launch and was retired 2026-08-18 — collection
+links now always contribute one track; migration 170 deletes the stored key.)
 
 The owning Spotify account is a config concern (the OAuth grant), not schema
 — swapping it is a re-consent, never a migration.
+
+**Repointing `playlist_id` strands the back catalogue, by design.** The
+processed-message ledger is playlist-agnostic, so messages already ledgered
+terminal never re-process into the new playlist, and nothing already added
+moves. Decided 2026-08-18 (warning over re-keying the ledger): the panel
+confirms a playlist change with exactly this caveat, and the field hint
+carries it statically. The 22 tracks the first Re-scan put into the
+previously-configured playlist are the incident that surfaced this.
 
 ## Pipeline (per message in the watched channel)
 
@@ -67,9 +94,15 @@ The owning Spotify account is a config concern (the OAuth grant), not schema
    read), then the service re-checks `enabled` + `playlist_id` +
    channel match and the processed-message ledger (idempotency).
 2. **Parse:** Spotify track links / `spotify:track:` URIs and YouTube video
-   links. Spotify album/playlist links and YouTube playlist links are
-   **skipped** unless `expand_albums` (they aren't "a song someone posted",
-   and one album would flush the window).
+   links. A Spotify album or playlist link contributes its single
+   most-popular track (`SpotifyResolver.album_top_track` /
+   `playlist_top_track`; album popularity needs a batched `GET /v1/tracks`
+   pass, cached per album id) — one collection post can never flush the
+   window. A collection the app cannot read — an editorial (`37i9…`)
+   playlist, or the Development-mode null-track shape — raises
+   `SpotifyUnusableReadError` and is queued for review as
+   `collection_unreadable` (terminal, not retried: the condition is
+   lasting).
 3. **Resolve:** direct by id for Spotify tracks; YouTube goes
    oEmbed metadata → cleaned search queries → Spotify search →
    `select_best_match` (title/artist blend with live/remaster mismatch
@@ -77,7 +110,9 @@ The owning Spotify account is a config concern (the OAuth grant), not schema
 4. **Confidence gate:** at or above `match_threshold` the track is added
    silently; below it (or on no metadata / no candidates) the link lands in
    `music_playlist_unmatched` with its best candidate, score, and a reason
-   (`no_metadata` / `no_candidates` / `low_confidence`).
+   (`youtube_metadata_unavailable` / `no_spotify_candidates` /
+   `confidence_below_threshold`; unreadable collections arrive as
+   `collection_unreadable` with no candidate — reject is the only resolution).
 5. **Dedupe** against the *window*, not all time: a duplicate records a
    reference row born dead (`removal_reason='duplicate'`) and adds nothing —
    the reference is what keeps deletion honest (below). A song that rolled
@@ -86,8 +121,9 @@ The owning Spotify account is a config concern (the OAuth grant), not schema
    window is trimmed back to `window_size` (oldest live rows marked
    `rolled_off`; trim removals on Spotify are best-effort).
 7. **Ledger:** every processed message gets a `music_playlist_messages` row,
-   so restarts and re-scans are idempotent. Terminal statuses are `processed`
-   and `no_links`; `write_failed` and `resolve_failed` are **retryable** and
+   so restarts and re-scans are idempotent. Terminal statuses are `processed`,
+   `no_links`, and `message_gone` (the retry sweep found the message deleted);
+   `write_failed` and `resolve_failed` are **retryable** and
    read as unprocessed (see the error contract below). Note the cog's pre-gate
    means genuinely linkless messages are never ledgered — `no_links` only
    lands for link-shaped messages that resolved to nothing.
@@ -119,7 +155,13 @@ not).
 
 Every write catches `SpotifyResolveError`. Missing scope / 403 / 429 set
 `write_blocked` and carry the resolver's already-worded message, and nothing
-is inserted as live.
+is inserted as live. Transport failures are part of the same contract:
+spotipy speaks requests, so a connection reset arrives as
+`requests.exceptions.ConnectionError` — `SpotifyResolver._call` retries it on
+the 429 backoff ladder and exhausts into `SpotifyResolveError` (2026-08-18;
+before that it escaped unwrapped and the song vanished with no ledger row,
+reaction, or queue entry). The httpx token-refresh path wraps the same way so
+a blip there degrades to the client-credentials fallback.
 
 **Recovery is re-consent + Re-scan, not Reconcile.** A refused write inserts
 no track row, and `reconcile` only pushes tracks the DB already holds, so it
@@ -135,7 +177,25 @@ This is the difference between "the read-only window before re-consent costs
 you nothing" and "every song posted in it is gone" — the retryable ledger is
 what makes the former true.
 
-## Storage (migration 165)
+### The auto-retry sweep (2026-08-18)
+
+Retryable rows no longer wait for a human: a 5-minute `tasks.loop` on the cog
+visits every guild holding one (`guilds_with_retryable`) and re-runs each
+*due* message through `process_message`. Policy constants live in the
+service: exponential backoff from the latest failure (due at
+`processed_at + 300s × 2^attempts`; migration 169 adds the `attempts`
+column), batch cap 10 per guild per sweep, giving up after 8 attempts (~10h)
+— past the cap the row stays retryable and a manual Re-scan (which ignores
+`attempts`) remains the recovery for long outages like a consent gap.
+Attempts bump *before* re-processing so a crash mid-retry cannot hot-loop. A
+message the fetch finds deleted ledgers terminally as `message_gone`; other
+fetch failures leave the row for a later sweep. The sweep is **write-side
+only — no playlist read is involved**, which is why automating Reconcile
+instead would have been wrong (see the read guard below). Unlike Re-scan, a
+successful retry delivers the source-message reaction the original failure
+swallowed.
+
+## Storage (migrations 165, 169, 170)
 
 - **`music_playlist_tracks`** — window + history. Removals *mark* rows
   (`removed_at` + `removal_reason` ∈ `rolled_off` / `message_deleted` /
@@ -145,7 +205,10 @@ what makes the former true.
   lands as rows, not a schema rewrite.
 - **`music_playlist_unmatched`** — the review queue (partial index on
   pending).
-- **`music_playlist_messages`** — the idempotency ledger.
+- **`music_playlist_messages`** — the idempotency ledger; migration 169 adds
+  `attempts` (the retry sweep's counter and backoff exponent). Migration 170
+  is data-only: it deletes the retired `music_playlist_expand_albums` config
+  key.
 
 The member column is **`added_by` in both user-data tables** — deliberately
 not the plan's `posted_by`, because `added_by` is already in
@@ -214,6 +277,16 @@ The dashboard's two Maintenance buttons delegate to the live cog by name
   `?confirm_removals=true`) then performs them. Note Reconcile is **not**
   the recovery path for a read-only period — Re-scan is, per the error
   contract above.
+
+  **The read half is guarded too (2026-08-18).** Spotify can report a
+  playlist's items while nulling every `track` object (the Development-mode
+  shape); treating that as "the playlist is empty" made Reconcile compute
+  `missing = the whole window` and re-add it once per click.
+  `playlist_track_ids` now raises `SpotifyUnusableReadError` on an all-null
+  read, so Reconcile reports the error and changes nothing. An all-local
+  playlist (real track objects, no catalog ids) still reads as empty-but-
+  readable. Either way the extras set is computed from what Spotify
+  returned, so a blind read can only ever have duplicated — never deleted.
 
 ## Explicitly out (this round)
 

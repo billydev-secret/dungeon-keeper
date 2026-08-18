@@ -40,6 +40,14 @@ const REASONS = {
 
 function nowSec() { return Date.now() / 1000; }
 
+// Client-side twin of the route's playlist-id normalization, so pasting a
+// link to the *same* playlist doesn't trip the change warning.
+function extractPlaylistId(raw) {
+  const value = String(raw || "").trim();
+  const m = value.match(/(?:open\.spotify\.com\/playlist\/|spotify:playlist:)([A-Za-z0-9]+)/);
+  return m ? m[1] : value;
+}
+
 function ageCell(ts) {
   return ts ? `${fmtAge(nowSec() - ts)} ago` : "—";
 }
@@ -99,6 +107,9 @@ export function mount(container) {
 
 function render(container, status, channels) {
   const s = status.settings || {};
+  // Tracks the last-saved playlist id across saves in this panel session,
+  // for the change warning below.
+  let savedPlaylistId = s.playlist_id || "";
 
   container.textContent = "";
   const panel = document.createElement("div");
@@ -171,7 +182,9 @@ function render(container, status, channels) {
     playlistInput,
     "The Spotify playlist the window is written to. Paste an " +
       "open.spotify.com/playlist link — it's stored as the bare id. Leave " +
-      "empty to clear.",
+      "empty to clear. Changing it does not move anything: songs already " +
+      "added stay in the old playlist, and already-processed messages " +
+      "never follow the new one.",
   ));
   const watchToggles = document.createElement("div");
   watchToggles.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
@@ -200,7 +213,6 @@ function render(container, status, channels) {
   const behaviorToggles = document.createElement("div");
   behaviorToggles.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
   behaviorToggles.append(
-    checkbox("expand_albums", s.expand_albums === true, "Expand album & playlist links"),
     checkbox("remove_on_delete", s.remove_on_delete !== false, "Remove when the message is deleted"),
   );
   cardBehavior.appendChild(field(
@@ -215,11 +227,9 @@ function render(container, status, channels) {
   cardBehavior.appendChild(field(
     "Options",
     behaviorToggles,
-    "Expanding albums adds every track from an album or playlist link — " +
-      "one post can flush the whole window, which is why it ships off and " +
-      "album links are skipped. Remove-on-delete drops a track when its " +
-      "source message is deleted, unless another live message still " +
-      "references it.",
+    "Remove-on-delete drops a track when its source message is deleted, " +
+      "unless another live message still references it. Album and playlist " +
+      "links always contribute their single most popular track.",
   ));
 
   const saveRow = document.createElement("div");
@@ -255,17 +265,36 @@ function render(container, status, channels) {
       form.querySelector('[name="rescan_depth"]').focus();
       return;
     }
+    // Repointing the dial strands the back catalogue: the processed-message
+    // ledger is playlist-agnostic, so already-processed messages never
+    // follow, and nothing already added moves. Deliberate (2026-08-18) —
+    // warned about here rather than re-keying the ledger.
+    if (
+      savedPlaylistId &&
+      extractPlaylistId(playlistInput.value) !== savedPlaylistId
+    ) {
+      const ok = await confirmDialog(
+        "Songs already in the current playlist stay there, and messages " +
+          "the bot has already processed will never be re-added to the new " +
+          "one — a Re-scan only picks up messages that never landed. " +
+          "Change the target playlist?",
+        { title: "Change target playlist", confirmLabel: "Change playlist" },
+      );
+      if (!ok) return;
+    }
     try {
-      await apiPut("/api/music-playlist/settings", {
+      const saved = await apiPut("/api/music-playlist/settings", {
         enabled: fd.has("enabled"),
         channel_id: chanPicker.getValue() || "0", // string — snowflake rule
         playlist_id: playlistInput.value.trim(),
         window_size: windowSize,
         match_threshold: threshold,
-        expand_albums: fd.has("expand_albums"),
         remove_on_delete: fd.has("remove_on_delete"),
         rescan_depth: rescanDepth,
       });
+      savedPlaylistId = (saved && saved.settings
+        ? saved.settings.playlist_id
+        : extractPlaylistId(playlistInput.value)) || "";
       showStatus(saveStatus, true);
       refreshWindow(); // a changed playlist or window size redraws the table
     } catch (err) {

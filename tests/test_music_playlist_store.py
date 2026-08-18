@@ -21,12 +21,17 @@ from bot_modules.music_playlist.music_playlist_store import (
     REASON_ROLLED_OFF,
     RETRYABLE_MESSAGE_STATUSES,
     STATUS_APPROVED,
+    STATUS_MESSAGE_GONE,
     STATUS_PROCESSED,
     STATUS_REJECTED,
+    STATUS_WRITE_FAILED,
+    bump_retry_attempts,
     create_unmatched,
+    guilds_with_retryable,
     insert_track,
     is_message_processed,
     list_pending,
+    list_retryable_messages,
     live_window,
     partition_new_vs_existing,
     purge_member_rows,
@@ -123,6 +128,86 @@ def test_failed_message_stays_retryable(sync_db_path, failed_status):
             conn, GUILD, 777, CHANNEL, status=failed_status
         ) is False
         assert is_message_processed(conn, GUILD, 777)
+
+
+def _failed(conn, message_id, *, attempts=0, processed_at=1000.0):
+    record_message(
+        conn, GUILD, message_id, CHANNEL,
+        status=STATUS_WRITE_FAILED, processed_at=processed_at,
+    )
+    for _ in range(attempts):
+        bump_retry_attempts(conn, GUILD, message_id)
+
+
+def _due(conn, *, now, guild=GUILD, limit=10, max_attempts=8):
+    return list_retryable_messages(
+        conn, guild, base_delay_s=300.0, max_attempts=max_attempts,
+        limit=limit, now=now,
+    )
+
+
+def test_retry_backoff_doubles_per_attempt(sync_db_path):
+    """Due at processed_at + base * 2^attempts — nothing re-fires early."""
+    with open_db(sync_db_path) as conn:
+        _failed(conn, 601, attempts=0)   # due at 1000 + 300
+        _failed(conn, 602, attempts=2)   # due at 1000 + 1200
+        assert _due(conn, now=1200.0) == []
+        assert [r["message_id"] for r in _due(conn, now=1300.0)] == [601]
+        assert [r["message_id"] for r in _due(conn, now=2200.0)] == [601, 602]
+
+
+def test_retry_excludes_capped_and_terminal_rows(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        _failed(conn, 601, attempts=8)
+        record_message(conn, GUILD, 602, CHANNEL, status=STATUS_PROCESSED,
+                       processed_at=1000.0)
+        record_message(conn, GUILD, 603, CHANNEL, status=STATUS_MESSAGE_GONE,
+                       processed_at=1000.0)
+        assert _due(conn, now=10_000_000.0) == []
+        # Capped rows are done for the sweep, but a manual Re-scan still
+        # re-fires them — retryable never reads as processed.
+        assert not is_message_processed(conn, GUILD, 601)
+
+
+def test_retry_lists_oldest_first_and_respects_limit(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        _failed(conn, 601, processed_at=3000.0)
+        _failed(conn, 602, processed_at=1000.0)
+        _failed(conn, 603, processed_at=2000.0)
+        due = _due(conn, now=10_000.0, limit=2)
+        assert [r["message_id"] for r in due] == [602, 603]
+
+
+def test_retry_overwrite_preserves_attempts(sync_db_path):
+    """A failed retry re-ledgers the row without resetting its backoff."""
+    with open_db(sync_db_path) as conn:
+        _failed(conn, 601, attempts=3)
+        record_message(conn, GUILD, 601, CHANNEL, status=STATUS_WRITE_FAILED,
+                       processed_at=2000.0)
+        (row,) = _due(conn, now=2000.0 + 300.0 * 8)
+        assert row["attempts"] == 3
+
+
+def test_message_gone_is_terminal(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        _failed(conn, 601)
+        assert record_message(
+            conn, GUILD, 601, CHANNEL, status=STATUS_MESSAGE_GONE
+        ) is True
+        assert is_message_processed(conn, GUILD, 601)
+
+
+def test_guilds_with_retryable_rows(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        _failed(conn, 601)
+        record_message(conn, GUILD + 1, 602, CHANNEL, status=STATUS_PROCESSED)
+        # A second guild whose only retryable row is past the attempt cap
+        # doesn't earn a sweep visit.
+        record_message(conn, GUILD + 2, 603, CHANNEL,
+                       status=STATUS_WRITE_FAILED)
+        for _ in range(8):
+            bump_retry_attempts(conn, GUILD + 2, 603)
+        assert guilds_with_retryable(conn, max_attempts=8) == [GUILD]
 
 
 # ── Window + dedupe ───────────────────────────────────────────────────

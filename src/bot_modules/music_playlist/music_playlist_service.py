@@ -8,9 +8,11 @@ bot-owner Spotify client (``services/spotify_resolver``). Per message:
 1. **Parse** every supported link (``music_playlist_logic.extract_links``).
 2. **Resolve** each to a Spotify track id — direct for track links/URIs,
    by *search* for YouTube (title+channel via the keyless oEmbed endpoint,
-   cleaned and scored by ``select_best_match``). Album/playlist links are
-   skipped unless the ``expand_albums`` dial is on — one album post must not
-   flush the whole window.
+   cleaned and scored by ``select_best_match``). An album or playlist link
+   contributes exactly its **single most-popular track** — one collection
+   post must not flush the whole window, but it shouldn't contribute
+   nothing either. A collection the app cannot read (editorial playlist,
+   Development-mode null-track reads) goes to the review queue instead.
 3. **Dedupe** against the live window; duplicate posts are recorded as
    references (the 🔁 case) so the deletion rule stays honest.
 4. **Write** the survivors to Spotify, then **trim** back to ``window_size``.
@@ -64,6 +66,7 @@ from bot_modules.music_playlist.music_playlist_logic import (
 from bot_modules.services.spotify_resolver import (
     SpotifyResolveError,
     SpotifyResolver,
+    SpotifyUnusableReadError,
 )
 
 log = logging.getLogger("dungeonkeeper.music_playlist")
@@ -74,12 +77,29 @@ SETTINGS_PREFIX = "music_playlist_"
 REASON_NO_METADATA = "youtube_metadata_unavailable"
 REASON_NO_CANDIDATES = "no_spotify_candidates"
 REASON_LOW_CONFIDENCE = "confidence_below_threshold"
+# An album/playlist link whose contents this app cannot read (editorial
+# playlist, or the Development-mode null-track shape). Queued rather than
+# ledgered retryable: the condition is lasting, and the auto-retry sweep
+# re-firing it every backoff step would never converge.
+REASON_COLLECTION_UNREADABLE = "collection_unreadable"
 
 # Ledger statuses. Aliased from the store so the retryable-vs-terminal
 # classification has exactly one definition (the store's ledger reads it).
 STATUS_NO_LINKS = store.STATUS_NO_LINKS
 STATUS_WRITE_FAILED = store.STATUS_WRITE_FAILED
 STATUS_RESOLVE_FAILED = store.STATUS_RESOLVE_FAILED
+STATUS_MESSAGE_GONE = store.STATUS_MESSAGE_GONE
+
+# Auto-retry policy for retryable ledger rows (the cog's timer sweep).
+# A row is due at processed_at + BASE * 2^attempts (~5m, 10m, 20m, … from the
+# latest failure), giving up after MAX_ATTEMPTS (~10h of coverage) — past
+# that, only a manual Re-scan re-fires it, which ignores attempts and remains
+# the recovery for long outages like a consent gap. The sweep re-runs
+# process_message, so it is write-side only: no playlist read is ever
+# involved (reconcile stays a manual button for exactly that reason).
+RETRY_BASE_DELAY_S = 300.0
+RETRY_MAX_ATTEMPTS = 8
+RETRY_BATCH_LIMIT = 10
 
 # Candidate pool cap when resolving a YouTube link: stop searching once this
 # many distinct Spotify candidates have been collected (upstream's numbers).
@@ -101,6 +121,10 @@ ConnectionStatus = Literal["connected", "read_only", "not_connected"]
 # (query, limit) and the YouTube metadata fetch (video id).
 SearchTracks = Callable[[str, int], Awaitable[list[SpotifyTrack]]]
 YouTubeFetcher = Callable[[str], Awaitable[YouTubeMetadata | None]]
+# The retry sweep's Discord edge: (channel_id, message_id) → (content,
+# author_id), or None when the message (or its channel) no longer exists.
+# Transient fetch failures must RAISE, not return None — None is terminal.
+MessageFetcher = Callable[[int, int], Awaitable[tuple[str, int] | None]]
 
 
 # ── Settings (config KV, the CasinoSettings pattern) ──────────────────
@@ -118,9 +142,6 @@ class MusicPlaylistSettings:
     window_size: int = 30
     # YouTube→Spotify confidence gate; below it the link goes to review.
     match_threshold: float = 0.74
-    # Expand album/playlist links into their tracks. Default off — one album
-    # post would flush the whole window.
-    expand_albums: bool = False
     # Deleting the source message pulls the track (unless another live
     # message still references it).
     remove_on_delete: bool = True
@@ -133,7 +154,7 @@ class MusicPlaylistSettings:
 
 DEFAULT_MUSIC_PLAYLIST_SETTINGS = MusicPlaylistSettings()
 
-_BOOL_KEYS = ["enabled", "expand_albums", "remove_on_delete"]
+_BOOL_KEYS = ["enabled", "remove_on_delete"]
 _FLOAT_KEYS = ["match_threshold"]
 _STR_KEYS = ["playlist_id"]
 # Everything else on the dataclass is a plain int.
@@ -222,8 +243,6 @@ class ProcessingSummary:
     added_track_ids: list[str] = field(default_factory=list)
     duplicate_count: int = 0
     unmatched_ids: list[int] = field(default_factory=list)
-    # Album/playlist links skipped by the expand_albums dial.
-    skipped_collections: int = 0
     rolled_off_track_ids: list[str] = field(default_factory=list)
     # Nothing was attempted: feature off, wrong channel, or already in the
     # ledger. Distinct from a processed message that merely found no links.
@@ -232,6 +251,22 @@ class ProcessingSummary:
     # the message is ledgered ``write_failed`` and nothing was inserted.
     write_blocked: bool = False
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class RetrySummary:
+    """What one guild's retry sweep did — the cog logs it and reacts from it.
+
+    ``results`` carries (channel_id, message_id, summary) for every message
+    that was actually re-processed, so the cog can finally deliver the
+    ✅/🔁/❓ reaction the original failure swallowed.
+    """
+
+    attempted: int = 0
+    recovered: int = 0
+    still_failing: int = 0
+    gone: int = 0
+    results: list[tuple[int, int, ProcessingSummary]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -527,6 +562,81 @@ class MusicPlaylistService:
             )
         return summary
 
+    # -- the auto-retry sweep ----------------------------------------------
+
+    async def guilds_with_pending_retries(self) -> list[int]:
+        """Guilds the retry sweep should visit at all this tick."""
+        def _query() -> list[int]:
+            with open_db(self._db_path) as conn:
+                return store.guilds_with_retryable(
+                    conn, max_attempts=RETRY_MAX_ATTEMPTS
+                )
+        return await asyncio.to_thread(_query)
+
+    async def retry_failed_messages(
+        self, guild_id: int, fetch_message: MessageFetcher
+    ) -> RetrySummary:
+        """Re-fire due retryable ledger rows through the normal pipeline.
+
+        Write-side only: each row is re-run through ``process_message``, which
+        overwrites the ledger row with its real outcome. Attempts are bumped
+        *before* re-processing so a crash mid-retry can never hot-loop; a
+        still-failing row's refreshed ``processed_at`` restarts its backoff
+        window. A message the fetcher reports gone is ledgered terminally.
+        """
+        result = RetrySummary()
+        settings = await self.load_settings(guild_id)
+        if (
+            not settings.enabled
+            or not settings.playlist_id
+            or not settings.channel_id
+        ):
+            return result
+        rows = await asyncio.to_thread(self._due_retries, guild_id)
+        for row in rows:
+            channel_id = int(row["channel_id"])
+            message_id = int(row["message_id"])
+            await asyncio.to_thread(self._bump_attempts, guild_id, message_id)
+            result.attempted += 1
+            try:
+                fetched = await fetch_message(channel_id, message_id)
+            except Exception as exc:
+                # Transient Discord failure — the row stays for a later sweep.
+                log.warning(
+                    "music playlist retry: fetch failed for %s: %s",
+                    message_id, exc,
+                )
+                result.still_failing += 1
+                continue
+            if fetched is None:
+                await asyncio.to_thread(
+                    self._record_message, guild_id, message_id, channel_id,
+                    store.STATUS_MESSAGE_GONE,
+                )
+                result.gone += 1
+                continue
+            content, author_id = fetched
+            try:
+                summary = await self.process_message(
+                    guild_id, channel_id, message_id, content, author_id
+                )
+            except Exception:
+                log.exception(
+                    "music playlist retry: processing failed for %s", message_id
+                )
+                result.still_failing += 1
+                continue
+            if summary.skipped:
+                # A dial moved since the failure (channel/enabled/playlist) —
+                # attempted, but there is no outcome to report or react to.
+                continue
+            result.results.append((channel_id, message_id, summary))
+            if summary.write_blocked or summary.errors:
+                result.still_failing += 1
+            else:
+                result.recovered += 1
+        return result
+
     async def _resolve_link(
         self,
         guild_id: int,
@@ -551,23 +661,45 @@ class MusicPlaylistService:
             )]
 
         if link.link_type in (LinkType.SPOTIFY_ALBUM, LinkType.SPOTIFY_PLAYLIST):
-            if not settings.expand_albums:
-                summary.skipped_collections += 1
+            # A collection contributes exactly its most-popular track: one
+            # album post must not flush the window, but it shouldn't
+            # contribute nothing either. (popularity is Spotify's 0-100
+            # recency-weighted score, not a play count; while the app lacks
+            # popularity data the pick degrades to the opening track.)
+            try:
+                if link.link_type is LinkType.SPOTIFY_ALBUM:
+                    track = await self._spotify.album_top_track(link.item_id)
+                else:
+                    track = await self._spotify.playlist_top_track(link.item_id)
+            except SpotifyUnusableReadError as exc:
+                # Lasting condition (editorial playlist, unreadable contents)
+                # — visible in the review queue, terminal for the ledger. A
+                # retryable status here would put it on the auto-retry sweep
+                # forever with no chance of a different outcome.
+                unmatched_id = await asyncio.to_thread(
+                    self._queue_unmatched, guild_id,
+                    channel_id=channel_id, message_id=message_id,
+                    source_url=link.raw_url, added_by=added_by,
+                    reason=REASON_COLLECTION_UNREADABLE,
+                )
+                summary.unmatched_ids.append(unmatched_id)
+                log.info(
+                    "music playlist: collection unreadable (%s): %s",
+                    link.raw_url, exc,
+                )
                 return []
-            result = await self._spotify.resolve(link.raw_url)
-            infos: list[_TrackInfo] = []
-            for track in result.tracks:
-                # The resolver's track model carries the URL, not the id.
-                parsed = parse_spotify_url(track.spotify_url or "")
-                if parsed is None or parsed.link_type is not LinkType.SPOTIFY_TRACK:
-                    continue
-                infos.append(_TrackInfo(
-                    track_id=parsed.item_id,
-                    title=track.title,
-                    artist=", ".join(track.artists),
-                    source_url=link.raw_url,
-                ))
-            return infos
+            if track is None:  # empty collection
+                return []
+            # The resolver's track model carries the URL, not the id.
+            parsed = parse_spotify_url(track.spotify_url or "")
+            if parsed is None or parsed.link_type is not LinkType.SPOTIFY_TRACK:
+                return []
+            return [_TrackInfo(
+                track_id=parsed.item_id,
+                title=track.title,
+                artist=", ".join(track.artists),
+                source_url=link.raw_url,
+            )]
 
         # YouTube: fetch metadata, search Spotify, gate on confidence.
         metadata = await self._fetch_youtube(link.item_id)
@@ -835,6 +967,19 @@ class MusicPlaylistService:
             store.record_message(
                 conn, guild_id, message_id, channel_id, status=status
             )
+
+    def _due_retries(self, guild_id: int) -> list[Mapping[str, Any]]:
+        with open_db(self._db_path) as conn:
+            return store.list_retryable_messages(
+                conn, guild_id,
+                base_delay_s=RETRY_BASE_DELAY_S,
+                max_attempts=RETRY_MAX_ATTEMPTS,
+                limit=RETRY_BATCH_LIMIT,
+            )
+
+    def _bump_attempts(self, guild_id: int, message_id: int) -> None:
+        with open_db(self._db_path) as conn:
+            store.bump_retry_attempts(conn, guild_id, message_id)
 
     def _partition(
         self, guild_id: int, playlist_id: str, track_ids: list[str]

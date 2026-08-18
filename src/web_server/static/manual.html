@@ -1274,7 +1274,7 @@
     <h4>Posting a song</h4>
     <ul>
       <li><strong>What counts:</strong> Spotify track links and YouTube video links. A YouTube link is matched to the same song on Spotify using the video's title.</li>
-      <li><strong>Album and playlist links are skipped</strong> — one album post would flush everyone else's songs out of the window. Post individual tracks.</li>
+      <li><strong>An album or playlist link contributes one song</strong> — its most popular track (by Spotify's popularity score), so one post can never flush everyone else's songs out of the window. Post individual tracks to pick the exact songs.</li>
       <li><strong>One message can carry several links</strong> — each is handled on its own.</li>
     </ul>
 
@@ -1304,12 +1304,12 @@
       <thead><tr><th>Section</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><strong>Connection</strong></td><td>Status chip for the bot's Spotify account link, with a Connect / Re-consent button. See below for what each state means.</td></tr>
-        <tr><td><strong>Watch</strong></td><td><em>Enabled</em> (doubles as pause — turning it off stops processing without losing anything), the <em>watched channel</em>, and the <em>target playlist</em> (paste a playlist link, a <code>spotify:playlist:</code> URI, or the bare id).</td></tr>
-        <tr><td><strong>Behavior</strong></td><td><em>Window size</em> (default 30, 1–200); <em>match threshold</em> (0–1, default 0.74 — raise it and more YouTube links go to review, lower it and more get auto-added); <em>expand albums</em> (default <strong>off</strong>: album/playlist links are skipped; on, they expand into the window — one album post can flush it); <em>remove on delete</em> (default on: deleting the source message pulls the song).</td></tr>
+        <tr><td><strong>Watch</strong></td><td><em>Enabled</em> (doubles as pause — turning it off stops processing without losing anything), the <em>watched channel</em>, and the <em>target playlist</em> (paste a playlist link, a <code>spotify:playlist:</code> URI, or the bare id). Changing the target playlist doesn't move anything: songs already added stay in the old playlist, and messages the bot has already handled won't be re-added to the new one — the panel asks before saving such a change.</td></tr>
+        <tr><td><strong>Behavior</strong></td><td><em>Window size</em> (default 30, 1–200); <em>match threshold</em> (0–1, default 0.74 — raise it and more YouTube links go to review, lower it and more get auto-added); <em>re-scan depth</em> (how far back Re-scan reads); <em>remove on delete</em> (default on: deleting the source message pulls the song). Album and playlist links always contribute their single most popular track.</td></tr>
         <tr><td><strong>Live Window</strong></td><td>The current playlist, newest first, with a per-row <strong>Remove</strong>.</td></tr>
         <tr><td><strong>Review Queue</strong></td><td>Pending unmatched links: the poster, what was extracted, the best Spotify candidate and its confidence score, and the reason it queued. <strong>Approve</strong> adds it (or marks it a duplicate if it's already live); <strong>Reject</strong> discards it.</td></tr>
         <tr><td><strong>History</strong></td><td>Every song that left the window, with why: <em>rolled off</em>, <em>message deleted</em>, or <em>admin removed</em>.</td></tr>
-        <tr><td><strong>Maintenance</strong></td><td><strong>Re-scan</strong> replays the watched channel's history through the pipeline (already-processed messages are skipped, so it's safe to repeat); <strong>Reconcile</strong> squares the real Spotify playlist against the bot's window, and asks first if it would delete songs it doesn't recognise — so pointing the playlist dial at a playlist you already had can't silently strip it.</td></tr>
+        <tr><td><strong>Maintenance</strong></td><td><strong>Re-scan</strong> replays the watched channel's history through the pipeline (already-processed messages are skipped, so it's safe to repeat); <strong>Reconcile</strong> squares the real Spotify playlist against the bot's window, and asks first if it would delete songs it doesn't recognise — so pointing the playlist dial at a playlist you already had can't silently strip it. Songs that couldn't be added because of a temporary Spotify problem retry themselves automatically for around ten hours; Re-scan remains the manual recovery for anything older.</td></tr>
       </tbody>
     </table>
 
