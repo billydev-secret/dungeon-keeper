@@ -178,6 +178,19 @@ def purge_user_data(
         table="role_events",
     )
 
+    # Survivor (migration 167): purged across every season, live or archived
+    # — a game record has no Art 17(3) ground to outlive the member (register
+    # rows: docs/data_register.md). guild_id is denormalized onto both tables
+    # (so the export's standard guild scoping covers them too); coin
+    # movements live in econ_ledger, which is preserved separately.
+    for table in ("survivor_picks", "survivor_players"):
+        _delete(
+            conn,
+            f"DELETE FROM {table} WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+            table=table,
+        )
+
     # Shared todo list — ANONYMISED, NOT DELETED, and deliberately so.
     #
     # A todos row is two different things at once: the task text, which is the

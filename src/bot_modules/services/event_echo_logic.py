@@ -42,6 +42,7 @@ SOURCE_POOLS_CLOSING = "pools_closing"
 SOURCE_RAFFLE_CLOSING = "raffle_closing"
 SOURCE_QUEST_FLIP = "quest_flip"
 SOURCE_COMMUNITY_TIER = "community_tier"
+SOURCE_SURVIVOR_JOIN = "survivor_join"
 
 # How long before a deadline the "last chance" echo fires.
 CLOSING_LEAD_SECONDS = 3600
@@ -118,6 +119,16 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
     ),
     SOURCE_BOUNTY: SourceSpec(
         headline="New bounty: {name}", lead="Up for grabs", icon="🎯"
+    ),
+    # Survivor joins: the mini-advertisement (2026-08-18). Deliberately NOT
+    # exempt — joins recur all season, so skip-don't-queue is right, and the
+    # cooldowns turn an announcement-night burst into one echo instead of
+    # twenty. Per-ref dedupe (one per member per season) rides on `ref`.
+    SOURCE_SURVIVOR_JOIN: SourceSpec(
+        headline="{name} joined the Survivor pool",
+        lead="The pool grows",
+        icon="🏈",
+        cta="Join them →",
     ),
     SOURCE_AUCTION_CLOSING: SourceSpec(
         headline="Last call: {name}",

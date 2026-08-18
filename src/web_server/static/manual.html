@@ -897,7 +897,53 @@
     <!-- ══════════════════════════════════════════════════════════
          9. COMMUNITY & XP
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="community" class="section-break"><span class="section-num">9</span> Community &amp; XP</h2>
+    <h2 id="survivor" class="section-break"><span class="section-num">9</span> Survivor</h2>
+    <div class="callout callout-info">
+      <span class="callout-icon">🏗️</span>
+      <div class="callout-body">
+        <strong>Launching for the 2026 NFL season</strong>
+        <p>Survivor is being built right now, targeting Week&nbsp;1 (September&nbsp;10). Everything below describes how the game will work; the commands and buttons go live when the season announcement posts. Until then this page is a preview, not a promise you can click.</p>
+      </div>
+    </div>
+    <p>An NFL pick&rsquo;em survival pool that runs the length of the football season. Pick one NFL team to win each week, straight up. No team twice all season. If your team loses, you&rsquo;re out &mdash; last one standing takes the coin pot. Your picks are <strong>secret until the weekly reveal</strong>: the bot never shows anyone what you picked, but table talk is legal and lying is encouraged.</p>
+
+    <h4>The weekly rhythm</h4>
+    <ul>
+      <li><strong>Wednesday</strong> &mdash; the channel&rsquo;s one pinned panel reposts to the bottom with the week-open ping: the week&rsquo;s games, standings, and the pick and join buttons. Between Wednesdays the same panel quietly updates in place.</li>
+      <li><strong>Pick any time before your team kicks off.</strong> Each pick locks at <em>that game&rsquo;s</em> kickoff &mdash; until then you can change freely, and picking a Sunday team keeps your options open longer than a Thursday one.</li>
+      <li><strong>Saturday evening</strong> &mdash; if you haven&rsquo;t picked, the bot DMs you a nudge. A per-category notification toggle ships shortly after launch; until it does, closed DMs simply fall back to a channel mention.</li>
+      <li><strong>Tuesday morning</strong> &mdash; <strong>the Reckoning</strong>: one post reveals everyone&rsquo;s picks, who survived, who fell, and a eulogy for each of the fallen.</li>
+    </ul>
+
+    <h4>Staying alive</h4>
+    <ul>
+      <li><strong>Your team must win.</strong> A tie counts as a loss. A postponed or cancelled game voids your pick &mdash; you survive, and the team returns to your pool.</li>
+      <li><strong>Winning pays weekly.</strong> Everyone whose picks all won that week collects a small coin prize at the results post &mdash; the eliminated included, so the streak game stays worth playing.</li>
+      <li><strong>One strike</strong> (unless the season is configured otherwise): your first wrong week burns it 💛→🖤; the second is the end.</li>
+      <li><strong>Forget to pick</strong> and the groundskeeper assigns you the strongest team you have left &mdash; survivable, mildly embarrassing, and marked 📎 on the reveal. He covers you three times a season; the fourth time he declines, and that&rsquo;s an elimination.</li>
+    </ul>
+
+    <h4>Joining late &mdash; the Gauntlet</h4>
+    <p>The door never closes. Join in any week and the bot replays every week you missed as if you&rsquo;d picked the favorite each time, grading those picks against real results &mdash; you inherit that line&rsquo;s full fate, including its burned teams and any strikes it cost. You&rsquo;ll see the whole receipt <em>before</em> you pay the late-entry fee, which grows with each week you wait. Arrive with two losses on the line and you arrive as a ghost &mdash; which is still a live game:</p>
+
+    <h4>Death is not the end</h4>
+    <p>The eliminated get the 👻 Ghost role and keep picking every week with the same rules &mdash; the longest streak of correct picks after death wins a side-pot at season&rsquo;s end. Skipping a week resets your streak; your burned teams stay burned, so early ghosts are rich in teams and late ghosts scrape.</p>
+
+    <h4>The endgame</h4>
+    <p>The last living player takes the pot and the 🏈 Sole Survivor role. If the field ever collapses to a handful, any living player can propose <strong>the Accord</strong> &mdash; a public vote to end the season in an equal split, but only if <em>every</em> living player agrees within 24 hours. And if one savage week kills everyone at once: early in the season the week is annulled (nobody dies, burned teams stay burned); late in the season, the fallen split the pot.</p>
+
+    <h4>Commands</h4>
+    <ul>
+      <li><span class="cmd-name">/survivor pick [team]</span> &mdash; make or change this week&rsquo;s pick. With a team, the autocomplete only offers what you can legally take &mdash; unburned, playing this week, not yet kicked off. Without one, you get a two-menu panel (AFC / NFC) instead: no syntax, just pick.</li>
+      <li><span class="cmd-name">/survivor status</span> &mdash; private: your pick and its lock time, your satchel (🟢 turns 🟡 when you&rsquo;re under a dozen teams), your strikes.</li>
+      <li><span class="cmd-name">/survivor board</span> &mdash; public: the living with weeks survived, the graveyard with week of death, both pots, and the most-burned teams.</li>
+      <li><span class="cmd-name">/survivor history [member]</span> &mdash; revealed picks only, week by week. Nothing current ever leaks. The panel&rsquo;s <strong>📜 My History</strong> button is the personal version: private to you, so it also shows your current still-hidden pick.</li>
+    </ul>
+    <p>Joining happens through the <strong>🏈 Join the Season</strong> button on the channel&rsquo;s pinned panel &mdash; an ephemeral confirm shows the entry cost (and your balance, if it isn&rsquo;t free) before anything is charged.</p>
+
+    <p class="muted">Admins: the season is run entirely from the dashboard panel (Games &rarr; Survivor) &mdash; season creation, every rule dial, posting the pinned announcement, the flavor-line corpus behind the eulogies, and roster corrections. Manual game-settling lives on the same panel (for the rare stuck result &mdash; and a correction on a wrong result unwinds strikes and resurrects the wrongly eliminated); the Reckoning preview arrives with the Reckoning itself. Survivor has no admin commands in Discord at all.</p>
+
+    <h2 id="community" class="section-break"><span class="section-num">10</span> Community &amp; XP</h2>
 
     <h3 id="xp">XP System</h3>
     <p>Members earn XP by posting messages, replying, reacting to images, and spending time in voice channels. XP level-ups automatically grant configured roles and post announcements.</p>
@@ -969,7 +1015,7 @@
     <!-- ══════════════════════════════════════════════════════════
          10. ECONOMY & PERK SHOP
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="economy" class="section-break"><span class="section-num">10</span> Economy &amp; Perk Shop</h2>
+    <h2 id="economy" class="section-break"><span class="section-num">11</span> Economy &amp; Perk Shop</h2>
     <p>A per-server currency (branded per guild — name, emoji, and wallet name are all configurable) earned by being active and spent on weekly-renewing perks. There's no grinding loop of earn commands: currency flows from the activity you're already doing — logging in, hanging out in voice, playing games, answering the question of the day, and completing quests. The economy is off until an admin enables it and sets a bank channel.</p>
 
     <h3 id="economy-earning">Earning</h3>
@@ -1141,7 +1187,7 @@
     <!-- ══════════════════════════════════════════════════════════
          11. VOICE CHANNELS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="voice" class="section-break"><span class="section-num">11</span> Voice Control</h2>
+    <h2 id="voice" class="section-break"><span class="section-num">12</span> Voice Control</h2>
     <p>Voice Control is the personal voice-channel system. Members join a configured <em>hub</em> voice channel and the bot spins up a channel of their own. They have full control over it; mods and admins have override tools.</p>
 
     <h3 id="voice-user">Member / Channel Owner Commands</h3>
@@ -1177,7 +1223,7 @@
     <!-- ══════════════════════════════════════════════════════════
          12. MUSIC
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="music" class="section-break"><span class="section-num">12</span> Music</h2>
+    <h2 id="music" class="section-break"><span class="section-num">13</span> Music</h2>
     <p>Music playback in voice channels. Most commands require you to be in the bot's voice channel; <code>/play</code> joins your channel automatically. Spotify URLs require a one-time <strong>Connect Spotify</strong> from Config → Global → Integrations on the dashboard.</p>
 
     <h3 id="music-cmds">Music Commands</h3>
@@ -1278,7 +1324,7 @@
     <!-- ══════════════════════════════════════════════════════════
          13. WELLNESS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="wellness" class="section-break"><span class="section-num">13</span> Wellness</h2>
+    <h2 id="wellness" class="section-break"><span class="section-num">14</span> Wellness</h2>
     <p>The wellness system helps members maintain healthy Discord habits. Members opt in for themselves; admins can also create caps, blackouts, and exemptions on a member's behalf.</p>
 
     <h3 id="wellness-member">Member Commands</h3>
@@ -1334,7 +1380,7 @@
     <!-- ══════════════════════════════════════════════════════════
          14. DM PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="dm-perms" class="section-break"><span class="section-num">14</span> DM Permissions</h2>
+    <h2 id="dm-perms" class="section-break"><span class="section-num">15</span> DM Permissions</h2>
     <p>Members declare a DM "mode" via Discord roles (<em>Open</em>, <em>Ask</em>, or <em>Closed</em>). The bot enforces requests through a button panel and modal, automatically deduping conflicting role assignments.</p>
 
     <h3 id="dm-perms-cmds">The DM panel</h3>
@@ -1366,7 +1412,7 @@
     <!-- ══════════════════════════════════════════════════════════
          15. NO-CONTACT LIST
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="no-contact" class="section-break"><span class="section-num">15</span> No-Contact List</h2>
+    <h2 id="no-contact" class="section-break"><span class="section-num">16</span> No-Contact List</h2>
     <p>Blocking someone in Discord stops them messaging you directly — but it does not stop them
       reaching you <em>through a bot</em>. An anonymous whisper, an AMA question, a reply to your
       confession: all of those are the bot delivering something on their behalf, and Discord's block
@@ -1425,7 +1471,7 @@
     <!-- ══════════════════════════════════════════════════════════
          16. MEMBER SELF-SERVICE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="self-service" class="section-break"><span class="section-num">16</span> Member Self-Service</h2>
+    <h2 id="self-service" class="section-break"><span class="section-num">17</span> Member Self-Service</h2>
     <p>Commands intended for the average member. Mods may also use them — they aren't restricted.</p>
 
     <h3 id="self-service-cmds">Personal Commands</h3>
@@ -1495,6 +1541,7 @@
         <tr><td><strong>Economy &amp; games</strong> — wallet, every ledger entry, quests, casino bets and hands, game results</td><td>Running the economy; the ledger is a double-entry record that has to balance</td><td>Indefinitely</td></tr>
         <tr><td><strong>Things you chose to add</strong> — bio answers, birthday (day and month only, never the year), Wellness settings, Pen Pals participation, role picks</td><td>The feature you opted into</td><td>Until you remove it (archived bios of members who left are deleted after 12 months)</td></tr>
         <tr><td><strong>Pen Pals pool movement</strong> — when you joined or left the matching pool and what caused it (you signed up, you were matched, a chat ended, you left the server). Never any of what you and your pen pal said</td><td>So moderators can see whether matching is actually working — a pool that stops moving is invisible otherwise</td><td>Indefinitely; cleared in full by an erasure request</td></tr>
+        <tr><td><strong>Survivor</strong> — if you join a season: your entry, your weekly NFL picks (kept secret from everyone but admins until the weekly reveal), strikes, and when you were eliminated</td><td>Running the game — picks have to be recorded to be graded, and past seasons stay browsable as history</td><td>Indefinitely; cleared in full by an erasure request</td></tr>
         <tr><td><strong>Music playlist posts</strong> — which track you posted into the playlist channel, and any link of yours that's waiting in the review queue</td><td>Running the rolling community playlist: crediting posts, skipping duplicates, and removing a song when its message is deleted</td><td>Indefinitely (rolled-off songs are kept as playlist history); cleared in full by an erasure request</td></tr>
         <tr><td><strong>Mod worklist</strong> (moderators only) — if you're on the mod team, which tasks and <a href="#todo-chore-board">chores</a> you added and which you ticked off, and when</td><td>Running the shared <a href="#todo">todo list</a> and the chore board: crediting who did a chore and counting the days it's been kept up</td><td>Indefinitely. An erasure clears your name off them but leaves the tasks — they're the team's outstanding work, not a record about you</td></tr>
         <tr><td><strong>Anonymous features</strong> — Whisper, Confessions, Guess, and the anonymous party games</td><td>See the box below — "anonymous" means anonymous to other members, not to moderators</td><td>Varies; see below</td></tr>
@@ -1555,7 +1602,7 @@
     <!-- ══════════════════════════════════════════════════════════
          16. MODERATION CORE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="moderation" class="section-break"><span class="section-num">17</span> Moderation Core</h2>
+    <h2 id="moderation" class="section-break"><span class="section-num">18</span> Moderation Core</h2>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
@@ -1708,7 +1755,7 @@
     <!-- ══════════════════════════════════════════════════════════
          17. TICKETS, POLICIES & WARNINGS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="tickets" class="section-break"><span class="section-num">18</span> Tickets, Policies &amp; Warnings</h2>
+    <h2 id="tickets" class="section-break"><span class="section-num">19</span> Tickets, Policies &amp; Warnings</h2>
     <p>The escalation toolkit. Tickets create private channels between the member and the mod team (everything logged). Policies let mods propose and vote on rules. Warnings build a paper trail per member.</p>
 
     <div class="callout callout-warn">
@@ -1833,7 +1880,7 @@
     <!-- ══════════════════════════════════════════════════════════
          18. ANALYTICS & WATCH
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="analytics" class="section-break"><span class="section-num">19</span> Analytics &amp; Watch List</h2>
+    <h2 id="analytics" class="section-break"><span class="section-num">20</span> Analytics &amp; Watch List</h2>
 
     <div class="callout callout-tip">
       <span class="callout-icon">💡</span>
@@ -1921,7 +1968,7 @@
     <!-- ══════════════════════════════════════════════════════════
          19. AI MODERATION TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="ai-tools" class="section-break"><span class="section-num">20</span> AI Moderation Tools</h2>
+    <h2 id="ai-tools" class="section-break"><span class="section-num">21</span> AI Moderation Tools</h2>
     <p>AI-assisted investigation tools. The bot runs a local AI model (no messages leave your server) to summarize messages, flag rule violations, and answer free-form questions about a member or channel's recent history. All <code>/ai</code> commands reply privately — only the invoking admin sees the result. For always-on monitoring instead of on-demand questions, see <a href="#rules-watch">Rules Watch</a>.</p>
 
     <div class="callout callout-info">
@@ -1963,7 +2010,7 @@
     <!-- ══════════════════════════════════════════════════════════
          20. RULES WATCH
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="rules-watch" class="section-break"><span class="section-num">21</span> Rules Watch</h2>
+    <h2 id="rules-watch" class="section-break"><span class="section-num">22</span> Rules Watch</h2>
     <p>A passive AI moderation monitor. Once enabled, Rules Watch screens every public message against your server rules and sorts anything suspicious into a tiered queue: <strong>immediate</strong> (an alert embed posted to your alert channel with Confirm / False-positive buttons), <strong>digest</strong> (queued for review in batches), and <strong>logged</strong> (recorded but not alerted). Labeling events as violations or false positives tunes the signal over time — the stats command shows your false-positive rate. Mods can also right-click any message → <strong>Apps → Report Rule Violation</strong> to hand-file it as a confirmed example the AI missed.</p>
 
     <div class="callout callout-info">
@@ -2022,7 +2069,7 @@
     <!-- ══════════════════════════════════════════════════════════
          TODO LIST & BOARD
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="todo" class="section-break"><span class="section-num">22</span> Todo List &amp; Boards</h2>
+    <h2 id="todo" class="section-break"><span class="section-num">23</span> Todo List &amp; Boards</h2>
     <p>A shared worklist for the mod team. Tasks can be added from Discord or from the dashboard, and everything lands in the same list. It is moderator-only end to end — members never see it unless you post the board in a channel they can read.</p>
     <p>There are <strong>two</strong> boards you can post, and they answer different questions. The <a href="#todo-board">todo board</a> shows everything outstanding. The <a href="#todo-chore-board">mod chore board</a> shows only recurring chores, as a daily "did we do it today?" scoreboard — so a daily "post the QOTD" isn't buried among "fix the quote bot" and "rotate the tunnel token". You can post either, or both, but <strong>not in the same channel</strong>.</p>
 
@@ -2079,7 +2126,7 @@
     <!-- ══════════════════════════════════════════════════════════
          (legacy section anchor preserved) SETUP & PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="setup" class="section-break"><span class="section-num">23</span> Setup &amp; Permissions</h2>
+    <h2 id="setup" class="section-break"><span class="section-num">24</span> Setup &amp; Permissions</h2>
 
     <h3 id="dashboard-pickers">Dashboard channel &amp; role pickers</h3>
     <p>Anywhere the dashboard asks you to choose a channel, role or member, the box
@@ -2165,7 +2212,7 @@
     <!-- ══════════════════════════════════════════════════════════
          22. CLEANUP & TAGGING
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="server-ops" class="section-break"><span class="section-num">24</span> Server Upkeep</h2>
+    <h2 id="server-ops" class="section-break"><span class="section-num">25</span> Server Upkeep</h2>
     <p>Ongoing housekeeping and community upkeep: scheduled cleanup, automatic threading, listing-site bump reminders, member tagging, unanswered-greeting alerts, lull-reviving questions, and channel hiding. The background schedulers run continuously; most configuration lives on the web dashboard.</p>
 
     <h3 id="auto-delete">Cleanup</h3>
@@ -2397,7 +2444,7 @@
     <!-- ══════════════════════════════════════════════════════════
          23. CONTENT & COMMS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="content-comms" class="section-break"><span class="section-num">25</span> Content &amp; Comms</h2>
+    <h2 id="content-comms" class="section-break"><span class="section-num">26</span> Content &amp; Comms</h2>
     <p>Bot-maintained content and outbound messaging: self-assign role menus, dashboard-authored documents posted into channels, and scheduled announcements. All three are built on the dashboard and post persistent messages that keep working across bot restarts.</p>
 
     <h3 id="role-menus">Role Menus</h3>
@@ -2457,7 +2504,7 @@
     <!-- ══════════════════════════════════════════════════════════
          24. NETWORK ANALYTICS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="network-analytics" class="section-break"><span class="section-num">26</span> Network Analytics</h2>
+    <h2 id="network-analytics" class="section-break"><span class="section-num">27</span> Network Analytics</h2>
     <p>Interactive graph and matrix views of who interacts with whom. Useful for spotting cliques, isolated members, and invite trees.</p>
 
     <div class="callout callout-info">
@@ -2471,7 +2518,7 @@
     <!-- ══════════════════════════════════════════════════════════
          24. CONFIGURATION REFERENCE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="config" class="section-break"><span class="section-num">27</span> Configuration Reference</h2>
+    <h2 id="config" class="section-break"><span class="section-num">28</span> Configuration Reference</h2>
     <p>Every persistent bot setting lives on the web dashboard. The retired <code>/config</code> slash command, <code>/welcome_preview</code>, and <code>/leave_preview</code> have all been replaced by interactive dashboard panels with live preview.</p>
 
     <div class="callout callout-info">
@@ -2542,7 +2589,7 @@
     <!-- ══════════════════════════════════════════════════════════
          25. QA TRACKER
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="qa-tracker" class="section-break"><span class="section-num">28</span> QA Tracker</h2>
+    <h2 id="qa-tracker" class="section-break"><span class="section-num">29</span> QA Tracker</h2>
     <p>A volunteer testing crew for the bot itself. Each new change lands as a <strong>QA card</strong> in the testing channel — an embed carrying the test checklist with <strong>Pass / Fail / Blocked</strong> buttons.</p>
     <ul>
       <li>Members holding the configured QA-crew role click a verdict. <strong>Fail</strong> requires a "what went wrong" note, which lands in the card's thread.</li>
@@ -2563,7 +2610,7 @@
     <!-- ══════════════════════════════════════════════════════════
          26. DEVELOPER / OWNER TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="owner-tools" class="section-break"><span class="section-num">29</span> Developer / Owner Tools</h2>
+    <h2 id="owner-tools" class="section-break"><span class="section-num">30</span> Developer / Owner Tools</h2>
     <p>Bot-owner-only utilities. The owner is configured at bot startup; owner status is checked inside the handler regardless of Discord permissions.</p>
 
     <div class="cmd-block">

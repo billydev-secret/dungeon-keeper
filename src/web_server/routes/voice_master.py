@@ -11,10 +11,7 @@ from pydantic import BaseModel
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.moderation import write_audit
-from bot_modules.voice_master.embeds import (
-    build_admin_audit_mirror_embed,
-    build_howto_embed,
-)
+from bot_modules.voice_master.embeds import build_howto_embed
 from bot_modules.voice_master.logic import (
     build_force_clear_profile_summary,
     build_force_delete_summary,
@@ -45,6 +42,7 @@ from web_server.deps import (
     require_perms,
     run_query,
 )
+from web_server.helpers import mirror_admin_action_to_mod_log
 
 router = APIRouter()
 log = logging.getLogger("dungeonkeeper.web.voice_master")
@@ -99,23 +97,19 @@ async def _post_mod_log_mirror(
 
     Parity with the audit embeds the retired /voice-admin force-* commands
     posted; the web audit log row is written separately by the caller.
+    Thin delegate to the shared mirror since 2026-08-17 — the plumbing
+    (channel resolution, embed shape, best-effort send) lives once in
+    ``web_server.helpers`` and is shared with Survivor's admin surface.
     """
-    mod_channel_id = ctx.guild_config(guild.id).mod_channel_id
-    if not mod_channel_id:
-        return
-    channel = guild.get_channel(mod_channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        return
-    embed = build_admin_audit_mirror_embed(
+    await mirror_admin_action_to_mod_log(
+        ctx,
+        guild.id,
+        domain="🛡️ Voice Control",
         action=action,
         summary=summary,
-        actor_name=f"{user.username} (web)",
-        actor_id=int(user.user_id),
+        user=user,
+        log=log,
     )
-    try:
-        await channel.send(embed=embed)
-    except (discord.Forbidden, discord.HTTPException):
-        log.exception("voice_master web: failed to mirror admin audit to mod-log")
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,8 @@ export const HELP_GROUPS = [
     { page: "help-games",       anchor: "games",           label: "Games Night" },
     { page: "help-guess",       anchor: "guess",           label: "Guess Who" },
     { page: "help-photo",       anchor: "photo-challenge", label: "Photo Challenge" },
+    { page: "help-survivor",    anchor: "survivor",        label: "Survivor",
+      keywords: "nfl football pickem survival pool gauntlet ghost reckoning" },
     { page: "help-whisper",     anchor: "whisper",         label: "Whisper" },
     { page: "help-confessions", anchor: "confessions",     label: "Confessions" },
     { page: "help-pen-pals",    anchor: "pen-pals",        label: "Pen Pals" },

@@ -49,6 +49,11 @@ from bot_modules.services import pools_logic, pools_metrics
 from bot_modules.services import welcome_service
 from bot_modules.services.risky_roll import formatters as risky_formatters
 from bot_modules.services.risky_roll import models as risky_models
+from bot_modules.survivor import embeds as survivor_embeds
+from bot_modules.survivor import reckoning as survivor_reckoning
+from bot_modules.survivor.gauntlet import GauntletFate as _Fate
+from bot_modules.survivor.gauntlet import ReplayWeek as _ReplayWeek
+from bot_modules.survivor.logic import OpenGame as _SurvivorGame
 
 # Deliberately no builder defaults to this value.
 ACCENT = discord.Color(0x5A32A8)
@@ -610,6 +615,97 @@ CASES = [
         ),
         discord.Color(services_embeds.DM_PRIMARY),
     ),
+    # ── survivor ─────────────────────────────────────────────────────────
+    case(
+        "survivor.status",
+        lambda **kw: survivor_embeds.build_status_embed(
+            _survivor_status(), season_name="S", **kw
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.pick_confirm",
+        lambda **kw: survivor_embeds.build_pick_confirm_embed(
+            _SurvivorGame(
+                team="SEA", opponent="NE", is_home=True, game_id="g",
+                week=1, kickoff_ts=1_700_000_000.0,
+            ),
+            _survivor_status(), changed=False, **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.board",
+        lambda **kw: survivor_embeds.build_board_embed(
+            {
+                "week": 1,
+                "alive": [{"user_id": 1, "strikes_used": 0, "weeks_survived": 2}],
+                "graveyard": [{"user_id": 2, "eliminated_week": 1}],
+                "pots": {"main": 8000, "ghost": 2000},
+                "most_burned": [("SEA", 2)],
+            },
+            lambda uid: f"soul {uid}", season_name="S", **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.reckoning",
+        lambda **kw: survivor_reckoning.build_reckoning_embed(
+            {
+                "week": 1, "before": 3, "after": 2,
+                "pots": {"main": 8000, "ghost": 2000},
+                "toll_line": "the toll", "stragglers": 0,
+                "arrivals": [], "eulogy_lines": ["{name} fell."],
+                "deaths": [{"user_id": 2, "teams": "NE 💀", "state": "💀",
+                            "died": True, "source": "picks",
+                            "fatal_team": "NE"}],
+                "ledger": [{"user_id": 1, "teams": "SEA ✅", "state": "",
+                            "died": False, "source": None,
+                            "fatal_team": None}],
+                "streak_strip": [], "streak_record": 0,
+            },
+            lambda uid: f"soul {uid}", season_name="S", **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.history",
+        lambda **kw: survivor_embeds.build_history_embed(
+            [{"week": 1, "team": "SEA", "result": "win",
+              "auto_assigned": False}],
+            display_name="Loaf", revealed_week=1, own=False, **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.gauntlet_receipt",
+        lambda **kw: survivor_embeds.build_gauntlet_receipt_embed(
+            _Fate(
+                weeks=(_ReplayWeek(1, "KC", "g1", "win", 0, False),),
+                elapsed_count=1, strikes_used=0, dead=False,
+                death_week=None, burned=("KC",), fee=50,
+            ),
+            buyin=0, **kw,
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.panel_enrolling",
+        lambda **kw: survivor_embeds.build_panel_embed(
+            season_name="S", entrants=3, buyin=0, gauntlet_mode=False, **kw
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    case(
+        "survivor.panel_active",
+        lambda **kw: survivor_embeds.build_panel_embed(
+            season_name="S", entrants=9, buyin=0, gauntlet_mode=True,
+            week=3, games=[{"home": "SEA", "away": "NE",
+                            "kickoff_ts": 1_700_000_000.0}],
+            alive=7, eliminated=2, picked=5, pot=8150, ghost_pot=2000, **kw
+        ),
+        discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
     # ── music playlist (passthrough-only: `color` is a required keyword) ─
     case(
         "music_playlist.window",
@@ -631,6 +727,17 @@ CASES = [
         None,
     ),
 ]
+
+
+def _survivor_status() -> dict:
+    return {
+        "status": "alive", "strikes_used": 0, "strikes_allowed": 1,
+        "eliminated_week": None, "week": 1,
+        "pick": {"team": "SEA", "game_id": "g", "auto_assigned": False,
+                 "result": None},
+        "pick_locked": False, "pick_kickoff_ts": 1_700_000_000.0,
+        "satchel_count": 31, "satchel_low": False,
+    }
 
 # Passthrough-only builders (fallback None) are excluded from the fallback test.
 FALLBACK_CASES = [p for p in CASES if p.values[1] is not None]
@@ -749,8 +856,8 @@ KNOWN_UNCOVERED = {
     "bot_modules.services.risky_roll.formatters.build_pending_question_summary",
     "bot_modules.services.risky_roll.formatters.build_question_reply_content",
     "bot_modules.services.risky_roll.formatters.build_rolloff_embed",
+    "bot_modules.services.embeds.build_admin_mirror_embed",
     "bot_modules.starboard.embeds.build_starboard_embed",
-    "bot_modules.voice_master.embeds.build_admin_audit_mirror_embed",
     "bot_modules.voice_master.embeds.build_claim_done_embed",
     "bot_modules.voice_master.embeds.build_claim_prompt_embed",
     "bot_modules.voice_master.embeds.build_howto_embed",

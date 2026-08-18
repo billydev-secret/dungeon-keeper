@@ -64,28 +64,6 @@ def build_profile_show_embed(
     return embed
 
 
-def build_admin_audit_mirror_embed(
-    *,
-    action: str,
-    summary: str,
-    actor_name: str,
-    actor_id: int,
-) -> discord.Embed:
-    """Embed posted to mod-log for any web admin force-* action.
-
-    ``action`` is the short label (e.g. ``"force-delete"``); the title
-    prefixes with ``Voice Control —`` so the audit feed groups our
-    actions visually with other domain entries.
-    """
-    embed = discord.Embed(
-        title=f"🛡️ Voice Control — {action}",
-        description=summary,
-        color=discord.Color.orange(),
-    )
-    embed.set_footer(text=f"by {actor_name} ({actor_id})")
-    return embed
-
-
 def build_claim_prompt_embed(
     *, channel_name: str, color: "discord.Color | None" = None
 ) -> discord.Embed:

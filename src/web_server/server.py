@@ -326,6 +326,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(chat_revive_routes.router, prefix="/api", tags=["chat-revive"])
 
+    from web_server.routes import survivor as survivor_routes
+
+    app.include_router(survivor_routes.router, prefix="/api", tags=["survivor"])
+
     from web_server.routes import no_contact as no_contact_routes
 
     app.include_router(no_contact_routes.router, prefix="/api", tags=["no-contact"])
