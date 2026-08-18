@@ -1,15 +1,13 @@
 """THE RECKONING — the Tuesday post, in three acts (spec §2.5, stage 5).
 
-Act 1 the toll (week, survivors before → after, pot, a rotating flavor
-line, the gate for new arrivals). Act 2 the ledger — the ONLY place picks
-ever appear — plus the Ghost Streak strip. Act 3 the eulogies, one
-name-slotted flavor line per death, source-aware: the groundskeeper's
-decline and the leaver's exit have their own fixed lines.
+Act 1 the toll (week, survivors before → after, pot, the gate for new
+arrivals). Act 2 the ledger — the ONLY place picks ever appear — plus the
+Ghost Streak strip. Act 3 the eliminations, one factual line per death,
+source-aware. Copy is just-the-facts throughout (Billy, 2026-08-18 — the
+flavor corpus and its rotation were removed with the feature).
 
 Everything here is pure assembly over a connection; the weekly task in
 ``survivor/tasks.py`` does the posting, role swaps, and condolence DMs.
-Flavor rotation is deterministic (week-keyed modulo), so a preview renders
-exactly what Tuesday will post.
 """
 
 from __future__ import annotations
@@ -19,20 +17,22 @@ import sqlite3
 import discord
 
 from bot_modules.services.branding_service import DEFAULT_ACCENT
-from bot_modules.services.survivor_service import eliminate_player, list_flavor
+from bot_modules.services.survivor_service import eliminate_player
 from bot_modules.survivor.logic import (
     elapsed_weeks,
     ghost_streaks,
     pot_totals,
 )
 
-# Fixed lines for deaths that aren't the corpus's job (§1.2, §6.14). The
-# groundskeeper survives the 2026-08-18 standard-sports copy pass — he is
-# the spec's own auto-pick character and travels fine; the other two lines
-# are server-neutral.
-GROUNDSKEEPER_LINE = "the groundskeeper stopped covering for **{name}**."
+# One factual line per elimination source (§1.2, §6.14). Just-the-facts
+# (2026-08-18): the football death states team, result, and week; the three
+# special sources state their cause plainly.
+FATAL_LINE = "**{name}** — {team} lost. Eliminated in Week {week}."
+GROUNDSKEEPER_LINE = (
+    "**{name}** — out of auto-assigns, no pick made. Eliminated."
+)
 MISSED_LINE = "**{name}** never picked. Eliminated."
-LEAVER_LINE = "**{name}** left the server mid-season. 🚪"
+LEAVER_LINE = "**{name}** left the server mid-season. Eliminated."
 
 _RESULT_ICON = {
     "win": "✅", "loss": "💀", "tie": "🤝", "void": "🌫️", None: "⏳",
@@ -48,17 +48,9 @@ def next_reckoning_week(conn: sqlite3.Connection, season: dict, now: float) -> i
     return None
 
 
-def rotate(lines: list[str], key: int) -> str:
-    """Deterministic corpus rotation — the same week always draws the same
-    line, so the panel preview matches the Tuesday post exactly."""
-    if not lines:
-        return ""
-    return lines[key % len(lines)]
-
-
 def _fill(line: str, *, name: str = "", team: str = "", week: int = 0) -> str:
     # str.replace, never str.format — a brace in a nickname must not crash
-    # a eulogy (the corpus's own contract since stage 1).
+    # an elimination line (the contract since stage 1).
     return (
         line.replace("{name}", name)
         .replace("{team}", team)
@@ -180,10 +172,6 @@ def build_reckoning_data(
         }
         (deaths if died_this_week else ledger).append(entry)
 
-    flavor_toll = [f["line"] for f in list_flavor(conn, season["guild_id"], "toll")]
-    flavor_none = [f["line"] for f in list_flavor(conn, season["guild_id"], "no_death")]
-    flavor_eulogy = [f["line"] for f in list_flavor(conn, season["guild_id"], "eulogy")]
-
     # The gate reports gauntlet walkers only: joins since the last Reckoning
     # AND after the season's first kickoff. Pre-kickoff enrollees never
     # walked anything — the week-1 gate saying they did was the mockup's
@@ -220,14 +208,8 @@ def build_reckoning_data(
         "before": alive_now + len(deaths),
         "after": alive_now,
         "pots": pot_totals(conn, season),
-        "toll_line": (
-            _fill(rotate(flavor_toll, week), week=week)
-            if deaths
-            else _fill(rotate(flavor_none, week), week=week)
-        ),
         "deaths": deaths,
         "ledger": ledger,
-        "eulogy_lines": flavor_eulogy,
         "arrivals": arrivals,
         "stragglers": stragglers,
         "streak_strip": strip,
@@ -245,18 +227,16 @@ def _joined_ts(joined_at: str) -> float:
 
 
 def eulogy_for(entry: dict, data: dict, name: str, index: int) -> str:
-    """Act 3, one line per death — fixed lines for the groundskeeper's
-    decline, the missed-pick ruleset, and the leaver; the corpus for the
-    honest football deaths, rotated deterministically."""
+    """Act 3, one factual line per death, keyed on its source."""
     if entry["source"] == "cap":
         return _fill(GROUNDSKEEPER_LINE, name=name)
     if entry["source"] == "missed":
         return _fill(MISSED_LINE, name=name)
     if entry["source"] == "left":
         return _fill(LEAVER_LINE, name=name)
-    line = rotate(data["eulogy_lines"], data["week"] * 7 + index)
     return _fill(
-        line, name=name, team=entry["fatal_team"] or "—", week=data["week"]
+        FATAL_LINE, name=name, team=entry["fatal_team"] or "—",
+        week=data["week"],
     )
 
 
@@ -271,9 +251,9 @@ def build_reckoning_embed(
         title=f"🏈 Week {week} — THE RECKONING",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
-    # Act 1 — the toll.
+    # Act 1 — the toll. Numbers only (just-the-facts, 2026-08-18): the
+    # survivors delta says whether the week took anyone.
     toll = (
-        f"{data['toll_line']}\n"
         f"👥 Survivors **{data['before']} → {data['after']}** · "
         f"Pot **{data['pots']['main']:,}** · Ghost Pot **{data['pots']['ghost']:,}**"
     )

@@ -29,10 +29,6 @@ from bot_modules.survivor.logic import burned_teams, kickoff_ts
 
 log = logging.getLogger("dungeonkeeper.survivor")
 
-# The auto-assign-cap elimination's fixed line (§1.2) — deliberately not in
-# the flavor corpus; it is THE line for this one path.
-GROUNDSKEEPER_DECLINE = "the groundskeeper stopped covering for {name}."
-
 # How long past the final kickoff the groundskeeper may still assign. Covers
 # the 10-minute poll cadence plus restart slack; beyond it the closer is deep
 # in progress and an assignment would carry mid-game information no member's

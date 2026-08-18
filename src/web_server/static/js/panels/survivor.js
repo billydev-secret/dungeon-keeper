@@ -1,12 +1,12 @@
 // Survivor — the feature's ENTIRE admin surface (docs/survivor_spec.md §3;
 // decided 2026-08-17/18: zero admin commands in Discord). Season lifecycle,
-// every §5 dial, This Week's Games with manual settle, the flavor corpus,
-// and the roster's eliminate/revive all live here.
+// every §5 dial, This Week's Games with manual settle, and the roster's
+// eliminate/revive all live here. (The flavor corpus was removed 2026-08-18
+// — the Reckoning is just-the-facts now.)
 import { api } from "../api.js";
 import {
   apiPost,
   apiPut,
-  apiDelete,
   esc,
   showStatus,
   guardForm,
@@ -19,8 +19,6 @@ import {
   resolveMembers,
   memberNameLookup,
 } from "../config-helpers.js";
-
-const FLAVOR_CATEGORIES = ["eulogy", "toll", "no_death", "annul"];
 
 const ENUMS = {
   tie_rule: [["loss", "Tie counts as a loss"], ["survive", "Tie survives"]],
@@ -45,7 +43,7 @@ export function mount(container) {
 // shape, so those two actions rebuild everything — through mountAsync, whose
 // error-with-retry state catches a failed refetch instead of leaving an
 // unhandled rejection and a stale panel. Everything else re-renders only its
-// own card (below), so unsaved rules-form edits survive roster/flavor work.
+// own card (below), so unsaved rules-form edits survive roster work.
 function refreshAll(container) {
   return mountAsync(container, () => render(container), {
     errorMsg: "Couldn’t load the Survivor settings.",
@@ -73,7 +71,6 @@ async function render(container) {
       <div data-week-zone></div>
       <div data-roster-zone></div>
       <div data-rules-zone></div>
-      <div data-flavor-zone></div>
     </div>
   `;
 
@@ -94,7 +91,6 @@ async function render(container) {
       container.querySelector("[data-roster-zone]"), overview.players,
     );
   }
-  renderFlavorCard(container.querySelector("[data-flavor-zone]"), overview.flavor);
 }
 
 // ── season simulator (synthetic seasons, year ≥ 2090) ─────────────────
@@ -676,98 +672,3 @@ async function renderRosterCard(zone, players) {
   };
 }
 
-// ── flavor corpus ─────────────────────────────────────────────────────
-
-function renderFlavorCard(zone, flavor) {
-  flavor = flavor || [];
-  const byCategory = new Map(FLAVOR_CATEGORIES.map((cat) => [cat, []]));
-  for (const f of flavor) byCategory.get(f.category)?.push(f);
-
-  const sections = FLAVOR_CATEGORIES.map((cat) => {
-    const lines = byCategory.get(cat);
-    const items = lines.map((f) => `
-      <tr>
-        <td style="${f.active ? "" : "opacity:.45;"}">${esc(f.line)}</td>
-        <td style="white-space:nowrap;">
-          <button type="button" class="btn btn-small"
-            data-toggle="${f.id}" data-active="${f.active ? 1 : 0}">
-            ${f.active ? "Retire" : "Restore"}</button>
-          <button type="button" class="btn btn-small btn-danger"
-            data-delete="${f.id}">Delete</button>
-        </td>
-      </tr>`).join("");
-    return `
-      <details ${cat === "eulogy" ? "open" : ""}>
-        <summary><strong>${cat}</strong> (${lines.filter((f) => f.active).length} active)</summary>
-        <div style="overflow-x:auto;">
-          <table class="table"><tbody>${items ||
-      `<tr><td class="field-hint">no lines yet — seeded at season creation</td></tr>`}
-          </tbody></table>
-        </div>
-      </details>`;
-  }).join("");
-
-  zone.innerHTML = `
-    <div class="card">
-      <div class="section-label">Flavor Corpus</div>
-      <div class="field-hint">The Reckoning’s voice. Slots:
-        <code>{name}</code> the member, <code>{team}</code> the fatal pick,
-        <code>{week}</code> the week number. Retired lines stay for later;
-        the starter corpus seeds itself at season creation.</div>
-      ${sections}
-      <form data-flavor-form class="form mt-8">
-        <div class="row-8" style="flex-wrap:wrap;">
-          <select name="category">
-            ${FLAVOR_CATEGORIES.map((cat) => `<option value="${cat}">${cat}</option>`).join("")}
-          </select>
-          <input type="text" name="line" required maxlength="500"
-            placeholder="a new line for the meadow…" style="flex:1; min-width:240px;" />
-          <button type="submit" class="btn btn-primary">Add Line</button>
-          <span data-status></span>
-        </div>
-      </form>
-    </div>
-  `;
-
-  const status = zone.querySelector("[data-status]");
-  // Scoped like the roster card: this card refetches and rebuilds alone
-  // (unsaved rules edits survive), onclick assignment keeps the zone's
-  // handler single across re-renders, and a failed refetch lands in the
-  // still-present status line.
-  const refreshFlavor = async () => {
-    const fresh = await api("/api/survivor/overview");
-    renderFlavorCard(zone, fresh.flavor);
-  };
-  zone.querySelector("[data-flavor-form]").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    try {
-      await apiPost("/api/survivor/flavor", {
-        category: fd.get("category"),
-        line: fd.get("line"),
-      });
-      await refreshFlavor();
-    } catch (err) {
-      showStatus(status, false, err.message);
-    }
-  });
-  zone.onclick = async (e) => {
-    const toggle = e.target.closest("[data-toggle]");
-    const del = e.target.closest("[data-delete]");
-    try {
-      if (toggle) {
-        await apiPut(`/api/survivor/flavor/${toggle.dataset.toggle}`, {
-          active: toggle.dataset.active !== "1",
-        });
-      } else if (del) {
-        if (!window.confirm("Delete this line for good? Retiring keeps it around.")) return;
-        await apiDelete(`/api/survivor/flavor/${del.dataset.delete}`);
-      } else {
-        return;
-      }
-      await refreshFlavor();
-    } catch (err) {
-      showStatus(status, false, err.message);
-    }
-  };
-}

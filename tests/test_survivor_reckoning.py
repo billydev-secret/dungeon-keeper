@@ -1,7 +1,7 @@
 """Tests for survivor/reckoning.py + tasks.py decisions + ghost streaks.
 
 Stages 5 and 6a of docs/plans/survivor.md: the three-act data assembly,
-deterministic flavor rotation, leaver elimination (§6.14), the weekly-task
+leaver elimination (§6.14), the weekly-task
 due logic over guild-local clocks, and the streak rules as decided
 2026-08-17 (miss breaks, void neither, unsettled pending).
 """
@@ -22,12 +22,10 @@ from bot_modules.services.survivor_service import (
 from bot_modules.survivor import tasks
 from bot_modules.survivor.logic import ghost_streaks, join_season, place_pick
 from bot_modules.survivor.reckoning import (
-    GROUNDSKEEPER_LINE,
     build_reckoning_data,
     eulogy_for,
     eliminate_leavers,
     next_reckoning_week,
-    rotate,
 )
 from bot_modules.survivor.settle import run_settle
 from tests.db_template import migrated_db
@@ -104,25 +102,15 @@ def test_next_reckoning_week_gates_on_elapsed(db):
         assert next_reckoning_week(conn, season, AFTER_W1) is None  # wk2 open
 
 
-def test_rotation_is_deterministic_and_cycles():
-    lines = ["a", "b", "c"]
-    assert [rotate(lines, k) for k in (1, 2, 3, 4)] == ["b", "c", "a", "b"]
-    assert rotate([], 5) == ""
-
-
 # ── the three acts ─────────────────────────────────────────────────────
 
 
 def test_reckoning_data_toll_ledger_deaths(db):
     with open_db(db) as conn:
         season = _season(conn, strikes=0)
-        from bot_modules.services.survivor_service import seed_default_flavor
-
-        seed_default_flavor(conn, GID)
         _settled_week1(conn, season)
         data = build_reckoning_data(conn, season, 1, AFTER_W1)
         assert (data["before"], data["after"]) == (2, 1)
-        assert data["toll_line"] and "{" not in data["toll_line"]
         # Deaths sorted first, states honest.
         assert [e["user_id"] for e in data["deaths"]] == [2]
         assert data["deaths"][0]["fatal_team"] == "NE"
@@ -131,12 +119,11 @@ def test_reckoning_data_toll_ledger_deaths(db):
         assert data["stragglers"] == 0
 
 
-def test_reckoning_no_deaths_uses_no_death_corpus(db):
+def test_reckoning_no_deaths_is_just_the_numbers(db):
+    # Just-the-facts (2026-08-18): a clean week carries no special line —
+    # the survivors delta in the embed says it.
     with open_db(db) as conn:
         season = _season(conn)
-        from bot_modules.services.survivor_service import seed_default_flavor
-
-        seed_default_flavor(conn, GID)
         join_season(conn, season, 1, NOW)
         place_pick(conn, season, 1, 1, "SEA", NOW)
         _finalize(conn, "g-thu", "SEA")
@@ -144,34 +131,32 @@ def test_reckoning_no_deaths_uses_no_death_corpus(db):
         run_settle(conn, season, AFTER_W1)
         data = build_reckoning_data(conn, season, 1, AFTER_W1)
         assert data["deaths"] == []
-        assert data["toll_line"]  # a no_death line, filled
-        assert "{week}" not in data["toll_line"]
+        assert "toll_line" not in data
 
 
 @pytest.mark.parametrize(
     ("source", "needle"),
     [
-        pytest.param("cap", "groundskeeper", id="cap-fixed-line"),
+        pytest.param("cap", "out of auto-assigns", id="cap-fixed-line"),
         pytest.param("missed", "never picked", id="missed-fixed-line"),
         pytest.param("left", "left the server", id="leaver-fixed-line"),
     ],
 )
 def test_eulogy_fixed_lines_by_source(source, needle):
     entry = {"source": source, "fatal_team": None, "user_id": 1}
-    line = eulogy_for(entry, {"week": 3, "eulogy_lines": ["{name} fell."]},
-                      "Loaf", 0)
+    line = eulogy_for(entry, {"week": 3}, "Loaf", 0)
     assert needle in line and "Loaf" in line
 
 
-def test_eulogy_corpus_fills_slots_and_rotates():
-    data = {"week": 3, "eulogy_lines": ["{name} rode {team} in wk {week}.",
-                                        "{name} fell."]}
+def test_eulogy_football_death_states_the_facts():
+    # Just-the-facts (2026-08-18): team, result, week — no corpus.
     entry = {"source": "picks", "fatal_team": "NE", "user_id": 1}
-    line0 = eulogy_for(entry, data, "Loaf", 0)
-    line1 = eulogy_for(entry, data, "Loaf", 1)
-    assert line0 != line1
-    assert "{" not in line0 + line1  # every slot filled
-    assert GROUNDSKEEPER_LINE not in (line0, line1)
+    line = eulogy_for(entry, {"week": 3}, "Loaf", 0)
+    assert line == "**Loaf** — NE lost. Eliminated in Week 3."
+    assert "{" not in line
+    # A brace in a nickname must not crash or leak a slot (stage-1 contract).
+    braced = eulogy_for(entry, {"week": 3}, "{Loaf}", 0)
+    assert "{Loaf}" in braced
 
 
 def test_leavers_die_at_the_reckoning(db):
@@ -462,8 +447,8 @@ def test_reckoning_embed_shows_the_prize_line():
     data = {
         "week": 1, "before": 3, "after": 3,
         "pots": {"main": 8000, "ghost": 2000},
-        "toll_line": "clean sheet", "stragglers": 0, "arrivals": [],
-        "eulogy_lines": [], "deaths": [], "ledger": [],
+        "stragglers": 0, "arrivals": [],
+        "deaths": [], "ledger": [],
         "streak_strip": [], "streak_record": 0,
         "weekly_win": {"count": 14, "amount": 25},
     }

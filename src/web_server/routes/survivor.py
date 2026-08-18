@@ -1,7 +1,7 @@
 """Survivor dashboard API — the feature's entire admin surface.
 
 Survivor's configuration is dashboard-managed per the 2026-08-17 decision
-(spec §3): season lifecycle, every §5 dial, the flavor corpus, and roster
+(spec §3): season lifecycle, every §5 dial, and roster
 eliminate/revive all live here, admin-gated. There is NO Discord-side admin
 surface at all (decided 2026-08-18) — manual settle and the Reckoning
 preview arrive on this panel with the settle engine in stage 4.
@@ -55,14 +55,6 @@ class CreateSeasonBody(BaseModel):
     season_year: int = Field(ge=2020, le=2100)
 
 
-class FlavorBody(BaseModel):
-    category: str
-    line: str = Field(min_length=1, max_length=500)
-
-
-class FlavorUpdateBody(BaseModel):
-    line: str | None = Field(default=None, min_length=1, max_length=500)
-    active: bool | None = None
 
 
 class EliminateBody(BaseModel):
@@ -147,19 +139,17 @@ async def overview(request: Request, _: AuthenticatedUser = _ADMIN):
         with ctx.open_db() as conn:
             season = svc.get_active_season(conn, guild_id)
             players = svc.list_players(conn, season["id"]) if season else []
-            flavor = svc.list_flavor(conn, guild_id, include_inactive=True)
             archived = [
                 s for s in svc.list_seasons(conn, guild_id) if s["status"] == "complete"
             ]
-        return season, players, flavor, archived
+        return season, players, archived
 
-    season, players, flavor, archived = await run_query(_q)
+    season, players, archived = await run_query(_q)
     return {
         "season": _season_json(season) if season else None,
         "players": [
             {**p, "user_id": str(p["user_id"])} for p in players
         ],
-        "flavor": flavor,
         "archived_seasons": [
             {"id": s["id"], "name": s["name"], "season_year": s["season_year"]}
             for s in archived
@@ -183,7 +173,6 @@ async def create_season(
     def _create():
         with ctx.open_db() as conn:
             season_id = svc.create_season(conn, guild_id, body.name, body.season_year)
-            seeded = svc.seed_default_flavor(conn, guild_id)
             # Durable audit row in the same transaction (the Discord mirror
             # is best-effort and log.txt is wiped every boot).
             write_audit(
@@ -193,9 +182,9 @@ async def create_season(
                        "year": body.season_year, "via": "web"},
             )
             conn.commit()
-        return season_id, seeded
+        return season_id
 
-    season_id, seeded = await _service_call(run_query(_create))
+    season_id = await _service_call(run_query(_create))
 
     # Roles only after the season exists (spec §3.3): create any of the three
     # that are missing and store their ids in the season's config. Degraded
@@ -261,7 +250,6 @@ async def create_season(
     )
     return {
         "season": _season_json(season),
-        "flavor_seeded": seeded,
         "role_report": role_report,
         "schedule_report": schedule_report,
     }
@@ -769,81 +757,6 @@ async def update_config(
         user=user,
     )
     return {"config": _config_json(merged)}
-
-
-# ── flavor corpus ─────────────────────────────────────────────────────
-
-
-@router.post("/survivor/flavor")
-async def add_flavor(
-    request: Request, body: FlavorBody, user: AuthenticatedUser = _ADMIN
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        with ctx.open_db() as conn:
-            flavor_id = svc.add_flavor(conn, guild_id, body.category, body.line)
-            conn.commit()
-        return flavor_id
-
-    flavor_id = await _service_call(run_query(_q))
-    await _mirror_mod_log(
-        ctx, guild_id,
-        action="flavor added",
-        summary=f"{body.category}: {body.line[:120]}",
-        user=user,
-    )
-    return {"id": flavor_id}
-
-
-@router.put("/survivor/flavor/{flavor_id}")
-async def update_flavor(
-    request: Request,
-    flavor_id: int,
-    body: FlavorUpdateBody,
-    user: AuthenticatedUser = _ADMIN,
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        with ctx.open_db() as conn:
-            changed = svc.update_flavor(
-                conn, guild_id, flavor_id, line=body.line, active=body.active
-            )
-            conn.commit()
-        return changed
-
-    changed = await _service_call(run_query(_q))
-    if not changed:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such flavor line.")
-    await _mirror_mod_log(
-        ctx, guild_id, action="flavor updated", summary=f"line #{flavor_id}", user=user
-    )
-    return {"ok": True}
-
-
-@router.delete("/survivor/flavor/{flavor_id}")
-async def delete_flavor(
-    request: Request, flavor_id: int, user: AuthenticatedUser = _ADMIN
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    def _q():
-        with ctx.open_db() as conn:
-            deleted = svc.delete_flavor(conn, guild_id, flavor_id)
-            conn.commit()
-        return deleted
-
-    deleted = await run_query(_q)
-    if not deleted:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such flavor line.")
-    await _mirror_mod_log(
-        ctx, guild_id, action="flavor deleted", summary=f"line #{flavor_id}", user=user
-    )
-    return {"ok": True}
 
 
 # ── roster ────────────────────────────────────────────────────────────

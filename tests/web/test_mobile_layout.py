@@ -490,7 +490,6 @@ _SURVIVOR_SEASON_STUB = {
         {"user_id": "2234567890123456789", "status": "ghost",
          "strikes_used": 2, "eliminated_week": 3},
     ],
-    "flavor": [],
     "archived_seasons": [],
 }
 

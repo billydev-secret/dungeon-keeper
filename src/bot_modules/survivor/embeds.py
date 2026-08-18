@@ -6,8 +6,8 @@ rides the shared accent contract (tests/test_embed_accent_contract.py — one
 
 Copy voice (decided 2026-08-18): **standard sports register** — Title Case
 labels per the style guide, scoreboard framing, light humor. These strings
-ship to every server; per-guild personality lives in the guild-scoped
-flavor corpus and the branding kit (accent + bot identity), never here.
+ship to every server; per-guild personality is the branding kit (accent +
+bot identity) alone — the flavor corpus was removed 2026-08-18.
 """
 
 from __future__ import annotations

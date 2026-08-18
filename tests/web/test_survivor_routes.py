@@ -195,47 +195,6 @@ def test_overview_player_ids_are_strings(authed_client, fake_ctx, web_db):
     assert over["players"][0]["user_id"] == str(BIG_ID)
 
 
-# ── flavor ────────────────────────────────────────────────────────────
-
-
-def test_flavor_crud_status_codes(authed_client, fake_ctx):
-    _create_season(authed_client)
-    resp = authed_client.post(
-        "/api/survivor/flavor", json={"category": "toll", "line": "week {week}."}
-    )
-    assert resp.status_code == 200
-    flavor_id = resp.json()["id"]
-
-    # Empty update: 422 (a caller mistake), NOT 404 (the line exists).
-    assert (
-        authed_client.put(f"/api/survivor/flavor/{flavor_id}", json={}).status_code
-        == 422
-    )
-    assert (
-        authed_client.put(
-            f"/api/survivor/flavor/{flavor_id}", json={"active": False}
-        ).status_code
-        == 200
-    )
-    assert (
-        authed_client.put(
-            "/api/survivor/flavor/999999", json={"active": False}
-        ).status_code
-        == 404
-    )
-    assert (
-        authed_client.delete(f"/api/survivor/flavor/{flavor_id}").status_code == 200
-    )
-    assert authed_client.delete("/api/survivor/flavor/999999").status_code == 404
-
-
-def test_flavor_bad_category_is_422(authed_client, fake_ctx):
-    resp = authed_client.post(
-        "/api/survivor/flavor", json={"category": "limerick", "line": "x"}
-    )
-    assert resp.status_code == 422
-
-
 # ── roster ────────────────────────────────────────────────────────────
 
 
