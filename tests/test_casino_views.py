@@ -53,23 +53,30 @@ def _rows(view) -> list[list[str]]:
         # Todo #87: a 5-wide row wraps on narrow clients and drops a short
         # "derby line"; three per row fits every client. The full house must
         # keep that shape through the #98 repack.
-        pytest.param((), [3, 3, 3], id="full-house-keeps-3-3-3"),
+        # Mines (2026-08-16) made it ten, which is exactly where the hub
+        # runs out of room: four game rows plus the utility row IS
+        # Discord's five, with nothing spare. The nine-table shape still
+        # has to be the 3/3/3 todo #87 chose.
+        pytest.param((), [3, 3, 2, 2], id="full-house-of-ten"),
+        pytest.param(("mines",), [3, 3, 3], id="nine-keeps-3-3-3"),
         # Todo #98: rows come from the enabled set, so a closed table
         # shortens two rows by one rather than leaving one row alone.
-        pytest.param(("keno",), [3, 3, 2], id="eight"),
-        pytest.param(("war", "keno"), [3, 2, 2], id="seven"),
-        pytest.param(("dice", "war", "keno"), [3, 3], id="six"),
+        pytest.param(("mines", "keno"), [3, 3, 2], id="eight"),
+        pytest.param(("mines", "war", "keno"), [3, 2, 2], id="seven"),
+        pytest.param(("mines", "dice", "war", "keno"), [3, 3], id="six"),
         # Billy's report: derby + baccarat closed used to leave Roulette
         # full-width and alone on row 1.
-        pytest.param(("derby", "baccarat"), [3, 2, 2], id="lone-roulette"),
         pytest.param(
-            ("derby", "baccarat", "dice", "war", "keno"),
+            ("mines", "derby", "baccarat"), [3, 2, 2], id="lone-roulette"
+        ),
+        pytest.param(
+            ("mines", "derby", "baccarat", "dice", "war", "keno"),
             [2, 2],
             id="four-tables-open",
         ),
         pytest.param(
-            ("slots", "blackjack", "roulette", "derby", "baccarat", "dice",
-             "war", "keno"),
+            ("mines", "slots", "blackjack", "roulette", "derby", "baccarat",
+             "dice", "war", "keno"),
             [1],
             id="one-table-open",
         ),

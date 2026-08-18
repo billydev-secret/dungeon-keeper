@@ -71,6 +71,8 @@ export const HELP_GROUPS = [
   { heading: "Voice & Music", items: [
     { page: "help-voice", anchor: "voice",     label: "Voice Control" },
     { page: "help-music", anchor: "music",     label: "Music" },
+    { page: "help-music-playlist", anchor: "music-playlist", label: "Music Playlist",
+      keywords: "spotify rolling playlist songs tracks watched channel youtube links review unmatched window" },
   ]},
   { heading: "Moderation", items: [
     { page: "help-moderation",  anchor: "moderation",  label: "Moderation Core" },
@@ -83,7 +85,7 @@ export const HELP_GROUPS = [
     { page: "help-usage-telemetry", anchor: "usage-telemetry", label: "Command & Panel Usage" },
     { page: "help-ai",          anchor: "ai-tools",    label: "AI Moderation Tools" },
     { page: "help-rules-watch", anchor: "rules-watch", label: "Rules Watch" },
-    { page: "help-todo",        anchor: "todo",        label: "Todo List & Board" },
+    { page: "help-todo",        anchor: "todo",        label: "Todo List & Boards" },
   ]},
   { heading: "Server Admin", items: [
     { page: "help-setup",          anchor: "setup",             label: "Setup & Permissions" },

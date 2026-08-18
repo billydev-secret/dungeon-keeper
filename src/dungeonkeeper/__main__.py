@@ -231,6 +231,7 @@ def main() -> None:
         "bot_modules.cogs.dev_cog",
         "bot_modules.cogs.starboard_cog",
         "bot_modules.cogs.music_cog",
+        "bot_modules.cogs.music_playlist_cog",
         "bot_modules.cogs.voice_master_cog",
         "bot_modules.cogs.guess_cog",
         "bot_modules.cogs.quote_cog",

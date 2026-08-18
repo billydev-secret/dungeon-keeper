@@ -4,6 +4,11 @@ Shared per-guild todo list for the mod team. Tasks arrive from a slash command,
 from a sticky Discord board, from the web dashboard, or from a recurring
 schedule; they all land in the same list, curated from the dashboard.
 
+The list has **two** Discord boards. The original shows everything outstanding;
+the **mod chore board** shows only recurring chores, as a daily "did we do it
+today?" scoreboard. They are configured the same way and **may never share a
+channel** — see "Two boards, never one channel" below.
+
 ## Surfaces
 
 | Surface | Type | Permission | Purpose |
@@ -11,10 +16,11 @@ schedule; they all land in the same list, curated from the dashboard.
 | `/todo task:<text>` | Slash | Moderator (server only) | Add a free-form task |
 | Board **➕ Add Task** | Button + modal | Moderator | Add a task with optional notes |
 | Board **✅ Complete** | Button + select | Moderator | Tick one or several tasks off |
+| Chore board **✅ Mark Done** | Button + select | Moderator | Tick off today's chores |
 | `GET /api/todos` | Web | Mod | List todos (newest first, capped at 200) + board placement |
 | `POST /api/todos` | Web | Mod | Create a free-form todo as the authenticated user |
 | `POST /api/todos/{id}/complete` | Web | Mod | Mark a todo complete |
-| `PUT /api/todos/board` | Web | **Admin** | Post / move / remove the Discord board |
+| `PUT /api/todos/board` | Web | **Admin** | Post / move / remove either board (`kind`: `all` \| `chores`) |
 | `GET/POST /api/todos/recurring` | Web | Mod | List / create recurring definitions |
 | `PUT/DELETE /api/todos/recurring/{id}` | Web | Mod | Edit / delete a definition |
 | `POST /api/todos/recurring/{id}/{pause,resume,run-now}` | Web | Mod | Row actions |
@@ -25,6 +31,7 @@ the same `has_mod_or_admin_permissions` rule as the other mod-tier commands
 
 Board *placement* is the one admin-gated action: choosing a channel makes the
 bot post into it, which is server configuration rather than worklist curation.
+Both boards go through the same endpoint, distinguished by `kind`.
 
 ## Behavior
 
@@ -38,7 +45,8 @@ Rejects DMs. Refreshes the board if one is posted.
 
 A single message the bot keeps at the **bottom of a configured channel**.
 
-- **Contents.** Pending tasks only, **oldest first** — the longest-waiting task
+- **Contents.** Outstanding tasks only — neither completed nor written off —
+  **oldest first** — the longest-waiting task
   sits at the top where it nags. Each row is one padded monospace cell
   (`` `#12  Post QOTD` ``) followed by a live `<t:…:R>` age outside the code
   span, per `docs/embed_style_guide.md`. Rows spawned by a recurring definition
@@ -69,6 +77,74 @@ A single message the bot keeps at the **bottom of a configured channel**.
 The view is a static-`custom_id` persistent view (`todo_board_add`,
 `todo_board_complete`) re-registered in `cog_load`, so buttons survive restarts.
 
+### The mod chore board
+
+A second sticky panel, same machinery, different question. The all-todos board
+asks "what is outstanding?"; this one asks **"did we do it today?"**
+
+- **Contents.** One row per *active* recurring definition — its **latest**
+  instance, done or not — in `time_of_day` order, so it reads like a shift
+  checklist rather than by an id nobody thinks in. Each row is a state box
+  (✅ / ⬜) plus the chore in a padded monospace cell, then who ticked it and a
+  live `<t:…:R>`, then a 🔥 streak. Paused definitions are left out: a
+  chore parked for the holidays is not one the team is failing, and showing it
+  with a dead streak reads as a reproach.
+- **A scoreboard, not a pending list.** A ticked chore *stays* on the board
+  until the next reset replaces it. A board that removes the answer the moment
+  it is yes cannot answer the question it exists for.
+- **Streaks.** Consecutive completed instances, ending at the first missed one.
+  Shown from two up — a 🔥 1 on everything that happened once is noise that
+  hides a real run. **Today does not count against you:** the newest instance is
+  skipped while it is still outstanding, or a chore due at 09:00 would read as a
+  broken streak every morning until someone ticked it.
+- **How a miss reaches the board — `missed_previous`, not `chore_state`.** The
+  reset writes the old instance off and spawns its replacement *in the same
+  call*, so the latest instance — the only one this board renders — is never
+  the missed one. Rendering `chore_state == "missed"` therefore showed three
+  consecutive undone days as a plain ⬜ with the footer's missed count
+  structurally pinned at zero, while `missed_at` was being written correctly
+  the whole time. So each row also carries whether the instance *before* it was
+  written off, rendered as `❌ missed last run` on a still-open row and cleared
+  the moment the chore is ticked again. `chore_state`'s `missed` branch stays
+  as defence for a row `mark_missed` closed with nothing spawned behind it,
+  which the service permits.
+- **Footer.** `N of M done`, plus `· K missed last run` when any are. Counts
+  every active chore including those past the visible window, so it can't
+  disagree with the dashboard about how the day went.
+- **One button, `todo_chore_board_complete`.** No Add: a chore is a *recurring
+  definition* with a cadence, created on the dashboard — the thing the other
+  board's Add button makes is a one-off task, which is exactly what this board
+  exists not to show. The picker offers only chores still open; a done one has
+  nothing to tick and a missed one is closed business `complete_todo` refuses.
+
+### Two boards, never one channel
+
+A Discord channel has exactly one bottom slot, and both boards want it. Put
+them in the same channel and every member message wakes both: they race, and
+whichever lands second owns the bottom while the other sits buried above it —
+the one state a sticky panel exists to avoid, and one no amount of activity in
+the channel repairs.
+
+Neither board sets `restick_on_bot`, so this is *not* the repost storm
+`docs/reviews/2026-08-06-sticky-panel-machinery.md` F1 found between the casino
+and bounty hubs — they cannot chase each other's reposts at all. It is quieter
+and permanent. Measured with that file's harness over 10 member
+messages, the split between the two panels varies run to run (3/7 placements in
+one run, 9/10 in another; with three panels one took 0 of 10) — so the
+committed test asserts the part that doesn't vary, **one bottom, one winner**,
+rather than a send count that would make it flaky.
+
+The sticky layer cannot arbitrate this — someone has to lose — so
+`todo_service.conflicting_board` refuses the configuration where a human can
+still read the reason, and `PUT /api/todos/board` answers **409** naming the
+board already in that channel. The check runs *before* anything is posted, and
+catches the collision from either direction. Unposting a board frees its
+channel for the other.
+
+> Not covered: `economy_auction_service.sticky_panel_channels` still does not
+> know about either todo board, so `/bank auction start` won't warn about them.
+> Tracked as todo #103.
+
 ### Recurring tasks
 
 Definitions live on the dashboard and materialise a normal todo row when due.
@@ -82,17 +158,34 @@ Definitions live on the dashboard and materialise a normal todo row when due.
   task is just a task. Column names mirror `games_scheduled` and the time math
   is `scheduled_games_service.compute_next_run`, so the two can't drift.
   Guild-local time comes from the fixed `tz_offset_hours` (no DST).
-- **Skip-if-pending.** If the previous instance is still outstanding, the new
-  occurrence does *not* create a second row — `next_run_at` advances and
-  `last_status` records `skipped_pending`. A chore nobody did all week reads as
-  one ageing task rather than seven identical ones.
+- **Daily reset.** When an occurrence comes round and the previous instance is
+  still outstanding, that instance is **written off** (`todos.missed_at`) and a
+  fresh row spawns in its place. Exactly one row per definition is ever
+  outstanding, so nothing stacks — and unlike the skip-if-pending rule this
+  replaced, the day that did not happen leaves a durable record.
+
+  Skip-if-pending kept one ageing row instead: Monday's untouched QOTD was still
+  Monday's row on Wednesday, you could not tell which day it stood for, one tick
+  credited both, and no streak was computable because a skipped day left no row
+  at all. The trade is more rows for an answerable question.
+
+  A written-off row is **closed**: `pending_todos`/`pending_count` exclude it (so
+  it also leaves the all-todos board), and `complete_todo` refuses it — you
+  cannot tick yesterday's box today, which would invent a completion and put a
+  hole in the streak either side of it.
 - **Catch-up.** `compute_next_run(after=…)` advances past every missed slot to
-  the next future one, so three days of downtime spawns one row on boot.
+  the next future one, so three days of downtime spawns one row on boot — and
+  writes off *one* instance, not three. Downtime is not evidence that a chore
+  was skipped; the record deliberately covers only the days the bot was
+  watching.
 - **Resume** recomputes `next_run_at` from now, so a long pause doesn't come
   back and immediately fire a stale slot.
 - **Run now** adds one instance immediately and changes nothing else: not the
-  entry's `status`, not its `next_run_at`. Skip-if-pending still applies, so
-  pressing it twice can't stack duplicates. It deliberately does *not* go
+  entry's `status`, not its `next_run_at`. **Skip-if-pending still applies
+  here**, deliberately: a manual add is not a day boundary, so pressing the
+  button twice can neither stack duplicates nor write the first press off as
+  missed — that would fabricate a failure out of a double click and the streak
+  would wear it. It deliberately does *not* go
   through `spawn_due` — that scans every guild, so driving it from one guild's
   request would spawn other guilds' due chores and rewrite their `next_run_at`
   with the requesting guild's UTC offset. Leaving `status` alone likewise means
@@ -103,16 +196,30 @@ Definitions live on the dashboard and materialise a normal todo row when due.
 
 ### Web list
 
-The dashboard shows pending and completed lists for the active guild, plus the
-board card and the recurring-task table. Names are resolved against the active
+The dashboard shows pending and completed lists for the active guild, plus both
+board cards and the recurring-task table. Names are resolved against the active
 guild. Completion records the moderator who clicked complete.
+
+A written-off recurring row shows a **Missed** chip and no Mark Complete button,
+and is excluded from the Pending filter — the same rule the boards and
+`pending_count` use, so the three can't disagree. The stat tiles count all
+three states independently rather than deriving one by subtraction, and a
+**Missed** tile appears only when there is something in it.
+
+Creating, editing, deleting, pausing or resuming a **definition** repaints the
+chore board directly. The 60s loop is not a backstop for it: that only repaints
+guilds where a spawn or a write-off happened, and the chore board is one row per
+definition — so without the explicit repaint an added chore stays invisible and
+a deleted one leaves a ghost row until the next scheduled fire, a day away for a
+daily and a week for a weekly.
 
 ## Permissions
 
 - Discord: moderator-gated. `/todo` and both board buttons require
   administrator, manage_guild, or manage_channels; `/todo` rejects DMs.
 - Web: every endpoint requires `moderator`; `PUT /api/todos/board` additionally
-  requires `admin`. The panel disables the board card off `can_manage_board`.
+  requires `admin`, for either `kind`. The panel disables both board cards off
+  `can_manage_board`.
 
 ## User-visible errors
 
@@ -125,6 +232,10 @@ guild. Completion records the moderator who clicked complete.
 | Task is longer than 500 characters | "Task must be 500 characters or fewer." |
 | Web completion targets a missing or already-completed row | HTTP 404: "Todo not found or already completed." |
 | Board channel doesn't exist in the guild | HTTP 400: "That channel doesn't exist here." |
+| Board `kind` is neither `all` nor `chores` | HTTP 400: "Unknown board." |
+| The other todo board already holds the chosen channel | HTTP 409: "The server todo board is already in that channel. Two sticky boards can't share one — they'd take turns being buried. Move that one first, or pick a different channel." |
+| Chore board **Mark Done** with nothing open | "Every chore is already ticked off. ✨" |
+| Chore board button clicked by a non-moderator | "Only moderators can tick off chores." |
 | Bot can't post in the chosen channel | HTTP 400: "I can't post in that channel — check my Send Messages and Embed Links permissions." |
 | Board action while the bot is disconnected | HTTP 503: "The bot isn't connected right now — try again in a moment." |
 | Weekly recurrence with no days | HTTP 400: "Pick at least one day of the week." |
@@ -148,16 +259,27 @@ guild. Completion records the moderator who clicked complete.
   DM the creator; a due recurring task doesn't ping anyone.
 - **No in-Discord configuration.** Board placement and recurring definitions are
   dashboard-only, per the project's configuration rule.
+- **No per-chore reset rule.** The reset is uniform. A per-definition "carry
+  over vs. reset" switch was considered and dropped: two rules doubles what a
+  streak, a footer, and a missed row each mean, for a distinction a mod team can
+  express by choosing the cadence instead.
+- **No backfill of missed days.** `missed_at` starts empty; chores that ran
+  before migration 166 have no history, so their streaks begin at zero.
 
 ## Stored data
 
 Three tables, all per-guild:
 
 - `todos` — headline, optional description and source URL, creator id, creation
-  timestamp, completion timestamp + completer id, and `recurring_id`
-  provenance. No per-user PII beyond Discord ids.
-- `todo_board` — `(guild_id PK, channel_id, message_id, updated_at)`; zeroes
-  mean "not posted".
+  timestamp, completion timestamp + completer id, `recurring_id` provenance, and
+  `missed_at` (migration 166) for a recurring row the daily reset wrote off. No
+  per-user PII beyond Discord ids. Registered in `docs/data_register.md`.
+- `todo_board` — `(guild_id, kind)` PK, `channel_id`, `message_id`,
+  `updated_at`; zeroes mean "not posted". `kind` is `all` or `chores`
+  (migration 166 widened the key from `guild_id` alone; existing rows became
+  `all`). One row per board keeps a board's channel and message ids atomic,
+  which was the original reason for the table and survives the composite key
+  unchanged.
 - `todo_recurring` — definition, cadence, `next_run_at` cache, `status`,
   `last_run_at`/`last_status`.
 

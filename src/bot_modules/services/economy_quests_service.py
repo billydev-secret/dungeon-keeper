@@ -229,11 +229,12 @@ def _check_trigger_config(
     are **auto-tracked only**: they REQUIRE a trigger kind, cannot be sign-off
     (month-end tier settlement is automatic), and never take trigger words.
 
-    The anonymous kinds (:data:`quests.ANON_KINDS` — confession,
-    confession_reply, whisper) additionally forbid sign-off: a sign-off claim
-    posts a bank-channel card naming the claimant, which is timing-correlatable
-    against the anonymous feed — exactly the deanonymization the silent
-    auto-claim and the register-feed suppression exist to avoid.
+    The privacy-suppressed kinds (:data:`quests.ANON_KINDS`) additionally
+    forbid sign-off: a sign-off claim posts a bank-channel card naming the
+    claimant, which is timing-correlatable against whatever the kind was
+    keeping quiet — exactly the exposure the silent auto-claim and the
+    register-feed suppression exist to avoid. For ``guess_post`` that card
+    would name the answer to a live round.
     """
     if trigger_kind and trigger_kind not in quests.TRIGGER_KINDS:
         raise ValueError(f"unknown trigger kind: {trigger_kind!r}")
@@ -334,6 +335,10 @@ def update_quest(
         raise KeyError(f"unknown quest field(s): {sorted(unknown)}")
     if not values:
         return
+    # ``signoff`` belongs here even though it isn't trigger-shaped: the
+    # suppressed kinds forbid it, and a patch of nothing but {"signoff": true}
+    # (the API sends only what changed) would otherwise skip the guard and turn
+    # sign-off on for a quest that must never post a claim card.
     if {
         "qtype",
         "trigger_kind",
@@ -341,6 +346,7 @@ def update_quest(
         "target_count",
         "target_min",
         "target_max",
+        "signoff",
     } & set(values):
         quest = get_quest(conn, guild_id, quest_id)
         if quest is not None:
@@ -1528,6 +1534,8 @@ def maybe_pay_set_bonus(
     user_id: int,
     qtype: str,
     period: str,
+    *,
+    anon: bool = False,
 ) -> int:
     """Pay the clear-the-board bonus if this claim finished the set.
 
@@ -1587,7 +1595,11 @@ def maybe_pay_set_bonus(
         user_id,
         bonus,
         "quest_bonus",
-        meta={"qtype": qtype, "period": period},
+        meta=(
+            {"qtype": qtype, "period": period, "anon": 1}
+            if anon
+            else {"qtype": qtype, "period": period}
+        ),
         booster=False,
         multiplier=settings.booster_multiplier,
     )
@@ -1907,6 +1919,8 @@ def _fire_daily_completion(
     quest: sqlite3.Row,
     period: str,
     booster: bool,
+    *,
+    anon: bool = False,
 ) -> None:
     """One paid daily claim = one tick of the ``daily_complete`` meta kind.
 
@@ -1945,6 +1959,7 @@ def _fire_daily_completion(
         local_day=local_day,
         occurrence=f"{int(quest['id'])}:{period}",
         booster=booster,
+        anon=anon,
     )
 
 
@@ -1959,6 +1974,7 @@ def fire_trigger_quests(
     occurrence: str | None,
     booster: bool,
     channel_ids: tuple[int, ...] | None = None,
+    anon: bool = False,
 ) -> list[tuple[sqlite3.Row, ClaimOutcome]]:
     """Claim every active quest with this trigger kind for one member.
 
@@ -2038,6 +2054,7 @@ def fire_trigger_quests(
                 user_id,
                 period=period,
                 booster=booster,
+                anon=anon,
             )
         except ValueError:
             continue  # already claimed this period/occurrence, or window closed
@@ -2232,6 +2249,7 @@ def claim_quest(
     *,
     period: str,
     booster: bool,
+    anon: bool = False,
 ) -> ClaimOutcome:
     """Claim a daily/weekly/event quest for a member in a given period.
 
@@ -2298,12 +2316,20 @@ def claim_quest(
     if signoff:
         return ClaimOutcome(state="pending", claim_id=claim_id, paid=0)
 
-    paid = _credit_reward(conn, settings, quest, user_id, booster=booster, claim_id=claim_id)
+    # Everything this claim writes inherits the suppression, not just the
+    # payout row: the board-clear bonus carries no quest id for the drain's
+    # filter to match on, and the daily_complete tick carries the *other*
+    # quest's id. Both land in this transaction, so an unstamped one posts at
+    # the second the anonymous action happened — the leak itself, one hop out.
+    anon = anon or str(quest["trigger_kind"] or "") in quests.ANON_KINDS
+    paid = _credit_reward(
+        conn, settings, quest, user_id, booster=booster, claim_id=claim_id, anon=anon
+    )
     maybe_pay_set_bonus(
-        conn, settings, guild_id, user_id, str(quest["qtype"]), period
+        conn, settings, guild_id, user_id, str(quest["qtype"]), period, anon=anon
     )
     _fire_daily_completion(
-        conn, settings, guild_id, user_id, quest, period, booster
+        conn, settings, guild_id, user_id, quest, period, booster, anon=anon
     )
     return ClaimOutcome(state="paid", claim_id=claim_id, paid=paid)
 
@@ -2316,6 +2342,7 @@ def _credit_reward(
     *,
     booster: bool,
     claim_id: int,
+    anon: bool = False,
 ) -> int:
     guild_id = int(quest["guild_id"])
     reward_xp = int(quest["reward_xp"])
@@ -2338,6 +2365,11 @@ def _credit_reward(
     if reward < 1:
         return 0
     meta: dict[str, object] = {"quest_id": int(quest["id"]), "claim_id": claim_id}
+    if anon:
+        # Belt and braces over the quest_id filter, which resolves anon quests
+        # live: delete the quest and its undrained rows would suddenly post.
+        # The stamp travels with the row.
+        meta["anon"] = 1
     kind = str(quest["trigger_kind"] or "")
     if kind:
         # ⚡ Weekly spotlight: this week's featured kind pays double. Checked
@@ -2888,9 +2920,10 @@ def settle_community_weekly(
                 )
             paid_members += 1
 
-    # Anonymous kinds pay flat tiers only: surfacing the top confessors /
-    # repliers / whisperers (in the bonus ledger or the paste-ready beat
-    # sheet) would deanonymize the feed the kind exists to protect.
+    # Privacy-suppressed kinds pay flat tiers only: surfacing the top
+    # confessors / whisperers / askers (in the bonus ledger or the paste-ready
+    # beat sheet) would deanonymize the feed the kind exists to protect, and a
+    # top-`guess_post` list would spoil several live rounds in one card.
     anonymous = str(quest["trigger_kind"] or "") in quests.ANON_KINDS
     contributors, top = community_contrib_summary(conn, qid)
     if anonymous:

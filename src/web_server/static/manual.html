@@ -496,6 +496,7 @@
         <tr><td><strong><a href="#economy">Economy &amp; Perk Shop</a></strong></td><td>Per-server currency earned from activity — daily logins, quests, games, QOTD — spent on weekly-renewing role perks (color, name, icon, palette, gradient, holographic) and gifts.</td></tr>
         <tr><td><strong><a href="#voice">Voice Control</a></strong></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
         <tr><td><strong><a href="#music">Music</a></strong></td><td>YouTube/Spotify playback in voice channels.</td></tr>
+        <tr><td><strong><a href="#music-playlist">Music Playlist</a></strong></td><td>A watched channel feeds a rolling Spotify playlist of the last 30 songs members posted — drop a Spotify or YouTube link and it's on the playlist.</td></tr>
         <tr><td><strong><a href="#wellness">Wellness</a></strong></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides on the dashboard.</td></tr>
         <tr><td><strong><a href="#dm-perms">DM Permissions</a></strong></td><td>Per-member DM-mode system (Open / Ask / Closed) with anonymous request flow.</td></tr>
         <tr><td><strong><a href="#self-service">Member Self-Service</a></strong></td><td>Help dropdown, support link, bot invite, birthday registration, data self-erasure.</td></tr>
@@ -569,6 +570,14 @@
         <p>Scheduled games work the same way: if an admin has one of those six on a schedule, the bot tags whoever set it up as soon as the lobby appears, since someone still has to start it.</p>
         <p>A schedule can also be set to <strong>announce when it starts</strong> — the bot posts a note in the channel (pinging a role, if staff picked one) the moment the game goes up, with a link straight to it. The note follows the game rather than leading it, so it never announces one that failed to appear.</p>
         <p>Two Truths and a Lie, Hot Takes and LegitLibs also wait on the host, but don't take <code>start_in:</code> yet.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">🤫</span>
+      <div class="callout-body">
+        <strong>AMA question quests pay you quietly</strong>
+        <p>If your server runs a quest like <em>Ask in an AMA</em>, the payout stays off the server's transaction feed, and such a quest can't be set to require staff sign-off. AMA questions post anonymously, so a card naming you seconds after one appeared would give you away by timing alone. You still get paid: the credit shows on your own <code>/quests</code> board and <code>/bank wallet</code> ledger. Answering questions in your <em>own</em> AMA is not treated this way — the hot seat is public.</p>
       </div>
     </div>
 
@@ -753,6 +762,14 @@
     </table>
     <p style="font-size:0.82rem;color:var(--muted)">The <code>/guess submit</code> and <code>/guess confess</code> commands need the configured Guess role; if no role is set they refuse with a configuration error. The Guess channel and submitter role are set on the <a href="/#/config-guess">web dashboard</a>. Any channel may be used — the bot does not require the age-restricted flag and does not check submissions against it, so mark the channel age-restricted in Discord if NSFW submissions are expected, and let your moderators police what gets posted where.</p>
 
+    <div class="callout callout-info">
+      <span class="callout-icon">🤫</span>
+      <div class="callout-body">
+        <strong>Guess Who quests pay you quietly</strong>
+        <p>If your server runs a quest like <em>Submit a Guess Who Round</em>, the payout never appears in the server's transaction feed, and such a quest can't be set to require staff sign-off. In Guess Who you are the answer to your own round, so a card naming you moments after a round went up would not just expose you — it would solve the round for everyone reading. You still get paid: the credit shows on your own <code>/quests</code> board and <code>/bank wallet</code> ledger. <em>Making</em> a guess and <em>winning</em> a round are not treated this way — neither says anything the round has not already revealed.</p>
+      </div>
+    </div>
+
     <!-- ══════════════════════════════════════════════════════════
          6. WHISPER
     ═══════════════════════════════════════════════════════════ -->
@@ -866,6 +883,14 @@
         <strong>Configure via the <a href="/#/pen-pals">web dashboard</a></strong>
         <p>The <strong>Social → Pen Pals</strong> panel holds the whole feature on one page: the enable toggle and wiring (channel category), session length, and the re-match cooldown, with the conversation-starter question bank below them. Moderators can change both halves — Pen Pals settings are moderator-level rather than admin-only, so whoever curates the prompts can also set the channel they post in. <strong>Pairing Mode</strong> picks how matches happen — <em>Instant</em> (the default) matches the moment a partner is waiting, or <em>Once a day</em> to queue everyone and pair the whole pool in a single batch at 8:00 AM Eastern instead. <strong>Who Can See Each Chat</strong> controls how much staff oversight the private rooms get — <em>Admins only</em>, <em>Admins and mods</em> (the default), or <em>Everyone</em> (anyone can read the chat but only the two members can post). It applies to chats opened after you save; chats already running keep their original visibility. <strong>Session Opening Message</strong> is an optional note you write once — it's shown at the top of the pinned intro embed every time a chat opens, above who's matched and when the chat ends. Leave it blank for no message. Under <strong>Timing &amp; Limits</strong>, <strong>Nudge A Quiet Partner After</strong> sets how many hours a message can go unanswered before the bot reminds the member who owes a reply — it pings that one member, fires once per silence, and is skipped once the closing-soon warning is out. It ships at 0 (no reminders); 6 hours is a sensible starting point on a 24-hour session.</p>
         <p><strong>Pool Activity</strong>, below the settings, is the log of who joined or left the matching pool and why — signed up, matched, chat ended, left the server, or left out for never posting. It exists because the pool itself only shows who is waiting <em>right now</em>: a pool that has quietly stopped moving looks exactly like one nobody has ever joined, which is how a five-day stall went unnoticed. If matching seems to have stopped, read this list first.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">🤫</span>
+      <div class="callout-body">
+        <strong>Pen Pals quests pay you quietly</strong>
+        <p>If your server runs quests like <em>Get Matched with a Pen Pal</em> or <em>Finish a Pen Pals Session</em>, the payouts stay off the server's transaction feed, and such a quest can't be set to require staff sign-off. Both of you are paid at the same moment, so two cards side by side would announce not only that you were matched but <em>who with</em> — which your server may well have set the chat itself up to keep quiet (see <strong>Who Can See Each Chat</strong> above). You still get paid: the credit shows on your own <code>/quests</code> board and <code>/bank wallet</code> ledger.</p>
       </div>
     </div>
 
@@ -1102,6 +1127,7 @@
       <li><strong>🎴 Baccarat</strong> — your own coup. Back the <em>Player</em> or the <em>Banker</em> (both pay 2× — the best odds in the house; ties hand your bet back, and a Banker win on a three-card seven pushes instead of paying) or the long-shot <em>Tie</em> at 9×. Press <strong>🎴 Deal</strong> and the cards fall by baccarat's fixed drawing rules — no decisions, nearest to nine wins.</li>
       <li><strong>🎲 Dice</strong> — three dice, your roll. Call <em>Big</em> (11–17), <em>Small</em> (4–10), <em>Odd</em>, or <em>Even</em> — all pay 2×, but any triple sweeps the table for the house. Make your calls, then press <strong>🎲 Roll</strong>.</li>
       <li><strong>⚔️ War</strong> — the fastest table in the house: one card each, aces high, the higher card pays 2× on the spot. Matched cards are a standoff — <em>Go to War</em> (double your stake; win <em>or tie</em> the next card for 3× your original bet) or <em>Retreat</em> with half. Going to war is always the better play, and if you wander off mid-standoff the house goes to war for you (or retreats if you can't cover the raise).</li>
+      <li><strong>💣 Mines</strong> — twenty tiles, and you choose how dangerous: <strong>1, 3, 5 or 10 bombs</strong>. Every safe tile you open lifts your multiplier, and you can <strong>Cash Out</strong> at any moment — the button always shows exactly what you'd walk away with. Hit a bomb and the grid takes the lot. Whichever risk you pick, the ladder tops out at much the same place — between 18.6× and 21.9× — and cashes you out there, so the choice is how <em>long</em> the road is (19 nervous tiles on one bomb, four brutal ones on ten), not how big the prize gets. Open nothing and change your mind? Walk away and your bet comes straight back; wander off mid-grid and the house cashes you out at the multiplier you reached, never less. Returns ~95% at every single stopping point — there is no "wrong" moment to stop.</li>
       <li><strong>🔢 Keno</strong> — your own draw. Grab a quick-pick ticket of 4, 6, 8, or 10 numbers (the house picks them — fate does the rest), press <strong>🔢 Draw</strong>, and 20 of 80 numbers drop; pays scale with how many of yours hit: catch everything on a big ticket and the multipliers run into the thousands. Tuned far kinder than real-casino keno (~95% return). The result card shows every ticket — winners and losers alike — with your numbers that hit in <strong>bold</strong> and how many you caught, and an unpaid ticket also says how many it needed, so a near miss is never a mystery.</li>
     </ul>
     <h4>Limits &amp; payouts</h4>
@@ -1240,6 +1266,59 @@
       along with <code>/247</code> and <code>/247_status</code> — the bot now leaves a
       voice channel once it has been alone for a minute, or once the queue empties,
       in every channel.</p>
+
+    <h3 id="music-playlist">Music Playlist</h3>
+    <p>Separate from voice playback: one channel on the server (ask a mod which one) feeds a <strong>rolling Spotify playlist of the last 30 songs</strong> the community posted. Drop a song link in that channel and the bot adds it to the playlist; once the playlist is full, each new song pushes the oldest one out. Posting the link is the whole interaction — there is nothing to run.</p>
+
+    <h4>Posting a song</h4>
+    <ul>
+      <li><strong>What counts:</strong> Spotify track links and YouTube video links. A YouTube link is matched to the same song on Spotify using the video's title.</li>
+      <li><strong>Album and playlist links are skipped</strong> — one album post would flush everyone else's songs out of the window. Post individual tracks.</li>
+      <li><strong>One message can carry several links</strong> — each is handled on its own.</li>
+    </ul>
+
+    <p>The bot reacts on your message to tell you what happened:</p>
+    <table>
+      <thead><tr><th>Reaction</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>✅</td><td>Added to the playlist.</td></tr>
+        <tr><td>🔁</td><td>Already on the current playlist — the song stays where it is, nothing is added twice. Once it rolls off, it can be posted again.</td></tr>
+        <tr><td>❓</td><td>Sent to the review queue — see below. If a mod approves it, it's added then.</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Why a song lands in review:</strong> YouTube links are matched to Spotify by title, and titles are messy — "(Official Video)", "sped up", fan uploads. When the bot isn't confident its best Spotify match is really your song (or can't read the video's title at all, or finds no candidates), it queues the link with its best guess instead of adding the wrong track. A mod approves or rejects it from the dashboard; nothing below the confidence bar ever reaches the playlist on its own.</p>
+
+    <p><strong>Deleting your message</strong> removes the song from the playlist too — unless someone else's message also posted the same song, in which case it stays (their post keeps it alive).</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/playlist</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Ephemeral panel showing the rolling playlist. Three buttons: <strong>🎶 Playlist</strong> (the current window, newest first), <strong>🎧 My Songs</strong> (what you posted that's currently on it), and <strong>❓ In Review</strong> (your links waiting on a mod). Only visible to you.</span>
+    </div>
+
+    <h4>For admins</h4>
+    <p>Everything is configured on the dashboard at <strong>Config → Channels &amp; Messages → Music Playlist</strong> — there are no admin commands. The panel's sections:</p>
+    <table>
+      <thead><tr><th>Section</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Connection</strong></td><td>Status chip for the bot's Spotify account link, with a Connect / Re-consent button. See below for what each state means.</td></tr>
+        <tr><td><strong>Watch</strong></td><td><em>Enabled</em> (doubles as pause — turning it off stops processing without losing anything), the <em>watched channel</em>, and the <em>target playlist</em> (paste a playlist link, a <code>spotify:playlist:</code> URI, or the bare id).</td></tr>
+        <tr><td><strong>Behavior</strong></td><td><em>Window size</em> (default 30, 1–200); <em>match threshold</em> (0–1, default 0.74 — raise it and more YouTube links go to review, lower it and more get auto-added); <em>expand albums</em> (default <strong>off</strong>: album/playlist links are skipped; on, they expand into the window — one album post can flush it); <em>remove on delete</em> (default on: deleting the source message pulls the song).</td></tr>
+        <tr><td><strong>Live Window</strong></td><td>The current playlist, newest first, with a per-row <strong>Remove</strong>.</td></tr>
+        <tr><td><strong>Review Queue</strong></td><td>Pending unmatched links: the poster, what was extracted, the best Spotify candidate and its confidence score, and the reason it queued. <strong>Approve</strong> adds it (or marks it a duplicate if it's already live); <strong>Reject</strong> discards it.</td></tr>
+        <tr><td><strong>History</strong></td><td>Every song that left the window, with why: <em>rolled off</em>, <em>message deleted</em>, or <em>admin removed</em>.</td></tr>
+        <tr><td><strong>Maintenance</strong></td><td><strong>Re-scan</strong> replays the watched channel's history through the pipeline (already-processed messages are skipped, so it's safe to repeat); <strong>Reconcile</strong> squares the real Spotify playlist against the bot's window, and asks first if it would delete songs it doesn't recognise — so pointing the playlist dial at a playlist you already had can't silently strip it.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>The connection chip, and re-consent</strong>
+        <p><strong>Connected</strong> — the linked Spotify account's grant includes playlist-write permission; everything works. <strong>Read-only, needs re-consent</strong> — an account is linked, but its grant predates playlist writing: the bot can read playlists but every add/remove is blocked. Click the button and approve the Spotify prompt once more — the wider grant takes effect immediately, no restart needed. <strong>Not connected</strong> — no Spotify account is linked at all; connect one from the same button. While writes are blocked, the bot remembers which messages it could not land — so after re-consenting, run <strong>Re-scan</strong> to pick those songs up. Use Re-scan, not Reconcile: a blocked write never recorded a track, and Reconcile only pushes tracks the bot already holds, so it would do nothing here. Re-scan reaches back as far as the <strong>Re-scan Depth</strong> dial (200 messages by default), so if writes were blocked for longer than that, raise it before running the sweep.</p>
+      </div>
+    </div>
 
     <!-- ══════════════════════════════════════════════════════════
          13. WELLNESS
@@ -1462,6 +1541,8 @@
         <tr><td><strong>Things you chose to add</strong> — bio answers, birthday (day and month only, never the year), Wellness settings, Pen Pals participation, role picks</td><td>The feature you opted into</td><td>Until you remove it (archived bios of members who left are deleted after 12 months)</td></tr>
         <tr><td><strong>Pen Pals pool movement</strong> — when you joined or left the matching pool and what caused it (you signed up, you were matched, a chat ended, you left the server). Never any of what you and your pen pal said</td><td>So moderators can see whether matching is actually working — a pool that stops moving is invisible otherwise</td><td>Indefinitely; cleared in full by an erasure request</td></tr>
         <tr><td><strong>Survivor</strong> — if you join a season: your entry, your weekly NFL picks (kept secret from everyone but admins until the weekly reveal), strikes, and when you were eliminated</td><td>Running the game — picks have to be recorded to be graded, and past seasons stay browsable as history</td><td>Indefinitely; cleared in full by an erasure request</td></tr>
+        <tr><td><strong>Music playlist posts</strong> — which track you posted into the playlist channel, and any link of yours that's waiting in the review queue</td><td>Running the rolling community playlist: crediting posts, skipping duplicates, and removing a song when its message is deleted</td><td>Indefinitely (rolled-off songs are kept as playlist history); cleared in full by an erasure request</td></tr>
+        <tr><td><strong>Mod worklist</strong> (moderators only) — if you're on the mod team, which tasks and <a href="#todo-chore-board">chores</a> you added and which you ticked off, and when</td><td>Running the shared <a href="#todo">todo list</a> and the chore board: crediting who did a chore and counting the days it's been kept up</td><td>Indefinitely. An erasure clears your name off them but leaves the tasks — they're the team's outstanding work, not a record about you</td></tr>
         <tr><td><strong>Anonymous features</strong> — Whisper, Confessions, Guess, and the anonymous party games</td><td>See the box below — "anonymous" means anonymous to other members, not to moderators</td><td>Varies; see below</td></tr>
         <tr><td><strong>Moderation records</strong> — warnings, jails, tickets and their transcripts, notes about rule-breaking, and flags raised by the automated Rules Watch</td><td>The record of moderation decisions, and the ability to justify one if challenged</td><td>Indefinitely</td></tr>
         <tr><td><strong>Image checks</strong> — for pictures you post in <strong>age-gated channels and spoiler-required channels</strong>, a score for how explicit the picture is, plus which body parts were detected and roughly where in the frame. Elsewhere, only the score, and only while a rule is deciding what to do — nothing is written down. Every removal is recorded wherever it happens</td><td>Enforcing the spoiler rule and keeping explicit images out of SFW channels. All of it runs on the bot's own machine; no picture is ever uploaded anywhere</td><td>Indefinitely. Admin-only — never shown to other members</td></tr>
@@ -1483,7 +1564,7 @@
     <ul>
       <li><strong>Discord</strong> — inherent; they host everything the bot reads and writes.</li>
       <li><strong>Anthropic (Claude)</strong> — when you ask the in-server AI assistant a question, your question text is sent to Anthropic's API to answer it. Your Discord identity is not sent with it: no name, no user id. If an admin has switched on live server context, the channel names and topics you can see, server docs and recent announcements go with it, plus your role names so the answer matches what you're allowed to do. <strong>Nothing a member wrote or stored goes with it</strong> — no messages, bios, birthdays, confessions, wellness entries, DMs, balances or stats, for you or anyone else. Don't put anything in a question you wouldn't want leaving the server.</li>
-      <li><strong>Spotify</strong> — when you queue music by name or link, the track query is sent to Spotify's API to resolve it. No member identity is attached.</li>
+      <li><strong>Spotify</strong> — when you queue music by name or link, the track query is sent to Spotify's API to resolve it; and when you post a song in the <a href="#music-playlist">Music Playlist</a> channel, the search query and the playlist add/remove (track ids only) go to Spotify's API. No member identity is attached to any of it — Spotify never learns who posted a song.</li>
     </ul>
 
     <h4>What you can do</h4>
@@ -1987,8 +2068,9 @@
     <!-- ══════════════════════════════════════════════════════════
          TODO LIST & BOARD
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="todo" class="section-break"><span class="section-num">23</span> Todo List &amp; Board</h2>
+    <h2 id="todo" class="section-break"><span class="section-num">23</span> Todo List &amp; Boards</h2>
     <p>A shared worklist for the mod team. Tasks can be added from Discord or from the dashboard, and everything lands in the same list. It is moderator-only end to end — members never see it unless you post the board in a channel they can read.</p>
+    <p>There are <strong>two</strong> boards you can post, and they answer different questions. The <a href="#todo-board">todo board</a> shows everything outstanding. The <a href="#todo-chore-board">mod chore board</a> shows only recurring chores, as a daily "did we do it today?" scoreboard — so a daily "post the QOTD" isn't buried among "fix the quote bot" and "rotate the tunnel token". You can post either, or both, but <strong>not in the same channel</strong>.</p>
 
     <h3 id="todo-board">The Discord board</h3>
     <p>The board is a single message the bot keeps at the <strong>bottom of a channel</strong>. It lists every pending task oldest-first, so whatever has been waiting longest sits at the top. It carries two buttons:</p>
@@ -1999,18 +2081,40 @@
     <p>Both buttons are moderator-only. Anyone else who clicks gets a private "moderators only" reply and nothing changes.</p>
     <p>The board updates itself. Adding or completing a task anywhere — the buttons, <code>/todo</code>, or the dashboard — is reflected within about a minute, and immediately when the action came from Discord. When people chat in the channel, the board deletes itself and re-posts underneath so it never scrolls out of sight. Tasks marked 🔁 came from a recurring entry.</p>
 
+    <h3 id="todo-chore-board">The mod chore board</h3>
+    <p>A second board for your mod team's own channel, showing <strong>only</strong> recurring chores. Where the todo board asks "what's outstanding?", this one asks "did we do it today?" — so it keeps a chore on screen after it's ticked, rather than removing the answer the moment it's yes.</p>
+    <p>Each row shows the chore, whether it's been done, who did it and when, and how many days running it's been done:</p>
+    <ul>
+      <li><strong>✅</strong> — done. The name and time beside it are whoever ticked it off.</li>
+      <li><strong>⬜</strong> — still to do today.</li>
+      <li><strong>❌ missed last run</strong> — still to do today, <em>and</em> the last one went by without anyone doing it. It clears as soon as the chore is ticked again.</li>
+      <li><strong>🔥 6</strong> — six days running. Shown from two days up.</li>
+    </ul>
+    <p>The footer keeps the score for the day — "2 of 3 done", plus a count of anything whose last run was missed. Chores you've <em>paused</em> are left off entirely: a chore parked for the holidays isn't one the team is failing.</p>
+    <p>One button, <strong>✅ Mark Done</strong>, moderator-only, offering only the chores still open. There's no Add button here — chores are recurring entries with a schedule, set up on the dashboard, and a one-off task belongs on the other board.</p>
+
+    <div class="callout callout-warn">
+      <span class="callout-icon">⚠️</span>
+      <div class="callout-body">
+        <strong>The two boards need separate channels</strong>
+        <p>A Discord channel has one bottom, and both boards want to sit in it. Put them together and they take turns being buried, which no amount of chatting in the channel fixes. The dashboard refuses the second one with a message naming the board already there — move that one first, or pick a different channel.</p>
+      </div>
+    </div>
+
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Posted from the <a href="/">web dashboard</a></strong>
-        <p>Pick a channel on the <a href="/#/mod-todo">Todo List</a> panel and press <strong>Post Board</strong>. Posting or moving the board is an <em>administrator</em> action; managing the tasks and recurring entries on it only needs moderator. Removing the board deletes the message but keeps every task.</p>
+        <p>Pick a channel on the <a href="/#/mod-todo">Todo List</a> panel and press <strong>Post Board</strong>. The mod chore board has its own card just below it, with its own channel and its own <strong>Post Chore Board</strong> button. Posting or moving either board is an <em>administrator</em> action; managing the tasks and recurring entries on them only needs moderator. Removing a board deletes the message but keeps every task.</p>
       </div>
     </div>
 
     <h3 id="todo-recurring">Recurring tasks</h3>
     <p>Recurring entries put a chore on the list on a schedule — "Post QOTD" every morning at 09:00, "Photo challenge prompt" every Monday. Set them up on the dashboard panel with a daily or weekly cadence and a time of day (server local time).</p>
     <p>These are <strong>reminders, not automation</strong>. When one comes due the bot adds the task to the list; a moderator then does the thing and ticks it off. The bot does not post the QOTD or the photo prompt for you.</p>
-    <p>If the previous copy of a recurring task is still sitting on the list, no duplicate is added — a chore nobody got to all week shows up as one increasingly old task rather than seven identical ones. Each entry can be paused, edited, deleted, or fired immediately with <strong>Run now</strong> — which adds one instance there and then without touching the schedule or un-pausing a paused entry. Deleting an entry stops it repeating but leaves any copy already on the list, since that is real outstanding work.</p>
+    <p>Each recurring task <strong>resets</strong> rather than carrying over. When the next one comes due and the last is still untouched, that one is marked <strong>missed</strong> and a fresh task takes its place. Only ever one copy is outstanding, so nothing piles up — and the days a chore didn't happen stay on the record, which is what the chore board's ❌ marks and 🔥 streaks are counted from. A missed task can't be ticked off later: it's yesterday's box, and crediting it would put a hole in the streak either side of it.</p>
+    <p>Two things deliberately don't reset. <strong>Run now</strong> adds one instance there and then without touching the schedule or un-pausing a paused entry — and pressing it twice just tells you one is already on the list, rather than marking your first press missed. And if the bot is offline for three days, it comes back and adds <em>one</em> task, marking one instance missed rather than three: the record covers the days the bot was watching, not the days it was away.</p>
+    <p>Each entry can be paused, edited or deleted. Deleting an entry stops it repeating but leaves any copy already on the list, since that is real outstanding work.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/todo task:&lt;text&gt;</span>

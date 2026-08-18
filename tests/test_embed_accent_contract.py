@@ -38,7 +38,9 @@ from bot_modules.games_rushmore import embeds as rushmore_embeds
 from bot_modules.games_traditional import embeds as traditional_embeds
 from bot_modules.games_ttl import embeds as ttl_embeds
 from bot_modules.games_wyr import embeds as wyr_embeds
+from bot_modules.music_playlist import embeds as music_playlist_embeds
 from bot_modules.services import branding_service
+from bot_modules.services import casino_service
 from bot_modules.services import dm_branding
 from bot_modules.services import economy_service
 from bot_modules.services import event_echo_logic
@@ -495,6 +497,18 @@ CASES = [
         discord.Color(services_embeds.COLOR_GOLD),
     ),
     case(
+        # The live grid (outcome=None) is the accent-colored state; the
+        # cashed/bombed verdicts are semantic and tested in the embeds file.
+        "casino.mines_grid",
+        lambda **kw: casino_embeds.build_mines_embed(
+            _econ_settings(), 1,
+            casino_service.MinesStep(hand_id=1, stake=10, bombs=3, revealed=(4,),
+                                     mult=133, next_mult=159),
+            kw.get("color"),
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
         "casino.keno_round",
         lambda **kw: casino_embeds.build_keno_round_embed(
             _econ_settings(), 0.0, [], kw.get("color")
@@ -691,6 +705,26 @@ CASES = [
             alive=7, eliminated=2, picked=5, pot=8150, ghost_pot=2000, **kw
         ),
         discord.Color(branding_service.DEFAULT_ACCENT),
+    ),
+    # ── music playlist (passthrough-only: `color` is a required keyword) ─
+    case(
+        "music_playlist.window",
+        lambda **kw: music_playlist_embeds.build_window_embed(
+            [], window_size=30, color=kw["color"]
+        ),
+        None,
+    ),
+    case(
+        "music_playlist.my_posts",
+        lambda **kw: music_playlist_embeds.build_my_posts_embed(
+            [], window_size=30, color=kw["color"]
+        ),
+        None,
+    ),
+    case(
+        "music_playlist.my_review",
+        lambda **kw: music_playlist_embeds.build_my_review_embed([], color=kw["color"]),
+        None,
     ),
 ]
 

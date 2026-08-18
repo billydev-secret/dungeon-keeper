@@ -2150,3 +2150,315 @@ def test_win_percentile_band_never_rounds_loose(db, total, expected_over):
         over = [p for p in range(1, total + 1) if p >= mark]
         assert len(over) == expected_over
         assert len(over) / total <= 0.03 or len(over) == 1
+
+
+# ── mines grids ────────────────────────────────────────────────────────
+
+
+def _mines_deal(conn, user_id=A, stake=20, bombs=3, bomb_tiles=(0, 1, 2)):
+    """Deal a grid with the bombs pinned, so a test can press a known tile."""
+    with_patched = list(bomb_tiles)
+    orig = logic.mines_place_bombs
+    logic.mines_place_bombs = lambda b, **kw: with_patched  # type: ignore[assignment]
+    try:
+        return svc.deal_mines_hand(conn, GUILD, CHAN, user_id, stake, bombs, now=NOW)
+    finally:
+        logic.mines_place_bombs = orig  # type: ignore[assignment]
+
+
+def test_mines_deal_debits_and_opens_one_grid(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=20)
+        assert step.err is None and step.hand_id
+        assert get_balance(conn, GUILD, A) == 80
+        assert _kinds(conn, A)[-1] == ("casino_stake", -20)
+        row = svc.live_mines_hand(conn, GUILD, A)
+        assert row is not None and int(row["bombs"]) == 3
+        bombs, revealed = svc.deserialize_mines(str(row["state_json"]))
+        assert (bombs, revealed) == ([0, 1, 2], [])
+
+
+def test_mines_deal_never_leaks_the_board_while_it_is_live(db):
+    """A live step carries no bomb positions — nothing downstream can leak
+    a board the player is still betting into."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn)
+        assert step.bomb_tiles is None
+        live = svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 5, now=NOW)
+        assert live.outcome is None and live.bomb_tiles is None
+        # ...and it IS carried once the round is over.
+        done = svc.cash_out_mines_hand(conn, GUILD, step.hand_id, A, now=NOW)
+        assert done.bomb_tiles == (0, 1, 2)
+
+
+def test_mines_one_live_grid_per_member(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 200)
+        assert _mines_deal(conn).err is None
+        assert "already have a grid" in (_mines_deal(conn).err or "")
+
+
+def test_mines_one_live_grid_index_backstops_the_precheck(db):
+    """The partial unique index is the real guard, not the pre-check."""
+    with open_db(db) as conn:
+        _fund(conn, A, 200)
+        _mines_deal(conn)
+        assert svc.take_stake(conn, GUILD, A, 20, "mines", now=NOW) is None
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO casino_mines_hands (guild_id, channel_id, user_id, "
+                "stake, bombs, state_json, created_at, last_action_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (GUILD, CHAN, A, 20, 3, svc.serialize_mines([4], []), NOW, NOW),
+            )
+
+
+def test_mines_safe_reveal_steps_the_ladder_without_paying(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=20)
+        after = svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 9, now=NOW)
+        assert after.err is None and after.outcome is None
+        assert after.revealed == (9,)
+        assert after.mult == logic.mines_multiplier(3, 1)
+        assert after.next_mult == logic.mines_multiplier(3, 2)
+        assert get_balance(conn, GUILD, A) == 80  # nothing moved
+
+
+def test_mines_bomb_settles_at_zero_and_feeds_the_pot(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=20)
+        boom = svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 0, now=NOW)
+        assert boom.outcome == "bombed" and boom.payout == 0
+        assert boom.bomb_tiles == (0, 1, 2)
+        assert get_balance(conn, GUILD, A) == 80
+        assert svc.live_mines_hand(conn, GUILD, A) is None
+        assert boom.pot_after > 0
+
+
+def test_mines_cash_out_pays_the_rung_and_closes_the_grid(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=100, bombs=10, bomb_tiles=list(range(10)))
+        for tile in (10, 11):
+            svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, tile, now=NOW)
+        cashed = svc.cash_out_mines_hand(conn, GUILD, step.hand_id, A, now=NOW)
+        assert cashed.outcome == "cashed"
+        assert cashed.payout == logic.mines_payout(10, 2, 100) == 401
+        assert get_balance(conn, GUILD, A) == 401
+        assert _kinds(conn, A)[-1] == ("casino_payout", 401)
+        assert svc.live_mines_hand(conn, GUILD, A) is None
+
+
+def test_mines_cash_out_refused_on_an_untouched_grid(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=20)
+        nope = svc.cash_out_mines_hand(conn, GUILD, step.hand_id, A, now=NOW)
+        assert "Open a tile first" in (nope.err or "")
+        assert svc.live_mines_hand(conn, GUILD, A) is not None
+        assert get_balance(conn, GUILD, A) == 80
+
+
+def test_mines_break_even_rung_is_a_push_not_a_win(db):
+    """The 1.00× first rung of the one-bomb ladder hands the stake back;
+    calling that a win is losses-disguised-as-wins at its mildest."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=100, bombs=1, bomb_tiles=[19])
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 0, now=NOW)
+        pushed = svc.cash_out_mines_hand(conn, GUILD, step.hand_id, A, now=NOW)
+        assert pushed.outcome == "pushed"
+        assert pushed.payout == 100 == pushed.stake
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_mines_clearing_the_ladder_auto_cashes(db):
+    """The ceiling ends the round — there is no infinite climb to press into."""
+    with open_db(db) as conn:
+        _fund(conn, A, 1000)
+        step = _mines_deal(conn, stake=100, bombs=10, bomb_tiles=list(range(10)))
+        last = None
+        for tile in (10, 11, 12, 13):
+            last = svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, tile, now=NOW)
+        assert last is not None
+        assert last.topped is True and last.outcome == "cashed"
+        assert last.payout == logic.mines_payout(10, 4, 100) == 2192
+        assert svc.live_mines_hand(conn, GUILD, A) is None
+        assert last.next_mult == 0
+
+
+def test_mines_reveal_guards(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 200)
+        _fund(conn, B, 200)
+        step = _mines_deal(conn, stake=20)
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 9, now=NOW)
+        again = svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 9, now=NOW)
+        assert "already opened that tile" in (again.err or "")
+        theirs = svc.reveal_mines_tile(conn, GUILD, step.hand_id, B, 8, now=NOW)
+        assert "not your grid" in (theirs.err or "")
+        with pytest.raises(ValueError, match="tile out of range"):
+            svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 20, now=NOW)
+
+
+def test_mines_a_stranger_cannot_reset_someone_elses_idle_clock(db):
+    """Ownership rides in the claim itself: a rejected press must not bump
+    last_action_at, or a stranger could block the auto-cash forever and
+    strand the owner's stake."""
+    with open_db(db) as conn:
+        _fund(conn, A, 200)
+        _fund(conn, B, 200)
+        step = _mines_deal(conn, stake=20)
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, B, 9, now=NOW + 500)
+        row = svc.get_mines_hand(conn, step.hand_id)
+        assert row is not None and float(row["last_action_at"]) == NOW
+
+
+def test_mines_settle_is_exactly_once_under_a_race(db):
+    """The player's Cash Out, the idle auto-cash and the boot sweep can all
+    reach one grid; the BALANCE proves only one of them paid."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=20)
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 9, now=NOW)
+        first = svc.cash_out_mines_hand(conn, GUILD, step.hand_id, A, now=NOW)
+        assert first.err is None
+        balance = get_balance(conn, GUILD, A)
+        assert svc.resolve_idle_mines_hand(conn, step.hand_id, now=NOW) is None
+        assert svc.refund_live_mines_hands(conn, now=NOW) == []
+        second = svc.cash_out_mines_hand(conn, GUILD, step.hand_id, A, now=NOW)
+        assert "already finished" in (second.err or "")
+        assert get_balance(conn, GUILD, A) == balance
+
+
+def test_mines_idle_auto_cash_pays_what_a_manual_press_would(db):
+    """Walking away costs nothing that staying would not have."""
+    with open_db(db) as conn:
+        _fund(conn, A, 200)
+        _fund(conn, B, 200)
+        a_step = _mines_deal(conn, A, stake=100, bombs=5, bomb_tiles=[0, 1, 2, 3, 4])
+        b_step = _mines_deal(conn, B, stake=100, bombs=5, bomb_tiles=[0, 1, 2, 3, 4])
+        for tile in (10, 11):
+            svc.reveal_mines_tile(conn, GUILD, a_step.hand_id, A, tile, now=NOW)
+            svc.reveal_mines_tile(conn, GUILD, b_step.hand_id, B, tile, now=NOW)
+        manual = svc.cash_out_mines_hand(conn, GUILD, a_step.hand_id, A, now=NOW)
+        idle = svc.resolve_idle_mines_hand(conn, b_step.hand_id, now=NOW)
+        assert idle is not None
+        assert idle.payout == manual.payout == 172
+        assert get_balance(conn, GUILD, A) == get_balance(conn, GUILD, B)
+
+
+def test_mines_idle_on_an_untouched_grid_refunds_rather_than_taking_the_edge(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=40)
+        idle = svc.resolve_idle_mines_hand(conn, step.hand_id, now=NOW)
+        assert idle is not None and idle.outcome == "refunded"
+        assert idle.payout == 40
+        assert get_balance(conn, GUILD, A) == 100
+        assert _kinds(conn, A)[-1] == ("casino_refund", 40)
+        # A refund is not a play: no jackpot skim, nothing in the stats.
+        assert svc.member_casino_stats(conn, GUILD, A) is None
+
+
+def test_mines_idle_sweep_finds_only_stale_grids(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=20)
+        assert svc.idle_live_mines_hands(conn, NOW - 1) == []
+        assert [int(r["id"]) for r in svc.idle_live_mines_hands(conn, NOW + 1)] == [
+            step.hand_id
+        ]
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 9, now=NOW + 500)
+        assert svc.idle_live_mines_hands(conn, NOW + 1) == []
+
+
+def test_mines_boot_sweep_refunds_a_live_grid_in_full_and_replays_free(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=20)
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 9, now=NOW)
+        swept = svc.refund_live_mines_hands(conn, now=NOW)
+        assert [int(r["user_id"]) for r in swept] == [A]
+        assert get_balance(conn, GUILD, A) == 100  # made whole, not cashed
+        assert svc.refund_live_mines_hands(conn, now=NOW) == []
+
+
+def test_boot_sweep_covers_every_live_hand_game(db):
+    """The sweep must not be the place a new table is forgotten — this is
+    the test that fails if a fourth live-hand game is added without
+    joining ALL_HAND_TABLES."""
+    assert {t.game for t in svc.ALL_HAND_TABLES} == {"blackjack", "war", "mines"}
+    with open_db(db) as conn:
+        _fund(conn, A, 200)
+        _fund(conn, B, 200)
+        _deal(conn, A, stake=20)                      # blackjack
+        _mines_deal(conn, B, stake=30)                # mines
+        swept = svc.refund_all_live_hands(conn, now=NOW)
+        assert len(swept) == 2
+        assert get_balance(conn, GUILD, A) == 200
+        assert get_balance(conn, GUILD, B) == 200
+        assert svc.refund_all_live_hands(conn, now=NOW) == []
+
+
+def test_leaver_refund_returns_a_live_mines_stake(db):
+    """Same rule, the other seam: ALL_HAND_TABLES, not a third copy-paste."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=25)
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 9, now=NOW)
+        assert svc.refund_member_live_stakes(conn, GUILD, A, now=NOW) == {"mines": 25}
+        assert get_balance(conn, GUILD, A) == 100
+        assert svc.live_mines_hand(conn, GUILD, A) is None
+
+
+def test_mines_respects_the_table_toggle_and_the_casino_channel(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        svc.save_casino_settings(conn, GUILD, {"mines_enabled": False})
+        assert "table is closed" in (_mines_deal(conn).err or "")
+        svc.save_casino_settings(conn, GUILD, {"mines_enabled": True})
+        moved = svc.deal_mines_hand(conn, GUILD, CHAN + 1, A, 20, 3, now=NOW)
+        assert "casino has moved" in (moved.err or "")
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_mines_rejects_a_bomb_count_with_no_ladder(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        with pytest.raises(ValueError, match="mines bomb count"):
+            svc.deal_mines_hand(conn, GUILD, CHAN, A, 20, 7, now=NOW)
+        assert get_balance(conn, GUILD, A) == 100  # nothing debited
+
+
+def test_mines_jackpot_feeds_only_the_lost_slice(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 50, "jackpot_seed": 0})
+        _fund(conn, A, 1000)
+        # A winning cash-out feeds nothing.
+        step = _mines_deal(conn, A, stake=100, bombs=10, bomb_tiles=list(range(10)))
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 10, now=NOW)
+        svc.cash_out_mines_hand(conn, GUILD, step.hand_id, A, now=NOW)
+        assert svc.get_jackpot(conn, GUILD) == 0
+        # A bomb feeds half of the whole stake at a 50% cut.
+        step = _mines_deal(conn, A, stake=100, bombs=3, bomb_tiles=[0, 1, 2])
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 0, now=NOW)
+        assert svc.get_jackpot(conn, GUILD) == 50
+
+
+def test_mines_plays_land_on_the_floor_ticker(db):
+    """A private game with no public recap is invisible without this."""
+    assert "mines" in svc.TICKER_GAMES
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        step = _mines_deal(conn, stake=20)
+        svc.reveal_mines_tile(conn, GUILD, step.hand_id, A, 0, now=NOW)
+        rows = conn.execute(
+            "SELECT game, stake, payout FROM casino_ticker WHERE guild_id = ?",
+            (GUILD,),
+        ).fetchall()
+        assert [(r["game"], r["stake"], r["payout"]) for r in rows] == [("mines", 20, 0)]

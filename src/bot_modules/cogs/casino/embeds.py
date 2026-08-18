@@ -34,7 +34,7 @@ from bot_modules.core.meters import mono
 from bot_modules.economy.leaderboard import bar_fill
 from bot_modules.services import casino_logic as logic
 from bot_modules.services import pools_charts, pools_logic
-from bot_modules.services.casino_service import CasinoSettings
+from bot_modules.services.casino_service import CasinoSettings, MinesStep
 from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.branding_service import DEFAULT_CASINO_NAME
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED
@@ -64,6 +64,9 @@ _GAME_LINES = {
     "dice": "🎲 **Dice** — three dice, one roll; call Big, Small, Odd, or Even",
     "war": "⚔️ **War** — one card each, high card wins; on a tie, go to war",
     "keno": "🔢 **Keno** — grab a ticket, 20 numbers drop, catches pay big",
+    "mines": (
+        "💣 **Mines** — open tiles, climb the multiplier, stop before the bang"
+    ),
 }
 
 
@@ -362,6 +365,28 @@ def build_help_embed(
                 f"drop in your own private draw. {pays} — pays scale with how "
                 "many of yours hit (~95% return, tuned far kinder than real "
                 "keno). Buy your tickets, then press **Draw**.\n​"
+            ),
+            inline=False,
+        )
+    if settings.mines_enabled:
+        ladders = "\n".join(
+            f"· **{bombs} bomb{'' if bombs == 1 else 's'}** — "
+            f"{logic.mines_top_rung(bombs)} tiles to "
+            f"{logic.mines_mult_label(logic.mines_ladder(bombs)[-1])}"
+            for bombs in logic.MINES_BOMB_CHOICES
+        )
+        embed.add_field(
+            name="💣 Mines",
+            value=(
+                f"{logic.MINES_TILES} tiles, and you pick the danger:\n"
+                f"{ladders}\n"
+                "Every safe tile lifts your multiplier and **Cash Out** banks "
+                "it — the button shows exactly what you would walk away with. "
+                "Every ladder tops out around the same place, so the choice is "
+                "how long the road is. Every stopping point returns the same "
+                f"~{logic.MINES_RTP_PCT:.0f}%, so there is no wrong moment to "
+                "stop, and if you wander off the house cashes you out where "
+                "you stood.\n​"
             ),
             inline=False,
         )
@@ -1509,3 +1534,119 @@ def build_pools_void_embed(
         ),
         color=_accent(accent),
     ).set_footer(text=_FOOTER)
+
+
+# ── mines ──────────────────────────────────────────────────────────────
+
+_MINES_HIDDEN = "⬛"
+_MINES_SAFE = "💎"
+_MINES_BOMB = "💣"
+
+_MINES_OUTCOME_LINES = {
+    "cashed": "**Banked it.**",
+    "pushed": "**Broke even** — the stake comes home.",
+    "bombed": "**Boom.** The grid takes it.",
+    "refunded": "The table was reset — the bet came home.",
+}
+
+
+def _mines_board(
+    revealed: tuple[int, ...] | list[int],
+    bomb_tiles: tuple[int, ...] | list[int] | None,
+) -> str:
+    """The grid as it stands, mirroring the buttons above it.
+
+    ``bomb_tiles`` is only ever passed once the round is OVER, and only on
+    a bomb: revealing the safe tiles a player walked away from would
+    manufacture a near miss out of a decision that was correct by
+    construction. A cash-out card shows what was won, never what could
+    have been.
+    """
+    opened, bombs = set(revealed), set(bomb_tiles or ())
+    rows = []
+    for start in range(0, logic.MINES_TILES, logic.MINES_GRID_WIDTH):
+        row = []
+        for tile in range(start, start + logic.MINES_GRID_WIDTH):
+            if tile in bombs:
+                row.append(_MINES_BOMB)
+            elif tile in opened:
+                row.append(_MINES_SAFE)
+            else:
+                row.append(_MINES_HIDDEN)
+        rows.append("".join(row))
+    return "\n".join(rows)
+
+
+def build_mines_embed(
+    econ: EconSettings,
+    user_id: int,
+    step: MinesStep,
+    accent: discord.Color | None,
+    *,
+    name_fn: NameFn = mention,
+) -> discord.Embed:
+    """One grid, live or finished.
+
+    The next rung is stated plainly while the grid is live — the decision
+    genuinely needs it and hiding it would only make the player press
+    blind — but it is never dressed up: no countdown, no "so close", and no
+    escalating language as the ladder climbs.
+    """
+    live = step.outcome is None
+    if live:
+        color: discord.Color | int = _accent(accent)
+    elif step.outcome == "cashed":
+        color = COLOR_GREEN
+    elif step.outcome in ("pushed", "refunded"):
+        color = _accent(accent)
+    else:
+        color = COLOR_RED
+    bomb_word = "bomb" if step.bombs == 1 else "bombs"
+    embed = discord.Embed(
+        title="💣 Mines",
+        description=(
+            f"{name_fn(user_id)} is in for {_coins(econ, step.stake)} "
+            f"· {step.bombs} {bomb_word}\n​"
+        ),
+        color=color,
+    )
+    # A bomb reveals the board — that is what makes the loss legible rather
+    # than a shrug. A cash-out deliberately does not.
+    show_bombs = step.outcome == "bombed"
+    embed.add_field(
+        name="The grid",
+        value=(
+            _mines_board(step.revealed, step.bomb_tiles if show_bombs else None)
+            + "\n​"
+        ),
+        inline=False,
+    )
+    if live:
+        standing = (
+            f"**{logic.mines_mult_label(step.mult)}** · "
+            f"{_coins(econ, logic.mines_payout(step.bombs, len(step.revealed), step.stake))}"
+            if step.mult
+            else "*Open a tile to start the ladder.*"
+        )
+        lines = [f"Banked if you stop now: {standing}"]
+        if step.next_mult:
+            lines.append(
+                f"One more safe tile: {logic.mines_mult_label(step.next_mult)}"
+            )
+        embed.add_field(name="Standing", value="\n".join(lines), inline=False)
+    else:
+        line = _MINES_OUTCOME_LINES.get(step.outcome or "", "")
+        if step.topped:
+            line = f"**Cleared the board!** {line}"
+        if step.payout > 0:
+            line = (
+                f"{line} {logic.mines_mult_label(step.mult)} — "
+                f"{_coins(econ, step.payout)}."
+            )
+        if step.payout == 0 and step.pot_after > 0:
+            line = f"{line}\n{_pot_line(step.pot_after)}"
+        if step.outcome != "refunded":
+            line = _with_streak(line, econ, step.streak)
+        embed.add_field(name="Result", value=line, inline=False)
+    embed.set_footer(text=_FOOTER)
+    return embed

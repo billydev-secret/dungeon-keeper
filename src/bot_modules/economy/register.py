@@ -183,10 +183,13 @@ def _parse_meta(raw: object) -> dict:
 def _anon_quest_ids(conn: sqlite3.Connection, guild_id: int) -> list[int]:
     """Quest ids the register must never post a payout for.
 
-    Quests on an anonymous trigger kind (:data:`quests.ANON_KINDS`): posting
-    "**X** earned *Send a Whisper*" seconds after an anonymous whisper lands in
-    the feed names the whisperer by timing correlation, which is the whole
-    thing the anonymity is for. The member still sees the credit on every
+    Quests on a privacy-suppressed trigger kind (:data:`quests.ANON_KINDS`):
+    posting "**X** earned *Send a Whisper*" seconds after an anonymous whisper
+    lands in the feed names the whisperer by timing correlation, which is the
+    whole thing the anonymity is for. The set covers more than anonymity now —
+    ``pen_pal`` pays both halves of a pairing at once, so two adjacent cards
+    name who was matched with whom, and a ``guess_post`` card names the answer
+    to a live Guess Who round. The member still sees the credit on every
     private surface — their own ``/quests`` log and ``/bank wallet`` read the
     ledger directly, and neither goes through here.
     """
@@ -227,11 +230,20 @@ def collect_register_entries(
     anon_ids = _anon_quest_ids(conn, guild_id)
     # ``meta`` is NULL on plenty of rows and json_extract would raise on a
     # hand-written non-JSON one, so normalise before reaching into it.
-    anon_clause = ""
+    meta_json = "CASE WHEN json_valid(meta) THEN meta ELSE '{}' END"
+    # Two ways a row is suppressed. Its ``quest_id`` names a suppressed quest —
+    # the payout itself. Or it carries ``anon``, stamped by the claim path on
+    # everything *else* that claim wrote: the board-clear bonus (no quest_id at
+    # all) and the daily_complete tick (the progression quest's id, not the
+    # suppressed one). Both land in the same transaction as the payout, so an
+    # unfiltered one names the member at the exact second the payout was
+    # suppressed for.
+    anon_clause = (
+        f" AND COALESCE(json_extract({meta_json}, '$.anon'), 0) = 0"
+    )
     if anon_ids:
-        anon_clause = (
-            " AND COALESCE(json_extract("
-            "CASE WHEN json_valid(meta) THEN meta ELSE '{}' END, '$.quest_id'), 0) "
+        anon_clause += (
+            f" AND COALESCE(json_extract({meta_json}, '$.quest_id'), 0) "
             f"NOT IN ({','.join('?' * len(anon_ids))})"
         )
     rows = conn.execute(

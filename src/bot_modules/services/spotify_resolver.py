@@ -29,7 +29,15 @@ log = logging.getLogger("dungeonkeeper.music.spotify")
 
 MAX_PLAYLIST_TRACKS = 500
 _PLAYLIST_PAGE_SIZE = 100
+_PLAYLIST_WRITE_CHUNK = 100  # Spotify caps playlist add/remove at 100 URIs/call
 _RETRY_BACKOFF_S = (1.0, 2.0, 4.0)
+
+# Either modify scope unlocks writes; which one applies depends on whether the
+# target playlist is public, so we require at least one and let Spotify police
+# the specific case (surfaced as a 403 with its own message below).
+_PLAYLIST_MODIFY_SCOPES = frozenset(
+    {"playlist-modify-public", "playlist-modify-private"}
+)
 
 
 _SPOTIFY_URL_RE = re.compile(
@@ -130,6 +138,28 @@ class SpotifyResolver:
         assert self._db_path is not None
         with open_db(self._db_path) as conn:
             return get_config_value(conn, "spotify_bot_refresh_token", "") or ""
+
+    def _read_granted_scope(self) -> str:
+        from bot_modules.core.db_utils import get_config_value, open_db
+
+        assert self._db_path is not None
+        with open_db(self._db_path) as conn:
+            return get_config_value(conn, "spotify_bot_scope", "") or ""
+
+    async def playlist_scopes(self) -> set[str]:
+        """Return the scopes granted to the stored bot-owner token.
+
+        The OAuth callback persists the space-separated grant under
+        ``spotify_bot_scope``; empty set when unconfigured.
+        """
+        if self._db_path is None:
+            return set()
+        raw = await asyncio.to_thread(self._read_granted_scope)
+        return set(raw.split())
+
+    async def can_modify_playlists(self) -> bool:
+        """True iff the stored token carries a playlist-modify-* scope."""
+        return bool(await self.playlist_scopes() & _PLAYLIST_MODIFY_SCOPES)
 
     async def _refresh_user_token(self, refresh_token: str) -> tuple[str, int]:
         if not self._client_id or not self._client_secret:
@@ -323,6 +353,116 @@ class SpotifyResolver:
                 break
             offset += 50
         return results
+
+    async def _get_write_client(self) -> spotipy.Spotify:
+        """Return the user client for a playlist write, or raise legibly.
+
+        Scope is checked *before* the call so a read-only grant reports itself
+        in re-consent terms instead of surfacing as a bare 403 from Spotify.
+        """
+        if not await self.can_modify_playlists():
+            raise SpotifyResolveError(
+                "Spotify authorization is read-only — re-authorize at "
+                "/spotify/authorize to grant playlist-modify."
+            )
+        client = await self._get_user_client()
+        if client is None:
+            raise SpotifyResolveError(
+                "Spotify bot-owner authorization missing or expired — "
+                "re-authorize at /spotify/authorize."
+            )
+        return client
+
+    async def add_tracks_to_playlist(
+        self, playlist_id: str, track_ids: list[str]
+    ) -> int:
+        """Add tracks to a playlist in chunks of 100 URIs; returns count added."""
+        if not track_ids:
+            return 0
+        client = await self._get_write_client()
+        total_added = 0
+        for index in range(0, len(track_ids), _PLAYLIST_WRITE_CHUNK):
+            chunk = track_ids[index : index + _PLAYLIST_WRITE_CHUNK]
+            uris = [f"spotify:track:{track_id}" for track_id in chunk]
+            await self._write_call(client.playlist_add_items, playlist_id, uris)
+            total_added += len(chunk)
+        log.info(
+            "added %d track(s) to playlist %s", total_added, playlist_id
+        )
+        return total_added
+
+    async def remove_tracks_from_playlist(
+        self, playlist_id: str, track_ids: list[str]
+    ) -> int:
+        """Remove every occurrence of the tracks, in chunks of 100 URIs."""
+        if not track_ids:
+            return 0
+        client = await self._get_write_client()
+        total_removed = 0
+        for index in range(0, len(track_ids), _PLAYLIST_WRITE_CHUNK):
+            chunk = track_ids[index : index + _PLAYLIST_WRITE_CHUNK]
+            uris = [f"spotify:track:{track_id}" for track_id in chunk]
+            await self._write_call(
+                client.playlist_remove_all_occurrences_of_items, playlist_id, uris
+            )
+            total_removed += len(chunk)
+        log.info(
+            "removed %d track(s) from playlist %s", total_removed, playlist_id
+        )
+        return total_removed
+
+    async def playlist_track_ids(self, playlist_id: str) -> list[str]:
+        """Track ids currently on a playlist, in playlist order.
+
+        The reconcile action's read half: prefers the bot-owner client (it
+        sees their private playlists), falls back to Client Credentials.
+        Local files (no catalog id) are skipped — they can't be written back.
+        """
+        client = await self._get_user_client() or self._ensure_client()
+        ids: list[str] = []
+        offset = 0
+        while True:
+            page = await self._call(
+                client.playlist_items,
+                playlist_id,
+                limit=_PLAYLIST_PAGE_SIZE,
+                offset=offset,
+                additional_types=("track",),
+            )
+            for item in page.get("items", []):
+                track = item.get("track") or {}
+                track_id = track.get("id")
+                if track_id and not track.get("is_local"):
+                    ids.append(str(track_id))
+            if not page.get("next"):
+                break
+            offset += _PLAYLIST_PAGE_SIZE
+        return ids
+
+    async def _write_call(self, fn, *args, **kwargs):
+        """_call, translating write-denied statuses into actionable messages.
+
+        Reaching a 403 here means the modify scope *was* granted (checked
+        up-front), so the denial is about the playlist itself — a different
+        failure from missing scope and worded as such.
+        """
+        try:
+            return await self._call(fn, *args, **kwargs)
+        except SpotifyResolveError as exc:
+            cause = exc.__cause__
+            if isinstance(cause, SpotifyException):
+                http_status = getattr(cause, "http_status", None)
+                if http_status == 403:
+                    raise SpotifyResolveError(
+                        "Spotify refused the playlist write (403) — the "
+                        "authorized account likely doesn't own this playlist "
+                        "or can't edit it."
+                    ) from cause
+                if http_status == 404:
+                    raise SpotifyResolveError(
+                        "Playlist not found — check the configured playlist id."
+                    ) from cause
+            raise
 
     async def _call(self, fn, *args, **kwargs):
         """Invoke a sync spotipy method off-loop, retrying on 429.

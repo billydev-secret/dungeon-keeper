@@ -403,6 +403,13 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(bios_routes.router, prefix="/api/bios", tags=["bios"])
 
+    # ── Music Playlist ──────────────────────────────────────────────────
+    from web_server.routes import music_playlist as music_playlist_routes
+
+    app.include_router(
+        music_playlist_routes.router, prefix="/api", tags=["music-playlist"]
+    )
+
     # Install the log handler so records flow to the SSE stream
     logs_routes.install_log_handler()
 

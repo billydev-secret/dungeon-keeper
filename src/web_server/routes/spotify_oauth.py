@@ -27,7 +27,14 @@ _log = logging.getLogger("dungeonkeeper.web.spotify_oauth")
 
 SPOTIFY_AUTHORIZE = "https://accounts.spotify.com/authorize"
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
-SPOTIFY_SCOPES = "playlist-read-private playlist-read-collaborative"
+# Both read scopes are load-bearing in prod (private-playlist reads in
+# spotify_resolver) — the modify pair extends the grant for playlist writes,
+# it never replaces them. A re-consent with a narrower list silently breaks
+# the live reader.
+SPOTIFY_SCOPES = (
+    "playlist-read-private playlist-read-collaborative"
+    " playlist-modify-private playlist-modify-public"
+)
 
 _STATE_COOKIE = "dk_spotify_oauth_state"
 
@@ -154,8 +161,8 @@ async def spotify_callback(
     _log.info("Spotify bot refresh token stored (scope=%s)", scope)
     response = HTMLResponse(
         "<h1>Spotify authorized</h1>"
-        "<p>The bot can now access your private playlists. "
-        "You can close this tab.</p>"
+        "<p>The bot can now access your private playlists and update "
+        "playlists on your behalf. You can close this tab.</p>"
     )
     response.delete_cookie(_STATE_COOKIE)
     return response
