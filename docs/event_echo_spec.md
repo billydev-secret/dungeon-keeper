@@ -66,6 +66,7 @@ nobody has to act. The distinction is not cosmetic; see Rate limiting.
 | `raffle_closing` | **deadline** | The guild's ISO week rolls within the hour (and the raffle is enabled) | ISO week (`2026-W31`) |
 | `quest_flip` | **happened** | A new quest period going live at the ISO-week roll | ISO week (`2026-W31`) |
 | `community_tier` | **happened** | A community goal crossing a 40% / 70% / 100% tier | `quest_id:tier` |
+| `survivor_join` | **happened** | A member joining a Survivor season (fired by the join confirm; the mini-advertisement, 2026-08-18) | `season_id:user_id` |
 
 `echo_key` is the game type for party games, the sub-game for Gamebot, and
 the source name for everything else — those fire a handful of times a year,

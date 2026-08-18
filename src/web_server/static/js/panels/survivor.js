@@ -437,6 +437,10 @@ function renderRulesCards(zone, season, roles, channels) {
         ${numField("gauntlet_fee_per_week", "Gauntlet Fee / Week", c.gauntlet_fee_per_week,
     "× replayed weeks, charged on late entry. Alive arrivals feed the main " +
     "pot; dead-on-arrival fees feed the ghost pot.", { max: 10000 })}
+        ${numField("weekly_win_coins", "Weekly Win Prize", c.weekly_win_coins,
+    "Paid at the Reckoning to everyone whose picks all won that week " +
+    "(ghosts included). A real faucet — <code>survivor_weekly_win</code> in " +
+    "the ledger. 0 = off.", { max: 10000 })}
       </div>
 
       <div class="card">

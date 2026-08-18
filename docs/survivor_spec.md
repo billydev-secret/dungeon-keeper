@@ -98,6 +98,16 @@ The roles get pinged exactly twice a week. Restraint is the brand.
 ### 2.7 Endgame ceremony
 Champion gets a dedicated post (never folded into a Reckoning): season stats (weeks survived, closest call, teams ridden), pot receipt, role, optional Bios-cog trophy line. Splits framed as shared victory; annulments as their own mini-event (*"everyone died. therefore nobody did. the week is stricken — but the teams you burned stay burned."*)
 
+### 2.7b Join echo (added 2026-08-18)
+A member joining fires an **Event Echo** into main chat — the existing
+mirror system, not a new announcement path: silent (no ping), the guild's
+configured echo channel, per-member-per-season dedupe, and the shared
+cooldowns coalescing a busy join night into one echo. The line is a mini
+advertisement — *"🏈 Loaf joined the Survivor pool — 14 players in · pot
+8,000 · one team a week, last one standing takes it"* — with the jump link
+landing on the channel panel, where the Join button is. A guild with no
+echo channel configured simply never echoes.
+
 ### 2.8 Notifications & consent
 `/survivor notifications`: per-category DM toggles (last call, condolence), default ON. Closed DMs fall back to channel mention.
 
@@ -247,6 +257,7 @@ CREATE TABLE survivor_flavor (
 | `pot_seed` | **10000** | House-seeded pot. **Amended 2026-08-17 from 5000.** See §5.1 |
 | `ghost_pot_pct` | **20** | Ghost Streak side-pot's share of the seed. Was unspecified |
 | `gauntlet_fee_per_week` | 50 | × weeks elapsed; alive → main pot, DOA → ghost pot |
+| `weekly_win_coins` | **25** | *Added 2026-08-18:* paid at the Reckoning to every player whose picks all won that week (ghosts included; a double-pick split week earns nothing). 0 = off. **A faucet**: ~15–20 winners × 25 ≈ 400/week ≈ 60/day, own ledger kind `survivor_weekly_win`, paid in the same transaction that marks the week reckoned so it can never double-pay and the preview can never pay |
 | `strikes` | 1 | 0 = sudden death |
 | `tie_rule` | `loss` | `loss` \| `survive` |
 | `late_entry` | `gauntlet` | `gauntlet` \| `closed` \| `ghost_only` |
@@ -285,6 +296,7 @@ in the economy metrics rather than appearing as unexplained mint:
 | `survivor_gauntlet_fee` | debit player | late entry, `fee_per_week × weeks` |
 | `survivor_payout` | credit player | champion, equal split, or annul-era split |
 | `survivor_ghost_payout` | credit player | Ghost Streak side-pot, ties split |
+| `survivor_weekly_win` | credit player | weekly all-wins prize, paid at the Reckoning (added 2026-08-18) |
 
 The seed itself is **booked, not minted, at create-season** — the pot displays
 truthfully all season and the 10,000 enters supply exactly once, at payout.

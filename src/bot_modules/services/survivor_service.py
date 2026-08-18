@@ -26,6 +26,10 @@ DEFAULT_CONFIG: dict[str, object] = {
     "pot_seed": 10000,
     "ghost_pot_pct": 20,
     "gauntlet_fee_per_week": 50,
+    # A small weekly faucet (added 2026-08-18): every player whose picks all
+    # won that week collects this at the Reckoning. 0 = off. ~15-20 winners
+    # × 25 ≈ 400/week ≈ 60/day — about 1% of current net supply growth.
+    "weekly_win_coins": 25,
     "strikes": 1,
     "tie_rule": "loss",             # loss | survive
     "late_entry": "gauntlet",       # gauntlet | closed | ghost_only
@@ -74,6 +78,7 @@ _INT_RANGES: dict[str, tuple[int, int]] = {
     "pot_seed": (0, 1_000_000),
     "ghost_pot_pct": (0, 100),
     "gauntlet_fee_per_week": (0, 10_000),
+    "weekly_win_coins": (0, 10_000),
     "strikes": (0, 2),
     "max_auto_assigns": (0, 18),
     "double_pick_start_week": (0, 18),

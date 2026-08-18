@@ -445,6 +445,41 @@ async def echo_discord_event(bot, event: discord.ScheduledEvent) -> bool:
 # `quests.TRIGGER_FLAVOR` and `quests.tier_echo_line`). Event Echo owns the
 # frame; the feature owns its own voice.
 
+async def echo_survivor_join(
+    bot,
+    guild: discord.Guild,
+    *,
+    member_name: str,
+    season_id: int,
+    user_id: int,
+    detail: str,
+    url: str,
+    now: float | None = None,
+) -> bool:
+    """Echo a Survivor join into main chat — the mini-advertisement.
+
+    Keyed per (season, member), so one member's join can never echo twice;
+    the shared cooldowns coalesce a busy join night into a single echo. The
+    `detail` line (players in, pot) is Survivor's own vocabulary, built by
+    the caller; the link lands on the channel panel — the join button is
+    right there.
+    """
+    from bot_modules.services.event_echo_logic import SOURCE_SURVIVOR_JOIN
+
+    return await echo_event(
+        bot,
+        guild=guild,
+        source=SOURCE_SURVIVOR_JOIN,
+        echo_key=SOURCE_SURVIVOR_JOIN,
+        ref=f"{season_id}:{user_id}",
+        name=member_name,
+        origin_channel_id=None,
+        url=url,
+        detail=detail,
+        now=now,
+    )
+
+
 async def echo_quest_flip(
     bot,
     guild: discord.Guild,

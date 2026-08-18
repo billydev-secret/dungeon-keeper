@@ -197,7 +197,14 @@ async def post_reckoning(bot, db_path: Path, season: dict, week: int, now: float
         with open_db(db_path) as conn:
             # §6.14: leavers die at the Reckoning, so this post reports them.
             reckoning.eliminate_leavers(conn, season, week, present)
+            # The weekly prize pays in the same transaction that marks the
+            # week reckoned — once per week structurally, never in a preview.
+            paid = reckoning.pay_weekly_wins(conn, season, week)
             data = reckoning.build_reckoning_data(conn, season, week, now)
+            if paid:
+                data["weekly_win"] = {
+                    "count": len(paid), "amount": paid[0][1],
+                }
             update_config(conn, season["id"], {
                 "last_reckoned_week": week,
                 "last_reckoned_at": int(now),

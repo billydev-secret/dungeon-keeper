@@ -401,3 +401,92 @@ def test_panel_view_button_roster():
     ]
     ids = [c.custom_id for c in panel_view(7, join_open=False).children]
     assert ids == ["survivor_slate:7", "survivor_history:7"]
+
+
+# ── the weekly prize (2026-08-18) ──────────────────────────────────────
+
+
+def test_weekly_prize_pays_all_win_players_only(db):
+    from bot_modules.services import economy_service
+    from bot_modules.survivor.reckoning import pay_weekly_wins
+
+    with open_db(db) as conn:
+        season = _season(conn)  # weekly_win_coins default 25
+        _settled_week1(conn, season)  # 1 won (SEA), 2 lost (NE)
+        paid = pay_weekly_wins(conn, season, 1)
+        assert paid == [(1, 25)]
+        assert economy_service.get_balance(conn, GID, 1) == 25
+        assert economy_service.get_balance(conn, GID, 2) == 0
+        row = conn.execute(
+            "SELECT kind, amount, meta FROM econ_ledger WHERE user_id = 1"
+        ).fetchone()
+        assert row["kind"] == "survivor_weekly_win" and row["amount"] == 25
+        import json as _json
+
+        meta = _json.loads(row["meta"])
+        assert (meta["season_id"], meta["week"]) == (season["id"], 1)
+
+
+def test_weekly_prize_ghosts_collect_and_double_pick_split_does_not(db):
+    from bot_modules.survivor.reckoning import pay_weekly_wins
+
+    with open_db(db) as conn:
+        season = _season(conn)
+        join_season(conn, season, 1, NOW)   # ghost, wins
+        join_season(conn, season, 2, NOW)   # split week: win + loss
+        eliminate_player(conn, season["id"], 1, week=0)
+        conn.execute(
+            "INSERT INTO survivor_picks (season_id, guild_id, user_id, week,"
+            " slot, team, game_id, result) VALUES"
+            " (?, ?, 1, 1, 1, 'SEA', 'g-thu', 'win'),"
+            " (?, ?, 2, 1, 1, 'SEA', 'g-thu', 'win'),"
+            " (?, ?, 2, 1, 2, 'LV', 'g-mon', 'loss')",
+            (season["id"], GID, season["id"], GID, season["id"], GID),
+        )
+        paid = pay_weekly_wins(conn, season, 1)
+        assert paid == [(1, 25)]  # the ghost collects; the split week doesn't
+
+
+def test_weekly_prize_dial_zero_is_off(db):
+    from bot_modules.survivor.reckoning import pay_weekly_wins
+
+    with open_db(db) as conn:
+        season = _season(conn, weekly_win_coins=0)
+        _settled_week1(conn, season)
+        assert pay_weekly_wins(conn, season, 1) == []
+
+
+def test_reckoning_embed_shows_the_prize_line():
+    from bot_modules.survivor.reckoning import build_reckoning_embed
+
+    data = {
+        "week": 1, "before": 3, "after": 3,
+        "pots": {"main": 8000, "ghost": 2000},
+        "toll_line": "clean sheet", "stragglers": 0, "arrivals": [],
+        "eulogy_lines": [], "deaths": [], "ledger": [],
+        "streak_strip": [], "streak_record": 0,
+        "weekly_win": {"count": 14, "amount": 25},
+    }
+    embed = build_reckoning_embed(data, lambda u: f"P{u}", season_name="S")
+    assert "💰 14 correct pick(s) collect **25** each" in embed.description
+
+
+# ── the join echo (2026-08-18) ─────────────────────────────────────────
+
+
+def test_survivor_join_echo_source_registered():
+    from bot_modules.services.event_echo_logic import (
+        SOURCE_SURVIVOR_JOIN,
+        spec_for,
+    )
+
+    spec = spec_for(SOURCE_SURVIVOR_JOIN)
+    assert "joined the Survivor pool" in spec.headline
+    assert not spec.exempt  # joins recur; skip-don't-queue is right
+
+
+def test_join_echo_detail_line():
+    from bot_modules.survivor.views import join_echo_detail
+
+    line = join_echo_detail(14, 8150)
+    assert "14 players in" in line and "pot 8,150" in line

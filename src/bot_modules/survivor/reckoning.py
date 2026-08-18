@@ -82,6 +82,46 @@ def eliminate_leavers(
     return gone
 
 
+def pay_weekly_wins(
+    conn: sqlite3.Connection, season: dict, week: int
+) -> list[tuple[int, int]]:
+    """The weekly prize (added 2026-08-18): every player whose graded picks
+    for ``week`` were ALL wins (one fate, one prize — a double-pick split
+    week earns nothing) collects ``weekly_win_coins``. Ghosts included: a
+    small retention hook for the dead, which is Ghost Streak's whole point.
+
+    Called ONLY from the posting path, inside the same transaction that
+    marks the week reckoned — once per week structurally, and the panel
+    preview can never pay. Own ledger kind, so the faucet is visible in the
+    economy metrics. Post-Reckoning corrections neither pay late nor claw
+    back — the moment of the Reckoning is the moment of record.
+    Returns [(user_id, amount)].
+    """
+    from bot_modules.services import economy_service
+    from bot_modules.survivor.logic import KIND_WEEKLY_WIN
+
+    amount = int(season["config"].get("weekly_win_coins") or 0)
+    if amount <= 0:
+        return []
+    rows = conn.execute(
+        "SELECT user_id FROM survivor_picks "
+        "WHERE season_id = ? AND week = ? AND result IS NOT NULL "
+        "GROUP BY user_id "
+        "HAVING SUM(CASE WHEN result != 'win' THEN 1 ELSE 0 END) = 0 "
+        "AND SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) > 0",
+        (season["id"], week),
+    ).fetchall()
+    paid = []
+    for r in rows:
+        user_id = int(r["user_id"])
+        economy_service.apply_credit(
+            conn, season["guild_id"], user_id, amount, KIND_WEEKLY_WIN,
+            meta={"season_id": season["id"], "week": week},
+        )
+        paid.append((user_id, amount))
+    return paid
+
+
 def build_reckoning_data(
     conn: sqlite3.Connection, season: dict, week: int, now: float
 ) -> dict:
@@ -237,6 +277,12 @@ def build_reckoning_embed(
         f"👥 Survivors **{data['before']} → {data['after']}** · "
         f"Pot **{data['pots']['main']:,}** · Ghost Pot **{data['pots']['ghost']:,}**"
     )
+    weekly = data.get("weekly_win")
+    if weekly and weekly["count"]:
+        toll += (
+            f"\n💰 {weekly['count']} correct pick(s) collect "
+            f"**{weekly['amount']:,}** each"
+        )
     if data["stragglers"]:
         toll += (
             f"\n⏳ {data['stragglers']} result(s) still pending — an update "

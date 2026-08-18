@@ -344,6 +344,70 @@ class JoinConfirmView(discord.ui.View):
             except discord.HTTPException:
                 log.warning("survivor: join followup failed for %s", user_id)
         await refresh_panel(bot, db_path, season["id"])
+        await _echo_join(bot, db_path, interaction, season["id"])
+
+
+def join_echo_detail(entrants: int, pot: int) -> str:
+    """The mini-advertisement line under a join echo — Survivor's own
+    vocabulary, per Event Echo's frame-vs-voice split."""
+    return (
+        f"{entrants} players in · pot {pot:,} · one team a week, "
+        "last one standing takes it"
+    )
+
+
+async def _echo_join(bot, db_path, interaction, season_id: int) -> None:
+    """Fire the main-chat join echo (2026-08-18), best-effort. Event Echo
+    owns the destination, cooldowns, and one-per-member dedupe; a guild
+    with no echo channel configured simply never echoes."""
+    guild = interaction.guild
+    if guild is None:
+        return
+
+    def _q():
+        with open_db(db_path) as conn:
+            season = get_season(conn, season_id)
+            if season is None:
+                return None
+            entrants = conn.execute(
+                "SELECT COUNT(*) FROM survivor_players WHERE season_id = ?",
+                (season_id,),
+            ).fetchone()[0]
+            pot = logic.pot_totals(conn, season)["main"]
+        return season, int(entrants), pot
+
+    loaded = await asyncio.to_thread(_q)
+    if loaded is None:
+        return
+    season, entrants, pot = loaded
+    config = season["config"]
+    channel_id = int(
+        config.get("announcement_channel_id") or config["channel_id"] or 0
+    )
+    message_id = int(config.get("announcement_message_id") or 0)
+    if not channel_id or not message_id:
+        return  # no panel to land on — no ad without a door
+    url = (
+        f"https://discord.com/channels/{guild.id}/{channel_id}/{message_id}"
+    )
+    member = interaction.user
+    name = (
+        member.display_name if isinstance(member, discord.Member)
+        else member.name
+    )
+    try:
+        from bot_modules.services.event_echo_service import echo_survivor_join
+
+        await echo_survivor_join(
+            bot, guild,
+            member_name=name,
+            season_id=season_id,
+            user_id=member.id,
+            detail=join_echo_detail(entrants, pot),
+            url=url,
+        )
+    except Exception:
+        log.exception("survivor: join echo failed")
 
 
 async def _grant_survivor_role(

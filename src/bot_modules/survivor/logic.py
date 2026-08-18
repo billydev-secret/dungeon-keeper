@@ -25,6 +25,7 @@ from bot_modules.services.survivor_service import add_player
 # unexplained mint.
 KIND_BUYIN = "survivor_buyin"
 KIND_GAUNTLET_FEE = "survivor_gauntlet_fee"
+KIND_WEEKLY_WIN = "survivor_weekly_win"
 
 # ESPN abbreviations by conference, for the dual-select pick panel
 # (Discord's 25-option cap vs 32 teams, spec §2.4). The full set is pinned
