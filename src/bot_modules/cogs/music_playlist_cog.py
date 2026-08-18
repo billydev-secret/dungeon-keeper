@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
@@ -122,6 +122,63 @@ class MusicPlaylistCog(commands.Cog):
             ctx.db_path, SpotifyResolver(db_path=ctx.db_path)
         )
         super().__init__()
+
+    async def cog_load(self) -> None:
+        self._retry_loop.start()
+
+    async def cog_unload(self) -> None:
+        self._retry_loop.cancel()
+
+    # ------------------------------------------------------------------
+    # Auto-retry sweep — re-fires retryable ledger rows (write_failed /
+    # resolve_failed) so a transient Spotify outage heals itself instead of
+    # waiting for someone to press Re-scan. Policy (backoff, attempt cap,
+    # batch size) lives in the service; this is only the Discord edge.
+    # ------------------------------------------------------------------
+
+    @tasks.loop(minutes=5)
+    async def _retry_loop(self) -> None:
+        try:
+            guild_ids = await self.service.guilds_with_pending_retries()
+            for guild_id in guild_ids:
+                await self._retry_sweep_guild(guild_id)
+        except Exception:
+            log.exception("music playlist: retry sweep failed")
+
+    @_retry_loop.before_loop
+    async def _before_retry_loop(self) -> None:
+        await self.bot.wait_until_ready()
+
+    async def _retry_sweep_guild(self, guild_id: int) -> None:
+        fetched: dict[int, discord.Message] = {}
+
+        async def _fetch(channel_id: int, message_id: int) -> tuple[str, int] | None:
+            channel = self.bot.get_channel(channel_id)
+            fetch_message = getattr(channel, "fetch_message", None)
+            if fetch_message is None:
+                # Channel deleted (or not text-ish) — its messages are gone.
+                return None
+            try:
+                message = await fetch_message(message_id)
+            except discord.NotFound:
+                return None
+            # Other HTTPExceptions propagate: transient, retried next sweep.
+            fetched[message_id] = message
+            return (message.content or "", message.author.id)
+
+        result = await self.service.retry_failed_messages(guild_id, _fetch)
+        # The original failure swallowed the poster's feedback; deliver it now.
+        for _channel_id, message_id, summary in result.results:
+            message = fetched.get(message_id)
+            if message is not None:
+                await self._react(message, summary)
+        if result.attempted:
+            log.info(
+                "music playlist retry sweep: guild %s attempted=%d "
+                "recovered=%d still_failing=%d gone=%d",
+                guild_id, result.attempted, result.recovered,
+                result.still_failing, result.gone,
+            )
 
     # ------------------------------------------------------------------
     # Store reads for the panel (sync, called via asyncio.to_thread)

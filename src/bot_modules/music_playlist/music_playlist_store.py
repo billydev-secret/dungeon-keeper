@@ -55,6 +55,10 @@ STATUS_PROCESSED = "processed"
 STATUS_NO_LINKS = "no_links"
 STATUS_WRITE_FAILED = "write_failed"
 STATUS_RESOLVE_FAILED = "resolve_failed"
+# The retry sweep found the message deleted from Discord. Terminal: there is
+# nothing left to re-process, and without it a deleted message's retryable
+# row would be re-fetched forever.
+STATUS_MESSAGE_GONE = "message_gone"
 
 # Statuses that mean "we saw this message but did NOT land its tracks" —
 # a Spotify write that was refused (read-only grant, 403, exhausted 429s) or a
@@ -108,6 +112,59 @@ def record_message(
          *sorted(RETRYABLE_MESSAGE_STATUSES)),
     )
     return cur.rowcount > 0
+
+
+def list_retryable_messages(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    base_delay_s: float,
+    max_attempts: int,
+    limit: int,
+    now: float | None = None,
+) -> list[Mapping[str, Any]]:
+    """Ledger rows due for an automatic retry, oldest failure first.
+
+    A row is due when its exponential-backoff window has passed:
+    ``processed_at + base_delay_s * 2^attempts <= now`` (the upsert refreshes
+    ``processed_at`` on every failed retry, so the clock runs from the latest
+    failure). Rows at or past *max_attempts* never come back from here — they
+    stay retryable for a manual Re-scan, which ignores attempts entirely.
+    """
+    ts = time.time() if now is None else now
+    return conn.execute(
+        "SELECT * FROM music_playlist_messages "
+        f"WHERE guild_id = ? AND status IN ({_RETRYABLE_PLACEHOLDERS}) "
+        "AND attempts < ? AND processed_at + ? * (1 << attempts) <= ? "
+        "ORDER BY processed_at LIMIT ?",
+        (guild_id, *sorted(RETRYABLE_MESSAGE_STATUSES),
+         max_attempts, base_delay_s, ts, limit),
+    ).fetchall()
+
+
+def bump_retry_attempts(
+    conn: sqlite3.Connection, guild_id: int, message_id: int
+) -> None:
+    """Count a retry against a ledger row (call before re-processing it)."""
+    conn.execute(
+        "UPDATE music_playlist_messages SET attempts = attempts + 1 "
+        "WHERE guild_id = ? AND message_id = ?",
+        (guild_id, message_id),
+    )
+
+
+def guilds_with_retryable(
+    conn: sqlite3.Connection, *, max_attempts: int
+) -> list[int]:
+    """Guilds holding at least one row the retry sweep could still act on."""
+    return [
+        int(r[0])
+        for r in conn.execute(
+            "SELECT DISTINCT guild_id FROM music_playlist_messages "
+            f"WHERE status IN ({_RETRYABLE_PLACEHOLDERS}) AND attempts < ?",
+            (*sorted(RETRYABLE_MESSAGE_STATUSES), max_attempts),
+        ).fetchall()
+    ]
 
 
 def is_message_processed(

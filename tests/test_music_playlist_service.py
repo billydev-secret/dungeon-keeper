@@ -750,6 +750,171 @@ async def test_reconcile_surfaces_spotify_errors(sync_db_path):
     assert spotify.add_calls == [] and spotify.remove_calls == []
 
 
+# ── The auto-retry sweep ──────────────────────────────────────────────
+
+
+def _age_ledger_row(db_path, message_id, *, to=0.0, attempts=None):
+    """Backdate a ledger row past its backoff window (and set attempts)."""
+    with open_db(db_path) as conn:
+        conn.execute(
+            "UPDATE music_playlist_messages SET processed_at = ? "
+            "WHERE guild_id = ? AND message_id = ?",
+            (to, GUILD, message_id),
+        )
+        if attempts is not None:
+            conn.execute(
+                "UPDATE music_playlist_messages SET attempts = ? "
+                "WHERE guild_id = ? AND message_id = ?",
+                (attempts, GUILD, message_id),
+            )
+
+
+def _ledger_row(db_path, message_id):
+    with open_db(db_path) as conn:
+        return conn.execute(
+            "SELECT * FROM music_playlist_messages "
+            "WHERE guild_id = ? AND message_id = ?",
+            (GUILD, message_id),
+        ).fetchone()
+
+
+def _fetcher_returning(content, author_id=ALICE):
+    async def fetch(channel_id: int, message_id: int):
+        return (content, author_id)
+    return fetch
+
+
+async def _failed_write(db_path, spotify, svc, message_id=101, track="t1"):
+    """Drive a real message into a write_failed ledger row."""
+    spotify.catalog[track] = ("Song", ["A"])
+    spotify.add_error = SpotifyResolveError("Spotify API error: 503 down")
+    summary = await svc.process_message(
+        GUILD, CHANNEL, message_id, track_url(track), ALICE
+    )
+    assert summary.write_blocked
+    assert _ledger_row(db_path, message_id)["status"] == store.STATUS_WRITE_FAILED
+    spotify.add_error = None
+
+
+async def test_retry_recovers_a_failed_write(sync_db_path):
+    """The defect: retryable rows existed, and nothing ever re-fired them."""
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101)
+
+    result = await svc.retry_failed_messages(
+        GUILD, _fetcher_returning(track_url("t1"))
+    )
+
+    assert (result.attempted, result.recovered) == (1, 1)
+    assert result.still_failing == 0
+    assert window_ids(sync_db_path) == ["t1"]
+    assert spotify.playlists[PLAYLIST] == ["t1"]
+    assert _ledger_row(sync_db_path, 101)["status"] == store.STATUS_PROCESSED
+    # The cog gets the summary to finally deliver the swallowed ✅.
+    [(channel_id, message_id, summary)] = result.results
+    assert (channel_id, message_id) == (CHANNEL, 101)
+    assert summary.added_track_ids == ["t1"]
+
+
+async def test_retry_waits_out_the_backoff_window(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)  # processed_at = now
+
+    result = await svc.retry_failed_messages(
+        GUILD, _fetcher_returning(track_url("t1"))
+    )
+    assert result.attempted == 0
+    assert window_ids(sync_db_path) == []
+
+
+async def test_retry_still_failing_keeps_row_and_backoff(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101)
+    spotify.add_error = SpotifyResolveError("Spotify API error: 503 still down")
+
+    result = await svc.retry_failed_messages(
+        GUILD, _fetcher_returning(track_url("t1"))
+    )
+
+    assert (result.attempted, result.still_failing) == (1, 1)
+    row = _ledger_row(sync_db_path, 101)
+    assert row["status"] == store.STATUS_WRITE_FAILED
+    # Attempts bumped and the failure re-timestamped: backoff window doubled.
+    assert row["attempts"] == 1
+    assert row["processed_at"] > 0.0
+
+
+async def test_retry_gone_message_ledgers_terminally(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101)
+
+    async def fetch_gone(channel_id: int, message_id: int):
+        return None
+
+    result = await svc.retry_failed_messages(GUILD, fetch_gone)
+    assert (result.attempted, result.gone) == (1, 1)
+    assert _ledger_row(sync_db_path, 101)["status"] == store.STATUS_MESSAGE_GONE
+    # Terminal: the next sweep has nothing to do.
+    result = await svc.retry_failed_messages(GUILD, fetch_gone)
+    assert result.attempted == 0
+
+
+async def test_retry_transient_fetch_failure_leaves_row_retryable(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101)
+
+    async def fetch_boom(channel_id: int, message_id: int):
+        raise RuntimeError("discord hiccup")
+
+    result = await svc.retry_failed_messages(GUILD, fetch_boom)
+    assert (result.attempted, result.still_failing) == (1, 1)
+    row = _ledger_row(sync_db_path, 101)
+    assert row["status"] == store.STATUS_WRITE_FAILED
+    assert row["attempts"] == 1
+
+
+async def test_retry_gives_up_after_the_attempt_cap(sync_db_path):
+    seed_settings(sync_db_path)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+    await _failed_write(sync_db_path, spotify, svc)
+    _age_ledger_row(sync_db_path, 101, attempts=8)
+
+    result = await svc.retry_failed_messages(
+        GUILD, _fetcher_returning(track_url("t1"))
+    )
+    assert result.attempted == 0
+    # The row stays retryable — a manual Re-scan still picks it up.
+    with open_db(sync_db_path) as conn:
+        assert not store.is_message_processed(conn, GUILD, 101)
+
+
+async def test_retry_respects_the_settings_gates(sync_db_path):
+    seed_settings(sync_db_path, enabled=False)
+    spotify = FakeSpotify()
+    svc = make_service(sync_db_path, spotify)
+
+    async def fetch_never(channel_id: int, message_id: int):
+        raise AssertionError("sweep must not fetch when the feature is off")
+
+    result = await svc.retry_failed_messages(GUILD, fetch_never)
+    assert result.attempted == 0
+
+
 # ── Review queue: approve / reject ────────────────────────────────────
 
 
