@@ -1,0 +1,135 @@
+# Dungeon Keeper docs+source MCP server (read-only), for developing feature
+# specs in claude.ai against the bot's real specs, conventions and code.
+#
+# Install: see deploy/README.md ("DK MCP server").
+# Logs:    journalctl -u dk-mcp
+#
+# ---------------------------------------------------------------------------
+# THE THREAT MODEL, because it drives every hardening line below
+# ---------------------------------------------------------------------------
+# This process is reachable from the internet through a Cloudflare Tunnel, and
+# the connector is UNAUTHENTICATED -- the only thing protecting it is a long
+# random URL path acting as a shared secret. It reads the PRODUCTION checkout,
+# which contains:
+#
+#   .env              Discord token, LAVALINK_PASSWORD, SPOTIFY_CLIENT_SECRET
+#   dungeonkeeper.db  the live database, full of per-user data
+#   .git/             every secret ever committed, in full history
+#   lavalink/         config with interpolated credentials
+#
+# The application enforces an allowlist (src/dk_mcp/paths_service.py: resolve
+# symlinks and '..' FIRST, then prove containment in docs/ or src/, extension
+# allowlist per root, regular files only). That is the actual security
+# boundary, and it is the part with 74 adversarial tests behind it.
+#
+# The mount namespace below is the second, independent layer. It is coarser
+# than the application's allowlist, and that is a deliberate retreat rather
+# than an oversight -- see the note on file binds.
+#
+#   ProtectHome=tmpfs    empties /home, /root and /run/user, so ~/.ssh, the
+#                        dev worktrees under dk-sessions/ and everything else
+#                        in Billy's home simply do not exist here.
+#   BindReadOnlyPaths=   binds ONLY the DK checkout back in, read-only.
+#   InaccessiblePaths=   masks the secrets inside it.
+#
+# WHY NOT A PURE ALLOWLIST OF docs/ + src/ + CLAUDE.md
+#
+# That was the first design and it cannot work on this host: systemd fails to
+# create the destination mount-point node for a SINGLE-FILE bind, so binding
+# CLAUDE.md dies at 226/NAMESPACE with
+#
+#   Failed to create destination mount point node
+#     '/run/systemd/mount-rootfs/home/ben/.../CLAUDE.md', ignoring: Permission denied
+#   Failed to set up mount namespacing: .../CLAUDE.md: No such file or directory
+#
+# The second line blames the source and is a red herring -- CLAUDE.md is a
+# regular file, right there, same SELinux label as docs/ and src/. Bisected
+# with transient units (2026-08-17):
+#
+#   ProtectHome=tmpfs + bind a FILE                       FAIL
+#   ProtectHome=tmpfs + bind a DIRECTORY                  OK
+#   ...both together                                      FAIL
+#   ...file bind + ProtectSystem=strict                   FAIL
+#   ...file bind + CapabilityBoundingSet=                 FAIL
+#
+# So: directory binds work, file binds do not, and no other property is
+# involved. CLAUDE.md is the working agreement and has to be served, and the
+# only directory containing it is the repo root -- which also contains .env.
+# Hence bind the root and mask, instead of binding the three allowed paths.
+#
+# The cost is the usual denylist weakness: a NEW secret dropped in the repo
+# root would not be masked until it is added below. What stops it being served
+# is the application allowlist, which only ever resolves docs/**.md, src/**
+# and CLAUDE.md -- so a new root-level secret is unreachable regardless of
+# whether anyone remembers this list. Keep it updated anyway.
+
+[Unit]
+Description=Dungeon Keeper docs/source MCP server (read-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ben
+Group=ben
+WorkingDirectory=/opt/dk-mcp
+
+# The secret URL path lives in a 0600 file, NOT in Environment=. `systemctl
+# show` prints Environment= to any local user without sudo, which would leak
+# the one credential this service has.
+EnvironmentFile=/opt/dk-mcp/dk-mcp.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/tmp
+
+ExecStart=/opt/dk-mcp/.venv/bin/python -m dk_mcp.server
+Restart=on-failure
+RestartSec=5s
+
+# -- filesystem: the allowlist, enforced by the kernel ----------------------
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/ben/discord-bots/dungeon-keeper
+
+# Masked inside the bound checkout. '-' means "skip if absent", so a missing
+# WAL file cannot stop the service booting.
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/.env
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/.git
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/dungeonkeeper.db
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/dungeonkeeper.db-wal
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/dungeonkeeper.db-shm
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/backups
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/lavalink
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/guess_cache
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/log.txt
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/.claude
+InaccessiblePaths=-/home/ben/discord-bots/dungeon-keeper/.cache
+
+PrivateTmp=yes
+PrivateDevices=yes
+
+# -- privilege and kernel surface ------------------------------------------
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=yes
+
+# Binds loopback for the tunnel; AF_UNIX is needed by the Python runtime.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

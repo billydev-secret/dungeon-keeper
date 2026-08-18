@@ -288,3 +288,95 @@ ssh admin@192.168.174.3 \
 - The bot's own `backups/` sit beside the DB on the same disk, which defends
   against logical damage but not disk failure. The off-device copy that closes
   that gap is the NAS timer below.
+
+## DK MCP server
+
+A read-only MCP server exposing this repo's specs and source to claude.ai, so
+feature specs are developed against how the bot actually works. Source lives in
+`src/dk_mcp/` (versioned with the docs it serves, covered by `scripts/gate.py`);
+it runs from `/opt/dk-mcp`, so a network-facing process is not executing out of
+the production checkout. Spec: `docs/dk_mcp_server.md`.
+
+Install:
+
+```bash
+# 1. Create the deploy directory once, as root.
+sudo install -d -o ben -g ben /opt/dk-mcp
+
+# 2. Sync the package, build its venv, and generate the endpoint secret.
+#    Re-run this after any change to src/dk_mcp/. It never restarts anything.
+./scripts/deploy_dk_mcp.sh
+
+# 3. Install the unit.
+sudo install -m 644 deploy/dk-mcp.service /etc/systemd/system/dk-mcp.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now dk-mcp
+
+# 4. Point a Cloudflare Tunnel hostname at it (Cloudflare dashboard):
+#      dkmcp.billy-bots.com  ->  http://127.0.0.1:8322
+```
+
+The connector URL is printed by the deploy script; it is
+`https://dkmcp.billy-bots.com` plus the random path in `/opt/dk-mcp/dk-mcp.env`.
+Add it in claude.ai as a custom connector.
+
+**That random path is the only credential.** The connector is unauthenticated,
+so the path is a shared secret: it lives in a 0600 `EnvironmentFile` rather than
+in the unit's `Environment=`, because `systemctl show` prints `Environment=` to
+any local user without sudo. Don't paste it anywhere it will be logged, and
+don't rotate it casually — the connector then 404s with no explanation.
+
+Verifying the sandbox after install (worth doing once, since the unit's mount
+namespace is the backstop for the application's own path allowlist):
+
+```bash
+# The service must be able to read docs/ and src/ ...
+sudo systemd-run --uid=ben --property=JoinsNamespaceOf=dk-mcp.service \
+  --pty /bin/ls /home/ben/discord-bots/dungeon-keeper/
+
+# ... and .env, dungeonkeeper.db and .git must not exist in its namespace at
+# all. `ls` above should show only docs, src and CLAUDE.md.
+```
+
+Note `systemd-run --user` is *not* a substitute for testing this: user-manager
+uid remapping makes root-owned files read as `nobody` and produces false
+failures. Test against the real system unit or not at all.
+
+Ports: 8322 (8321 belongs to the Truth-or-Dare server at `/opt/tod`).
+Logs: `journalctl -u dk-mcp -f`.
+
+### The tunnel ingress rule has to be exactly `http://127.0.0.1:8322`
+
+Not `https://`, and not `localhost`. Both were wrong on the first setup and
+each fails differently:
+
+- `https://` — the origin speaks plain HTTP, so cloudflared's TLS handshake
+  gets plain text back: `tls: first record does not look like a TLS handshake`.
+- `localhost` — resolves to `::1` first, and the service binds IPv4 only:
+  `dial tcp [::1]:8322: connect: connection refused`.
+
+Both surface publicly as a Cloudflare **502**, and claude.ai reports *that* as
+"Couldn't register with the sign-in service" — because a 502 body is not a
+valid MCP response, so the client falls back to OAuth discovery. The auth error
+is a symptom; check the origin first.
+
+Diagnose from the origin outwards, in this order:
+
+```bash
+# 1. Is the service up and listening?
+systemctl is-active dk-mcp && ss -ltn | grep 8322
+
+# 2. Does it answer MCP locally? (expect status=200)
+set -a; . /opt/dk-mcp/dk-mcp.env; set +a
+curl -s -o /dev/null -w 'status=%{http_code}\n' -X POST "http://127.0.0.1:8322${DK_MCP_PATH}" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"p","version":"1"}}}'
+
+# 3. If that is 200 and the public URL is not, it is the tunnel. cloudflared
+#    logs the rule it actually used, including the scheme and host:
+journalctl -u cloudflared -n 50 | grep -i originService
+```
+
+Note that step 3 prints request paths, so the secret endpoint path ends up in
+cloudflared's journal. That is another reason to treat it as rotatable rather
+than permanent.
