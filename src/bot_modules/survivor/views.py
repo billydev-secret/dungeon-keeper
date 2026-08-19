@@ -79,7 +79,7 @@ class PickPanel(discord.ui.View):
             if not side:
                 continue
             select = discord.ui.Select(
-                placeholder=f"{label} — pick a team to win",
+                placeholder=f"Pick an {label} team to win…",
                 options=[_game_option(g, offset_hours) for g in side],
             )
             select.callback = self._make_callback(select)
@@ -456,7 +456,7 @@ class SlatePickButton(
     def __init__(self, season_id: int) -> None:
         super().__init__(
             discord.ui.Button(
-                label="🏈 Make your pick",
+                label="🏈 Make Your Pick",
                 style=discord.ButtonStyle.primary,
                 custom_id=f"survivor_slate:{season_id}",
             )

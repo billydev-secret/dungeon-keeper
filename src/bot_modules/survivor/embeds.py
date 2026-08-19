@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import discord
 
+from bot_modules.core.branding import apply_section_spacing
 from bot_modules.services.branding_service import DEFAULT_ACCENT
 from bot_modules.survivor.logic import OpenGame
 
@@ -120,6 +121,7 @@ def build_status_embed(
         )
     embed.add_field(name="Pick", value=pick_line, inline=False)
     embed.set_footer(text=season_name)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -201,6 +203,7 @@ def build_board_embed(
             value=" · ".join(f"{t} ({n})" for t, n in board["most_burned"]),
             inline=False,
         )
+    apply_section_spacing(embed)
     return embed
 
 
@@ -311,10 +314,11 @@ def build_panel_embed(
         embed.add_field(name="New Here?", value=join_line, inline=False)
     if active:
         embed.set_footer(
-            text=f"Picks close at kickoff · {picked} of {alive} alive have picked"
+            text=f"Picks close at kickoff • {picked} of {alive} alive have picked"
         )
     else:
         embed.set_footer(text="Picks stay secret until the weekly results post")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -359,6 +363,7 @@ def build_gauntlet_receipt_embed(
         cost.append(f"Buy-in: **{buyin:,}**")
     embed.add_field(name="Entry Cost", value=" · ".join(cost), inline=False)
     embed.set_footer(text="Shown before you pay — no surprises")
+    apply_section_spacing(embed)
     return embed
 
 

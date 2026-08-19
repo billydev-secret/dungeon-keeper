@@ -533,8 +533,10 @@ def test_panel_lists_alive_and_eliminated_by_name():
         alive_names=["Ana", "Bo"], eliminated_names=["Cy"],
     )
     assert _field(embed, "✅ Alive").name == "✅ Alive (2)"
-    assert _field(embed, "✅ Alive").value == "Ana · Bo"
-    assert _field(embed, "👻 Eliminated").value == "Cy"
+    # rstrip: apply_section_spacing appends the zero-width spacer to every
+    # field but the last (style-guide adoption, 2026-08-19).
+    assert _field(embed, "✅ Alive").value.rstrip("\n\u200b") == "Ana · Bo"
+    assert _field(embed, "👻 Eliminated").value.rstrip("\n\u200b") == "Cy"
 
 
 def test_panel_omits_the_graveyard_until_someone_is_in_it():

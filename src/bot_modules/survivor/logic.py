@@ -330,7 +330,7 @@ def join_season(
         )
         if not ok:
             raise PickError(
-                f"The buy-in is {buyin} coins — your balance is short."
+                f"The buy-in is {buyin:,} coins — your balance is short."
             )
     if not add_player(conn, season, user_id, joined_at=now):
         # Race loser: the duplicate SELECT above passed before the winner

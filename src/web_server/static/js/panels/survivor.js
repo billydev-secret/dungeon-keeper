@@ -4,6 +4,7 @@
 // eliminate/revive all live here. (The flavor corpus was removed 2026-08-18
 // — the Reckoning is just-the-facts now.)
 import { api } from "../api.js";
+import { confirmDialog } from "../ui.js";
 import {
   apiPost,
   apiPut,
@@ -119,9 +120,9 @@ function renderSimulatorCard(zone, refresh) {
       <div class="field mt-8">
         <label>Settle Kicked Games</label>
         <div class="row-8" style="flex-wrap:wrap;">
-          <button type="button" class="btn btn-small" data-sim-settle="chalk">favorites win</button>
-          <button type="button" class="btn btn-small" data-sim-settle="random">random</button>
-          <button type="button" class="btn btn-small" data-sim-settle="upset">upsets</button>
+          <button type="button" class="btn btn-small" data-sim-settle="chalk">Favorites Win</button>
+          <button type="button" class="btn btn-small" data-sim-settle="random">Random</button>
+          <button type="button" class="btn btn-small" data-sim-settle="upset">Upsets</button>
         </div>
       </div>
       <div class="field mt-8">
@@ -154,9 +155,10 @@ function renderSimulatorCard(zone, refresh) {
     }
   });
   zone.querySelector("[data-tasks-btn]").addEventListener("click", async () => {
-    if (!window.confirm(
+    if (!await confirmDialog(
       "Run the weekly tasks now, skipping the day/hour gates? "
-      + "Once-per-week still holds — nothing double-posts.")) return;
+      + "Once-per-week still holds — nothing double-posts.",
+      { confirmLabel: "Run Now" })) return;
     try {
       const res = await apiPost("/api/survivor/tasks/run", {});
       // Report what actually posted: with no schedule ingested every gate
@@ -279,9 +281,10 @@ async function renderWeekCard(zone) {
     if (!btn) return;
     if (e.target.closest("[data-preview-btn]")) return;
     const outcome = btn.dataset.outcome;
-    if (!window.confirm(
+    if (!await confirmDialog(
       `Settle ${btn.dataset.settle} as ${outcome}? This grades picks `
-      + "immediately (and a correction re-grades them).")) return;
+      + "immediately (and a correction re-grades them).",
+      { confirmLabel: "Settle" })) return;
     try {
       await apiPost("/api/survivor/settle", {
         game_id: btn.dataset.settle, outcome,
@@ -381,7 +384,9 @@ function renderSeasonCard(zone, overview, refresh) {
     }
   });
   zone.querySelector("[data-end-btn]").addEventListener("click", async () => {
-    if (!window.confirm(`End "${season.name}"? This archives the season.`)) return;
+    if (!await confirmDialog(
+      `End "${season.name}"? This archives the season — history stays queryable, and a new season can then be created.`,
+      { danger: true, confirmLabel: "End Season" })) return;
     try {
       await apiPost("/api/survivor/season/end", {});
       refresh();
@@ -656,10 +661,13 @@ async function renderRosterCard(zone, players) {
         const uid = elim.dataset.eliminate;
         const week = parseInt(
           zone.querySelector(`[data-week="${uid}"]`).value, 10) || 1;
-        if (!window.confirm(`Eliminate this member in week ${week}?`)) return;
+        if (!await confirmDialog(
+          `Eliminate this member in week ${week}? Revive can undo it.`,
+          { danger: true, confirmLabel: "Eliminate" })) return;
         await apiPost(`/api/survivor/player/${uid}/eliminate`, { week });
       } else if (revive) {
-        if (!window.confirm("Revive this member?")) return;
+        if (!await confirmDialog("Revive this member?",
+          { confirmLabel: "Revive" })) return;
         await apiPost(`/api/survivor/player/${revive.dataset.revive}/revive`, {});
       } else {
         return;

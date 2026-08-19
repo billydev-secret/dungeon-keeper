@@ -432,3 +432,51 @@ than dropping), and both history faces render from it. Lines now read
 `Week 3: **PHI** vs DAL · ✅ won` / `Week 4: **ARI** at SEA · 💀 SEA won`
 / `🤝 tied` / `🌫️ voided` / `⏳ awaiting result`; 📎 auto-assign and the
 🤫 hidden tag are unchanged. No scores — the schema stores winner only.
+
+---
+
+## 12. Style-guide review of the Survivor panels (2026-08-19)
+
+> "Can we review the panels against the style guide?"
+
+Audited every Survivor Discord surface (channel panel, Reckoning, status,
+pick confirm, board, history, gauntlet receipt, last-call/condolence DMs,
+buttons/selects) and the dashboard panel against
+`docs/embed_style_guide.md`.
+
+**Clean already:** accent contract (all 8 builders have `case()` rows);
+em-dash titles; error/denial `❌` prefixes; empty states with nudges;
+`escape_markdown` on member names; `AllowedMentions` allow-listing on both
+weekly pings; ephemeral self-service; persistent-view rules (stable ids,
+`timeout=None`, re-registered at cog load); relative timestamps except
+kickoffs, where wall-clock is the point (sanctioned); no ASCII `...`; no
+"guild" leaks in member copy; snowflakes as strings in the panel JS.
+
+**Fixed in this pass (each a dated ruling in the guide):**
+- Footer separators `·` → `•` (Reckoning, channel panel) — the middot rule.
+- `apply_section_spacing()` adopted in every field-bearing builder
+  (status, board, panel, gauntlet receipt, Reckoning) — none called it.
+- `embed.timestamp` on the Reckoning — it's a record card members scroll
+  back to.
+- **"THE RECKONING" → "The Reckoning"** in the embed title — the ALL-CAPS
+  games register is retired (ruling 2026-07-21). Docstrings/spec keep the
+  dramatic caps as a name; the member-facing title recased.
+- Button label "🏈 Make your pick" → "🏈 Make Your Pick" (Title Case).
+- Select placeholder → "Pick an {AFC|NFC} team to win…" ("Pick …" +
+  unicode ellipsis form).
+- DMs (condolence, last call) route through `send_branded_dm` instead of
+  raw `member.send` — the guide's "no fifth `_try_dm`" rule; closed-DM
+  handling now keys on the helper's None return.
+- Dashboard: all six native `window.confirm` calls → `confirmDialog`
+  (danger styling on End Season / Eliminate); simulator settle buttons
+  recased to Title Case (Favorites Win / Random / Upsets).
+- `{buyin:,}` thousands separator in the short-balance error.
+
+**Flagged, needs Billy's call — currency vocabulary.** The guide: amounts
+render as `{currency_emoji} **{n:,}** {unit}` with the guild-configured
+name, singular at 1, never a hard-coded "coins". Survivor hard-codes
+"coins" in five places (join post, gauntlet receipt copy, slate join line,
+short-balance error, join ack) and renders pot amounts bare. Real impact:
+the second live guild's economy has its own denomination. The fix threads
+the econ settings (or a formatted unit string) into the pure builders —
+a param on ~6 builders plus caller resolution. Not done in this pass.
