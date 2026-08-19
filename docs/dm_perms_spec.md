@@ -25,7 +25,7 @@ This is **not** a Discord-friend system — it lives entirely inside the bot. Th
 - **Ask** — a request is required; the target chooses to accept or deny.
 - **Closed** — no requests possible; the system refuses up front.
 
-Picking a mode removes the other two role assignments and grants the chosen one. If a member somehow ends up with multiple DM-mode roles (race, manual edit), the highest-position role is kept and the rest are stripped.
+Picking a mode removes the other two role assignments and grants the chosen one, against the member's roles **as of that click** — the settings panel re-seats its cached member on every press, since a second change in one sitting would otherwise compute the removal from the role set the panel opened with. If a member somehow ends up with multiple DM-mode roles (race, manual edit), the role added in that same update — the one the member just chose — is kept and the rest are stripped; a duplicate with no such role falls back to keeping the highest-position one. Every mode change writes `mode_set` to the audit log with `mode=<open|ask|closed>` in its notes.
 
 ### Sending a request
 The persistent panel's **Open DM Request Form** button opens an ephemeral picker (user-select + DM-or-friend-request type buttons + Continue, 5-minute timeout). Continue opens a modal with one optional reason field, capped at **250 characters**.
@@ -62,7 +62,7 @@ Either party can remove the connection from the settings panel (pick the member,
 The settings panel's status line is a one-line "connected" or "no connection yet" lookup against the in-memory consent map — it does not surface the original reason, who initiated, or when.
 
 ### Mod audit
-The dashboard's audit log lists every state transition: requested, accepted, denied, expired, revoked. Optional filters: action name and request type (DM vs friend-request label). The audit channel — if configured — also receives a one-line embed for each event in real time.
+The dashboard's audit log lists every state transition: requested, accepted, denied, expired, revoked, and a member setting their own DM mode. Optional filters: action name and request type (DM vs friend-request label). The audit channel — if configured — also receives a one-line embed for each event in real time.
 
 ## Permissions
 

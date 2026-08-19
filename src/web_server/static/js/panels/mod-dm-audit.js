@@ -7,6 +7,7 @@ const ACTION_LABELS = {
   request_denied:       "Request Denied",
   request_expired:      "Request Expired",
   relationship_revoked: "Revoked",
+  mode_set:             "DM Mode Set",
 };
 
 const ACTION_BADGE = {
@@ -15,6 +16,7 @@ const ACTION_BADGE = {
   request_denied:       "badge-danger",
   request_expired:      "badge-dim",
   relationship_revoked: "badge-warning",
+  mode_set:             "badge-dim",
 };
 
 const TYPE_LABELS = { dm: "DM", friend: "Friend Request" };

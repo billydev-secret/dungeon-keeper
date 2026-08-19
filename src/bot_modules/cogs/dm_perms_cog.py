@@ -648,6 +648,16 @@ class DmSettingsView(discord.ui.View):
     # ── Mode buttons ─────────────────────────────────────────────────────
 
     async def _set_mode(self, interaction: discord.Interaction, mode: str) -> None:
+        # Re-seat the cached member on every click. ``self.member`` is captured
+        # when the panel opens and discord.py never writes REST results back
+        # into it, so a *second* mode change in one sitting computed its
+        # removals from a role set that predated the first — leaving the old
+        # mode's role in place, which then raced the dedup listener and could
+        # revert the choice the member had just made. The interaction carries a
+        # member resolved by the gateway at click time, which is as fresh as
+        # this process can get without a REST fetch per click.
+        if isinstance(interaction.user, discord.Member):
+            self.member = interaction.user
         try:
             await set_member_dm_mode(
                 self.member, mode, self.cog._mode_roles_for(self.member.guild.id)
@@ -658,6 +668,18 @@ class DmSettingsView(discord.ui.View):
             )
             return
         self._pending_mode = mode
+        # A mode change left no trace anywhere before this: dm_audit_log only
+        # held requests, so "did the bot set this, or did something else take
+        # it away?" could only be answered by trawling role_events.
+        await asyncio.to_thread(
+            write_audit_log,
+            self.cog.ctx.db_path,
+            self.member.guild.id,
+            "mode_set",
+            actor_id=self.member.id,
+            user_a_id=self.member.id,
+            notes=f"mode={mode}",
+        )
         await self._rerender(interaction, f"✅ Your DM mode is now **{mode.upper()}**.")
 
     @discord.ui.button(
@@ -1216,13 +1238,22 @@ class DmPermsCog(commands.Cog):
 
     @commands.Cog.listener("on_member_update")
     async def _on_member_update_dm_roles(
-        self, _before: discord.Member, after: discord.Member
+        self, before: discord.Member, after: discord.Member
     ) -> None:
+        """Enforce one DM-mode role, keeping the one that just arrived.
+
+        ``before`` is the whole point: the role added *in this update* is the
+        member's new choice, and stripping anything else is the dedup doing its
+        job. Ignoring it and keeping the highest-positioned role instead undid
+        real choices — see ``pick_dm_roles_to_remove``.
+        """
         dm_roles = [
             r for r in after.roles
             if is_dm_mode_role(r, self._mode_roles_for(after.guild.id))
         ]
-        to_remove = pick_dm_roles_to_remove(dm_roles)
+        before_ids = {r.id for r in before.roles}
+        just_added = next((r for r in dm_roles if r.id not in before_ids), None)
+        to_remove = pick_dm_roles_to_remove(dm_roles, keep=just_added)
         if not to_remove:
             return
         try:

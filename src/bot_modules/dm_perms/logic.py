@@ -126,14 +126,27 @@ def discard_consent_pair(
     return removed
 
 
-def pick_dm_roles_to_remove(roles: Iterable[discord.Role]) -> list[discord.Role]:
+def pick_dm_roles_to_remove(
+    roles: Iterable[discord.Role], *, keep: discord.Role | None = None
+) -> list[discord.Role]:
     """Choose which DM-mode roles to strip when a member has multiple.
 
-    Only one of (Open / Ask / Closed) should be active. When more than
-    one is present (e.g. caused by a race during ``/dm_set_mode`` retries
-    or by the web UI), keep the role with the highest position and return
-    the others for removal. Returns an empty list when 0 or 1 DM roles
-    are present.
+    Only one of (Open / Ask / Closed) should be active. When more than one is
+    present (a race between the settings panel and the gateway, or a mod adding
+    one by hand), exactly one survives and the rest are returned for removal.
+    Returns an empty list when 0 or 1 DM roles are present.
+
+    ``keep`` is the role the member just *chose* — the caller derives it from
+    the member-update diff, so it is the one that arrived in this very update.
+    It wins outright, because position order has nothing to do with intent:
+    keeping the highest-positioned role instead silently reverted a member's
+    new choice back to their old mode whenever the new role happened to sit
+    lower in the list (2026-08-18: 21 reverted choices across one guild, with
+    the panel cheerfully confirming the mode it had just undone).
+
+    Falling back to position when ``keep`` is absent or is not among ``roles``
+    preserves the old behaviour for duplicates this bot did not create — an
+    arbitrary but stable survivor beats stripping everything.
 
     ``roles`` is the (already-filtered) list of DM-mode roles found on a
     member. The cog passes a list filtered against ``DM_ROLE_NAMES`` so
@@ -142,8 +155,10 @@ def pick_dm_roles_to_remove(roles: Iterable[discord.Role]) -> list[discord.Role]
     role_list = list(roles)
     if len(role_list) <= 1:
         return []
-    keep = max(role_list, key=lambda r: r.position)
-    return [r for r in role_list if r is not keep]
+    survivor = next((r for r in role_list if r == keep), None)
+    if survivor is None:
+        survivor = max(role_list, key=lambda r: r.position)
+    return [r for r in role_list if r != survivor]
 
 
 # ── Audit-log line builders ──────────────────────────────────────────

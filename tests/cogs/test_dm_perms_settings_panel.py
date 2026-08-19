@@ -62,6 +62,25 @@ def _revoke_button(view: DmSettingsView):
 
 
 @pytest.fixture(autouse=True)
+def audit_rows(monkeypatch):
+    """Capture ``write_audit_log`` instead of writing it.
+
+    A mode change records itself since 2026-08-18, and ``_cog`` hands the view a
+    ``:memory:`` path with no schema behind it — so without this every mode test
+    dies on "no such table: dm_audit_log" rather than on anything it asserts.
+    Returning the list lets one test check the row is actually written.
+    """
+    import bot_modules.cogs.dm_perms_cog as mod
+
+    rows: list[tuple] = []
+    monkeypatch.setattr(
+        mod, "write_audit_log",
+        lambda *args, **kwargs: rows.append((args, kwargs)),
+    )
+    return rows
+
+
+@pytest.fixture(autouse=True)
 def _stub_accent(monkeypatch):
     """The panel resolves the guild accent; colour isn't what's under test."""
     import bot_modules.cogs.dm_perms_cog as mod
@@ -281,6 +300,51 @@ async def test_setting_a_mode_writes_it_and_reports_it(monkeypatch, mode):
 
     assert set_mode.await_args.args[1] == mode
     assert mode.upper() in view._last_note
+
+
+@pytest.mark.asyncio
+async def test_mode_change_records_itself_in_the_audit_log(monkeypatch, audit_rows):
+    """Without this row, only Discord's own audit log knew a mode had changed."""
+    import bot_modules.cogs.dm_perms_cog as mod
+
+    monkeypatch.setattr(mod, "set_member_dm_mode", AsyncMock())
+    view = DmSettingsView(_cog(), _member(1))
+
+    await view._set_mode(_interaction_capturing(view), "closed")
+
+    assert len(audit_rows) == 1
+    args, kwargs = audit_rows[0]
+    assert args[2] == "mode_set"
+    assert kwargs["notes"] == "mode=closed"
+    assert kwargs["actor_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_second_mode_change_uses_live_roles_not_the_panel_snapshot(monkeypatch):
+    """Regression (2026-08-18): the view cached its member at panel-open time.
+
+    A member who changed mode twice without closing the panel had the second
+    change computed against the *first* change's stale role set, so the previous
+    mode's role was never removed — leaving two DM roles on and handing the dedup
+    listener a choice it then got wrong, silently reverting the pick.
+    """
+    import bot_modules.cogs.dm_perms_cog as mod
+
+    set_mode = AsyncMock()
+    monkeypatch.setattr(mod, "set_member_dm_mode", set_mode)
+
+    ask_role = MagicMock(spec=discord.Role)
+    ask_role.id, ask_role.name, ask_role.position = 20, "ASK TO DM", 9
+    stale = _member(1)                       # what the panel opened with: no roles
+    live = _member(1, roles=[ask_role])      # what the member holds by the 2nd click
+
+    view = DmSettingsView(_cog(), stale)
+    interaction = _interaction_capturing(view)
+    interaction.user = live
+
+    await view._set_mode(interaction, "closed")
+
+    assert set_mode.await_args.args[0] is live
 
 
 @pytest.mark.asyncio

@@ -204,9 +204,13 @@ def test_pick_dm_roles_to_remove_returns_empty_when_single_role():
 
 
 def test_pick_dm_roles_to_remove_keeps_highest_position():
-    """When multiple DM-mode roles exist, the one with the highest
-    ``position`` wins (rationale: the cog grants the new role first then
-    cleans up — the new role is bumped above the old)."""
+    """With no ``keep`` to go on, the highest ``position`` survives.
+
+    This is the fallback for duplicates the bot did not create. The rationale
+    once recorded here — "the new role is bumped above the old" — was simply
+    untrue: Discord does not move a role's position when it is assigned, so
+    position never encoded recency, and trusting it reverted real choices.
+    """
     low = _role("DMs: Ask", 1)
     mid = _role("DMs: Closed", 5)
     high = _role("DMs: Open", 10)
@@ -223,6 +227,35 @@ def test_pick_dm_roles_to_remove_handles_two_role_case():
     a = _role("DMs: Ask", 1)
     b = _role("DMs: Open", 2)
     out = pick_dm_roles_to_remove([a, b])
+    assert out == [a]
+
+
+def test_pick_dm_roles_to_remove_keeps_the_just_chosen_role():
+    """The member's new choice survives even when it sits lowest.
+
+    The 2026-08-18 defect: a member on Ask pressed Closed, briefly held both,
+    and the dedup kept Ask because it sat higher in the role list — silently
+    reverting the choice while the panel confirmed it. ``keep`` is the role
+    that arrived in this member-update, so it must win regardless of position.
+    """
+    chosen = _role("DM CLOSED", 1)
+    previous = _role("ASK TO DM", 9)
+    out = pick_dm_roles_to_remove([previous, chosen], keep=chosen)
+    assert out == [previous]
+
+
+def test_pick_dm_roles_to_remove_falls_back_to_position_without_keep():
+    chosen = _role("DM CLOSED", 1)
+    previous = _role("ASK TO DM", 9)
+    assert pick_dm_roles_to_remove([previous, chosen]) == [chosen]
+
+
+def test_pick_dm_roles_to_remove_ignores_a_keep_the_member_does_not_hold():
+    """A stale ``keep`` degrades to the position rule rather than stripping all."""
+    a = _role("DMs: Ask", 1)
+    b = _role("DMs: Open", 2)
+    stranger = _role("DMs: Closed", 7)
+    out = pick_dm_roles_to_remove([a, b], keep=stranger)
     assert out == [a]
 
 
