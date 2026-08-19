@@ -16,6 +16,7 @@ import sqlite3
 
 import discord
 
+from bot_modules.core.branding import apply_section_spacing
 from bot_modules.services.branding_service import DEFAULT_ACCENT
 from bot_modules.services.survivor_service import eliminate_player
 from bot_modules.survivor.logic import (
@@ -248,7 +249,7 @@ def build_reckoning_embed(
 
     week = data["week"]
     embed = discord.Embed(
-        title=f"🏈 Week {week} — THE RECKONING",
+        title=f"🏈 Week {week} — The Reckoning",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
     # Act 1 — the toll. Numbers only (just-the-facts, 2026-08-18): the
@@ -315,7 +316,10 @@ def build_reckoning_embed(
             name="🪦 Eliminations", value=_clip_field(lines, "eliminated"),
             inline=False,
         )
-    embed.set_footer(text=f"{season_name} · results post every Tuesday")
+    embed.set_footer(text=f"{season_name} • results post every Tuesday")
+    # A record card (style guide: Timestamps) — members scroll back to it.
+    embed.timestamp = discord.utils.utcnow()
+    apply_section_spacing(embed)
     return embed
 
 

@@ -24,6 +24,7 @@ import discord
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services.survivor_service import update_config
 from bot_modules.survivor import logic, reckoning
 from bot_modules.survivor.views import SlatePickButton, swap_member_roles
@@ -353,10 +354,13 @@ async def post_reckoning(
         )
         member = guild.get_member(entry["user_id"])
         if member is not None:
-            try:
-                await member.send(CONDOLENCE.replace("{week}", str(week)))
-            except (discord.Forbidden, discord.HTTPException):
-                pass  # closed DMs: the eulogy already said it publicly
+            # Through dm_branding (style guide: DM branding) — content-only
+            # passes through unbranded, and a closed DM returns None; the
+            # eulogy already said it publicly.
+            await send_branded_dm(
+                member, db_path=db_path, guild=guild,
+                content=CONDOLENCE.replace("{week}", str(week)),
+            )
     return True
 
 
@@ -449,13 +453,16 @@ async def send_last_call(
         member = guild.get_member(user_id)
         if member is None:
             continue
-        try:
-            # The pick button rides the DM (2026-08-18) — same persistent
-            # DynamicItem as the channel panel, so the nudge IS the door,
-            # not directions to one. pick_view builds it fresh per send;
-            # a view instance can't be reused across messages.
-            await member.send(text, view=pick_view(season["id"]))
-        except (discord.Forbidden, discord.HTTPException):
+        # The pick button rides the DM (2026-08-18) — same persistent
+        # DynamicItem as the channel panel, so the nudge IS the door, not
+        # directions to one. pick_view builds it fresh per send; a view
+        # instance can't be reused across messages. send_branded_dm returns
+        # None on a closed DM (style guide: DM branding).
+        sent = await send_branded_dm(
+            member, db_path=db_path, guild=guild,
+            content=text, view=pick_view(season["id"]),
+        )
+        if sent is None:
             fallback.append(user_id)
     if fallback and channel is not None:
         mentions = " ".join(f"<@{uid}>" for uid in fallback)
