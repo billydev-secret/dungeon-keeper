@@ -293,9 +293,16 @@ class SurvivorCog(commands.Cog):
 
         def _q():
             with open_db(self.ctx.db_path) as conn:
-                return logic.board_data(conn, season, now)
+                from bot_modules.services.economy_service import (
+                    load_econ_settings,
+                )
 
-        board = await asyncio.to_thread(_q)
+                return (
+                    logic.board_data(conn, season, now),
+                    load_econ_settings(conn, season["guild_id"]),
+                )
+
+        board, settings = await asyncio.to_thread(_q)
         guild = interaction.guild
 
         def name_of(user_id: int) -> str:
@@ -313,6 +320,7 @@ class SurvivorCog(commands.Cog):
                 name_of,
                 season_name=season["name"],
                 strikes_allowed=int(season["config"]["strikes"]),
+                settings=settings,
                 color=color,
             )
         )

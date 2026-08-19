@@ -486,9 +486,12 @@ async def reckoning_preview(request: Request, _: AuthenticatedUser = _ADMIN):
                 # anyway so the button always shows something honest.
                 week = int(season["config"].get("last_reckoned_week") or 0) + 1
             data = reck.build_reckoning_data(conn, season, week, now)
-        return season, data, pending
+            from bot_modules.services.economy_service import load_econ_settings
 
-    season, data, pending = await _service_call(run_query(_q))
+            settings = load_econ_settings(conn, guild_id)
+        return season, data, pending, settings
+
+    season, data, pending, settings = await _service_call(run_query(_q))
 
     from bot_modules.survivor.reckoning import build_reckoning_embed
 
@@ -499,7 +502,9 @@ async def reckoning_preview(request: Request, _: AuthenticatedUser = _ADMIN):
         member = guild.get_member(user_id) if guild else None
         return member.display_name if member else f"soul {user_id}"
 
-    embed = build_reckoning_embed(data, name_of, season_name=season["name"])
+    embed = build_reckoning_embed(
+        data, name_of, season_name=season["name"], settings=settings,
+    )
     return {
         "pending": pending,
         "week": data["week"],

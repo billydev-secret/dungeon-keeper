@@ -19,6 +19,7 @@ import discord
 
 from bot_modules.core import branding
 from bot_modules.core.db_utils import open_db, open_db_immediate
+from bot_modules.economy.view_helpers import coins
 from bot_modules.services.survivor_service import get_season
 from bot_modules.survivor import logic
 from bot_modules.survivor.embeds import (
@@ -198,24 +199,28 @@ class JoinSeasonButton(
             with open_db(db_path) as conn:
                 season = get_season(conn, self.season_id)
                 if season is None or season["status"] == "complete":
-                    return None, None, 0, None
+                    return None, None, 0, None, None
                 entered = conn.execute(
                     "SELECT 1 FROM survivor_players "
                     "WHERE season_id = ? AND user_id = ?",
                     (season["id"], user_id),
                 ).fetchone()
-                from bot_modules.services.economy_service import get_balance
+                from bot_modules.services.economy_service import (
+                    get_balance,
+                    load_econ_settings,
+                )
                 from bot_modules.survivor.gauntlet import compute_fate
 
                 balance = get_balance(conn, season["guild_id"], user_id)
+                settings = load_econ_settings(conn, season["guild_id"])
                 fate = None
                 if logic.elapsed_weeks(conn, season["season_year"], now):
                     if season["config"]["late_entry"] == "gauntlet":
                         fate = compute_fate(conn, season, now)
-                return season, entered is not None, balance, fate
+                return season, entered is not None, balance, settings, fate
 
-        season, entered, balance, fate = await asyncio.to_thread(_q)
-        if season is None:
+        season, entered, balance, settings, fate = await asyncio.to_thread(_q)
+        if season is None or settings is None:
             await interaction.response.send_message(
                 "This season has ended — the pin outlived it.", ephemeral=True
             )
@@ -239,12 +244,14 @@ class JoinSeasonButton(
             total = fate.fee + buyin
             content = (
                 "Your catch-up results are below — review before you pay. "
-                f"Balance: **{balance:,}**"
+                f"Balance: {coins(settings, balance)}"
                 + (" ⚠️ (short)" if balance < total else "")
             )
             await interaction.response.send_message(
                 content,
-                embed=build_gauntlet_receipt_embed(fate, buyin=buyin, color=color),
+                embed=build_gauntlet_receipt_embed(
+                    fate, buyin=buyin, settings=settings, color=color,
+                ),
                 view=JoinConfirmView(self.season_id, gauntlet=True),
                 ephemeral=True,
             )
@@ -252,10 +259,10 @@ class JoinSeasonButton(
         lines = [
             "**The rules in one line:** pick one team to win each week, no "
             "team twice — lose and you're out.",
-            f"Entry: **{buyin:,} coins**" if buyin else "Entry: **free**",
+            f"Entry: {coins(settings, buyin)}" if buyin else "Entry: **free**",
         ]
         if buyin:
-            lines.append(f"Your balance: {balance:,}")
+            lines.append(f"Your balance: {coins(settings, balance)}")
         await interaction.response.send_message(
             "\n".join(lines),
             view=JoinConfirmView(self.season_id),
@@ -296,6 +303,11 @@ class JoinConfirmView(discord.ui.View):
                 season = get_season(conn, self.season_id)
                 if season is None:
                     raise logic.PickError("This season no longer exists.")
+                from bot_modules.services.economy_service import (
+                    load_econ_settings,
+                )
+
+                stg = load_econ_settings(conn, season["guild_id"])
                 elapsed = logic.elapsed_weeks(conn, season["season_year"], now)
                 if elapsed:
                     from bot_modules.survivor.gauntlet import (
@@ -311,16 +323,16 @@ class JoinConfirmView(discord.ui.View):
                         )
                     if mode == "ghost_only":
                         ghost_only_join(conn, season, user_id, now)
-                        return season, logic.JoinResult(charged=0), None
+                        return season, logic.JoinResult(charged=0), None, stg
                     fate = compute_fate(conn, season, now)
                     execute_gauntlet_join(conn, season, user_id, fate, now)
                     charged = fate.fee + int(season["config"]["buyin_coins"])
-                    return season, logic.JoinResult(charged=charged), fate
+                    return season, logic.JoinResult(charged=charged), fate, stg
                 result = logic.join_season(conn, season, user_id, now)
-            return season, result, None
+            return season, result, None, stg
 
         try:
-            season, result, fate = await asyncio.to_thread(_q)
+            season, result, fate, settings = await asyncio.to_thread(_q)
         except logic.PickError as exc:
             await interaction.response.edit_message(
                 content=f"❌ {str(exc)}", view=None
@@ -331,7 +343,10 @@ class JoinConfirmView(discord.ui.View):
         # commit lands, and a rate-limited role grant must not eat the
         # 3-second interaction window and turn a successful join into
         # "This interaction failed".
-        charged = f" ({result.charged:,} coins paid)" if result.charged else ""
+        charged = (
+            f" ({coins(settings, result.charged)} paid)"
+            if result.charged else ""
+        )
         if fate is not None and fate.dead:
             content = (
                 f"The Gauntlet caught you at Week {fate.death_week}{charged}. "
@@ -360,11 +375,20 @@ class JoinConfirmView(discord.ui.View):
         await _echo_join(bot, db_path, interaction, season["id"])
 
 
-def join_echo_detail(entrants: int, pot: int) -> str:
+def join_echo_detail(entrants: int, pot: int, settings=None) -> str:
     """The mini-advertisement line under a join echo — Survivor's own
-    vocabulary, per Event Echo's frame-vs-voice split."""
+    vocabulary, per Event Echo's frame-vs-voice split. The pot renders in
+    the guild's currency vocabulary (style guide), bold-free — the echo
+    line is prose, not a card."""
+    from bot_modules.economy.view_helpers import unit
+    from bot_modules.services.economy_service import EconSettings
+
+    settings = settings or EconSettings()
+    pot_text = (
+        f"{settings.currency_emoji} {pot:,} {unit(settings, pot)}".strip()
+    )
     return (
-        f"{entrants} players in · pot {pot:,} · one team a week, "
+        f"{entrants} players in · pot {pot_text} · one team a week, "
         "last one standing takes it"
     )
 
@@ -387,12 +411,15 @@ async def _echo_join(bot, db_path, interaction, season_id: int) -> None:
                 (season_id,),
             ).fetchone()[0]
             pot = logic.pot_totals(conn, season)["main"]
-        return season, int(entrants), pot
+            from bot_modules.services.economy_service import load_econ_settings
+
+            settings = load_econ_settings(conn, season["guild_id"])
+        return season, int(entrants), pot, settings
 
     loaded = await asyncio.to_thread(_q)
     if loaded is None:
         return
-    season, entrants, pot = loaded
+    season, entrants, pot, settings = loaded
     config = season["config"]
     channel_id = int(
         config.get("announcement_channel_id") or config["channel_id"] or 0
@@ -416,7 +443,7 @@ async def _echo_join(bot, db_path, interaction, season_id: int) -> None:
             member_name=name,
             season_id=season_id,
             user_id=member.id,
-            detail=join_echo_detail(entrants, pot),
+            detail=join_echo_detail(entrants, pot, settings),
             url=url,
         )
     except Exception:
@@ -672,6 +699,9 @@ async def build_live_panel(
                 (season_id, week if week is not None else -1),
             ).fetchone()[0]
             pots = logic.pot_totals(conn, season)
+            from bot_modules.services.economy_service import load_econ_settings
+
+            settings = load_econ_settings(conn, season["guild_id"])
             gauntlet_mode = bool(logic.elapsed_weeks(conn, year, now))
             roster = [
                 (int(r["user_id"]), r["status"])
@@ -684,14 +714,14 @@ async def build_live_panel(
         return (
             season, week, games, int(counts["alive"] or 0),
             int(counts["ghost"] or 0), int(counts["total"] or 0),
-            int(picked), pots, gauntlet_mode, roster,
+            int(picked), pots, gauntlet_mode, roster, settings,
         )
 
     loaded = await asyncio.to_thread(_q)
     if loaded is None:
         return None
     (season, week, games, alive, ghost, total, picked, pots,
-     gauntlet_mode, roster) = loaded
+     gauntlet_mode, roster, settings) = loaded
     guild = bot.get_guild(season["guild_id"])
     if guild is None:
         return None
@@ -741,6 +771,7 @@ async def build_live_panel(
         ghost_pot=pots["ghost"],
         alive_names=alive_names,
         eliminated_names=eliminated_names,
+        settings=settings,
         color=color,
     )
     return season, embed, join_open

@@ -17,6 +17,8 @@ import sqlite3
 import discord
 
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.economy.view_helpers import coins
+from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.branding_service import DEFAULT_ACCENT
 from bot_modules.services.survivor_service import eliminate_player
 from bot_modules.survivor.logic import (
@@ -242,7 +244,12 @@ def eulogy_for(entry: dict, data: dict, name: str, index: int) -> str:
 
 
 def build_reckoning_embed(
-    data: dict, name_of, *, season_name: str, color: discord.Color | None = None
+    data: dict,
+    name_of,
+    *,
+    season_name: str,
+    settings: EconSettings | None = None,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """The one post. Three acts, one embed, clipped to Discord's limits."""
     from bot_modules.survivor.embeds import _clip_field
@@ -254,15 +261,17 @@ def build_reckoning_embed(
     )
     # Act 1 — the toll. Numbers only (just-the-facts, 2026-08-18): the
     # survivors delta says whether the week took anyone.
+    settings = settings or EconSettings()
     toll = (
         f"👥 Survivors **{data['before']} → {data['after']}** · "
-        f"Pot **{data['pots']['main']:,}** · Ghost Pot **{data['pots']['ghost']:,}**"
+        f"Pot {coins(settings, data['pots']['main'])} · "
+        f"Ghost Pot {coins(settings, data['pots']['ghost'])}"
     )
     weekly = data.get("weekly_win")
     if weekly and weekly["count"]:
         toll += (
             f"\n💰 {weekly['count']} correct pick(s) collect "
-            f"**{weekly['amount']:,}** each"
+            f"{coins(settings, weekly['amount'])} each"
         )
     if data["stragglers"]:
         toll += (
@@ -324,11 +333,18 @@ def build_reckoning_embed(
 
 
 def slate_join_line(
-    *, buyin: int, late_entry: str, gauntlet_mode: bool
+    *,
+    buyin: int,
+    late_entry: str,
+    gauntlet_mode: bool,
+    settings: EconSettings | None = None,
 ) -> str | None:
     """The one-line door for the weekly slate. None = entry is closed and
     neither line nor button belongs on the post."""
-    entry = f"{buyin:,} coins to enter" if buyin else "free entry"
+    entry = (
+        f"{coins(settings or EconSettings(), buyin)} to enter"
+        if buyin else "free entry"
+    )
     if not gauntlet_mode:
         return f"Join below — {entry}."
     if late_entry == "gauntlet":

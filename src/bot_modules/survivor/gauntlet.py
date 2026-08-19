@@ -163,8 +163,12 @@ def execute_gauntlet_join(
     total = buyin + fate.fee
     balance = economy_service.get_balance(conn, season["guild_id"], user_id)
     if total > 0 and balance < total:
+        from bot_modules.economy.view_helpers import coins
+        from bot_modules.services.economy_service import load_econ_settings
+
+        stg = load_econ_settings(conn, season["guild_id"])
         raise PickError(
-            f"Late entry costs {total:,} coins ({fate.fee:,} late fee"
+            f"Late entry costs {coins(stg, total)} ({fate.fee:,} late fee"
             + (f" + {buyin:,} buy-in" if buyin else "")
             + ") — your balance is short."
         )

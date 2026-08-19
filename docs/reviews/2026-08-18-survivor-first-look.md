@@ -479,4 +479,17 @@ name, singular at 1, never a hard-coded "coins". Survivor hard-codes
 short-balance error, join ack) and renders pot amounts bare. Real impact:
 the second live guild's economy has its own denomination. The fix threads
 the econ settings (or a formatted unit string) into the pure builders —
-a param on ~6 builders plus caller resolution. Not done in this pass.
+a param on ~6 builders plus caller resolution.
+
+**Done (Billy: "Yes please", 2026-08-19).** All survivor money renders via
+`economy.view_helpers.coins()` — the canonical `{emoji} **{n:,}** {unit}`
+helper — with `EconSettings` threaded as an optional param through
+`build_panel_embed`, `build_board_embed`, `build_gauntlet_receipt_embed`,
+`build_reckoning_embed` and `slate_join_line` (None → defaults, so the
+accent-contract rows stay minimal). Callers load the settings inside the
+query pass they already run. The gauntlet/buy-in error strings load them
+at raise time; the join echo renders the pot bold-free (prose, not a
+card), and the gauntlet error's parenthetical fee breakdown deliberately
+stays bare numbers — the headline amount carries the unit, repeating it
+three times in one sentence is noise. Tested with a custom denomination
+(🥜 Nut/Nuts) including singular-at-1.
