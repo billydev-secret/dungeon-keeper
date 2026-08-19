@@ -394,9 +394,11 @@ def build_history_embed(
         if r["result"] == "loss":
             winner = r.get("winner")
             outcome = f"💀 {winner} won" if winner and winner != "TIE" else "💀 lost"
+        # 📎 trails the outcome (2026-08-19): mid-line it shifted the
+        # separator on only the auto-assigned rows, breaking the column feel.
         line = (
-            f"Week {r['week']}: **{r['team']}**{opp}{tag} · "
-            f"{outcome or '⏳ awaiting result'}"
+            f"Week {r['week']}: **{r['team']}**{opp} · "
+            f"{outcome or '⏳ awaiting result'}{tag}"
         )
         if own and int(r["week"]) > revealed_week:
             line += " · 🤫 hidden from others"
