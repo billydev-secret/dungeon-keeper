@@ -373,15 +373,31 @@ def build_history_embed(
     """Pick history, one builder for both faces (§2.6): the public
     /survivor history shows revealed weeks only; the panel's My History
     button is ephemeral and personal, so the viewer's own unrevealed picks
-    appear too — tagged as hidden from everyone else. ``rows``:
-    ``{week, team, result, auto_assigned}`` ascending."""
-    icons = {"win": "✅", "loss": "💀", "tie": "🤝", "void": "🌫️", None: "⏳"}
+    appear too — tagged as hidden from everyone else. ``rows`` come from
+    ``logic.history_rows`` — pick fields plus the joined game (opponent,
+    is_home, winner), so each line names both teams and how it ended
+    (2026-08-19, Billy's #11)."""
     lines = []
     for r in rows:
         if not own and int(r["week"]) > revealed_week:
             continue  # secrecy: the public face never shows a live pick
         tag = " 📎" if r["auto_assigned"] else ""
-        line = f"Week {r['week']}: **{r['team']}**{tag} {icons.get(r['result'], '·')}"
+        opp = (
+            f" {'vs' if r.get('is_home') else 'at'} {r['opponent']}"
+            if r.get("opponent") else ""
+        )
+        outcome = {
+            "win": "✅ won",
+            "tie": "🤝 tied",
+            "void": "🌫️ voided",
+        }.get(r["result"])
+        if r["result"] == "loss":
+            winner = r.get("winner")
+            outcome = f"💀 {winner} won" if winner and winner != "TIE" else "💀 lost"
+        line = (
+            f"Week {r['week']}: **{r['team']}**{opp}{tag} · "
+            f"{outcome or '⏳ awaiting result'}"
+        )
         if own and int(r["week"]) > revealed_week:
             line += " · 🤫 hidden from others"
         lines.append(line)

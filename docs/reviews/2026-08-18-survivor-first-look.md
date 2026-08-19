@@ -417,3 +417,18 @@ through the idempotent, cache-checked `swap_member_roles`, so no drift
 means zero API calls and any drift heals on the next tick. This also
 retroactively fixes Billy's missing role at the first pass after restart,
 so the manual grant is no longer needed.
+
+
+---
+
+## 11. History panel: both teams and more information (2026-08-19)
+
+> "Can we put both teams, and a little more information on the history
+> panel"
+
+**Shipped.** `logic.history_rows` joins each pick to its `nfl_games` row
+(LEFT JOIN — a pick whose game vanished degrades to no-opponent rather
+than dropping), and both history faces render from it. Lines now read
+`Week 3: **PHI** vs DAL · ✅ won` / `Week 4: **ARI** at SEA · 💀 SEA won`
+/ `🤝 tied` / `🌫️ voided` / `⏳ awaiting result`; 📎 auto-assign and the
+🤫 hidden tag are unchanged. No scores — the schema stores winner only.

@@ -344,6 +344,49 @@ def join_season(
 # ── status & board ─────────────────────────────────────────────────────
 
 
+def history_rows(
+    conn: sqlite3.Connection,
+    season: dict,
+    user_id: int,
+    *,
+    through_week: int | None = None,
+) -> list[dict]:
+    """Pick history enriched with the game each pick rode (2026-08-19,
+    Billy's #11 — "put both teams, and a little more information"): the
+    opponent, home/away, and the game's winner join in from nfl_games so
+    the embed can say who the pick played and how it ended. One helper for
+    both faces — the public /survivor history passes ``through_week`` (the
+    last reckoned week); the personal panel button passes None for all."""
+    sql = (
+        "SELECT p.week, p.team, p.result, p.auto_assigned, "
+        " g.home, g.away, g.winner, g.status "
+        "FROM survivor_picks p "
+        "LEFT JOIN nfl_games g ON g.season_year = ? AND g.week = p.week "
+        " AND (g.home = p.team OR g.away = p.team) "
+        "WHERE p.season_id = ? AND p.user_id = ?"
+    )
+    params: list[object] = [season["season_year"], season["id"], user_id]
+    if through_week is not None:
+        sql += " AND p.week <= ?"
+        params.append(through_week)
+    sql += " ORDER BY p.week, p.slot"
+    return [
+        {
+            "week": int(r["week"]),
+            "team": r["team"],
+            "result": r["result"],
+            "auto_assigned": bool(r["auto_assigned"]),
+            "opponent": (
+                (r["away"] if r["home"] == r["team"] else r["home"])
+                if r["home"] is not None else None
+            ),
+            "is_home": r["home"] == r["team"] if r["home"] is not None else None,
+            "winner": r["winner"],
+        }
+        for r in conn.execute(sql, params).fetchall()
+    ]
+
+
 def player_status(
     conn: sqlite3.Connection, season: dict, user_id: int, now: float
 ) -> dict | None:

@@ -358,21 +358,26 @@ def test_history_embed_public_hides_unrevealed_own_shows_tagged():
     from bot_modules.survivor.embeds import build_history_embed
 
     rows = [
-        {"week": 1, "team": "SEA", "result": "win", "auto_assigned": False},
-        {"week": 2, "team": "KC", "result": "loss", "auto_assigned": True},
-        {"week": 3, "team": "SF", "result": None, "auto_assigned": False},
+        {"week": 1, "team": "SEA", "result": "win", "auto_assigned": False,
+         "opponent": "NE", "is_home": True, "winner": "SEA"},
+        {"week": 2, "team": "KC", "result": "loss", "auto_assigned": True,
+         "opponent": "LV", "is_home": False, "winner": "LV"},
+        {"week": 3, "team": "SF", "result": None, "auto_assigned": False,
+         "opponent": "ARI", "is_home": True, "winner": None},
     ]
     public = build_history_embed(
         rows, display_name="Loaf", revealed_week=2, own=False
     )
     assert "SF" not in public.description          # secrecy holds
-    assert "Week 2: **KC** 📎 💀" in public.description
+    assert "Week 1: **SEA** vs NE · ✅ won" in public.description
+    assert "Week 2: **KC** at LV 📎 · 💀 LV won" in public.description
     assert "Revealed picks only" in public.footer.text
 
     own = build_history_embed(
         rows, display_name="Loaf", revealed_week=2, own=True
     )
-    assert "Week 3: **SF**" in own.description     # your own eyes only
+    assert "Week 3: **SF** vs ARI" in own.description  # your own eyes only
+    assert "⏳ awaiting result" in own.description
     assert "hidden from others" in own.description
     assert "Only you can see this" in own.footer.text
 

@@ -556,20 +556,7 @@ class HistoryButton(
                 season = get_season(conn, self.season_id)
                 if season is None:
                     return None, [], 0
-                rows = [
-                    {
-                        "week": int(r["week"]), "team": r["team"],
-                        "result": r["result"],
-                        "auto_assigned": bool(r["auto_assigned"]),
-                    }
-                    for r in conn.execute(
-                        "SELECT week, team, result, auto_assigned "
-                        "FROM survivor_picks "
-                        "WHERE season_id = ? AND user_id = ? "
-                        "ORDER BY week, slot",
-                        (self.season_id, user_id),
-                    ).fetchall()
-                ]
+                rows = logic.history_rows(conn, season, user_id)
                 revealed = int(
                     season["config"].get("last_reckoned_week") or 0
                 )

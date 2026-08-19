@@ -112,7 +112,7 @@ The roles get pinged exactly twice a week. Restraint is the brand.
 
 ### 2.6 Boards
 - `/survivor board` (public; ~~auto-posted after each Reckoning~~ *amended 2026-08-18: the auto-post is retired — the channel panel carries the standings line, and the full board stays on demand*): alive roster with weeks survived + strike hearts, graveyard with week-of-death, pot, most-burned teams meta-stat.
-- `/survivor history [@player]`: revealed picks only. Nothing current ever leaks. *(Amended 2026-08-18: the channel panel carries a **[📜 My History]** button — ephemeral and personal, so the clicker's own unrevealed picks show too, tagged as hidden from others. One shared builder renders both faces so the secrecy rule can't drift.)*
+- `/survivor history [@player]`: revealed picks only. Nothing current ever leaks. *(Amended 2026-08-18: the channel panel carries a **[📜 My History]** button — ephemeral and personal, so the clicker's own unrevealed picks show too, tagged as hidden from others. One shared builder renders both faces so the secrecy rule can't drift.)* *(Amended 2026-08-19, Billy's #11: each line names both teams and the outcome — "Week 3: **PHI** vs DAL · ✅ won", a loss naming the winner — via `logic.history_rows`, which joins the pick to its game.)*
 
 ### 2.7 Endgame ceremony
 Champion gets a dedicated post (never folded into a Reckoning): season stats (weeks survived, closest call, teams ridden), pot receipt, role, optional Bios-cog trophy line. Splits framed as shared victory; annulments as their own mini-event (*"everyone died. therefore nobody did. the week is stricken — but the teams you burned stay burned."*)

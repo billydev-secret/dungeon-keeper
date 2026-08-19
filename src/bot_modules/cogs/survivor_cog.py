@@ -341,12 +341,9 @@ class SurvivorCog(commands.Cog):
 
         def _q():
             with open_db(self.ctx.db_path) as conn:
-                return conn.execute(
-                    "SELECT week, slot, team, result, auto_assigned "
-                    "FROM survivor_picks WHERE season_id = ? AND user_id = ? "
-                    "AND week <= ? ORDER BY week, slot",
-                    (season["id"], target.id, revealed),
-                ).fetchall()
+                return logic.history_rows(
+                    conn, season, target.id, through_week=revealed
+                )
 
         rows = await asyncio.to_thread(_q)
         if not rows:
@@ -361,14 +358,7 @@ class SurvivorCog(commands.Cog):
         color = await resolve_accent_color(self.ctx.db_path, interaction.guild)
         await interaction.response.send_message(
             embed=build_history_embed(
-                [
-                    {
-                        "week": int(r["week"]), "team": r["team"],
-                        "result": r["result"],
-                        "auto_assigned": bool(r["auto_assigned"]),
-                    }
-                    for r in rows
-                ],
+                rows,
                 display_name=discord.utils.escape_markdown(target.display_name),
                 revealed_week=revealed,
                 own=False,
