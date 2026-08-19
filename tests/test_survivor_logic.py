@@ -560,3 +560,53 @@ def test_panel_roster_trims_on_the_field_limit_before_the_count():
     value = _field(_panel(alive=30, alive_names=names), "✅ Alive").value
     assert len(value) <= 1024
     assert "more alive" in value
+
+
+# ── history_rows (2026-08-19, Billy's #11) ────────────────────────────
+#
+# Both history faces render from this one helper: pick fields plus the
+# joined game, so the embed can name both teams and the winner. A pick
+# whose game vanished from the schedule degrades to opponent=None rather
+# than dropping the row.
+
+def test_history_rows_joins_the_game(db):
+    from bot_modules.survivor.logic import history_rows
+
+    with open_db(db) as conn:
+        season = _season(conn)
+        join_season(conn, season, 1, NOW)
+        place_pick(conn, season, 1, 1, "SEA", NOW)   # SEA is home vs NE
+        conn.execute(
+            "UPDATE nfl_games SET status='final', winner='SEA' "
+            "WHERE game_id='g-thu'",
+        )
+        rows = history_rows(conn, season, 1)
+    (r,) = rows
+    assert (r["team"], r["opponent"], r["is_home"], r["winner"]) == (
+        "SEA", "NE", True, "SEA"
+    )
+
+
+def test_history_rows_through_week_filters(db):
+    from bot_modules.survivor.logic import history_rows
+
+    with open_db(db) as conn:
+        season = _season(conn)
+        join_season(conn, season, 1, NOW)
+        place_pick(conn, season, 1, 1, "SEA", NOW)
+        place_pick(conn, season, 1, 2, "SF", NOW + 7 * DAY)
+        assert len(history_rows(conn, season, 1)) == 2
+        assert len(history_rows(conn, season, 1, through_week=1)) == 1
+
+
+def test_history_rows_survives_a_missing_game(db):
+    from bot_modules.survivor.logic import history_rows
+
+    with open_db(db) as conn:
+        season = _season(conn)
+        join_season(conn, season, 1, NOW)
+        place_pick(conn, season, 1, 1, "SEA", NOW)
+        conn.execute("DELETE FROM nfl_games WHERE game_id='g-thu'")
+        (r,) = history_rows(conn, season, 1)
+    assert r["team"] == "SEA"
+    assert r["opponent"] is None and r["is_home"] is None
