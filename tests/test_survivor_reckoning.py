@@ -370,7 +370,7 @@ def test_history_embed_public_hides_unrevealed_own_shows_tagged():
     )
     assert "SF" not in public.description          # secrecy holds
     assert "Week 1: **SEA** vs NE · ✅ won" in public.description
-    assert "Week 2: **KC** at LV 📎 · 💀 LV won" in public.description
+    assert "Week 2: **KC** at LV · 💀 LV won 📎" in public.description
     assert "Revealed picks only" in public.footer.text
 
     own = build_history_embed(
