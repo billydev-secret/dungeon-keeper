@@ -328,7 +328,7 @@ def test_panel_embed_carries_the_door_unless_closed():
     open_embed = build_panel_embed(**{**kwargs, "late_entry": "gauntlet"})
     assert any(f.name == "New Here?" for f in open_embed.fields)
     assert "Alive **7**" in open_embed.description
-    assert "Pot **8,150**" in open_embed.description
+    assert "Pot 🪙 **8,150** Coins" in open_embed.description
     games_field = next(
         f for f in open_embed.fields if f.name == "This Week's Games"
     )
@@ -458,7 +458,10 @@ def test_reckoning_embed_shows_the_prize_line():
         "weekly_win": {"count": 14, "amount": 25},
     }
     embed = build_reckoning_embed(data, lambda u: f"P{u}", season_name="S")
-    assert "💰 14 correct pick(s) collect **25** each" in embed.description
+    assert (
+        "💰 14 correct pick(s) collect 🪙 **25** Coins each"
+        in embed.description
+    )
 
 
 # ── the join echo (2026-08-18) ─────────────────────────────────────────
@@ -479,7 +482,7 @@ def test_join_echo_detail_line():
     from bot_modules.survivor.views import join_echo_detail
 
     line = join_echo_detail(14, 8150)
-    assert "14 players in" in line and "pot 8,150" in line
+    assert "14 players in" in line and "pot 🪙 8,150 Coins" in line
 
 # ── why nothing was due (2026-08-18) ──────────────────────────────────
 #
@@ -673,3 +676,29 @@ async def test_reconcile_roles_heals_drift_and_skips_the_settled(db):
     assert roleless.calls == [("add", 11)]          # the crashed-join heal
     assert settled.calls == []                       # no drift → zero API calls
     assert stale_ghost.calls == [("remove", 11), ("add", 22)]
+
+
+# ── currency vocabulary (2026-08-19, Billy's #12 follow-up) ───────────
+#
+# The style guide's rule: amounts render with the guild-configured
+# emoji/name, singular at 1, never a hard-coded "coins". The second live
+# guild runs its own denomination, so this is behavior, not pedantry.
+
+def test_money_renders_in_the_guilds_own_denomination():
+    from bot_modules.services.economy_service import EconSettings
+    from bot_modules.survivor.embeds import build_panel_embed
+    from bot_modules.survivor.reckoning import slate_join_line
+
+    nuts = EconSettings(
+        currency_name="Nut", currency_plural="Nuts", currency_emoji="🥜"
+    )
+    embed = build_panel_embed(
+        season_name="S", entrants=3, buyin=100, gauntlet_mode=False,
+        pot=10300, settings=nuts,
+    )
+    assert "Pot 🥜 **10,300** Nuts" in embed.description
+    assert "coins" not in embed.description.lower()
+    line = slate_join_line(
+        buyin=1, late_entry="gauntlet", gauntlet_mode=False, settings=nuts
+    )
+    assert "🥜 **1** Nut to enter" in line  # singular at 1

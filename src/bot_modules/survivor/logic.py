@@ -329,8 +329,12 @@ def join_season(
             meta={"season_id": season["id"]},
         )
         if not ok:
+            from bot_modules.economy.view_helpers import coins as _coins
+            from bot_modules.services.economy_service import load_econ_settings
+
+            stg = load_econ_settings(conn, season["guild_id"])
             raise PickError(
-                f"The buy-in is {buyin:,} coins — your balance is short."
+                f"The buy-in is {_coins(stg, buyin)} — your balance is short."
             )
     if not add_player(conn, season, user_id, joined_at=now):
         # Race loser: the duplicate SELECT above passed before the winner

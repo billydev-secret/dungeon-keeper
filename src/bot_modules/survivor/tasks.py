@@ -322,9 +322,12 @@ async def post_reckoning(
                 "last_reckoned_at": int(now),
             })
             conn.commit()
-        return data
+            from bot_modules.services.economy_service import load_econ_settings
 
-    data = await asyncio.to_thread(_q)
+            settings = load_econ_settings(conn, season["guild_id"])
+        return data, settings
+
+    data, settings = await asyncio.to_thread(_q)
 
     def name_of(user_id: int) -> str:
         member = guild.get_member(user_id)
@@ -335,7 +338,8 @@ async def post_reckoning(
 
     color = await resolve_accent_color(db_path, guild)
     embed = reckoning.build_reckoning_embed(
-        data, name_of, season_name=season["name"], color=color
+        data, name_of, season_name=season["name"], settings=settings,
+        color=color,
     )
     content, allowed = _pings(bot, season)
     await channel.send(content=content or None, embed=embed, allowed_mentions=allowed)

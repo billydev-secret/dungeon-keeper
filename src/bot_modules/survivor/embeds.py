@@ -15,7 +15,9 @@ from __future__ import annotations
 import discord
 
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.economy.view_helpers import coins
 from bot_modules.services.branding_service import DEFAULT_ACCENT
+from bot_modules.services.economy_service import EconSettings
 from bot_modules.survivor.logic import OpenGame
 
 # Strike hearts (§1.4): the display for "used / allowed".
@@ -162,6 +164,7 @@ def build_board_embed(
     *,
     season_name: str,
     strikes_allowed: int = 1,
+    settings: EconSettings | None = None,
     color: discord.Color | None = None,
 ) -> discord.Embed:
     """The public board (§2.6). ``name_of(user_id) -> str`` is injected so
@@ -170,11 +173,13 @@ def build_board_embed(
         title=f"🏈 {season_name} — Standings",
         color=color or discord.Color(DEFAULT_ACCENT),
     )
+    settings = settings or EconSettings()
     week = board["week"]
     pots = board["pots"]
     embed.description = (
         f"Week {week if week is not None else '—'} · "
-        f"Pot **{pots['main']:,}** · Ghost Pot **{pots['ghost']:,}**"
+        f"Pot {coins(settings, pots['main'])} · "
+        f"Ghost Pot {coins(settings, pots['ghost'])}"
     )
     if board["alive"]:
         lines = [
@@ -224,6 +229,7 @@ def build_panel_embed(
     ghost_pot: int = 0,
     alive_names: list[str] | None = None,
     eliminated_names: list[str] | None = None,
+    settings: EconSettings | None = None,
     color: discord.Color | None = None,
 ) -> discord.Embed:
     """THE channel panel — the one updating message (decided 2026-08-18).
@@ -237,6 +243,10 @@ def build_panel_embed(
     """
     from bot_modules.survivor.reckoning import slate_join_line
 
+    # Currency vocabulary (style guide): the guild's configured emoji/name,
+    # never a hard-coded "coins". None (tests, legacy callers) renders the
+    # defaults.
+    settings = settings or EconSettings()
     active = week is not None
     title = f"🏈 {season_name}"
     if active:
@@ -246,14 +256,15 @@ def build_panel_embed(
             "Pick one team to **win**. Picks lock at each game's kickoff "
             "and stay hidden until the results post.\n"
             f"✅ Alive **{alive}** · 👻 Eliminated **{eliminated}** · "
-            f"Pot **{pot:,}** · Ghost Pot **{ghost_pot:,}**"
+            f"Pot {coins(settings, pot)} · "
+            f"Ghost Pot {coins(settings, ghost_pot)}"
         )
     else:
         description = (
             "Pick one NFL team to win each week. No team twice. "
             "Lose and you're out.\n"
             "Last one standing takes the pot.\n"
-            f"👥 **{entrants}** players in · Pot **{pot:,}**"
+            f"👥 **{entrants}** players in · Pot {coins(settings, pot)}"
         )
     embed = discord.Embed(
         title=title,
@@ -308,7 +319,8 @@ def build_panel_embed(
         inline=False,
     )
     join_line = slate_join_line(
-        buyin=buyin, late_entry=late_entry, gauntlet_mode=gauntlet_mode
+        buyin=buyin, late_entry=late_entry, gauntlet_mode=gauntlet_mode,
+        settings=settings,
     )
     if join_line:
         embed.add_field(name="New Here?", value=join_line, inline=False)
@@ -326,7 +338,11 @@ _RESULT_ICON = {"win": "✅", "loss": "💀", "tie": "🤝", "void": "🌫️"}
 
 
 def build_gauntlet_receipt_embed(
-    fate, *, buyin: int, color: discord.Color | None = None
+    fate,
+    *,
+    buyin: int,
+    settings: EconSettings | None = None,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """The private gauntlet receipt (§4.2): the inherited fate, week by week,
     shown BEFORE anyone pays — nobody buys in blind."""
@@ -358,9 +374,13 @@ def build_gauntlet_receipt_embed(
             f"{len(fate.burned)} teams already used"
         )
     embed.add_field(name="Where You Land", value=state, inline=False)
-    cost = [f"Late fee: **{fate.fee:,}** ({fate.elapsed_count} missed weeks)"]
+    settings = settings or EconSettings()
+    cost = [
+        f"Late fee: {coins(settings, fate.fee)} "
+        f"({fate.elapsed_count} missed weeks)"
+    ]
     if buyin:
-        cost.append(f"Buy-in: **{buyin:,}**")
+        cost.append(f"Buy-in: {coins(settings, buyin)}")
     embed.add_field(name="Entry Cost", value=" · ".join(cost), inline=False)
     embed.set_footer(text="Shown before you pay — no surprises")
     apply_section_spacing(embed)
