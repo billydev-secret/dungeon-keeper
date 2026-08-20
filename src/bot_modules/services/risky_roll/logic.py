@@ -182,3 +182,127 @@ def build_one_rule_prompt_state(game_id: str, state: RiskyRollState):
         extra_questioner_id=state.second_highest_user,
         prompt_kind=PromptKind.TWO_QUESTIONERS,
     )
+
+
+def possible_directed_edges(rolls: dict[int, int]) -> set[tuple[int, int]]:
+    """Every ``(asker, answerer)`` this roll set could produce.
+
+    Mirrors what :meth:`RiskyRollState.resolve` plus
+    :func:`build_main_prompt_state` and :func:`build_one_rule_prompt_state`
+    would decide — but **pessimistically**, taking the union over every way an
+    unresolved tie could break, because the tie-break is a hidden roll-off the
+    caller has not run yet and must not have to.
+
+    A 69 in the round returns no edges at all: that roller asks the *room*, in
+    a thread, and a question put to everyone is not directed contact between
+    two people (docs/no_contact_spec.md, Risky Rolls). The same is true of a
+    round too small to resolve.
+
+    This restates ``resolve``'s seat rules, which is a drift risk; the contract
+    is pinned by a property test that runs the real resolution over randomised
+    rolls and asserts the edges it actually produces are a subset of these.
+    """
+    if len(rolls) < 2:
+        return set()
+    if any(roll == 69 for roll in rolls.values()):
+        return set()
+
+    max_value = max(rolls.values())
+    winners = [uid for uid, roll in rolls.items() if roll == max_value]
+
+    edges: set[tuple[int, int]] = set()
+    for winner in winners:
+        # A tie for highest is settled first and the winner is then out of the
+        # running for lowest; a clean win leaves the whole roster in it.
+        pool = (
+            {uid: r for uid, r in rolls.items() if uid != winner}
+            if len(winners) > 1
+            else rolls
+        )
+        if not pool:
+            continue
+        min_value = min(pool.values())
+        for loser in [uid for uid, r in pool.items() if r == min_value]:
+            if loser == winner:
+                continue
+            edges.add((winner, loser))
+
+            rest = {
+                uid: r for uid, r in rolls.items()
+                if uid != winner and uid != loser
+            }
+            if not rest:
+                continue
+            # The 100 rule hands the winner a second answerer…
+            if rolls[winner] == 100:
+                second_lowest = min(rest.values())
+                edges.update(
+                    (winner, uid) for uid, r in rest.items() if r == second_lowest
+                )
+            # …and the 1 rule hands the loser a second asker.
+            if rolls[loser] == 1:
+                second_highest = max(rest.values())
+                edges.update(
+                    (uid, loser) for uid, r in rest.items() if r == second_highest
+                )
+    return edges
+
+
+def has_blocked_edge(
+    rolls: dict[int, int], blocked_pairs: set[tuple[int, int]]
+) -> bool:
+    """Whether this roll set could put a no-contact pair in touch.
+
+    *blocked_pairs* comes from ``no_contact_service.no_contact_pairs_among``
+    and is keyed low-first; the edges are directed, so both orderings are
+    tested. Direction never matters to the list — it separates two people
+    both ways — but it very much matters to who ends up asking.
+    """
+    if not blocked_pairs:
+        return False
+    return any(
+        (min(a, b), max(a, b)) in blocked_pairs
+        for a, b in possible_directed_edges(rolls)
+    )
+
+
+def choose_roll(
+    rolls: dict[int, int],
+    roller_id: int,
+    blocked_pairs: set[tuple[int, int]],
+) -> int:
+    """Roll 1–100 for *roller_id*, avoiding a value that pairs a blocked couple.
+
+    The die is drawn honestly first and kept if it is safe, so a round with no
+    no-contact pair in it — every round, nearly always — takes the same
+    ``randint`` it always did. Only a natural roll that *would* create a
+    directed edge is redrawn, uniformly over the values that would not.
+
+    **69 is excluded from the redraw pool**, and that exclusion is the whole
+    reason this is a keep-or-redraw rather than a pick-from-safe. When the two
+    members of a pair are the only players so far, 69 is the *only* safe value
+    — a room question has no directed edge — so picking uniformly from the safe
+    set would make the second of them to roll come up 69 essentially every
+    time, which is a far louder tell than the thing being hidden. Drawing
+    naturally first leaves 69 at its honest 1-in-100 and lets the round fall
+    through to the close-time check instead.
+
+    Returns the natural roll when no value is safe (a round that is only the
+    two of them, say). The round is then unresolvable, and refusing to close it
+    is the close path's job — see ``views.close_button``.
+    """
+    natural = random.randint(1, 100)
+    if not blocked_pairs:
+        return natural
+    if not has_blocked_edge({**rolls, roller_id: natural}, blocked_pairs):
+        return natural
+
+    safe = [
+        value
+        for value in range(1, 101)
+        if value != 69
+        and not has_blocked_edge({**rolls, roller_id: value}, blocked_pairs)
+    ]
+    if not safe:
+        return natural
+    return random.choice(safe)

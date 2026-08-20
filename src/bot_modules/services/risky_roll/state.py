@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import weakref
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .models import PendingQuestionState, PostedQuestionState, RiskyRollState
@@ -12,6 +13,12 @@ if TYPE_CHECKING:
 DEFAULT_MIN_GAME_SECONDS = 1800
 
 store: StateStore | None = None  # set by RiskyRollCog.cog_load()
+
+# Set alongside ``store``. The no-contact gate reads the list directly on every
+# roll and close rather than caching it — a stale no-contact cache fails toward
+# letting a blocked member through, which is the one way this must not fail
+# (docs/no_contact_spec.md, "Why not an in-memory cache").
+db_path: Path | None = None
 
 active_games: dict[str, RiskyRollState] = {}
 pending_questions: dict[str, PendingQuestionState] = {}

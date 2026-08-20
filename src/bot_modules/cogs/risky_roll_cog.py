@@ -47,6 +47,7 @@ class RiskyRollCog(commands.Cog):
 
     async def cog_load(self) -> None:
         rr_state.store = StateStore(self.ctx.db_path)
+        rr_state.db_path = self.ctx.db_path
 
         swept = await rr_state.store.sweep_old_posted_questions()
         if swept:

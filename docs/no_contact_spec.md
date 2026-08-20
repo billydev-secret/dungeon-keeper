@@ -76,6 +76,7 @@ low-frequency, so every check is a direct indexed read.
 | Pen Pals | Matching, via `_is_blocked_pair` | `pen_pals_cog` |
 | Voice Master | Room permissions, via `effective_blocked` | `voice_master_service` |
 | DM requests | Consent suppressed; new requests refused | `dm_perms_cog` |
+| Risky Rolls | The dice: a draw that would seat a pair as asker/answerer is redrawn, and a round that cannot be made safe refuses to close. Plus the 69 room ping | `risky_roll/logic.py`, `risky_roll/views.py` |
 
 Features that hold their own connection (Pen Pals' matching pass, Voice
 Master's permission build) consult the list through
@@ -83,11 +84,16 @@ Master's permission build) consult the list through
 `no_contact_pairs` directly, so the table's shape stays owned by one module —
 adding an expiry or soft-delete column is a change in one place, not a grep.
 
-Only the first six surfaces record an **attempt** event. The last three are
-gated by extending an existing predicate that runs inside matching loops and
+Only the first six surfaces record an **attempt** event. The last four are
+gated without one. For Pen Pals, Voice Master and DM requests that is because
+the gate extends an existing predicate running inside matching loops and
 permission syncs; there is no single moment there that means "he tried", and
-recording per iteration would bury the real attempts. They are enforced just
-as strictly — they simply produce no log lines.
+recording per iteration would bury the real attempts. Risky Rolls is the
+stronger case: nobody ever submits anything aimed at a blocked person, because
+the pairing never forms. He pressed a dice button aimed at nobody, and a log
+line saying so would be a record of the bot's own arithmetic, not of an
+attempt. They are enforced just as strictly — they simply produce no log
+lines.
 
 `dm_consent_pairs` rows are **suppressed, not deleted**: `_is_mutual` returns
 False for a no-contact pair while the row and its provenance survive for a mod
@@ -168,6 +174,60 @@ row** (and is never delivered or mod-logged), because `_do_count_replies` is
 what enforces the one-reply-per-whisper cap. Skipping the write let a second
 press succeed where a genuine one returns "already replied".
 
+### Risky Rolls: the dice are nudged, not the outcome
+
+Every other gate here hides behind something private. Guess Who filters a
+picker only the guesser sees; AMA screens a question before it is posted;
+Whisper fakes a delivery nobody could observe. Risky Rolls has no private
+moment at all — `/risky start` opens a round in a public channel, everyone
+presses Roll, and the highest unique roll asks a question of the lowest with
+the whole roster of names and numbers in the embed. The room watched the dice
+decide. There is nowhere in that sequence to refuse something quietly.
+
+So the gate moved earlier than the contact: **to the draw itself.** When a
+value would seat a no-contact pair as asker and answerer, it is redrawn before
+it exists. Nothing is refused, so there is no refusal to make
+indistinguishable from a success — the core rule is satisfied by there being
+nothing to distinguish. Nobody can audit a number that was never generated,
+where a re-*targeted* pairing would have been checkable against the roster
+anyone can read.
+
+Four seats, not two. A 100 makes the second-lowest a recipient of the winner's
+question and a 1 makes the second-highest an asker aimed at the loser, so the
+safe-value test covers every directed asker→answerer edge the round could
+produce, not just (winner, loser).
+
+**Two layers.** `choose_roll` is avoidance; the check in `close_button` is the
+guarantee. The nudge cannot see the future — a round can be doomed the moment
+the second member of a pair rolls (they are the only two players so far, and
+every value makes one of them highest and the other lowest) and then *rescued*
+by a third player rolling above both. The close-time check is what actually
+holds, and the nudge is what stops it having to fire.
+
+**69 is excluded from the redraw pool**, and this is the subtle part. A room
+question has no directed edge, so when the pair are the only players in the
+round 69 is the *only* safe value. Picking uniformly from the safe set would
+therefore make the second of them to roll come up 69 nearly every time, which
+is a far louder tell than the pairing it hides. The draw is honest first and
+redrawn only on a collision, which leaves 69 at its true 1-in-100 and lets a
+doomed round fall through to the close check instead.
+
+**When no value is safe**, the round takes the ordinary "at least 2 players
+must roll" refusal — the same constant, `views.NOT_ENOUGH_TEXT`, that a
+genuinely short round gets — and the auto-close path uses the matching
+`AUTO_CLOSE_NOT_ENOUGH_TEXT`. The cost is real and worth stating: a round with
+eight people in it can die because two of them ended up in those seats. The
+nudge makes that rare; it does not make it impossible.
+
+**The 69 room question is not directed contact** and posts intact. She is
+dropped from its `@`-mention list, and the thread stays public — she can read
+it exactly as she can read anything else he says in the channel, which
+no-contact has never tried to prevent.
+
+The dice are genuinely biased for that pair, which is unauditable and
+therefore safe, but it is a real change to a game of chance and belongs in
+writing rather than in folklore.
+
 ## Alerts
 
 Fires when one member of a pair `@mention`s **or replies to** the other. The
@@ -217,3 +277,11 @@ harasser benefits from, and the one he might pressure her into.
   including that the *visible* voice blocklist stays clean.
 - `tests/cogs/test_guess_no_contact.py` — wiring: the gate is actually called,
   and a blocked guess is neither recorded nor distinguishable.
+- `tests/test_risky_roll_no_contact.py` — the four contact moments, the redraw,
+  and two property tests that carry the design: that the predicted edge set
+  never under-reports what a real resolution produces (the predicate restates
+  `resolve`'s seat rules, so it can drift), and that a later roll can clear a
+  collision but never create one (which is why the draw only has to look at the
+  round in front of it).
+- `tests/cogs/test_risky_no_contact.py` — wiring: the draw consults the list,
+  and an unsafe round refuses to close *before* `resolve` runs.

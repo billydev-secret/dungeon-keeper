@@ -44,6 +44,29 @@ After resolution, the **Roll / Close** view is disabled and replaced with an **A
 
 Both the question **and** the reply are public free text, so both are screened against the shared slur/abuse denylist (`duels/filters.contains_disallowed_content`) — a match is rejected with an ephemeral "contains disallowed content" and nothing is posted.
 
+### No-contact enforcement
+
+Risky Rolls consults the [no-contact list](no_contact_spec.md) on **every
+draw**, not at resolution. A roll value that would seat a no-contact pair as
+asker and answerer — including the extra seats the 100 and 1 rules create — is
+redrawn before it exists, so the pairing never forms and there is nothing to
+refuse. The draw is honest first and redrawn only on a collision, which leaves
+the natural distribution alone except where it has to change; 69 is excluded
+from the redraw pool specifically so it is never manufactured as an escape.
+
+When no value can avoid it (a round that is only those two players), **Close
+Round returns the ordinary "At least 2 players must roll."** and the round
+stays open; the auto-close path ends it with the ordinary "not enough players
+rolled". Both strings are module constants shared with the genuine
+too-few-players path — see `views.NOT_ENOUGH_TEXT` /
+`views.AUTO_CLOSE_NOT_ENOUGH_TEXT`. The cost: a large round can occasionally
+die because two of its players landed in those seats.
+
+A **69 room question is not directed contact** — it posts to the thread
+intact, and the partner is only dropped from its `@`-mention list. The full
+reasoning is in `no_contact_spec.md` §"Risky Rolls: the dice are nudged, not
+the outcome".
+
 ### Cooldown / minimum game time
 
 A configurable min-game-time floor (default 30 minutes) prevents premature closes. Opening the round with `ping:false` bypasses it.
