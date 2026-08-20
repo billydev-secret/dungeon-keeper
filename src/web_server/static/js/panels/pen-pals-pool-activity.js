@@ -25,6 +25,7 @@ const REASONS = {
   matched: "matched with a pen pal",
   departed: "left the server",
   inactive: "never posted — left out of the pool",
+  opted_out: "opted out — not re-pooled",
 };
 
 const ACTIONS = {
@@ -37,7 +38,7 @@ export function mountPoolActivity(container) {
   container.innerHTML = `<div class="empty">Loading pool activity…</div>`;
 
   return mountAsync(container, async () => {
-    const [{ events }, members] = await Promise.all([
+    const [{ events, optouts = [] }, members] = await Promise.all([
       api("/api/config/pen-pals/pool-events"),
       loadMembers(),
     ]);
@@ -54,7 +55,10 @@ export function mountPoolActivity(container) {
         A pool that stops moving is a pool that has stopped making pairs.
       </div>
       <div data-region="table"></div>
+      <div data-region="optouts" style="margin-top:24px;"></div>
     `;
+
+    renderOptOuts(container.querySelector('[data-region="optouts"]'), optouts, nameOf);
 
     renderSortableTable(container.querySelector('[data-region="table"]'), {
       columns: [
@@ -74,5 +78,45 @@ export function mountPoolActivity(container) {
         "Nothing yet. Joins, matches and departures show up here as they happen.",
       maxRows: 50,
     });
+  });
+}
+
+/**
+ * Members who have left the pool and stay left until they rejoin.
+ *
+ * The activity log shows that someone stopped being re-pooled; only this
+ * shows that they will stay that way, which is the question a moderator
+ * looking at a thinning pool actually has. Read-only on purpose: an opt-out
+ * is the member's own decision about being put in a private chat with a
+ * stranger, and a staff-side "clear" button would be an override of it. The
+ * only way back in is the member's own Join.
+ */
+function renderOptOuts(container, optouts, nameOf) {
+  if (!optouts.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = `
+    <div class="section-label">Opted Out (${optouts.length})</div>
+    <div class="field-hint" style="margin-bottom:12px;">
+      These members won't be matched or returned to the pool when a chat of
+      theirs ends. Only they can undo it, by joining again.
+    </div>
+    <div data-region="optout-table"></div>
+  `;
+
+  renderSortableTable(container.querySelector('[data-region="optout-table"]'), {
+    columns: [
+      { key: "user_id", label: "Member", format: (v) => nameOf(v) },
+      {
+        key: "at",
+        label: "Since",
+        format: (v) => new Date(v * 1000).toLocaleString(),
+      },
+    ],
+    data: optouts,
+    defaultSort: "at",
+    defaultAsc: false,
+    emptyMsg: "Nobody has opted out.",
   });
 }

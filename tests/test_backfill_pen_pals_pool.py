@@ -174,3 +174,16 @@ def test_seed_excludes_everyone_when_nobody_holds_the_opt_in_role(sync_db_path):
         _spoke(conn, 2, 100)
 
         assert backfill.candidates(conn, GUILD, present=set()) == []
+
+
+def test_skips_members_who_opted_out(sync_db_path):
+    """The seed reads past participation, which is exactly what an opted-out
+    member has — so without this it would re-pool the people who said no
+    loudest (migration 173)."""
+    with open_db(sync_db_path) as conn:
+        _closed_session(conn, "s1", 1, 2, channel_id=100, closed_at=1000.0)
+        _spoke(conn, 1, 100)
+        _spoke(conn, 2, 100)
+        pp._set_opt_out(conn, GUILD, 2)
+
+        assert [u for u, _ in backfill.candidates(conn, GUILD)] == [1]

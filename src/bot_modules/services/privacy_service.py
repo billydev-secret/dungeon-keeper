@@ -152,6 +152,10 @@ def purge_user_data(
         # protective record), nothing reads this back, so there is no ground
         # to hold it against an erasure request.
         "pen_pals_pool_events",
+        # Pen Pals opt-out (migration 173). A bare preference — "don't match
+        # me" — that nothing but the requeue paths reads, and an erasure also
+        # clears pen_pals_pool, so there is no state left for it to protect.
+        "pen_pals_optouts",
     ):
         _delete(
             conn,

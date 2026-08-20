@@ -893,6 +893,21 @@ def test_pen_pals_pool_events_are_newest_first(authed_client, fake_ctx):
     assert events[0]["user_id"] == "4242"
 
 
+def test_pen_pals_pool_events_carry_the_current_opt_outs(authed_client, fake_ctx):
+    """The log says a member stopped being re-pooled; only this says they will
+    stay that way. Read-only — there is deliberately no route for staff to
+    clear a member's own opt-out."""
+    from bot_modules.cogs.pen_pals_cog import _set_opt_out
+
+    with fake_ctx.open_db() as conn:
+        _set_opt_out(conn, fake_ctx.guild_id, 4242, at=100.0)
+        _set_opt_out(conn, fake_ctx.guild_id + 1, 77, at=200.0)  # another guild
+
+    optouts = authed_client.get("/api/config/pen-pals/pool-events").json()["optouts"]
+
+    assert optouts == [{"user_id": "4242", "at": 100.0}]
+
+
 def test_pen_pals_pool_events_are_scoped_to_the_active_guild(authed_client, fake_ctx):
     from bot_modules.cogs.pen_pals_cog import _record_pool_event
 

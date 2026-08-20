@@ -52,6 +52,9 @@ def candidates(
     Pure read. Kept separate from the write so the selection rule is testable
     without a database that anyone minds being written to.
 
+    Members who have opted out (migration 173) are skipped, as are members
+    already pooled or mid-session.
+
     ``present`` is the set of members who are still in the guild *and* hold the
     opt-in role, read live from Discord by ``main``. Without it this script
     would pool from DB history alone: Pen Pals has been live in TGM long enough
@@ -85,10 +88,19 @@ def candidates(
             "SELECT user_id FROM pen_pals_pool WHERE guild_id = ?", (guild_id,)
         )
     }
+    # Members who have asked not to be matched (migration 173). Past
+    # participation is precisely what this script reads, and it is exactly
+    # what an opted-out member has: seeding from history would re-pool the
+    # people who most explicitly said no.
+    opted_out = {
+        r[0] for r in conn.execute(
+            "SELECT user_id FROM pen_pals_optouts WHERE guild_id = ?", (guild_id,)
+        )
+    }
 
     out: list[tuple[int, float]] = []
     for uid, (channel_id, closed_at) in last.items():
-        if uid in busy or uid in pooled:
+        if uid in busy or uid in pooled or uid in opted_out:
             continue
         if present is not None and uid not in present:
             continue

@@ -155,6 +155,7 @@ from bot_modules.cogs.pen_pals_cog import (
     DEFAULT_ROOM_VISIBILITY as _PP_DEFAULT_ROOM_VISIBILITY,
     _get_admin_separations as _pp_get_admin_separations,
     _get_config as _pp_get_config,
+    _get_opt_outs as _pp_get_opt_outs,
     _get_pool as _pp_get_pool,
     _normalize_match_mode as _pp_normalize_match_mode,
     _normalize_room_visibility as _pp_normalize_room_visibility,
@@ -3498,24 +3499,37 @@ async def pen_pals_pool_events(
     Its own endpoint rather than a field on ``/config`` because that payload is
     fetched by every panel on the dashboard, and none of the others want fifty
     rows of pen pal history.
+
+    Carries the current opt-outs (migration 173) alongside the log, because
+    the two answer one question between them: the events say a member stopped
+    being re-pooled, and only the opt-out list says they will stay that way.
+    Read-only by design — a member's opt-out is their own decision, so there
+    is no route here for staff to reverse it.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
-            return [
-                {
-                    # Snowflakes cross as strings — see _pen_pals_section.
-                    "user_id": str(r["user_id"]),
-                    "at": float(r["at"]),
-                    "action": r["action"],
-                    "reason": r["reason"],
-                }
-                for r in _pp_recent_pool_events(conn, guild_id)
-            ]
+            return (
+                [
+                    {
+                        # Snowflakes cross as strings — see _pen_pals_section.
+                        "user_id": str(r["user_id"]),
+                        "at": float(r["at"]),
+                        "action": r["action"],
+                        "reason": r["reason"],
+                    }
+                    for r in _pp_recent_pool_events(conn, guild_id)
+                ],
+                [
+                    {"user_id": str(r["user_id"]), "at": float(r["at"])}
+                    for r in _pp_get_opt_outs(conn, guild_id)
+                ],
+            )
 
-    return {"events": await run_query(_q)}
+    events, optouts = await run_query(_q)
+    return {"events": events, "optouts": optouts}
 
 
 class PenPalsSeparation(BaseModel):
