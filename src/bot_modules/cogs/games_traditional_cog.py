@@ -10,7 +10,7 @@ from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
@@ -122,7 +122,7 @@ class TraditionalHostView(discord.ui.View):
         host_member = guild.get_member(self.host_id) if guild else None
         host_name = host_member.display_name if host_member else "Host"
         names = self._resolve_names(guild, payload)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="traditional")
         embed = build_tod_embed(host_name, payload, names=names, color=color)
         if hasattr(self, '_message') and self._message:
             try:
@@ -326,7 +326,7 @@ class TraditionalHostView(discord.ui.View):
         total_q = len(asked)
 
         guild = (interaction.guild if interaction else None) or getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="traditional")
         embed = build_recap_embed(payload, color=color)
         if guild:
             from bot_modules.economy.game_rewards import append_payout_footer
@@ -411,7 +411,7 @@ class TraditionalCog(commands.Cog):
         )
 
         guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="traditional")
         embed = build_lobby_embed(host_name, color=color, single_choice=single_choice)
 
         log.info("Game %s (traditional) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))

@@ -24,7 +24,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     channel_name,
 )
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -72,7 +72,7 @@ class ComplimentView(discord.ui.View):
         names = resolve_names(interaction.guild, payload.get("participants", []))
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
         guild = interaction.guild
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="compliment")
         embed = build_lobby_embed(
             host_member.display_name if host_member else "Host",
             names,
@@ -116,7 +116,7 @@ class ComplimentView(discord.ui.View):
             mention_lookup[giver_id] = giver_str
             mention_lookup[receiver_id] = receiver_str
         guild = interaction.guild
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="compliment")
         embed = build_pairings_embed(lines, color=color)
         if guild:
             from bot_modules.economy.game_rewards import append_payout_footer
@@ -238,7 +238,7 @@ class ComplimentCog(commands.Cog):
 
         log.info("Game %s (compliment) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="compliment")
         embed = build_lobby_embed(host_name, [], color=color, start_at=start_epoch)
         view = ComplimentView(game_id, host_id, self.db, self.bot)
         self.bot.active_views[game_id] = view

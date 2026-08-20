@@ -10,7 +10,7 @@ from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -76,7 +76,7 @@ class MFKView(discord.ui.View):
 
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
         names = resolve_names(interaction.guild, payload.get("participants", []))
-        color = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild) if interaction.guild else None
+        color = await safe_resolve_accent(self.bot, interaction.guild, log_label="mfk")
         embed = build_lobby_embed(
             host_member.display_name if host_member else "Host",
             names,
@@ -125,7 +125,7 @@ class MFKView(discord.ui.View):
                 target_names.append(m.display_name if m else str(uid))
             player_assignments.append((player_str, target_names))
 
-        color = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild) if interaction.guild else None
+        color = await safe_resolve_accent(self.bot, interaction.guild, log_label="mfk")
         embed = build_assignments_embed(player_assignments, labels=self.labels, color=color)
         if interaction.guild:
             from bot_modules.economy.game_rewards import append_payout_footer
@@ -245,7 +245,7 @@ class MFKCog(commands.Cog):
 
         log.info("Game %s (mfk) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="mfk")
         embed = build_lobby_embed(host_name, [], labels=labels, color=color, start_at=start_epoch)
         view = MFKView(game_id, host_id, self.db, self.bot, labels=labels)
         self.bot.active_views[game_id] = view

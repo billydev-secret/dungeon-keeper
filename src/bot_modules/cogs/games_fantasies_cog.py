@@ -28,7 +28,7 @@ from bot_modules.games.utils.game_manager import (
     channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games_fantasies.embeds import (
     build_lobby_embed,
     build_recap_embed,
@@ -304,7 +304,7 @@ class FantasiesCog(commands.Cog):
         )
 
         guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="fantasies")
         embed = build_lobby_embed(host_name, color=color)
 
         log.info("Game %s (fantasies) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
@@ -331,7 +331,7 @@ class FantasiesCog(commands.Cog):
         channel,
     ):
         guild = getattr(channel, "guild", None)
-        accent_color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        accent_color = await safe_resolve_accent(self.bot, guild, log_label="fantasies")
         submit_embed = build_round_submit_embed(round_num, color=accent_color)
         submit_view = SubmitRoundView(game_id, host_id, round_num, self.db, self.bot)
         # Let the main view know so it can stop us on close
@@ -424,7 +424,7 @@ class FantasiesCog(commands.Cog):
     async def _post_recap(self, channel, payload: dict):
         results = payload.get("results", [])
         guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="fantasies")
         embed = build_recap_embed(results, color=color)
         if embed is None:
             return

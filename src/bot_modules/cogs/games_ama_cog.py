@@ -27,7 +27,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     channel_name,
 )
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.services.anon_audit_service import (
     EVENT_HOT_SEAT_CHANGED,
@@ -225,7 +225,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         q_idx = len(payload.get("questions", [])) - 1
 
         if self.mode == "unfiltered":
-            color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
+            color = await safe_resolve_accent(interaction.client, interaction.guild, log_label="ama")
             embed = build_question_embed(self.question.value, color=color)
             target_member = interaction.guild.get_member(self.target_id) if interaction.guild else None
             question_view = QuestionView(self.game_id, self.target_id, self.db, q_idx, interaction.user.id, self.ama_view, self.question.value)
@@ -343,7 +343,7 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted reply modal in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
-        color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
+        color = await safe_resolve_accent(interaction.client, interaction.guild, log_label="ama")
         answered_embed = build_answered_embed(
             self.question_text,
             self.reply.value,
@@ -473,7 +473,7 @@ class ScreenedQuestionView(discord.ui.View):
             )
             return
 
-        color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
+        color = await safe_resolve_accent(interaction.client, interaction.guild, log_label="ama")
         embed = build_question_embed(self.question_text, color=color)
         hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
         question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, self.question_idx, self.asker_id, self.ama_view, self.question_text)
@@ -634,7 +634,7 @@ class AMAView(discord.ui.View):
 
     async def _build_embed(self, host_name: str, payload: dict | None = None) -> discord.Embed:
         guild = self._game_msg.guild if self._game_msg else None
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="ama")
 
         def _name_resolver(uid: int) -> str:
             m = guild.get_member(uid) if guild else None
@@ -1012,7 +1012,7 @@ class AMAView(discord.ui.View):
         total_q = stats["total_q"]
         unique_askers = stats["unique_askers"]
 
-        color = await resolve_accent_color(self.bot.ctx.db_path, channel.guild) if channel.guild else None
+        color = await safe_resolve_accent(self.bot, channel.guild, log_label="ama")
         embed = build_recap_embed(self.mode, stats, color=color)
         if channel.guild:
             from bot_modules.economy.game_rewards import append_payout_footer
@@ -1565,7 +1565,7 @@ class AMACog(commands.Cog):
         )
 
         launch_guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, launch_guild) if launch_guild else None
+        color = await safe_resolve_accent(self.bot, launch_guild, log_label="ama")
         if game_format == AMA_FORMAT_PANEL:
             embed = build_panel_embed(host_name, mode, [], str, color=color)
         else:

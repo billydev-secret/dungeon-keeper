@@ -14,6 +14,7 @@ import discord
 import pytest
 
 import bot_modules.cogs.games_ama_cog as ama_mod
+from bot_modules.core import branding
 from bot_modules.cogs.games_ama_cog import AMACog, AskQuestionModal, AskTargetSelect
 from bot_modules.services.games_db import GamesDb
 
@@ -126,7 +127,7 @@ def stub_branding(monkeypatch):
     async def _audit(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(ama_mod, "resolve_accent_color", _accent)
+    monkeypatch.setattr(branding, "resolve_accent_color", _accent)
     monkeypatch.setattr(ama_mod, "audit_anonymous", _audit)
 
 

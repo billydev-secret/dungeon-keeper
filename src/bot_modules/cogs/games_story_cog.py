@@ -12,7 +12,7 @@ from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
@@ -309,7 +309,7 @@ class StoryCog(commands.Cog):
         )
 
         guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="story")
         embed = build_lobby_embed(
             host_name=host_name,
             visibility=visibility,
@@ -379,7 +379,7 @@ class StoryCog(commands.Cog):
             mention = current_member.mention if current_member else f"**{player_name}**"
             turn_view = StoryTurnView(game_id, host_id, current_player_id, context_text, self.db, self.bot)
 
-            turn_color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+            turn_color = await safe_resolve_accent(self.bot, guild, log_label="story")
             turn_embed = build_turn_embed(
                 sentence_count=sentence_count,
                 max_sentences=max_sentences,
@@ -448,7 +448,7 @@ class StoryCog(commands.Cog):
         def _name_for(author_id: int) -> str:
             return resolve_name(guild, author_id)
 
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="story")
 
         # Send the full story embed first
         story_text = assemble_story_text(sentences)

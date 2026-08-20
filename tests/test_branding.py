@@ -9,6 +9,7 @@ section heading doesn't hug the section above it.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -176,3 +177,46 @@ async def test_guard_returns_stay_silent(monkeypatch, caplog, guild):
     with caplog.at_level(logging.DEBUG, logger="bot_modules.core.branding"):
         await branding.safe_resolve_accent(bot, guild)
     assert [r for r in caplog.records if r.name == "bot_modules.core.branding"] == []
+
+
+# ── adoption: the game cogs route through the guard ───────────────────
+
+# The six cogs converted in the "guard the last six" commit. Scoped
+# deliberately: ~80 direct resolve_accent_color calls remain elsewhere under
+# cogs/ (economy, whisper, jail, voice_master, guess, music, ...), and
+# converting those is a much larger behaviour change than this list. This
+# asserts the six stay converted, not that the repo is finished.
+GUARDED_GAME_COGS = [
+    "games_ama_cog",
+    "games_compliment_cog",
+    "games_fantasies_cog",
+    "games_mfk_cog",
+    "games_story_cog",
+    "games_traditional_cog",
+]
+
+
+@pytest.mark.parametrize("module", GUARDED_GAME_COGS)
+def test_live_game_embeds_never_call_the_raw_resolver(module):
+    """A branding hiccup must not raise into a live game's embed builder.
+
+    These six built embeds with a bare ``await resolve_accent_color(...)``,
+    so a raising branding read surfaced to the player as "This interaction
+    failed" mid-game. They go through ``safe_resolve_accent`` now; the
+    fallback behaviour itself is covered by the tests above.
+    """
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src/bot_modules/cogs"
+        / f"{module}.py"
+    ).read_text(encoding="utf-8")
+    unguarded = [
+        line.strip()
+        for line in source.splitlines()
+        if "resolve_accent_color(" in line and "safe_resolve_accent(" not in line
+    ]
+    assert not unguarded, (
+        f"{module} calls resolve_accent_color directly again — use "
+        "safe_resolve_accent so a branding failure can't break a live game:\n  "
+        + "\n  ".join(unguarded)
+    )
