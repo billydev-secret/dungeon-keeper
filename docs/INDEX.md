@@ -10,12 +10,15 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 >
 > Each entry below is classified. When in doubt, the code wins.
 
+**Building a feature? Start with [design_guide.md](design_guide.md)** — it holds the order of the decisions, the coding standards and the pre-commit obligations, and points at whichever doc below owns each detail.
+
 ---
 
 ## Reference specs (match current behavior)
 
 | Doc | What it covers |
 |---|---|
+| [design_guide.md](design_guide.md) | **Start here.** How a feature gets built in this repo: the order of the design decisions (where the surface lives, panel vs command, the safety gates including the no-contact list, what data it stores), the coding standards for the bot and dashboard layers, what tests ship with it, and the assembled **pre-commit obligations checklist**. Owns the spine and points at the eight documents that own the detail — it deliberately restates none of them, so a rule here that disagrees with its target is a pointer to repair. Also the source `get_conventions()` serves to claude.ai |
 | [README.md](../README.md) | Feature overview + quick start, written for someone evaluating the bot (slimmed 2026-07-27: 365→193 lines). Its command table is a hand-picked highlights list, deliberately **not** a reference — `/help` and `manual.html` are. Not on the per-commit docs contract; update it when a feature area appears or disappears |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
 | [dev_remote_testing.md](dev_remote_testing.md) | Dispatching pytest to a faster machine over SSH (opt-in, falls back to local) |

@@ -34,6 +34,7 @@ INDEX = """# Documentation Index
 
 | Doc | What it covers |
 |---|---|
+| [design_guide.md](design_guide.md) | The entry point |
 | [README.md](../README.md) | Outside the corpus on purpose |
 | [alpha_spec.md](alpha_spec.md) | Alpha, which matches the code |
 | [embed_style_guide.md](embed_style_guide.md) | Embed conventions |
@@ -83,6 +84,32 @@ FILES: dict[str, str] = {
     "docs/beta_spec.md": "# Beta Spec\n\nBeta drifted.\n\n## Behavior\n\nBeta pings.\n",
     "docs/gamma_spec.md": "# Gamma Spec\n\nGamma is unbuilt.\n",
     "docs/zeta_spec.md": "# Zeta Spec\n\nZeta describes a jackpot nobody wrote.\n",
+    "docs/design_guide.md": (
+        "# Design guide\n\nThe entry point.\n\n"
+        "# Part 1 — The decision sequence\n\n"
+        "## 1. Where does the surface live?\n\n"
+        "Config lives on the WEB DASHBOARD, not Discord.\n\n"
+        "## 2. If it's a dashboard panel — which page, and which id?\n\n"
+        "Route ids are FROZEN.\n\n"
+        "## 4. Who does it put in contact, and who can see it?\n\n"
+        "Member-to-member surfaces consult the no-contact list.\n\n"
+        "## 5. What data does it store?\n\n"
+        "A per-user table needs a data_register.md row.\n\n"
+        "# Part 2 — Coding standards\n\n"
+        "## Bot-side code\n\nUse resolve_accent_color.\n\n"
+        "## Dashboard-side code\n\nNever parseInt an id.\n\n"
+        "## Copy\n\nServer, never guild.\n\n"
+        "# Part 3 — What tests ship with it\n\n"
+        "A bug fix gets a test that FAILS BEFORE THE FIX.\n\n"
+        "# Part 4 — Before you commit\n\n"
+        "## The docs contract\n\nA UI change updates manual.html.\n\n"
+        "## Enforcement\n\nEvery gate has a test that proves it denies.\n\n"
+        "## Gates\n\nA new logic-layer file with no test is a HARD FAILURE.\n\n"
+        "## The commit itself\n\nSubject is Scope: summary.\n"
+    ),
+    "docs/no_contact_spec.md": (
+        "# No-Contact List\n\n## Gated surfaces\n\nWhisper, AMA, Pen Pals.\n"
+    ),
     "docs/embed_style_guide.md": "# Embed style guide\n\nUse resolve_accent_color.\n",
     "docs/dashboard_ia.md": "# Dashboard IA\n\nRoute ids are frozen.\n",
     "docs/data_register.md": "# Data register\n\nEvery per-user table gets a row.\n",

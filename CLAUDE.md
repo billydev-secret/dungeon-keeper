@@ -22,11 +22,20 @@ SQLite-backed. Tests in `tests/`.
   own age-gate), never a bot-side toggle. Store minimal data — message
   content is off by default, so derive metadata at ingest time. Sensitive
   access is opt-in. Never ship a preference or toggle that isn't enforced.
+- **Any surface that puts two members in contact consults the no-contact
+  list** (`is_no_contact_conn` / `no_contact_partners_conn`), and refuses in a
+  way the blocked party can't distinguish from an ordinary outcome. See
+  `docs/no_contact_spec.md`.
 - If a feature genuinely seems to need in-Discord admin config, raise it and
   ask instead of building it.
 
 ## Docs
 
+- **`docs/design_guide.md` is the entry point** — the order the design
+  decisions come in, the coding standards for the bot and dashboard layers,
+  and the assembled pre-commit obligations checklist. It restates nothing:
+  every rule there points at the document that owns it. Read it when building
+  a feature; this file is the terse in-context statement of the same rules.
 - Specs live in `docs/`. Read `docs/INDEX.md` **first** — it classifies every
   spec as Reference / Design / Aspirational. Aspirational specs describe
   unbuilt features; when a spec and the code disagree, the code wins.
