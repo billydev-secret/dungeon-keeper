@@ -87,13 +87,15 @@ server = MCPServer(
         "the source modules. (2) search_docs / get_doc(path, section=...) to "
         "read the parts that matter; the corpus is 2.7 MB, so fetch sections, "
         "not whole files. (3) search_code / get_code to confirm what is "
-        "really built. (4) get_conventions() before writing -- DK has strong "
-        "house rules that make a spec wrong if missed: admin configuration "
-        "lives on the WEB DASHBOARD and never in Discord slash commands, "
-        "dashboard route ids are FROZEN, a new per-user table needs a "
-        "docs/data_register.md row in the same commit, a UI change must "
-        "update manual.html in the same commit, and every feature ships with "
-        "logic-layer tests. "
+        "really built. (4) get_conventions() before writing -- it serves "
+        "docs/design_guide.md, the repo's ENTRY POINT for design decisions and "
+        "coding standards, and DK's house rules make a spec wrong if missed: "
+        "admin configuration lives on the WEB DASHBOARD and never in Discord "
+        "slash commands, dashboard route ids are FROZEN, any surface that puts "
+        "two members in contact MUST consult the no-contact list, a new "
+        "per-user table needs a docs/data_register.md row in the same commit, "
+        "a UI change must update manual.html in the same commit, and every "
+        "feature ships with logic-layer tests. "
         "NOT SERVED, deliberately: docs/reviews/ (43 audit documents whose "
         "findings are largely superseded) and docs/testing/ (completed QA "
         "checklists). docs/INDEX.md links to both; those sections are omitted "
@@ -293,19 +295,19 @@ def get_doc(path: str, section: str | None = None) -> dict:
 def get_conventions(topic: str | None = None) -> dict:
     """The house rules a Dungeon Keeper spec has to satisfy.
 
-    Call this BEFORE drafting. DK's conventions are scattered across CLAUDE.md,
-    the embed style guide, the dashboard IA doc, the data register and the
-    testing docs, and a spec that misses one of them is wrong rather than
-    merely incomplete -- putting admin config in a slash command, renaming a
-    frozen dashboard route id, or adding a per-user table with no data-register
-    row.
+    Call this BEFORE drafting. It serves docs/design_guide.md, the repo's entry
+    point for its design decisions and coding standards, and a spec that misses
+    one of them is wrong rather than merely incomplete -- putting admin config
+    in a slash command, renaming a frozen dashboard route id, adding a per-user
+    table with no data-register row, or building a member-to-member surface
+    that never consults the no-contact list.
 
-    With no topic you get every rule, assembled. With a topic you also get the
-    full source document behind it.
+    With no topic you get the whole guide. With a topic you get its section of
+    the guide plus the full documents that own the detail behind it.
 
     Args:
         topic: one of working-agreement, docs-contract, testing, dashboard,
-            privacy, embeds, commits
+            safety, privacy, embeds, commits
     """
     if topic is None:
         return {

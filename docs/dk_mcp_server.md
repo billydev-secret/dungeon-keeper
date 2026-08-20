@@ -85,7 +85,7 @@ session is open.
 | `list_docs(kind, contains)` | The catalogue: every document with its classification, summary and status |
 | `search_docs(query, kind, limit)` | Ranked search **per section**, so a hit names the heading breadcrumb and line to fetch next. Supports `"quoted phrases"` |
 | `get_doc(path, section)` | A document or one section, with its banner. Long docs return an outline instead of their text |
-| `get_conventions(topic)` | The house rules assembled from CLAUDE.md, `embed_style_guide.md`, `dashboard_ia.md`, `data_register.md`, `web_testing.md` |
+| `get_conventions(topic)` | `docs/design_guide.md` — the whole guide with no topic, or one topic's section of it plus the full documents that own the detail (CLAUDE.md, `embed_style_guide.md`, `dashboard_ia.md`, `data_register.md`, `privacy_spec.md`, `web_testing.md`, `no_contact_spec.md`, `INDEX.md`) |
 | `search_code(pattern, path_glob, regex, limit)` | Search `src/` — how "the code wins" gets checked |
 | `get_code(path, start, end, symbol)` | Read a file, a range, or one `def`/`class` |
 | `feature_brief(feature)` | One call that grounds a session: specs with classifications, plans with status, the manual section, the source modules |
@@ -171,9 +171,12 @@ There is **no write path and no database tool**, by design.
 ## Tests
 
 `tests/test_dk_mcp_{paths,corpus,sections,search,code,conventions}_service.py`
-— 168 tests. Beyond the path boundary, the ones worth knowing about: banners
+— 182 tests. Beyond the path boundary, the ones worth knowing about: banners
 must exist for every kind; a doc listed twice takes the cautionary label; an
 unlisted plan admits it has no status; links in Notes cells are not
 classifications; aspirational ranks below reference but is still returned; the
-excluded corpora are unsearchable and unfetchable; and every conventions topic
-names a source document that still exists in the repo.
+excluded corpora are unsearchable and unfetchable; and every conventions
+topic both names a source document that still exists and addresses a
+heading that still resolves in `docs/design_guide.md` — the service holds
+no hand-written copy of the rules, so a renamed heading there is a code
+change and fails a test rather than silently serving an empty section.
