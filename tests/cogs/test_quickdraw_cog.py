@@ -78,7 +78,7 @@ async def test_void_embed_uses_accent(db, sync_db_path):
     cog._edit_message_silent = _cap  # type: ignore[method-assign]
     # FakeGuild has no awaitable avatar, so stub the resolver.
     with patch(
-        "bot_modules.cogs.quickdraw.cog.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(return_value=accent),
     ):
         await cog._fire_void(game.id)
@@ -96,7 +96,7 @@ async def test_void_embed_falls_back_when_accent_errors(db, sync_db_path):
 
     cog._edit_message_silent = _cap  # type: ignore[method-assign]
     with patch(
-        "bot_modules.cogs.quickdraw.cog.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(side_effect=RuntimeError("boom")),
     ):
         await cog._fire_void(game.id)

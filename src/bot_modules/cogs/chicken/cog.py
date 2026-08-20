@@ -15,7 +15,7 @@ import discord
 from discord import app_commands
 
 from bot_modules.core import meters
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
@@ -284,13 +284,9 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         """Guild accent for the live climb card. Any branding hiccup — no
         guild, no app context, or a resolution error — falls back to
         COLOR_YELLOW so a color lookup can never crash a running game."""
-        ctx = getattr(self.bot, "ctx", None)
-        if guild is None or ctx is None:
-            return COLOR_YELLOW
-        try:
-            return await resolve_accent_color(ctx.db_path, guild)
-        except Exception:
-            return COLOR_YELLOW
+        return await safe_resolve_accent(
+            self.bot, guild, default=COLOR_YELLOW, log_label="chicken"
+        )
 
     def render_game_state(
         self,

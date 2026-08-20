@@ -6,7 +6,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
@@ -383,17 +383,9 @@ class WYRCog(commands.Cog):
         or accent resolution raises — a game must never fail to render
         because branding lookup hiccuped.
         """
-        guild = getattr(channel, "guild", None)
-        if guild is None:
-            return None
-        ctx = getattr(self.bot, "ctx", None)
-        if ctx is None:
-            return None
-        try:
-            return await resolve_accent_color(ctx.db_path, guild)
-        except Exception:
-            log.exception("WYR: accent resolution failed; using default color")
-            return None
+        return await safe_resolve_accent(
+            self.bot, getattr(channel, "guild", None), log_label="WYR"
+        )
 
     async def _voter_roster(self, game_id: str) -> list[int]:
         """Everyone who voted for either option in any completed round — the

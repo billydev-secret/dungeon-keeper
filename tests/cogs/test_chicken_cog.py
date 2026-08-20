@@ -227,9 +227,9 @@ async def test_lobby_start_begins_climb(cog, db):
 async def test_active_card_uses_guild_accent(cog, db, monkeypatch):
     """The live climb card follows the resolved guild accent."""
     accent = discord.Color(0x5865F2)
-    from bot_modules.cogs.chicken import cog as chicken_cog
+    from bot_modules.core import branding
     monkeypatch.setattr(
-        chicken_cog, "resolve_accent_color", AsyncMock(return_value=accent)
+        branding, "resolve_accent_color", AsyncMock(return_value=accent)
     )
     # The bare FakeBot has no ``ctx``; give it one so accent resolution runs.
     cog.bot.ctx = SimpleNamespace(db_path=Path("unused.db"))

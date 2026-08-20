@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -615,7 +615,7 @@ class RushmoreCog(commands.Cog):
 
         if row["state"] == "joining":
             settings = payload.get("settings", {})
-            accent = await self._resolve_accent(guild)
+            accent = await safe_resolve_accent(self.bot, guild, log_label="rushmore")
             view = RushmoreJoinView(
                 game_id, host_id, host_name,
                 payload.get("topic"), settings.get("source", "host"),
@@ -649,24 +649,6 @@ class RushmoreCog(commands.Cog):
     async def _get_settings(self, game_id: str) -> dict:
         payload = await get_game_payload(self.db, game_id)
         return payload.get("settings", {})
-
-    async def _resolve_accent(self, guild) -> "discord.Color | None":
-        """Resolve the guild's brand accent once, tolerating any failure.
-
-        Returns ``None`` when there's no guild, no bot context, or the
-        branding lookup raises — callers fall back to each builder's
-        no-guild default color, so a resolution miss never crashes a game.
-        """
-        if guild is None:
-            return None
-        db_path = getattr(getattr(self.bot, "ctx", None), "db_path", None)
-        if db_path is None:
-            return None
-        try:
-            return await resolve_accent_color(db_path, guild)
-        except Exception:
-            log.debug("rushmore: accent resolve failed for guild %s", getattr(guild, "id", "?"), exc_info=True)
-            return None
 
     # ── Slash command ────────────────────────────────────────────────
 
@@ -766,7 +748,7 @@ class RushmoreCog(commands.Cog):
 
         # Resolve the guild accent once, here at game start, and thread it
         # through every view/builder for the whole game — never per-update.
-        accent = await self._resolve_accent(getattr(channel, "guild", None))
+        accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="rushmore")
 
         join_view = RushmoreJoinView(
             game_id, host_id, host_name,

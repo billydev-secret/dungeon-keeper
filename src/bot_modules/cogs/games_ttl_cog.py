@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
@@ -337,21 +337,6 @@ class TTLCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    async def _resolve_accent(self, guild) -> discord.Color | None:
-        """Best-effort guild accent; never raises.
-
-        Returns ``None`` when there's no guild or when resolution fails
-        (e.g. no ``bot.ctx``), so the embed builders fall back to their
-        historical phase colors instead of crashing the game.
-        """
-        if guild is None:
-            return None
-        try:
-            return await resolve_accent_color(self.bot.ctx.db_path, guild)
-        except Exception:
-            log.debug("ttl accent resolution failed", exc_info=True)
-            return None
-
     @app_commands.command(name="twotruths", description="Start a Two Truths and a Lie game!")
     @app_commands.describe(prompt="Optional topic prompt for players' statements")
     async def twotruths(self, interaction: discord.Interaction, prompt: str | None = None):
@@ -402,7 +387,7 @@ class TTLCog(commands.Cog):
             },
         )
 
-        accent = await self._resolve_accent(getattr(channel, "guild", None))
+        accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="ttl")
         embed = build_lobby_embed(prompt=prompt, color=accent)
 
         log.info("Game %s (ttl) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
@@ -432,7 +417,7 @@ class TTLCog(commands.Cog):
         guild = channel.guild if hasattr(channel, "guild") else None
         # Resolve the guild accent once for the whole game; every round's
         # view + the final recap reuse it (never re-resolved per vote).
-        accent = await self._resolve_accent(guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="ttl")
         # On resume after a restart, seed from persisted scores so already-played
         # subjects are skipped; the subject whose round was interrupted is still
         # "unplayed" and gets a fresh round.

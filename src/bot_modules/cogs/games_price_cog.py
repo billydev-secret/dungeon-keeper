@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
@@ -497,22 +497,6 @@ class PriceCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    async def _resolve_accent(self, guild) -> discord.Color | None:
-        """Resolve the guild accent once at game start; ``None`` on any miss.
-
-        Falls back to ``None`` (embeds then use their PHASE_* fallback) when
-        there is no guild, no ``bot.ctx``, or accent resolution raises — never
-        crash the round loop over branding.
-        """
-        ctx = getattr(self.bot, "ctx", None)
-        if guild is None or ctx is None:
-            return None
-        try:
-            return await resolve_accent_color(ctx.db_path, guild)
-        except Exception as e:  # branding must never break the game
-            log.debug("price: accent resolution failed: %s", e)
-            return None
-
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Re-drive the round loop from the next un-played round after a restart.
 
@@ -542,7 +526,7 @@ class PriceCog(commands.Cog):
             await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
         except discord.HTTPException:
             pass
-        accent = await self._resolve_accent(guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="price")
         if start_round > total_rounds:
             asyncio.create_task(self._show_recap(game_id, host_id, host_name, channel, guild, settings, accent=accent))
         else:
@@ -667,7 +651,7 @@ class PriceCog(commands.Cog):
 
         # Resolve the guild accent once for the whole game; threaded into every
         # non-winner embed builder below. Never re-resolved per round/guess.
-        accent = await self._resolve_accent(guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="price")
         embed = build_start_embed(host_name, 1, rounds, color=accent)
         try:
             msg = await channel.send(embed=embed)
@@ -1068,7 +1052,7 @@ class PriceCog(commands.Cog):
                 guild = getattr(channel, "guild", None) or getattr(
                     game_msg, "guild", None
                 )
-                accent = await self._resolve_accent(guild)
+                accent = await safe_resolve_accent(self.bot, guild, log_label="price")
                 embed = discord.Embed(
                     title=f"{GAME_ICONS['price']} Name Your Price — Closed",
                     description="This game was closed by the host.",

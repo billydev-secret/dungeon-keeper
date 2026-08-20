@@ -33,7 +33,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import (
@@ -490,21 +490,6 @@ class ClapbackCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    async def _resolve_accent(self, guild) -> "discord.Color | None":
-        """Resolve the guild accent once, swallowing any failure to None.
-
-        Kept guild-tolerant: with no guild (headless / DM) or a resolver
-        error we return None and the builders fall back to their neutral
-        default rather than crashing the game loop.
-        """
-        if guild is None:
-            return None
-        try:
-            return await resolve_accent_color(self.bot.ctx.db_path, guild)
-        except Exception:
-            log.warning("clapback accent resolve failed for guild %s", getattr(guild, "id", "?"))
-            return None
-
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Re-drive the game from the next un-played round after a restart.
 
@@ -520,7 +505,7 @@ class ClapbackCog(commands.Cog):
         self._game_cancelled.discard(game_id)
         # Accent cache is lost across a restart — re-resolve it once here so the
         # resumed phases stay on-theme without re-resolving per update.
-        self._accents[game_id] = await self._resolve_accent(getattr(channel, "guild", None))
+        self._accents[game_id] = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="clapback")
         resume_round = len(payload.get("round_history", [])) + 1
         await start_redrive(
             self.bot, game_id, message,
@@ -644,7 +629,7 @@ class ClapbackCog(commands.Cog):
 
         # Resolve the guild accent ONCE for the whole game and cache it; every
         # phase (lobby / submit / vote / reveal / scoreboard / recap) reuses it.
-        accent = await self._resolve_accent(guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="clapback")
         self._accents[game_id] = accent
         embed = build_lobby_embed(
             host_name=host_name,

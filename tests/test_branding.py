@@ -8,8 +8,14 @@ section heading doesn't hug the section above it.
 
 from __future__ import annotations
 
-import discord
+import logging
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import discord
+import pytest
+
+from bot_modules.core import branding
 from bot_modules.core.branding import SECTION_SPACER, apply_section_spacing
 
 
@@ -68,3 +74,88 @@ def test_is_idempotent():
 def test_returns_the_same_embed_for_chaining():
     embed = _embed("a", "b")
     assert apply_section_spacing(embed) is embed
+
+
+# ── safe_resolve_accent ───────────────────────────────────────────────
+#
+# Twelve near-copies of this wrapper lived across the game cogs. They agreed on
+# the shape — resolve the guild accent, and never let a branding hiccup crash a
+# live game — but disagreed on the fallback, so ``default`` stayed per-caller.
+
+
+class _Bot:
+    def __init__(self, db_path="db.sqlite"):
+        self.ctx = SimpleNamespace(db_path=db_path) if db_path else None
+
+
+@pytest.mark.asyncio
+async def test_resolves_through_to_the_real_accent(monkeypatch):
+    guild = SimpleNamespace(id=7)
+    monkeypatch.setattr(
+        branding, "resolve_accent_color", AsyncMock(return_value=discord.Color(0x123456))
+    )
+    got = await branding.safe_resolve_accent(_Bot(), guild)  # type: ignore[arg-type]
+    assert got == discord.Color(0x123456)
+    branding.resolve_accent_color.assert_awaited_once_with("db.sqlite", guild)
+
+
+@pytest.mark.asyncio
+async def test_no_guild_returns_the_default_without_touching_the_db(monkeypatch):
+    """A DM, or a channel whose .guild is None — nothing to brand."""
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock())
+    assert await branding.safe_resolve_accent(_Bot(), None) is None
+    branding.resolve_accent_color.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bot_without_ctx_returns_the_default(monkeypatch):
+    """Early startup, or a test double — no db_path to read branding from."""
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock())
+    assert await branding.safe_resolve_accent(_Bot(db_path=None), SimpleNamespace(id=7)) is None
+    assert await branding.safe_resolve_accent(object(), SimpleNamespace(id=7)) is None
+    branding.resolve_accent_color.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolution_failure_falls_back_rather_than_raising(monkeypatch):
+    """The whole reason this wrapper exists: an embed with the wrong color
+    still beats a game that crashes building it."""
+    monkeypatch.setattr(
+        branding, "resolve_accent_color", AsyncMock(side_effect=RuntimeError("db gone"))
+    )
+    assert await branding.safe_resolve_accent(_Bot(), SimpleNamespace(id=7)) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param("no_guild", id="no-guild"),
+        pytest.param("no_ctx", id="no-ctx"),
+        pytest.param("raises", id="resolve-raises"),
+    ],
+)
+async def test_every_failure_path_honours_a_custom_default(monkeypatch, case):
+    """chicken, musical chairs and pressure cooker fall back to their own
+    yellow rather than letting discord.py pick."""
+    YELLOW = 0xF1C40F
+    monkeypatch.setattr(
+        branding,
+        "resolve_accent_color",
+        AsyncMock(side_effect=RuntimeError("db gone") if case == "raises" else None),
+    )
+    bot = _Bot(db_path=None) if case == "no_ctx" else _Bot()
+    guild = None if case == "no_guild" else SimpleNamespace(id=7)
+    assert await branding.safe_resolve_accent(bot, guild, default=YELLOW) == YELLOW
+
+
+@pytest.mark.asyncio
+async def test_failure_is_logged_under_the_callers_label(monkeypatch, caplog):
+    monkeypatch.setattr(
+        branding, "resolve_accent_color", AsyncMock(side_effect=RuntimeError("db gone"))
+    )
+    with caplog.at_level(logging.DEBUG, logger="bot_modules.core.branding"):
+        await branding.safe_resolve_accent(
+            _Bot(), SimpleNamespace(id=7), log_label="pressure"
+        )
+    assert "pressure" in caplog.text

@@ -17,7 +17,9 @@ caching (a trivial DB read + int).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from typing import Any
 
 import discord
 
@@ -27,6 +29,8 @@ from bot_modules.services.branding_service import (
     DEFAULT_ACCENT,
     get_branding,
 )
+
+log = logging.getLogger(__name__)
 
 # guild_id -> (avatar_key, resolved_color) for avatar-derived accents.
 _avatar_cache: dict[int, tuple[str, discord.Color]] = {}
@@ -64,6 +68,43 @@ async def resolve_accent_color(db_path: Path, guild: discord.Guild) -> discord.C
 
     _avatar_cache[guild.id] = (avatar.key, color)
     return color
+
+
+async def safe_resolve_accent(
+    bot: Any,
+    guild: discord.Guild | None,
+    *,
+    default: Any = None,
+    log_label: str = "accent",
+) -> Any:
+    """``resolve_accent_color`` for callers that would rather have a fallback.
+
+    Every game cog wants the same thing: the guild's accent if we can get
+    it, and something harmless if we can't — an embed is still worth
+    sending when its color bar isn't the branded one. This wraps the real
+    resolver so that a missing guild (a DM), a bot with no ``ctx`` yet
+    (early startup, or a test double), and a failed DB read all return
+    ``default`` instead of raising into an embed builder.
+
+    ``default`` is per-caller because the callers genuinely disagree: most
+    pass ``None`` and let discord.py choose, while chicken, musical chairs
+    and pressure cooker fall back to their own yellow.
+    """
+    if guild is None:
+        return default
+    db_path = getattr(getattr(bot, "ctx", None), "db_path", None)
+    if db_path is None:
+        return default
+    try:
+        return await resolve_accent_color(db_path, guild)
+    except Exception:
+        log.debug(
+            "%s: accent resolution failed for guild %s",
+            log_label,
+            getattr(guild, "id", "?"),
+            exc_info=True,
+        )
+        return default
 
 
 def invalidate_accent_cache(guild_id: int) -> None:

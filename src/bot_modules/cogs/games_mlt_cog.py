@@ -6,7 +6,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -347,21 +347,6 @@ class MLTCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    async def _resolve_accent(self, guild):
-        """Resolve the guild accent once, tolerating no guild / no ctx.
-
-        Returns ``None`` (embed builders fall back to phase colors) when
-        there's no guild or resolution fails, so a branding hiccup never
-        crashes the game.
-        """
-        if guild is None:
-            return None
-        try:
-            return await resolve_accent_color(self.bot.ctx.db_path, guild)
-        except Exception:
-            log.debug("MLT: accent resolution failed", exc_info=True)
-            return None
-
     @app_commands.command(name="mlt", description="Start a Most Likely To game!")
     @app_commands.describe(
         question="Opening prompt (e.g. 'win a staring contest') — defaults to question bank",
@@ -431,7 +416,7 @@ class MLTCog(commands.Cog):
         )
 
         log.info("Game %s (mlt) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
-        accent = await self._resolve_accent(getattr(channel, "guild", None))
+        accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="MLT")
         embed = build_join_embed(host_name, [], color=accent, start_at=start_epoch)
         view = MLTJoinView(game_id, host_id, self.db, self.bot, self, accent=accent)
         self.bot.active_views[game_id] = view
@@ -456,7 +441,7 @@ class MLTCog(commands.Cog):
             if not any(int(c) > 0 for c in crowns.values()):
                 return
             guild = getattr(channel, "guild", None)
-            accent = await self._resolve_accent(guild)
+            accent = await safe_resolve_accent(self.bot, guild, log_label="MLT")
             embed = build_final_standings_embed(crowns, guild, color=accent)
             if guild:
                 from bot_modules.economy.game_rewards import append_payout_footer
@@ -675,7 +660,7 @@ class MLTCog(commands.Cog):
         rounds = payload.get("rounds", {})
 
         if not rounds:
-            accent = await self._resolve_accent(getattr(channel, "guild", None))
+            accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="MLT")
             view = MLTJoinView(
                 game_id, host_id, self.db, self.bot, self, accent=accent
             )
@@ -690,7 +675,7 @@ class MLTCog(commands.Cog):
         players = [int(p) for p in payload.get("players", [])]
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
-        accent = await self._resolve_accent(guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="MLT")
 
         view = self._build_vote_view(
             game_id=game_id,

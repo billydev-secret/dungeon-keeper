@@ -14,7 +14,7 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED, COLOR_YELLOW
@@ -47,15 +47,8 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         Returns None (callers fall back to their old color) when there's no
         guild, no bot context, or the resolve errors — never crash a game.
         """
-        if guild is None:
-            return None
-        ctx = getattr(self.bot, "ctx", None)
-        if ctx is None:
-            return None
-        try:
-            accent = await resolve_accent_color(ctx.db_path, guild)
-        except Exception:
-            log.debug("quickdraw accent resolve failed for %s", game_id, exc_info=True)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="quickdraw")
+        if accent is None:
             return None
         self._accents[game_id] = accent
         return accent
