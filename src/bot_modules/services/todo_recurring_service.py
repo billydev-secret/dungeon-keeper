@@ -19,9 +19,14 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Callable, Iterable
 
-from bot_modules.services.scheduled_games_service import compute_next_run
+from bot_modules.services.scheduled_games_service import (
+    _epoch_to_local,
+    _local_to_epoch,
+    compute_next_run,
+)
 from bot_modules.services.todo_service import TASK_MAX_LEN, create_todo, mark_missed
 
 log = logging.getLogger(__name__)
@@ -133,6 +138,39 @@ def validate(
 # ── CRUD ────────────────────────────────────────────────────────────────────
 
 
+def todays_slot_epoch(
+    *,
+    now_ts: float,
+    offset_hours: float,
+    recurrence: str,
+    time_of_day_min: int,
+    recur_days: Iterable | None = None,
+) -> float | None:
+    """This definition's occurrence on the guild's **current local day**.
+
+    ``None`` when today is not one of its days (a weekly chore off-schedule),
+    which is a different answer from "today's slot is in the future".
+
+    ``compute_next_run`` deliberately only ever looks forward, so it cannot
+    answer "has today's slot already gone by?" — the question a chore created
+    at 12:16 for a 09:00 daily has to ask. Uses the same local-time primitives
+    so the two can't disagree about where a day starts.
+    """
+    if recurrence not in ("daily", "weekly"):
+        return None
+    days = {int(x) for x in (recur_days or ())}
+    if recurrence == "weekly" and not days:
+        return None
+
+    today = _epoch_to_local(now_ts, offset_hours).date()
+    if recurrence == "weekly" and today.weekday() not in days:
+        return None
+    slot = datetime(today.year, today.month, today.day) + timedelta(
+        minutes=int(time_of_day_min)
+    )
+    return _local_to_epoch(slot, offset_hours)
+
+
 def create_recurring(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -145,8 +183,14 @@ def create_recurring(
     created_by: int = 0,
     offset_hours: float = 0.0,
     now_ts: float,
+    spawn_if_slot_passed: bool = True,
 ) -> int:
-    """Insert a recurring definition with its first ``next_run_at`` computed."""
+    """Insert a recurring definition with its first ``next_run_at`` computed.
+
+    When today's slot has already gone by, one instance is materialised
+    immediately (see below) so a chore is tickable from the moment it exists.
+    ``spawn_if_slot_passed=False`` opts out for callers that want the bare row.
+    """
     task, recurrence, minutes, days = validate(
         task=task, recurrence=recurrence, time_of_day=time_of_day, recur_days=recur_days
     )
@@ -174,7 +218,40 @@ def create_recurring(
             now_ts,
         ),
     )
-    return cur.lastrowid  # type: ignore[return-value]
+    recurring_id: int = cur.lastrowid  # type: ignore[assignment]
+
+    # A chore added *after* its own time of day had nothing outstanding until
+    # the following morning, but the board still drew it ⬜ open — a definition
+    # with no instance is indistinguishable from due-and-not-done-yet, by
+    # design. Mark Done then found no todo row behind it and answered "Every
+    # chore is already ticked off" over a board showing open work. Give it
+    # today's instance instead, so the two agree and the chore is tickable the
+    # moment it is set up.
+    #
+    # Borrowing run_now's semantics, not the scheduled fire's: ``advance``
+    # stays False so ``next_run_at`` still points at the real next occurrence,
+    # and ``reset_open`` stays False because creating a chore is not a day
+    # boundary and must never write anything off as missed.
+    if spawn_if_slot_passed:
+        slot = todays_slot_epoch(
+            now_ts=now_ts,
+            offset_hours=offset_hours,
+            recurrence=recurrence,
+            time_of_day_min=minutes,
+            recur_days=days,
+        )
+        if slot is not None and slot <= now_ts:
+            created = get_recurring(conn, recurring_id, guild_id)
+            if created is not None:
+                _spawn_one(
+                    conn,
+                    created,
+                    now_ts=now_ts,
+                    offset_hours=offset_hours,
+                    advance=False,
+                    reset_open=False,
+                )
+    return recurring_id
 
 
 def list_recurring(conn: sqlite3.Connection, guild_id: int) -> list[RecurringTask]:
@@ -580,7 +657,9 @@ def chore_board_rows(
     """
     rows = conn.execute(
         "SELECT r.id AS recurring_id, r.task AS task, r.recurrence,"
-        "       r.time_of_day, r.recur_days,"
+        # next_run_at so the board's own button can say *when* a chore that has
+        # not come round yet first lands, instead of claiming it is done.
+        "       r.time_of_day, r.recur_days, r.next_run_at,"
         "       t.id AS todo_id, t.created_at, t.completed_at,"
         "       t.completed_by, t.missed_at"
         " FROM todo_recurring r"

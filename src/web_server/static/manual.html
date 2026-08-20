@@ -1491,7 +1491,7 @@
         <tr><td><code>/help</code></td><td>Browse all commands by category in an interactive ephemeral dropdown</td></tr>
         <tr><td><code>/support</code></td><td>Ephemeral link to the support Discord server</td></tr>
         <tr><td><code>/invite</code></td><td>Generate a Discord OAuth invite link for adding the bot to another server</td></tr>
-        <tr><td><code>/todo task:&lt;text&gt;</code></td><td><span class="perm perm-mod">Mod</span> Add a task to the server's shared todo list. <strong>task</strong> — up to 500 characters.</td></tr>
+        <tr><td><code>/todo task:&lt;text&gt;</code></td><td><span class="perm perm-mod">Mod</span> Add a task to the server's shared todo list — a configured mod/admin role, or Administrator or Manage Server. <strong>task</strong> — up to 500 characters.</td></tr>
         <tr><td><code>/bio</code></td><td>Create or update your member bio — see <a href="#bios">Member Bios</a> below.</td></tr>
         <tr><td><code>/birthday set</code> / <code>remove</code></td><td>Register your birthday (month + day) for daily announcements, or remove it.</td></tr>
       </tbody>
@@ -2103,6 +2103,7 @@
     </ul>
     <p>The footer keeps the score for the day — "2 of 3 done", plus a count of anything whose last run was missed. Chores you've <em>paused</em> are left off entirely: a chore parked for the holidays isn't one the team is failing.</p>
     <p>One button, <strong>✅ Mark Done</strong>, moderator-only, offering only the chores still open. There's no Add button here — chores are recurring entries with a schedule, set up on the dashboard, and a one-off task belongs on the other board.</p>
+    <p>When it has nothing to offer it says which of three things is true, because they mean very different things: <em>"Every chore is already ticked off"</em>, <em>"Nothing due yet"</em> — naming the next chore and when it lands, for a weekly set up on a day it doesn't run — or that no chores are configured at all.</p>
 
     <div class="callout callout-warn">
       <span class="callout-icon">⚠️</span>
@@ -2112,11 +2113,20 @@
       </div>
     </div>
 
+    <div class="callout callout-warn">
+      <span class="callout-icon">⚠️</span>
+      <div class="callout-body">
+        <strong>Leaving the todo board unposted takes something away</strong>
+        <p>The todo board is the <em>only</em> place in Discord an ordinary task can be ticked off — the chore board's <strong>Mark Done</strong> offers recurring chores and nothing else. With it unposted, anyone can still add tasks with <code>/todo</code>, but completing one means going to the dashboard. The panel says so on the board's card whenever it isn't posted, and warns you before you remove it.</p>
+      </div>
+    </div>
+
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Posted from the <a href="/">web dashboard</a></strong>
         <p>Pick a channel on the <a href="/#/mod-todo">Todo List</a> panel and press <strong>Post Board</strong>. The mod chore board has its own card just below it, with its own channel and its own <strong>Post Chore Board</strong> button. Posting or moving either board is an <em>administrator</em> action; managing the tasks and recurring entries on them only needs moderator. Removing a board deletes the message but keeps every task.</p>
+        <p><strong>Who counts as a moderator</strong> is the same answer in Discord and on the dashboard: anyone holding a role you've configured as a mod or admin role, plus anyone with Discord's <em>Administrator</em> or <em>Manage Server</em> permission. Set those roles under Server Settings on the dashboard. (Before 18 August 2026 the two surfaces used different rules, so a mod could be let in on one and turned away on the other.)</p>
       </div>
     </div>
 
@@ -2125,6 +2135,7 @@
     <p>These are <strong>reminders, not automation</strong>. When one comes due the bot adds the task to the list; a moderator then does the thing and ticks it off. The bot does not post the QOTD or the photo prompt for you.</p>
     <p>Each recurring task <strong>resets</strong> rather than carrying over. When the next one comes due and the last is still untouched, that one is marked <strong>missed</strong> and a fresh task takes its place. Only ever one copy is outstanding, so nothing piles up — and the days a chore didn't happen stay on the record, which is what the chore board's ❌ marks and 🔥 streaks are counted from. A missed task can't be ticked off later: it's yesterday's box, and crediting it would put a hole in the streak either side of it.</p>
     <p>Two things deliberately don't reset. <strong>Run now</strong> adds one instance there and then without touching the schedule or un-pausing a paused entry — and pressing it twice just tells you one is already on the list, rather than marking your first press missed. And if the bot is offline for three days, it comes back and adds <em>one</em> task, marking one instance missed rather than three: the record covers the days the bot was watching, not the days it was away.</p>
+    <p>Set a chore up <em>after</em> its time of day has passed and it lands on the list right away, rather than waiting until tomorrow — a 09:00 daily added at lunchtime is something you can tick off this afternoon. It doesn't shift the schedule: the next one still comes at 09:00 tomorrow. A weekly chore added on a day it doesn't run simply waits for its day.</p>
     <p>Each entry can be paused, edited or deleted. Deleting an entry stops it repeating but leaves any copy already on the list, since that is real outstanding work.</p>
 
     <div class="cmd-block">

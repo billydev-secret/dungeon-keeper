@@ -25,6 +25,7 @@ from bot_modules.services.todo_service import (
     BOARD_CHORES,
     BOARD_KINDS,
     TASK_MAX_LEN,
+    board_conflict_detail,
     complete_todo,
     conflicting_board,
     create_todo,
@@ -313,14 +314,7 @@ async def set_board(
 
     resident = await run_query(_conflict)
     if resident:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"{resident.capitalize()} is already in that channel. Two sticky"
-                " boards can't share one — they'd take turns being buried. Move"
-                " that one first, or pick a different channel."
-            ),
-        )
+        raise HTTPException(status_code=409, detail=board_conflict_detail(resident))
 
     message = await place(guild, channel)
     if message is None:

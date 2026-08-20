@@ -12,6 +12,8 @@ from bot_modules.services.todo_service import (
     complete_todo,
     create_todo,
     get_board,
+    UNPOSTED_ALL_COST,
+    board_conflict_detail,
     conflicting_board,
     guilds_with_board,
     list_todos,
@@ -325,16 +327,32 @@ def test_conflicting_board_names_the_other_resident(db):
     """
     with open_db(db) as conn:
         save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
-        assert conflicting_board(conn, GUILD, BOARD_CHORES, 555) == (
-            "the server todo board"
-        )
+        assert conflicting_board(conn, GUILD, BOARD_CHORES, 555) == BOARD_ALL
 
 
 def test_conflicting_board_catches_the_collision_from_either_side(db):
     """Whichever board is placed second is the one refused."""
     with open_db(db) as conn:
         save_board(conn, GUILD, 555, 222, kind=BOARD_CHORES)
-        assert conflicting_board(conn, GUILD, BOARD_ALL, 555) == "the mod chore board"
+        assert conflicting_board(conn, GUILD, BOARD_ALL, 555) == BOARD_CHORES
+
+
+def test_conflict_detail_prices_clearing_the_all_todos_board():
+    """The 409 is where a mod decides how to make room, so it has to say what
+    clearing the all-todos board costs: with it gone, nothing in Discord can
+    complete an ordinary todo. In prod that was discovered three days later by
+    failing to tick anything off."""
+    detail = board_conflict_detail(BOARD_ALL)
+    assert "The server todo board is already in that channel" in detail
+    assert UNPOSTED_ALL_COST in detail
+
+
+def test_conflict_detail_does_not_price_the_chore_board():
+    """Nothing is lost by moving the chore board: every chore on it is also on
+    the all-todos board while outstanding, and completable there."""
+    detail = board_conflict_detail(BOARD_CHORES)
+    assert "The mod chore board is already in that channel" in detail
+    assert UNPOSTED_ALL_COST not in detail
 
 
 def test_conflicting_board_allows_a_free_channel(db):

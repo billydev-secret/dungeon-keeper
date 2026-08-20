@@ -371,11 +371,23 @@ export function mount(container, initialParams = {}) {
       removeLabel: "Remove Board",
       removeTitle: "Remove the board?",
       removeBody:
-        "The board message will be deleted from its channel. Tasks themselves are untouched.",
+        "The board message will be deleted from its channel. Tasks themselves are "
+        + "untouched — but this is the only place in Discord an ordinary todo can be "
+        + "ticked off, so completing one will mean coming back to the dashboard.",
       postedToast: "Board posted.",
       removedToast: "Board removed.",
       lockedHint: "Only administrators can post or move the board.",
       jumpLabel: "jump to the board ↗",
+      // The all-todos board is the *only* Discord surface that can complete an
+      // ordinary todo — the chore board's Mark Done offers recurring chores and
+      // nothing else. Unposting it therefore removes a capability, silently,
+      // and the way through the same-channel 409 is to unpost one of the two.
+      // It sat unposted for three days in prod and was noticed by a mod failing
+      // to tick anything off.
+      unpostedWarning:
+        "Not posted — no one can complete an ordinary todo from Discord. "
+        + "The chore board's ✅ Mark Done only offers recurring chores, so tasks "
+        + "can still be added with /todo but only ticked off here on the dashboard.",
     },
     {
       kind: "chores",
@@ -392,6 +404,10 @@ export function mount(container, initialParams = {}) {
       removedToast: "Chore board removed.",
       lockedHint: "Only administrators can post or move the chore board.",
       jumpLabel: "jump to the chore board ↗",
+      // Nothing is lost by leaving this one unposted: every chore it shows is
+      // also on the all-todos board while it is outstanding, and completable
+      // there. So it gets a plain "not posted", not a warning.
+      unpostedWarning: "",
     },
   ].map((card) => ({ ...card, body: container.querySelector(card.selector) }));
 
@@ -409,6 +425,13 @@ export function mount(container, initialParams = {}) {
       ? `Posted — <a href="${esc(board.jump_url)}" target="_blank" rel="noopener noreferrer"
            style="color:var(--accent,#5af)">${esc(card.jumpLabel)}</a>`
       : "Not posted yet.";
+    // Shown to moderators as well as admins: a mod who cannot move the board
+    // is exactly the person who needs to know why they have nowhere to tick a
+    // task off. Placement stays admin-gated; the *fact* is not privileged.
+    const warning = !board.posted && card.unpostedWarning
+      ? `<div class="field-hint" data-board-warning
+              style="margin-top:6px;color:var(--gold-solid)">⚠️ ${esc(card.unpostedWarning)}</div>`
+      : "";
     card.body.innerHTML = `
       <div class="field">
         <label>${esc(card.pickerLabel)}</label>
@@ -425,7 +448,8 @@ export function mount(container, initialParams = {}) {
       </div>
       <div class="field-hint" style="margin-top:6px">
         ${locked ? esc(card.lockedHint) : where}
-      </div>`;
+      </div>
+      ${warning}`;
 
     boardPickers[card.kind] = mountChannelPicker(
       card.body.querySelector('[data-picker="board-channel"]'),

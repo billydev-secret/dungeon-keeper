@@ -143,7 +143,7 @@ async def select_guild(
     # them across a switch would let a cache-miss fallback replay guild A's
     # admin rights inside guild B (B-SEC1). When the member can't be resolved
     # (bot offline / not a member) they are cleared, not inherited.
-    from web_server.auth import resolve_discord_perms
+    from web_server.auth import resolve_guild_perms, staff_role_ids
 
     perms: list[str] = []
     role_ids: list[str] = []
@@ -154,8 +154,20 @@ async def select_guild(
         member = target_guild.get_member(user.user_id)
         if member:
             permission_bits = member.guild_permissions.value
-            perms = sorted(resolve_discord_perms(permission_bits))
             role_ids = [str(r.id) for r in member.roles if not r.is_default()]
+            # Resolve with the *target* guild's configured staff roles — the
+            # same rule authenticate() will apply on the next request. Reading
+            # bits alone here would report a moderator tier the gate then
+            # refuses (or hide one it grants).
+            mod_rids, admin_rids = staff_role_ids(ctx, guild_id)
+            perms = sorted(
+                resolve_guild_perms(
+                    permission_bits,
+                    role_ids=[int(r) for r in role_ids],
+                    mod_role_ids=mod_rids,
+                    admin_role_ids=admin_rids,
+                )
+            )
             role_names = [r.name for r in member.roles if not r.is_default()]
             status = str(member.status)
     if is_support:
