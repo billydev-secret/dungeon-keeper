@@ -344,63 +344,6 @@ def test_can_roll_blocks_repeat_in_open_round():
     assert s.can_roll(43) is True
 
 
-def test_can_roll_restricts_to_reroll_set_when_rerolling():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {1, 2}
-    assert s.can_roll(1) is True   # in the reroll set
-    assert s.can_roll(3) is False  # not in the reroll set
-
-
-def test_add_roll_clears_reroll_set_when_all_rerollers_submit():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {1, 2}
-    s.add_roll(1, 5)
-    assert s.reroll_user_ids == {1, 2}  # still waiting for 2
-    s.add_roll(2, 7)
-    assert s.reroll_user_ids == set()  # all submitted → cleared
-
-
-# ── models.RiskyRollState.prepare_reroll ─────────────────────────────
-
-
-def test_prepare_reroll_clears_state_for_listed_users_only():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.rolls = {1: 80, 2: 80, 3: 5}
-    s.highest_user = 1
-    s.lowest_user = 3
-    s.second_lowest_user = 3
-    s.second_highest_user = 2
-    s.lowest_tie_user_ids = {3}
-    s.prepare_reroll([1, 2])
-    assert s.reroll_user_ids == {1, 2}
-    assert 1 not in s.rolls  # rerollers had rolls removed
-    assert 2 not in s.rolls
-    assert s.rolls[3] == 5   # non-rerollers untouched
-    assert s.highest_user is None
-    assert s.lowest_user is None
-    assert s.second_lowest_user is None
-    assert s.second_highest_user is None
-    assert s.lowest_tie_user_ids == set()
-
-
-# ── models.RiskyRollState.reroll_mentions ────────────────────────────
-
-
-def test_reroll_mentions_returns_sorted_mention_string():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {3, 1, 2}
-    assert s.reroll_mentions() == "<@1>, <@2>, <@3>"
-
-
-def test_pending_reroll_mentions_skips_already_rolled():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {1, 2, 3}
-    s.rolls = {2: 50}
-    pending = s.pending_reroll_mentions()
-    assert "<@1>" in pending and "<@3>" in pending
-    assert "<@2>" not in pending
-
-
 # ── models.RiskyRollState.resolve — six branches ────────────────────
 
 
@@ -413,13 +356,6 @@ def test_resolve_returns_not_enough_with_one_roll():
 def test_resolve_returns_not_enough_with_zero_rolls():
     s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
     assert s.resolve().result_type == RoundResult.NOT_ENOUGH
-
-
-def test_resolve_waiting_for_rerolls_when_reroll_set_incomplete():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.rolls = {1: 50, 2: 60}
-    s.reroll_user_ids = {1, 3}  # 3 has not rolled yet
-    assert s.resolve().result_type == RoundResult.WAITING_FOR_REROLLS
 
 
 def test_resolve_ok_result_picks_unique_high_and_low():
@@ -756,15 +692,6 @@ def test_build_embed_1_rule_shows_two_askers():
     assert "<@3>" in by_name["Result"]
 
 
-def test_build_embed_reroll_state_shows_pending():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {1, 2}
-    s.rolls = {2: 7}  # only player 2 has rerolled
-    embed = build_embed(s)
-    by_name = _embed_field_map(embed)
-    assert "Reroll" in " ".join(by_name.keys())
-
-
 def test_build_embed_footer_describes_auto_close():
     s = RiskyRollState(
         channel_id=100, guild_id=1, opener_id=10,
@@ -1081,7 +1008,6 @@ async def test_store_round_save_load_delete_round_trip(store: StateStore):
     s.highest_user = 10
     s.lowest_user = 20
     s.second_lowest_user = 30
-    s.reroll_user_ids = {77, 88}
 
     await store.save_round(s)
     loaded = await store.load_active_rounds()
@@ -1096,7 +1022,6 @@ async def test_store_round_save_load_delete_round_trip(store: StateStore):
     assert got.highest_user == 10
     assert got.lowest_user == 20
     assert got.second_lowest_user == 30
-    assert got.reroll_user_ids == {77, 88}
     assert got.rolls == {10: 80, 20: 5}
 
     await store.delete_round(s.game_id)

@@ -122,10 +122,10 @@ class StateStore:
                 """
                 INSERT INTO risky_active_rounds (
                     game_id, channel_id, guild_id, opener_id, message_id, is_open,
-                    highest_user, lowest_user, reroll_user_ids,
+                    highest_user, lowest_user,
                     auto_close_players, auto_close_minutes, created_at,
                     skip_min_game_time, second_lowest_user, second_highest_user
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(game_id) DO UPDATE SET
                     channel_id = excluded.channel_id,
                     guild_id = excluded.guild_id,
@@ -134,7 +134,6 @@ class StateStore:
                     is_open = excluded.is_open,
                     highest_user = excluded.highest_user,
                     lowest_user = excluded.lowest_user,
-                    reroll_user_ids = excluded.reroll_user_ids,
                     auto_close_players = excluded.auto_close_players,
                     auto_close_minutes = excluded.auto_close_minutes,
                     created_at = excluded.created_at,
@@ -145,7 +144,7 @@ class StateStore:
                 (
                     state.game_id, state.channel_id, state.guild_id, state.opener_id,
                     state.message_id, int(state.is_open), state.highest_user,
-                    state.lowest_user, serialize_user_ids(state.reroll_user_ids),
+                    state.lowest_user,
                     state.auto_close_players, state.auto_close_minutes, state.created_at,
                     int(state.skip_min_game_time), state.second_lowest_user,
                     state.second_highest_user,
@@ -184,7 +183,7 @@ class StateStore:
             round_rows = conn.execute(
                 """
                 SELECT game_id, channel_id, guild_id, opener_id, message_id, is_open,
-                       highest_user, lowest_user, reroll_user_ids,
+                       highest_user, lowest_user,
                        auto_close_players, auto_close_minutes, created_at,
                        skip_min_game_time, second_lowest_user, second_highest_user
                 FROM risky_active_rounds
@@ -202,7 +201,6 @@ class StateStore:
                     is_open=bool(row["is_open"]),
                     highest_user=int(row["highest_user"]) if row["highest_user"] is not None else None,
                     lowest_user=int(row["lowest_user"]) if row["lowest_user"] is not None else None,
-                    reroll_user_ids=deserialize_user_ids(row["reroll_user_ids"]),
                     auto_close_players=int(row["auto_close_players"]) if row["auto_close_players"] is not None else None,
                     auto_close_minutes=int(row["auto_close_minutes"]) if row["auto_close_minutes"] is not None else None,
                     created_at=float(row["created_at"]) if row["created_at"] is not None else time.time(),

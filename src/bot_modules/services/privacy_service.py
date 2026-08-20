@@ -365,8 +365,7 @@ SUBJECT_ID_COLUMNS = frozenset(
 # Known blind spot: a handful of columns store a *list* of member ids as JSON or
 # CSV (``econ_demurrage_sweeps.taxed_members``,
 # ``risky_pending_questions.participant_user_ids`` / ``lowest_tie_user_ids``,
-# ``risky_active_rounds.reroll_user_ids``, ``confession_config.blocked_user_ids``,
-# ``revive_events.follow_authors``). A subject inside one of those lists is not
+# ``confession_config.blocked_user_ids``, ``revive_events.follow_authors``). A subject inside one of those lists is not
 # found by an equality match and will not appear in the export. The volumes are
 # small and the content is incidental, but it is a gap, not an absence — the
 # runbook tells the operator to grep them by hand.
@@ -377,7 +376,6 @@ LIST_VALUED_MEMBER_COLUMNS = (
     ("mention_award_rules", "conditions"),
     ("econ_demurrage_sweeps", "taxed_members"),
     ("revive_events", "follow_authors"),
-    ("risky_active_rounds", "reroll_user_ids"),
     ("risky_pending_questions", "lowest_tie_user_ids"),
     ("risky_pending_questions", "participant_user_ids"),
 )
