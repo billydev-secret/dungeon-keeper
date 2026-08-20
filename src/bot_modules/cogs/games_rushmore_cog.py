@@ -27,7 +27,7 @@ from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
 )
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 
@@ -209,14 +209,6 @@ class RushmoreJoinView(discord.ui.View):
         self.players: list[int] = []
         self._msg: discord.Message | None = None
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     def _player_names(self, guild) -> list[str]:
         return [resolve_name(guild, uid) for uid in self.players]
 
@@ -262,7 +254,7 @@ class RushmoreJoinView(discord.ui.View):
     @discord.ui.button(label="Start Draft", style=discord.ButtonStyle.primary, custom_id="rushmore_start", row=0)
     async def start_draft(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
         if len(self.players) < 3:
@@ -399,14 +391,6 @@ class RushmoreDraftView(discord.ui.View):
 
         if self._pick_event:
             self._pick_event.set()
-
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
 
     def _build_embed(self) -> discord.Embed:
         if self.mode == "blitz":
@@ -558,18 +542,10 @@ class RushmoreRecapView(discord.ui.View):
         self.cog = cog
         self._settings = settings
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="\U0001f501 Run Again", style=discord.ButtonStyle.primary, custom_id="rushmore_run_again")
     async def run_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
             return
         disable_all_items(self)
@@ -597,7 +573,7 @@ class RushmoreRecapView(discord.ui.View):
     @discord.ui.button(label="\U0001f504 Hand Off", style=discord.ButtonStyle.secondary, custom_id="rushmore_hand_off")
     async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can hand off.", ephemeral=True)
             return
         await interaction.response.send_message(

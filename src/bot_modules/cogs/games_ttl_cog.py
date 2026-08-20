@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -154,14 +154,6 @@ class TTLSubmitView(discord.ui.View):
         self.cog = cog
         self.prompt = prompt
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="Submit Statements", style=discord.ButtonStyle.primary, custom_id="ttl_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -176,7 +168,7 @@ class TTLSubmitView(discord.ui.View):
     @discord.ui.button(label="Start Guessing", style=discord.ButtonStyle.primary, custom_id="ttl_start")
     async def start_guessing(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start guessing.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
@@ -254,14 +246,6 @@ class TTLGuessView(discord.ui.View):
         self._closed = False
         self._advanced_event: asyncio.Event | None = None
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     def _build_embed(self, subject_name: str, closed: bool = False) -> discord.Embed:
         return build_guess_embed(
             subject_name, self.statements, self.votes,
@@ -324,7 +308,7 @@ class TTLGuessView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="ttl_next", row=1)
     async def advance_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()

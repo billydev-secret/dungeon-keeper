@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 
@@ -172,14 +172,6 @@ class ClapbackJoinView(discord.ui.View):
         self.accent = accent
         self.message: discord.Message | None = None
 
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     async def on_timeout(self):
         await self.cog._cancel_game(self.game_id, reason="Lobby timed out")
         # Retire the lobby message — a live-looking Join/Start row on a dead
@@ -233,7 +225,7 @@ class ClapbackJoinView(discord.ui.View):
     @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="ql_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self._is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
 
@@ -331,14 +323,6 @@ class ClapbackSubmitView(discord.ui.View):
         self.bot = bot
         self.cog = cog
 
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="✏️ Submit", style=discord.ButtonStyle.primary, custom_id="ql_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -370,14 +354,6 @@ class ClapbackVoteView(discord.ui.View):
         self.bot = bot
         self.cog = cog
         self._closed = False
-
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
 
     @discord.ui.button(label="🅰️", style=discord.ButtonStyle.primary, custom_id="ql_vote_a", row=0)
     async def vote_a(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -428,21 +404,13 @@ class ClapbackRoundSummaryView(discord.ui.View):
         self.cog = cog
         self._advanced = asyncio.Event()
 
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     async def on_timeout(self):
         self._advanced.set()
 
     @discord.ui.button(label="▶️ Next Round", style=discord.ButtonStyle.primary, custom_id="ql_next")
     async def next_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self._is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         self.stop()
@@ -461,18 +429,10 @@ class ClapbackRecapView(discord.ui.View):
         self.bot = bot
         self.cog = cog
 
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="🔁 Play Again", style=discord.ButtonStyle.primary, custom_id="ql_replay")
     async def play_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self._is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
             return
         self.stop()
@@ -489,7 +449,7 @@ class ClapbackRecapView(discord.ui.View):
     @discord.ui.button(label="🔀 Play Again (Shuffled)", style=discord.ButtonStyle.secondary, custom_id="ql_replay_shuffle")
     async def play_again_shuffled(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self._is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
             return
         channel = interaction.channel

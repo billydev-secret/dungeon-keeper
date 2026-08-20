@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+import discord
+import pytest
 
 from bot_modules.core.utils import (
     format_guild_for_log,
     format_user_for_log,
+    is_host_or_mod,
     resolve_guild_for_log,
     resolve_user_for_log,
 )
@@ -98,3 +102,92 @@ def test_resolve_unknown_guild_falls_back_to_id():
 
 def test_resolve_none_bot_falls_back_to_id():
     assert resolve_guild_for_log(None, 42) == "guild 42"
+
+
+# ── is_host_or_mod ────────────────────────────────────────────────────
+#
+# The gate on every game view's host-only control. One definition now backs
+# all 29 former copies, so every branch is exercised here rather than in a
+# per-game cog test. Deliberately narrower than AppContext.is_mod (which also
+# honours guild-configured mod roles) — see the docstring on the helper.
+
+HOST_ID = 777
+
+
+def _member(user_id: int, *, administrator=False, manage_guild=False) -> discord.Member:
+    member = MagicMock(spec=discord.Member)
+    member.id = user_id
+    member.guild_permissions = SimpleNamespace(
+        administrator=administrator, manage_guild=manage_guild
+    )
+    return member
+
+
+def _interaction(user, *, in_guild: bool = True) -> discord.Interaction:
+    return SimpleNamespace(  # type: ignore[return-value]
+        user=user, guild=SimpleNamespace(id=1) if in_guild else None
+    )
+
+
+def test_host_passes():
+    assert is_host_or_mod(_interaction(_member(HOST_ID)), HOST_ID) is True
+
+
+def test_host_passes_even_in_a_dm():
+    """The host check runs before the guild check, so it holds with no guild."""
+    user = MagicMock(spec=discord.User)
+    user.id = HOST_ID
+    assert is_host_or_mod(_interaction(user, in_guild=False), HOST_ID) is True
+
+
+@pytest.mark.parametrize(
+    "perms",
+    [
+        pytest.param({"administrator": True}, id="administrator"),
+        pytest.param({"manage_guild": True}, id="manage_guild"),
+        pytest.param({"administrator": True, "manage_guild": True}, id="both"),
+    ],
+)
+def test_mod_overrides_the_host(perms):
+    assert is_host_or_mod(_interaction(_member(1, **perms)), HOST_ID) is True
+
+
+def test_plain_member_is_refused():
+    assert is_host_or_mod(_interaction(_member(1)), HOST_ID) is False
+
+
+@pytest.mark.parametrize(
+    "perms",
+    [
+        pytest.param({"manage_channels": True}, id="manage_channels"),
+        pytest.param({"manage_messages": True}, id="manage_messages"),
+        pytest.param({"moderate_members": True}, id="moderate_members"),
+    ],
+)
+def test_other_elevated_perms_do_not_qualify(perms):
+    """Only administrator/manage_guild count.
+
+    is_mod_or_admin — the /games admin-command gate — *does* accept
+    manage_channels. Keeping that perm out here is the whole reason the two
+    rules stayed separate; if this test starts failing, a gate was widened.
+    """
+    member = _member(1)
+    member.guild_permissions = SimpleNamespace(
+        administrator=False, manage_guild=False, **perms
+    )
+    assert is_host_or_mod(_interaction(member), HOST_ID) is False
+
+
+def test_non_member_user_in_a_guild_is_refused():
+    """A raw User (uncached member) has no guild_permissions to trust."""
+    user = MagicMock(spec=discord.User)
+    user.id = 1
+    assert is_host_or_mod(_interaction(user), HOST_ID) is False
+
+
+def test_mod_in_a_dm_is_refused():
+    """No guild on the interaction ⇒ no guild permissions apply."""
+    assert (
+        is_host_or_mod(_interaction(_member(1, administrator=True), in_guild=False), HOST_ID)
+        is False
+    )

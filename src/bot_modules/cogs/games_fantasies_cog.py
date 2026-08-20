@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -113,18 +113,10 @@ class FantasiesMainView(discord.ui.View):
         self.round_num = 0
         self._active_submit_view: SubmitRoundView | None = None
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="Start Round", style=discord.ButtonStyle.primary, custom_id="fan_start_round")
     async def start_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start rounds.", ephemeral=True)
             return
 
@@ -154,14 +146,6 @@ class SubmitRoundView(discord.ui.View):
         self.db = db
         self.bot = bot
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="Submit", style=discord.ButtonStyle.primary, custom_id="fan_submit_entry")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -171,7 +155,7 @@ class SubmitRoundView(discord.ui.View):
     @discord.ui.button(label="Close Submissions", style=discord.ButtonStyle.secondary, custom_id="fan_close_sub")
     async def close_submissions(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can close submissions.", ephemeral=True)
             return
         self._closed = True
@@ -213,14 +197,6 @@ class FantasiesVoteView(discord.ui.View):
         self._closed = False
         self._advanced_event: asyncio.Event | None = None
         self._accent_color: "discord.Color | None" = None
-
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
 
     def _build_embed(self, closed: bool = False) -> discord.Embed:
         return build_vote_embed(
@@ -273,7 +249,7 @@ class FantasiesVoteView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="fan_next", row=1)
     async def next_entry(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()

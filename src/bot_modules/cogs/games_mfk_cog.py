@@ -6,7 +6,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -53,14 +53,6 @@ class MFKView(discord.ui.View):
         self.bot = bot
         self.labels = labels or DEFAULT_LABELS
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="mfk_join")
     async def join_pool(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -102,7 +94,7 @@ class MFKView(discord.ui.View):
     @discord.ui.button(label="Close & Assign", style=discord.ButtonStyle.primary, custom_id="mfk_assign")
     async def close_assign(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can assign roles.", ephemeral=True)
             return
 

@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -101,14 +101,6 @@ class StoryTurnView(discord.ui.View):
         self._submitted_text: str | None = None
         self._skipped = False
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="✍️ Write Your Sentence", style=discord.ButtonStyle.primary, custom_id="story_write")
     async def write(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -131,7 +123,7 @@ class StoryTurnView(discord.ui.View):
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="story_skip")
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
             return
         self._skipped = True
@@ -148,14 +140,6 @@ class StoryJoinView(discord.ui.View):
         self.db = db
         self.bot = bot
         self.cog = cog
-
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="story_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -198,7 +182,7 @@ class StoryJoinView(discord.ui.View):
     @discord.ui.button(label="Start Story", style=discord.ButtonStyle.primary, custom_id="story_start")
     async def start_story(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)

@@ -11,7 +11,7 @@ from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
 )
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -79,14 +79,6 @@ class MLTJoinView(discord.ui.View):
         # Join/Leave press so we never re-resolve per interaction.
         self.accent = accent
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="mlt_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -143,7 +135,7 @@ class MLTJoinView(discord.ui.View):
     @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="mlt_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
@@ -277,14 +269,6 @@ class MLTVoteView(discord.ui.View):
         self.select.callback = self._vote_select_callback
         self.add_item(self.select)
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     async def _vote_select_callback(self, interaction: discord.Interaction):
         log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
@@ -340,7 +324,7 @@ class MLTVoteView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="mlt_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         if self._closed:

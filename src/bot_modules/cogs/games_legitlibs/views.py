@@ -4,21 +4,12 @@ import uuid
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from bot_modules.games.constants import HOW_TO_PLAY, GAME_ICONS
 from bot_modules.games.utils.game_manager import channel_name
 
 log = logging.getLogger(__name__)
 _ICON = GAME_ICONS["legitlibs"]
-
-
-def _is_host_or_mod(interaction: discord.Interaction, host_id: int) -> bool:
-    if interaction.user.id == host_id:
-        return True
-    if interaction.guild and isinstance(interaction.user, discord.Member):
-        perms = interaction.user.guild_permissions
-        return perms.administrator or perms.manage_guild
-    return False
 
 
 class _CancelConfirmView(discord.ui.View):
@@ -69,7 +60,7 @@ class JoinView(discord.ui.View):
     @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="ml_start", row=0)
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start the round.", ephemeral=True)
             return
         await self._on_start(interaction, action="start")
@@ -77,7 +68,7 @@ class JoinView(discord.ui.View):
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_lobby", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
             return
         await interaction.response.send_message(
@@ -112,7 +103,7 @@ class QuiplashFillView(discord.ui.View):
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_fill", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
             return
         await interaction.response.send_message(
@@ -152,7 +143,7 @@ class ClassicFillView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
                  channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can cancel.", ephemeral=True)
             return
@@ -192,7 +183,7 @@ class ClassicRescueView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
                  channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can cancel.", ephemeral=True)
             return
@@ -224,7 +215,7 @@ class ClassicRescueFillView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
                  channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can cancel.", ephemeral=True)
             return

@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from bot_modules.services.dm_branding import send_branded_dm
 from discord.ext import commands
 from discord import app_commands
@@ -632,14 +632,6 @@ class AMAView(discord.ui.View):
                 if getattr(item, "custom_id", None) in {"ama_skip", "ama_new_hs"}:
                     self.remove_item(item)
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     async def _build_embed(self, host_name: str, payload: dict | None = None) -> discord.Embed:
         guild = self._game_msg.guild if self._game_msg else None
         color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
@@ -952,7 +944,7 @@ class AMAView(discord.ui.View):
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="ama_skip", row=1)
     async def skip_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
             return
         if self.hot_seat_id is None:
@@ -977,7 +969,7 @@ class AMAView(discord.ui.View):
     @discord.ui.button(label="🔄 New Hot Seat", style=discord.ButtonStyle.secondary, custom_id="ama_new_hs", row=1)
     async def new_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can select the hot seat.", ephemeral=True)
             return
         # Only members who volunteered (are in the queue) may be promoted —

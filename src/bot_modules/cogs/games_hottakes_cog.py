@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -137,14 +137,6 @@ class HotTakesSubmitView(discord.ui.View):
         self.cog = cog
         self._message: discord.Message | None = None
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="Submit Hot Take", style=discord.ButtonStyle.primary, custom_id="ht_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -154,7 +146,7 @@ class HotTakesSubmitView(discord.ui.View):
     @discord.ui.button(label="Start Voting", style=discord.ButtonStyle.primary, custom_id="ht_start")
     async def start_voting(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start voting.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
@@ -237,14 +229,6 @@ class HotTakeVoteView(discord.ui.View):
         self._closed = False
         self._advanced_event: asyncio.Event | None = None
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     def _build_embed(self, closed: bool = False) -> discord.Embed:
         return build_vote_embed(
             take_text=self.take_text,
@@ -300,7 +284,7 @@ class HotTakeVoteView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next Take", style=discord.ButtonStyle.secondary, custom_id="ht_next", row=1)
     async def next_take(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()

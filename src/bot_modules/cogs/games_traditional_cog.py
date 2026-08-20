@@ -6,7 +6,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord import app_commands
 from discord.ext import commands
 
@@ -102,14 +102,6 @@ class TraditionalHostView(discord.ui.View):
         self.bot = bot
         self._message: discord.Message | None = None
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     async def _get_payload(self) -> dict:
         return await get_game_payload(self.db, self.game_id)
 
@@ -196,7 +188,7 @@ class TraditionalHostView(discord.ui.View):
     @discord.ui.button(label="Ask Question", style=discord.ButtonStyle.success, custom_id="tod_ask", row=1)
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can ask questions.", ephemeral=True)
             return
         payload = await self._get_payload()
@@ -236,7 +228,7 @@ class TraditionalHostView(discord.ui.View):
         category are reported back.
         """
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can run a bank round.", ephemeral=True)
             return
 
@@ -311,7 +303,7 @@ class TraditionalHostView(discord.ui.View):
         unreachable and no game ever paid out.
         """
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can end the game.", ephemeral=True)
             return
 

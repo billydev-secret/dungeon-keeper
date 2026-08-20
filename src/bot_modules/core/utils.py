@@ -17,6 +17,31 @@ def disable_all_items(view: discord.ui.View) -> None:
             item.disabled = True
 
 
+def is_host_or_mod(interaction: discord.Interaction, host_id: int) -> bool:
+    """Is the clicker the game's host, or a server mod who can override?
+
+    The gate on every game view's host-only control — close the round, skip,
+    end early. One definition for all of them: the host always passes; anyone
+    else needs ``administrator`` or ``manage_guild`` *in a guild*, so a DM or
+    a non-member user never qualifies.
+
+    Deliberately **not** ``AppContext.is_mod``. That one reads
+    ``interaction.permissions`` and additionally honours the guild's
+    configured mod roles, so it answers a wider question ("is this person
+    staff?"). Routing game overrides through it would hand a configured
+    mod-role holder without ``manage_guild`` control over other people's
+    games — a permission widening, not a refactor. ``is_mod_or_admin`` below
+    is a third rule again (it also accepts ``manage_channels``). Three gates,
+    kept apart on purpose.
+    """
+    if interaction.user.id == host_id:
+        return True
+    if interaction.guild and isinstance(interaction.user, discord.Member):
+        perms = interaction.user.guild_permissions
+        return perms.administrator or perms.manage_guild
+    return False
+
+
 def get_interaction_member(interaction: discord.Interaction) -> discord.Member | None:
     """Get the member from an interaction, resolving from guild if needed."""
     user = interaction.user

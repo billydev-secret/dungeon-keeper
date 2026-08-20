@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 
@@ -317,14 +317,6 @@ class PriceGameView(discord.ui.View):
         self._timer: GameTimer | None = None
         self._closed = False
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     def _build_embed(self) -> discord.Embed:
         return build_scenario_embed(
             self.host_name,
@@ -359,7 +351,7 @@ class PriceGameView(discord.ui.View):
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="price_skip", row=1)
     async def skip_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
             return
         await interaction.response.defer()
@@ -368,7 +360,7 @@ class PriceGameView(discord.ui.View):
     @discord.ui.button(label="➕ Add Rounds", style=discord.ButtonStyle.secondary, custom_id="price_add_rounds", row=1)
     async def add_rounds(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can add rounds.", ephemeral=True)
             return
         await interaction.response.send_modal(AddRoundsModal(self.cog, self.game_id))
@@ -448,18 +440,10 @@ class PriceRecapView(discord.ui.View):
         self.cog = cog
         self._settings = settings
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="🔁 Run Again", style=discord.ButtonStyle.primary, custom_id="price_run_again")
     async def run_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
             return
         # Disable buttons on old recap
@@ -487,7 +471,7 @@ class PriceRecapView(discord.ui.View):
     @discord.ui.button(label="🔄 Hand Off", style=discord.ButtonStyle.secondary, custom_id="price_hand_off")
     async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can hand off.", ephemeral=True)
             return
         await interaction.response.send_message(

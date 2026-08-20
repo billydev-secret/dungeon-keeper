@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY
@@ -117,14 +117,6 @@ class NHIERoundView(discord.ui.View):
         # for every round-embed edit — never re-resolved on the per-vote path.
         self.accent = accent
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     def _build_embed(self, closed=False) -> discord.Embed:
         return build_round_embed(
             statement=self.statement,
@@ -185,7 +177,7 @@ class NHIERoundView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="nhie_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         if self._closed:

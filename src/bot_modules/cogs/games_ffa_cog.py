@@ -46,6 +46,7 @@ from bot_modules.services.confessions_service import (
     anon_circle_from_index,
     build_anon_reply,
 )
+from bot_modules.core.utils import is_host_or_mod
 
 log = logging.getLogger(__name__)
 
@@ -302,14 +303,6 @@ class FFAEmbedView(discord.ui.View):
             return False
         return True
 
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(
         label="Reply",
         emoji="🎭",
@@ -343,7 +336,7 @@ class FFAEmbedView(discord.ui.View):
     )
     async def next_prompt(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed Next in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not self._is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can pull the next prompt.", ephemeral=True
             )
