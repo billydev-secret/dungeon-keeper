@@ -178,6 +178,76 @@ def purge_user_data(
         table="role_events",
     )
 
+    # Risky Rolls (migration 019): every row naming the member goes.
+    #
+    # These are ephemeral party-game rows — a round deletes itself on close and
+    # a posted question is swept at 7 days — and nothing downstream reads them
+    # back, so there is no Art 17(3) ground to hold one against an erasure.
+    # Rows are deleted WHOLE rather than scrubbed: a round whose winner no
+    # longer exists, or a question whose asker was erased, is incoherent state
+    # that the cog would then try to re-attach a view to on next boot. That
+    # does take an in-flight round away from the other players in it; erasure
+    # is rare, out-of-band, and the alternative is retaining the id.
+    #
+    # `risky_round_rolls` has no `guild_id` and reaches its round by FK, so the
+    # game ids are resolved first: this connection is the caller's and does not
+    # promise `PRAGMA foreign_keys = ON` (the feature's own store sets it), so
+    # the cascade cannot be relied on to take the rolls with the round.
+    try:
+        risky_game_ids = [
+            r[0]
+            for r in conn.execute(
+                "SELECT game_id FROM risky_active_rounds WHERE guild_id = ? AND ("
+                "opener_id = ? OR highest_user = ? OR lowest_user = ? OR "
+                "second_lowest_user = ? OR second_highest_user = ? OR game_id IN "
+                "(SELECT game_id FROM risky_round_rolls WHERE user_id = ?))",
+                (guild_id, user_id, user_id, user_id, user_id, user_id, user_id),
+            ).fetchall()
+        ]
+    except sqlite3.Error as exc:
+        log.warning("Purge: failed on risky_active_rounds lookup (%s)", exc)
+        risky_game_ids = []
+
+    if risky_game_ids:
+        ph = ",".join("?" for _ in risky_game_ids)
+        _delete(
+            conn,
+            f"DELETE FROM risky_round_rolls WHERE game_id IN ({ph})",
+            tuple(risky_game_ids),
+            table="risky_round_rolls",
+        )
+        _delete(
+            conn,
+            f"DELETE FROM risky_active_rounds WHERE game_id IN ({ph})",
+            tuple(risky_game_ids),
+            table="risky_active_rounds",
+        )
+
+    # The CSV columns need exact membership, not a bare LIKE: '%123%' also
+    # matches 1234. Wrapping both sides in commas makes ',123,' the needle.
+    _delete(
+        conn,
+        "DELETE FROM risky_pending_questions WHERE guild_id = ? AND ("
+        "winner_id = ? OR extra_questioner_id = ? "
+        "OR (',' || COALESCE(participant_user_ids, '') || ',') LIKE ? "
+        "OR (',' || COALESCE(lowest_tie_user_ids, '') || ',') LIKE ? "
+        "OR (',' || COALESCE(questioners_asked, '') || ',') LIKE ?)",
+        (guild_id, user_id, user_id, *([f"%,{user_id},%"] * 3)),
+        table="risky_pending_questions",
+    )
+
+    # question_text is the member's own words, so a posted question they asked
+    # goes with them; one they were merely a recipient of names them in
+    # allowed_replier_ids and goes too.
+    _delete(
+        conn,
+        "DELETE FROM risky_posted_questions WHERE guild_id = ? AND ("
+        "asker_id = ? "
+        "OR (',' || COALESCE(allowed_replier_ids, '') || ',') LIKE ?)",
+        (guild_id, user_id, f"%,{user_id},%"),
+        table="risky_posted_questions",
+    )
+
     # Survivor (migration 167): purged across every season, live or archived
     # — a game record has no Art 17(3) ground to outlive the member (register
     # rows: docs/data_register.md). guild_id is denormalized onto both tables
@@ -364,7 +434,8 @@ SUBJECT_ID_COLUMNS = frozenset(
 
 # Known blind spot: a handful of columns store a *list* of member ids as JSON or
 # CSV (``econ_demurrage_sweeps.taxed_members``,
-# ``risky_pending_questions.participant_user_ids`` / ``lowest_tie_user_ids``,
+# ``risky_pending_questions.participant_user_ids`` / ``lowest_tie_user_ids`` /
+# ``questioners_asked``, ``risky_posted_questions.allowed_replier_ids``,
 # ``confession_config.blocked_user_ids``, ``revive_events.follow_authors``). A subject inside one of those lists is not
 # found by an equality match and will not appear in the export. The volumes are
 # small and the content is incidental, but it is a gap, not an absence — the
@@ -378,6 +449,8 @@ LIST_VALUED_MEMBER_COLUMNS = (
     ("revive_events", "follow_authors"),
     ("risky_pending_questions", "lowest_tie_user_ids"),
     ("risky_pending_questions", "participant_user_ids"),
+    ("risky_pending_questions", "questioners_asked"),
+    ("risky_posted_questions", "allowed_replier_ids"),
 )
 
 # Tables whose rows name a *second* member, where that person's identity is the

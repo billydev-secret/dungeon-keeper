@@ -714,3 +714,203 @@ def test_purge_of_definitions_is_scoped_to_the_guild(db):
         }
     assert rows["Mine"] == 0
     assert rows["Theirs"] == USER
+
+
+# ── Risky Rolls (registered 2026-08-20) ──────────────────────────────
+
+
+def _insert_risky_round(conn, guild_id, *, game_id, opener_id, rolls, **seats):
+    conn.execute(
+        "INSERT INTO risky_active_rounds "
+        "(game_id, channel_id, guild_id, opener_id, is_open, highest_user, "
+        " lowest_user, second_lowest_user, second_highest_user) "
+        "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
+        (
+            game_id, 500, guild_id, opener_id,
+            seats.get("highest_user"), seats.get("lowest_user"),
+            seats.get("second_lowest_user"), seats.get("second_highest_user"),
+        ),
+    )
+    for uid, roll in rolls.items():
+        conn.execute(
+            "INSERT INTO risky_round_rolls (game_id, user_id, roll) VALUES (?, ?, ?)",
+            (game_id, uid, roll),
+        )
+
+
+def test_purge_clears_risky_round_the_member_rolled_in(db):
+    with open_db(db) as conn:
+        _insert_risky_round(
+            conn, GUILD, game_id="g1", opener_id=OTHER_USER,
+            rolls={USER: 40, OTHER_USER: 90},
+            highest_user=OTHER_USER, lowest_user=USER,
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM risky_active_rounds").fetchone()[0] == 0
+        # The rolls go with the round: this connection makes no foreign_keys
+        # promise, so the cascade must not be what removes them.
+        assert conn.execute("SELECT COUNT(*) FROM risky_round_rolls").fetchone()[0] == 0
+
+
+def test_purge_clears_risky_round_the_member_only_opened(db):
+    with open_db(db) as conn:
+        _insert_risky_round(
+            conn, GUILD, game_id="g1", opener_id=USER,
+            rolls={OTHER_USER: 90, 1003: 10},
+            highest_user=OTHER_USER, lowest_user=1003,
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM risky_active_rounds").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("seat", ["second_lowest_user", "second_highest_user"])
+def test_purge_clears_risky_round_naming_the_member_in_a_second_seat(db, seat):
+    # The 100 and 1 rules seat a member who is neither winner nor loser.
+    with open_db(db) as conn:
+        _insert_risky_round(
+            conn, GUILD, game_id="g1", opener_id=OTHER_USER,
+            rolls={OTHER_USER: 100, 1003: 1},
+            highest_user=OTHER_USER, lowest_user=1003, **{seat: USER},
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM risky_active_rounds").fetchone()[0] == 0
+
+
+def test_purge_leaves_a_risky_round_the_member_had_no_part_in(db):
+    with open_db(db) as conn:
+        _insert_risky_round(
+            conn, GUILD, game_id="g1", opener_id=OTHER_USER,
+            rolls={OTHER_USER: 90, 1003: 10},
+            highest_user=OTHER_USER, lowest_user=1003,
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM risky_active_rounds").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM risky_round_rolls").fetchone()[0] == 2
+
+
+def test_purge_leaves_another_guilds_risky_round(db):
+    with open_db(db) as conn:
+        _insert_risky_round(
+            conn, 999, game_id="g1", opener_id=USER, rolls={USER: 40},
+            highest_user=USER,
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM risky_active_rounds").fetchone()[0] == 1
+
+
+def _insert_pending_question(conn, guild_id, *, winner_id, **csv_columns):
+    """A pending question whose CSV columns default to naming nobody.
+
+    ``participant_user_ids`` is NOT NULL, so it carries a bystander id unless
+    the caller is the one putting the subject there.
+    """
+    columns = {"participant_user_ids": "1003"} | csv_columns
+    names = ", ".join(columns)
+    marks = ", ".join("?" for _ in columns)
+    conn.execute(
+        f"INSERT INTO risky_pending_questions "
+        f"(game_id, channel_id, guild_id, winner_id, prompt_kind, {names}) "
+        f"VALUES ('g1', 500, ?, ?, 'direct', {marks})",
+        (guild_id, winner_id, *columns.values()),
+    )
+
+
+@pytest.mark.parametrize(
+    "column", ["participant_user_ids", "lowest_tie_user_ids", "questioners_asked"]
+)
+def test_purge_clears_pending_question_naming_the_member_in_a_csv_column(db, column):
+    with open_db(db) as conn:
+        _insert_pending_question(
+            conn, GUILD, winner_id=OTHER_USER, **{column: str(USER)}
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM risky_pending_questions").fetchone()[0] == 0
+
+
+def test_purge_does_not_match_a_csv_id_by_substring(db):
+    # USER is 1001; a round naming 10010 and 10011 must survive a bare-LIKE bug.
+    with open_db(db) as conn:
+        _insert_pending_question(
+            conn, GUILD, winner_id=OTHER_USER,
+            participant_user_ids=f"{USER}0,{USER}1",
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM risky_pending_questions").fetchone()[0] == 1
+
+
+def test_purge_clears_posted_question_the_member_asked(db):
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO risky_posted_questions "
+            "(message_id, channel_id, guild_id, asker_id, allowed_replier_ids, question_text) "
+            "VALUES (7, 500, ?, ?, ?, 'their own words')",
+            (GUILD, USER, str(OTHER_USER)),
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM risky_posted_questions").fetchone()[0] == 0
+
+
+def test_purge_clears_posted_question_the_member_was_only_asked(db):
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO risky_posted_questions "
+            "(message_id, channel_id, guild_id, asker_id, allowed_replier_ids, question_text) "
+            "VALUES (7, 500, ?, ?, ?, 'someone elses words')",
+            (GUILD, OTHER_USER, f"{USER},1003"),
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM risky_posted_questions").fetchone()[0] == 0
