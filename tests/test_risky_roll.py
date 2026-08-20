@@ -24,6 +24,8 @@ extracted pieces are proven to work without spinning up Discord.
 
 from __future__ import annotations
 
+import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -1151,6 +1153,57 @@ async def test_store_sweep_old_posted_questions_removes_stale(store: StateStore)
     assert swept == 1
     remaining = await store.load_posted_questions()
     assert [p.message_id for p in remaining] == [2]
+
+
+async def test_store_sweep_old_pending_questions_removes_stale(store: StateStore):
+    old = PendingQuestionState(
+        channel_id=100, guild_id=1, winner_id=10,
+        participant_user_ids={20}, game_id="old",
+        created_at=1.0,  # epoch — definitely > 7 days old
+    )
+    fresh = PendingQuestionState(
+        channel_id=100, guild_id=1, winner_id=10,
+        participant_user_ids={20}, game_id="fresh",
+    )
+    await store.save_pending_question(old)
+    await store.save_pending_question(fresh)
+
+    swept = await store.sweep_old_pending_questions()
+    assert swept == 1
+    assert [p.game_id for p in await store.load_pending_questions()] == ["fresh"]
+
+
+async def test_store_sweep_old_pending_questions_treats_null_age_as_old(store: StateStore):
+    # Rows written before migration 173 have no created_at. They predate the
+    # column, so they predate the release — swept, not granted a fresh week.
+    pq = PendingQuestionState(
+        channel_id=100, guild_id=1, winner_id=10,
+        participant_user_ids={20}, game_id="pre-migration",
+    )
+    await store.save_pending_question(pq)
+    with sqlite3.connect(store._path) as conn:
+        conn.execute("UPDATE risky_pending_questions SET created_at = NULL")
+
+    assert await store.sweep_old_pending_questions() == 1
+    assert await store.load_pending_questions() == []
+
+
+async def test_store_pending_question_resave_keeps_the_original_age(store: StateStore):
+    # A two-questioner round re-saves this row when the first of the two asks.
+    # Refreshing the clock there would let a half-finished prompt outlive the
+    # sweep for as long as someone kept feeding it.
+    pq = PendingQuestionState(
+        channel_id=100, guild_id=1, winner_id=10, extra_questioner_id=11,
+        participant_user_ids={20}, game_id="two",
+        created_at=1.0,
+    )
+    await store.save_pending_question(pq)
+
+    pq.questioners_asked = {10}
+    pq.created_at = time.time()  # what a fresh in-memory state would carry
+    await store.save_pending_question(pq)
+
+    assert await store.sweep_old_pending_questions() == 1
 
 
 async def test_store_delete_guild_data_clears_all_tables(store: StateStore):

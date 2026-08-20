@@ -52,6 +52,10 @@ class RiskyRollCog(commands.Cog):
         if swept:
             log.info("Swept %d old posted questions.", swept)
 
+        swept_pending = await rr_state.store.sweep_old_pending_questions()
+        if swept_pending:
+            log.info("Swept %d old pending questions.", swept_pending)
+
         ping_roles, min_times, max_games, active_rounds, pending_questions, posted_questions = await asyncio.gather(
             rr_state.store.load_ping_roles(),
             rr_state.store.load_min_game_times(),

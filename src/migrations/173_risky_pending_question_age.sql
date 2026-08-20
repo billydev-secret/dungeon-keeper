@@ -1,0 +1,24 @@
+-- Give pending Risky Rolls questions an age, so they can be swept.
+--
+-- A pending question is the gap between a round resolving and the winner
+-- pressing Ask Question. The row is deleted when they ask -- and if they
+-- never ask, it was never deleted by anything: the table had no created_at
+-- and no sweep, so it accumulated. 58 rows in prod on 2026-08-20 against
+-- 2 live rounds, the oldest dating to whenever the feature shipped.
+--
+-- Posted questions already age out at 7 days (store._POSTED_Q_MAX_AGE);
+-- this puts pending ones on the same clock, which is the storage-limitation
+-- answer the data register was left holding an open question about.
+--
+-- The existing rows are deliberately left NULL rather than backfilled to
+-- "now". A NULL means "created before this column existed", which is to say
+-- before this migration's release -- so the sweep treats NULL as old and
+-- clears them on the first startup after deploy, rather than granting 58
+-- known-stale rows another fresh week. The cost is that a round which closed
+-- in the minutes between deploy and restart loses its prompt; its Ask
+-- Question button then answers with the ordinary "no pending winner question
+-- for this round". Note this is the OPPOSITE of the posted-question sweep's
+-- NULL handling, which skips NULLs -- there the column has always existed, so
+-- a NULL is corruption rather than age.
+
+ALTER TABLE risky_pending_questions ADD COLUMN created_at REAL;

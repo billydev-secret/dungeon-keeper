@@ -50,7 +50,7 @@ A configurable min-game-time floor (default 30 minutes) prevents premature close
 
 ### Persistence and restarts
 
-Active rounds, pending questions, and posted questions are all stored in SQLite. On bot restart the cog re-attaches all persistent views to the original messages, re-schedules auto-close timers from the remaining elapsed time, and sweeps posted questions older than 7 days.
+Active rounds, pending questions, and posted questions are all stored in SQLite. On bot restart the cog re-attaches all persistent views to the original messages, re-schedules auto-close timers from the remaining elapsed time, and sweeps both pending and posted questions older than 7 days.
 
 **Roster names across a restart.** The roster embed prints display names as
 plain text, never `<@id>` mentions — an embed mention is resolved client-side
@@ -141,7 +141,7 @@ Four per-guild tables:
 
 - **Active rounds** — one row per open game: opener, message id, rolls map (deserialised), auto-close settings, special-roll outcomes. Deleted on close.
   The table also carries a `reroll_user_ids` column, left over from a player-visible reroll flow that was never wired up; nothing reads or writes it (see **Non-goals**).
-- **Pending questions** — between resolution and the question being asked. Includes the "two questioners" sub-game when the loser rolled 1.
+- **Pending questions** — between resolution and the question being asked. Includes the "two questioners" sub-game when the loser rolled 1. Swept on bot startup once older than 7 days (migration 173): the row is deleted when the winner asks, so a winner who never asks used to leave it forever. A row re-saved mid-round (the first of two questioners asking) keeps its original timestamp rather than restarting the clock.
 - **Posted questions** — a question that's been sent and is awaiting a reply. Keyed by the question message id. Auto-swept on bot startup once older than 7 days.
 - Two per-guild rows in the shared config table for the ping role and the min-game-time floor.
 
