@@ -1,4 +1,4 @@
--- 173_pen_pals_optouts.sql
+-- 174_pen_pals_optouts.sql
 -- Pen Pals: a durable "don't match me" that outlives the current chat.
 --
 -- pen_pals_pool is current-state only — one row per member waiting *right

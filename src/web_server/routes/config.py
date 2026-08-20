@@ -3500,7 +3500,7 @@ async def pen_pals_pool_events(
     fetched by every panel on the dashboard, and none of the others want fifty
     rows of pen pal history.
 
-    Carries the current opt-outs (migration 173) alongside the log, because
+    Carries the current opt-outs (migration 174) alongside the log, because
     the two answer one question between them: the events say a member stopped
     being re-pooled, and only the opt-out list says they will stay that way.
     Read-only by design — a member's opt-out is their own decision, so there
