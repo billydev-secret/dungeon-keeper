@@ -21,6 +21,7 @@ import asyncio
 import logging
 import re
 from typing import TYPE_CHECKING, cast
+from functools import partial
 
 import discord
 
@@ -40,6 +41,7 @@ from bot_modules.services.economy_service import (
     notify_member,
 )
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -241,14 +243,7 @@ class PinReviewView(discord.ui.View):
         self.add_item(PinDenyButton(submission_id))
 
 
-async def _safe_ephemeral(interaction: discord.Interaction, text: str) -> None:
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(text, ephemeral=True)
-        else:
-            await interaction.response.send_message(text, ephemeral=True)
-    except discord.HTTPException:
-        log.debug("econ pin: failed to send ephemeral", exc_info=True)
+_safe_ephemeral = partial(_core_safe_ephemeral, log_label="econ pin")
 
 
 async def _handle_resolution(

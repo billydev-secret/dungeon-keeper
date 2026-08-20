@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
@@ -10,6 +11,7 @@ from bot_modules.core.utils import (
     format_guild_for_log,
     format_user_for_log,
     is_host_or_mod,
+    safe_ephemeral,
     resolve_guild_for_log,
     resolve_user_for_log,
 )
@@ -191,3 +193,75 @@ def test_mod_in_a_dm_is_refused():
         is_host_or_mod(_interaction(_member(1, administrator=True), in_guild=False), HOST_ID)
         is False
     )
+
+
+# ── safe_ephemeral ────────────────────────────────────────────────────
+#
+# Nine copies of this send-or-followup dance lived across economy/, casino/,
+# services/ and confessions_cog. The branch that matters is which of the two
+# send paths gets used: picking the wrong one raises inside a button callback,
+# which the member sees as "This interaction failed".
+
+
+def _send_interaction(*, responded: bool, raises: Exception | None = None):
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.response = MagicMock()
+    interaction.response.is_done.return_value = responded
+    interaction.response.send_message = AsyncMock(side_effect=raises)
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock(side_effect=raises)
+    return interaction
+
+
+@pytest.mark.asyncio
+async def test_fresh_interaction_replies_through_response():
+    interaction = _send_interaction(responded=False)
+    await safe_ephemeral(interaction, "hi")
+    interaction.response.send_message.assert_awaited_once_with("hi", ephemeral=True)
+    interaction.followup.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_already_responded_interaction_replies_through_followup():
+    """Deferred, or a modal answered first — ``response`` is spent."""
+    interaction = _send_interaction(responded=True)
+    await safe_ephemeral(interaction, "hi")
+    interaction.followup.send.assert_awaited_once_with("hi", ephemeral=True)
+    interaction.response.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("responded", [False, True], ids=["response", "followup"])
+async def test_http_failure_is_swallowed(responded):
+    """Best-effort: a raise here would surface as an interaction failure."""
+    boom = discord.HTTPException(MagicMock(status=500), "nope")
+    await safe_ephemeral(_send_interaction(responded=responded, raises=boom), "hi")
+
+
+@pytest.mark.asyncio
+async def test_non_http_errors_still_propagate():
+    """Only HTTPException is swallowed — a bug in the caller shouldn't vanish."""
+    interaction = _send_interaction(responded=False, raises=ValueError("bug"))
+    with pytest.raises(ValueError):
+        await safe_ephemeral(interaction, "hi")
+
+
+@pytest.mark.asyncio
+async def test_log_label_names_the_caller(caplog):
+    """Each module binds its own label; the traceback alone points here."""
+    boom = discord.HTTPException(MagicMock(status=500), "nope")
+    with caplog.at_level(logging.DEBUG, logger="bot_modules.core.utils"):
+        await safe_ephemeral(
+            _send_interaction(responded=False, raises=boom), "hi", log_label="econ pin"
+        )
+    assert "econ pin" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_module_partials_carry_their_label():
+    """The nine former copies are now one function plus a bound label."""
+    from bot_modules.economy.pin_views import _safe_ephemeral
+
+    interaction = _send_interaction(responded=False)
+    await _safe_ephemeral(interaction, "hi")
+    interaction.response.send_message.assert_awaited_once_with("hi", ephemeral=True)

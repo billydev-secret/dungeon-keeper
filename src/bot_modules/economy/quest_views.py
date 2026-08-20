@@ -29,6 +29,7 @@ import logging
 import re
 import time
 from typing import TYPE_CHECKING, cast
+from functools import partial
 
 import discord
 
@@ -39,6 +40,7 @@ from bot_modules.economy.guide import GuideNotifyButton, HowItWorksButton
 from bot_modules.economy.leaderboard import bar_fill, progress_bar
 from bot_modules.economy.view_helpers import unit as _unit
 from bot_modules.economy.quests import quest_period
+from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.services.economy_quests_service import (
     claim_quest,
     deny_history,
@@ -480,15 +482,7 @@ async def _load_settings(
     return await asyncio.to_thread(_read)
 
 
-async def _safe_ephemeral(interaction: discord.Interaction, message: str) -> None:
-    """Send an ephemeral note whether or not the interaction was answered."""
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
-    except discord.HTTPException:
-        log.debug("econ quests: failed to send ephemeral note", exc_info=True)
+_safe_ephemeral = partial(_core_safe_ephemeral, log_label="econ quests")
 
 
 def _read_claim_bundle(ctx: AppContext, claim_id: int) -> dict | None:

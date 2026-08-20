@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TypeAlias
 
 import discord
+
+log = logging.getLogger(__name__)
 
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
@@ -15,6 +18,30 @@ def disable_all_items(view: discord.ui.View) -> None:
     for item in view.children:
         if isinstance(item, (discord.ui.Button, discord.ui.Select)):
             item.disabled = True
+
+
+async def safe_ephemeral(
+    interaction: discord.Interaction, text: str, *, log_label: str = "ephemeral"
+) -> None:
+    """Send ``text`` back to the clicker privately, whatever state we're in.
+
+    Answers the two ways a view can find itself needing to say something: if
+    the interaction was already responded to (deferred, or a modal handled
+    first) the reply has to go through ``followup``, otherwise through
+    ``response``. Getting that wrong raises, and a raise inside a button
+    callback surfaces to the member as "This interaction failed" — so the
+    send is best-effort and an HTTP failure is swallowed.
+
+    ``log_label`` names the caller in the debug line; the traceback would
+    otherwise point at this module rather than the view that failed.
+    """
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(text, ephemeral=True)
+        else:
+            await interaction.response.send_message(text, ephemeral=True)
+    except discord.HTTPException:
+        log.debug("%s: failed to send ephemeral", log_label, exc_info=True)
 
 
 def is_host_or_mod(interaction: discord.Interaction, host_id: int) -> bool:

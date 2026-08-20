@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
+from functools import partial
 
-import discord
+from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
@@ -41,16 +42,6 @@ def coins(settings: EconSettings, amount: int) -> str:
     return f"{settings.currency_emoji} **{amount:,}** {unit}"
 
 
-async def safe_ephemeral(interaction: discord.Interaction, text: str) -> None:
-    """Send an ephemeral reply, honoring whether the interaction was deferred.
+safe_ephemeral = partial(_core_safe_ephemeral, log_label="econ view")
 
-    Swallows the HTTP error (a dead/expired interaction is not worth raising
-    into a button handler) and logs it at debug.
-    """
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(text, ephemeral=True)
-        else:
-            await interaction.response.send_message(text, ephemeral=True)
-    except discord.HTTPException:
-        log.debug("econ view: failed to send ephemeral", exc_info=True)
+

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Optional, cast
+from functools import partial
 
 import discord
 from discord import app_commands
@@ -20,6 +21,7 @@ from bot_modules.services.anon_audit_service import (
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import SURFACE_CONFESSION_REPLY
+from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.confessions.logic import (
     HELP_TEXT,
     audit_channel_id,
@@ -66,6 +68,7 @@ if TYPE_CHECKING:
     from bot_modules.services.confessions_service import GuildConfig
 
 log = logging.getLogger(__name__)
+_safe_ephemeral = partial(_core_safe_ephemeral, log_label="confessions")
 
 
 async def _record_confession_audit(
@@ -167,29 +170,29 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
         db_path = self.cog.ctx.db_path
         cfg = get_config(db_path, interaction.guild.id)
         if not cfg:
-            await self.cog._safe_ephemeral(interaction, ERROR_NOT_CONFIGURED)
+            await _safe_ephemeral(interaction, ERROR_NOT_CONFIGURED)
             return
         if cfg.panic:
-            await self.cog._safe_ephemeral(interaction, ERROR_PANIC_MODE)
+            await _safe_ephemeral(interaction, ERROR_PANIC_MODE)
             return
         if interaction.user.id in cfg.blocked_set():
-            await self.cog._safe_ephemeral(interaction, ERROR_USER_BLOCKED)
+            await _safe_ephemeral(interaction, ERROR_USER_BLOCKED)
             return
 
         content = str(self.confession.value).strip()
         pref_parsed = parse_notify_pref(self.notify_pref.value)
         if pref_parsed is None:
-            await self.cog._safe_ephemeral(interaction, "❌ Invalid notify setting. Use `yes` or `no`.")
+            await _safe_ephemeral(interaction, "❌ Invalid notify setting. Use `yes` or `no`.")
             return
         ping_pref = pref_parsed
 
         if not content:
-            await self.cog._safe_ephemeral(interaction, "❌ Confession can't be empty.")
+            await _safe_ephemeral(interaction, "❌ Confession can't be empty.")
             return
 
         confession_max_chars = compute_confession_max_chars(cfg.max_chars)
         if len(content) > confession_max_chars:
-            await self.cog._safe_ephemeral(
+            await _safe_ephemeral(
                 interaction, f"❌ That's too long (max **{confession_max_chars}** characters for this confession format)."
             )
             return
@@ -197,7 +200,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
         dest_channel = interaction.guild.get_channel(cfg.dest_channel_id)
         log_channel = interaction.guild.get_channel(cfg.log_channel_id)
         if not isinstance(dest_channel, (discord.TextChannel, discord.ForumChannel)):
-            await self.cog._safe_ephemeral(interaction, "❌ Bot config is invalid (missing destination channel).")
+            await _safe_ephemeral(interaction, "❌ Bot config is invalid (missing destination channel).")
             return
 
         ok, msg = check_and_bump_limits(
@@ -205,7 +208,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             is_reply=False, cooldown_seconds=cfg.cooldown_seconds, per_day_limit=cfg.per_day_limit,
         )
         if not ok:
-            await self.cog._safe_ephemeral(interaction, msg)
+            await _safe_ephemeral(interaction, msg)
             return
 
         try:
@@ -229,7 +232,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
                     **tag_kwargs,
                 )
             except discord.HTTPException:
-                await self.cog._safe_ephemeral(interaction, "❌ Failed to post confession (missing perms?).")
+                await _safe_ephemeral(interaction, "❌ Failed to post confession (missing perms?).")
                 return
             forum_thread = forum_result.thread
             root_message_id = forum_thread.id
@@ -270,7 +273,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException:
-            await self.cog._safe_ephemeral(interaction, "❌ Failed to post confession (missing perms?).")
+            await _safe_ephemeral(interaction, "❌ Failed to post confession (missing perms?).")
             return
 
         if isinstance(log_channel, discord.TextChannel):
@@ -345,31 +348,31 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         db_path = self.cog.ctx.db_path
         cfg = get_config(db_path, interaction.guild.id)
         if not cfg:
-            await self.cog._safe_ephemeral(interaction, "❌ Bot is not configured.")
+            await _safe_ephemeral(interaction, "❌ Bot is not configured.")
             return
         if cfg.panic:
-            await self.cog._safe_ephemeral(interaction, ERROR_PANIC_MODE)
+            await _safe_ephemeral(interaction, ERROR_PANIC_MODE)
             return
         if not cfg.replies_enabled:
-            await self.cog._safe_ephemeral(interaction, ERROR_REPLIES_DISABLED)
+            await _safe_ephemeral(interaction, ERROR_REPLIES_DISABLED)
             return
         if interaction.user.id in cfg.blocked_set():
-            await self.cog._safe_ephemeral(interaction, "❌ You can't submit anonymous replies on this server.")
+            await _safe_ephemeral(interaction, "❌ You can't submit anonymous replies on this server.")
             return
 
         content = str(self.reply.value).strip()
         pref_parsed = parse_notify_pref(self.notify_pref.value)
         if pref_parsed is None:
-            await self.cog._safe_ephemeral(interaction, "❌ Invalid notify setting. Use `yes` or `no`.")
+            await _safe_ephemeral(interaction, "❌ Invalid notify setting. Use `yes` or `no`.")
             return
         my_notify_pref = 1 if pref_parsed else 0
 
         if not content:
-            await self.cog._safe_ephemeral(interaction, "❌ Reply can't be empty.")
+            await _safe_ephemeral(interaction, "❌ Reply can't be empty.")
             return
         reply_max_chars = compute_reply_max_chars(cfg.max_chars)
         if len(content) > reply_max_chars:
-            await self.cog._safe_ephemeral(
+            await _safe_ephemeral(
                 interaction, f"❌ That's too long (max **{reply_max_chars}** characters for replies)."
             )
             return
@@ -387,7 +390,7 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             is_reply=True, cooldown_seconds=reply_cooldown, per_day_limit=0,
         )
         if not ok:
-            await self.cog._safe_ephemeral(interaction, msg)
+            await _safe_ephemeral(interaction, msg)
             return
 
         thread_info = get_thread_info(db_path, interaction.guild.id, self.parent_message_id)
@@ -449,19 +452,19 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                 try:
                     reply_channel = await interaction.guild.fetch_channel(self.thread_id)
                 except discord.HTTPException:
-                    await self.cog._safe_ephemeral(interaction, "❌ Couldn't access the confession thread.")
+                    await _safe_ephemeral(interaction, "❌ Couldn't access the confession thread.")
                     return
             if not isinstance(reply_channel, discord.Thread):
-                await self.cog._safe_ephemeral(interaction, "❌ Confession thread is unavailable.")
+                await _safe_ephemeral(interaction, "❌ Confession thread is unavailable.")
                 return
             if reply_channel.locked:
-                await self.cog._safe_ephemeral(interaction, "❌ This confession thread is locked.")
+                await _safe_ephemeral(interaction, "❌ This confession thread is locked.")
                 return
 
             try:
                 reply_msg = await reply_channel.send(content=reply_content, allowed_mentions=discord.AllowedMentions.none())
             except discord.HTTPException:
-                await self.cog._safe_ephemeral(interaction, "❌ Failed to post reply (missing perms?).")
+                await _safe_ephemeral(interaction, "❌ Failed to post reply (missing perms?).")
                 return
 
             upsert_thread_post(
@@ -506,15 +509,15 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
 
         dest_channel = interaction.guild.get_channel(self.parent_channel_id)
         if not isinstance(dest_channel, discord.TextChannel):
-            await self.cog._safe_ephemeral(interaction, "❌ Bot config is invalid.")
+            await _safe_ephemeral(interaction, "❌ Bot config is invalid.")
             return
         try:
             parent_msg = await dest_channel.fetch_message(self.parent_message_id)
         except discord.NotFound:
-            await self.cog._safe_ephemeral(interaction, "❌ That message no longer exists.")
+            await _safe_ephemeral(interaction, "❌ That message no longer exists.")
             return
         except discord.HTTPException:
-            await self.cog._safe_ephemeral(interaction, "❌ Couldn't load that message.")
+            await _safe_ephemeral(interaction, "❌ Couldn't load that message.")
             return
 
         try:
@@ -523,7 +526,7 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException:
-            await self.cog._safe_ephemeral(interaction, "❌ Failed to post reply (missing perms?).")
+            await _safe_ephemeral(interaction, "❌ Failed to post reply (missing perms?).")
             return
 
         upsert_thread_post(
@@ -739,15 +742,6 @@ class ConfessionsCog(commands.Cog):
 
     # ── Interaction helpers ──────────────────────────────────────────────────
 
-    async def _safe_ephemeral(self, interaction: discord.Interaction, message: str) -> None:
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(message, ephemeral=True)
-            else:
-                await interaction.response.send_message(message, ephemeral=True)
-        except discord.HTTPException:
-            pass
-
     async def _safe_complete(self, interaction: discord.Interaction) -> None:
         if interaction.response.is_done():
             try:
@@ -798,7 +792,7 @@ class ConfessionsCog(commands.Cog):
             if decoded.kind == "new_confession":
                 action = "new confession"
                 if not interaction.guild or interaction.guild.id != decoded.guild_id:
-                    await self._safe_ephemeral(interaction, "❌ Invalid confession button.")
+                    await _safe_ephemeral(interaction, "❌ Invalid confession button.")
                     return
                 if not interaction.response.is_done():
                     await interaction.response.send_modal(ConfessModal(self))
@@ -808,30 +802,30 @@ class ConfessionsCog(commands.Cog):
 
             if decoded.kind == "invalid":
                 assert decoded.error is not None
-                await self._safe_ephemeral(interaction, decoded.error)
+                await _safe_ephemeral(interaction, decoded.error)
                 return
 
             if not interaction.guild:
-                await self._safe_ephemeral(interaction, "❌ Invalid reply target.")
+                await _safe_ephemeral(interaction, "❌ Invalid reply target.")
                 return
 
             if decoded.kind == "reply_help":
                 action = "help request"
-                await self._safe_ephemeral(interaction, HELP_TEXT)
+                await _safe_ephemeral(interaction, HELP_TEXT)
                 return
 
             cfg = get_config(self.ctx.db_path, interaction.guild.id)
             if not cfg:
-                await self._safe_ephemeral(interaction, "❌ Bot is not configured.")
+                await _safe_ephemeral(interaction, "❌ Bot is not configured.")
                 return
             if cfg.panic:
-                await self._safe_ephemeral(interaction, ERROR_PANIC_MODE)
+                await _safe_ephemeral(interaction, ERROR_PANIC_MODE)
                 return
             if not cfg.replies_enabled:
-                await self._safe_ephemeral(interaction, ERROR_REPLIES_DISABLED)
+                await _safe_ephemeral(interaction, ERROR_REPLIES_DISABLED)
                 return
             if interaction.user and interaction.user.id in cfg.blocked_set():
-                await self._safe_ephemeral(interaction, "❌ You can't submit anonymous replies on this server.")
+                await _safe_ephemeral(interaction, "❌ You can't submit anonymous replies on this server.")
                 return
 
             if decoded.kind in ("reply", "reply_new"):
@@ -841,13 +835,13 @@ class ConfessionsCog(commands.Cog):
                     action = "ephemeral anonymous reply"
                 root_message_id = decoded.root_id
                 if not get_thread_info(self.ctx.db_path, interaction.guild.id, root_message_id):
-                    await self._safe_ephemeral(interaction, "❌ This confession can no longer be replied to.")
+                    await _safe_ephemeral(interaction, "❌ This confession can no longer be replied to.")
                     return
                 discord_thread_id = get_discord_thread_id(self.ctx.db_path, interaction.guild.id, root_message_id)
                 if discord_thread_id:
                     thread_obj = self.bot.get_channel(discord_thread_id)
                     if isinstance(thread_obj, discord.Thread) and thread_obj.locked:
-                        await self._safe_ephemeral(interaction, "❌ This confession thread is locked.")
+                        await _safe_ephemeral(interaction, "❌ This confession thread is locked.")
                         return
                 if not interaction.response.is_done():
                     await interaction.response.send_modal(
@@ -864,14 +858,14 @@ class ConfessionsCog(commands.Cog):
             # decoded.kind == "legacy_reply" — plain "cr" button on old posts
             target_msg = interaction.message
             if target_msg is None:
-                await self._safe_ephemeral(interaction, "❌ That message no longer exists.")
+                await _safe_ephemeral(interaction, "❌ That message no longer exists.")
                 return
             target_channel = target_msg.channel
             if not isinstance(target_channel, discord.TextChannel):
-                await self._safe_ephemeral(interaction, "❌ That message no longer exists.")
+                await _safe_ephemeral(interaction, "❌ That message no longer exists.")
                 return
             if not self.is_valid_reply_target_message(interaction.guild.id, target_msg):
-                await self._safe_ephemeral(interaction, "❌ This message can't be replied to anonymously.")
+                await _safe_ephemeral(interaction, "❌ This message can't be replied to anonymously.")
                 return
             if not interaction.response.is_done():
                 await interaction.response.send_modal(
@@ -884,7 +878,7 @@ class ConfessionsCog(commands.Cog):
                 action, custom_id, interaction.guild_id,
                 interaction.user.id if interaction.user else None,
             )
-            await self._safe_ephemeral(interaction, "❌ I don't have enough access to handle that action.")
+            await _safe_ephemeral(interaction, "❌ I don't have enough access to handle that action.")
         except discord.HTTPException as exc:
             if is_stale_interaction_error_code(exc.code):
                 log.debug("Stale interaction during %s (code=%r)", action, exc.code)
@@ -894,14 +888,14 @@ class ConfessionsCog(commands.Cog):
                 action, custom_id, interaction.guild_id,
                 interaction.user.id if interaction.user else None,
             )
-            await self._safe_ephemeral(interaction, "❌ Discord rejected that interaction. Please try again.")
+            await _safe_ephemeral(interaction, "❌ Discord rejected that interaction. Please try again.")
         except Exception:
             log.exception(
                 "Unexpected error during %s (custom_id=%r guild=%r user=%r)",
                 action, custom_id, interaction.guild_id,
                 interaction.user.id if interaction.user else None,
             )
-            await self._safe_ephemeral(interaction, f"❌ Something went wrong handling that {action}.")
+            await _safe_ephemeral(interaction, f"❌ Something went wrong handling that {action}.")
 
     # ── User commands ────────────────────────────────────────────────────────
 
@@ -919,7 +913,7 @@ class ConfessionsCog(commands.Cog):
             interaction.user.id if interaction.user else None,
             exc_info=error,
         )
-        await self._safe_ephemeral(interaction, "❌ An unexpected error occurred. Please try again.")
+        await _safe_ephemeral(interaction, "❌ An unexpected error occurred. Please try again.")
 
     # ── Web panel action ─────────────────────────────────────────────────────
 

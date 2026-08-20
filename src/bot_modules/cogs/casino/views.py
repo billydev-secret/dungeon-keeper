@@ -12,12 +12,14 @@ from __future__ import annotations
 import re
 
 from typing import TYPE_CHECKING
+from functools import partial
 
 import discord
 
 from bot_modules.services import casino_logic as logic
 from bot_modules.services import casino_service as svc
 from bot_modules.services import pools_logic
+from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 
 if TYPE_CHECKING:
     from bot_modules.cogs.casino.cog import CasinoCog
@@ -28,14 +30,7 @@ def _cog(interaction: discord.Interaction) -> CasinoCog | None:
     return cog
 
 
-async def safe_ephemeral(interaction: discord.Interaction, message: str) -> None:
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
-    except discord.HTTPException:
-        pass
+safe_ephemeral = partial(_core_safe_ephemeral, log_label="casino")
 
 
 async def _dispatch_or_apologize(interaction: discord.Interaction) -> CasinoCog | None:
