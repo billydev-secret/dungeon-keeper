@@ -191,8 +191,11 @@ The gate enforces the floor: a **new** `logic.py` / `store.py` / `service.py` /
   embeds inline is the anti-pattern.
   → `embed_style_guide.md` § Builder conventions
 - **Color comes in as a parameter**, resolved by the caller via
-  `resolve_accent_color(db_path, guild)`. A builder never resolves the accent
-  itself. Keep a hard-coded red/green only where the color is *semantic*.
+  `safe_resolve_accent(source, guild)` (`core/branding`) — never
+  `resolve_accent_color` directly, which raises and is a hard test failure.
+  `source` is whatever the caller holds: a bot, an AppContext, or a db_path.
+  A builder never resolves the accent itself. Keep a hard-coded red/green only
+  where the color is *semantic*.
   → `embed_style_guide.md` § Color
 - **DMs go through `services/dm_branding.py`** — `send_branded_dm` for the
   common case, `brand_dm_embed` for callers that own their own delivery

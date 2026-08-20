@@ -796,6 +796,7 @@ async def place_grant_audit_card(
 
     import discord
 
+    from bot_modules.core.branding import safe_resolve_accent
 
     cfg = ctx.guild_config(guild.id).grant_roles.get(role_key)
     if cfg is None or cfg["role_id"] <= 0:
@@ -820,8 +821,6 @@ async def place_grant_audit_card(
                 load_card_ref(conn, guild_id),
                 gather_grant_audit(conn, guild_id, role_id, min_level, role_name),
             )
-
-    from bot_modules.core.branding import safe_resolve_accent
 
     ref, gathered = await asyncio.to_thread(_load)
     snap = resolve_grant_audit_buckets(guild, role, gathered, min_level, now_ts)

@@ -8,6 +8,7 @@ section heading doesn't hug the section above it.
 
 from __future__ import annotations
 
+import ast
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -169,13 +170,38 @@ async def test_failure_is_logged_at_warning_under_the_callers_label(monkeypatch,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guild", [None, SimpleNamespace(id=7)], ids=["no-guild", "no-ctx"])
-async def test_guard_returns_stay_silent(monkeypatch, caplog, guild):
-    """A DM or a ctx-less bot is ordinary — only a real failure is worth a line."""
+async def test_no_guild_stays_silent(monkeypatch, caplog):
+    """A DM is ordinary — there is nothing to brand and nothing to report."""
     monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock())
-    bot = _Bot() if guild is None else _Bot(db_path=None)
     with caplog.at_level(logging.DEBUG, logger="bot_modules.core.branding"):
-        await branding.safe_resolve_accent(bot, guild)
+        await branding.safe_resolve_accent(_Bot(), None)
+    assert [r for r in caplog.records if r.name == "bot_modules.core.branding"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_source_with_no_db_path_is_reported(monkeypatch, caplog):
+    """Almost always the wrong object, and it used to raise.
+
+    Before this helper existed, ``safe_resolve_accent(self, ...)`` from a cog
+    that keeps its context on ``self.bot`` was an AttributeError you couldn't
+    miss. Returning the default silently would turn that typo into an embed
+    that is permanently unbranded and never complains, which neither ruff nor
+    pyright can see (``source`` is deliberately untyped).
+    """
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock())
+    with caplog.at_level(logging.DEBUG, logger="bot_modules.core.branding"):
+        got = await branding.safe_resolve_accent(_Bot(db_path=None), SimpleNamespace(id=7))
+    assert got is None  # still degrades rather than raising
+    (record,) = [r for r in caplog.records if r.name == "bot_modules.core.branding"]
+    assert record.levelno == logging.WARNING
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_none_source_stays_silent(monkeypatch, caplog):
+    """Passing None says "I know I have no context" — that isn't a mistake."""
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock())
+    with caplog.at_level(logging.DEBUG, logger="bot_modules.core.branding"):
+        await branding.safe_resolve_accent(None, SimpleNamespace(id=7))
     assert [r for r in caplog.records if r.name == "bot_modules.core.branding"] == []
 
 
@@ -194,6 +220,28 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _direct_calls(tree: ast.AST) -> list[int]:
+    """Line numbers of real ``resolve_accent_color(...)`` calls.
+
+    Parsed, not grepped: prose in a docstring naming the function is not a
+    call, and ``branding.resolve_accent_color(...)`` is one even though it
+    doesn't start with the bare name.
+    """
+    lines = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (
+            func.id if isinstance(func, ast.Name)
+            else func.attr if isinstance(func, ast.Attribute)
+            else None
+        )
+        if name == "resolve_accent_color":
+            lines.append(node.lineno)
+    return lines
+
+
 def test_nothing_outside_branding_calls_the_raw_resolver():
     """A raise here reaches a live game, a background loop, or an HTTP handler.
 
@@ -207,23 +255,31 @@ def test_nothing_outside_branding_calls_the_raw_resolver():
         rel = path.relative_to(root).as_posix()
         if rel == RESOLVER_HOME:
             continue
-        for lineno, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            stripped = line.strip()
-            if "resolve_accent_color(" not in stripped:
-                continue
-            if "safe_resolve_accent(" in stripped:
-                continue
-            if stripped.startswith(("#", '"', "'")):  # prose, not a call
-                continue
-            offenders.append(f"{rel}:{lineno}  {stripped}")
+        source = path.read_text(encoding="utf-8")
+        if "resolve_accent_color" not in source:  # cheap skip
+            continue
+        for lineno in _direct_calls(ast.parse(source)):
+            offenders.append(f"{rel}:{lineno}")
 
     assert not offenders, (
         "These call resolve_accent_color directly, so a branding failure "
         "raises into them. Use safe_resolve_accent instead:\n  "
         + "\n  ".join(offenders)
     )
+
+
+def test_the_sweep_can_actually_see_a_violation():
+    """Guards the guard. The check is only worth having if a reintroduced
+    direct call — bare *or* module-qualified — is actually detected."""
+    bare = ast.parse("x = await resolve_accent_color(db_path, guild)")
+    qualified = ast.parse("x = await branding.resolve_accent_color(db_path, guild)")
+    prose = ast.parse('"""Use resolve_accent_color(db_path, guild) for this."""')
+    wrapped = ast.parse("x = await safe_resolve_accent(ctx, guild)")
+
+    assert _direct_calls(bare) == [1]
+    assert _direct_calls(qualified) == [1]
+    assert _direct_calls(prose) == []  # a docstring is not a call
+    assert _direct_calls(wrapped) == []
 
 
 def test_the_wrapper_still_lives_where_the_sweep_left_it():

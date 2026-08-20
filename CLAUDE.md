@@ -188,10 +188,14 @@ SQLite-backed. Tests in `tests/`.
   restyle a panel, prefer wrapping/scrolling flex rows over fixed-width ones and
   add an interaction scenario if layout lives behind a click; measure with
   `scripts/mobile_layout_scan.py`.
-- New embeds take their color from `resolve_accent_color(db_path, guild)`;
-  keep red/green/etc. only where the color is semantic. Fuller conventions
-  for bot embeds/panels (section spacing, monospace tables, persistent views,
-  ping allow-listing) live in `docs/embed_style_guide.md`.
+- New embeds take their color from `safe_resolve_accent(source, guild)`
+  (`core/branding`), where `source` is whatever you hold — a bot, an
+  AppContext, or a db_path; pass `default=DEFAULT_ACCENT_COLOR` if you need a
+  non-optional `Color`. Never call `resolve_accent_color` directly: it raises,
+  and a repo-wide test fails the suite if you do. Keep red/green/etc. only
+  where the color is semantic. Fuller conventions for bot embeds/panels
+  (section spacing, monospace tables, persistent views, ping allow-listing)
+  live in `docs/embed_style_guide.md`.
 - **Dashboard route ids are the bare feature name** (`pen-pals`, `role-menus`)
   — no `config-`/`games-`/`mod-` prefix. The prefixes on older ids are
   historical, and **every existing id is frozen**: deep links, the nav `help:`

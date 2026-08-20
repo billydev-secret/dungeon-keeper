@@ -65,7 +65,7 @@ A single message the bot keeps at the **bottom of a configured channel**.
   (`` `#12  Post QOTD` ``) followed by a live `<t:…:R>` age outside the code
   span, per `docs/embed_style_guide.md`. Rows spawned by a recurring definition
   carry a 🔁 marker. Capped at 15 rows, then "…and **N** more on the dashboard".
-  Accent from `resolve_accent_color`.
+  Accent from `safe_resolve_accent`.
 - **Staying at the bottom.** A member message in the board's channel arms a 6s
   debounce, then the board is deleted and re-posted (Discord has no reorder
   API). Reuses `economy.guide.should_restick_guide` — bot messages are filtered

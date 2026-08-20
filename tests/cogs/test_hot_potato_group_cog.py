@@ -53,16 +53,11 @@ async def db(sync_db_path: Path) -> GamesDb:
 def _stub_lobby_accent():
     """The lobby embed (base_game) and the active game embed (this cog, via
     ``_prime_accent`` on start/resume) both resolve the guild accent; the
-    FakeGuild here has no real avatar to read, so stub both import paths."""
-    with (
-        patch(
-            "bot_modules.core.branding.resolve_accent_color",
-            new=AsyncMock(return_value=discord.Color.blurple()),
-        ),
-        patch(
-            "bot_modules.core.branding.resolve_accent_color",
-            new=AsyncMock(return_value=discord.Color.blurple()),
-        ),
+    FakeGuild here has no real avatar to read. Both now reach the resolver
+    through ``safe_resolve_accent``, so one stub at its source covers them."""
+    with patch(
+        "bot_modules.core.branding.resolve_accent_color",
+        new=AsyncMock(return_value=discord.Color.blurple()),
     ):
         yield
 

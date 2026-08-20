@@ -1,10 +1,6 @@
 import logging
-from typing import TYPE_CHECKING
 
 import discord
-
-if TYPE_CHECKING:
-    pass
 
 from bot_modules.games.command_groups import games
 from bot_modules.core.branding import safe_resolve_accent

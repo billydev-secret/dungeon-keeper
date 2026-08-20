@@ -19,8 +19,19 @@ Two register notes up front:
 
 ## Color
 
-- New embeds take their color from **`resolve_accent_color(db_path, guild)`** —
-  the guild's brand accent. Don't hard-code a color. A builder that lives away
+- New embeds take their color from **`safe_resolve_accent(source, guild)`**
+  (`bot_modules.core.branding`) — the guild's brand accent. `source` is
+  whatever the caller has in hand: a bot, an AppContext, or a `db_path`.
+  Don't hard-code a color.
+
+  **Never call `resolve_accent_color` directly.** It reads the branding table
+  and, in avatar mode, fetches the bot avatar over HTTP, so it *raises* — into
+  a live game, a background loop or an HTTP handler, depending on where you
+  called it. `safe_resolve_accent` wraps it and returns `None` (or `default`)
+  on any failure instead. It returns `discord.Color | None`, so pass
+  `default=DEFAULT_ACCENT_COLOR` where a non-optional `Color` is required.
+  `tests/test_branding.py` fails the suite on any direct call outside
+  `core/branding.py` itself. A builder that lives away
   from the guild/db (an `embeds.py` module) takes the resolved color as a
   `color=`/`accent` **param** and lets the cog resolve it; a hard-coded value as
   a `color is None` fallback is fine, an *un-overridable* hard-code is not.

@@ -40,7 +40,6 @@ from bot_modules.announcements.buttons import (
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 from bot_modules.core.utils import resolve_bot_channel
-from bot_modules.services.branding_service import DEFAULT_ACCENT
 
 log = logging.getLogger(__name__)
 
@@ -308,10 +307,9 @@ async def _process_due(bot, db_path: Path, row, now: float) -> None:
         return
 
     guild = bot.get_guild(row["guild_id"])
-    if guild is not None:
-        accent = await safe_resolve_accent(db_path, guild, log_label="announcements", default=DEFAULT_ACCENT_COLOR)
-    else:
-        accent = discord.Color(DEFAULT_ACCENT)
+    accent = await safe_resolve_accent(
+        db_path, guild, default=DEFAULT_ACCENT_COLOR, log_label="announcements"
+    )
 
     content, embed, allowed = build_announcement_message(row, accent)
     buttons = await asyncio.to_thread(_db_call, db_path, list_buttons, ann_id)

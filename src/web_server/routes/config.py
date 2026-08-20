@@ -1825,7 +1825,6 @@ async def welcome_preview(
     except Exception:
         member_bio_link = ""
 
-
     accent = await safe_resolve_accent(ctx, guild, log_label="config")
 
     welcome_embed = build_welcome_embed(

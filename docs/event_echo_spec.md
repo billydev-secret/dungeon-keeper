@@ -271,7 +271,7 @@ In main chat:
 > **[Jump in →]**
 
 No ping, no notification, no buttons. One accent-coloured embed
-(`resolve_accent_color`), footer naming the host where one is known (cache
+(`safe_resolve_accent`), footer naming the host where one is known (cache
 lookup only — a footer isn't worth an API round trip per game).
 
 Copy varies by source: a native Discord event gets 📅 and "It's happening"

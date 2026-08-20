@@ -34,11 +34,14 @@ log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
-#: What ``resolve_accent_color`` itself falls back to when a guild has no
-#: branding configured. Callers that need a non-optional ``discord.Color``
-#: pass this as ``safe_resolve_accent(..., default=DEFAULT_ACCENT_COLOR)``,
-#: so a branding failure renders the same color an unbranded guild gets
-#: rather than dropping the embed's accent bar entirely.
+#: The end of ``resolve_accent_color``'s own fallback chain — what a guild
+#: gets when it has no custom color and the bot has no colored role either.
+#: Callers that need a non-optional ``discord.Color`` pass this as
+#: ``safe_resolve_accent(..., default=DEFAULT_ACCENT_COLOR)`` so a branding
+#: failure still yields a color rather than dropping the accent bar. Note it
+#: is the *last* link, not "whatever an unbranded guild shows": where the bot
+#: has a colored top role, ``_fallback_color`` returns that instead, so a
+#: failure here can render a different color than a healthy lookup would.
 DEFAULT_ACCENT_COLOR = discord.Color(DEFAULT_ACCENT)
 
 # guild_id -> (avatar_key, resolved_color) for avatar-derived accents.
@@ -141,6 +144,20 @@ async def safe_resolve_accent(
         return default
     db_path = _db_path_from(source)
     if db_path is None:
+        if source is not None:
+            # An explicit None means "I know I have no context" and stays
+            # quiet. A real object that yields no db_path is either a bot
+            # whose ctx isn't attached yet or — far more likely — the wrong
+            # object: ``safe_resolve_accent(self, ...)`` from a cog that
+            # keeps its context on ``self.bot``. Before this helper existed
+            # that typo raised AttributeError; silence would make it a
+            # permanently unbranded embed that nothing ever reports.
+            log.warning(
+                "%s: no db_path on %s — accent not resolved for guild %s",
+                log_label,
+                type(source).__name__,
+                getattr(guild, "id", "?"),
+            )
         return default
     try:
         return await resolve_accent_color(db_path, guild)

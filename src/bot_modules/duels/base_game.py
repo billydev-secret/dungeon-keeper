@@ -651,10 +651,7 @@ class BaseGame(commands.Cog):
         (for a wagered lobby) loads the econ settings so the wager field reads
         ``🪙 **500** coins``, then hands both to the sync builder.
         """
-        ctx = getattr(self.bot, "ctx", None)
-        accent = (
-            await safe_resolve_accent(ctx, guild, log_label="base game")
-        )
+        accent = await safe_resolve_accent(self.bot, guild, log_label="base game")
         settings = await self._econ_settings(guild.id) if ante > 0 else None
         return self._render_lobby(
             game, guild, min_players, max_players, ante,

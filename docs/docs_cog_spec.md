@@ -28,7 +28,7 @@ The `/docs post|sync|unpost|list` slash commands were removed 2026-07-28 in the 
 - A section longer than 4096 chars splits on paragraph boundaries into continuation embeds — never inside a fenced code block; oversized single blocks hard-split on line breaks.
 - One embed per message (sidesteps the 6000-char aggregate limit). An empty doc renders one placeholder embed (`*(This document is empty.)*`).
 
-Embed color: the doc's `accent` hex if set, otherwise the guild's branding accent (`resolve_accent_color`).
+Embed color: the doc's `accent` hex if set, otherwise the guild's branding accent (`safe_resolve_accent`).
 
 ### Posting and sync reconciliation
 

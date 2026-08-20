@@ -322,7 +322,7 @@ no decomposition) for pilmoji to draw.
 - Fonts load eagerly and raise `FileNotFoundError` loudly if a TTF is missing —
   a broken/absent font is a hard failure, not a silent degrade.
 - Rendering must run in a worker thread (`asyncio.to_thread`).
-- New embeds/cards should take their accent from `resolve_accent_color`; the
+- New embeds/cards should take their accent from `safe_resolve_accent`; the
   card themes above are the exception where color is part of the design.
 
 ## Related

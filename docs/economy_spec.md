@@ -49,7 +49,7 @@ Dashboard → Economy → QOTD: `qotd_ping_role_id` (§3.4).
   `src/bot_modules/core/xp_system.py`). Per-guild with **no** `guild_id=0` legacy fallback
   (`allow_legacy_fallback=False`) so non-primary guilds get true defaults.
 - Neutral defaults ("Coins", 🪙) pre-branding. All member-facing strings template these.
-- Embeds use `resolve_accent_color(db_path, guild)` per repo convention; currency emoji
+- Embeds use `safe_resolve_accent(source, guild)` per repo convention; currency emoji
   is decorative, not semantic color.
 - **Feature gate:** economy is off until `enabled` is set AND `bank_channel_id` is
   configured (Pen Pals pattern). Prod DK is multi-guild; each guild opts in separately.
@@ -1981,7 +1981,7 @@ library's raw `target_count`, which no member necessarily worked to.
 the quest's title — the Venmo memo line. Every kind has a memo; an unknown
 future kind degrades to its title-cased name rather than rendering blank.
 Credits are green, debits red — here the colour is semantic, so this is a
-deliberate exception to the `resolve_accent_color` convention. The footer
+deliberate exception to the guild-accent convention. The footer
 carries the balance that row produced, reconstructed per row (the live wallet
 balance would be wrong for every entry but the last).
 
