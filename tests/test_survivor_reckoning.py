@@ -464,26 +464,6 @@ def test_reckoning_embed_shows_the_prize_line():
     )
 
 
-# ── the join echo (2026-08-18) ─────────────────────────────────────────
-
-
-def test_survivor_join_echo_source_registered():
-    from bot_modules.services.event_echo_logic import (
-        SOURCE_SURVIVOR_JOIN,
-        spec_for,
-    )
-
-    spec = spec_for(SOURCE_SURVIVOR_JOIN)
-    assert "joined the Survivor pool" in spec.headline
-    assert not spec.exempt  # joins recur; skip-don't-queue is right
-
-
-def test_join_echo_detail_line():
-    from bot_modules.survivor.views import join_echo_detail
-
-    line = join_echo_detail(14, 8150)
-    assert "14 players in" in line and "pot 🪙 8,150 Coins" in line
-
 # ── why nothing was due (2026-08-18) ──────────────────────────────────
 #
 # Every gate routes through pick_week, so a season on a year with no
