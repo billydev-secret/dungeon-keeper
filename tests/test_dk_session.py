@@ -764,3 +764,55 @@ def test_sessions_outside_this_repo_are_left_alone():
 )
 def test_in_scope(cwd, ours):
     assert dk_session.in_scope(cwd, PROD) is ours
+
+
+# ── teardown posts the feature's QA card ────────────────────────────────
+
+
+def test_post_qa_card_shells_out_to_the_poster(tmp_path, monkeypatch, capsys) -> None:
+    """Teardown is where a feature is finished, so it is where its card is written."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "post_testing_docs.py").write_text("", encoding="utf-8")
+    seen: dict = {}
+
+    def fake_run(args, **kwargs):
+        seen["args"] = args
+        seen["cwd"] = kwargs.get("cwd")
+        seen["timeout"] = kwargs.get("timeout")
+
+        class Res:
+            stdout = "qa-card: posted QA card -- Widget Polish\n"
+
+        return Res()
+
+    monkeypatch.setattr(dk_session.subprocess, "run", fake_run)
+    dk_session.post_qa_card(tmp_path, "widget")
+
+    assert seen["args"][1:] == [str(scripts / "post_testing_docs.py"), "--branch", "widget"]
+    assert seen["cwd"] == str(tmp_path)
+    assert seen["timeout"] == 300  # a hung API call must not wedge teardown
+    assert "posted QA card" in capsys.readouterr().out
+
+
+def test_post_qa_card_without_the_poster_is_a_no_op(tmp_path, monkeypatch) -> None:
+    def explode(*_a, **_k):
+        raise AssertionError("must not shell out when the script is absent")
+
+    monkeypatch.setattr(dk_session.subprocess, "run", explode)
+    dk_session.post_qa_card(tmp_path, "widget")
+
+
+def test_post_qa_card_swallows_a_failure(tmp_path, monkeypatch, capsys) -> None:
+    """A card must never be the reason a session fails to tear down."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "post_testing_docs.py").write_text("", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise dk_session.subprocess.TimeoutExpired("cmd", 300)
+
+    monkeypatch.setattr(dk_session.subprocess, "run", boom)
+    dk_session.post_qa_card(tmp_path, "widget")  # does not raise
+
+    assert "qa card: skipped" in capsys.readouterr().err

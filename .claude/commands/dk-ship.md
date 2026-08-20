@@ -23,8 +23,9 @@ Steps:
    `git status --porcelain`. If it's non-empty, stage everything (`git add -A`) and
    commit it following the repo's commit conventions (CLAUDE.md → Commits:
    `Scope: summary` subject, prose body of why/edge-cases, a `Testing:` section of
-   `- [ ]` lines **only** if the change alters live bot/dashboard behavior, no
-   `Co-Authored-By`/`Claude-Session` trailers). The pre-commit hook runs the scoped
+   `- [ ]` lines **only** if the change is user-facing — something a member or admin
+   can see in Discord or on the dashboard — written for a volunteer tester rather
+   than a developer, no `Co-Authored-By`/`Claude-Session` trailers). The pre-commit hook runs the scoped
    gate — if that commit fails the hook, STOP and report; do not `--no-verify` past it.
    If the tree is already clean, skip this step.
 3. **Rebase onto latest main:** `git fetch origin` then `git rebase origin/main`.
@@ -39,10 +40,10 @@ Steps:
    a. Verify prod is on `main` with a clean tracked tree:
       `git -C "$MAIN" rev-parse --abbrev-ref HEAD` (must be `main`) and
       `git -C "$MAIN" status --porcelain -uno` (must be empty). If not, STOP.
-   b. `git -C "$MAIN" merge --no-ff "$BRANCH"` — a merge commit, so the QA/Testing
-      card hook fires (post-merge for a clean merge, post-commit if conflict
-      resolution ended in `git commit`) and posts a card for each merged commit
-      that has a `Testing:` section (the hook expands the merge to its branch side).
+   b. `git -C "$MAIN" merge --no-ff "$BRANCH"` — a merge commit. The merge itself
+      posts **no** QA card: a branch ships as many times as the work needs, and the
+      feature's single card is written at teardown in step 7 from everything the
+      branch ever merged.
    c. Unless `--no-push`: `git -C "$MAIN" push`.
 
    If the lock is held, say so — a blocked ship looks identical to a hung one, and
@@ -59,6 +60,13 @@ Steps:
    outlive the shell that launched it and wait long enough for your report from step 6
    to reach the screen. Tell the user the window will close in a few seconds and that
    `--keep` is how to hold it open next time.
+
+   Teardown is also where the feature's **QA card** is posted — one card built from
+   every `Testing:` section the branch ever merged, rewritten into a tester-readable
+   checklist. It runs after the window is killed, so nothing waits on it. A ship with
+   `--keep` skips teardown and therefore posts no card; run
+   `python3 scripts/post_testing_docs.py --branch "$BRANCH"` from the prod checkout
+   when that session is finally done, or pass `--no-card` to teardown to suppress it.
 
    Never pass `--force` to teardown — it discards uncommitted work, and step 2 already
    guaranteed there is none.

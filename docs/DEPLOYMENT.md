@@ -335,14 +335,17 @@ that off unless you fully control the network path.
   (`src/dungeonkeeper/__main__.py`) and rotates at ~2MB, so it only ever holds
   the current run. journald retains the stream copy: `journalctl -u
   dungeon-keeper` is the durable history for anything before the last restart.
-- **QA card recovery** — the post-commit hook that posts QA Tracker cards reads
-  the `Testing:` section off the commit, but it **skips worktree commits** (no
-  `.env` in the worktree) and **fast-forward merges** (no merge commit to fire
-  on). Recover a missed card manually:
+- **QA card recovery** — a feature's card is posted once, by `/dk-ship`
+  teardown, from every `Testing:` section the branch merged. It is missed when a
+  session ships with `--keep` (teardown never runs) or is torn down by hand.
+  Merges post nothing by design, and commits made in a worktree post nothing
+  either (no `.env` there). Recover a card manually from the prod checkout:
   ```bash
-  python scripts/post_testing_docs.py --commit <sha>        # dry-run preview
-  python scripts/post_testing_docs.py --commit <sha> --yes  # actually post
+  python scripts/post_testing_docs.py --branch <name> --dry-run   # preview
+  python scripts/post_testing_docs.py --branch <name>             # post it
   ```
+  `--commit <sha>` does the same for a single commit that landed straight on
+  main. Both are idempotent: a branch whose card is already posted is a no-op.
 - **Handy maintenance scripts** (all in `scripts/`):
   - `refresh_dev_db.py --no-fixtures` — rebuild the dev DB from prod without
     seeding fixture data.

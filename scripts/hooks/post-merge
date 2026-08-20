@@ -1,13 +1,13 @@
 #!/bin/sh
-# Post QA cards for the commits a merge just landed on this branch.
+# Hand a merge to the QA card poster. Usually that posts nothing.
 #
 # git does NOT run post-commit for `git merge` — merges get this hook
-# instead. post_testing_docs.py expands a merge commit into its branch-side
-# commits' Testing: sections (see merged_commits there), so /dk-ship's
-# --no-ff integration posts one card per shipped commit. A conflicted merge
-# finished by `git commit` fires post-commit rather than this hook; both
-# paths run the same script, and the (guild, entry_key, sha) unique index
-# makes any overlap idempotent.
+# instead. A --no-ff merge commit posts no card by design: the branch it
+# lands is a feature, and a feature's single card is written from everything
+# the branch ever shipped when /dk-ship tears the session down (see
+# post_branch_card, and CLAUDE.md § Commits). The hook is kept for the
+# fast-forward case, where HEAD is a plain commit that never saw
+# post-commit — that still earns its own card.
 #
 # $1 is git's squash flag — a squash merge stages changes without creating
 # a merge commit, so there is nothing to expand; skip it.

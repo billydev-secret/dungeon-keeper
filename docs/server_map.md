@@ -124,7 +124,7 @@ temporarily relocates channels here; see `docs/hidden_channels_spec.md`)*
 ### dev *(staff-only)*
 | Channel | Notes |
 |---|---|
-| testing-queue | QA Tracker cards post here (from each commit's `Testing:` section; the old `docs/TESTING_QUEUE.md` mirror was retired 2026-07-18). |
+| testing-queue | QA Tracker cards post here — one per feature branch, written at `/dk-ship` teardown from every `Testing:` section it merged (the old `docs/TESTING_QUEUE.md` mirror was retired 2026-07-18). |
 | admin-tests / moderator-tests / user-tests | Role-scoped QA checklists. |
 | dev-discussion | Dev coordination. |
 

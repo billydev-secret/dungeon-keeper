@@ -977,6 +977,35 @@ def cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def post_qa_card(main_repo: Path, branch: str) -> None:
+    """Post the branch's QA card — one card for the whole feature.
+
+    Teardown is where a feature is *finished*, which is why the card is written
+    here rather than at each merge: a branch ships as many times as work needs
+    (survivor-review landed ten), and a card per merge is how the testing queue
+    filled up with 442 cards a month that nobody could work through.
+
+    ``post_testing_docs.py`` gathers every ``Testing:`` section the branch ever
+    merged, has Claude rewrite them into one plainly-worded checklist and posts
+    it. Best-effort by contract — it swallows its own failures and exits 0, and
+    this call is guarded on top of that, because a card must never be the
+    reason a session fails to tear down.
+    """
+    script = main_repo / "scripts" / "post_testing_docs.py"
+    if not script.exists():
+        return
+    try:
+        res = subprocess.run(
+            [sys.executable, str(script), "--branch", branch],
+            cwd=str(main_repo), capture_output=True, text=True, timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"qa card: skipped — {exc}", file=sys.stderr)
+        return
+    for line in (res.stdout or "").strip().splitlines():
+        print(line)
+
+
 def cmd_teardown(args: argparse.Namespace) -> int:
     main_repo = find_main_repo()
     name = normalize_name([args.name])
@@ -1015,6 +1044,13 @@ def cmd_teardown(args: argparse.Namespace) -> int:
 
     window = args.window or name
     run(["tmux", "kill-window", "-t", window], check=False)
+
+    # Deliberately after the window is gone: posting the card calls out to
+    # Claude and to Discord, and nothing user-visible should sit waiting on a
+    # network round trip. Teardown is detached (see /dk-ship), so this outlives
+    # the pane it was launched from.
+    if not args.no_card:
+        post_qa_card(main_repo, name)
     return 0
 
 
@@ -1083,6 +1119,10 @@ def main(argv: list[str] | None = None) -> int:
     p_down.add_argument("--window", help="tmux target to kill (default: the name)")
     p_down.add_argument("--delay", type=float, default=0.0, help="seconds to wait first")
     p_down.add_argument("--force", action="store_true", help="discard uncommitted work")
+    p_down.add_argument(
+        "--no-card", action="store_true",
+        help="skip posting the feature's QA card to #testing-queue",
+    )
     p_down.set_defaults(func=cmd_teardown)
 
     args = parser.parse_args(argv)

@@ -257,6 +257,14 @@ def set_qa_test_message(
     conn.commit()
 
 
+def qa_test_message_id(conn: sqlite3.Connection, test_id: int) -> int | None:
+    """The Discord message a card was posted as, if it has been posted."""
+    row = conn.execute(
+        "SELECT message_id FROM qa_tests WHERE id = ?", (test_id,)
+    ).fetchone()
+    return int(row[0]) if row and row[0] else None
+
+
 def card_fields(block: str) -> tuple[str, str]:
     """Card title (heading text, trailing parenthetical kept) + body."""
     lines = block.splitlines()
@@ -496,19 +504,22 @@ def purge(channel: str, tok: str, me: str) -> int:
 
 
 def merged_commits(sha: str) -> list[str]:
-    """The commits whose ``Testing:`` sections a hook run for ``sha`` posts.
+    """The commits a merge brought in — where a branch's checklists live.
 
     A plain commit is just itself. A merge commit — what dk-ship's --no-ff
-    integration hands the hook — has no ``Testing:`` section of its own: the
+    integration produces — has no ``Testing:`` section of its own: the
     checklists live in the branch-side commits it lands, where the hook never
     fired (worktrees carry no .env, deliberately — a card posted
     mid-development would invite testing a feature that isn't live yet, and
-    dk-ship's rebase would re-post it under new shas). Expanding the merge
-    posts those cards exactly once, at ship time, with the final shas.
+    dk-ship's rebase would re-post it under new shas).
 
     ``first-parent..merge`` bounds the range to what the merge brought in;
     ``--no-merges`` drops the merge itself and any main-into-branch
     back-merges, whose messages never carry checklists.
+
+    Used by ``branch_checklists`` to gather everything a feature shipped, not
+    by the hook directly — a merge posts nothing at merge time (see
+    ``post_commit``).
     """
     parents = (git("log", "-1", "--format=%P", sha) or "").split()
     if len(parents) < 2:
@@ -519,14 +530,25 @@ def merged_commits(sha: str) -> list[str]:
 
 
 def post_commit(sha: str, *, dry_run: bool) -> None:
-    """Post QA cards for one hook invocation: the commit, or what it merged.
+    """Post the QA card for one hook invocation, if this commit earns one.
 
-    Used by the post-commit hook. Failures are contained per commit inside
-    ``post_one_commit`` — the hook must never break a commit, and one dead
-    card must not starve the rest of a merged branch.
+    A plain commit landing straight on main is its own feature, and posts its
+    own card. A **merge posts nothing**: the branch it lands is the feature,
+    and a feature gets exactly one card, written from everything the branch
+    ever shipped, when /dk-ship tears the session down (``post_branch_card``).
+    Posting here as well would put a card in the queue per merge — a branch
+    that shipped ten times, as survivor-review did, would fill the queue on
+    its own.
+
+    Failures are contained inside ``post_one_commit`` — the hook must never
+    break a commit.
     """
-    for commit in merged_commits(sha):
-        post_one_commit(commit, dry_run=dry_run)
+    parents = (git("log", "-1", "--format=%P", sha) or "").split()
+    if len(parents) > 1:
+        if dry_run:
+            print(f"{sha[:8]}: merge — its card posts at branch teardown")
+        return
+    post_one_commit(sha, dry_run=dry_run)
 
 
 def post_one_commit(sha: str, *, dry_run: bool) -> None:
@@ -594,6 +616,319 @@ def post_one_commit(sha: str, *, dry_run: bool) -> None:
     print(f"post-commit: posted QA card -- {subject}")
 
 
+# ── Branch cards: one card per feature, posted when the session is torn down ─
+
+# Merge subjects on main come in five shapes, all of them produced by hand or
+# by /dk-ship over the years:
+#     Merge branch 'survivor-review'
+#     Merge branch "todo-triage"
+#     Merge branch quest-review
+#     Merge branch 'x' into main            (and 'x' (trailing description))
+#     Merge setup-quest-pinning: economy sources/sinks review
+# The branch name is the first token after the optional "branch" keyword,
+# quoted or not, with a trailing ":" from the last shape stripped.
+_MERGE_SUBJECT_RE = re.compile(
+    r"""^Merge\s+(?:branch\s+)?(?:'(?P<sq>[^']+)'|"(?P<dq>[^"]+)"|(?P<bare>\S+))"""
+)
+
+# A branch alive longer than this many merges deep in main's history is not
+# something teardown will find -- 1000 first-parent merges is well over a
+# year at current rates, and bounds the log walk on every teardown.
+MERGE_SCAN_DEPTH = 1000
+
+
+def branch_from_merge_subject(subject: str) -> str | None:
+    """The branch name a merge commit's subject names, or None."""
+    match = _MERGE_SUBJECT_RE.match(subject.strip())
+    if not match:
+        return None
+    name = match.group("sq") or match.group("dq") or match.group("bare") or ""
+    return name.rstrip(":").strip() or None
+
+
+def branch_merges(branch: str) -> list[str]:
+    """Every first-parent merge of ``branch`` into the current history, oldest first.
+
+    A branch ships repeatedly while work continues on it (survivor-review
+    landed ten times), so this is a list, not a single sha. Matching on the
+    merge *subject* rather than the branch ref is deliberate: teardown deletes
+    the ref, and by then the branch's commits are indistinguishable from
+    main's own by ancestry alone.
+    """
+    out = git(
+        "log", "--first-parent", "--merges", f"-n{MERGE_SCAN_DEPTH}",
+        "--format=%H%x1f%s", "HEAD",
+    )
+    wanted = branch.strip().casefold()
+    shas: list[str] = []
+    for line in (out or "").splitlines():
+        sha, _, subject = line.partition("\x1f")
+        found = branch_from_merge_subject(subject)
+        if found and found.casefold() == wanted:
+            shas.append(sha.strip())
+    shas.reverse()
+    return shas
+
+
+def branch_checklists(branch: str) -> list[tuple[str, str, str]]:
+    """``(short sha, subject, checklist)`` for everything ``branch`` ever landed.
+
+    Each of the branch's merges is expanded to its branch-side commits by
+    ``merged_commits``, and the ones carrying a ``Testing:`` section are kept
+    in the order they were written. A commit that ships twice (a rebase replay
+    landing under a new sha, or a branch merged forward again) contributes its
+    checklist once -- identical (subject, checklist) pairs collapse.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str, str]] = []
+    for merge in branch_merges(branch):
+        for sha in merged_commits(merge):
+            checklist = testing_checklist(sha)
+            if not checklist:
+                continue
+            subject = (git("log", "-1", "--format=%s", sha) or "").strip()
+            if (subject, checklist) in seen:
+                continue
+            seen.add((subject, checklist))
+            short = (git("rev-parse", "--short", sha) or sha[:8]).strip()
+            out.append((short, subject, checklist))
+    return out
+
+
+def humanize_branch(branch: str) -> str:
+    """``survivor-review`` -> ``Survivor review``: the fallback card title."""
+    words = branch.replace("_", "-").replace("/", "-").split("-")
+    text = " ".join(w for w in words if w).strip()
+    return (text[:1].upper() + text[1:]) if text else branch
+
+
+def raw_branch_body(entries: list[tuple[str, str, str]]) -> str:
+    """The un-rewritten card body: every checklist, per commit, deduped by line.
+
+    This is what posts when the rewrite is unavailable. Exact-duplicate steps
+    are dropped because a branch that shipped five times often repeats them
+    verbatim, and a card is worse than useless once it runs to twenty boxes.
+    """
+    seen: set[str] = set()
+    parts: list[str] = []
+    for _short, subject, checklist in entries:
+        lines = [ln for ln in checklist.splitlines() if ln.strip()]
+        kept = []
+        for line in lines:
+            marker = line.strip().casefold()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            kept.append(line)
+        if kept:
+            parts.append("\n".join([f"**{subject}**", *kept]))
+    return "\n\n".join(parts)
+
+
+# ── The rewrite: one Claude call turns N commits' checklists into one card ───
+
+ANTHROPIC_API = "https://api.anthropic.com/v1/messages"
+REWRITE_MODEL = "claude-opus-5"
+# Teardown runs detached, after the tmux window is already gone, so nothing
+# user-visible waits on this call -- it can afford a real timeout.
+REWRITE_TIMEOUT = 90
+# A card nobody finishes is worse than a short one: only ~12% of cards ever
+# got a verdict under the per-commit regime. Past this many steps, the card
+# keeps its most valuable checks and drops the rest rather than compressing
+# several actions into one box -- compression is what made the old cards
+# unreadable in the first place.
+MAX_CARD_ITEMS = 8
+
+REWRITE_SYSTEM = """\
+You turn developers' commit-message testing notes into a QA card for a \
+volunteer tester in a Discord community. The tester is not a developer: they \
+have the Discord server and the bot's web dashboard in front of them, they \
+cannot read the code, and they have never heard of the feature's internals.
+
+Rewrite the notes as a checklist. Rules:
+
+- One action and one observable result per item, in one sentence of at most \
+200 characters. "Add a chore, press Run now, then tick it with Mark Done and \
+check the row shows your name" is three items, not one. If an item needs "and \
+then", or lists several things to confirm, split it.
+- Name what the tester clicks and sees -- a button label, a command, a panel \
+name. Never a code identifier, table name, config key, or issue number.
+- Every item must be verifiable in one sitting. Rewrite anything that requires \
+waiting overnight or for a scheduled job so it can be checked immediately; if \
+it genuinely cannot be, leave it out.
+- Merge duplicates and near-duplicates across the notes.
+- At most %d items. NEVER pack more in by combining unrelated actions into one \
+item -- a long compound step is the thing this card exists to avoid. If the \
+notes cover more than %d distinct checks, keep the ones most likely to catch a \
+regression a member of the community would actually notice, and leave the rest \
+out.
+- Plain, direct language. No preamble, no explanation of why the change was \
+made, no markdown beyond the plain text of each item.
+
+Also give the feature a short title a tester would recognise -- what the \
+feature is, not the branch name. Title Case, at most 60 characters.
+
+Reply with only a JSON object: {"title": "...", "items": ["...", "..."]}\
+""" % (MAX_CARD_ITEMS, MAX_CARD_ITEMS)
+
+
+def _extract_json(text: str) -> dict | None:
+    """The first JSON object in a model reply, or None if there isn't one."""
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def rewrite_card(
+    branch: str, entries: list[tuple[str, str, str]]
+) -> tuple[str, str] | None:
+    """``(title, body)`` rewritten by Claude, or None to fall back to the raw text.
+
+    Best-effort by contract: a missing key, a network failure, a bad reply or a
+    malformed shape all return None, and the caller posts the raw checklists.
+    Teardown must never fail because a rewrite did.
+    """
+    key = env_value("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+
+    notes = "\n\n".join(
+        f"Commit: {subject}\n{checklist}" for _short, subject, checklist in entries
+    )
+    payload = {
+        "model": REWRITE_MODEL,
+        "max_tokens": 4000,
+        # A rewrite is not a reasoning task; low effort keeps it quick and cheap.
+        "output_config": {"effort": "low"},
+        "system": REWRITE_SYSTEM,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    f"Feature branch: {branch}\n\n"
+                    f"Testing notes from the commits it landed:\n\n{notes}"
+                ),
+            }
+        ],
+    }
+    req = urllib.request.Request(
+        ANTHROPIC_API,
+        data=json.dumps(payload).encode(),
+        headers={
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+            "user-agent": UA,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=REWRITE_TIMEOUT) as resp:
+            body = json.loads(resp.read() or b"{}")
+    except Exception as exc:  # containment: any failure falls back to raw
+        print(f"qa-card: WARNING rewrite unavailable, posting raw -- {exc}")
+        return None
+
+    text = "".join(
+        block.get("text", "")
+        for block in body.get("content", [])
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+    parsed = _extract_json(text)
+    if not parsed:
+        print("qa-card: WARNING rewrite returned no JSON, posting raw")
+        return None
+
+    items = [
+        str(item).strip()
+        for item in (parsed.get("items") or [])
+        if str(item).strip()
+    ]
+    title = str(parsed.get("title") or "").strip()
+    if not items or not title:
+        print("qa-card: WARNING rewrite returned an empty card, posting raw")
+        return None
+
+    checklist = "\n".join(f"- [ ] {item}" for item in items[:MAX_CARD_ITEMS])
+    return title[:60], checklist
+
+
+def post_branch_card(branch: str, *, dry_run: bool) -> None:
+    """Post the one QA card for a feature branch. Called at session teardown.
+
+    Everything the branch ever landed is gathered, deduped, rewritten into one
+    plainly-worded checklist and posted as a single card keyed on the branch
+    name. Nothing posts if the branch landed no ``Testing:`` sections -- a
+    refactor, a docs pass or a dep bump earns no card by design.
+
+    Contained like the rest of the hook paths: any DB or REST failure prints a
+    warning and returns, because teardown must not fail over a card.
+    """
+    branch = branch.strip()
+    entries = branch_checklists(branch)
+    if not entries:
+        if dry_run:
+            print(f"{branch}: no Testing: sections in anything it merged")
+        return
+
+    rewritten = None if dry_run else rewrite_card(branch, entries)
+    if rewritten is None:
+        title, body = humanize_branch(branch), raw_branch_body(entries)
+    else:
+        title, body = rewritten
+
+    latest_sha = entries[-1][0]
+
+    if dry_run:
+        print(f"{branch}: {len(entries)} checklist(s) -> 1 card")
+        print(f"  title: {title}")
+        for line in body.splitlines():
+            print(f"  {line}")
+        return
+
+    try:
+        tok = token()
+        conn = qa_connect()
+        home_guild = (
+            channel_guild_id(DEFAULT_QA_CHANNEL, tok) if conn is not None else 0
+        )
+        channel = qa_card_channel(conn, home_guild)
+        guild_id = channel_guild_id(channel, tok) if conn is not None else 0
+        if conn is not None and not guild_id:
+            print("qa-card: WARNING channel has no guild -- posting plain text")
+            conn.close()
+            conn = None
+        if conn is not None:
+            test_id = insert_qa_test(
+                conn, guild_id, branch.casefold(), title, body, latest_sha, branch,
+            )
+            if qa_test_message_id(conn, test_id):
+                # Already posted -- a teardown re-run, not a second ship.
+                print(f"qa-card: {branch} already has a card, nothing to do")
+                conn.close()
+                return
+            mid = post_card(channel, tok, test_id, title, body, latest_sha, branch)
+            if mid:
+                set_qa_test_message(conn, test_id, int(channel), int(mid))
+            conn.close()
+        else:
+            parts = pack(f"### {title}\n\n{body}")
+            parts[-1] = f"{parts[-1]}\n-# `{latest_sha}` · {branch}"
+            for part in parts:
+                post_message(channel, part, tok)
+                time.sleep(1.1)
+    except (Exception, SystemExit) as exc:  # containment: teardown exits 0
+        print(f"qa-card: WARNING could not post {branch} -- {exc}")
+        return
+
+    print(f"qa-card: posted QA card -- {title}")
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -605,7 +940,17 @@ def main() -> None:
     ap.add_argument(
         "--commit", metavar="SHA", help="post this commit's Testing: section, if any"
     )
+    ap.add_argument(
+        "--branch",
+        metavar="NAME",
+        help="post one card for everything this branch ever merged "
+        "(what teardown runs; use it by hand for a --keep'd session)",
+    )
     args = ap.parse_args()
+
+    if args.branch:
+        post_branch_card(args.branch, dry_run=args.dry_run)
+        return
 
     targets = args.only or list(DOCS)
 
