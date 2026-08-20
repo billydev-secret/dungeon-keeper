@@ -11,6 +11,7 @@ from bot_modules.core.utils import (
     format_guild_for_log,
     format_user_for_log,
     is_host_or_mod,
+    is_mod_or_admin,
     safe_ephemeral,
     resolve_guild_for_log,
     resolve_user_for_log,
@@ -265,3 +266,73 @@ async def test_module_partials_carry_their_label():
     interaction = _send_interaction(responded=False)
     await _safe_ephemeral(interaction, "hi")
     interaction.response.send_message.assert_awaited_once_with("hi", ephemeral=True)
+
+
+# ── is_mod_or_admin ───────────────────────────────────────────────────
+#
+# The /games admin-command gate, formerly duplicated in games_config_cog and
+# games_external_cog. Wider than is_host_or_mod: manage_channels qualifies
+# here and deliberately does not there.
+
+
+def _predicate():
+    """Pull the check out of the decorator so it can be called directly."""
+
+    @is_mod_or_admin()
+    async def command(interaction):  # pragma: no cover - never invoked
+        ...
+
+    (check,) = command.__discord_app_commands_checks__
+    return check
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "perms",
+    [
+        pytest.param({"administrator": True}, id="administrator"),
+        pytest.param({"manage_guild": True}, id="manage_guild"),
+        pytest.param({"manage_channels": True}, id="manage_channels"),
+    ],
+)
+async def test_each_elevated_perm_qualifies(perms):
+    member = MagicMock(spec=discord.Member)
+    member.guild_permissions = SimpleNamespace(
+        **{"administrator": False, "manage_guild": False, "manage_channels": False, **perms}
+    )
+    assert await _predicate()(_interaction(member)) is True
+
+
+@pytest.mark.asyncio
+async def test_manage_channels_qualifies_here_but_not_for_a_game_host():
+    """The one perm that separates this gate from is_host_or_mod.
+
+    Both rules have one definition now; this pins the difference between
+    them so a later tidy-up can't quietly merge them.
+    """
+    member = MagicMock(spec=discord.Member)
+    member.guild_permissions = SimpleNamespace(
+        administrator=False, manage_guild=False, manage_channels=True
+    )
+    interaction = _interaction(member)
+    assert await _predicate()(interaction) is True
+    assert is_host_or_mod(interaction, HOST_ID) is False
+
+
+@pytest.mark.asyncio
+async def test_plain_member_is_refused_by_the_admin_gate():
+    member = MagicMock(spec=discord.Member)
+    member.guild_permissions = SimpleNamespace(
+        administrator=False, manage_guild=False, manage_channels=False
+    )
+    assert await _predicate()(_interaction(member)) is False
+
+
+@pytest.mark.asyncio
+async def test_refused_outside_a_guild_and_for_a_non_member():
+    member = MagicMock(spec=discord.Member)
+    member.guild_permissions = SimpleNamespace(administrator=True, manage_guild=True)
+    assert await _predicate()(_interaction(member, in_guild=False)) is False
+
+    user = MagicMock(spec=discord.User)
+    assert await _predicate()(_interaction(user)) is False

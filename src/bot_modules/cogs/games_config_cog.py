@@ -14,6 +14,7 @@ from bot_modules.games_config.embeds import (
     build_game_status_embed,
 )
 from bot_modules.games_config.logic import has_mod_or_admin_permissions
+from bot_modules.core.utils import is_mod_or_admin
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.command_groups import games
 from bot_modules.games.utils.game_manager import (
@@ -25,13 +26,6 @@ from bot_modules.games.utils.game_manager import (
 
 log = logging.getLogger(__name__)
 
-
-def is_mod_or_admin():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if not interaction.guild or not isinstance(interaction.user, discord.Member):
-            return False
-        return has_mod_or_admin_permissions(interaction.user.guild_permissions)
-    return app_commands.check(predicate)
 
 
 class GamesConfigCog(commands.Cog):

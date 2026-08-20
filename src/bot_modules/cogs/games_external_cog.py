@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
 
 import discord
-from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot_modules.economy.game_rewards import (
@@ -28,7 +27,6 @@ from bot_modules.economy.game_rewards import (
     pay_game_rewards,
     resolve_named_scores,
 )
-from bot_modules.games_config.logic import has_mod_or_admin_permissions
 from bot_modules.games_external import logic, parser
 from bot_modules.services.event_echo_service import echo_gamebot_lobby
 
@@ -47,14 +45,6 @@ def _load_catcatch_tier_coins(db_path, guild_id: int) -> dict[str, int]:
         for tier in ("common", "uncommon", "rare", "epic", "mythic", "divine")
     }
 
-
-def is_mod_or_admin():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if not interaction.guild or not isinstance(interaction.user, discord.Member):
-            return False
-        return has_mod_or_admin_permissions(interaction.user.guild_permissions)
-
-    return app_commands.check(predicate)
 
 
 class GamesExternalCog(commands.Cog):

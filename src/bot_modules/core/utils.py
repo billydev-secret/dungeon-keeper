@@ -6,6 +6,9 @@ import logging
 from typing import TypeAlias
 
 import discord
+from discord import app_commands
+
+from bot_modules.games_config.logic import has_mod_or_admin_permissions
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +70,24 @@ def is_host_or_mod(interaction: discord.Interaction, host_id: int) -> bool:
         perms = interaction.user.guild_permissions
         return perms.administrator or perms.manage_guild
     return False
+
+
+def is_mod_or_admin():
+    """``app_commands.check`` gating the /games admin commands.
+
+    A third rule again, wider than ``is_host_or_mod`` above: it accepts
+    ``manage_channels`` as well, because the commands it guards are about
+    which channels games may run in — the perm that says "you arrange this
+    server's rooms" is the one that ought to say where games live. Kept
+    separate from the host gate on purpose; widening that to match this
+    would hand any channel manager control of other people's live games.
+    """
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return False
+        return has_mod_or_admin_permissions(interaction.user.guild_permissions)
+
+    return app_commands.check(predicate)
 
 
 def get_interaction_member(interaction: discord.Interaction) -> discord.Member | None:
