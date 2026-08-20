@@ -646,6 +646,18 @@ def branch_from_merge_subject(subject: str) -> str | None:
     return name.rstrip(":").strip() or None
 
 
+def branch_alias(name: str) -> str:
+    """The form two spellings of one branch name have in common.
+
+    ``dk_session.normalize_name`` folds ``/`` and ``_`` to ``-`` and lowercases,
+    so ``dk_session.py teardown`` hands over ``fix-quote-spacing`` while the
+    merge subject on main still says ``Merge branch 'fix/quote-spacing'``.
+    Comparing the folded forms matches either spelling, and keying the card on
+    it stops the two spellings opening two cards.
+    """
+    return re.sub(r"[/_]", "-", name.strip()).casefold()
+
+
 def branch_merges(branch: str) -> list[str]:
     """Every first-parent merge of ``branch`` into the current history, oldest first.
 
@@ -659,25 +671,37 @@ def branch_merges(branch: str) -> list[str]:
         "log", "--first-parent", "--merges", f"-n{MERGE_SCAN_DEPTH}",
         "--format=%H%x1f%s", "HEAD",
     )
-    wanted = branch.strip().casefold()
+    wanted = branch_alias(branch)
     shas: list[str] = []
     for line in (out or "").splitlines():
         sha, _, subject = line.partition("\x1f")
         found = branch_from_merge_subject(subject)
-        if found and found.casefold() == wanted:
+        if found and branch_alias(found) == wanted:
             shas.append(sha.strip())
     shas.reverse()
     return shas
 
 
-def branch_checklists(branch: str) -> list[tuple[str, str, str]]:
-    """``(short sha, subject, checklist)`` for everything ``branch`` ever landed.
+def branch_checklists(
+    branch: str, after: str | None = None
+) -> list[tuple[str, str, str]]:
+    """``(short sha, subject, checklist)`` for everything ``branch`` landed.
 
     Each of the branch's merges is expanded to its branch-side commits by
     ``merged_commits``, and the ones carrying a ``Testing:`` section are kept
     in the order they were written. A commit that ships twice (a rebase replay
     landing under a new sha, or a branch merged forward again) contributes its
     checklist once -- identical (subject, checklist) pairs collapse.
+
+    ``after`` is the short sha the branch's previous card already covered;
+    everything up to and including it is dropped. Two things need that bound.
+    A ``--keep``'d session can have its card posted by hand and then ship more
+    work, and without the bound the second card would repeat the first's steps
+    on top of the new ones. And branch names are reusable -- nothing stops a
+    second ``/dk-feature survivor review`` months later -- so an unbounded walk
+    of the merge subjects would rake a previous incarnation's long-verified
+    checklists into a brand-new feature's card, where the item cap could then
+    drop the checks that are actually new.
     """
     seen: set[tuple[str, str]] = set()
     out: list[tuple[str, str, str]] = []
@@ -692,6 +716,10 @@ def branch_checklists(branch: str) -> list[tuple[str, str, str]]:
             seen.add((subject, checklist))
             short = (git("rev-parse", "--short", sha) or sha[:8]).strip()
             out.append((short, subject, checklist))
+    if after:
+        for index, (short, _subject, _checklist) in enumerate(out):
+            if short == after:
+                return out[index + 1 :]
     return out
 
 
@@ -803,7 +831,11 @@ def rewrite_card(
     )
     payload = {
         "model": REWRITE_MODEL,
-        "max_tokens": 4000,
+        # Opus 5 thinks by default and those tokens count against max_tokens
+        # while never coming back in the reply, so a tight budget truncates the
+        # JSON and silently drops the whole rewrite. 16k is the SDK's own
+        # non-streaming default and leaves the card's few hundred tokens room.
+        "max_tokens": 16000,
         # A rewrite is not a reasoning task; low effort keeps it quick and cheap.
         "output_config": {"effort": "low"},
         "system": REWRITE_SYSTEM,
@@ -835,6 +867,10 @@ def rewrite_card(
         print(f"qa-card: WARNING rewrite unavailable, posting raw -- {exc}")
         return None
 
+    if body.get("stop_reason") == "max_tokens":
+        print("qa-card: WARNING rewrite hit max_tokens, posting raw")
+        return None
+
     text = "".join(
         block.get("text", "")
         for block in body.get("content", [])
@@ -859,35 +895,45 @@ def rewrite_card(
     return title[:60], checklist
 
 
+def previous_card_sha(
+    conn: sqlite3.Connection, guild_id: int, key: str
+) -> str | None:
+    """The commit the branch's last posted card already covered, if any."""
+    row = conn.execute(
+        """
+        SELECT commit_sha FROM qa_tests
+        WHERE guild_id = ? AND entry_key = ? AND message_id IS NOT NULL
+        ORDER BY id DESC LIMIT 1
+        """,
+        (guild_id, key),
+    ).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
 def post_branch_card(branch: str, *, dry_run: bool) -> None:
     """Post the one QA card for a feature branch. Called at session teardown.
 
-    Everything the branch ever landed is gathered, deduped, rewritten into one
-    plainly-worded checklist and posted as a single card keyed on the branch
-    name. Nothing posts if the branch landed no ``Testing:`` sections -- a
-    refactor, a docs pass or a dep bump earns no card by design.
+    Everything the branch landed since its last card is gathered, deduped,
+    rewritten into one plainly-worded checklist and posted as a single card
+    keyed on the branch name. Nothing posts if the branch landed no ``Testing:``
+    sections -- a refactor, a docs pass or a dep bump earns no card by design --
+    and nothing posts if a card already covers all of them, which is what makes
+    a teardown re-run a no-op.
 
     Contained like the rest of the hook paths: any DB or REST failure prints a
     warning and returns, because teardown must not fail over a card.
     """
     branch = branch.strip()
-    entries = branch_checklists(branch)
-    if not entries:
-        if dry_run:
-            print(f"{branch}: no Testing: sections in anything it merged")
-        return
-
-    rewritten = None if dry_run else rewrite_card(branch, entries)
-    if rewritten is None:
-        title, body = humanize_branch(branch), raw_branch_body(entries)
-    else:
-        title, body = rewritten
-
-    latest_sha = entries[-1][0]
+    key = branch_alias(branch)
 
     if dry_run:
+        entries = branch_checklists(branch)
+        if not entries:
+            print(f"{branch}: no Testing: sections in anything it merged")
+            return
+        title, body = humanize_branch(branch), raw_branch_body(entries)
         print(f"{branch}: {len(entries)} checklist(s) -> 1 card")
-        print(f"  title: {title}")
+        print(f"  title: {title}   (unrewritten — a dry run makes no API call)")
         for line in body.splitlines():
             print(f"  {line}")
         return
@@ -904,12 +950,32 @@ def post_branch_card(branch: str, *, dry_run: bool) -> None:
             print("qa-card: WARNING channel has no guild -- posting plain text")
             conn.close()
             conn = None
+
+        # Only what no card covers yet. Without a DB there is nothing to read
+        # the bound from, and the degraded text path posts the lot.
+        covered = previous_card_sha(conn, guild_id, key) if conn is not None else None
+        entries = branch_checklists(branch, after=covered)
+        if not entries:
+            if conn is not None:
+                conn.close()
+            print(f"qa-card: nothing new to test on {branch}")
+            return
+
+        rewritten = rewrite_card(branch, entries)
+        if rewritten is None:
+            title, body = humanize_branch(branch), raw_branch_body(entries)
+        else:
+            title, body = rewritten
+        latest_sha = entries[-1][0]
+
         if conn is not None:
             test_id = insert_qa_test(
-                conn, guild_id, branch.casefold(), title, body, latest_sha, branch,
+                conn, guild_id, key, title, body, latest_sha, branch,
             )
             if qa_test_message_id(conn, test_id):
-                # Already posted -- a teardown re-run, not a second ship.
+                # Belt and braces: the ``covered`` bound above already makes a
+                # re-run a no-op, but a row that exists with its message
+                # already posted must never post a second one.
                 print(f"qa-card: {branch} already has a card, nothing to do")
                 conn.close()
                 return
@@ -928,6 +994,7 @@ def post_branch_card(branch: str, *, dry_run: bool) -> None:
         return
 
     print(f"qa-card: posted QA card -- {title}")
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()

@@ -345,7 +345,9 @@ that off unless you fully control the network path.
   python scripts/post_testing_docs.py --branch <name>             # post it
   ```
   `--commit <sha>` does the same for a single commit that landed straight on
-  main. Both are idempotent: a branch whose card is already posted is a no-op.
+  main. Only `--branch` is idempotent — it posts nothing when a card already
+  covers everything the branch merged. Re-running `--commit` on the same sha
+  reuses the DB row but posts a *second* Discord card, orphaning the first.
 - **Handy maintenance scripts** (all in `scripts/`):
   - `refresh_dev_db.py --no-fixtures` — rebuild the dev DB from prod without
     seeding fixture data.

@@ -334,3 +334,44 @@ posts; run `--branch` by hand. A branch bundling unrelated work (`todo-triage`)
 produces one card covering all of it, which is inherent to keying on the branch.
 Branch names like `worktree-agent-acee91a4…` make poor card titles, but the
 rewrite supplies its own title, so only the fallback path shows the slug.
+
+### Review fixes (same day)
+
+`/code-review` on the stage found eight things; six were real.
+
+- **The merge walk had no lower bound.** It matched branch names across all of
+  main's history, so a reused branch name — nothing stops a second
+  `/dk-feature survivor review` months later — would rake the first
+  incarnation's long-verified checklists into a new feature's card, where the
+  8-item cap could then drop the checks that were actually new. The same gap
+  broke the documented `--keep` workflow concretely: card posted by hand, more
+  work shipped, teardown posts a *second* card repeating the first's steps.
+  `branch_checklists(branch, after=...)` now stops at the sha the branch's last
+  posted card already covered, read from `qa_tests`. That makes a re-run a true
+  no-op and makes a genuine second card carry only what is new.
+- **Teardown passed the *normalized* name** (`normalize_name` folds `/` and `_`
+  to `-`), which could never match a merge subject naming the real branch, so
+  `fix/quote-spacing` would silently earn no card. Matching and keying now go
+  through `branch_alias`, which folds both sides.
+- **`max_tokens` was 4000** while Opus 5 thinks by default and those tokens
+  count against the budget without coming back — a long branch could truncate
+  the JSON and fall back to exactly the raw text this stage exists to remove.
+  Raised to 16000, and a `stop_reason: "max_tokens"` reply now bails explicitly
+  instead of half-parsing.
+- **A mistyped `--cutoff` was destructive.** The comparison is lexicographic, so
+  `2026-7-21` (unpadded, a plausible typo) sorts *above* every real `2026-08-…`
+  timestamp and would have selected the entire live queue for archiving. Note
+  that `strptime` alone does not catch it — it accepts unpadded months happily;
+  the round trip through `strftime` is what enforces the format.
+- **A failed card was invisible.** `/dk-ship` launches teardown with
+  `>/dev/null 2>&1`, so neither the success line nor a traceback ever reached a
+  screen. `qa_card_log` appends every attempt to `.git/qa-card.log`.
+- **`DEPLOYMENT.md` claimed both recovery commands were idempotent.** Only
+  `--branch` is; re-running `--commit` posts a second card and orphans the
+  first. Doc corrected rather than the behaviour, which is deliberate.
+
+Two findings did not hold up. The report claimed a live button on an archived
+card could still record a paid verdict — `qa_service.record_verdict` raises on
+an archived test (`qa_service.py:379`), so it cannot. And branch-name reuse had
+no historical instance; it was fixed anyway because the bound it needed is the
+same one the `--keep` bug needed.

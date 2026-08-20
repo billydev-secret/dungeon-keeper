@@ -33,11 +33,33 @@ import post_testing_docs as ptd  # noqa: E402  (path shim above must run first)
 DEFAULT_CUTOFF = "2026-07-21"
 
 
+def valid_cutoff(text: str) -> str:
+    """``YYYY-MM-DD`` or an argparse error.
+
+    The comparison below is lexicographic, which makes a plausible typo
+    destructive rather than merely wrong: ``2026-7-21`` (no zero pad) sorts
+    *above* every real ``2026-08-…`` timestamp at the sixth character, so the
+    query would select the entire live queue and --apply would archive it.
+    """
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        parsed = None
+    # strptime itself is lenient about zero-padding -- it accepts "2026-7-21"
+    # happily -- so the round trip, not the parse, is what enforces the format.
+    if parsed is None or parsed.strftime("%Y-%m-%d") != text:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a zero-padded YYYY-MM-DD date"
+        )
+    return text
+
+
 def stale_pending(conn, cutoff: str) -> list[dict]:
     """Pending, verdict-free cards created on or before ``cutoff``.
 
     ``created_at`` is a UTC ISO timestamp, so a plain string comparison
-    against ``<date>T23:59:59`` covers the whole cutoff day.
+    against ``<date>T23:59:59`` covers the whole cutoff day — sound only
+    because ``valid_cutoff`` has already rejected an unpadded date.
     """
     conn.row_factory = __import__("sqlite3").Row
     rows = conn.execute(
@@ -87,7 +109,9 @@ def retire_message(row: dict, tok: str) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cutoff", default=DEFAULT_CUTOFF, metavar="YYYY-MM-DD")
+    ap.add_argument(
+        "--cutoff", default=DEFAULT_CUTOFF, type=valid_cutoff, metavar="YYYY-MM-DD"
+    )
     ap.add_argument("--apply", action="store_true", help="actually archive")
     args = ap.parse_args()
 

@@ -977,6 +977,23 @@ def cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def qa_card_log(main_repo: Path, branch: str, output: str) -> None:
+    """Append the card attempt to ``.git/qa-card.log``.
+
+    /dk-ship launches teardown with ``>/dev/null 2>&1``, so neither the success
+    line nor a traceback ever reaches a screen — a feature's only card could
+    fail to post and nothing would say so. The log is the one durable record;
+    it lives in .git so it is never committed and never seen by a worktree.
+    """
+    try:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        body = output.strip() or "(no output)"
+        with (main_repo / ".git" / "qa-card.log").open("a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {branch}: {body}\n")
+    except OSError:
+        pass  # a log that cannot be written must not fail a teardown either
+
+
 def post_qa_card(main_repo: Path, branch: str) -> None:
     """Post the branch's QA card — one card for the whole feature.
 
@@ -999,11 +1016,17 @@ def post_qa_card(main_repo: Path, branch: str) -> None:
             [sys.executable, str(script), "--branch", branch],
             cwd=str(main_repo), capture_output=True, text=True, timeout=300,
         )
+        output = "\n".join(
+            part.strip() for part in (res.stdout, res.stderr) if part and part.strip()
+        )
+        if res.returncode != 0:
+            output = f"{output}\nposter exited {res.returncode}".strip()
     except (OSError, subprocess.SubprocessError) as exc:
-        print(f"qa card: skipped — {exc}", file=sys.stderr)
-        return
-    for line in (res.stdout or "").strip().splitlines():
-        print(line)
+        output = f"skipped — {exc}"
+
+    for line in output.splitlines():
+        print(line, file=sys.stderr if "skipped" in line else sys.stdout)
+    qa_card_log(main_repo, branch, output)
 
 
 def cmd_teardown(args: argparse.Namespace) -> int:

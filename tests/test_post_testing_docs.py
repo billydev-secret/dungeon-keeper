@@ -517,6 +517,103 @@ def test_dry_run_posts_nothing_and_never_calls_the_rewrite(
 # ── the rewrite: best-effort, and the raw checklists when it isn't there ──
 
 
+def test_a_second_card_carries_only_what_the_first_did_not(
+    mod, monkeypatch, qa_db
+) -> None:
+    """The --keep escape hatch: card posted by hand, then the branch ships again.
+
+    Without a bound the second card would repeat the first's steps on top of
+    the new ones — and the same bound is what stops a reused branch name
+    raking a previous incarnation's long-verified checklists into a new card.
+    """
+    wire_branch(mod, monkeypatch, qa_db, merges=TWO_MERGES)
+    mod.post_branch_card(BRANCH, dry_run=False)
+
+    three = "m3\x1fMerge branch 'widget'\n" + TWO_MERGES
+    later = {
+        ("log", "-1", "--format=%P", "m3"): "m2 b3",
+        ("rev-list", "--reverse", "--no-merges", "m2..m3"): "c3\n",
+        ("log", "-1", "--format=%B", "c3"): (
+            f"{SUBJECT_3}\n\nWhy.\n\nTesting:\n- [ ] buff it\n"
+        ),
+        ("log", "-1", "--format=%s", "c3"): SUBJECT_3,
+        ("rev-parse", "--short", "c3"): "c3c3c3c",
+    }
+    wire_branch(mod, monkeypatch, qa_db, merges=three, extra=later)
+    mod.post_branch_card(BRANCH, dry_run=False)
+
+    first, second = rows(qa_db)
+    assert "check it" in first["body_md"] and "spin it" in first["body_md"]
+    assert second["body_md"].count("buff it") == 1
+    assert "check it" not in second["body_md"]
+    assert "spin it" not in second["body_md"]
+    assert second["commit_sha"] == "c3c3c3c"
+
+
+def test_a_reship_of_already_carded_work_posts_nothing(
+    mod, monkeypatch, qa_db
+) -> None:
+    """Same merges, run again: everything is covered, so no second card."""
+    wire_branch(mod, monkeypatch, qa_db, merges=TWO_MERGES)
+    mod.post_branch_card(BRANCH, dry_run=False)
+    calls = wire_branch(mod, monkeypatch, qa_db, merges=TWO_MERGES)
+    mod.post_branch_card(BRANCH, dry_run=False)
+
+    assert len(rows(qa_db)) == 1
+    assert message_posts(mod, calls) == []
+
+
+def test_a_slashed_branch_matches_its_normalized_name(
+    mod, monkeypatch, qa_db
+) -> None:
+    """teardown hands over the normalized name; the merge subject has the real one.
+
+    ``normalize_name`` folds ``/`` and ``_`` to ``-``, so without matching on
+    the folded form a branch like ``fix/quote-spacing`` would silently earn no
+    card at all.
+    """
+    merges = "m1\x1fMerge branch 'fix/quote_spacing'\n"
+    wire_branch(mod, monkeypatch, qa_db, merges=merges)
+
+    mod.post_branch_card("fix-quote-spacing", dry_run=False)
+
+    (row,) = rows(qa_db)
+    assert row["entry_key"] == "fix-quote-spacing"
+    assert "check it" in row["body_md"]
+
+
+def test_rewrite_gives_up_when_thinking_ate_the_budget(mod, monkeypatch) -> None:
+    """A max_tokens stop truncates the JSON — fall back rather than half-parse."""
+    monkeypatch.setattr(mod, "env_value", lambda _k: "sk-test")
+
+    class Resp:
+        def read(self):
+            return json.dumps(
+                {"stop_reason": "max_tokens", "content": [{"type": "text", "text": "{"}]}
+            ).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda *a, **k: Resp())
+    assert mod.rewrite_card(BRANCH, [("a1", SUBJECT, "- [ ] x")]) is None
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        pytest.param("fix/quote_spacing", "fix-quote-spacing", id="slash-underscore"),
+        pytest.param("Survivor-Review", "survivor-review", id="case"),
+        pytest.param("  widget  ", "widget", id="whitespace"),
+    ],
+)
+def test_branch_alias(mod, name, expected) -> None:
+    assert mod.branch_alias(name) == expected
+
+
 def test_rewrite_result_becomes_the_card(mod, monkeypatch, qa_db) -> None:
     wire_branch(mod, monkeypatch, qa_db, merges=TWO_MERGES)
     monkeypatch.setattr(
