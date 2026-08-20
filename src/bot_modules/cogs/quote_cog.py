@@ -24,7 +24,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.services.quote_renderer import (
     BORDERS,
     CUSTOM_BORDER_KEY,
@@ -73,7 +73,7 @@ async def _resolve_brand_theme(
     """
     if guild is None:
         return THEMES["golden_meadow"]
-    color = await resolve_accent_color(bot.ctx.db_path, guild)
+    color = await safe_resolve_accent(bot, guild, log_label="quote", default=DEFAULT_ACCENT_COLOR)
     return theme_from_accent((color.r, color.g, color.b))
 
 

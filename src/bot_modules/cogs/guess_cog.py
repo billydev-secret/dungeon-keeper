@@ -21,7 +21,7 @@ from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.duels.filters import contains_disallowed_content
@@ -1141,7 +1141,7 @@ class CropEditorView(discord.ui.View):
         crop_file = discord.File(io.BytesIO(crop_bytes), filename="SPOILER_guess_crop.jpg")
         game_view = GameView(self.bot, round_id)
         self.bot.add_view(game_view)
-        accent = await resolve_accent_color(db_path, interaction.guild)
+        accent = await safe_resolve_accent(db_path, interaction.guild, log_label="guess")
         game_msg = await guess_channel.send(
             content=None,
             embed=_game_embed(round_id, color=accent),
@@ -1576,7 +1576,7 @@ class ConfessionPreviewView(discord.ui.View):
         card_file = discord.File(io.BytesIO(card_bytes), filename="SPOILER_guess_confession.jpg")
         game_view = GameView(self._bot, round_id)
         self._bot.add_view(game_view)
-        accent = await resolve_accent_color(db_path, interaction.guild)
+        accent = await safe_resolve_accent(db_path, interaction.guild, log_label="guess")
         game_msg = await guess_channel.send(
             content=None,
             embed=_game_embed(round_id, color=accent),
@@ -1792,7 +1792,7 @@ class GuessCog(commands.Cog):
             )
 
     async def _build_prompt_panel(self, guild: discord.Guild) -> PanelContent:
-        accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="guess")
         return PanelContent(
             embed=_prompt_embed(color=accent), view=GuessPromptView(self.bot)
         )
@@ -2025,7 +2025,7 @@ class GuessCog(commands.Cog):
         else:
             status = "⏳ Open"
 
-        accent = await resolve_accent_color(db_path, interaction.guild)
+        accent = await safe_resolve_accent(db_path, interaction.guild, log_label="guess")
         embed = discord.Embed(
             title=f"🔍 Round #{round_row.id} — inspector",
             color=accent,
@@ -2287,7 +2287,7 @@ class GuessCog(commands.Cog):
             if guessers else "_No rounds solved yet._"
         )
 
-        accent = await resolve_accent_color(db_path, interaction.guild)
+        accent = await safe_resolve_accent(db_path, interaction.guild, log_label="guess")
         embed = discord.Embed(title="🏆 Guess Leaderboard", color=accent)
         embed.add_field(name="Top Posters", value=poster_text, inline=False)
         embed.add_field(name="Top Guessers", value=guesser_text, inline=False)

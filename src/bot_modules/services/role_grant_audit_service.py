@@ -646,7 +646,7 @@ async def refresh_grant_audit_card(
     grant config or role also clears it (the card can't render sensibly).
     Any other Discord error leaves the ref for the next tick.
     """
-    from bot_modules.core.branding import resolve_accent_color
+    from bot_modules.core.branding import safe_resolve_accent
     from bot_modules.core.db_utils import get_grant_roles, open_db
 
     now = now_ts if now_ts is not None else time.time()
@@ -694,7 +694,7 @@ async def refresh_grant_audit_card(
 
     gathered = await asyncio.to_thread(_gather)
     snap = resolve_grant_audit_buckets(guild, role, gathered, ref.min_level, now)
-    accent = await resolve_accent_color(db_path, guild)
+    accent = await safe_resolve_accent(db_path, guild, log_label="role grant audit")
     embed = build_grant_audit_embed(str(cfg["label"]), snap, now_ts=now, color=accent)
 
     def _save(new_message_id: int) -> None:
@@ -796,7 +796,6 @@ async def place_grant_audit_card(
 
     import discord
 
-    from bot_modules.core.branding import resolve_accent_color
 
     cfg = ctx.guild_config(guild.id).grant_roles.get(role_key)
     if cfg is None or cfg["role_id"] <= 0:
@@ -822,9 +821,11 @@ async def place_grant_audit_card(
                 gather_grant_audit(conn, guild_id, role_id, min_level, role_name),
             )
 
+    from bot_modules.core.branding import safe_resolve_accent
+
     ref, gathered = await asyncio.to_thread(_load)
     snap = resolve_grant_audit_buckets(guild, role, gathered, min_level, now_ts)
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="role grant audit")
     embed = build_grant_audit_embed(cfg["label"], snap, now_ts=now_ts, color=accent)
 
     message = None

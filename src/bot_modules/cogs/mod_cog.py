@@ -12,7 +12,7 @@ from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.settings import AUTO_DELETE_SETTINGS
 from bot_modules.services.replies import NO_PERMISSION
@@ -474,7 +474,7 @@ class ModCog(commands.Cog):
     async def help_command(self, interaction: discord.Interaction) -> None:
         accent = None
         if interaction.guild is not None:
-            accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+            accent = await safe_resolve_accent(self.ctx, interaction.guild, log_label="mod")
         pages = _build_help_pages(self.ctx, interaction, accent)
         view = HelpView(
             pages, invoker_id=interaction.user.id, bot=self.bot, color=accent

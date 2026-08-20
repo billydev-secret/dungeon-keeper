@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import discord
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.dm_perms.embeds import (
@@ -593,7 +593,7 @@ class DmSettingsView(discord.ui.View):
 
     async def _embed(self) -> discord.Embed:
         guild = self.member.guild
-        accent = await resolve_accent_color(self.cog.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.cog.ctx, guild, log_label="dm perms")
         return build_dm_settings_embed(
             self._current_mode(),
             guild.icon.url if guild.icon else None,
@@ -987,7 +987,7 @@ class DmPermsCog(commands.Cog):
         return int(ch) if ch else None
 
     async def _post_audit(self, guild: discord.Guild, message: str) -> None:
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="dm perms")
         await post_audit_event(
             guild, self._audit_channel_for(guild.id), message, color=accent
         )
@@ -1112,7 +1112,7 @@ class DmPermsCog(commands.Cog):
             await interaction.response.defer(ephemeral=True)
 
         type_label = request_type_label(req_type)
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="dm perms")
         embed = build_request_dm_embed(
             guild_name=guild.name,
             requester_display_name=requester.display_name,
@@ -1196,7 +1196,7 @@ class DmPermsCog(commands.Cog):
         )
 
     async def _build_panel(self, guild: discord.Guild) -> PanelContent:
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="dm perms")
         return PanelContent(
             embed=build_panel_embed(
                 color=accent, role_names=self._mode_role_names_for(guild)

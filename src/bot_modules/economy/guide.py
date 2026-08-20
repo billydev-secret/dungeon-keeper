@@ -29,7 +29,7 @@ from functools import partial
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.economy.leaderboard import _pad
 from bot_modules.economy.logic import resolve_notify_toggle
 from bot_modules.services.economy_service import load_econ_settings
@@ -215,7 +215,7 @@ class HowItWorksButton(discord.ui.Button):
                 return load_econ_settings(conn, guild.id)
 
         settings = await asyncio.to_thread(_read)
-        accent = await resolve_accent_color(bot.ctx.db_path, guild)
+        accent = await safe_resolve_accent(bot, guild, log_label="guide")
         embed = build_guide_embed(settings, color=accent)
         try:
             await interaction.response.send_message(embed=embed, ephemeral=True)

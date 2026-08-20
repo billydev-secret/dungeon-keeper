@@ -5,7 +5,7 @@ from pathlib import Path
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.embeds import COLOR_GREEN
 from bot_modules.services.message_store import get_known_user_names_bulk
@@ -27,16 +27,9 @@ async def resolve_embed_accent(guild: "discord.Guild | None") -> "discord.Color 
     resolution errors — the caller then falls back to the old state color.
     Never raises: a game embed must render even if branding lookup fails.
     """
-    if guild is None:
-        return None
-    db_path = getattr(app_state.store, "db_path", None)
-    if db_path is None:
-        return None
-    try:
-        return await resolve_accent_color(db_path, guild)
-    except Exception:
-        log.debug("risky_roll: accent resolve failed; using fallback color", exc_info=True)
-        return None
+    return await safe_resolve_accent(
+        getattr(app_state, "store", None), guild, log_label="risky roll"
+    )
 
 def make_name_resolver(guild: "discord.Guild | None") -> NameFn:
     """Return a resolver that prints display names as plain text.

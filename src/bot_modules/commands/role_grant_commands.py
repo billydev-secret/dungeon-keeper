@@ -231,7 +231,7 @@ async def _execute_grant_audit_post(
     the card (deleting the stale one when reachable), and the hourly
     ``grant_audit_card_loop`` keeps whichever message is stored fresh.
     """
-    from bot_modules.core.branding import resolve_accent_color
+    from bot_modules.core.branding import safe_resolve_accent
     from bot_modules.services.role_grant_audit_service import (
         build_grant_audit_embed,
         gather_grant_audit,
@@ -292,7 +292,7 @@ async def _execute_grant_audit_post(
 
     ref, gathered = await asyncio.to_thread(_load)
     snap = resolve_grant_audit_buckets(guild, role, gathered, min_level, now_ts)
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="role grant")
     embed = build_grant_audit_embed(cfg["label"], snap, now_ts=now_ts, color=accent)
 
     message: discord.Message | None = None

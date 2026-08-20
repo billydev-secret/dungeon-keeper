@@ -76,7 +76,7 @@ from bot_modules.services.wellness_service import (
     login_digest_value as wellness_login_digest_value,
 )
 from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.utils import (
     format_guild_for_log,
@@ -1372,7 +1372,7 @@ class EventsCog(commands.Cog):
         # standalone wellness daily DM, and the public bank-channel
         # fallback carries the economy-only form, never the wellness
         # section.
-        accent = await resolve_accent_color(self.ctx.db_path, message.guild)
+        accent = await safe_resolve_accent(self.ctx, message.guild, log_label="events", default=DEFAULT_ACCENT_COLOR)
         embed = self._econ_login_embed(
             settings, outcome, prior_streak, quests_out, gains, accent,
             wellness_value=wellness_value,
@@ -1723,7 +1723,7 @@ class EventsCog(commands.Cog):
         if cfg.welcome_ping_member:
             ping_parts.append(member.mention)
         ping = " ".join(ping_parts) or None
-        accent = await resolve_accent_color(self.ctx.db_path, member.guild)
+        accent = await safe_resolve_accent(self.ctx, member.guild, log_label="events")
         try:
             await channel.send(
                 content=ping,
@@ -2060,7 +2060,7 @@ class EventsCog(commands.Cog):
         else:
             member_bio_link = ""
 
-        accent = await resolve_accent_color(self.ctx.db_path, member.guild)
+        accent = await safe_resolve_accent(self.ctx, member.guild, log_label="events")
         try:
             await channel.send(
                 embed=build_leave_embed(

@@ -20,7 +20,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, parse_bool
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.economy.leaderboard import (
@@ -1487,7 +1487,7 @@ class EconomyCog(commands.Cog):
         if await self._refuse_disabled(interaction, settings):
             return
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
         embed = build_wallet_embed(
             settings,
             balance=balance,
@@ -1560,7 +1560,7 @@ class EconomyCog(commands.Cog):
 
         credited = await asyncio.to_thread(_grant)
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
         embed = discord.Embed(
             title=f"{settings.currency_emoji} Currency Granted",
             description=(
@@ -1603,7 +1603,7 @@ class EconomyCog(commands.Cog):
 
         muted = await asyncio.to_thread(_toggle)
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
         embed = discord.Embed(
             title="🔔 Notifications Muted" if muted else "🔔 Notifications On",
             description=(
@@ -1664,7 +1664,7 @@ class EconomyCog(commands.Cog):
             return
 
         if amount > _PAY_CONFIRM_THRESHOLD:
-            accent = await resolve_accent_color(self.ctx.db_path, guild)
+            accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
             desc = (
                 f"Send {settings.currency_emoji} **{amount:,}** "
                 f"{_unit(settings, amount)} to {member.mention}?"
@@ -1724,7 +1724,7 @@ class EconomyCog(commands.Cog):
             await self._reply(interaction, text, via_confirm=via_confirm)
             return
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
         safe_memo = discord.utils.escape_markdown(memo) if memo else None
         desc = (
             f"{settings.currency_emoji} **{amount:,}** {_unit(settings, amount)} "
@@ -1779,7 +1779,7 @@ class EconomyCog(commands.Cog):
 
         gated = await self._gated_perks(guild.id)
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
         embed = build_shop_embed(
             settings,
             gated,
@@ -2087,7 +2087,7 @@ class EconomyCog(commands.Cog):
         # The money is already taken and the row exists; a card failure must
         # never surface as an error to the member (it's still resolvable from
         # the dashboard), so this is best-effort inside post_review_card.
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
         await post_review_card(
             self.bot,
             self.ctx,
@@ -2161,7 +2161,7 @@ class EconomyCog(commands.Cog):
 
         # Money's taken and the row exists; a card failure must never surface as
         # an error to the member (it's still resolvable), so it's best-effort.
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
         await post_pin_review_card(
             self.bot, self.ctx, guild, settings, accent, outcome.submission_id, member
         )
@@ -2240,7 +2240,7 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
             return
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
         await post_bounty_card(
             self.bot, self.ctx, guild, settings, accent, outcome.bounty_id
         )
@@ -3452,7 +3452,7 @@ class EconomyCog(commands.Cog):
         if await self._refuse_disabled(interaction, settings):
             return
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
         embed = build_quest_board_embed(settings, quests_state, color=accent)
         if not quests_state:
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -3613,7 +3613,7 @@ class EconomyCog(commands.Cog):
         else:
             # Sign-off trigger quest: the phrase files the claim; a manager
             # still approves the payout from the bank-channel card.
-            accent = await resolve_accent_color(self.ctx.db_path, guild)
+            accent = await safe_resolve_accent(self.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
             await post_signoff_card(
                 self.bot, self.ctx, guild, settings, accent,
                 int(outcome.claim_id), member,
@@ -3946,7 +3946,7 @@ class EconomyCog(commands.Cog):
         accent = (
             None
             if card_file is not None
-            else await resolve_accent_color(self.ctx.db_path, guild)
+            else await safe_resolve_accent(self.ctx, guild, log_label="economy")
         )
 
         content: str | None = None
@@ -4251,7 +4251,7 @@ class EconomyCog(commands.Cog):
                 return member.display_name
             return known.get(uid) or f"User {uid}"
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
         return PanelContent(
             embed=build_leaderboard_embed(
                 settings, data, _name, now_ts=now_ts, color=accent
@@ -4276,7 +4276,7 @@ class EconomyCog(commands.Cog):
         catalog / no colour palette.
         """
         gated = await self._gated_perks(guild.id)
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
         return build_shop_embed(
             settings, gated, accent, panel=True, icon_catalog=icon_range,
             color_catalog=color_range,

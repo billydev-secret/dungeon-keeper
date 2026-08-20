@@ -18,7 +18,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 from bot_modules.music_playlist import music_playlist_store as store
 from bot_modules.music_playlist.embeds import (
@@ -373,7 +373,7 @@ class MusicPlaylistCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        color = await resolve_accent_color(self.ctx.db_path, guild)
+        color = await safe_resolve_accent(self.ctx, guild, log_label="music playlist", default=DEFAULT_ACCENT_COLOR)
         rows = await asyncio.to_thread(
             self.window_rows, guild.id, settings.playlist_id
         )

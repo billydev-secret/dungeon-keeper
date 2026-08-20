@@ -32,7 +32,6 @@ import pytest
 
 from bot_modules.services.risky_roll import state
 from bot_modules.services import embeds as embed_colors
-from bot_modules.services.risky_roll import formatters
 from bot_modules.services.risky_roll.formatters import (
     build_embed,
     build_how_to_play_content,
@@ -67,6 +66,7 @@ from bot_modules.services.risky_roll.store import (
 )
 
 import discord
+from bot_modules.core import branding
 
 
 def _embed_field_map(embed: discord.Embed) -> dict[str, str]:
@@ -743,7 +743,7 @@ async def test_resolve_embed_accent_resolves_via_branding(monkeypatch):
         return _ACCENT
 
     monkeypatch.setattr(state, "store", _Store(), raising=False)
-    monkeypatch.setattr(formatters, "resolve_accent_color", _fake_resolve)
+    monkeypatch.setattr(branding, "resolve_accent_color", _fake_resolve)
     assert await resolve_embed_accent(object()) == _ACCENT
 
 
@@ -755,7 +755,7 @@ async def test_resolve_embed_accent_swallows_errors(monkeypatch):
         raise RuntimeError("branding blew up")
 
     monkeypatch.setattr(state, "store", _Store(), raising=False)
-    monkeypatch.setattr(formatters, "resolve_accent_color", _boom)
+    monkeypatch.setattr(branding, "resolve_accent_color", _boom)
     # A branding failure must never crash a game — accent falls back to None.
     assert await resolve_embed_accent(object()) is None
 

@@ -27,7 +27,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import get_guild_channel_or_thread, jump_url
 from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import (
@@ -201,7 +201,7 @@ class NoContactCog(commands.Cog):
             tag = " *(set by a moderator)*" if row["protected_user_id"] is None else ""
             lines.append(f"• **{name}**{tag}")
 
-        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        accent = await safe_resolve_accent(self.ctx, interaction.guild, log_label="no contact")
         embed = discord.Embed(
             title="Your no-contact list",
             description="\n".join(lines),
@@ -277,7 +277,7 @@ class NoContactCog(commands.Cog):
         )
         if channel is None:
             return
-        accent = await resolve_accent_color(self.ctx.db_path, message.guild)
+        accent = await safe_resolve_accent(self.ctx, message.guild, log_label="no contact")
         for alert in alerts:
             await self._post_alert(message, alert, channel, settings, accent)
 

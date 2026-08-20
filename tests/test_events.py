@@ -677,7 +677,7 @@ def _patch_join_deps():
         ),
         patch("bot_modules.cogs.events_cog.build_welcome_embed", return_value="<embed>"),
         patch(
-            "bot_modules.cogs.events_cog.resolve_accent_color",
+            "bot_modules.core.branding.resolve_accent_color",
             new_callable=AsyncMock,
             return_value=discord.Color.blurple(),
         ),
@@ -690,7 +690,7 @@ def _patch_leave_deps():
         patch("bot_modules.cogs.events_cog.record_member_event"),
         patch("bot_modules.cogs.events_cog.build_leave_embed", return_value="<embed>"),
         patch(
-            "bot_modules.cogs.events_cog.resolve_accent_color",
+            "bot_modules.core.branding.resolve_accent_color",
             new_callable=AsyncMock,
             return_value=discord.Color.blurple(),
         ),
@@ -1165,7 +1165,7 @@ def _today() -> str:
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_disabled_is_noop(mock_notify, econ_db):
@@ -1179,7 +1179,7 @@ async def test_econ_disabled_is_noop(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_first_login_dms_daily_digest(mock_notify, econ_db):
@@ -1204,7 +1204,7 @@ async def test_econ_first_login_dms_daily_digest(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_repeat_same_day_no_second_login(mock_notify, econ_db):
@@ -1221,7 +1221,7 @@ async def test_econ_repeat_same_day_no_second_login(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_milestone_dms(mock_notify, econ_db):
@@ -1236,7 +1236,7 @@ async def test_econ_milestone_dms(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_grace_dms(mock_notify, econ_db):
@@ -1252,7 +1252,7 @@ async def test_econ_grace_dms(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_shield_consumed_dms_shield_copy(mock_notify, econ_db):
@@ -1281,7 +1281,7 @@ async def test_econ_shield_consumed_dms_shield_copy(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_grace_plus_shield_two_day_save(mock_notify, econ_db):
@@ -1298,7 +1298,7 @@ async def test_econ_grace_plus_shield_two_day_save(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_reset_below_three_omits_reset_field(mock_notify, econ_db):
@@ -1321,7 +1321,7 @@ async def test_econ_reset_below_three_omits_reset_field(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_reset_at_three_plus_dms(mock_notify, econ_db):
@@ -1337,7 +1337,7 @@ async def test_econ_reset_at_three_plus_dms(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_login_dm_includes_quest_recap(mock_notify, econ_db):
@@ -1369,7 +1369,7 @@ async def test_econ_login_dm_includes_quest_recap(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_reward_once_per_member(mock_notify, econ_db):
@@ -1389,7 +1389,7 @@ async def test_econ_qotd_reward_once_per_member(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_plain_message_earns_nothing(mock_notify, econ_db):
@@ -1404,7 +1404,7 @@ async def test_econ_qotd_plain_message_earns_nothing(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_stale_question_earns_nothing(mock_notify, econ_db):
@@ -1419,7 +1419,7 @@ async def test_econ_qotd_stale_question_earns_nothing(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_mod_tag_opens_the_question(mock_notify, econ_db):
@@ -1447,7 +1447,7 @@ async def test_econ_qotd_mod_tag_opens_the_question(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_tag_from_non_mod_opens_nothing(mock_notify, econ_db):
@@ -1463,7 +1463,7 @@ async def test_econ_qotd_tag_from_non_mod_opens_nothing(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_tag_registers_once(mock_notify, econ_db):
@@ -1514,7 +1514,7 @@ def _community_message(**kwargs):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_greeting_answered_fires_on_mention_of_pending_greeter(
@@ -1542,7 +1542,7 @@ async def test_econ_greeting_answered_fires_on_mention_of_pending_greeter(
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_greeting_answered_skips_resolved_greeting(mock_notify, econ_db):
@@ -1570,7 +1570,7 @@ async def test_econ_greeting_answered_skips_resolved_greeting(mock_notify, econ_
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_birthday_wish_targeted_and_phrase_paths(mock_notify, econ_db):
@@ -1609,7 +1609,7 @@ async def test_econ_birthday_wish_targeted_and_phrase_paths(mock_notify, econ_db
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_birthday_wish_never_fires_for_the_birthday_member(
@@ -1634,7 +1634,7 @@ async def test_econ_birthday_wish_never_fires_for_the_birthday_member(
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_birthday_wish_needs_an_announcement(mock_notify, econ_db):

@@ -34,6 +34,13 @@ log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
+#: What ``resolve_accent_color`` itself falls back to when a guild has no
+#: branding configured. Callers that need a non-optional ``discord.Color``
+#: pass this as ``safe_resolve_accent(..., default=DEFAULT_ACCENT_COLOR)``,
+#: so a branding failure renders the same color an unbranded guild gets
+#: rather than dropping the embed's accent bar entirely.
+DEFAULT_ACCENT_COLOR = discord.Color(DEFAULT_ACCENT)
+
 # guild_id -> (avatar_key, resolved_color) for avatar-derived accents.
 _avatar_cache: dict[int, tuple[str, discord.Color]] = {}
 
@@ -72,20 +79,40 @@ async def resolve_accent_color(db_path: Path, guild: discord.Guild) -> discord.C
     return color
 
 
+def _db_path_from(source: Any) -> Any:
+    """Find the branding DB path on whatever the caller happened to hold.
+
+    Call sites reach this helper from every layer of the bot and none of
+    them agree on what's in scope: a cog has ``self.bot``, a view has
+    ``self.ctx``, a service is handed a bare ``db_path``, and a dashboard
+    route has the app context. Rather than make 121 call sites each dig out
+    the same attribute — and re-introduce the ``bot.ctx`` AttributeError
+    that this helper exists to absorb — accept all three and look.
+    """
+    if isinstance(source, (str, Path)):
+        return source
+    ctx = getattr(source, "ctx", None)
+    if ctx is not None:
+        db_path = getattr(ctx, "db_path", None)
+        if db_path is not None:
+            return db_path
+    return getattr(source, "db_path", None)
+
+
 @overload
 async def safe_resolve_accent(
-    bot: Any, guild: discord.Guild | None, *, log_label: str = ...
+    source: Any, guild: discord.Guild | None, *, log_label: str = ...
 ) -> discord.Color | None: ...
 
 
 @overload
 async def safe_resolve_accent(
-    bot: Any, guild: discord.Guild | None, *, default: _T, log_label: str = ...
+    source: Any, guild: discord.Guild | None, *, default: _T, log_label: str = ...
 ) -> discord.Color | _T: ...
 
 
 async def safe_resolve_accent(
-    bot: Any,
+    source: Any,
     guild: discord.Guild | None,
     *,
     default: Any = None,
@@ -93,12 +120,16 @@ async def safe_resolve_accent(
 ) -> Any:
     """``resolve_accent_color`` for callers that would rather have a fallback.
 
-    Every game cog wants the same thing: the guild's accent if we can get
-    it, and something harmless if we can't — an embed is still worth
-    sending when its color bar isn't the branded one. This wraps the real
-    resolver so that a missing guild (a DM), a bot with no ``ctx`` yet
-    (early startup, or a test double), and a failed DB read all return
-    ``default`` instead of raising into an embed builder.
+    Every caller wants the same thing: the guild's accent if we can get it,
+    and something harmless if we can't — an embed is still worth sending
+    when its color bar isn't the branded one, and a dashboard page is worth
+    rendering. This wraps the real resolver so that a missing guild (a DM),
+    a bot with no ``ctx`` yet (early startup, or a test double), and a
+    failed DB read all return ``default`` instead of raising into an embed
+    builder, a background loop, or an HTTP handler.
+
+    ``source`` is whatever holds the DB path: a Bot, an AppContext, or the
+    path itself. See ``_db_path_from``.
 
     ``default`` is per-caller because the callers genuinely disagree: most
     pass ``None`` and let discord.py choose, while chicken, musical chairs
@@ -108,7 +139,7 @@ async def safe_resolve_accent(
     """
     if guild is None:
         return default
-    db_path = getattr(getattr(bot, "ctx", None), "db_path", None)
+    db_path = _db_path_from(source)
     if db_path is None:
         return default
     try:

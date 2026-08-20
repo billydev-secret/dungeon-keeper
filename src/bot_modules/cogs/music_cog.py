@@ -17,7 +17,7 @@ import wavelink
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.music.embeds import build_queue_embed
 from bot_modules.music.logic import (
     describe_track_failure,
@@ -440,7 +440,7 @@ class MusicCog(commands.Cog):
         start, end, total_pages, normalized_page = paginate_queue(total, page)
         items = list(queue.tracks)[start:end]
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="music")
         embed = build_queue_embed(
             current_summary=(
                 self._track_summary(queue.current)
@@ -510,7 +510,7 @@ class MusicCog(commands.Cog):
             if queue.requester_for(queue.current)
             else None
         )
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="music")
         embed = build_embed(
             queue.current, queue, requester, paused=player.paused, color=accent
         )
@@ -728,7 +728,7 @@ class MusicCog(commands.Cog):
 
         requester_id = queue.requester_for(track)
         requester = guild.get_member(requester_id) if requester_id else None
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="music")
         embed = build_embed(
             track, queue, requester, paused=player.paused, color=accent
         )
@@ -870,7 +870,7 @@ class MusicCog(commands.Cog):
         await player.pause(new_paused)
         queue = self._queue(guild.id)
         view.refresh_for(queue, paused=new_paused)
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="music")
         embed = build_embed(
             queue.current,
             queue,
@@ -941,7 +941,7 @@ class MusicCog(commands.Cog):
         player = self._player(guild)
         paused = bool(player and player.paused)
         view.refresh_for(queue, paused=paused)
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="music")
         embed = build_embed(
             queue.current,
             queue,

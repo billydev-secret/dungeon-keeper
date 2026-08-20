@@ -20,7 +20,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_grant_roles, open_db
 from bot_modules.services.branding_service import (
     DEFAULT_ASSISTANT_NAME,
@@ -270,7 +270,7 @@ class AdvisorCog(commands.Cog):
             answer = answer[:_MAX_DESC].rstrip() + "…"
 
         color = (
-            await resolve_accent_color(self.ctx.db_path, interaction.guild)
+            await safe_resolve_accent(self.ctx, interaction.guild, log_label="advisor")
             if interaction.guild
             else None
         )

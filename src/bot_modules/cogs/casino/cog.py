@@ -77,7 +77,7 @@ from bot_modules.cogs.casino.views import (
 )
 from bot_modules.core.app_context import Bot
 from bot_modules.core.sticky import PanelContent, StickyPanel
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.branding_service import resolve_casino_name_conn
 from bot_modules.services import casino_logic as logic
 from bot_modules.services import casino_service as svc
@@ -796,13 +796,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         invalidated on dashboard branding saves, so this stays cheap AND
         picks up accent changes without a restart.
         """
-        if guild is None:
-            return None
-        try:
-            return await resolve_accent_color(self.ctx.db_path, guild)
-        except Exception:
-            log.debug("casino accent resolve failed", exc_info=True)
-            return None
+        return await safe_resolve_accent(self.ctx, guild, log_label="casino")
 
     async def _names(
         self,

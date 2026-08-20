@@ -12,7 +12,7 @@ import discord
 
 from bot_modules.core.utils import disable_all_items
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services.moderation import write_audit
 from bot_modules.services.voice_master_service import (
@@ -2002,7 +2002,7 @@ async def post_knock_request(
     us from re-attaching one that's already bound to a delivered message.
     """
     _knock_req_guild_id = channel.guild.id
-    accent = await resolve_accent_color(ctx.db_path, channel.guild)
+    accent = await safe_resolve_accent(ctx, channel.guild, log_label="voice master")
     embed = build_knock_request_embed(
         requester_mention=requester.mention,
         owner_mention=owner.mention,

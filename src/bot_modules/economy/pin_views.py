@@ -25,7 +25,7 @@ from functools import partial
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.economy.view_helpers import coins as _reward_text
 from bot_modules.services.economy_pin_service import (
@@ -292,12 +292,12 @@ async def _handle_resolution(
         await _safe_ephemeral(interaction, MANAGE_DENIED_MSG)
         return
     if str(row["state"]) != "pending":  # type: ignore[index]
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="pin")
         await _refresh_card(card, ctx, accent, settings, submission_id)
         await _safe_ephemeral(interaction, f"Already {row['state']}.")  # type: ignore[index]
         return
 
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="pin")
 
     if not approve:
         await _do_deny(interaction, ctx, guild, settings, accent, submission_id,

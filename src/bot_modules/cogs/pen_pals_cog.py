@@ -15,7 +15,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.core.db_utils import open_db
@@ -1151,7 +1151,7 @@ async def _do_pair(
         return False
 
     expiry_at = now + session_seconds
-    accent = await resolve_accent_color(db_path, guild)
+    accent = await safe_resolve_accent(db_path, guild, log_label="pen pals")
     try:
         await _post_intro(
             channel, user1, user2, expiry_at, question,
@@ -2403,7 +2403,7 @@ class PenPalsCog(commands.Cog):
                 return cfg, len(_get_pool(conn, guild.id))
 
         cfg, pool_size = await asyncio.to_thread(_load)
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="pen pals")
         mode = _normalize_match_mode(
             cfg["match_mode"] if cfg is not None and "match_mode" in cfg.keys() else None
         )

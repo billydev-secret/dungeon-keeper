@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.services.todo_recurring_service import (
@@ -438,7 +438,7 @@ class TodoCog(commands.Cog):
 
     async def build_panel(self, guild: discord.Guild) -> PanelContent:
         rows, total = await asyncio.to_thread(self._read_rows, guild.id)
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="todo")
         embed = discord.Embed(
             title="📋 Server Todo",
             description=render_rows(rows, total=total),
@@ -466,7 +466,7 @@ class TodoCog(commands.Cog):
         rows = await asyncio.to_thread(self._read_chore_rows, guild.id)
         for row in rows:
             row["completed_by_name"] = self._display_name(guild, row.get("completed_by"))
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="todo")
         embed = discord.Embed(
             title="🔁 Mod Chores",
             description=render_chore_rows(rows),

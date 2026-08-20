@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.name_resolver import NameFn, build_name_fn, mention
@@ -431,7 +431,7 @@ class WhisperShareButton(
             )
             feed_channel = guild.get_channel(cfg.channel_id)
             if isinstance(feed_channel, discord.TextChannel):
-                accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
+                accent = await safe_resolve_accent(self.bot, guild, log_label="whisper")
                 name_fn = await build_name_fn(
                     guild=guild,
                     db_path=self.bot.ctx.db_path,
@@ -1452,7 +1452,7 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
     feed_channel = guild.get_channel(cfg.channel_id)
     if not isinstance(feed_channel, discord.TextChannel):
         return
-    accent = await resolve_accent_color(bot.ctx.db_path, guild)
+    accent = await safe_resolve_accent(bot, guild, log_label="whisper")
     name_fn = await build_name_fn(
         guild=guild,
         db_path=bot.ctx.db_path,
@@ -2058,7 +2058,7 @@ class WhisperFeedView(discord.ui.View):
             target_id=interaction.user.id,
             states=[STATE_PENDING, STATE_SHARED],
         )
-        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
+        accent = await safe_resolve_accent(self.bot, interaction.guild, log_label="whisper")
         name_fn = await build_name_fn(
             guild=interaction.guild,
             db_path=self.bot.ctx.db_path,
@@ -2082,7 +2082,7 @@ class WhisperFeedView(discord.ui.View):
             sender_id=interaction.user.id,
         )
         active = [w for w in whispers if not is_terminal_for_sender(w)]
-        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
+        accent = await safe_resolve_accent(self.bot, interaction.guild, log_label="whisper")
         name_fn = await build_name_fn(
             guild=interaction.guild,
             db_path=self.bot.ctx.db_path,
@@ -2433,7 +2433,7 @@ class WhisperCog(commands.Cog):
             sender_id=interaction.user.id,
         )
         active = [w for w in whispers if not is_terminal_for_sender(w)]
-        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        accent = await safe_resolve_accent(self.ctx, interaction.guild, log_label="whisper")
         name_fn = await build_name_fn(
             guild=interaction.guild,
             db_path=self.ctx.db_path,
@@ -2575,7 +2575,7 @@ class WhisperCog(commands.Cog):
             # awaited and rolls back on failure), so the feed post doesn't need
             # to ping. Post the embed only — it names the recipient visibly,
             # once, without firing a redundant channel notification.
-            accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+            accent = await safe_resolve_accent(self.ctx, interaction.guild, log_label="whisper")
             name_fn = await build_name_fn(
                 guild=interaction.guild,
                 db_path=self.ctx.db_path,

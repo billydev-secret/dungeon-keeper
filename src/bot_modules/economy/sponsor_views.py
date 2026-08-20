@@ -22,7 +22,7 @@ from functools import partial
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.services.economy_qotd_sponsor_service import (
     get_submission,
@@ -269,7 +269,7 @@ async def _handle_resolution(
         await _safe_ephemeral(interaction, MANAGE_DENIED_MSG)
         return
 
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="sponsor")
 
     def _resolve():
         with ctx.open_db() as conn:

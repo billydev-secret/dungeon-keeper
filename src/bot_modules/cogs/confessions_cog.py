@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.services.anon_audit_service import (
     EVENT_CONFESSION_POSTED,
     EVENT_REPLY_POSTED,
@@ -216,7 +216,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
         except discord.HTTPException:
             return
 
-        accent = await resolve_accent_color(self.cog.ctx.db_path, interaction.guild)
+        accent = await safe_resolve_accent(self.cog.ctx, interaction.guild, log_label="confessions", default=DEFAULT_ACCENT_COLOR)
         confession_embed = build_confession_embed(content, color=accent)
 
         if isinstance(dest_channel, discord.ForumChannel):

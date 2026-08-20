@@ -15,7 +15,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games_help.embeds import build_support_embed
 
 if TYPE_CHECKING:
@@ -35,7 +35,7 @@ class SupportCog(commands.Cog):
     async def support(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         color = (
-            await resolve_accent_color(self.ctx.db_path, guild)
+            await safe_resolve_accent(self.ctx, guild, log_label="support")
             if guild is not None
             else None
         )

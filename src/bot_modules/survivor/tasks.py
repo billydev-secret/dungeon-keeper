@@ -22,7 +22,7 @@ from pathlib import Path
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services.survivor_service import update_config
@@ -336,7 +336,7 @@ async def post_reckoning(
             if member else f"soul {user_id}"
         )
 
-    color = await resolve_accent_color(db_path, guild)
+    color = await safe_resolve_accent(db_path, guild, log_label="survivor")
     embed = reckoning.build_reckoning_embed(
         data, name_of, season_name=season["name"], settings=settings,
         color=color,

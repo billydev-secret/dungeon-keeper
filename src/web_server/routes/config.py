@@ -123,7 +123,7 @@ from bot_modules.services.branding_service import (
     get_branding_conn,
     upsert_branding,
 )
-from bot_modules.core.branding import invalidate_accent_cache
+from bot_modules.core.branding import invalidate_accent_cache, safe_resolve_accent
 from bot_modules.services.event_echo_service import (
     CONFIG_CHANNEL_KEY as EVENT_ECHO_CHANNEL_KEY,
 )
@@ -1825,9 +1825,8 @@ async def welcome_preview(
     except Exception:
         member_bio_link = ""
 
-    from bot_modules.core.branding import resolve_accent_color
 
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="config")
 
     welcome_embed = build_welcome_embed(
         member,

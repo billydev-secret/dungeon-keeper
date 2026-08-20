@@ -56,11 +56,11 @@ def _stub_lobby_accent():
     FakeGuild here has no real avatar to read, so stub both import paths."""
     with (
         patch(
-            "bot_modules.duels.base_game.resolve_accent_color",
+            "bot_modules.core.branding.resolve_accent_color",
             new=AsyncMock(return_value=discord.Color.blurple()),
         ),
         patch(
-            "bot_modules.cogs.hot_potato_group.cog.resolve_accent_color",
+            "bot_modules.core.branding.resolve_accent_color",
             new=AsyncMock(return_value=discord.Color.blurple()),
         ),
     ):

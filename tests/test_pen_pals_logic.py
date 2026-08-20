@@ -46,6 +46,7 @@ import pytest
 from bot_modules.cogs import pen_pals_cog as pp
 from bot_modules.core.db_utils import open_db
 from tests.fakes import FakeGuild, FakeMember, FakeRole, FakeUser, fake_interaction
+from bot_modules.core import branding
 
 GUILD_ID = 9001
 _COOLDOWN = pp._MATCH_COOLDOWN_SECS
@@ -164,7 +165,7 @@ def pair_env(sync_db_path, monkeypatch):
 
     monkeypatch.setattr(pp, "_create_channel", fake_create_channel)
     monkeypatch.setattr(pp, "_post_intro", AsyncMock())
-    monkeypatch.setattr(pp, "resolve_accent_color", AsyncMock(return_value=None))
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock(return_value=None))
     return bot, channel, created
 
 
@@ -659,7 +660,7 @@ async def _capture_do_pair(
 
     monkeypatch.setattr(pp, "_create_channel", fake_create_channel)
     monkeypatch.setattr(pp, "_post_intro", AsyncMock())
-    monkeypatch.setattr(pp, "resolve_accent_color", AsyncMock(return_value=None))
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock(return_value=None))
     with open_db(sync_db_path) as conn:
         pp._add_to_pool(conn, GUILD_ID, 1)
         pp._add_to_pool(conn, GUILD_ID, 2)

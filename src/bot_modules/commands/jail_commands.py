@@ -23,7 +23,7 @@ from bot_modules.services.dm_branding import (
     resolve_dm_accent,
 )
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.services.embeds import (
     MOD_JAIL as CLR_JAIL,  # noqa: F401  re-exported for jail_cog
@@ -238,7 +238,7 @@ async def _collect_and_post_transcript(
     if transcript_ch_id:
         ch = channel.guild.get_channel(transcript_ch_id)
         if ch and isinstance(ch, discord.TextChannel):
-            accent = await resolve_accent_color(ctx.db_path, channel.guild)
+            accent = await safe_resolve_accent(ctx, channel.guild, log_label="jail")
             embed = discord.Embed(
                 title=f"Transcript — {record_type.title()} #{record_id}",
                 description=f"**Channel:** #{channel.name}\n**Messages:** {transcript['message_count']}",
@@ -334,7 +334,7 @@ async def _finalize_ticket_delete(
 
     await asyncio.to_thread(_mark_deleted)
 
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="jail")
     if auto:
         desc = f"**Ticket #{ticket_id}** by <@{user_id}> auto-deleted 24h after close."
         reason = f"Ticket #{ticket_id} auto-deleted 24h after close"
@@ -463,7 +463,7 @@ class TicketReopenButton(
         # Restore send permission for creator
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
-            accent = await resolve_accent_color(ctx.db_path, channel.guild)
+            accent = await safe_resolve_accent(ctx, channel.guild, log_label="jail")
             reopen_ch_id = channel.id
 
             def _fetch_reopened_ticket():
@@ -1005,7 +1005,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
             return
 
         await interaction.response.defer(ephemeral=True)
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
 
         # Create channel
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
@@ -1153,7 +1153,7 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             return
 
         reason = self.reason.value or ""
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         close_guild_id = guild.id
         close_channel_id = interaction.channel_id or 0
         close_ticket_id = self.ticket_id
@@ -2094,7 +2094,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
             return
 
         await interaction.response.defer(ephemeral=True)
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         desc_text = self.description.value or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
         name = f"ticket-{user.name[:16]}-{ts}"

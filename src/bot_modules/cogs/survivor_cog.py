@@ -17,7 +17,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.services.survivor_service import (
@@ -272,7 +272,7 @@ class SurvivorCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        color = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        color = await safe_resolve_accent(self.ctx, interaction.guild, log_label="survivor")
         await interaction.response.send_message(
             embed=build_status_embed(st, season_name=season["name"], color=color),
             ephemeral=True,
@@ -313,7 +313,7 @@ class SurvivorCog(commands.Cog):
             # a name like "**everyone** ·" must not reformat the board.
             return discord.utils.escape_markdown(member.display_name)
 
-        color = await resolve_accent_color(self.ctx.db_path, guild)
+        color = await safe_resolve_accent(self.ctx, guild, log_label="survivor")
         await interaction.response.send_message(
             embed=build_board_embed(
                 board,
@@ -363,7 +363,7 @@ class SurvivorCog(commands.Cog):
             return
         from bot_modules.survivor.embeds import build_history_embed
 
-        color = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        color = await safe_resolve_accent(self.ctx, interaction.guild, log_label="survivor")
         await interaction.response.send_message(
             embed=build_history_embed(
                 rows,

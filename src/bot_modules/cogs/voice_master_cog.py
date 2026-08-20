@@ -32,7 +32,7 @@ from bot_modules.commands.voice_master_commands import (
     build_panel_embed,
     build_panel_view,
 )
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.core.sticky import PanelContent, StickyPanel
@@ -204,7 +204,7 @@ class VoiceMasterCog(commands.Cog):
             )
 
     async def _build_panel(self, guild: discord.Guild) -> PanelContent:
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="voice master")
         return PanelContent(
             embed=build_panel_embed(color=accent), view=build_panel_view()
         )
@@ -323,7 +323,7 @@ class VoiceMasterCog(commands.Cog):
         # posted before the restart) is harmless: first claim wins, and the
         # other button then refuses (claiming clears owner_left_at).
         now = time.time()
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="voice master")
         for row in tracked:
             if (
                 row.channel_id not in present_ids
@@ -699,7 +699,7 @@ class VoiceMasterCog(commands.Cog):
         row = await asyncio.to_thread(_fetch_pca)
         if row is None or row.owner_left_at is None:
             return  # owner returned (cancel raced) — nothing to claim
-        accent = await resolve_accent_color(self.ctx.db_path, live.guild)
+        accent = await safe_resolve_accent(self.ctx, live.guild, log_label="voice master")
         await post_claim_prompt(live, color=accent)
 
     async def _delete_after_grace(
@@ -962,7 +962,7 @@ class VoiceMasterCog(commands.Cog):
             # owner has the buttons right where they are. Non-fatal on failure
             # (perms missing, channel deleted out from under us, etc.).
             if cfg.post_inline_panel:
-                accent = await resolve_accent_color(self.ctx.db_path, guild)
+                accent = await safe_resolve_accent(self.ctx, guild, log_label="voice master")
                 await post_inline_panel(channel, member, color=accent)
 
             # DM the owner about anything we had to skip.
@@ -1543,7 +1543,7 @@ class VoiceMasterCog(commands.Cog):
                 )
 
         profile, trusted, blocked = await asyncio.to_thread(_fetch_profile)
-        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        accent = await safe_resolve_accent(self.ctx, interaction.guild, log_label="voice master")
         embed = build_profile_show_embed(
             saved_name=profile.saved_name,
             saved_limit=profile.saved_limit,

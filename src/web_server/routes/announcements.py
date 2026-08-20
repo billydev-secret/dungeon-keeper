@@ -22,7 +22,7 @@ from bot_modules.announcements.buttons import (
     DEFAULT_STYLE,
     MAX_BUTTONS,
 )
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.role_safety import role_block_reason
 from bot_modules.core.utils import get_bot_member
@@ -303,7 +303,7 @@ async def list_all(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     if guild is not None:
-        default_accent = (await resolve_accent_color(ctx.db_path, guild)).value
+        default_accent = (await safe_resolve_accent(ctx, guild, log_label="announcements", default=DEFAULT_ACCENT_COLOR)).value
 
     def _q():
         with ctx.open_db() as conn:

@@ -14,7 +14,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.bump_tracker.detector_logic import match_site, message_text
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 
 if TYPE_CHECKING:
@@ -377,7 +377,7 @@ async def _refresh_widget(
         return
 
     guild = bot.get_guild(guild_id)
-    accent = await resolve_accent_color(db_path, guild) if guild else None
+    accent = await safe_resolve_accent(db_path, guild, log_label="bump tracker")
     embed = _build_widget_embed(statuses, color=accent)
 
     # Edit in place when nothing new was posted to the channel — avoids
@@ -544,7 +544,7 @@ class BumpTrackerCog(commands.Cog):
             )
             for r in log_rows
         ]
-        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        accent = await safe_resolve_accent(self.ctx, interaction.guild, log_label="bump tracker")
         embed = _build_widget_embed(statuses, color=accent)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

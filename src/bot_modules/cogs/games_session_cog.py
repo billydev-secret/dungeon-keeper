@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games_session.embeds import build_session_recap_embed
 from bot_modules.games_session.logic import build_highlights, format_duration
 
@@ -95,7 +95,7 @@ class SessionCog(commands.Cog):
 
         guild = interaction.guild
         color = (
-            await resolve_accent_color(self.bot.ctx.db_path, guild)
+            await safe_resolve_accent(self.bot, guild, log_label="games session")
             if guild
             else None
         )

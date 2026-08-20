@@ -27,7 +27,7 @@ from functools import partial
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.utils import get_guild_channel_or_thread
 from bot_modules.inactive.apply import reactivate_member
 from bot_modules.services import promotion_review_service as svc
@@ -445,7 +445,7 @@ async def post_review_card(
         )
         return
 
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="promotion review", default=DEFAULT_ACCENT_COLOR)
     hint = (
         "Grant access re-adds the role and closes this out."
         if kind == svc.KIND_PRUNED_RETURN
@@ -667,7 +667,7 @@ async def _edit_resolved(
             )
 
     pruned_roles, level = await asyncio.to_thread(_fetch)
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="promotion review", default=DEFAULT_ACCENT_COLOR)
     embed = build_review_embed(
         accent,
         kind=kind,

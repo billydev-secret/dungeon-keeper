@@ -104,9 +104,7 @@ async def _accent(
     season's guild instead, and fall back to the branding default (None →
     the builders' own fallback) if the guild is gone."""
     guild = interaction.guild or interaction.client.get_guild(guild_id)
-    if guild is None:
-        return None
-    return await branding.resolve_accent_color(db_path, guild)
+    return await branding.safe_resolve_accent(db_path, guild, log_label="survivor")
 
 
 async def submit_pick(
@@ -657,7 +655,7 @@ async def build_live_panel(
         late_entry=str(config["late_entry"]),
         gauntlet_mode=gauntlet_mode,
     ) is not None
-    color = await branding.resolve_accent_color(db_path, guild)
+    color = await branding.safe_resolve_accent(db_path, guild, log_label="survivor")
 
     def _display(user_id: int) -> str:
         member = guild.get_member(user_id)

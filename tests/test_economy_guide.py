@@ -176,7 +176,7 @@ def ctx(db):
 @pytest.fixture(autouse=True)
 def _patch_accent():
     with patch(
-        "bot_modules.cogs.economy_cog.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         new=AsyncMock(return_value=discord.Color(0x123456)),
     ):
         yield
@@ -565,7 +565,7 @@ async def test_how_it_works_serves_the_guide_ephemerally(ctx, db):
     inter.response.send_message = AsyncMock()
 
     with patch(
-        "bot_modules.economy.guide.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(return_value=discord.Color(0x123456)),
     ):
         await HowItWorksButton().callback(inter)

@@ -10,7 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
 from bot_modules.core.xp_system import (
     XP_SOURCE_GRANT,
@@ -213,7 +213,7 @@ class XpCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
         window_name, subtitle, cutoff = _resolve_leaderboard_timescale(timescale)
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="xp", default=DEFAULT_ACCENT_COLOR)
 
         def _check_xp():
             with ctx.open_db() as conn:

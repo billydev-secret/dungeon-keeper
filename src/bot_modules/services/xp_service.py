@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import format_user_for_log, get_guild_channel_or_thread
 from bot_modules.core.xp_system import (
     DEFAULT_XP_SETTINGS,
@@ -512,7 +512,7 @@ async def handle_level_progress(
         level_5_log_channel_id,
     )
 
-    accent = await resolve_accent_color(db_path, member.guild)
+    accent = await safe_resolve_accent(db_path, member.guild, log_label="xp")
 
     if award.new_level >= settings.role_grant_level:
         await maybe_grant_level_role(
@@ -647,7 +647,7 @@ async def promotion_review_recheck_loop(
 
                 if guild is not None and member is not None:
                     cfg = guild_config_for(guild_id)
-                    accent = await resolve_accent_color(db_path, guild)
+                    accent = await safe_resolve_accent(db_path, guild, log_label="xp")
                     await maybe_log_level_5(
                         member,
                         total_xp,

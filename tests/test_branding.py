@@ -179,44 +179,54 @@ async def test_guard_returns_stay_silent(monkeypatch, caplog, guild):
     assert [r for r in caplog.records if r.name == "bot_modules.core.branding"] == []
 
 
-# ── adoption: the game cogs route through the guard ───────────────────
+# ── adoption: nothing calls the raw resolver ──────────────────────────
 
-# The six cogs converted in the "guard the last six" commit. Scoped
-# deliberately: ~80 direct resolve_accent_color calls remain elsewhere under
-# cogs/ (economy, whisper, jail, voice_master, guess, music, ...), and
-# converting those is a much larger behaviour change than this list. This
-# asserts the six stay converted, not that the repo is finished.
-GUARDED_GAME_COGS = [
-    "games_ama_cog",
-    "games_compliment_cog",
-    "games_fantasies_cog",
-    "games_mfk_cog",
-    "games_story_cog",
-    "games_traditional_cog",
-]
+# ``resolve_accent_color`` raises. Every caller that isn't prepared to handle
+# that wants ``safe_resolve_accent``, and as of the sweep every caller went
+# through it — 121 call sites across cogs, views, commands, duels, services,
+# background loops and the dashboard routes. This keeps it that way.
+#
+# core/branding.py is the one legitimate caller: it *is* the wrapper.
+RESOLVER_HOME = "src/bot_modules/core/branding.py"
 
 
-@pytest.mark.parametrize("module", GUARDED_GAME_COGS)
-def test_live_game_embeds_never_call_the_raw_resolver(module):
-    """A branding hiccup must not raise into a live game's embed builder.
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
 
-    These six built embeds with a bare ``await resolve_accent_color(...)``,
-    so a raising branding read surfaced to the player as "This interaction
-    failed" mid-game. They go through ``safe_resolve_accent`` now; the
-    fallback behaviour itself is covered by the tests above.
+
+def test_nothing_outside_branding_calls_the_raw_resolver():
+    """A raise here reaches a live game, a background loop, or an HTTP handler.
+
+    If you're adding a new embed: call ``safe_resolve_accent(source, guild)``.
+    ``source`` is whatever you have — a bot, an AppContext, or a db_path. Pass
+    ``default=DEFAULT_ACCENT_COLOR`` when you need a non-optional Color.
     """
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "src/bot_modules/cogs"
-        / f"{module}.py"
-    ).read_text(encoding="utf-8")
-    unguarded = [
-        line.strip()
-        for line in source.splitlines()
-        if "resolve_accent_color(" in line and "safe_resolve_accent(" not in line
-    ]
-    assert not unguarded, (
-        f"{module} calls resolve_accent_color directly again — use "
-        "safe_resolve_accent so a branding failure can't break a live game:\n  "
-        + "\n  ".join(unguarded)
+    root = _repo_root()
+    offenders: list[str] = []
+    for path in sorted(root.joinpath("src").rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        if rel == RESOLVER_HOME:
+            continue
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            if "resolve_accent_color(" not in stripped:
+                continue
+            if "safe_resolve_accent(" in stripped:
+                continue
+            if stripped.startswith(("#", '"', "'")):  # prose, not a call
+                continue
+            offenders.append(f"{rel}:{lineno}  {stripped}")
+
+    assert not offenders, (
+        "These call resolve_accent_color directly, so a branding failure "
+        "raises into them. Use safe_resolve_accent instead:\n  "
+        + "\n  ".join(offenders)
     )
+
+
+def test_the_wrapper_still_lives_where_the_sweep_left_it():
+    """Guards the exemption above: if branding.py moves, the sweep test would
+    silently start exempting nothing (or the wrong file)."""
+    assert _repo_root().joinpath(RESOLVER_HOME).is_file()

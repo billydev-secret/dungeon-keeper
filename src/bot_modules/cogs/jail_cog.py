@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.jail.embeds import (
     build_adopted_policies_embed,
     build_modinfo_embed,
@@ -611,7 +611,7 @@ class JailCog(commands.Cog):
 
         Returns the new message, or None if Discord refused the post.
         """
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.ctx, guild, log_label="jail")
         embed = build_ticket_panel_embed(color=accent)
         view = discord.ui.View(timeout=None)
         view.add_item(TicketPanelButton())
@@ -646,7 +646,7 @@ class JailCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         desc_text = description or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
         name = f"ticket-{sanitize_channel_name(user.name)[:16]}-{ts}"
@@ -760,7 +760,7 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             return
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         tc_guild_id = guild.id
         tc_ticket_user_id = ticket["user_id"]
 
@@ -843,7 +843,7 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             return
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         tid = ticket["id"]
         tr_guild_id = guild.id
 
@@ -1253,7 +1253,7 @@ class JailCog(commands.Cog):
 
         policy_id = policy["id"]
         reason_text = reason or "Closed without vote"
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         pc_guild_id = guild.id
 
         def _close_policy():
@@ -1732,7 +1732,7 @@ class JailCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
 
         since_30d = datetime.now(timezone.utc).timestamp() - 30 * 86400
 

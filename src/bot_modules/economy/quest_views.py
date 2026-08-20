@@ -33,7 +33,7 @@ from functools import partial
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.logic import is_economy_manager, local_day_for
 from bot_modules.economy.guide import GuideNotifyButton, HowItWorksButton
@@ -557,7 +557,7 @@ async def _handle_resolution(
         await _safe_ephemeral(interaction, MANAGE_DENIED_MSG)
         return
 
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="quest", default=DEFAULT_ACCENT_COLOR)
     claimant_id = int(claim["user_id"])
 
     # Already resolved (e.g. from the dashboard) — refresh the card to the true
@@ -932,7 +932,7 @@ class QuestClaimSelect(discord.ui.Select):
         state = getattr(outcome, "state", "")
         if state == "paid":
             paid = int(getattr(outcome, "paid", 0))
-            accent = await resolve_accent_color(self.ctx.db_path, self.guild)
+            accent = await safe_resolve_accent(self.ctx, self.guild, log_label="quest", default=DEFAULT_ACCENT_COLOR)
             embed = discord.Embed(
                 title="🎉 Quest Complete!",
                 description=(
@@ -947,7 +947,7 @@ class QuestClaimSelect(discord.ui.Select):
             return
 
         # Sign-off: post the card best-effort, then confirm submission.
-        accent = await resolve_accent_color(self.ctx.db_path, self.guild)
+        accent = await safe_resolve_accent(self.ctx, self.guild, log_label="quest", default=DEFAULT_ACCENT_COLOR)
         claim_id = int(getattr(outcome, "claim_id", 0))
         await post_signoff_card(
             bot, self.ctx, self.guild, settings, accent, claim_id, member

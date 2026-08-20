@@ -19,7 +19,7 @@ import discord
 
 from bot_modules.services.dm_branding import send_branded_dm
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
@@ -499,7 +499,7 @@ class PrivacyCog(commands.Cog):
                 interaction.user.id,
                 interaction,
                 mode=mode_value,
-                accent=await resolve_accent_color(self.ctx.db_path, interaction.guild),
+                accent=await safe_resolve_accent(self.ctx, interaction.guild, log_label="privacy"),
             )
         finally:
             self._active_deletions.discard(interaction.user.id)
@@ -575,7 +575,7 @@ class PrivacyCog(commands.Cog):
                 member.id,
                 interaction,
                 mode=mode_value,
-                accent=await resolve_accent_color(self.ctx.db_path, interaction.guild),
+                accent=await safe_resolve_accent(self.ctx, interaction.guild, log_label="privacy"),
             )
         finally:
             self._active_deletions.discard(member.id)

@@ -9,7 +9,7 @@ import discord
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.moderation import write_audit
 from bot_modules.voice_master.embeds import build_howto_embed
 from bot_modules.voice_master.logic import (
@@ -253,7 +253,7 @@ async def post_howto(
 
     hub_id = await run_query(_load_hub)
     hub_mention = f"<#{hub_id}>" if hub_id else None
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="voice master")
     embed = build_howto_embed(hub_mention=hub_mention, color=accent)
     try:
         msg = await channel.send(embed=embed)

@@ -1002,7 +1002,7 @@ async def _update_sponsor_card_and_dm(bot, ctx, guild_id, settings, row) -> bool
     """
     import discord
 
-    from bot_modules.core.branding import resolve_accent_color
+    from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
     from bot_modules.economy.sponsor_views import (
         render_sponsor_card_embed,
         sponsor_resolution_dm_text,
@@ -1012,7 +1012,7 @@ async def _update_sponsor_card_and_dm(bot, ctx, guild_id, settings, row) -> bool
     # Accent only shows on a pending card, which this never renders — a missing
     # guild is therefore not worth bailing on.
     accent = (
-        await resolve_accent_color(ctx.db_path, guild)
+        await safe_resolve_accent(ctx, guild, log_label="economy manager", default=DEFAULT_ACCENT_COLOR)
         if guild is not None
         else discord.Color.default()
     )

@@ -482,7 +482,7 @@ def ctx(db):
 def _patch_accents():
     with (
         patch(
-            "bot_modules.cogs.economy_cog.resolve_accent_color",
+            "bot_modules.core.branding.resolve_accent_color",
             new=AsyncMock(return_value=discord.Color(0x123456)),
         ),
     ):

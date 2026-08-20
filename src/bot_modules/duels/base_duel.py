@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from bot_modules.services.economy_service import EconSettings
@@ -153,7 +153,7 @@ class BaseDuel(BaseGame):
         if wager is not None:
             await self._declare_wager(guild.id, game_id, challenger.id, wager)
 
-        accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="base duel")
         settings = await self._econ_settings(guild.id) if wager is not None else None
         embed = self._build_challenge_embed(
             challenger, target, stakes_text, accent, wager=wager, settings=settings,  # type: ignore[arg-type]
