@@ -117,8 +117,13 @@ The roles get pinged exactly twice a week. Restraint is the brand.
 ### 2.7 Endgame ceremony
 Champion gets a dedicated post (never folded into a Reckoning): season stats (weeks survived, closest call, teams ridden), pot receipt, role, optional Bios-cog trophy line. Splits framed as shared victory; annulments as their own mini-event (*"everyone died. therefore nobody did. the week is stricken — but the teams you burned stay burned."*)
 
-### 2.7b Join echo (added 2026-08-18)
-A member joining fires an **Event Echo** into main chat — the existing
+### 2.7b Join echo (added 2026-08-18, **removed 2026-08-20**)
+**Removed** — Billy, on seeing it live: "I don't need per user join
+messages." The echo source, the service call, and the survivor-side glue
+are deleted; the panel's in-place player-count update is the join's only
+public trace. Original design for the record:
+
+A member joining fired an **Event Echo** into main chat — the existing
 mirror system, not a new announcement path: silent (no ping), the guild's
 configured echo channel, per-member-per-season dedupe, and the shared
 cooldowns coalescing a busy join night into one echo. The line is a mini

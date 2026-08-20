@@ -493,3 +493,18 @@ card), and the gauntlet error's parenthetical fee breakdown deliberately
 stays bare numbers — the headline amount carries the unit, repeating it
 three times in one sentence is noise. Tested with a custom denomination
 (🥜 Nut/Nuts) including singular-at-1.
+
+
+---
+
+## 13. Drop the per-member join echo (2026-08-20)
+
+> "I don't need per user join messages like this: [main-chat link]"
+
+**Removed whole.** The Survivor join echo (added 2026-08-18) — the
+`SOURCE_SURVIVOR_JOIN` Event Echo source, `echo_survivor_join` in the
+service, and the survivor-side `_echo_join`/`join_echo_detail` glue plus
+their tests. Event Echo itself and its other sources are untouched. A
+join's only public trace is now the channel panel's in-place player-count
+update (plus the sticky refresh). Spec §2.7b amended with the removal,
+original design kept for the record.
