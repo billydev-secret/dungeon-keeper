@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, overload
 
 import discord
 
@@ -31,6 +31,8 @@ from bot_modules.services.branding_service import (
 )
 
 log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 # guild_id -> (avatar_key, resolved_color) for avatar-derived accents.
 _avatar_cache: dict[int, tuple[str, discord.Color]] = {}
@@ -70,6 +72,18 @@ async def resolve_accent_color(db_path: Path, guild: discord.Guild) -> discord.C
     return color
 
 
+@overload
+async def safe_resolve_accent(
+    bot: Any, guild: discord.Guild | None, *, log_label: str = ...
+) -> discord.Color | None: ...
+
+
+@overload
+async def safe_resolve_accent(
+    bot: Any, guild: discord.Guild | None, *, default: _T, log_label: str = ...
+) -> discord.Color | _T: ...
+
+
 async def safe_resolve_accent(
     bot: Any,
     guild: discord.Guild | None,
@@ -88,7 +102,9 @@ async def safe_resolve_accent(
 
     ``default`` is per-caller because the callers genuinely disagree: most
     pass ``None`` and let discord.py choose, while chicken, musical chairs
-    and pressure cooker fall back to their own yellow.
+    and pressure cooker fall back to their own yellow. The overloads carry
+    that through the return type, so a caller storing the result in a
+    ``dict[int, discord.Color]`` still gets checked.
     """
     if guild is None:
         return default
@@ -98,7 +114,12 @@ async def safe_resolve_accent(
     try:
         return await resolve_accent_color(db_path, guild)
     except Exception:
-        log.debug(
+        # Warning, not debug: the root logger runs at INFO, so a debug line
+        # here would be invisible in production — and a branding table that
+        # has started raising strips the accent from every embed the bot
+        # sends. The guard returns above stay silent because a DM or a
+        # ctx-less bot is ordinary; an exception here is not.
+        log.warning(
             "%s: accent resolution failed for guild %s",
             log_label,
             getattr(guild, "id", "?"),

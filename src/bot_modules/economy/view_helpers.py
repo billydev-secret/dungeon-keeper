@@ -7,16 +7,13 @@ place so a change lands everywhere at once.
 
 from __future__ import annotations
 
-import logging
-from typing import TYPE_CHECKING
 from functools import partial
+from typing import TYPE_CHECKING
 
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
-
-log = logging.getLogger("dungeonkeeper.economy")
 
 
 def unit(settings: EconSettings, amount: int) -> str:

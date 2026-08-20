@@ -150,7 +150,10 @@ async def test_every_failure_path_honours_a_custom_default(monkeypatch, case):
 
 
 @pytest.mark.asyncio
-async def test_failure_is_logged_under_the_callers_label(monkeypatch, caplog):
+async def test_failure_is_logged_at_warning_under_the_callers_label(monkeypatch, caplog):
+    """WARNING, not debug: the root logger runs at INFO, so a debug line here
+    would be invisible in production and a branding table that has started
+    raising would strip every embed's accent with no evidence anywhere."""
     monkeypatch.setattr(
         branding, "resolve_accent_color", AsyncMock(side_effect=RuntimeError("db gone"))
     )
@@ -158,4 +161,18 @@ async def test_failure_is_logged_under_the_callers_label(monkeypatch, caplog):
         await branding.safe_resolve_accent(
             _Bot(), SimpleNamespace(id=7), log_label="pressure"
         )
-    assert "pressure" in caplog.text
+    (record,) = [r for r in caplog.records if r.name == "bot_modules.core.branding"]
+    assert record.levelno == logging.WARNING
+    assert "pressure" in record.getMessage()
+    assert record.exc_info is not None  # the traceback rides along
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guild", [None, SimpleNamespace(id=7)], ids=["no-guild", "no-ctx"])
+async def test_guard_returns_stay_silent(monkeypatch, caplog, guild):
+    """A DM or a ctx-less bot is ordinary — only a real failure is worth a line."""
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock())
+    bot = _Bot() if guild is None else _Bot(db_path=None)
+    with caplog.at_level(logging.DEBUG, logger="bot_modules.core.branding"):
+        await branding.safe_resolve_accent(bot, guild)
+    assert [r for r in caplog.records if r.name == "bot_modules.core.branding"] == []
