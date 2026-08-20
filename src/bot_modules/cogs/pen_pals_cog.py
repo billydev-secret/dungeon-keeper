@@ -209,6 +209,61 @@ def _get_pool(conn, guild_id: int) -> list:
     ).fetchall()
 
 
+# ── Durable opt-out ───────────────────────────────────────────────────────────
+#
+# Leaving the pool is a preference, not a deletion. `pen_pals_pool` holds who
+# is waiting *right now*, so `_remove_from_pool` says nothing about what should
+# happen next time a session of theirs closes — and since expiry started
+# re-pooling both members, "next time" is always. This flag is the part that
+# outlives the pool row (migration 174): set by every leave surface, cleared by
+# joining, and checked by both requeue paths.
+
+
+def _is_opted_out(conn, guild_id: int, user_id: int) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM pen_pals_optouts WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone() is not None
+
+
+def _set_opt_out(conn, guild_id: int, user_id: int, at: float | None = None) -> None:
+    """Record that this member does not want to be matched.
+
+    Idempotent, and deliberately does *not* refresh ``at`` on a repeat: the
+    interesting timestamp is when they first asked to be left alone, which is
+    what ``/penpals status`` and the dashboard report back.
+    """
+    conn.execute(
+        """
+        INSERT INTO pen_pals_optouts (guild_id, user_id, at) VALUES (?, ?, ?)
+        ON CONFLICT (guild_id, user_id) DO NOTHING
+        """,
+        (guild_id, user_id, at if at is not None else time.time()),
+    )
+
+
+def _clear_opt_out(conn, guild_id: int, user_id: int) -> None:
+    conn.execute(
+        "DELETE FROM pen_pals_optouts WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    )
+
+
+def _opted_out_at(conn, guild_id: int, user_id: int) -> float | None:
+    row = conn.execute(
+        "SELECT at FROM pen_pals_optouts WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    return row["at"] if row else None
+
+
+def _get_opt_outs(conn, guild_id: int) -> list:
+    return conn.execute(
+        "SELECT user_id, at FROM pen_pals_optouts WHERE guild_id = ? ORDER BY at DESC",
+        (guild_id,),
+    ).fetchall()
+
+
 # ── Pool audit trail ──────────────────────────────────────────────────────────
 #
 # pen_pals_pool answers "who is waiting right now" and nothing else, so a pool
@@ -434,7 +489,7 @@ def _claim_close(conn, session_id: str, reason: str) -> bool:
 
 def _close_abnormal_and_requeue(
     conn, session_row, reason: str, departed_user_id: int | None
-) -> list[int] | None:
+) -> tuple[list[int], list[int]] | None:
     """Close a session that ended for a reason other than expiry or /end.
 
     Atomically claims the close (returns ``None`` if another handler already
@@ -446,7 +501,13 @@ def _close_abnormal_and_requeue(
     ``departed_user_id`` is the member who left/was banned (never re-queued),
     or ``None`` when both members remain (e.g. a mod deleted the channel).
 
-    Returns the list of re-queued survivor ids.
+    Returns ``(requeued, opted_out)`` — the survivors put back in the pool,
+    and the survivors deliberately left out because they have opted out
+    (migration 174). The second list exists so the caller can still *tell*
+    them: their channel is being deleted out from under a live conversation,
+    and "you asked not to be re-pooled" is not a reason to say nothing. Same
+    split, and the same reason for it, as ``_close_expired_and_requeue``'s
+    ``skipped``.
     """
     if not _claim_close(conn, session_row["session_id"], reason):
         return None
@@ -456,15 +517,23 @@ def _close_abnormal_and_requeue(
             _record_pool_event(conn, guild_id, departed_user_id, POOL_LEAVE, "departed")
         _remove_from_pool(conn, guild_id, departed_user_id)
     requeued: list[int] = []
+    opted_out: list[int] = []
     for uid in (session_row["user1_id"], session_row["user2_id"]):
         if uid == departed_user_id:
             continue
         if _get_active_session(conn, guild_id, uid) or _in_pool(conn, guild_id, uid):
             continue
+        if _is_opted_out(conn, guild_id, uid):
+            # They asked not to be matched. An abnormal close is not a reason
+            # to override that — the session ending is exactly the moment the
+            # opt-out was made for. They are still told; see the return.
+            _record_pool_event(conn, guild_id, uid, POOL_SKIP, "opted_out")
+            opted_out.append(uid)
+            continue
         _add_to_pool(conn, guild_id, uid)
         _record_pool_event(conn, guild_id, uid, POOL_JOIN, "requeue_abnormal")
         requeued.append(uid)
-    return requeued
+    return requeued, opted_out
 
 
 def _member_spoke_in_session(conn, guild_id: int, channel_id: int, user_id: int) -> bool:
@@ -499,9 +568,12 @@ def _close_expired_and_requeue(
     member and sat there for five days with no matches at all.
 
     Both members go back in the pool, so the wave that just ended becomes the
-    wave that starts next — subject to one gate: a member who never posted in
+    wave that starts next — subject to two gates. A member who never posted in
     the chat is left out (``skipped``) rather than recycled into someone else's
-    24 hours. They are told, and one button puts them back.
+    24 hours; they are told, and one button puts them back. A member who has
+    opted out (migration 174) is left out and told nothing, because they
+    already know: this path re-pooling them regardless is what made leaving
+    the pool a no-op for anyone who was ever matched again.
 
     The re-match cooldown does the pacing from there: a re-pooled member is in
     the pool immediately but ineligible until ``match_cooldown_seconds`` has
@@ -542,6 +614,14 @@ def _close_expired_and_requeue(
             # Gone from the guild. Not "skipped" — there is nobody left to tell
             # they were left out, and no button that would help them.
             _record_pool_event(conn, guild_id, uid, POOL_SKIP, "departed")
+            continue
+        if _is_opted_out(conn, guild_id, uid):
+            # Ahead of the engagement test on purpose. Both outcomes leave
+            # them out of the pool, but 'skipped' members are DM'd "that one
+            # stayed quiet" with a Join button — the wrong thing to send
+            # someone who asked to be left alone, and it would also report
+            # their own choice back to them as the bot's.
+            _record_pool_event(conn, guild_id, uid, POOL_SKIP, "opted_out")
             continue
         if not _member_spoke_in_session(conn, guild_id, channel_id, uid):
             _record_pool_event(conn, guild_id, uid, POOL_SKIP, "inactive")
@@ -650,15 +730,25 @@ def _last_pen_pal_ended_at(conn, guild_id: int, user_id: int) -> float | None:
 def _eligible_pool(conn, guild_id: int, now: float, cooldown_seconds: int) -> list[int]:
     """Pool members who can be matched right now, oldest signup first.
 
-    Two rules, both hard: nobody already in an active session (one pen pal at a
-    time — a stale pool row must never hand someone a second channel), and
-    nobody inside the re-match cooldown. Ineligible members stay in the pool
-    untouched and become eligible on their own.
+    Three rules, all hard: nobody already in an active session (one pen pal at
+    a time — a stale pool row must never hand someone a second channel),
+    nobody inside the re-match cooldown, and nobody who has opted out.
+    Ineligible members stay in the pool untouched and become eligible on their
+    own — except the opted-out, who become eligible only by rejoining.
+
+    The opt-out check is belt-and-braces: leaving clears the pool row and no
+    requeue path adds one back, so an opted-out member should not be in the
+    pool at all. Should one arrive anyway — the backfill script, a restored
+    backup, a future path that forgets — a preference the bot holds but does
+    not honour is worse than no preference. It is not the *only* such gate:
+    `/penpals pair` bypasses this function entirely, so `_force_pair_status`
+    carries the same check.
     """
     return [
         r["user_id"]
         for r in _get_pool(conn, guild_id)
         if not _get_active_session(conn, guild_id, r["user_id"])
+        and not _is_opted_out(conn, guild_id, r["user_id"])
         and (
             (last := _last_pen_pal_ended_at(conn, guild_id, r["user_id"])) is None
             or now - last >= cooldown_seconds
@@ -685,9 +775,14 @@ def _force_pair_status(conn, guild_id: int, user1_id: int, user2_id: int) -> str
         return "active_1"
     if _get_active_session(conn, guild_id, user2_id):
         return "active_2"
-    if not _in_pool(conn, guild_id, user1_id):
+    # `_in_pool` is the consent proxy, and an opt-out overrides it: this path
+    # never touches `_eligible_pool`, so a stray pool row (restored backup, an
+    # older backfill) would otherwise let a mod hand an opted-out member a
+    # partner — the one staff-side reversal the feature promises nobody has.
+    # Reported as "hasn't opted in", which is exactly what it is.
+    if not _in_pool(conn, guild_id, user1_id) or _is_opted_out(conn, guild_id, user1_id):
         return "not_opted_in_1"
-    if not _in_pool(conn, guild_id, user2_id):
+    if not _in_pool(conn, guild_id, user2_id) or _is_opted_out(conn, guild_id, user2_id):
         return "not_opted_in_2"
     return "ok"
 
@@ -1155,9 +1250,10 @@ async def _end_session_abnormally(
         with open_db(db_path) as conn:
             return _close_abnormal_and_requeue(conn, session_row, reason, departed_user_id)
 
-    requeued = await asyncio.to_thread(_claim)
-    if requeued is None:
+    outcome = await asyncio.to_thread(_claim)
+    if outcome is None:
         return  # another handler already closed this session — nothing to do
+    requeued, opted_out = outcome
 
     # Tear the channel down (skip when it's already gone, e.g. it was deleted).
     if delete_channel:
@@ -1174,12 +1270,23 @@ async def _end_session_abnormally(
                 log.warning("pen_pals: failed to delete channel %d (%s): %s", channel_id, reason, exc)
 
     # Notify each surviving member and refresh the signup panel's pool count.
+    # Everyone who kept their seat hears about it, whether or not they were
+    # re-pooled: an abnormal close deletes a channel mid-conversation, which
+    # is the ending that most needs explaining. What differs is the last
+    # sentence — promising a member who opted out that they are back in the
+    # pool would be both false and the opposite of what they asked for.
     guild = bot.get_guild(guild_id)
     if guild is not None:
-        for uid in requeued:
+        for uid in (*requeued, *opted_out):
             member = guild.get_member(uid)
             if member is None:
                 continue
+            tail = (
+                "You've been put back in the Pen Pals pool for a new match."
+                if uid in requeued else
+                "You've left the pool, so we haven't put you back in — "
+                "join again whenever you'd like another."
+            )
             await send_branded_dm(
                 member,
                 db_path=db_path,
@@ -1187,8 +1294,7 @@ async def _end_session_abnormally(
                 embed=discord.Embed(
                     description=(
                         f"Your pen pal session in **{guild.name}** ended early — your "
-                        "partner is no longer available. You've been put back in the "
-                        "Pen Pals pool for a new match."
+                        f"partner is no longer available. {tail}"
                     )
                 ),
             )
@@ -1255,7 +1361,11 @@ async def _notify_expiry(
                 view = _dm_button_view(guild_id, joined=False)
             else:
                 # Already had a seat — mid-session, or pooled again in the
-                # meantime. Nothing about the pool changed, so offer nothing.
+                # meantime — or opted out, which is the one case here where
+                # something *did* change and still earns no button: they are
+                # out of the pool because they asked to be, and a "Join the
+                # pool" prompt on the way out is the bot arguing with them.
+                # Nothing to offer either way.
                 body = f"Your time with {partner_name} is up — thanks for the chat."
 
             await send_branded_dm(
@@ -1758,27 +1868,47 @@ async def _handle_join(
         cfg["match_mode"] if "match_mode" in cfg.keys() else None
     ) == MATCH_MODE_SCHEDULED
 
-    def _check() -> tuple[str, int | None]:
+    def _check() -> tuple[str, int | None, float | None]:
         with open_db(db_path) as conn:
-            if _get_active_session(conn, guild_id, user_id):
-                return "active", None
+            # Joining is the undo for leaving, so it clears the durable
+            # opt-out (migration 174) on every branch below — including the
+            # already-matched one, where pressing Join is a member changing
+            # their mind mid-chat and the only thing it can affect is whether
+            # that chat's close re-pools them.
+            was_opted_out = _is_opted_out(conn, guild_id, user_id)
+            _clear_opt_out(conn, guild_id, user_id)
+            session = _get_active_session(conn, guild_id, user_id)
+            if session:
+                return "active", None, (session["expiry_at"] if was_opted_out else None)
             if _in_pool(conn, guild_id, user_id):
-                return "in_pool", None
+                return "in_pool", None, None
             _add_to_pool(conn, guild_id, user_id)
             _record_pool_event(conn, guild_id, user_id, POOL_JOIN, source)
             if scheduled:
                 # Scheduled mode never matches on join — everyone waits for
                 # the once-a-day round.
-                return "queued", None
+                return "queued", None, None
             # Joining pairs immediately when someone eligible is already
             # waiting; the pool is only for when nobody is.
-            return "queued", _find_instant_match(conn, guild_id, user_id)
+            return "queued", _find_instant_match(conn, guild_id, user_id), None
 
-    status, partner_id = await asyncio.to_thread(_check)
+    status, partner_id, resumed_expiry_at = await asyncio.to_thread(_check)
 
     if status == "active":
         await interaction.response.send_message(
-            "❌ You already have an active pen pal. Use `/penpals status` to see it.", ephemeral=True
+            (
+                # They had opted out and have just undone it. Reporting the
+                # usual "❌ you already have a pen pal" would tell them their
+                # click did nothing, when in fact it changed what happens
+                # when this chat ends — the one thing they came to change.
+                "✅ You're back in Pen Pals.\n\n"
+                f"Your current chat runs until <t:{int(resumed_expiry_at)}:R>. When it "
+                "closes you'll go back in the pool for a new match, as long as "
+                "you've posted in it."
+                if resumed_expiry_at is not None else
+                "❌ You already have an active pen pal. Use `/penpals status` to see it."
+            ),
+            ephemeral=True,
         )
         return
     if status == "in_pool":
@@ -1822,8 +1952,23 @@ async def _handle_leave(
     from_guild_id: int | None = None,
     source: str = "panel",
 ) -> None:
-    """Take the clicking member out of the pool. See ``_handle_join`` on
-    ``from_guild_id`` — same reason, same resolution."""
+    """Take the clicking member out of the pool, and keep them out.
+
+    Leaving used to be a row deletion, which made it hold only until the
+    member's next session closed and re-pooled them — see migration 174. It
+    now sets the durable opt-out as well, so the button means what it says.
+
+    That also makes it answerable mid-session, which it was not: a member with
+    an active chat is by definition not in the pool, so every leave surface
+    told them "❌ You're not in the pool" and did nothing. Being matched is
+    precisely when someone decides they have had enough, and the only window
+    the old code offered was the gap between one chat closing and the next
+    round — reachable only through a DM that a member with DMs closed never
+    receives. Leaving now always succeeds; what differs is only what there was
+    to undo.
+
+    See ``_handle_join`` on ``from_guild_id`` — same reason, same resolution.
+    """
     guild = (
         interaction.guild
         if from_guild_id is None
@@ -1840,22 +1985,57 @@ async def _handle_leave(
     guild_id = guild.id
     user_id = interaction.user.id
 
-    def _remove():
-        with open_db(db_path) as conn:
-            if not _in_pool(conn, guild_id, user_id):
-                return False
-            _remove_from_pool(conn, guild_id, user_id)
-            _record_pool_event(conn, guild_id, user_id, POOL_LEAVE, source)
-            return True
-
-    removed = await asyncio.to_thread(_remove)
-    if removed:
-        await interaction.response.send_message("You've left the Pen Pals pool.", ephemeral=True)
-        await _refresh_panel(interaction.client, guild_id)
-    else:
+    if from_guild_id is not None and guild.get_member(user_id) is None:
+        # Same guard as `_handle_join`, and it started mattering for the same
+        # reason: leaving used to only delete a row, and now it writes one.
+        # A closing DM outlives the membership, so without this an ex-member
+        # tapping that weeks-old button plants an opt-out row for a guild they
+        # are not in — which `on_member_remove` does not prune, nothing else
+        # clears, and the dashboard then lists forever as a bare snowflake.
+        #
+        # Deliberately *not* also gated on `cfg["enabled"]` the way joining
+        # is: refusing to record "leave me out" because an admin has the
+        # feature switched off would drop the request on the floor and
+        # re-enable it along with the feature.
         await interaction.response.send_message(
-            "❌ You're not in the pool. Use `/penpals status` to check your status.", ephemeral=True
+            "❌ You're not in that server anymore.", ephemeral=True
         )
+        return
+
+    def _remove() -> tuple[bool, float | None]:
+        with open_db(db_path) as conn:
+            was_pooled = _in_pool(conn, guild_id, user_id)
+            if was_pooled:
+                _remove_from_pool(conn, guild_id, user_id)
+                _record_pool_event(conn, guild_id, user_id, POOL_LEAVE, source)
+            _set_opt_out(conn, guild_id, user_id)
+            session = _get_active_session(conn, guild_id, user_id)
+            return was_pooled, session["expiry_at"] if session else None
+
+    was_pooled, expiry_at = await asyncio.to_thread(_remove)
+
+    if expiry_at is not None:
+        # Mid-chat. Their current pen pal is untouched — leaving the pool is
+        # not ending a conversation, and `/penpals end` is the door for that.
+        msg = (
+            "You're out of the Pen Pals pool.\n\n"
+            f"Your current chat still runs until <t:{int(expiry_at)}:R> — when it "
+            "closes you won't be put back in the pool, and you won't be matched "
+            "again unless you rejoin."
+        )
+    elif was_pooled:
+        msg = (
+            "You've left the Pen Pals pool. You won't be matched again "
+            "until you rejoin."
+        )
+    else:
+        # Nothing to undo — already out, or opting out pre-emptively. Not an
+        # error: the member asked for a state, and they now have it.
+        msg = "You're out of the Pen Pals pool — you won't be matched until you rejoin."
+
+    await interaction.response.send_message(msg, ephemeral=True)
+    if was_pooled:
+        await _refresh_panel(interaction.client, guild_id)
 
 
 class _PenPalsPanelJoinButton(
@@ -2354,7 +2534,10 @@ class PenPalsCog(commands.Cog):
 
     # ── /penpals leave ────────────────────────────────────────────────
 
-    @penpals.command(name="leave", description="Leave the Pen Pals pool before being matched.")
+    @penpals.command(
+        name="leave",
+        description="Leave the Pen Pals pool — works mid-chat, and holds until you rejoin.",
+    )
     async def penpals_leave(self, interaction: discord.Interaction) -> None:
         await _handle_leave(interaction, self.ctx.db_path, source="command")
 
@@ -2381,21 +2564,22 @@ class PenPalsCog(commands.Cog):
 
         def _check():
             with open_db(db_path) as conn:
+                paused_at = _opted_out_at(conn, guild_id, user_id)
                 session = _get_active_session(conn, guild_id, user_id)
                 if session:
                     cfg = _get_config(conn, guild_id)
                     max_swaps = cfg["max_question_swaps"] if cfg else _MAX_SWAPS
-                    return "active", (dict(session), max_swaps)
+                    return "active", (dict(session), max_swaps), paused_at
                 pool = [r["user_id"] for r in _get_pool(conn, guild_id)]
                 if user_id in pool:
                     cfg = _get_config(conn, guild_id)
                     mode = _normalize_match_mode(
                         cfg["match_mode"] if cfg and "match_mode" in cfg.keys() else None
                     )
-                    return "pool", (pool.index(user_id) + 1, mode)
-                return "none", None
+                    return "pool", (pool.index(user_id) + 1, mode), paused_at
+                return "none", None, paused_at
 
-        status, data = await asyncio.to_thread(_check)
+        status, data, paused_at = await asyncio.to_thread(_check)
 
         if status == "active":
             session_data, max_swaps = cast("tuple[dict, int]", data)
@@ -2410,6 +2594,14 @@ class PenPalsCog(commands.Cog):
                 f"Expires: <t:{expiry_at}:R>",
                 f"Question swaps remaining: **{swaps_left}**",
             ]
+            if paused_at is not None:
+                # The whole point of being able to opt out mid-chat is that it
+                # is silent to your partner — so this is the only place it is
+                # ever reflected back to them.
+                lines.append(
+                    "\nYou've left the pool, so you won't be matched again "
+                    "when this chat closes."
+                )
             await interaction.response.send_message("\n".join(lines), ephemeral=True)
         elif status == "pool":
             pos, mode = cast("tuple[int, str]", data)
@@ -2420,6 +2612,13 @@ class PenPalsCog(commands.Cog):
             )
             await interaction.response.send_message(
                 f"You're in the pool at position **#{pos}** — you'll be matched {when}.",
+                ephemeral=True,
+            )
+        elif paused_at is not None:
+            await interaction.response.send_message(
+                f"You left the Pen Pals pool <t:{int(paused_at)}:R> and won't be "
+                "matched. Use `/penpals join` — or the **Join Pool** button on the "
+                "signup panel — whenever you want back in.",
                 ephemeral=True,
             )
         else:

@@ -152,6 +152,16 @@ def purge_user_data(
         # protective record), nothing reads this back, so there is no ground
         # to hold it against an erasure request.
         "pen_pals_pool_events",
+        # Pen Pals opt-out (migration 174). A bare preference — the state
+        # behind a Leave Pool press — held in its own table only because the
+        # pool row it belongs to keeps being deleted. Nothing but the requeue
+        # paths and _eligible_pool reads it, and an erasure means the member
+        # wants their record gone, not curated. Note this leaves an erased
+        # member's preserved session able to re-pool them at expiry (the pool
+        # and session rows survive the purge by an older decision, register
+        # row above) — accepted: an erasure is an out-of-band operator act,
+        # and one Leave press puts the flag back.
+        "pen_pals_optouts",
     ):
         _delete(
             conn,

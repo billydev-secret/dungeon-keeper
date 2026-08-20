@@ -300,6 +300,13 @@ def test_purges_user_with_more_messages_than_sqlite_variable_cap(db):
             "guild_id = ? AND user_id = ?",
             id="pen_pals_pool_events",
         ),
+        pytest.param(
+            "pen_pals_optouts",
+            "INSERT INTO pen_pals_optouts (guild_id, user_id, at) VALUES (?, ?, 0)",
+            (GUILD, USER),
+            "guild_id = ? AND user_id = ?",
+            id="pen_pals_optouts",
+        ),
     ],
 )
 def test_purges_review_added_simple_tables(db, table, insert_sql, params, where):
@@ -914,3 +921,4 @@ def test_purge_clears_posted_question_the_member_was_only_asked(db):
 
     with open_db(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM risky_posted_questions").fetchone()[0] == 0
+

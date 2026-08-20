@@ -1045,11 +1045,20 @@ async def test_handle_leave_removes_from_pool(sync_db_path, monkeypatch):
 
 
 async def test_handle_leave_when_not_queued(sync_db_path):
+    """Leaving with no pool row to delete is not an error any more.
+
+    It used to answer "❌ You're not in the pool", which was true of the row
+    and false of the intent — and the state they asked for is now something
+    the bot can actually hold, so it holds it.
+    """
     _configure(sync_db_path)
     interaction = _join_interaction(1)
     await pp._handle_leave(interaction, sync_db_path)
     msg = interaction.response.send_message.await_args.args[0]
-    assert "not in the pool" in msg
+    assert "❌" not in msg
+    assert "won't be matched" in msg
+    with open_db(sync_db_path) as conn:
+        assert pp._is_opted_out(conn, GUILD_ID, 1)
 
 
 # ── _do_round ─────────────────────────────────────────────────────────
@@ -1764,9 +1773,11 @@ def test_close_abnormal_member_left_requeues_only_partner(sync_db_path):
     with open_db(sync_db_path) as conn:
         pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now)
         row = pp._get_session_by_channel(conn, 4242)
-        requeued = pp._close_abnormal_and_requeue(conn, row, "member_left", departed_user_id=1)
+        requeued, opted_out = pp._close_abnormal_and_requeue(
+            conn, row, "member_left", departed_user_id=1
+        )
 
-    assert requeued == [2]
+    assert (requeued, opted_out) == ([2], [])
     assert _pool_ids(sync_db_path) == [2]  # departed member 1 is not re-queued
     assert _active_session(sync_db_path, 1) is None
     assert _close_reason(sync_db_path, "s1") == "member_left"
@@ -1777,9 +1788,12 @@ def test_close_abnormal_channel_delete_requeues_both(sync_db_path):
     with open_db(sync_db_path) as conn:
         pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now)
         row = pp._get_session_by_channel(conn, 4242)
-        requeued = pp._close_abnormal_and_requeue(conn, row, "channel_deleted", departed_user_id=None)
+        requeued, opted_out = pp._close_abnormal_and_requeue(
+            conn, row, "channel_deleted", departed_user_id=None
+        )
 
     assert sorted(requeued) == [1, 2]
+    assert opted_out == []
     assert sorted(_pool_ids(sync_db_path)) == [1, 2]
     assert _close_reason(sync_db_path, "s1") == "channel_deleted"
 
@@ -1794,7 +1808,7 @@ def test_close_abnormal_is_idempotent_on_double_event(sync_db_path):
         first = pp._close_abnormal_and_requeue(conn, row, "member_left", departed_user_id=1)
         second = pp._close_abnormal_and_requeue(conn, row, "channel_deleted", departed_user_id=None)
 
-    assert first == [2]
+    assert first == ([2], [])
     assert second is None                     # already closed → claim fails
     assert _pool_ids(sync_db_path) == [2]      # partner pooled exactly once
     assert _close_reason(sync_db_path, "s1") == "member_left"  # first reason wins
@@ -1807,9 +1821,11 @@ def test_close_abnormal_skips_survivor_already_pooled(sync_db_path):
         pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now)
         pp._add_to_pool(conn, GUILD_ID, 2)  # somehow already queued
         row = pp._get_session_by_channel(conn, 4242)
-        requeued = pp._close_abnormal_and_requeue(conn, row, "member_left", departed_user_id=1)
+        requeued, opted_out = pp._close_abnormal_and_requeue(
+            conn, row, "member_left", departed_user_id=1
+        )
 
-    assert requeued == []                # nothing newly added
+    assert (requeued, opted_out) == ([], [])  # nothing newly added
     assert _pool_ids(sync_db_path) == [2]  # still present, not duplicated
 
 
@@ -2930,3 +2946,288 @@ async def test_a_round_that_pairs_someone_always_logs(sync_db_path, monkeypatch,
         await pp._tick(MagicMock(), sync_db_path)
 
     assert sum("swept guild" in r.message for r in caplog.records) == 3
+
+
+# ── Durable opt-out ───────────────────────────────────────────────────
+#
+# Leaving the pool used to hold only until your current chat ended: the pool
+# is current-state only, so `_handle_leave` deleted a row and nothing recorded
+# that you wanted to stay out. Since expiry started re-pooling both members
+# (2026-08-15) that made leaving nearly meaningless — a TGM member was matched
+# on 08-16 and 08-19 having never once been put in the pool by her own hand.
+# The flag is the durable "don't match me", and these are its enforcement.
+
+
+def test_expiry_does_not_repool_an_opted_out_member(sync_db_path):
+    """The defect, at the layer it lives on. She spoke in the chat, so the
+    engagement gate passes and the old code re-pools her regardless."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)
+        _said_something(conn, 2)
+        pp._set_opt_out(conn, GUILD_ID, 2)
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row)
+
+        assert requeued == [1]
+        # Not "skipped" either: skipped members are DM'd "that one stayed
+        # quiet" with a Join button, which is the wrong thing to send someone
+        # who just asked to be left alone.
+        assert skipped == []
+        assert [r["user_id"] for r in pp._get_pool(conn, GUILD_ID)] == [1]
+        assert (2, pp.POOL_SKIP, "opted_out") in _pool_events(conn)
+
+
+def test_abnormal_close_does_not_repool_an_opted_out_member(sync_db_path):
+    """The other requeue path. A partner leaving the server is not consent to
+    be matched again."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, time.time())
+        row = pp._get_active_session(conn, GUILD_ID, 1)
+        pp._set_opt_out(conn, GUILD_ID, 2)
+
+        requeued, opted_out = pp._close_abnormal_and_requeue(
+            conn, row, "channel_deleted", departed_user_id=None
+        )
+
+        assert requeued == [1]
+        assert opted_out == [2]
+        assert [r["user_id"] for r in pp._get_pool(conn, GUILD_ID)] == [1]
+        assert (2, pp.POOL_SKIP, "opted_out") in _pool_events(conn)
+
+
+def test_opt_out_beats_the_engagement_gate(sync_db_path):
+    """A quiet member who also opted out is recorded as opted out, not
+    inactive: 'skipped' earns them the "hop back in" DM and a Join button,
+    which is the bot arguing with a decision they already made."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        row = _expiring_session(conn)
+        _said_something(conn, 1)  # 2 never posted *and* opted out
+        pp._set_opt_out(conn, GUILD_ID, 2)
+
+        requeued, skipped = pp._close_expired_and_requeue(conn, row)
+
+        assert requeued == [1]
+        assert skipped == []
+        assert (2, pp.POOL_SKIP, "opted_out") in _pool_events(conn)
+        assert (2, pp.POOL_SKIP, "inactive") not in _pool_events(conn)
+
+
+def test_opt_out_is_recorded_once(sync_db_path):
+    """Pressing Leave twice doesn't move the timestamp — /penpals status
+    reports when they first asked, not when they last pressed a button."""
+    with open_db(sync_db_path) as conn:
+        pp._set_opt_out(conn, GUILD_ID, 1, at=1000.0)
+        pp._set_opt_out(conn, GUILD_ID, 1, at=2000.0)
+
+        assert pp._opted_out_at(conn, GUILD_ID, 1) == 1000.0
+        assert [r["user_id"] for r in pp._get_opt_outs(conn, GUILD_ID)] == [1]
+
+
+def test_opt_out_is_per_guild(sync_db_path):
+    """Two guilds run their own pools; leaving one is not leaving the other."""
+    with open_db(sync_db_path) as conn:
+        pp._set_opt_out(conn, GUILD_ID, 1)
+
+        assert pp._is_opted_out(conn, GUILD_ID, 1)
+        assert not pp._is_opted_out(conn, 12345, 1)
+
+
+async def test_leave_while_matched_opts_out_without_ending_the_chat(sync_db_path):
+    """The heart of the fix. Every leave surface used to answer "❌ You're not
+    in the pool" to a matched member — who is never in the pool — so the only
+    window to opt out was the gap between chats, reachable only through a DM
+    that a member with DMs closed never sees."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, time.time())
+
+    interaction = _join_interaction(1)
+    await pp._handle_leave(interaction, sync_db_path)
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "❌" not in msg
+    assert "won't be put back in the pool" in msg
+    with open_db(sync_db_path) as conn:
+        assert pp._is_opted_out(conn, GUILD_ID, 1)
+        # Leaving the pool is not ending a conversation.
+        assert pp._get_active_session(conn, GUILD_ID, 1) is not None
+
+
+async def test_leave_from_the_pool_opts_out_too(sync_db_path, monkeypatch):
+    """The pool row still goes — but so does the member's place in every
+    future round, which is what "Leave Pool" always looked like it meant."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1)
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+
+    await pp._handle_leave(_join_interaction(1), sync_db_path)
+
+    assert _pool_ids(sync_db_path) == []
+    with open_db(sync_db_path) as conn:
+        assert pp._is_opted_out(conn, GUILD_ID, 1)
+        assert (1, pp.POOL_LEAVE, "panel") in _pool_events(conn)
+
+
+async def test_joining_clears_the_opt_out(sync_db_path, monkeypatch):
+    _configure(sync_db_path)
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    with open_db(sync_db_path) as conn:
+        pp._set_opt_out(conn, GUILD_ID, 1)
+
+    await pp._handle_join(_join_interaction(1), sync_db_path)
+
+    with open_db(sync_db_path) as conn:
+        assert not pp._is_opted_out(conn, GUILD_ID, 1)
+    assert _pool_ids(sync_db_path) == [1]
+
+
+async def test_joining_mid_chat_clears_the_opt_out_and_says_so(sync_db_path, monkeypatch):
+    """Changing your mind while still matched. The old "❌ you already have a
+    pen pal" would report the click as a no-op when it in fact decided what
+    happens when that chat closes."""
+    _configure(sync_db_path)
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, time.time())
+        pp._set_opt_out(conn, GUILD_ID, 1)
+
+    interaction = _join_interaction(1)
+    await pp._handle_join(interaction, sync_db_path)
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "back in Pen Pals" in msg
+    with open_db(sync_db_path) as conn:
+        assert not pp._is_opted_out(conn, GUILD_ID, 1)
+    # Still no second seat: clearing the flag is not joining the pool.
+    assert _pool_ids(sync_db_path) == []
+
+
+async def test_join_blocked_by_the_role_gate_leaves_the_opt_out_alone(sync_db_path):
+    """The gates run before the flag is touched, so a refused join can't
+    quietly un-pause someone who isn't allowed in anyway."""
+    _configure(sync_db_path, opt_in_role_id=555)
+    g = FakeGuild(id=GUILD_ID)
+    g.roles[555] = FakeRole(id=555, name="Verified")
+    with open_db(sync_db_path) as conn:
+        pp._set_opt_out(conn, GUILD_ID, 1)
+
+    await pp._handle_join(_join_interaction(1, guild=g), sync_db_path)
+
+    with open_db(sync_db_path) as conn:
+        assert pp._is_opted_out(conn, GUILD_ID, 1)
+
+
+def test_eligible_pool_skips_an_opted_out_member(sync_db_path):
+    """Last gate. Nothing should pool an opted-out member, but a preference
+    the bot holds and doesn't honour is worse than none — so a row arriving
+    from anywhere else (backfill script, a restored backup) still can't be
+    handed a partner."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1, joined_at=100.0)
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=200.0)
+        pp._set_opt_out(conn, GUILD_ID, 2)
+
+        assert pp._eligible_pool(conn, GUILD_ID, time.time(), 0) == [1]
+
+
+async def test_status_reports_the_paused_state(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._set_opt_out(conn, GUILD_ID, 1, at=1000.0)
+
+    interaction = _join_interaction(1)
+    cog = pp.PenPalsCog(MagicMock(), MagicMock(db_path=sync_db_path))
+    await cog.penpals_status.callback(cog, interaction)
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "left the Pen Pals pool" in msg
+    assert "<t:1000:R>" in msg
+
+
+async def test_status_tells_a_matched_member_they_are_paused(sync_db_path):
+    """Opting out mid-chat is invisible to your partner by design, so status
+    is the only place it's ever shown back to you."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, time.time())
+        pp._set_opt_out(conn, GUILD_ID, 1)
+
+    interaction = _join_interaction(1)
+    cog = pp.PenPalsCog(MagicMock(), MagicMock(db_path=sync_db_path))
+    await cog.penpals_status.callback(cog, interaction)
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "won't be matched again when this chat closes" in msg
+
+
+async def test_abnormal_close_still_tells_an_opted_out_member(sync_db_path, monkeypatch):
+    """Not re-pooling them is not a reason to say nothing.
+
+    An abnormal close deletes a channel out from under a live conversation —
+    the ending that most needs explaining — and an opted-out member is exactly
+    the one who would otherwise watch it vanish in silence. The expiry path
+    has always sent them the plain notice; this one skipped them entirely
+    because it DMs straight off the re-queued list.
+    """
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, time.time())
+        pp._set_opt_out(conn, GUILD_ID, 2)
+        row = pp._get_session_by_channel(conn, 4242)
+
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.delete = AsyncMock()
+    bot.get_channel.return_value = channel
+
+    await pp._end_session_abnormally(
+        bot, sync_db_path, row, reason="member_left", departed_user_id=1, delete_channel=True,
+    )
+
+    guild.get_member(2).send.assert_awaited_once()
+    body = guild.get_member(2).send.await_args.kwargs["embed"].description
+    assert "ended early" in body
+    # …but not promised a place they asked to give up.
+    assert "put back in the Pen Pals pool" not in body
+    assert "haven't put you back" in body
+    assert _pool_ids(sync_db_path) == []
+
+
+def test_force_pair_refuses_an_opted_out_member(sync_db_path):
+    """`/penpals pair` never touches `_eligible_pool`, so the opt-out has to
+    be checked here too — otherwise a stray pool row lets a mod undo a
+    member's own decision, which is the one thing the feature promises no
+    staff-side control can do."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1)
+        pp._add_to_pool(conn, GUILD_ID, 2)  # a stray row: they opted out after
+        pp._set_opt_out(conn, GUILD_ID, 2)
+
+        assert pp._force_pair_status(conn, GUILD_ID, 1, 2) == "not_opted_in_2"
+        assert pp._force_pair_status(conn, GUILD_ID, 2, 1) == "not_opted_in_1"
+
+
+async def test_leave_from_a_dm_button_by_an_ex_member_writes_nothing(sync_db_path):
+    """The closing DM outlives the membership, and leaving now *writes* a row.
+    Without the guard an ex-member's weeks-old button plants an opt-out for a
+    guild they aren't in, which nothing prunes and the dashboard then lists
+    forever as a bare snowflake."""
+    _configure(sync_db_path)
+    guild = FakeGuild(id=GUILD_ID)  # they are not in guild.members
+    interaction = fake_interaction(user=FakeUser(id=1), guild=None)
+    interaction.client.get_guild.return_value = guild
+
+    await pp._handle_leave(interaction, sync_db_path, from_guild_id=GUILD_ID, source="dm")
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "not in that server anymore" in msg
+    with open_db(sync_db_path) as conn:
+        assert not pp._is_opted_out(conn, GUILD_ID, 1)

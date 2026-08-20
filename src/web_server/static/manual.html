@@ -851,11 +851,16 @@
       <li><strong>More than one person at a time</strong> — nobody is ever in two pen pal chats at once, and after a chat ends there's a re-match cooldown (set on the dashboard) before you can be paired again.</li>
     </ul>
 
+    <h4>Taking a break</h4>
+    <p>Whenever you've had enough — waiting in the pool, or right in the middle of a chat — press <strong>Leave Pool</strong> on the signup panel, run <span class="cmd-name">/penpals leave</span>, or use the <strong>Leave the pool</strong> button in a closing DM. They all do the same thing, and it <em>sticks</em>: you won't be matched again, and you won't be put back in the pool when a chat of yours ends. It stays that way until you decide otherwise — nothing expires it, and nobody else can undo it for you.</p>
+    <p>Leaving mid-chat doesn't end the conversation you're already in — it runs to its normal finish, and your pen pal is never told. (To close a chat early, that's <span class="cmd-name">/penpals end</span>.) It only decides what happens afterwards, and <span class="cmd-name">/penpals status</span> will remind you it's set.</p>
+    <p>Coming back is one press of <strong>Join Pool</strong> or <span class="cmd-name">/penpals join</span> — that clears it, even if you're still in a chat at the time.</p>
+
     <h4>When your chat ends</h4>
     <p>The channel closes on its own when the session length runs out (you get a "closes in 1 hour" warning first), and it disappears — there's no transcript, so copy anything you want to keep before then.</p>
     <p>You'll get a DM the moment it closes, and what it says depends on whether you used the chat:</p>
     <ul>
-      <li><strong>If you posted in it</strong> — you go straight back into the pool for a new match, and the DM says so. If you'd rather sit the next one out, the <strong>Leave the pool</strong> button in that DM takes you out; <span class="cmd-name">/penpals leave</span> does the same.</li>
+      <li><strong>If you posted in it</strong> — you go straight back into the pool for a new match, and the DM says so. If you'd rather stop there, the <strong>Leave the pool</strong> button in that DM takes you out and keeps you out (see <strong>Taking a break</strong> above); <span class="cmd-name">/penpals leave</span> and the panel's <strong>Leave Pool</strong> button do the same.</li>
       <li><strong>If you never posted</strong> — you're quietly taken out of the pool instead, so your spot goes to someone who's ready to chat. Nothing is held against you: the DM has a <strong>Join the pool</strong> button, and you can hop back in whenever you feel like it.</li>
     </ul>
     <p>Going back in the pool doesn't mean you'll be matched immediately — the re-match cooldown still has to pass first, so there's always a breather between chats.</p>
@@ -867,12 +872,12 @@
       <thead><tr><th>Command</th><th>Permission</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><code>/penpals join</code></td><td><span class="perm perm-all">Everyone</span></td><td>Get a pen pal — instant mode matches you on the spot if someone's waiting, otherwise (or in "once a day" mode) you join the pool and wait for the next match</td></tr>
-        <tr><td><code>/penpals leave</code></td><td><span class="perm perm-all">Everyone</span></td><td>Leave the pool before you're matched</td></tr>
-        <tr><td><code>/penpals status</code></td><td><span class="perm perm-all">Everyone</span></td><td>Whether you're waiting or matched, and when your session ends</td></tr>
+        <tr><td><code>/penpals leave</code></td><td><span class="perm perm-all">Everyone</span></td><td>Leave the pool and stay out — works while you're waiting <em>or</em> mid-chat, and holds until you join again. Doesn't end a chat you're already in</td></tr>
+        <tr><td><code>/penpals status</code></td><td><span class="perm perm-all">Everyone</span></td><td>Whether you're waiting, matched, or taking a break — and when your session ends</td></tr>
         <tr><td><code>/penpals block</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private panel to pick members Pen Pals should never match you with (or unblock them) — one block is enough, the other person is never told, and it doesn't end a chat you're already in</td></tr>
         <tr><td><code>/penpals new-question</code></td><td><span class="perm perm-all">Everyone</span></td><td>Swap the current conversation-starter for a fresh one (limited swaps per session)</td></tr>
         <tr><td><code>/penpals end</code></td><td><span class="perm perm-all">Everyone</span></td><td>End your current session early and close the shared channel</td></tr>
-        <tr><td><code>/penpals pair &lt;user1&gt; &lt;user2&gt;</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force-pair two specific members, bypassing the pool — both must already have joined the pool, so force-pairing never overrides opt-in</td></tr>
+        <tr><td><code>/penpals pair &lt;user1&gt; &lt;user2&gt;</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force-pair two specific members, bypassing the pool — both must already have joined the pool and not have left it, so force-pairing never overrides opt-in</td></tr>
         <tr><td><code>/penpals round</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force a pool sweep right now, instead of waiting for the automatic sweep (every few minutes in Instant mode, once a day at 8am Eastern in Once-a-day mode)</td></tr>
       </tbody>
     </table>
@@ -1543,7 +1548,7 @@
         <tr><td><strong>Activity</strong> — XP, levels, voice-session times, when you were last active, join/leave events, invite chains</td><td>Levelling, leaderboards, the newcomer funnel, inactivity sweeps</td><td>Indefinitely</td></tr>
         <tr><td><strong>Who you interact with</strong> — a graph of who talks to, replies to and reacts to whom</td><td>The attention and network reports mods use to spot people being ignored or pestered</td><td>Indefinitely</td></tr>
         <tr><td><strong>Economy &amp; games</strong> — wallet, every ledger entry, quests, casino bets and hands, game results</td><td>Running the economy; the ledger is a double-entry record that has to balance</td><td>Indefinitely</td></tr>
-        <tr><td><strong>Things you chose to add</strong> — bio answers, birthday (day and month only, never the year), Wellness settings, Pen Pals participation, role picks</td><td>The feature you opted into</td><td>Until you remove it (archived bios of members who left are deleted after 12 months)</td></tr>
+        <tr><td><strong>Things you chose to add</strong> — bio answers, birthday (day and month only, never the year), Wellness settings, Pen Pals participation (including the fact that you've left the pool, and when, so you aren't matched again), role picks</td><td>The feature you opted into</td><td>Until you remove it (archived bios of members who left are deleted after 12 months)</td></tr>
         <tr><td><strong>Pen Pals pool movement</strong> — when you joined or left the matching pool and what caused it (you signed up, you were matched, a chat ended, you left the server). Never any of what you and your pen pal said</td><td>So moderators can see whether matching is actually working — a pool that stops moving is invisible otherwise</td><td>Indefinitely; cleared in full by an erasure request</td></tr>
         <tr><td><strong>Survivor</strong> — if you join a season: your entry, your weekly NFL picks (kept secret from everyone but admins until the weekly reveal), strikes, and when you were eliminated</td><td>Running the game — picks have to be recorded to be graded, and past seasons stay browsable as history</td><td>Indefinitely; cleared in full by an erasure request</td></tr>
         <tr><td><strong>Music playlist posts</strong> — which track you posted into the playlist channel, and any link of yours that's waiting in the review queue</td><td>Running the rolling community playlist: crediting posts, skipping duplicates, and removing a song when its message is deleted</td><td>Indefinitely (rolled-off songs are kept as playlist history); cleared in full by an erasure request</td></tr>
