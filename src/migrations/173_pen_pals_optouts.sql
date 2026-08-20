@@ -24,7 +24,10 @@
 -- moved — the row exists so that "the pool did not grow" is distinguishable
 -- from "the pool grew silently".
 --
--- Metadata only — who and when. Erasable: see docs/data_register.md.
+-- Metadata only — who and when. **Preserved through an erasure**, unlike the
+-- rest of Pen Pals' per-user data: this is a suppression record, and deleting
+-- it would cause the very processing the member objected to. See
+-- docs/data_register.md for the Art 17(3) statement.
 
 CREATE TABLE IF NOT EXISTS pen_pals_optouts (
     guild_id INTEGER NOT NULL,

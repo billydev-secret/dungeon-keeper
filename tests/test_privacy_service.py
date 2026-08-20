@@ -300,13 +300,6 @@ def test_purges_user_with_more_messages_than_sqlite_variable_cap(db):
             "guild_id = ? AND user_id = ?",
             id="pen_pals_pool_events",
         ),
-        pytest.param(
-            "pen_pals_optouts",
-            "INSERT INTO pen_pals_optouts (guild_id, user_id, at) VALUES (?, ?, 0)",
-            (GUILD, USER),
-            "guild_id = ? AND user_id = ?",
-            id="pen_pals_optouts",
-        ),
     ],
 )
 def test_purges_review_added_simple_tables(db, table, insert_sql, params, where):
@@ -921,3 +914,68 @@ def test_purge_clears_posted_question_the_member_was_only_asked(db):
 
     with open_db(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM risky_posted_questions").fetchone()[0] == 0
+
+def test_purge_preserves_the_pen_pals_opt_out(db):
+    """A suppression record survives the erasure that clears everything else.
+
+    It is the one row whose whole purpose is to stop the member being
+    processed, and an erasure preserves both `pen_pals_pool` and
+    `pen_pals_sessions` — so deleting it would leave a purged member sitting
+    in the pool, or in a live session that re-pools them at expiry, having
+    asked to be left out and with no way to know they no longer were.
+    """
+    from bot_modules.cogs.pen_pals_cog import _is_opted_out, _set_opt_out
+
+    with open_db(db) as conn:
+        _set_opt_out(conn, GUILD, USER, at=1000.0)
+        # Something that *is* cleared, so the test can't pass on a no-op purge.
+        conn.execute(
+            "INSERT INTO pen_pals_pool_events (guild_id, user_id, at, action, reason) "
+            "VALUES (?, ?, 0, 'leave', 'panel')",
+            (GUILD, USER),
+        )
+
+        purge_user_data(conn, GUILD, USER)
+
+        assert _is_opted_out(conn, GUILD, USER)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM pen_pals_pool_events WHERE guild_id = ? AND user_id = ?",
+            (GUILD, USER),
+        ).fetchone()[0] == 0
+
+
+def test_an_erased_member_is_still_not_requeued(db):
+    """The whole chain, end to end: opting out has to survive an erasure to
+    mean anything, because `pen_pals_sessions` is preserved and a preserved
+    session still expires."""
+    import time
+
+    from bot_modules.cogs import pen_pals_cog as pp
+
+    with open_db(db) as conn:
+        pp._set_opt_out(conn, GUILD, USER)
+        pp._create_session(conn, "s1", GUILD, 4242, USER, 777, time.time() - 90000)
+        for uid in (USER, 777):
+            conn.execute(
+                "INSERT INTO messages (guild_id, channel_id, author_id, ts) VALUES (?, ?, ?, 0)",
+                (GUILD, 4242, uid),
+            )
+
+        purge_user_data(conn, GUILD, USER)
+
+        row = pp._get_active_session(conn, GUILD, USER)
+        requeued, skipped = pp._close_expired_and_requeue(conn, row)
+
+        # The partner is re-pooled as usual — the path ran, and only the
+        # erased member was held back.
+        assert requeued == [777]
+        assert USER not in skipped
+        assert [r["user_id"] for r in pp._get_pool(conn, GUILD)] == [777]
+        # And held back *for the right reason*: the erasure deleted the
+        # messages proving they spoke, so without the surviving opt-out this
+        # would read as 'inactive' — which comes with a "hop back in" DM and
+        # a Join button.
+        assert [
+            (r["action"], r["reason"]) for r in pp._recent_pool_events(conn, GUILD)
+            if r["user_id"] == USER
+        ] == [(pp.POOL_SKIP, "opted_out")]

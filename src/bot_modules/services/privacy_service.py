@@ -152,10 +152,6 @@ def purge_user_data(
         # protective record), nothing reads this back, so there is no ground
         # to hold it against an erasure request.
         "pen_pals_pool_events",
-        # Pen Pals opt-out (migration 173). A bare preference — "don't match
-        # me" — that nothing but the requeue paths reads, and an erasure also
-        # clears pen_pals_pool, so there is no state left for it to protect.
-        "pen_pals_optouts",
     ):
         _delete(
             conn,
@@ -163,6 +159,18 @@ def purge_user_data(
             (guild_id, user_id),
             table=table,
         )
+
+    # Deliberately absent above: pen_pals_optouts (migration 173). It is a
+    # suppression record — the one row whose entire purpose is to stop the
+    # member being processed — and deleting it would cause the very thing they
+    # objected to. An erasure preserves pen_pals_pool and pen_pals_sessions,
+    # so a purged member can still be sitting in the pool or in a live session
+    # that will re-pool them at expiry; clearing the opt-out on the way past
+    # would quietly re-enrol someone who had asked to be left out, and they
+    # would have no way of knowing. Kept under Art 17(3) on the same footing
+    # as a no-contact order: it exists to protect, not to record. Disclosed in
+    # full by the access export (user_id is in SUBJECT_ID_COLUMNS), and the
+    # member clears it themselves at any time by rejoining.
 
     # Anonymous-features audit trail. Keyed on actor_id/target_id rather than
     # user_id, so it needs its own statements. Routinely pruned by the
