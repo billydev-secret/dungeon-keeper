@@ -24,6 +24,8 @@ extracted pieces are proven to work without spinning up Discord.
 
 from __future__ import annotations
 
+import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -344,63 +346,6 @@ def test_can_roll_blocks_repeat_in_open_round():
     assert s.can_roll(43) is True
 
 
-def test_can_roll_restricts_to_reroll_set_when_rerolling():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {1, 2}
-    assert s.can_roll(1) is True   # in the reroll set
-    assert s.can_roll(3) is False  # not in the reroll set
-
-
-def test_add_roll_clears_reroll_set_when_all_rerollers_submit():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {1, 2}
-    s.add_roll(1, 5)
-    assert s.reroll_user_ids == {1, 2}  # still waiting for 2
-    s.add_roll(2, 7)
-    assert s.reroll_user_ids == set()  # all submitted → cleared
-
-
-# ── models.RiskyRollState.prepare_reroll ─────────────────────────────
-
-
-def test_prepare_reroll_clears_state_for_listed_users_only():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.rolls = {1: 80, 2: 80, 3: 5}
-    s.highest_user = 1
-    s.lowest_user = 3
-    s.second_lowest_user = 3
-    s.second_highest_user = 2
-    s.lowest_tie_user_ids = {3}
-    s.prepare_reroll([1, 2])
-    assert s.reroll_user_ids == {1, 2}
-    assert 1 not in s.rolls  # rerollers had rolls removed
-    assert 2 not in s.rolls
-    assert s.rolls[3] == 5   # non-rerollers untouched
-    assert s.highest_user is None
-    assert s.lowest_user is None
-    assert s.second_lowest_user is None
-    assert s.second_highest_user is None
-    assert s.lowest_tie_user_ids == set()
-
-
-# ── models.RiskyRollState.reroll_mentions ────────────────────────────
-
-
-def test_reroll_mentions_returns_sorted_mention_string():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {3, 1, 2}
-    assert s.reroll_mentions() == "<@1>, <@2>, <@3>"
-
-
-def test_pending_reroll_mentions_skips_already_rolled():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {1, 2, 3}
-    s.rolls = {2: 50}
-    pending = s.pending_reroll_mentions()
-    assert "<@1>" in pending and "<@3>" in pending
-    assert "<@2>" not in pending
-
-
 # ── models.RiskyRollState.resolve — six branches ────────────────────
 
 
@@ -413,13 +358,6 @@ def test_resolve_returns_not_enough_with_one_roll():
 def test_resolve_returns_not_enough_with_zero_rolls():
     s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
     assert s.resolve().result_type == RoundResult.NOT_ENOUGH
-
-
-def test_resolve_waiting_for_rerolls_when_reroll_set_incomplete():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.rolls = {1: 50, 2: 60}
-    s.reroll_user_ids = {1, 3}  # 3 has not rolled yet
-    assert s.resolve().result_type == RoundResult.WAITING_FOR_REROLLS
 
 
 def test_resolve_ok_result_picks_unique_high_and_low():
@@ -756,15 +694,6 @@ def test_build_embed_1_rule_shows_two_askers():
     assert "<@3>" in by_name["Result"]
 
 
-def test_build_embed_reroll_state_shows_pending():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {1, 2}
-    s.rolls = {2: 7}  # only player 2 has rerolled
-    embed = build_embed(s)
-    by_name = _embed_field_map(embed)
-    assert "Reroll" in " ".join(by_name.keys())
-
-
 def test_build_embed_footer_describes_auto_close():
     s = RiskyRollState(
         channel_id=100, guild_id=1, opener_id=10,
@@ -1081,7 +1010,6 @@ async def test_store_round_save_load_delete_round_trip(store: StateStore):
     s.highest_user = 10
     s.lowest_user = 20
     s.second_lowest_user = 30
-    s.reroll_user_ids = {77, 88}
 
     await store.save_round(s)
     loaded = await store.load_active_rounds()
@@ -1096,7 +1024,6 @@ async def test_store_round_save_load_delete_round_trip(store: StateStore):
     assert got.highest_user == 10
     assert got.lowest_user == 20
     assert got.second_lowest_user == 30
-    assert got.reroll_user_ids == {77, 88}
     assert got.rolls == {10: 80, 20: 5}
 
     await store.delete_round(s.game_id)
@@ -1226,6 +1153,57 @@ async def test_store_sweep_old_posted_questions_removes_stale(store: StateStore)
     assert swept == 1
     remaining = await store.load_posted_questions()
     assert [p.message_id for p in remaining] == [2]
+
+
+async def test_store_sweep_old_pending_questions_removes_stale(store: StateStore):
+    old = PendingQuestionState(
+        channel_id=100, guild_id=1, winner_id=10,
+        participant_user_ids={20}, game_id="old",
+        created_at=1.0,  # epoch — definitely > 7 days old
+    )
+    fresh = PendingQuestionState(
+        channel_id=100, guild_id=1, winner_id=10,
+        participant_user_ids={20}, game_id="fresh",
+    )
+    await store.save_pending_question(old)
+    await store.save_pending_question(fresh)
+
+    swept = await store.sweep_old_pending_questions()
+    assert swept == 1
+    assert [p.game_id for p in await store.load_pending_questions()] == ["fresh"]
+
+
+async def test_store_sweep_old_pending_questions_treats_null_age_as_old(store: StateStore):
+    # Rows written before migration 173 have no created_at. They predate the
+    # column, so they predate the release — swept, not granted a fresh week.
+    pq = PendingQuestionState(
+        channel_id=100, guild_id=1, winner_id=10,
+        participant_user_ids={20}, game_id="pre-migration",
+    )
+    await store.save_pending_question(pq)
+    with sqlite3.connect(store._path) as conn:
+        conn.execute("UPDATE risky_pending_questions SET created_at = NULL")
+
+    assert await store.sweep_old_pending_questions() == 1
+    assert await store.load_pending_questions() == []
+
+
+async def test_store_pending_question_resave_keeps_the_original_age(store: StateStore):
+    # A two-questioner round re-saves this row when the first of the two asks.
+    # Refreshing the clock there would let a half-finished prompt outlive the
+    # sweep for as long as someone kept feeding it.
+    pq = PendingQuestionState(
+        channel_id=100, guild_id=1, winner_id=10, extra_questioner_id=11,
+        participant_user_ids={20}, game_id="two",
+        created_at=1.0,
+    )
+    await store.save_pending_question(pq)
+
+    pq.questioners_asked = {10}
+    pq.created_at = time.time()  # what a fresh in-memory state would carry
+    await store.save_pending_question(pq)
+
+    assert await store.sweep_old_pending_questions() == 1
 
 
 async def test_store_delete_guild_data_clears_all_tables(store: StateStore):

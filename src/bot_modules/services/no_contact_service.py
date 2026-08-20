@@ -90,6 +90,44 @@ def no_contact_partners_conn(
     return out
 
 
+def no_contact_pairs_among(
+    db_path: Path, guild_id: int, user_ids: "set[int] | list[int]"
+) -> set[tuple[int, int]]:
+    """Every no-contact pair with BOTH members inside *user_ids*.
+
+    The third shape a gate can need, after "are these two blocked" and "who is
+    this member blocked from". Risky Rolls asks it because the thing it has to
+    keep apart is not a member and a target but a *group*: the dice decide who
+    asks whom, so the gate needs the blocked pairs sitting in one round before
+    it can tell whether an outcome is safe.
+
+    Returned as ``(low, high)`` tuples in :func:`pair_key` order, so a caller
+    can test membership without worrying which way round it holds the pair.
+    """
+    ids = {int(u) for u in user_ids}
+    if len(ids) < 2:
+        return set()
+    with open_db(db_path) as conn:
+        return no_contact_pairs_among_conn(conn, guild_id, ids)
+
+
+def no_contact_pairs_among_conn(
+    conn: sqlite3.Connection, guild_id: int, user_ids: "set[int] | list[int]"
+) -> set[tuple[int, int]]:
+    """:func:`no_contact_pairs_among` for a caller that already holds a connection."""
+    ids = {int(u) for u in user_ids}
+    if len(ids) < 2:
+        return set()
+    ph = ",".join("?" for _ in ids)
+    ordered = sorted(ids)
+    rows = conn.execute(
+        f"SELECT user_low, user_high FROM no_contact_pairs "
+        f"WHERE guild_id = ? AND user_low IN ({ph}) AND user_high IN ({ph})",
+        (guild_id, *ordered, *ordered),
+    ).fetchall()
+    return {(int(r["user_low"]), int(r["user_high"])) for r in rows}
+
+
 def add_pair(
     db_path: Path,
     guild_id: int,

@@ -11,6 +11,7 @@ log = logging.getLogger(__name__)
 
 MAX_GAMES_PER_CHANNEL = 10
 _POSTED_Q_MAX_AGE = 7 * 24 * 3600  # 7 days
+_PENDING_Q_MAX_AGE = 7 * 24 * 3600  # 7 days — same clock as posted questions
 
 
 class StateStore:
@@ -122,10 +123,10 @@ class StateStore:
                 """
                 INSERT INTO risky_active_rounds (
                     game_id, channel_id, guild_id, opener_id, message_id, is_open,
-                    highest_user, lowest_user, reroll_user_ids,
+                    highest_user, lowest_user,
                     auto_close_players, auto_close_minutes, created_at,
                     skip_min_game_time, second_lowest_user, second_highest_user
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(game_id) DO UPDATE SET
                     channel_id = excluded.channel_id,
                     guild_id = excluded.guild_id,
@@ -134,7 +135,6 @@ class StateStore:
                     is_open = excluded.is_open,
                     highest_user = excluded.highest_user,
                     lowest_user = excluded.lowest_user,
-                    reroll_user_ids = excluded.reroll_user_ids,
                     auto_close_players = excluded.auto_close_players,
                     auto_close_minutes = excluded.auto_close_minutes,
                     created_at = excluded.created_at,
@@ -145,7 +145,7 @@ class StateStore:
                 (
                     state.game_id, state.channel_id, state.guild_id, state.opener_id,
                     state.message_id, int(state.is_open), state.highest_user,
-                    state.lowest_user, serialize_user_ids(state.reroll_user_ids),
+                    state.lowest_user,
                     state.auto_close_players, state.auto_close_minutes, state.created_at,
                     int(state.skip_min_game_time), state.second_lowest_user,
                     state.second_highest_user,
@@ -184,7 +184,7 @@ class StateStore:
             round_rows = conn.execute(
                 """
                 SELECT game_id, channel_id, guild_id, opener_id, message_id, is_open,
-                       highest_user, lowest_user, reroll_user_ids,
+                       highest_user, lowest_user,
                        auto_close_players, auto_close_minutes, created_at,
                        skip_min_game_time, second_lowest_user, second_highest_user
                 FROM risky_active_rounds
@@ -202,7 +202,6 @@ class StateStore:
                     is_open=bool(row["is_open"]),
                     highest_user=int(row["highest_user"]) if row["highest_user"] is not None else None,
                     lowest_user=int(row["lowest_user"]) if row["lowest_user"] is not None else None,
-                    reroll_user_ids=deserialize_user_ids(row["reroll_user_ids"]),
                     auto_close_players=int(row["auto_close_players"]) if row["auto_close_players"] is not None else None,
                     auto_close_minutes=int(row["auto_close_minutes"]) if row["auto_close_minutes"] is not None else None,
                     created_at=float(row["created_at"]) if row["created_at"] is not None else time.time(),
@@ -243,8 +242,8 @@ class StateStore:
                 INSERT INTO risky_pending_questions (
                     game_id, channel_id, guild_id, winner_id, prompt_message_id,
                     participant_user_ids, lowest_tie_user_ids, prompt_kind,
-                    extra_questioner_id, questioners_asked
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    extra_questioner_id, questioners_asked, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(game_id) DO UPDATE SET
                     channel_id = excluded.channel_id,
                     guild_id = excluded.guild_id,
@@ -255,6 +254,11 @@ class StateStore:
                     prompt_kind = excluded.prompt_kind,
                     extra_questioner_id = excluded.extra_questioner_id,
                     questioners_asked = excluded.questioners_asked
+                    -- created_at is NOT refreshed: a two-questioner round
+                    -- re-saves this row when the first of the two asks, and
+                    -- restarting the clock there would let a half-finished
+                    -- prompt outlive the sweep for as long as someone kept
+                    -- feeding it.
                 """,
                 (
                     state.game_id, state.channel_id, state.guild_id, state.winner_id,
@@ -264,6 +268,7 @@ class StateStore:
                     state.prompt_kind,
                     state.extra_questioner_id,
                     serialize_user_ids(state.questioners_asked),
+                    state.created_at,
                 ),
             )
 
@@ -283,7 +288,7 @@ class StateStore:
                 """
                 SELECT game_id, channel_id, guild_id, winner_id, prompt_message_id,
                        participant_user_ids, lowest_tie_user_ids, prompt_kind,
-                       extra_questioner_id, questioners_asked
+                       extra_questioner_id, questioners_asked, created_at
                 FROM risky_pending_questions
                 """
             ).fetchall()
@@ -300,6 +305,7 @@ class StateStore:
                 prompt_kind=PromptKind(row["prompt_kind"] or PromptKind.ROOM.value),
                 extra_questioner_id=int(row["extra_questioner_id"]) if row["extra_questioner_id"] is not None else None,
                 questioners_asked=deserialize_user_ids(row["questioners_asked"]),
+                created_at=float(row["created_at"]) if row["created_at"] is not None else 0.0,
             )
             for row in rows
         ]
@@ -388,6 +394,27 @@ class StateStore:
 
     async def sweep_old_posted_questions(self) -> int:
         return await asyncio.to_thread(self._sweep_old_posted_questions)
+
+    def _sweep_old_pending_questions(self) -> int:
+        """Drop prompts whose winner never pressed Ask Question.
+
+        NULL ``created_at`` is swept, unlike the posted-question sweep just
+        above which skips it. The difference is deliberate: this column
+        arrived in migration 173, so a NULL here means "written before the
+        column existed" — genuinely old — while over there the column has
+        always been written and a NULL would be corruption.
+        """
+        cutoff = time.time() - _PENDING_Q_MAX_AGE
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM risky_pending_questions "
+                "WHERE created_at IS NULL OR created_at < ?",
+                (cutoff,),
+            )
+            return cursor.rowcount or 0
+
+    async def sweep_old_pending_questions(self) -> int:
+        return await asyncio.to_thread(self._sweep_old_pending_questions)
 
     def _delete_guild_data(self, guild_id: int) -> list[str]:
         with self._connect() as conn:

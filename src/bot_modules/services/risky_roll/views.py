@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import math
-import random
 import time
 
 import discord
@@ -18,7 +17,12 @@ from .formatters import (
     get_text_channel,
     resolve_embed_accent,
 )
-from .logic import build_main_prompt_state, build_one_rule_prompt_state
+from .logic import (
+    build_main_prompt_state,
+    build_one_rule_prompt_state,
+    choose_roll,
+    has_blocked_edge,
+)
 from .models import (
     PendingQuestionState,
     PostedQuestionState,
@@ -29,6 +33,35 @@ from .models import (
 from .state import DEFAULT_MIN_GAME_SECONDS
 
 log = logging.getLogger(__name__)
+
+# Shared by the ordinary path and the no-contact path, deliberately. Both
+# refusals are reached two ways — a round genuinely too small to resolve, and a
+# round the gate will not let resolve — and the whole point of the second is
+# that it is indistinguishable from the first. Two copies of the literal would
+# let a copy edit to one of them turn the refusal into a tell, with no test
+# failing (docs/no_contact_spec.md, "The disclosure rules").
+NOT_ENOUGH_TEXT = "At least 2 players must roll."
+AUTO_CLOSE_NOT_ENOUGH_TEXT = "Round auto-closed: not enough players rolled."
+
+
+async def _blocked_pairs_in(state: RiskyRollState, *extra_user_ids: int) -> set[tuple[int, int]]:
+    """No-contact pairs sitting in this round, read fresh from the list.
+
+    Returns an empty set when the game has no db path (tests that drive the
+    views without a cog load) — the gate is additive, so an unconfigured
+    lookup must not break the ordinary round.
+    """
+    if app_state.db_path is None:
+        return set()
+    from bot_modules.services import no_contact_service
+
+    user_ids = set(state.rolls) | set(extra_user_ids)
+    return await asyncio.to_thread(
+        no_contact_service.no_contact_pairs_among,
+        app_state.db_path,
+        state.guild_id,
+        user_ids,
+    )
 
 
 async def schedule_auto_close(client: discord.Client, game_id: str, delay: float) -> None:
@@ -46,17 +79,24 @@ async def auto_close_round(client: discord.Client, game_id: str) -> None:
             return
 
         channel_id = state.channel_id
+
+        # Before resolving, not after: `resolve` flips `is_open` and runs the
+        # hidden tie roll-offs as a side effect, so a refusal that came later
+        # would have to unpick them.
+        blocked_pairs = await _blocked_pairs_in(state)
+        gate_blocked = has_blocked_edge(state.rolls, blocked_pairs)
+
         resolution = state.resolve()
         channel = await get_text_channel(client, channel_id)
 
-        if resolution.result_type in (RoundResult.NOT_ENOUGH, RoundResult.WAITING_FOR_REROLLS):
+        if gate_blocked or resolution.result_type == RoundResult.NOT_ENOUGH:
             state.is_open = False
             app_state.active_games.pop(game_id, None)
             if app_state.store is not None:
                 await app_state.store.delete_round(game_id)
             if channel is not None:
                 await disable_round_message(state, channel)
-                await channel.send("Round auto-closed: not enough players rolled.")
+                await channel.send(AUTO_CLOSE_NOT_ENOUGH_TEXT)
             return
 
         closed_view = RiskyRollView(game_id)
@@ -297,13 +337,15 @@ class RiskyRollView(BaseRiskyRollView):
                 return
 
             if not state.can_roll(interaction.user.id):
-                if state.reroll_user_ids:
-                    await interaction.followup.send("You cannot reroll right now.", ephemeral=True)
-                    return
                 await interaction.followup.send("You already rolled this round.", ephemeral=True)
                 return
 
-            roll = random.randint(1, 100)
+            # The draw itself is the gate. A round with no no-contact pair in
+            # it — nearly every round — takes the same honest randint it always
+            # did; only a value that would pair a blocked couple is redrawn.
+            # Nothing is refused, so there is no refusal to disguise.
+            blocked_pairs = await _blocked_pairs_in(state, interaction.user.id)
+            roll = choose_roll(state.rolls, interaction.user.id, blocked_pairs)
             state.add_roll(interaction.user.id, roll)
             # Cache the roller's name so the roster embed can show it as text
             # instead of a <@id> mention that some viewers can't resolve.
@@ -389,23 +431,18 @@ class RiskyRollView(BaseRiskyRollView):
                     )
                     return
 
-            resolution = state.resolve()
-
-            if resolution.result_type == RoundResult.WAITING_FOR_REROLLS:
-                pending_ids = [uid for uid in state.reroll_user_ids if uid not in state.rolls]
-                await interaction.response.send_message(
-                    f"Still waiting for {state.pending_reroll_mentions()} to reroll.",
-                    allowed_mentions=discord.AllowedMentions(
-                        users=[discord.Object(id=uid) for uid in pending_ids],
-                        everyone=False,
-                        roles=False,
-                    ),
-                    ephemeral=True,
-                )
+            # Authoritative. The roll-time nudge is what keeps this from
+            # firing; this is what makes it a guarantee. Runs before `resolve`,
+            # which would otherwise close the round out from under a refusal.
+            blocked_pairs = await _blocked_pairs_in(state)
+            if has_blocked_edge(state.rolls, blocked_pairs):
+                await interaction.response.send_message(NOT_ENOUGH_TEXT, ephemeral=True)
                 return
 
+            resolution = state.resolve()
+
             if resolution.result_type == RoundResult.NOT_ENOUGH:
-                await interaction.response.send_message("At least 2 players must roll.", ephemeral=True)
+                await interaction.response.send_message(NOT_ENOUGH_TEXT, ephemeral=True)
                 return
 
             task = app_state.auto_close_tasks.pop(self.game_id, None)
@@ -505,7 +542,23 @@ class SixtyNineQuestionModal(discord.ui.Modal, title="Ask A Question"):
                 except (discord.Forbidden, discord.HTTPException):
                     log.exception("Failed to create thread for 69 question in game %s.", self.game_id)
 
-                all_mentions = format_user_mentions(state.participant_user_ids)
+                # A room question is not directed contact, so it posts intact
+                # and the thread stays public — she can read it if she wants,
+                # exactly as she can read anything else he says in the channel.
+                # What she does not get is the bot @-pinging her with his words
+                # attached (docs/no_contact_spec.md, Risky Rolls).
+                from bot_modules.services import no_contact_service
+
+                pinged = set(state.participant_user_ids)
+                if app_state.db_path is not None:
+                    partners = await asyncio.to_thread(
+                        no_contact_service.no_contact_partners,
+                        app_state.db_path,
+                        state.guild_id,
+                        asker_id,
+                    )
+                    pinged -= partners
+                all_mentions = format_user_mentions(pinged)
                 content = f"{all_mentions}\n<@{asker_id}> asks:\n{question_text}"
 
                 try:

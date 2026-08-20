@@ -186,19 +186,6 @@ def build_pending_question_summary(state: PendingQuestionState, question_text: s
     return f"<@{state.winner_id}> rolled 69 and asked:\n> {question_text}"
 
 
-def _add_reroll_field(
-    embed: discord.Embed, state: RiskyRollState, *, show_all_in_message: bool, name_fn: NameFn
-) -> None:
-    tied = ", ".join(name_fn(uid) for uid in sorted(state.reroll_user_ids))
-    reroll_text = f"Tied: {tied}"
-    pending = [uid for uid in sorted(state.reroll_user_ids) if uid not in state.rolls]
-    if pending:
-        reroll_text += "\nWaiting on: " + ", ".join(name_fn(uid) for uid in pending)
-    elif show_all_in_message:
-        reroll_text += "\nAll rerolls in — close the round."
-    embed.add_field(name="⚔️ Reroll", value=reroll_text, inline=False)
-
-
 def build_embed(
     state: RiskyRollState,
     guild: "discord.Guild | None" = None,
@@ -215,17 +202,14 @@ def build_embed(
     elif accent is not None:
         color = accent
     elif state.is_open:
-        color = discord.Color(0xFF9800) if state.reroll_user_ids else discord.Color(0xDC3545)
+        color = discord.Color(0xDC3545)
     else:
         color = discord.Color(0x546E7A)
 
     embed = discord.Embed(title="🎲 Risky Rolls", color=color)
 
     if state.is_open:
-        if state.reroll_user_ids:
-            embed.description = "Tie for highest — the tied players must reroll."
-        else:
-            embed.description = "Highest roll wins, lowest answers. Press **Roll** to join."
+        embed.description = "Highest roll wins, lowest answers. Press **Roll** to join."
     else:
         embed.description = "Round over."
 
@@ -239,8 +223,6 @@ def build_embed(
 
     if not state.rolls:
         embed.add_field(name="Rolls (0)", value="No rolls yet.", inline=False)
-        if state.reroll_user_ids:
-            _add_reroll_field(embed, state, show_all_in_message=False, name_fn=name)
         return embed
 
     sorted_rolls = sorted(state.rolls.items(), key=lambda item: item[1], reverse=True)
@@ -249,9 +231,6 @@ def build_embed(
         for uid, roll in sorted_rolls
     ]
     embed.add_field(name=f"Rolls ({len(state.rolls)})", value="\n".join(lines), inline=False)
-
-    if state.reroll_user_ids:
-        _add_reroll_field(embed, state, show_all_in_message=True, name_fn=name)
 
     if not state.is_open and state.highest_user:
         high_mention = name(state.highest_user)

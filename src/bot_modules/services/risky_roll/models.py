@@ -11,7 +11,6 @@ log = logging.getLogger(__name__)
 
 class RoundResult(Enum):
     NOT_ENOUGH = auto()
-    WAITING_FOR_REROLLS = auto()
     TIE = auto()
     SIXTYNINE = auto()
     SIXTYNINE_TIE = auto()
@@ -46,7 +45,6 @@ class RiskyRollState:
     lowest_user: int | None = None
     lowest_tie_user_ids: set[int] = field(default_factory=set)
     highest_tie_user_ids: set[int] = field(default_factory=set)
-    reroll_user_ids: set[int] = field(default_factory=set)
     auto_close_players: int | None = None
     auto_close_minutes: int | None = None
     created_at: float = field(default_factory=time.time)
@@ -58,35 +56,9 @@ class RiskyRollState:
 
     def add_roll(self, user_id: int, value: int) -> None:
         self.rolls[user_id] = value
-        if self.reroll_user_ids:
-            completed = {uid for uid in self.reroll_user_ids if uid in self.rolls}
-            if completed == self.reroll_user_ids:
-                self.reroll_user_ids.clear()
 
     def can_roll(self, user_id: int) -> bool:
-        if self.reroll_user_ids:
-            return user_id in self.reroll_user_ids and user_id not in self.rolls
         return user_id not in self.rolls
-
-    def prepare_reroll(self, user_ids: list[int]) -> None:
-        self.reroll_user_ids = set(user_ids)
-        for uid in self.reroll_user_ids:
-            self.rolls.pop(uid, None)
-        self.highest_user = None
-        self.lowest_user = None
-        self.lowest_tie_user_ids.clear()
-        self.highest_tie_user_ids.clear()
-        self.second_lowest_user = None
-        self.second_highest_user = None
-        self.second_lowest_tie_user_ids.clear()
-        self.second_highest_tie_user_ids.clear()
-
-    def reroll_mentions(self) -> str:
-        return ", ".join(f"<@{uid}>" for uid in sorted(self.reroll_user_ids))
-
-    def pending_reroll_mentions(self) -> str:
-        pending = [uid for uid in self.reroll_user_ids if uid not in self.rolls]
-        return ", ".join(f"<@{uid}>" for uid in pending)
 
     def _find_second_extreme(self, *, pick_lowest: bool) -> tuple[int | None, set[int]]:
         if self.highest_user is None or self.lowest_user is None:
@@ -115,9 +87,6 @@ class RiskyRollState:
         self.highest_tie_user_ids.clear()
         self.second_lowest_tie_user_ids.clear()
         self.second_highest_tie_user_ids.clear()
-
-        if self.reroll_user_ids and any(uid not in self.rolls for uid in self.reroll_user_ids):
-            return ResolutionResult(result_type=RoundResult.WAITING_FOR_REROLLS)
 
         if len(self.rolls) < 2:
             return ResolutionResult(result_type=RoundResult.NOT_ENOUGH)
@@ -167,7 +136,6 @@ class RiskyRollState:
             self.highest_user = winner_id
             self.lowest_user = lowest_id
             self.is_open = False
-            self.reroll_user_ids.clear()
             self._apply_special_roll_rules()
             log.info("Game %s: highest tie resolved. Winner: %s, Lowest: %s", self.game_id, winner_id, lowest_id)
             return ResolutionResult(
@@ -211,6 +179,7 @@ class PendingQuestionState:
     prompt_kind: PromptKind = PromptKind.ROOM
     extra_questioner_id: int | None = None
     questioners_asked: set[int] = field(default_factory=set)
+    created_at: float = field(default_factory=time.time)
 
     @property
     def questions_remaining(self) -> int:

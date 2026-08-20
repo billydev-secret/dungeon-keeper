@@ -110,13 +110,6 @@ CASES = [
         discord.Color(0xDC3545),
     ),
     case(
-        "risky.reroll",
-        lambda **kw: risky_formatters.build_embed(
-            _risky_state(reroll_user_ids={1, 2}), accent=kw.get("color")
-        ),
-        discord.Color(0xFF9800),
-    ),
-    case(
         "risky.round_over",
         lambda **kw: risky_formatters.build_embed(
             _risky_state(rolls={1: 90, 2: 5}, highest_user=1, lowest_user=2, is_open=False),

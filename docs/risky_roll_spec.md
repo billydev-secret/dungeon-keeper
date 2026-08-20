@@ -8,7 +8,7 @@ A channel-scoped dice game. Anyone in the channel presses **Roll** to roll 1–1
 |---|---|---|---|
 | `/risky start` | Slash | Everyone (server only) | Open a new round; pings the configured role (if set) and applies the min-game-time floor |
 | `/risky reset_state` | Slash | Administrator | Wipe every active round, pending question, and posted question in **this channel** |
-| **Roll** button | Persistent | Round participant | Roll 1–100 once (rerolls in tie state are restricted to tied players) |
+| **Roll** button | Persistent | Round participant | Roll 1–100 once |
 | **How to Play** button | Persistent | Everyone | Show the rules in an ephemeral message |
 | **Close Round** button | Persistent | Round opener or admin | Resolve the round (blocked until min-game-time elapses unless the round was opened with `ping:false`) |
 | **Ask Question** button | Persistent | Eligible questioner | Open the question modal |
@@ -25,7 +25,7 @@ An auto-close is scheduled at start: by default the round auto-closes 120 minute
 
 ### Rolling
 
-Pressing **Roll** rolls 1–100 once per player. The roll is appended to the round embed with a decoration (🔥 for 69, ⭐/🥇 for current winner, 💀/☠️ for current loser, 🎲 otherwise). A player can't roll twice; in a reroll state, only tied players can roll and only once each.
+Pressing **Roll** rolls 1–100 once per player. The roll is appended to the round embed with a decoration (🔥 for 69, ⭐/🥇 for current winner, 💀/☠️ for current loser, 🎲 otherwise). A player can't roll twice.
 
 ### Closing and resolving
 
@@ -44,13 +44,36 @@ After resolution, the **Roll / Close** view is disabled and replaced with an **A
 
 Both the question **and** the reply are public free text, so both are screened against the shared slur/abuse denylist (`duels/filters.contains_disallowed_content`) — a match is rejected with an ephemeral "contains disallowed content" and nothing is posted.
 
+### No-contact enforcement
+
+Risky Rolls consults the [no-contact list](no_contact_spec.md) on **every
+draw**, not at resolution. A roll value that would seat a no-contact pair as
+asker and answerer — including the extra seats the 100 and 1 rules create — is
+redrawn before it exists, so the pairing never forms and there is nothing to
+refuse. The draw is honest first and redrawn only on a collision, which leaves
+the natural distribution alone except where it has to change; 69 is excluded
+from the redraw pool specifically so it is never manufactured as an escape.
+
+When no value can avoid it (a round that is only those two players), **Close
+Round returns the ordinary "At least 2 players must roll."** and the round
+stays open; the auto-close path ends it with the ordinary "not enough players
+rolled". Both strings are module constants shared with the genuine
+too-few-players path — see `views.NOT_ENOUGH_TEXT` /
+`views.AUTO_CLOSE_NOT_ENOUGH_TEXT`. The cost: a large round can occasionally
+die because two of its players landed in those seats.
+
+A **69 room question is not directed contact** — it posts to the thread
+intact, and the partner is only dropped from its `@`-mention list. The full
+reasoning is in `no_contact_spec.md` §"Risky Rolls: the dice are nudged, not
+the outcome".
+
 ### Cooldown / minimum game time
 
 A configurable min-game-time floor (default 30 minutes) prevents premature closes. Opening the round with `ping:false` bypasses it.
 
 ### Persistence and restarts
 
-Active rounds, pending questions, and posted questions are all stored in SQLite. On bot restart the cog re-attaches all persistent views to the original messages, re-schedules auto-close timers from the remaining elapsed time, and sweeps posted questions older than 7 days.
+Active rounds, pending questions, and posted questions are all stored in SQLite. On bot restart the cog re-attaches all persistent views to the original messages, re-schedules auto-close timers from the remaining elapsed time, and sweeps both pending and posted questions older than 7 days.
 
 **Roster names across a restart.** The roster embed prints display names as
 plain text, never `<@id>` mentions — an embed mention is resolved client-side
@@ -88,10 +111,8 @@ mentions rather than blocking cog load.
 | Non-admin `/risky reset_state` | "You do not have permission to use that command." |
 | **Roll** with no open round | "No open round to roll in." |
 | **Roll** when already rolled | "You already rolled this round." |
-| **Roll** when not eligible to reroll | "You cannot reroll right now." |
 | Non-opener / non-admin presses **Close Round** | "Only the round opener can close this round." |
 | **Close Round** before min-game-time elapsed | "This round cannot be closed yet. Please wait N more second(s)." |
-| **Close Round** while waiting on rerolls | "Still waiting for {mentions} to reroll." |
 | **Close Round** edit fails | "Round closed, but the message could not be updated. Start a new round." |
 | **Ask Question** with no pending question | "There is no pending winner question for this round." |
 | **Ask Question** from non-questioner | "Only the eligible players can send a question." |
@@ -117,6 +138,13 @@ roll time, not round close. Best-effort: an economy failure never blocks the rol
 - **No editing / cancelling an already-asked question.** Once submitted, the question is locked.
 - **No multi-reply chains.** First valid reply finalises the question.
 - **No spectator participation.** Only members who clicked Roll appear in the round.
+- **No player-visible reroll.** Ties are settled by a hidden roll-off the bot runs
+  itself; players are never asked to press Roll again. A dormant reroll state
+  (`RiskyRollState.prepare_reroll`, `RoundResult.WAITING_FOR_REROLLS`, the ⚔️ Reroll
+  embed field) shipped without a caller and was removed on 2026-08-20. The
+  `risky_active_rounds.reroll_user_ids` column stays in the schema — it is nullable,
+  was NULL on every live row, and dropping it would mean a migration against a table
+  with rounds in flight for no gain.
 - **No XP.** Round outcomes don't feed [[xp-spec]]; the economy quest trigger above fires on Roll instead.
 
 ## Configuration
@@ -134,8 +162,9 @@ Per-round only (not persisted as config):
 
 Four per-guild tables:
 
-- **Active rounds** — one row per open game: opener, message id, rolls map (deserialised), reroll state, auto-close settings, special-roll outcomes. Deleted on close.
-- **Pending questions** — between resolution and the question being asked. Includes the "two questioners" sub-game when the loser rolled 1.
+- **Active rounds** — one row per open game: opener, message id, rolls map (deserialised), auto-close settings, special-roll outcomes. Deleted on close.
+  The table also carries a `reroll_user_ids` column, left over from a player-visible reroll flow that was never wired up; nothing reads or writes it (see **Non-goals**).
+- **Pending questions** — between resolution and the question being asked. Includes the "two questioners" sub-game when the loser rolled 1. Swept on bot startup once older than 7 days (migration 173): the row is deleted when the winner asks, so a winner who never asks used to leave it forever. A row re-saved mid-round (the first of two questioners asking) keeps its original timestamp rather than restarting the clock.
 - **Posted questions** — a question that's been sent and is awaiting a reply. Keyed by the question message id. Auto-swept on bot startup once older than 7 days.
 - Two per-guild rows in the shared config table for the ping role and the min-game-time floor.
 
