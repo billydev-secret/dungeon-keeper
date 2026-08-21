@@ -977,6 +977,58 @@ def cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def qa_card_log(main_repo: Path, branch: str, output: str) -> None:
+    """Append the card attempt to ``.git/qa-card.log``.
+
+    /dk-ship launches teardown with ``>/dev/null 2>&1``, so neither the success
+    line nor a traceback ever reaches a screen — a feature's only card could
+    fail to post and nothing would say so. The log is the one durable record;
+    it lives in .git so it is never committed and never seen by a worktree.
+    """
+    try:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        body = output.strip() or "(no output)"
+        with (main_repo / ".git" / "qa-card.log").open("a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {branch}: {body}\n")
+    except OSError:
+        pass  # a log that cannot be written must not fail a teardown either
+
+
+def post_qa_card(main_repo: Path, branch: str) -> None:
+    """Post the branch's QA card — one card for the whole feature.
+
+    Teardown is where a feature is *finished*, which is why the card is written
+    here rather than at each merge: a branch ships as many times as work needs
+    (survivor-review landed ten), and a card per merge is how the testing queue
+    filled up with 442 cards a month that nobody could work through.
+
+    ``post_testing_docs.py`` gathers every ``Testing:`` section the branch ever
+    merged, has Claude rewrite them into one plainly-worded checklist and posts
+    it. Best-effort by contract — it swallows its own failures and exits 0, and
+    this call is guarded on top of that, because a card must never be the
+    reason a session fails to tear down.
+    """
+    script = main_repo / "scripts" / "post_testing_docs.py"
+    if not script.exists():
+        return
+    try:
+        res = subprocess.run(
+            [sys.executable, str(script), "--branch", branch],
+            cwd=str(main_repo), capture_output=True, text=True, timeout=300,
+        )
+        output = "\n".join(
+            part.strip() for part in (res.stdout, res.stderr) if part and part.strip()
+        )
+        if res.returncode != 0:
+            output = f"{output}\nposter exited {res.returncode}".strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        output = f"skipped — {exc}"
+
+    for line in output.splitlines():
+        print(line, file=sys.stderr if "skipped" in line else sys.stdout)
+    qa_card_log(main_repo, branch, output)
+
+
 def cmd_teardown(args: argparse.Namespace) -> int:
     main_repo = find_main_repo()
     name = normalize_name([args.name])
@@ -1015,6 +1067,13 @@ def cmd_teardown(args: argparse.Namespace) -> int:
 
     window = args.window or name
     run(["tmux", "kill-window", "-t", window], check=False)
+
+    # Deliberately after the window is gone: posting the card calls out to
+    # Claude and to Discord, and nothing user-visible should sit waiting on a
+    # network round trip. Teardown is detached (see /dk-ship), so this outlives
+    # the pane it was launched from.
+    if not args.no_card:
+        post_qa_card(main_repo, name)
     return 0
 
 
@@ -1083,6 +1142,10 @@ def main(argv: list[str] | None = None) -> int:
     p_down.add_argument("--window", help="tmux target to kill (default: the name)")
     p_down.add_argument("--delay", type=float, default=0.0, help="seconds to wait first")
     p_down.add_argument("--force", action="store_true", help="discard uncommitted work")
+    p_down.add_argument(
+        "--no-card", action="store_true",
+        help="skip posting the feature's QA card to #testing-queue",
+    )
     p_down.set_defaults(func=cmd_teardown)
 
     args = parser.parse_args(argv)

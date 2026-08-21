@@ -145,11 +145,22 @@ SQLite-backed. Tests in `tests/`.
   `Pen Pals: dashboard question bank + AI prompt studio`. Prose body: why,
   edge cases handled, what tests cover it.
 - **No** `Co-Authored-By` / `Claude-Session` trailers.
-- Behavior-changing commit ⇒ end the message body with a `Testing:` section
-  listing what to verify on the live server, as `- [ ]` checkbox lines. The
-  post-commit hook (`scripts/post_testing_docs.py`) reads it straight off the
-  commit and posts a QA Tracker card (Pass/Fail/Blocked buttons in Discord)
-  automatically — no separate doc to maintain.
+- **User-facing change ⇒ a `Testing:` section** ending the message body, as
+  `- [ ]` lines saying what to verify on the live server. User-facing means a
+  member or admin can see it in Discord or on the dashboard; an internal
+  refactor, a dep bump, a docs or test-only commit gets none.
+- Write those lines **for a volunteer tester, not a developer** — they *are*
+  the QA card's text. One action and one observable result per box; name what
+  the tester clicks and sees, never a code identifier, table name, config key
+  or issue number; verifiable in one sitting (nothing that waits for a
+  scheduled job or overnight roll).
+- The card is **one per feature, not per commit**: a merge posts nothing, and
+  at `/dk-ship` teardown `scripts/post_testing_docs.py --branch <name>` gathers
+  every `Testing:` section the branch ever merged, has Claude rewrite them into
+  one deduped checklist, and posts a single QA Tracker card (Pass/Fail/Blocked
+  buttons). A commit landing straight on main still posts its own card. Run
+  that command by hand for a session shipped with `--keep`, which never tears
+  down and so never posts.
 
 ## Conventions
 

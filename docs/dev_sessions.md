@@ -326,6 +326,26 @@ background rather than under a timeout.
 Refuses to remove a worktree with uncommitted changes. `--force` overrides that and
 discards the work; `/dk-ship` never passes it.
 
+### Teardown posts the feature's QA card
+
+Teardown is where a feature is *finished*, so it is where its QA card is written.
+It shells out to `post_testing_docs.py --branch <name>`, which walks main's merge
+history for every `Merge branch '<name>'`, collects the `Testing:` sections of
+everything those merges landed, has Claude rewrite them into one deduped
+tester-readable checklist, and posts a single card to #testing-queue.
+
+This is why merges themselves post nothing. A branch ships as many times as the
+work needs — `survivor-review` merged ten times in 30 days — and a card per merge
+is how the queue reached 442 cards a month against 21 verdicts ever recorded.
+
+The call happens *after* the tmux window is killed, so nothing user-visible waits
+on a network round trip, and it is contained twice over: the poster swallows its
+own failures, and `post_qa_card` guards the subprocess. A card is never the reason
+a session fails to tear down. `--no-card` skips it entirely.
+
+The gap is `--keep`: a session that ships without tearing down posts no card until
+it is eventually torn down. Run the poster by hand for those.
+
 ## The clone migration (2026-07-25)
 
 `dk-sessions/` previously held eleven hand-made clones (`work1`–`work4`, `gambling`,

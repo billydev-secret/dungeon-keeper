@@ -102,7 +102,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [events_spec.md](events_spec.md) | Events cog | |
 | [music_spec.md](music_spec.md) | Music cog (Lavalink) | Built |
 | [post_monitoring_spec.md](post_monitoring_spec.md) | Post monitoring | |
-| [plans/qa-tracker.md](plans/qa-tracker.md) | QA Tracker (volunteer testing crew: verdict cards, currency rewards, admin void) | Stages 0–4 built (schema/service, cog, poster cards, dashboard, auto-archive sweep); bounty idea still open |
+| [plans/qa-tracker.md](plans/qa-tracker.md) | QA Tracker (volunteer testing crew: verdict cards, currency rewards, admin void) | Stages 0–5 built (schema/service, cog, poster cards, dashboard, auto-archive sweep, one-card-per-branch at teardown + LLM rewrite); bounty idea still open |
 | [plans/live-leaderboard.md](plans/live-leaderboard.md) | Live leaderboard panel (today's pulse, pace, anonymous feed, event-driven debounced refresh) | Built 2026-07-18; awaiting live testing |
 | [plans/quest-variety-and-community-weeklies.md](plans/quest-variety-and-community-weeklies.md) | Quest engagement round: 13 new trigger kinds, auto-tracking community weeklies (tiered), live tracker, dynamic targets, board add-ons | Built 2026-07-18 (all stages); awaiting live testing + post-restart seed script |
 | [plans/quest-community-hooks-round.md](plans/quest-community-hooks-round.md) | Quest round 3 (community hooks): 7 kinds — greeting_answered, birthday_wish, drop_claim, guess_post (unified with the paired-boards round), role_pick, confession_reply, shop_purchase; role_pick/shop_purchase join the setup kinds | Built 2026-07-21; library seeding is a follow-up |
@@ -148,7 +148,7 @@ feature and also appear in the Design table above.
 | [plans/one-time-setup-dailies.md](plans/one-time-setup-dailies.md) | Bio/birthday setup quests inside the daily board | Code landed; prod enablement pending |
 | [plans/per-user-quest-board.md](plans/per-user-quest-board.md) | Personal per-member quest boards with repeat spacing | Code shipped; prod rollout pending |
 | [plans/photo-challenge-post-payout.md](plans/photo-challenge-post-payout.md) | Photo Challenge post-gated channel payout (flat award + quest bonus) | Shipped |
-| [plans/qa-tracker.md](plans/qa-tracker.md) | QA cards, volunteer verdict pay, admin void | Stages 0–4 shipped |
+| [plans/qa-tracker.md](plans/qa-tracker.md) | QA cards, volunteer verdict pay, admin void | Stages 0–5 shipped |
 | [plans/quest-variety-and-community-weeklies.md](plans/quest-variety-and-community-weeklies.md) | 13 new quest kinds, tiered community weeklies, live tracker | Built 2026-07-18 |
 | [plans/role-menus.md](plans/role-menus.md) | Self-assign role menus + Oracle builder | Built 2026-07-14 |
 | [plans/timed-announcements.md](plans/timed-announcements.md) | Dashboard-queued announcements + role buttons | Built 2026-07-19/20 |

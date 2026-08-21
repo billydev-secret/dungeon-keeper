@@ -252,3 +252,126 @@ hook now invokes the same script with the merge sha (squash merges skipped
 — no commit to expand), `install.sh` installs both hooks, and a conflicted
 merge finished by `git commit` still lands in `post-commit` — either path
 runs the same expansion, deduped by the (guild, entry_key, sha) index.
+
+---
+
+## Stage 5 — one card per feature, not per commit (2026-08-20)
+
+**The problem.** Every behaviour-changing commit posted its own card. In the
+30 days to 2026-08-20 that was **442 cards** (756 commits, 442 carrying a
+`Testing:` section). The queue held 414 cards all-time, of which **172 were
+still pending and only ~12% had ever received a verdict** — 165 of the pending
+ones created on or before 2026-07-21 with no verdict at all. The system was
+emitting far more than anyone could consume, and the cards it emitted were raw
+commit-message text written developer-to-developer: nine-checkbox cards,
+compound steps ("add a chore, press Run now, then tick it with Mark Done — the
+row shows your name and the time" is three actions and an assertion in one
+box), references to internals a tester cannot see (`guess_post` quest, "the two
+open spoiled rounds (#384, #388)"), and steps untestable in a sitting ("leave a
+chore untouched overnight").
+
+**The key is the branch, and the trigger is teardown.** Keying on the merge
+does not work: 184 first-parent merges in 30 days came from only **136 distinct
+branches**, because a branch ships repeatedly while work continues on it —
+`survivor-review` merged ten times, `backup-disaster-recovery-review` five. The
+feature is the branch, and the branch is *finished* at `/dk-ship` teardown, so
+that is where its card is written:
+
+- `post_commit()` now **returns without posting for a merge commit**. Plain
+  commits landing straight on main are unchanged — they are their own feature
+  and post their own card, keyed on the subject as before (~30 of these a
+  month).
+- `cmd_teardown` calls `post_testing_docs.py --branch <name>`, which finds every
+  `Merge branch '<name>'` on main's first-parent history (`branch_merges`, five
+  subject shapes: `'x'`, `"x"`, bare, `… into main`, `Merge x: description`),
+  expands each through the existing `merged_commits()`, and collects every
+  `Testing:` section it landed — deduped, since a rebase replay lands identical
+  work under a new sha.
+- The card is keyed `entry_key = <branch>` with `commit_sha` = the latest thing
+  the branch shipped, so a teardown re-run reuses the row, and a card that has
+  already been posted (`message_id` set) is left alone.
+
+**No migration.** The obvious approach — put the merge sha in `commit_sha` —
+would defeat in-place identity, and `NULL` is worse: SQLite treats NULLs as
+distinct in a unique index, so `ON CONFLICT` never fires on the checklist-doc
+path either (a latent duplicate-row bug, untouched here). The branch path does
+an explicit lookup instead and leaves the `(guild_id, entry_key, commit_sha)`
+index doing exactly what it did.
+
+**The rewrite.** One Claude call (`claude-opus-5`, `effort: low`) turns N
+commits' checklists into one card: one action and one observable result per
+item, at most 8 items, naming what the tester clicks rather than what the code
+calls it, nothing that needs an overnight wait. It is **best-effort by
+contract** — no `ANTHROPIC_API_KEY`, a network failure, a non-JSON reply or an
+empty result all fall back to the raw concatenated checklists under the
+humanised branch name. The call is plain `urllib`: the script runs under bare
+system python3 (the git hook has no venv), so the `anthropic` SDK is not
+available to it, and it must not use the module's own `request()` helper, which
+raises `SystemExit` on failure.
+
+A first pass capped the card at 6 items and told the model to *combine* what
+did not fit. It complied by writing seven assertions into one box — recreating
+the exact density the stage set out to remove. The cap is now 8 and the
+instruction is inverted: never combine unrelated actions; if the notes exceed
+the cap, keep the checks most likely to catch a regression a member would
+notice and leave the rest out. A card nobody finishes is worse than a short one.
+
+**Ordering.** The card posts *after* teardown kills the tmux window, so no
+user-visible step waits on an API round trip; teardown is already detached, so
+the call outlives the pane. Failures are contained twice (the poster swallows
+its own, `post_qa_card` guards the subprocess) — a card is never the reason a
+session fails to tear down.
+
+**Volume.** 442 cards/30d → ~166 (136 branches + ~30 direct commits) from the
+re-keying alone. Below that is policy, not machinery: CLAUDE.md now says only
+**user-facing** changes earn a `Testing:` section, and documents how to word the
+lines. The backlog was cleared with `scripts/archive_stale_qa_cards.py`, which
+archives the pending, verdict-free cards created on or before the cutoff and
+edits their Discord messages so the buttons die.
+
+**Known gaps.** A session shipped with `--keep` never tears down and so never
+posts; run `--branch` by hand. A branch bundling unrelated work (`todo-triage`)
+produces one card covering all of it, which is inherent to keying on the branch.
+Branch names like `worktree-agent-acee91a4…` make poor card titles, but the
+rewrite supplies its own title, so only the fallback path shows the slug.
+
+### Review fixes (same day)
+
+`/code-review` on the stage found eight things; six were real.
+
+- **The merge walk had no lower bound.** It matched branch names across all of
+  main's history, so a reused branch name — nothing stops a second
+  `/dk-feature survivor review` months later — would rake the first
+  incarnation's long-verified checklists into a new feature's card, where the
+  8-item cap could then drop the checks that were actually new. The same gap
+  broke the documented `--keep` workflow concretely: card posted by hand, more
+  work shipped, teardown posts a *second* card repeating the first's steps.
+  `branch_checklists(branch, after=...)` now stops at the sha the branch's last
+  posted card already covered, read from `qa_tests`. That makes a re-run a true
+  no-op and makes a genuine second card carry only what is new.
+- **Teardown passed the *normalized* name** (`normalize_name` folds `/` and `_`
+  to `-`), which could never match a merge subject naming the real branch, so
+  `fix/quote-spacing` would silently earn no card. Matching and keying now go
+  through `branch_alias`, which folds both sides.
+- **`max_tokens` was 4000** while Opus 5 thinks by default and those tokens
+  count against the budget without coming back — a long branch could truncate
+  the JSON and fall back to exactly the raw text this stage exists to remove.
+  Raised to 16000, and a `stop_reason: "max_tokens"` reply now bails explicitly
+  instead of half-parsing.
+- **A mistyped `--cutoff` was destructive.** The comparison is lexicographic, so
+  `2026-7-21` (unpadded, a plausible typo) sorts *above* every real `2026-08-…`
+  timestamp and would have selected the entire live queue for archiving. Note
+  that `strptime` alone does not catch it — it accepts unpadded months happily;
+  the round trip through `strftime` is what enforces the format.
+- **A failed card was invisible.** `/dk-ship` launches teardown with
+  `>/dev/null 2>&1`, so neither the success line nor a traceback ever reached a
+  screen. `qa_card_log` appends every attempt to `.git/qa-card.log`.
+- **`DEPLOYMENT.md` claimed both recovery commands were idempotent.** Only
+  `--branch` is; re-running `--commit` posts a second card and orphans the
+  first. Doc corrected rather than the behaviour, which is deliberate.
+
+Two findings did not hold up. The report claimed a live button on an archived
+card could still record a paid verdict — `qa_service.record_verdict` raises on
+an archived test (`qa_service.py:379`), so it cannot. And branch-name reuse had
+no historical instance; it was fixed anyway because the bound it needed is the
+same one the `--keep` bug needed.

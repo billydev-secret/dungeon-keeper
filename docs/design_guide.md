@@ -322,10 +322,15 @@ Same commit, not a follow-up.
 - [ ] Subject is `Scope: descriptive summary`, ~60 characters.
 - [ ] Body is prose: why, edge cases handled, what the tests cover.
 - [ ] No `Co-Authored-By` / `Claude-Session` trailers.
-- [ ] Behavior-changing ⇒ the body ends with a `Testing:` section of `- [ ]`
-      lines. The post-commit hook reads it straight off the commit and posts a
-      QA Tracker card with Pass/Fail/Blocked buttons — so those checkboxes are
-      the QA card, and a vague one produces a useless card.
+- [ ] **User-facing** ⇒ the body ends with a `Testing:` section of `- [ ]`
+      lines. Not every behaviour change earns one: it has to be something a
+      member or admin can see in Discord or on the dashboard, so an internal
+      refactor, a dep bump, a docs or test-only commit gets none.
+- [ ] Those lines are written for a **volunteer tester, not a developer** —
+      they *are* the QA card. One action and one observable result per box,
+      naming what the tester clicks and sees rather than what the code calls
+      it, each verifiable in one sitting. The card itself is assembled from
+      every `Testing:` section the branch merged, once, at `/dk-ship` teardown.
 
 → CLAUDE.md § Docs, § Gates, § Commits
 

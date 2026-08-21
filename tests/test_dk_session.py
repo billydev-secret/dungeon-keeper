@@ -764,3 +764,87 @@ def test_sessions_outside_this_repo_are_left_alone():
 )
 def test_in_scope(cwd, ours):
     assert dk_session.in_scope(cwd, PROD) is ours
+
+
+# ── teardown posts the feature's QA card ────────────────────────────────
+
+
+def test_post_qa_card_shells_out_to_the_poster(tmp_path, monkeypatch, capsys) -> None:
+    """Teardown is where a feature is finished, so it is where its card is written."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "post_testing_docs.py").write_text("", encoding="utf-8")
+    seen: dict = {}
+
+    def fake_run(args, **kwargs):
+        seen["args"] = args
+        seen["cwd"] = kwargs.get("cwd")
+        seen["timeout"] = kwargs.get("timeout")
+
+        class Res:
+            stdout = "qa-card: posted QA card -- Widget Polish\n"
+            stderr = ""
+            returncode = 0
+
+        return Res()
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(dk_session.subprocess, "run", fake_run)
+    dk_session.post_qa_card(tmp_path, "widget")
+
+    assert seen["args"][1:] == [str(scripts / "post_testing_docs.py"), "--branch", "widget"]
+    assert seen["cwd"] == str(tmp_path)
+    assert seen["timeout"] == 300  # a hung API call must not wedge teardown
+    assert "posted QA card" in capsys.readouterr().out
+    # dk-ship throws teardown's output away, so the log is the only record.
+    assert "posted QA card" in (tmp_path / ".git" / "qa-card.log").read_text(encoding="utf-8")
+
+
+def test_post_qa_card_without_the_poster_is_a_no_op(tmp_path, monkeypatch) -> None:
+    def explode(*_a, **_k):
+        raise AssertionError("must not shell out when the script is absent")
+
+    monkeypatch.setattr(dk_session.subprocess, "run", explode)
+    dk_session.post_qa_card(tmp_path, "widget")
+
+
+def test_post_qa_card_swallows_a_failure(tmp_path, monkeypatch, capsys) -> None:
+    """A card must never be the reason a session fails to tear down."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "post_testing_docs.py").write_text("", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise dk_session.subprocess.TimeoutExpired("cmd", 300)
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(dk_session.subprocess, "run", boom)
+    dk_session.post_qa_card(tmp_path, "widget")  # does not raise
+
+    assert "skipped" in capsys.readouterr().err
+    assert "skipped" in (tmp_path / ".git" / "qa-card.log").read_text(encoding="utf-8")
+
+
+def test_post_qa_card_records_a_nonzero_exit(tmp_path, monkeypatch) -> None:
+    """A poster that dies outside its own containment must still leave a trace."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "post_testing_docs.py").write_text("", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+
+    class Res:
+        stdout = ""
+        stderr = "Traceback: UnicodeDecodeError"
+        returncode = 1
+
+    monkeypatch.setattr(dk_session.subprocess, "run", lambda *a, **k: Res())
+    dk_session.post_qa_card(tmp_path, "widget")
+
+    logged = (tmp_path / ".git" / "qa-card.log").read_text(encoding="utf-8")
+    assert "UnicodeDecodeError" in logged
+    assert "poster exited 1" in logged
+
+
+def test_qa_card_log_survives_an_unwritable_git_dir(tmp_path) -> None:
+    """No .git to write into: still silent, still no exception."""
+    dk_session.qa_card_log(tmp_path, "widget", "anything")
