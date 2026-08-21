@@ -3109,7 +3109,13 @@ textarea.field-input { resize: vertical; }
   display: grid;
   grid-template-columns: 360px 1fr;
   gap: 16px;
-  min-height: 0;
+  /* .panel is a column flex container, so this section is a shrinkable flex
+     item — and its panes (min-height: 0, internal scrolling) let it absorb
+     the whole overflow. On a panel with content below the split (mod-todo's
+     add form + board cards) it collapsed to ~0 height and the panes painted
+     over everything after it. The panes' own max-height still caps how tall
+     it can get, so opting out of shrinking loses nothing on Tickets/Jails. */
+  flex-shrink: 0;
 }
 
 .ticket-list-wrap {
