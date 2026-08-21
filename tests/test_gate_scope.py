@@ -119,7 +119,7 @@ def test_select_tests_still_fans_out_on_an_edited_migration():
 
 
 def _cog_classes():
-    """Every commands.Cog subclass in src/, with its __init__ if it has one."""
+    """Every commands.Cog subclass in src/, with its __init__ and its body."""
     import ast
 
     root = Path(__file__).resolve().parents[1] / "src"
@@ -136,7 +136,7 @@ def _cog_classes():
                  if isinstance(n, ast.FunctionDef) and n.name == "__init__"),
                 None,
             )
-            yield path.relative_to(root.parent).as_posix(), cls.name, init
+            yield path.relative_to(root.parent).as_posix(), cls.name, init, cls
 
 
 def test_no_cog_takes_a_ctx_parameter():
@@ -151,7 +151,7 @@ def test_no_cog_takes_a_ctx_parameter():
 
     offenders = [
         f"{path}::{name}"
-        for path, name, init in _cog_classes()
+        for path, name, init, _cls in _cog_classes()
         if init is not None and "ctx" in [a.arg for a in init.args.args]
     ]
     assert not offenders, (
@@ -165,7 +165,7 @@ def test_no_cog_stores_self_ctx():
     import ast
 
     offenders = []
-    for path, name, init in _cog_classes():
+    for path, name, init, _cls in _cog_classes():
         if init is None:
             continue
         for node in ast.walk(init):
@@ -182,5 +182,32 @@ def test_no_cog_stores_self_ctx():
     assert not offenders, (
         "these cogs assign self.ctx; every cog already has self.bot, so read "
         "self.bot.ctx and let shared helpers rely on the bot:\n  "
+        + "\n  ".join(sorted(set(offenders)))
+    )
+
+
+def test_no_cog_reads_self_ctx_anywhere():
+    """Not just in __init__ — a cog that reads self.ctx in a method body is an
+    AttributeError waiting for that path to run.
+
+    This is the half that protects a rebase. main has moved on while this
+    branch was in flight and its new code does use ``self.ctx`` in cog method
+    bodies; without this the sweep would have to be re-applied by hand and by
+    memory. The __init__-only checks above wouldn't have seen it.
+    """
+    import ast
+
+    offenders = []
+    for path, name, _init, cls in _cog_classes():
+        for node in ast.walk(cls):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "ctx"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "self"
+            ):
+                offenders.append(f"{path}:{node.lineno}  {name}")
+    assert not offenders, (
+        "a cog has no self.ctx — read self.bot.ctx instead:\n  "
         + "\n  ".join(sorted(set(offenders)))
     )
