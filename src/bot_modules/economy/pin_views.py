@@ -42,6 +42,10 @@ from bot_modules.services.economy_service import (
 )
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
+from bot_modules.economy.view_helpers import (
+    edit_review_card,
+    refresh_review_card,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -430,39 +434,17 @@ def _card_embed(accent, settings: EconSettings, row) -> discord.Embed:
     )
 
 
-async def _edit_card(
-    card: discord.Message | None, accent, settings: EconSettings, row
-) -> None:
-    if card is None:
-        return
-    try:
-        await card.edit(embed=_card_embed(accent, settings, row), view=None)
-    except discord.HTTPException:
-        log.debug("econ pin: failed to edit card", exc_info=True)
+_edit_card = partial(
+    edit_review_card, build_embed=_card_embed, log_label="econ pin"
+)
 
 
-async def _refresh_card(
-    card: discord.Message | None,
-    ctx: AppContext,
-    accent,
-    settings: EconSettings,
-    submission_id: int,
-) -> None:
-    """Re-render a card whose row moved underneath it (dashboard or race)."""
-    if card is None:
-        return
-
-    def _read():
-        with ctx.open_db() as conn:
-            return get_submission(conn, submission_id)
-
-    try:
-        row = await asyncio.to_thread(_read)
-    except Exception:
-        log.debug("econ pin: failed to reload for refresh", exc_info=True)
-        return
-    if row is not None:
-        await _edit_card(card, accent, settings, row)
+_refresh_card = partial(
+    refresh_review_card,
+    read_row=get_submission,
+    build_embed=_card_embed,
+    log_label="econ pin",
+)
 
 
 def pin_resolution_dm_text(settings: EconSettings, row) -> str:

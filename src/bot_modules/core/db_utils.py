@@ -1,10 +1,26 @@
 from __future__ import annotations
 
 import contextlib
+import re
 import sqlite3
 from collections.abc import Generator, Iterable
 from pathlib import Path
 from typing import TypedDict
+
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def sql_identifier(name: str) -> str:
+    """Return ``name`` if it is a bare SQL identifier, else raise ``ValueError``.
+
+    Table and column names cannot be bound as query parameters, so any helper
+    that works across several tables has to format them into the statement.
+    Callers pass literals today; a shared builder is precisely where that
+    stops being self-evident, and the guard is cheaper than the alternative.
+    """
+    if not isinstance(name, str) or not _IDENTIFIER.match(name):
+        raise ValueError(f"not a valid SQL identifier: {name!r}")
+    return name
 
 
 def parse_bool(value: str | None, default: bool = False) -> bool:

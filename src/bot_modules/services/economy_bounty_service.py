@@ -31,6 +31,7 @@ from bot_modules.services.economy_service import (
     apply_debit,
     get_balance,
 )
+from bot_modules.services.economy_submission_store import list_rows
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
@@ -467,17 +468,7 @@ def open_board_count(conn: sqlite3.Connection, guild_id: int) -> int:
 def list_bounties(
     conn: sqlite3.Connection, guild_id: int, state: str | None = None, limit: int = 100
 ) -> list[sqlite3.Row]:
-    limit = min(max(limit, 1), 500)
-    if state:
-        return conn.execute(
-            "SELECT * FROM econ_bounties WHERE guild_id = ? AND state = ? "
-            "ORDER BY created_at ASC, id ASC LIMIT ?",
-            (guild_id, state, limit),
-        ).fetchall()
-    return conn.execute(
-        "SELECT * FROM econ_bounties WHERE guild_id = ? ORDER BY created_at DESC LIMIT ?",
-        (guild_id, limit),
-    ).fetchall()
+    return list_rows(conn, "econ_bounties", guild_id, state, limit)
 
 
 def set_bounty_card(

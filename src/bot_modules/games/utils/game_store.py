@@ -21,30 +21,18 @@ These take the table as an argument and hand back raw rows; mapping a row to
 Note on interpolation: table and column names cannot be bound as SQL
 parameters, so they are formatted into the statement. Every caller passes a
 literal, but a shared builder is exactly where that stops being obvious —
-hence ``_ident``, which refuses anything that isn't a plain identifier.
+hence ``sql_identifier``, which refuses anything that isn't a plain one.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from bot_modules.core.db_utils import sql_identifier as _ident
+
 if TYPE_CHECKING:
     from bot_modules.services.games_db import GamesDb
-
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _ident(name: str) -> str:
-    """Return ``name`` if it is a bare SQL identifier, else raise.
-
-    The guard is cheap and the alternative is a shared function that will
-    happily build ``DROP TABLE`` for whoever passes the wrong string.
-    """
-    if not isinstance(name, str) or not _IDENTIFIER.match(name):
-        raise ValueError(f"not a valid SQL identifier: {name!r}")
-    return name
 
 
 async def upsert_config(

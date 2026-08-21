@@ -34,10 +34,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bot_modules.services.economy_service import (
-    apply_credit,
     apply_debit,
     get_balance,
 )
+from bot_modules.services.economy_submission_store import list_rows, refund_once
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
@@ -142,29 +142,9 @@ def submit_pin(
 
 def _refund(conn: sqlite3.Connection, row: sqlite3.Row, reason: str) -> int:
     """Give the money back exactly once. Returns the amount actually refunded."""
-    price = int(row["price"])
-    if price < 1:
-        return 0
-    now = time.time()
-    # The refunded_at predicate is the guard: a second call updates 0 rows and
-    # credits nothing, even if the state moved in between.
-    cur = conn.execute(
-        "UPDATE econ_pin_submissions SET refunded_at = ? "
-        "WHERE id = ? AND refunded_at IS NULL",
-        (now, int(row["id"])),
+    return refund_once(
+        conn, "econ_pin_submissions", row, reason, refund_kind=REFUND_KIND
     )
-    if (cur.rowcount or 0) == 0:
-        return 0
-    apply_credit(
-        conn,
-        int(row["guild_id"]),
-        int(row["user_id"]),
-        price,
-        REFUND_KIND,
-        meta={"submission_id": int(row["id"]), "reason": reason},
-        booster=False,
-    )
-    return price
 
 
 def deny(
@@ -367,18 +347,7 @@ def list_submissions(
     conn: sqlite3.Connection, guild_id: int, state: str | None = None, limit: int = 100
 ) -> list[sqlite3.Row]:
     """Submissions for a dashboard queue, oldest first (or newest when unfiltered)."""
-    limit = min(max(limit, 1), 500)
-    if state:
-        return conn.execute(
-            "SELECT * FROM econ_pin_submissions WHERE guild_id = ? AND state = ? "
-            "ORDER BY created_at ASC, id ASC LIMIT ?",
-            (guild_id, state, limit),
-        ).fetchall()
-    return conn.execute(
-        "SELECT * FROM econ_pin_submissions WHERE guild_id = ? "
-        "ORDER BY created_at DESC, id DESC LIMIT ?",
-        (guild_id, limit),
-    ).fetchall()
+    return list_rows(conn, "econ_pin_submissions", guild_id, state, limit)
 
 
 def get_submission(
