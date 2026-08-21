@@ -73,7 +73,7 @@ from pathlib import Path
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import (
     get_config_value,
     get_tz_offset_hours,
@@ -353,7 +353,7 @@ async def echo_event(
             await asyncio.to_thread(_release)
             return False
 
-        color = await resolve_accent_color(db_path, guild)
+        color = await safe_resolve_accent(db_path, guild, log_label="event echo")
         embed = build_echo_embed(
             name=name,
             channel_id=origin_channel_id,

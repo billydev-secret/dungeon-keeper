@@ -126,16 +126,6 @@ def _percentile_ranks(values: list[float]) -> list[float]:
     return ranks
 
 
-def _day_key(ts: float) -> int:
-    """Return day number (days since epoch) for a timestamp."""
-    return int(ts) // 86400
-
-
-def _week_key(ts: float) -> int:
-    """Return ISO week number within the 90-day window."""
-    return int(ts) // (7 * 86400)
-
-
 def _fetch_tuples(conn: sqlite3.Connection, sql: str, params: tuple) -> list[tuple]:
     """Fetch as plain tuples regardless of the connection's row factory.
 

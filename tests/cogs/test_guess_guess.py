@@ -25,7 +25,7 @@ def _stub_accent_color(monkeypatch):
     import discord
 
     monkeypatch.setattr(
-        "bot_modules.cogs.guess_cog.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(return_value=discord.Color.default()),
     )
 

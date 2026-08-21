@@ -13,15 +13,14 @@ from bot_modules.commands.role_grant_commands import _execute_grant
 from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.role_grant")
 
 
 class RoleGrantCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def _role_autocomplete(
@@ -30,7 +29,7 @@ class RoleGrantCog(commands.Cog):
         current: str,
     ) -> list[app_commands.Choice[str]]:
         choices: list[app_commands.Choice[str]] = []
-        for key, cfg in self.ctx.guild_config(interaction.guild_id or 0).grant_roles.items():
+        for key, cfg in self.bot.ctx.guild_config(interaction.guild_id or 0).grant_roles.items():
             if (
                 current.lower() in key.lower()
                 or current.lower() in cfg["label"].lower()
@@ -52,7 +51,7 @@ class RoleGrantCog(commands.Cog):
         role: str,
         member: discord.Member,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.can_use_grant_role(interaction, role):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -94,7 +93,7 @@ class RoleGrantCog(commands.Cog):
         )
 
         message, reason = await place_grant_audit_card(
-            self.ctx, guild, channel, role_key=role_key, min_level=min_level
+            self.bot.ctx, guild, channel, role_key=role_key, min_level=min_level
         )
         if message is None:
             raise ValueError(reason)
@@ -102,4 +101,4 @@ class RoleGrantCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(RoleGrantCog(bot, bot.ctx))
+    await bot.add_cog(RoleGrantCog(bot))

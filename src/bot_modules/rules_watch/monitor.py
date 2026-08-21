@@ -33,7 +33,7 @@ from bot_modules.rules_watch.scorer import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.rules_watch")
 
@@ -46,9 +46,8 @@ _WINDOW_SIZE = 8
 
 
 class RulesWatchMonitor(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     # ------------------------------------------------------------------
@@ -56,13 +55,13 @@ class RulesWatchMonitor(commands.Cog):
     # ------------------------------------------------------------------
 
     def _is_enabled(self, guild_id: int) -> bool:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return (
                 get_config_value(conn, "rules_watch_enabled", "0", guild_id).strip() == "1"
             )
 
     def _alert_channel_id(self, guild_id: int) -> int:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             raw = get_config_value(conn, "rules_watch_channel_id", "0", guild_id)
         try:
             return int(raw.strip())
@@ -127,7 +126,7 @@ class RulesWatchMonitor(commands.Cog):
         )
 
         def _do_ledger() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 dm_hit = ledger.detect_dm_consent(
                     conn, guild_id, channel_id, author_id, content, created_ts
                 )
@@ -196,7 +195,7 @@ class RulesWatchMonitor(commands.Cog):
         guild_ref = message.guild  # checked non-None in on_message
 
         def _do_pre_filter_and_window():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 # 1. Pre-filter ---------------------------------------------------
                 vader_row = conn.execute(
                     "SELECT sentiment FROM messages WHERE message_id = ?",
@@ -359,7 +358,7 @@ class RulesWatchMonitor(commands.Cog):
                 resolve_mode,
             )
             mode_role_ids = await asyncio.to_thread(
-                get_dm_mode_role_ids, self.ctx.db_path, guild_id
+                get_dm_mode_role_ids, self.bot.ctx.db_path, guild_id
             )
             target_member = message.guild.get_member(tid)
             author_member = message.guild.get_member(author_id)
@@ -380,7 +379,7 @@ class RulesWatchMonitor(commands.Cog):
             guard = await ai_rules_watch_check(
                 window_text,
                 channel_is_nsfw=is_nsfw,
-                db_path=self.ctx.db_path,
+                db_path=self.bot.ctx.db_path,
                 guild_id=guild_id,
             )
         except Exception:
@@ -421,7 +420,7 @@ class RulesWatchMonitor(commands.Cog):
         _priority_reason = priority.reason
 
         def _do_store_event():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return service.insert_event(
                     conn,
                     guild_id=guild_id,
@@ -495,13 +494,13 @@ class RulesWatchMonitor(commands.Cog):
 
         alert_msg = await post_immediate_alert(
             alert_channel, message, event_id, guard, sigs, priority, target,
-            db_path=self.ctx.db_path,
+            db_path=self.bot.ctx.db_path,
         )
         if alert_msg:
             _alert_msg_id = alert_msg.id
 
             def _do_update_alert_msg():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     service.update_alert_message_id(conn, event_id, _alert_msg_id)
 
             await asyncio.to_thread(_do_update_alert_msg)
@@ -522,7 +521,7 @@ class RulesWatchMonitor(commands.Cog):
         await asyncio.sleep(_WITHDRAWAL_CHECK_DELAY)
         try:
             def _do_withdrawal_check():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     row = conn.execute(
                         """
                         SELECT COUNT(*) as cnt FROM messages
@@ -575,4 +574,4 @@ class RulesWatchMonitor(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(RulesWatchMonitor(bot, bot.ctx))
+    await bot.add_cog(RulesWatchMonitor(bot))

@@ -69,7 +69,7 @@ def ctx(db):
 def _patch_accent():
     """resolve_accent_color reads the guild avatar — stub it to a fixed color."""
     with patch(
-        "bot_modules.cogs.economy_cog.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         new=AsyncMock(return_value=discord.Color(0x123456)),
     ):
         yield
@@ -78,7 +78,9 @@ def _patch_accent():
 def _make_cog(ctx):
     from bot_modules.cogs.economy_cog import EconomyCog
 
-    return EconomyCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    return EconomyCog(_bot)
 
 
 def _enable(db, **overrides) -> None:

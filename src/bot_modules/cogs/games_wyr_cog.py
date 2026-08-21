@@ -6,8 +6,8 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.command_groups import play
@@ -146,14 +146,6 @@ class WYRRoundView(discord.ui.View):
         self._closed = False
         self.queued_questions: list[tuple[str, str]] = []
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     def _build_embed(self, closed=False) -> discord.Embed:
         return build_wyr_embed(
             self.host_name,
@@ -235,7 +227,7 @@ class WYRRoundView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="wyr_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         if self._closed:
@@ -247,7 +239,7 @@ class WYRRoundView(discord.ui.View):
     @discord.ui.button(label="👀 Reveal Voters", style=discord.ButtonStyle.secondary, custom_id="wyr_reveal", row=2)
     async def reveal_voters(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can reveal voters.", ephemeral=True)
             return
         self.revealed = True
@@ -391,17 +383,9 @@ class WYRCog(commands.Cog):
         or accent resolution raises — a game must never fail to render
         because branding lookup hiccuped.
         """
-        guild = getattr(channel, "guild", None)
-        if guild is None:
-            return None
-        ctx = getattr(self.bot, "ctx", None)
-        if ctx is None:
-            return None
-        try:
-            return await resolve_accent_color(ctx.db_path, guild)
-        except Exception:
-            log.exception("WYR: accent resolution failed; using default color")
-            return None
+        return await safe_resolve_accent(
+            self.bot, getattr(channel, "guild", None), log_label="WYR"
+        )
 
     async def _voter_roster(self, game_id: str) -> list[int]:
         """Everyone who voted for either option in any completed round — the

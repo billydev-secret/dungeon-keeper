@@ -9,7 +9,7 @@ Plan: [plans/timed-announcements.md](plans/timed-announcements.md).
 
 - **Embed**: title (≤256), markdown body (≤4096), optional image URL, accent
   color — a stored 6-hex override or, when blank, the server branding color
-  via `resolve_accent_color`.
+  via `safe_resolve_accent`.
 - **Plain-text line** (≤300, optional): rendered above the embed. This is
   where pings live — mentions inside embeds don't ping.
 - **Mentions**: explicit `mention_kind` — `none` | `role` (+ `mention_role_id`)

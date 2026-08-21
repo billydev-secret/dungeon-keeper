@@ -158,13 +158,3 @@ async def sync_if_changed(
     )
     return synced, True
 
-
-def invalidate_stored_hash(
-    db_path: Path, *, guild: discord.abc.Snowflake | None
-) -> None:
-    """Force the next sync_if_changed to push, regardless of local state."""
-    if guild is None:
-        key, gid = _KEY_GLOBAL, 0
-    else:
-        key, gid = _KEY_GUILD, int(guild.id)
-    _write_stored_hash(db_path, guild_id=gid, key=key, value="")

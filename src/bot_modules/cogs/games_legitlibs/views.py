@@ -1,24 +1,13 @@
-import json
 import logging
-import uuid
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from bot_modules.games.constants import HOW_TO_PLAY, GAME_ICONS
 from bot_modules.games.utils.game_manager import channel_name
 
 log = logging.getLogger(__name__)
 _ICON = GAME_ICONS["legitlibs"]
-
-
-def _is_host_or_mod(interaction: discord.Interaction, host_id: int) -> bool:
-    if interaction.user.id == host_id:
-        return True
-    if interaction.guild and isinstance(interaction.user, discord.Member):
-        perms = interaction.user.guild_permissions
-        return perms.administrator or perms.manage_guild
-    return False
 
 
 class _CancelConfirmView(discord.ui.View):
@@ -69,7 +58,7 @@ class JoinView(discord.ui.View):
     @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="ml_start", row=0)
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start the round.", ephemeral=True)
             return
         await self._on_start(interaction, action="start")
@@ -77,7 +66,7 @@ class JoinView(discord.ui.View):
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_lobby", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
             return
         await interaction.response.send_message(
@@ -112,7 +101,7 @@ class QuiplashFillView(discord.ui.View):
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_fill", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
             return
         await interaction.response.send_message(
@@ -152,7 +141,7 @@ class ClassicFillView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
                  channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can cancel.", ephemeral=True)
             return
@@ -192,7 +181,7 @@ class ClassicRescueView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
                  channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can cancel.", ephemeral=True)
             return
@@ -224,66 +213,10 @@ class ClassicRescueFillView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
                  channel_name(interaction.channel))
-        if not _is_host_or_mod(interaction, self.host_id):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can cancel.", ephemeral=True)
             return
         await self._on_cancel(interaction)
 
 
-class ReportView(discord.ui.View):
-    """Persistent view attached to reveal output so players can flag bad content."""
-
-    def __init__(self, db, game_id: str, snapshot: dict):
-        super().__init__(timeout=None)
-        self.db = db
-        self.game_id = game_id
-        # snapshot = {"title": str, "body": str, "reveals": [(name, fills_dict, filled_body), ...]}
-        self.snapshot = snapshot
-
-    @discord.ui.button(label="⚠️ Report", style=discord.ButtonStyle.secondary)
-    async def report(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        await interaction.response.send_modal(_ReportModal(self.db, self.game_id, self.snapshot))
-
-
-class _ReportModal(discord.ui.Modal):
-    reason = discord.ui.TextInput(
-        label="What's wrong? (optional)",
-        style=discord.TextStyle.paragraph,
-        required=False,
-        max_length=500,
-        placeholder="e.g. targeted harassment, slur, real-world PII…",
-    )
-
-    def __init__(self, db, game_id: str, snapshot: dict):
-        super().__init__(title="Report This Round")
-        self.db = db
-        self.game_id = game_id
-        self.snapshot = snapshot
-
-    async def on_submit(self, interaction: discord.Interaction):
-        report_id = str(uuid.uuid4())
-        content = json.dumps({
-            "title": self.snapshot.get("title"),
-            "body": self.snapshot.get("body"),
-            "reveals": [
-                {"name": name, "fills": fills, "filled": filled}
-                for name, fills, filled in self.snapshot.get("reveals", [])
-            ],
-            "reason": str(self.reason.value or "").strip(),
-        })
-        try:
-            await self.db.execute(
-                "INSERT INTO legitlibs_reports (report_id, game_id, submission_content, reporter_id) VALUES (?, ?, ?, ?)",
-                (report_id, self.game_id, content, interaction.user.id),
-            )
-            log.info("%s filed LegitLibs report %s for game %s", interaction.user.display_name, report_id, self.game_id)
-            await interaction.response.send_message(
-                "🛡️ Thanks — mods will review this round.", ephemeral=True
-            )
-        except Exception as e:
-            log.exception("Failed to store LegitLibs report: %s", e)
-            await interaction.response.send_message(
-                "Couldn't file that report — please ping a mod directly.", ephemeral=True
-            )

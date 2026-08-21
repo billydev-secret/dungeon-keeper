@@ -40,7 +40,7 @@ def _stub_accent_color(monkeypatch):
     """resolve_accent_color awaits guild.me.display_avatar.read(), which the
     mocked guilds here can't satisfy — stub it at the use-site namespace."""
     monkeypatch.setattr(
-        "bot_modules.commands.voice_master_commands.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(return_value=discord.Color.default()),
     )
 
@@ -1109,7 +1109,7 @@ def test_panel_ids_track_where_the_panel_actually_is(ctx):
     )
 
     cog = VoiceMasterCog.__new__(VoiceMasterCog)
-    cog.ctx = ctx
+    cog.bot = SimpleNamespace(ctx=ctx)
 
     assert cog._panel_ids(GUILD) == (0, 0)  # nothing posted yet
 

@@ -86,3 +86,53 @@ def test_known_panels_are_present_in_the_registry_map(pid):
     # If app.js's registry format drifts, the regex would silently map nothing
     # and every edit would sweep all panels — catch that here.
     assert gate._panel_id_to_module().get(pid) == f"{pid}.js"
+
+
+# ── every browser test file actually runs somewhere ───────────────────
+
+
+def _browser_test_files() -> set[str]:
+    """Files under tests/web that contain at least one ``browser``-marked test."""
+    web = Path(__file__).resolve().parent / "web"
+    found = set()
+    for path in sorted(web.glob("test_*.py")):
+        src = path.read_text(encoding="utf-8")
+        if "mark.browser" in src or "pytestmark" in src and "browser" in src:
+            found.add(path.name)
+    return found
+
+
+def test_the_gate_selects_browser_tests_by_marker_not_by_name():
+    """Naming files here is how five of them ended up running nowhere.
+
+    The default suite excludes the ``browser`` marker and nightly enumerated
+    the same two filenames the gate did, so tests/web/test_panel_js_fixes.py
+    and four siblings executed in no automated tier at all — a stale fixture
+    in it sat red on main until someone ran the suite by hand. Selecting a
+    directory (or the marker) instead means a new browser file is covered the
+    moment it exists.
+    """
+    assert gate._BROWSER_TESTS == (Path(gate.TESTS) / "web",), (
+        "gate._BROWSER_TESTS should point at tests/web so the browser marker "
+        "picks up every file; listing filenames orphans the ones nobody adds."
+    )
+
+
+def test_nightly_runs_the_whole_browser_marker():
+    """The backstop tier has to be the comprehensive one, or nothing is."""
+    path = Path(__file__).resolve().parents[1] / ".github/workflows/nightly.yml"
+    if not path.is_file():
+        # The remote test runner syncs src/, tests/ and scripts/ but not the
+        # workflow files, so this assertion has nothing to read there. Skip
+        # rather than fail, the same way the frame tests do for their missing
+        # image assets — a machine that can't see the file can't judge it.
+        pytest.skip("workflow files are not present on this runner")
+    workflow = path.read_text(encoding="utf-8")
+    assert "-m browser --tb=short -q tests/" in workflow, (
+        "nightly should run the browser marker across tests/, not a file list"
+    )
+    for name in _browser_test_files():
+        assert f"tests/web/{name}" not in workflow, (
+            f"nightly names {name} explicitly — that is the enumeration that "
+            "let five browser files go unrun; select the marker instead"
+        )

@@ -6,12 +6,12 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
 )
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -79,14 +79,6 @@ class MLTJoinView(discord.ui.View):
         # Join/Leave press so we never re-resolve per interaction.
         self.accent = accent
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="mlt_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -143,7 +135,7 @@ class MLTJoinView(discord.ui.View):
     @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="mlt_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
@@ -277,14 +269,6 @@ class MLTVoteView(discord.ui.View):
         self.select.callback = self._vote_select_callback
         self.add_item(self.select)
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     async def _vote_select_callback(self, interaction: discord.Interaction):
         log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
@@ -340,7 +324,7 @@ class MLTVoteView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="mlt_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         if self._closed:
@@ -362,21 +346,6 @@ class MLTCog(commands.Cog):
     @property
     def db(self):
         return self.bot.games_db
-
-    async def _resolve_accent(self, guild):
-        """Resolve the guild accent once, tolerating no guild / no ctx.
-
-        Returns ``None`` (embed builders fall back to phase colors) when
-        there's no guild or resolution fails, so a branding hiccup never
-        crashes the game.
-        """
-        if guild is None:
-            return None
-        try:
-            return await resolve_accent_color(self.bot.ctx.db_path, guild)
-        except Exception:
-            log.debug("MLT: accent resolution failed", exc_info=True)
-            return None
 
     @app_commands.command(name="mlt", description="Start a Most Likely To game!")
     @app_commands.describe(
@@ -447,7 +416,7 @@ class MLTCog(commands.Cog):
         )
 
         log.info("Game %s (mlt) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
-        accent = await self._resolve_accent(getattr(channel, "guild", None))
+        accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="MLT")
         embed = build_join_embed(host_name, [], color=accent, start_at=start_epoch)
         view = MLTJoinView(game_id, host_id, self.db, self.bot, self, accent=accent)
         self.bot.active_views[game_id] = view
@@ -472,7 +441,7 @@ class MLTCog(commands.Cog):
             if not any(int(c) > 0 for c in crowns.values()):
                 return
             guild = getattr(channel, "guild", None)
-            accent = await self._resolve_accent(guild)
+            accent = await safe_resolve_accent(self.bot, guild, log_label="MLT")
             embed = build_final_standings_embed(crowns, guild, color=accent)
             if guild:
                 from bot_modules.economy.game_rewards import append_payout_footer
@@ -691,7 +660,7 @@ class MLTCog(commands.Cog):
         rounds = payload.get("rounds", {})
 
         if not rounds:
-            accent = await self._resolve_accent(getattr(channel, "guild", None))
+            accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="MLT")
             view = MLTJoinView(
                 game_id, host_id, self.db, self.bot, self, accent=accent
             )
@@ -706,7 +675,7 @@ class MLTCog(commands.Cog):
         players = [int(p) for p in payload.get("players", [])]
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
-        accent = await self._resolve_accent(guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="MLT")
 
         view = self._build_vote_view(
             game_id=game_id,

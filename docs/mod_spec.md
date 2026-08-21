@@ -22,7 +22,7 @@ Ephemeral embed with a section dropdown. Pages are a **hand-curated** list (not 
 
 A **Browse by Module** button opens a second, auto-generated pager: one page per loaded cog, listing its registered app commands (groups flattened to `/group sub [subsub]`), sorted alphabetically. Bodies over 4000 chars are truncated with an ellipsis.
 
-Embeds use the guild accent color (`resolve_accent_color`) when invoked in a guild; per-section decorative colors are the DM fallback. Both views time out after 120 s (controls disabled); only the invoker can interact — others' clicks are silently ignored.
+Embeds use the guild accent color (`safe_resolve_accent`) when invoked in a guild; per-section decorative colors are the DM fallback. Both views time out after 120 s (controls disabled); only the invoker can interact — others' clicks are silently ignored.
 
 Because the curated pages are hand-maintained, they can drift from the real command set; the module browser is always accurate.
 

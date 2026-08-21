@@ -8,7 +8,7 @@ import discord
 
 from bot_modules.core.utils import disable_all_items
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games.utils.game_manager import (
     create_game, update_game_message, update_game_state,
     modify_payload, get_game_payload, end_game, update_session,
@@ -65,10 +65,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
     # Resolve the guild accent once; every embed below follows it. Guard so a
     # branding/ctx hiccup falls back to each builder's phase color (via
     # ``color=None``), never crashing the game.
-    try:
-        accent = await resolve_accent_color(cog.bot.ctx.db_path, guild)
-    except Exception:
-        accent = None
+    accent = await safe_resolve_accent(cog.bot, guild, log_label="legitlibs classic")
 
     # Enforce per-channel tier cap
     max_tier = await get_channel_max_tier(db, channel.id)

@@ -15,7 +15,7 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
@@ -180,14 +180,9 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         if game.id in self._accents:
             return
         guild = self.bot.get_guild(game.guild_id)
-        ctx = getattr(self.bot, "ctx", None)
-        db_path = getattr(ctx, "db_path", None)
-        if guild is None or db_path is None:
-            return
-        try:
-            self._accents[game.id] = await resolve_accent_color(db_path, guild)
-        except Exception as e:  # pragma: no cover - defensive
-            log.debug("hot potato group accent resolve failed: %s", e)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="hot potato group")
+        if accent is not None:
+            self._accents[game.id] = accent
 
     async def on_game_start(self, game: HotPotatoGroupGame) -> None:
         await self._prime_accent(game)

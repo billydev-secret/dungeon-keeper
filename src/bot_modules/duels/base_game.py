@@ -24,7 +24,7 @@ from typing import Any
 import discord
 from discord.ext import commands, tasks
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.services import economy_wager_service as wager_svc
@@ -651,10 +651,7 @@ class BaseGame(commands.Cog):
         (for a wagered lobby) loads the econ settings so the wager field reads
         ``🪙 **500** coins``, then hands both to the sync builder.
         """
-        ctx = getattr(self.bot, "ctx", None)
-        accent = (
-            await resolve_accent_color(ctx.db_path, guild) if ctx is not None else None
-        )
+        accent = await safe_resolve_accent(self.bot, guild, log_label="base game")
         settings = await self._econ_settings(guild.id) if ante > 0 else None
         return self._render_lobby(
             game, guild, min_players, max_players, ante,

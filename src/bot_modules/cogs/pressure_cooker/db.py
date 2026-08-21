@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from bot_modules.duels import db as duels_db
 
+from bot_modules.games.utils import game_store
 from .game import PressureGame, game_from_row, pumps_to_json
 
 if TYPE_CHECKING:
@@ -55,18 +56,8 @@ async def get_game(db: GamesDb, game_id: int) -> PressureGame | None:
 async def get_active_game_for_pair(
     db: GamesDb, guild_id: int, user_a: int, user_b: int
 ) -> PressureGame | None:
-    placeholders = ",".join("?" * len(_NON_TERMINAL))
-    row = await db.fetchone(
-        f"""
-        SELECT * FROM pressure_games
-        WHERE guild_id = ?
-          AND state IN ({placeholders})
-          AND (
-               (challenger_id = ? AND target_id = ?)
-            OR (challenger_id = ? AND target_id = ?)
-          )
-        """,
-        (guild_id, *_NON_TERMINAL, user_a, user_b, user_b, user_a),
+    row = await game_store.fetch_live_game_for_pair(
+        db, "pressure_games", guild_id, user_a, user_b, _NON_TERMINAL
     )
     return game_from_row(row) if row else None
 
@@ -74,24 +65,14 @@ async def get_active_game_for_pair(
 async def get_pending_game_for_challenger(
     db: GamesDb, guild_id: int, channel_id: int, challenger_id: int
 ) -> PressureGame | None:
-    row = await db.fetchone(
-        """
-        SELECT * FROM pressure_games
-        WHERE guild_id = ? AND channel_id = ? AND challenger_id = ? AND state = 'PENDING'
-        ORDER BY created_at DESC LIMIT 1
-        """,
-        (guild_id, channel_id, challenger_id),
+    row = await game_store.fetch_pending_game_for_challenger(
+        db, "pressure_games", guild_id, channel_id, challenger_id
     )
     return game_from_row(row) if row else None
 
 
 async def set_game_state(db: GamesDb, game_id: int, state: str, **extra_fields) -> None:
-    fields = {"state": state, **extra_fields}
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
-    await db.execute(
-        f"UPDATE pressure_games SET {set_clause} WHERE id = ?",
-        (*fields.values(), game_id),
-    )
+    await game_store.set_game_state(db, "pressure_games", game_id, state, **extra_fields)
 
 
 async def save_pump(db: GamesDb, game: PressureGame) -> None:
@@ -140,20 +121,6 @@ async def fetch_sweepable_games(db: GamesDb, now: float) -> list[PressureGame]:
         (now - 60, now - 300, now - 300),
     )
     return [game_from_row(r) for r in rows]
-
-
-async def get_pending_game_for_target(
-    db: GamesDb, guild_id: int, user_id: int
-) -> PressureGame | None:
-    row = await db.fetchone(
-        """
-        SELECT * FROM pressure_games
-        WHERE guild_id = ? AND target_id = ? AND state = 'PENDING'
-        ORDER BY created_at DESC LIMIT 1
-        """,
-        (guild_id, user_id),
-    )
-    return game_from_row(row) if row else None
 
 
 # ── Nicks (shim → duels/db) ───────────────────────────────────────────────────

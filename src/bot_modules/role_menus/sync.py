@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import get_bot_member
 from bot_modules.role_menus import db as menus_db
 from bot_modules.role_menus.views import build_disabled_view, build_view
@@ -53,7 +53,7 @@ async def build_embed(
         except ValueError:
             color = None
     if color is None:
-        color = await resolve_accent_color(ctx.db_path, guild)
+        color = await safe_resolve_accent(ctx, guild, log_label="role menus")
     embed = discord.Embed(
         title=menu["title"] or None,
         description=menu["description"] or None,

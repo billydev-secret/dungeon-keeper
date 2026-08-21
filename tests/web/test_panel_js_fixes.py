@@ -437,6 +437,11 @@ _SPOILER_ROUTES = {
             "nsfw_classifier": {
                 "threshold": 0.7,
                 "sfw_threshold": 0.9,
+                # The panel validates all three thresholds before it posts, so
+                # a field missing here renders value="undefined" and blocks the
+                # save — which is what a stale fixture looks like from the
+                # test's side. GET /api/config always sends this one.
+                "chest_floor": 0.4,
                 "sfw_mode": "log",
                 "sfw_log_channel_id": "0",
                 "sfw_exempt_channels": [],

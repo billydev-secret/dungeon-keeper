@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 
@@ -33,7 +33,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import (
@@ -172,14 +172,6 @@ class ClapbackJoinView(discord.ui.View):
         self.accent = accent
         self.message: discord.Message | None = None
 
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     async def on_timeout(self):
         await self.cog._cancel_game(self.game_id, reason="Lobby timed out")
         # Retire the lobby message — a live-looking Join/Start row on a dead
@@ -233,7 +225,7 @@ class ClapbackJoinView(discord.ui.View):
     @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="ql_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self._is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
 
@@ -331,14 +323,6 @@ class ClapbackSubmitView(discord.ui.View):
         self.bot = bot
         self.cog = cog
 
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="✏️ Submit", style=discord.ButtonStyle.primary, custom_id="ql_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -370,14 +354,6 @@ class ClapbackVoteView(discord.ui.View):
         self.bot = bot
         self.cog = cog
         self._closed = False
-
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
 
     @discord.ui.button(label="🅰️", style=discord.ButtonStyle.primary, custom_id="ql_vote_a", row=0)
     async def vote_a(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -428,21 +404,13 @@ class ClapbackRoundSummaryView(discord.ui.View):
         self.cog = cog
         self._advanced = asyncio.Event()
 
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     async def on_timeout(self):
         self._advanced.set()
 
     @discord.ui.button(label="▶️ Next Round", style=discord.ButtonStyle.primary, custom_id="ql_next")
     async def next_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self._is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         self.stop()
@@ -461,18 +429,10 @@ class ClapbackRecapView(discord.ui.View):
         self.bot = bot
         self.cog = cog
 
-    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="🔁 Play Again", style=discord.ButtonStyle.primary, custom_id="ql_replay")
     async def play_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self._is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
             return
         self.stop()
@@ -489,7 +449,7 @@ class ClapbackRecapView(discord.ui.View):
     @discord.ui.button(label="🔀 Play Again (Shuffled)", style=discord.ButtonStyle.secondary, custom_id="ql_replay_shuffle")
     async def play_again_shuffled(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self._is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
             return
         channel = interaction.channel
@@ -530,21 +490,6 @@ class ClapbackCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    async def _resolve_accent(self, guild) -> "discord.Color | None":
-        """Resolve the guild accent once, swallowing any failure to None.
-
-        Kept guild-tolerant: with no guild (headless / DM) or a resolver
-        error we return None and the builders fall back to their neutral
-        default rather than crashing the game loop.
-        """
-        if guild is None:
-            return None
-        try:
-            return await resolve_accent_color(self.bot.ctx.db_path, guild)
-        except Exception:
-            log.warning("clapback accent resolve failed for guild %s", getattr(guild, "id", "?"))
-            return None
-
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Re-drive the game from the next un-played round after a restart.
 
@@ -560,7 +505,7 @@ class ClapbackCog(commands.Cog):
         self._game_cancelled.discard(game_id)
         # Accent cache is lost across a restart — re-resolve it once here so the
         # resumed phases stay on-theme without re-resolving per update.
-        self._accents[game_id] = await self._resolve_accent(getattr(channel, "guild", None))
+        self._accents[game_id] = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="clapback")
         resume_round = len(payload.get("round_history", [])) + 1
         await start_redrive(
             self.bot, game_id, message,
@@ -684,7 +629,7 @@ class ClapbackCog(commands.Cog):
 
         # Resolve the guild accent ONCE for the whole game and cache it; every
         # phase (lobby / submit / vote / reveal / scoreboard / recap) reuses it.
-        accent = await self._resolve_accent(guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="clapback")
         self._accents[game_id] = accent
         embed = build_lobby_embed(
             host_name=host_name,

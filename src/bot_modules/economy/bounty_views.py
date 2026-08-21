@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, cast
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.economy.view_helpers import coins as _coins
 from bot_modules.economy.view_helpers import safe_ephemeral as _safe_ephemeral
@@ -501,7 +501,7 @@ async def build_bounty_hub_panel(
     bot: Bot, guild: discord.Guild
 ) -> tuple[discord.Embed, BountyHubView]:
     """Render the hub for ``guild`` — the cog's StickyPanel ``build`` callback."""
-    accent = await resolve_accent_color(bot.ctx.db_path, guild)
+    accent = await safe_resolve_accent(bot, guild, log_label="bounty", default=DEFAULT_ACCENT_COLOR)
 
     def _read() -> tuple[EconSettings, list[BountyBoardEntry], int]:
         # One connection for settings, list and count: this runs on every
@@ -560,7 +560,7 @@ async def _refresh_card(
     if card is None:
         return
     settings = await _load_settings(bot, guild.id)
-    accent = await resolve_accent_color(bot.ctx.db_path, guild)
+    accent = await safe_resolve_accent(bot, guild, log_label="bounty", default=DEFAULT_ACCENT_COLOR)
 
     def _read():
         with bot.ctx.open_db() as conn:

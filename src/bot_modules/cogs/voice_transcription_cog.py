@@ -23,7 +23,7 @@ from bot_modules.services.voice_transcription_service import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.voice_transcription")
 
@@ -36,12 +36,11 @@ def _is_voice_message(message: discord.Message) -> bool:
 
 
 class VoiceTranscriptionCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
 
     def _read_config(self, guild_id: int) -> VoiceTranscriptionConfig | None:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             return get_config(conn, guild_id)
 
     @commands.Cog.listener("on_message")
@@ -104,4 +103,4 @@ async def setup(bot: Bot) -> None:
             "Install it with: pip install faster-whisper"
         )
         return
-    await bot.add_cog(VoiceTranscriptionCog(bot, bot.ctx))
+    await bot.add_cog(VoiceTranscriptionCog(bot))

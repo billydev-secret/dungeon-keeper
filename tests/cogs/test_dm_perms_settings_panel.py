@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
+from bot_modules.core import branding
 
 from bot_modules.cogs.dm_perms_cog import (
     DM_SETTINGS_PANEL_CUSTOM_ID,
@@ -39,7 +40,7 @@ def _member(user_id: int = 1, *, roles=None) -> MagicMock:
 
 def _cog(*, mutual: bool = False) -> MagicMock:
     cog = MagicMock()
-    cog.ctx.db_path = ":memory:"
+    cog.bot.ctx.db_path = ":memory:"
     cog._mode_roles_for.return_value = {}
     cog._is_mutual.return_value = mutual
     cog.revoke_connection = AsyncMock(return_value=True)
@@ -83,10 +84,8 @@ def audit_rows(monkeypatch):
 @pytest.fixture(autouse=True)
 def _stub_accent(monkeypatch):
     """The panel resolves the guild accent; colour isn't what's under test."""
-    import bot_modules.cogs.dm_perms_cog as mod
 
-    monkeypatch.setattr(
-        mod, "resolve_accent_color", AsyncMock(return_value=discord.Color.blurple())
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock(return_value=discord.Color.blurple())
     )
 
 

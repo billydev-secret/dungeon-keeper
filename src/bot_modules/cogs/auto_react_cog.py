@@ -19,7 +19,7 @@ from bot_modules.services.auto_react_service import (
 from bot_modules.services.reaction_tip_service import apply_tip
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.auto_react")
 
@@ -41,9 +41,8 @@ def _has_image(message: discord.Message) -> bool:
 
 
 class AutoReactCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
 
     @commands.Cog.listener("on_message")
     async def _on_message(self, message: discord.Message) -> None:
@@ -54,7 +53,7 @@ class AutoReactCog(commands.Cog):
         if not _has_image(message):
             return
 
-        row = get_auto_react_rule(self.ctx.db_path, message.guild.id, message.channel.id)
+        row = get_auto_react_rule(self.bot.ctx.db_path, message.guild.id, message.channel.id)
         if not row or not int(row["enabled"]):
             return
 
@@ -94,7 +93,7 @@ class AutoReactCog(commands.Cog):
             # entirely on a misconfigured rule.
             return []
 
-        classify = nsfw_classifier_service.classifier_for(self.ctx.db_path, message)
+        classify = nsfw_classifier_service.classifier_for(self.bot.ctx.db_path, message)
         # Concurrently: an album's attachments are independent, and serialising
         # them stacks a download plus ~74ms of inference each before any emoji
         # appears.
@@ -114,7 +113,7 @@ class AutoReactCog(commands.Cog):
         try:
             await asyncio.to_thread(
                 record_placement,
-                self.ctx.db_path,
+                self.bot.ctx.db_path,
                 guild_id=message.guild.id if message.guild else 0,
                 channel_id=message.channel.id,
                 message_id=message.id,
@@ -146,7 +145,7 @@ class AutoReactCog(commands.Cog):
         try:
             outcome = await asyncio.to_thread(
                 apply_tip,
-                self.ctx.db_path,
+                self.bot.ctx.db_path,
                 guild_id=payload.guild_id,
                 message_id=payload.message_id,
                 reactor_id=payload.user_id,
@@ -175,4 +174,4 @@ class AutoReactCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(AutoReactCog(bot, bot.ctx))
+    await bot.add_cog(AutoReactCog(bot))

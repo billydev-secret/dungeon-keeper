@@ -299,7 +299,18 @@ def _browser_available(py: str) -> bool:
                           capture_output=True).returncode == 0
 
 
-_BROWSER_TESTS = ("test_mobile_layout.py", "test_panel_console.py")
+# Everything under tests/web marked ``browser``, selected by marker rather than
+# by name. The two panel *sweeps* (test_mobile_layout, test_panel_console) used
+# to be listed here explicitly, which quietly meant the other five browser
+# files — the targeted panel regressions — ran in no tier at all: the default
+# suite excludes the marker, and nightly enumerated the same two names. A stale
+# fixture in test_panel_js_fixes sat red on main for days because of it. Select
+# the marker, and a new browser file is covered the moment it is written.
+#
+# Cost is proportionate: the five regression files are ~69 tests in ~60s, while
+# the sweeps they join are minutes. PANEL_SCOPE/PANEL_VIEWPORTS below only
+# affect the sweeps; the regression files ignore them.
+_BROWSER_TESTS = (TESTS / "web",)
 
 
 def run_mobile(py: str, changed: list[str]) -> None:
@@ -326,7 +337,7 @@ def run_mobile(py: str, changed: list[str]) -> None:
         env.setdefault("PANEL_VIEWPORTS", "phone")
     result = subprocess.run(
         [py, "-m", "pytest", "-m", "browser", "-n", "0",
-         *[str(TESTS / "web" / t) for t in _BROWSER_TESTS]],
+         *[str(t) for t in _BROWSER_TESTS]],
         cwd=ROOT, env=env,
     )
     if result.returncode != 0:

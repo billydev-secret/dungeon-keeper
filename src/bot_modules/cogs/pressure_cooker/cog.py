@@ -12,7 +12,7 @@ import random
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
@@ -52,14 +52,9 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         cached = self._accent_cache.get(game_id)
         if cached is not None:
             return cached
-        color: discord.Color | int = COLOR_YELLOW
-        ctx = getattr(self.bot, "ctx", None)
-        if guild is not None and ctx is not None:
-            try:
-                color = await resolve_accent_color(ctx.db_path, guild)
-            except Exception:  # never crash a game over accent resolution
-                log.debug("pressure accent resolve failed; using fallback", exc_info=True)
-                color = COLOR_YELLOW
+        color: discord.Color | int = await safe_resolve_accent(
+            self.bot, guild, default=COLOR_YELLOW, log_label="pressure"
+        )
         self._accent_cache[game_id] = color
         return color
 

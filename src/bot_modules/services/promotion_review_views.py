@@ -23,13 +23,15 @@ import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, cast
+from functools import partial
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.utils import get_guild_channel_or_thread
 from bot_modules.inactive.apply import reactivate_member
 from bot_modules.services import promotion_review_service as svc
+from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -385,14 +387,7 @@ class Level5PromotionView(discord.ui.View):
 # ---------------------------------------------------------------------------
 
 
-async def _safe_ephemeral(interaction: discord.Interaction, text: str) -> None:
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(text, ephemeral=True)
-        else:
-            await interaction.response.send_message(text, ephemeral=True)
-    except discord.HTTPException:
-        log.debug("promo review: failed to send ephemeral", exc_info=True)
+_safe_ephemeral = partial(_core_safe_ephemeral, log_label="promo review")
 
 
 async def post_review_card(
@@ -450,7 +445,7 @@ async def post_review_card(
         )
         return
 
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="promotion review", default=DEFAULT_ACCENT_COLOR)
     hint = (
         "Grant access re-adds the role and closes this out."
         if kind == svc.KIND_PRUNED_RETURN
@@ -672,7 +667,7 @@ async def _edit_resolved(
             )
 
     pruned_roles, level = await asyncio.to_thread(_fetch)
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="promotion review", default=DEFAULT_ACCENT_COLOR)
     embed = build_review_embed(
         accent,
         kind=kind,

@@ -23,13 +23,15 @@ import re
 import sqlite3
 import time
 from typing import TYPE_CHECKING, Any, cast
+from functools import partial
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.economy.intake_rewards import pay_intake_steps
 from bot_modules.economy.leaderboard import progress_bar
 from bot_modules.services import intake_service as svc
+from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -199,10 +201,6 @@ def _is_mod(ctx: AppContext, member: discord.Member) -> bool:
     )
 
 
-def _is_greeter(member: discord.Member, greeter_role_id: int) -> bool:
-    return greeter_role_id > 0 and any(r.id == greeter_role_id for r in member.roles)
-
-
 # ---------------------------------------------------------------------------
 # Rendering helpers
 # ---------------------------------------------------------------------------
@@ -229,7 +227,7 @@ async def _build_embed_for_card(
 ) -> discord.Embed:
     user_id = int(card["user_id"])
     member = guild.get_member(user_id)
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="intake", default=DEFAULT_ACCENT_COLOR)
     return build_intake_embed(
         accent,
         member_mention=member.mention if member else f"<@{user_id}>",
@@ -338,7 +336,7 @@ async def post_intake_card(ctx: AppContext, member: discord.Member) -> bool:
         await asyncio.to_thread(_delete_card, ctx, card_id)
         return False  # no card surface — let the legacy ping announce them
 
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="intake", default=DEFAULT_ACCENT_COLOR)
     embed = build_intake_embed(
         accent,
         member_mention=member.mention,
@@ -564,14 +562,7 @@ async def close_member_card(
 # ---------------------------------------------------------------------------
 
 
-async def _safe_ephemeral(interaction: discord.Interaction, text: str) -> None:
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(text, ephemeral=True)
-        else:
-            await interaction.response.send_message(text, ephemeral=True)
-    except discord.HTTPException:
-        log.debug("intake: failed to send ephemeral", exc_info=True)
+_safe_ephemeral = partial(_core_safe_ephemeral, log_label="intake")
 
 
 async def _toggle_step(

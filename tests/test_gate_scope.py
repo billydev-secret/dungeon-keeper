@@ -113,3 +113,101 @@ def test_select_tests_honours_a_new_migration():
 def test_select_tests_still_fans_out_on_an_edited_migration():
     _, _, run_full = gate.select_tests(["src/migrations/134_todo_board.sql"], new=set())
     assert run_full is True
+
+
+# ── cogs reach the app context one way ────────────────────────────────
+
+
+def _cog_classes():
+    """Every commands.Cog subclass in src/, with its __init__ and its body."""
+    import ast
+
+    root = Path(__file__).resolve().parents[1] / "src"
+    for path in sorted(root.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover - not our problem here
+            continue
+        for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+            if not any("Cog" in ast.unparse(b) for b in cls.bases):
+                continue
+            init = next(
+                (n for n in cls.body
+                 if isinstance(n, ast.FunctionDef) and n.name == "__init__"),
+                None,
+            )
+            yield path.relative_to(root.parent).as_posix(), cls.name, init, cls
+
+
+def test_no_cog_takes_a_ctx_parameter():
+    """CLAUDE.md: a cog takes ``(self, bot)`` and reaches the context through it.
+
+    Pinned repo-wide rather than per-directory because the one cog this
+    branch's sweep missed — RulesWatchMonitor — lives in rules_watch/, not
+    cogs/. A convention with an unpinned exception is how the next one gets
+    written, and a rebase onto a main that added a cog would reintroduce the
+    split silently.
+    """
+
+    offenders = [
+        f"{path}::{name}"
+        for path, name, init, _cls in _cog_classes()
+        if init is not None and "ctx" in [a.arg for a in init.args.args]
+    ]
+    assert not offenders, (
+        "these cogs still take a ctx argument; take (self, bot) and read "
+        "self.bot.ctx instead:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_no_cog_stores_self_ctx():
+    """The field that made helpers duck-type what a caller happened to hold."""
+    import ast
+
+    offenders = []
+    for path, name, init, _cls in _cog_classes():
+        if init is None:
+            continue
+        for node in ast.walk(init):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "ctx"
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "self"
+                ):
+                    offenders.append(f"{path}::{name}")
+    assert not offenders, (
+        "these cogs assign self.ctx; every cog already has self.bot, so read "
+        "self.bot.ctx and let shared helpers rely on the bot:\n  "
+        + "\n  ".join(sorted(set(offenders)))
+    )
+
+
+def test_no_cog_reads_self_ctx_anywhere():
+    """Not just in __init__ — a cog that reads self.ctx in a method body is an
+    AttributeError waiting for that path to run.
+
+    This is the half that protects a rebase. main has moved on while this
+    branch was in flight and its new code does use ``self.ctx`` in cog method
+    bodies; without this the sweep would have to be re-applied by hand and by
+    memory. The __init__-only checks above wouldn't have seen it.
+    """
+    import ast
+
+    offenders = []
+    for path, name, _init, cls in _cog_classes():
+        for node in ast.walk(cls):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "ctx"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "self"
+            ):
+                offenders.append(f"{path}:{node.lineno}  {name}")
+    assert not offenders, (
+        "a cog has no self.ctx — read self.bot.ctx instead:\n  "
+        + "\n  ".join(sorted(set(offenders)))
+    )

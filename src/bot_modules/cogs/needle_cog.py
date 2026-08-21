@@ -17,7 +17,7 @@ from discord.ext import commands
 from bot_modules.core.db_utils import get_config_value, open_db
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.needle")
 
@@ -295,9 +295,8 @@ def _has_thread_perm(user: discord.User | discord.Member, thread: discord.Thread
 class NeedleCog(commands.Cog):
     """Auto-threading; channel configuration lives in the web dashboard."""
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
@@ -305,7 +304,7 @@ class NeedleCog(commands.Cog):
         self.bot.add_view(NeedleThreadView())
 
     def _init_db(self) -> None:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             _ensure_tables(conn)
 
     # ── DB thread helpers ──────────────────────────────────────────────────
@@ -313,11 +312,11 @@ class NeedleCog(commands.Cog):
     def _load_channel_config(
         self, guild_id: int, channel_id: int
     ) -> NeedleChannelConfig | None:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             return _get_channel_config(conn, guild_id, channel_id)
 
     def _load_global_config(self, guild_id: int) -> NeedleGlobalConfig:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             return _get_global_config(conn, guild_id)
 
     # ── on_message ────────────────────────────────────────────────────────
@@ -626,4 +625,4 @@ class NeedleCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(NeedleCog(bot, bot.ctx))
+    await bot.add_cog(NeedleCog(bot))

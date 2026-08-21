@@ -152,7 +152,8 @@ def _wellness_cog(monkeypatch, *, write=None):
     monkeypatch.setattr(mod, "get_wellness_user", MagicMock(return_value=MagicMock(away_message="saved")))
 
     cog = WellnessCog.__new__(WellnessCog)
-    cog.ctx = MagicMock()
+    cog.bot = MagicMock()
+    cog.bot.ctx = MagicMock()
     return cog
 
 

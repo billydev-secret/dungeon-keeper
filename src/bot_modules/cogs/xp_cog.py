@@ -10,7 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
 from bot_modules.core.xp_system import (
     XP_SOURCE_GRANT,
@@ -173,9 +173,8 @@ def _build_xp_leaderboard_embed(
 
 
 class XpCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     @app_commands.command(
@@ -192,7 +191,7 @@ class XpCog(commands.Cog):
             "hour", "day", "week", "month", "year", "alltime"
         ] = "alltime",
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         if not guild:
             await interaction.response.send_message(
@@ -213,7 +212,7 @@ class XpCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
         window_name, subtitle, cutoff = _resolve_leaderboard_timescale(timescale)
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="xp", default=DEFAULT_ACCENT_COLOR)
 
         def _check_xp():
             with ctx.open_db() as conn:
@@ -268,7 +267,7 @@ class XpCog(commands.Cog):
     async def xp_give(
         self, interaction: discord.Interaction, member: discord.Member
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.can_use_xp_grant(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -334,4 +333,4 @@ class XpCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(XpCog(bot, bot.ctx))
+    await bot.add_cog(XpCog(bot))

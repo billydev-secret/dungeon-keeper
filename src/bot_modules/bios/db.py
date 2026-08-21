@@ -234,14 +234,6 @@ def soft_retire_field(conn: sqlite3.Connection, field_id: int) -> None:
     conn.execute("UPDATE bio_fields SET active = 0 WHERE id = ?", (field_id,))
 
 
-def has_active_headline(conn: sqlite3.Connection, template_id: int) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM bio_fields WHERE template_id = ? AND active = 1 AND is_headline = 1 LIMIT 1",
-        (template_id,),
-    ).fetchone()
-    return row is not None
-
-
 def has_any_active_field(conn: sqlite3.Connection, template_id: int) -> bool:
     row = conn.execute(
         "SELECT 1 FROM bio_fields WHERE template_id = ? AND active = 1 LIMIT 1",

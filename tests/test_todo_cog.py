@@ -43,11 +43,12 @@ def _interaction(user: MagicMock) -> MagicMock:
 
 
 def _cog() -> TodoCog:
-    ctx = MagicMock()
-    ctx.is_mod = lambda ix: bool(
+    _bot = MagicMock()
+    _bot.ctx = MagicMock()
+    _bot.ctx.is_mod = lambda ix: bool(
         getattr(ix.user.guild_permissions, "administrator", False)
     )
-    return TodoCog(MagicMock(), ctx)
+    return TodoCog(_bot)
 
 
 @pytest.mark.asyncio
@@ -72,11 +73,11 @@ async def test_mod_gate_delegates_to_app_context():
     place; what that rule decides is tests/test_todo_mod_tier_parity.py.
     """
     cog = _cog()
-    cog.ctx.is_mod = MagicMock(return_value=False)
+    cog.bot.ctx.is_mod = MagicMock(return_value=False)
     interaction = _interaction(_member(mod=True))  # elevated bits, not on the team
     with patch("bot_modules.cogs.todo_cog.create_todo") as create:
         await cog.todo.callback(cog, interaction, "clean up the channels")
-    cog.ctx.is_mod.assert_called_once_with(interaction)
+    cog.bot.ctx.is_mod.assert_called_once_with(interaction)
     create.assert_not_called()
 
 
@@ -174,7 +175,8 @@ class _FakeCtx:
 def _board_cog(db_path, guild):
     bot = MagicMock()
     bot.get_guild.return_value = guild
-    cog = TodoCog(bot, _FakeCtx(db_path))
+    bot.ctx = _FakeCtx(db_path)
+    cog = TodoCog(bot)
     return cog
 
 
@@ -225,7 +227,7 @@ async def test_refresh_edits_then_skips_when_unchanged(board_db):
         save_board(conn, 123, 555, 666)
         create_todo(conn, 123, 42, "Post QOTD")
 
-    with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
+    with patch("bot_modules.core.branding.resolve_accent_color",
                new=AsyncMock(return_value=discord.Color.blurple())):
         assert await cog.refresh_board(123) is True
         assert message.edit.await_count == 1
@@ -252,7 +254,7 @@ async def test_refresh_reposts_when_the_board_was_deleted(board_db):
     with open_db(board_db) as conn:
         save_board(conn, 123, 555, 666)
 
-    with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
+    with patch("bot_modules.core.branding.resolve_accent_color",
                new=AsyncMock(return_value=discord.Color.blurple())):
         assert await cog.refresh_board(123) is True
     channel.send.assert_awaited_once()
@@ -268,7 +270,7 @@ async def test_place_board_persists_ids_and_renders_tasks(board_db):
     with open_db(board_db) as conn:
         create_todo(conn, 123, 42, "Post QOTD")
 
-    with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
+    with patch("bot_modules.core.branding.resolve_accent_color",
                new=AsyncMock(return_value=discord.Color.blurple())):
         assert await cog.place_board(guild, channel) is message
 
@@ -288,7 +290,7 @@ async def test_place_board_deletes_the_previous_one(board_db):
     with open_db(board_db) as conn:
         save_board(conn, 123, 555, 111)
 
-    with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
+    with patch("bot_modules.core.branding.resolve_accent_color",
                new=AsyncMock(return_value=discord.Color.blurple())):
         await cog.place_board(guild, channel)
     channel.get_partial_message.assert_called_once_with(111)
@@ -373,7 +375,7 @@ async def test_place_board_keeps_the_old_one_when_posting_fails(board_db):
     with open_db(board_db) as conn:
         save_board(conn, 123, 555, 111)
 
-    with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
+    with patch("bot_modules.core.branding.resolve_accent_color",
                new=AsyncMock(return_value=discord.Color.blurple())):
         assert await cog.place_board(guild, channel) is None
 
@@ -394,7 +396,7 @@ async def test_place_board_survives_non_forbidden_errors(board_db):
     guild = _fake_guild(channel)
     cog = _board_cog(board_db, guild)
 
-    with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
+    with patch("bot_modules.core.branding.resolve_accent_color",
                new=AsyncMock(return_value=discord.Color.blurple())):
         assert await cog.place_board(guild, channel) is None
 

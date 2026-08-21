@@ -136,12 +136,12 @@ class GamesDevCog(commands.Cog):
             else:
                 try:
                     from bot_modules.games_clapback.embeds import build_lobby_embed
-                    from bot_modules.core.branding import resolve_accent_color
+                    from bot_modules.core.branding import safe_resolve_accent
                     config = payload.get("config", {})
                     guild = interaction.guild
                     host_member = guild.get_member(row["host_id"]) if guild else None
                     color = (
-                        await resolve_accent_color(self.bot.ctx.db_path, guild)
+                        await safe_resolve_accent(self.bot, guild, log_label="games dev")
                         if guild
                         else None
                     )

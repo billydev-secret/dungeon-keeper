@@ -154,7 +154,9 @@ def _cog(sync_db_path: Path) -> HiddenChannelsCog:
     ctx = MagicMock()
     ctx.is_admin.return_value = True
     ctx.open_db = lambda: open_db(sync_db_path)
-    return HiddenChannelsCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    return HiddenChannelsCog(_bot)
 
 
 def _guild() -> MagicMock:
@@ -252,7 +254,7 @@ async def test_hide_leaves_the_channel_untouched_when_the_db_write_fails(
             raise sqlite3.OperationalError("database is locked")
         return open_db(sync_db_path)
 
-    cog.ctx.open_db = _open
+    cog.bot.ctx.open_db = _open
     await cog.hide.callback(cog, interaction, channel)  # type: ignore[union-attr]
 
     channel.edit.assert_not_awaited()

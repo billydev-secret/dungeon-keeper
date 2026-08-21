@@ -15,7 +15,7 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
 from bot_modules.duels.views import ResultView
@@ -192,14 +192,9 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         if game.id in self._accents:
             return
         guild = self.bot.get_guild(game.guild_id)
-        ctx = getattr(self.bot, "ctx", None)
-        db_path = getattr(ctx, "db_path", None)
-        if guild is None or db_path is None:
-            return
-        try:
-            self._accents[game.id] = await resolve_accent_color(db_path, guild)
-        except Exception as e:  # pragma: no cover - defensive
-            log.debug("hot potato accent resolve failed: %s", e)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="hot potato")
+        if accent is not None:
+            self._accents[game.id] = accent
 
     async def on_game_start(self, game: HotPotatoGame) -> None:
         await self._prime_accent(game)

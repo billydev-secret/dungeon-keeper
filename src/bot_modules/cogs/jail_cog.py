@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.jail.embeds import (
     build_adopted_policies_embed,
     build_modinfo_embed,
@@ -299,14 +299,13 @@ class JailCog(commands.Cog):
         name="policy", description="Policy proposal and voting commands."
     )
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
         bot = self.bot
-        ctx = self.ctx
+        ctx = self.bot.ctx
 
         # Register persistent dynamic items
         bot.add_dynamic_items(TicketPanelButton)
@@ -418,7 +417,7 @@ class JailCog(commands.Cog):
         rejoin restores access to it, and deleting it here would strand a
         returning member in a server they can't see with nowhere to appeal.
         """
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = member.guild
         if guild is None or guild.id != ctx.guild_id:
             return
@@ -517,7 +516,7 @@ class JailCog(commands.Cog):
         category inherits the deny by syncing. Best-effort: a channel we lack
         permission on is logged and skipped, exactly like the initial sweep.
         """
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = channel.guild
         if guild is None or guild.id != ctx.guild_id:
             return
@@ -545,7 +544,7 @@ class JailCog(commands.Cog):
         duration: str | None = None,
         reason: str | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
@@ -580,7 +579,7 @@ class JailCog(commands.Cog):
         left departed users unreleasable from Discord entirely. Resolving the
         member here keeps full role restoration for anyone still present.
         """
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         guild = interaction.guild
         if (
@@ -611,7 +610,7 @@ class JailCog(commands.Cog):
 
         Returns the new message, or None if Discord refused the post.
         """
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="jail")
         embed = build_ticket_panel_embed(color=accent)
         view = discord.ui.View(timeout=None)
         view.add_item(TicketPanelButton())
@@ -619,7 +618,7 @@ class JailCog(commands.Cog):
             msg = await channel.send(embed=embed, view=view)
         except discord.HTTPException:
             return None
-        _add_ticket_panel(self.ctx, guild.id, channel.id, msg.id)
+        _add_ticket_panel(self.bot.ctx, guild.id, channel.id, msg.id)
         return msg
 
     @ticket.command(
@@ -629,7 +628,7 @@ class JailCog(commands.Cog):
     async def ticket_open(
         self, interaction: discord.Interaction, description: str | None = None
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):
@@ -646,7 +645,7 @@ class JailCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         desc_text = description or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
         name = f"ticket-{sanitize_channel_name(user.name)[:16]}-{ts}"
@@ -738,7 +737,7 @@ class JailCog(commands.Cog):
     async def ticket_close_cmd(
         self, interaction: discord.Interaction, reason: str | None = None
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
@@ -760,7 +759,7 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             return
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         tc_guild_id = guild.id
         tc_ticket_user_id = ticket["user_id"]
 
@@ -822,7 +821,7 @@ class JailCog(commands.Cog):
 
     @ticket.command(name="reopen", description="Reopen a closed ticket.")
     async def ticket_reopen_cmd(self, interaction: discord.Interaction) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
@@ -843,7 +842,7 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             return
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         tid = ticket["id"]
         tr_guild_id = guild.id
 
@@ -905,7 +904,7 @@ class JailCog(commands.Cog):
         description="Permanently delete a closed ticket. A transcript is saved first.",
     )
     async def ticket_delete_cmd(self, interaction: discord.Interaction) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
@@ -936,7 +935,7 @@ class JailCog(commands.Cog):
         description="Mark yourself as handling this ticket. You'll get DM pings on new activity.",
     )
     async def ticket_claim_cmd(self, interaction: discord.Interaction) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message("❌ Mod only.", ephemeral=True)
@@ -975,7 +974,7 @@ class JailCog(commands.Cog):
     async def ticket_escalate_cmd(
         self, interaction: discord.Interaction, reason: str | None = None
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         guild = interaction.guild
         if (
@@ -1069,7 +1068,7 @@ class JailCog(commands.Cog):
         title: str,
         description: str | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):
@@ -1189,7 +1188,7 @@ class JailCog(commands.Cog):
     )
     @app_commands.default_permissions(moderate_members=True)
     async def policy_vote_cmd(self, interaction: discord.Interaction) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member):
@@ -1228,7 +1227,7 @@ class JailCog(commands.Cog):
     async def policy_close_cmd(
         self, interaction: discord.Interaction, reason: str | None = None
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member):
@@ -1253,7 +1252,7 @@ class JailCog(commands.Cog):
 
         policy_id = policy["id"]
         reason_text = reason or "Closed without vote"
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
         pc_guild_id = guild.id
 
         def _close_policy():
@@ -1340,7 +1339,7 @@ class JailCog(commands.Cog):
     @policy.command(name="list", description="List all passed policies.")
     @app_commands.default_permissions(moderate_members=True)
     async def policy_list_cmd(self, interaction: discord.Interaction) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member):
@@ -1379,7 +1378,7 @@ class JailCog(commands.Cog):
     async def pull_cmd(
         self, interaction: discord.Interaction, user: discord.Member
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         guild = interaction.guild
         channel = interaction.channel
@@ -1462,7 +1461,7 @@ class JailCog(commands.Cog):
     async def remove_cmd(
         self, interaction: discord.Interaction, user: discord.Member
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         guild = interaction.guild
         channel = interaction.channel
@@ -1546,7 +1545,7 @@ class JailCog(commands.Cog):
         user: discord.Member,
         reason: str | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         guild = interaction.guild
         if (
@@ -1628,7 +1627,7 @@ class JailCog(commands.Cog):
         warning_id: int,
         reason: str | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         guild = interaction.guild
         if (
@@ -1720,7 +1719,7 @@ class JailCog(commands.Cog):
     async def modinfo_cmd(
         self, interaction: discord.Interaction, user: discord.Member
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         member = interaction.user
         guild = interaction.guild
         if (
@@ -1732,7 +1731,7 @@ class JailCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
 
         since_30d = datetime.now(timezone.utc).timestamp() - 30 * 86400
 
@@ -1844,4 +1843,4 @@ class JailCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(JailCog(bot, bot.ctx))
+    await bot.add_cog(JailCog(bot))

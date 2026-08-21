@@ -163,7 +163,7 @@ def bot(db):
 @pytest.fixture(autouse=True)
 def _patch_accent():
     with patch(
-        "bot_modules.economy.auction_views.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         new=AsyncMock(return_value=ACCENT),
     ):
         yield

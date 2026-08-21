@@ -24,8 +24,8 @@ def _make_channel() -> MagicMock:
 def _make_cog():
     from bot_modules.cogs.risky_roll_cog import RiskyRollCog
     bot = MagicMock()
-    ctx = MagicMock()
-    return RiskyRollCog(bot, ctx)
+    bot.ctx = MagicMock()
+    return RiskyRollCog(bot)
 
 
 @pytest.fixture(autouse=True)

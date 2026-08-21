@@ -18,7 +18,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 from bot_modules.music_playlist import music_playlist_store as store
 from bot_modules.music_playlist.embeds import (
@@ -34,7 +34,7 @@ from bot_modules.music_playlist.music_playlist_service import (
 from bot_modules.services.spotify_resolver import SpotifyResolver
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.music_playlist")
 
@@ -115,11 +115,11 @@ class MusicPlaylistPanelView(discord.ui.View):
 class MusicPlaylistCog(commands.Cog):
     """Listener-first cog; configuration lives on the web dashboard."""
 
-    def __init__(self, bot: "Bot", ctx: "AppContext") -> None:
+    def __init__(self, bot: "Bot") -> None:
         self.bot = bot
-        self.ctx = ctx
+        db_path = bot.ctx.db_path
         self.service = MusicPlaylistService(
-            ctx.db_path, SpotifyResolver(db_path=ctx.db_path)
+            db_path, SpotifyResolver(db_path=db_path)
         )
         super().__init__()
 
@@ -187,13 +187,13 @@ class MusicPlaylistCog(commands.Cog):
     def window_rows(
         self, guild_id: int, playlist_id: str
     ) -> list[Mapping[str, Any]]:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             return store.live_window(conn, guild_id, playlist_id)
 
     def pending_rows_for(
         self, guild_id: int, user_id: int
     ) -> list[Mapping[str, Any]]:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             return [
                 r for r in store.list_pending(conn, guild_id)
                 if int(r["added_by"]) == user_id
@@ -373,7 +373,7 @@ class MusicPlaylistCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        color = await resolve_accent_color(self.ctx.db_path, guild)
+        color = await safe_resolve_accent(self.bot.ctx, guild, log_label="music playlist", default=DEFAULT_ACCENT_COLOR)
         rows = await asyncio.to_thread(
             self.window_rows, guild.id, settings.playlist_id
         )
@@ -395,4 +395,4 @@ class MusicPlaylistCog(commands.Cog):
 
 
 async def setup(bot: "Bot") -> None:
-    await bot.add_cog(MusicPlaylistCog(bot, bot.ctx))
+    await bot.add_cog(MusicPlaylistCog(bot))

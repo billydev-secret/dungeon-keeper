@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from bot_modules.services.dm_branding import send_branded_dm
 from discord.ext import commands
 from discord import app_commands
@@ -27,7 +27,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     channel_name,
 )
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.services.anon_audit_service import (
     EVENT_HOT_SEAT_CHANGED,
@@ -225,7 +225,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         q_idx = len(payload.get("questions", [])) - 1
 
         if self.mode == "unfiltered":
-            color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
+            color = await safe_resolve_accent(interaction.client, interaction.guild, log_label="ama")
             embed = build_question_embed(self.question.value, color=color)
             target_member = interaction.guild.get_member(self.target_id) if interaction.guild else None
             question_view = QuestionView(self.game_id, self.target_id, self.db, q_idx, interaction.user.id, self.ama_view, self.question.value)
@@ -343,7 +343,7 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted reply modal in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
-        color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
+        color = await safe_resolve_accent(interaction.client, interaction.guild, log_label="ama")
         answered_embed = build_answered_embed(
             self.question_text,
             self.reply.value,
@@ -473,7 +473,7 @@ class ScreenedQuestionView(discord.ui.View):
             )
             return
 
-        color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
+        color = await safe_resolve_accent(interaction.client, interaction.guild, log_label="ama")
         embed = build_question_embed(self.question_text, color=color)
         hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
         question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, self.question_idx, self.asker_id, self.ama_view, self.question_text)
@@ -632,17 +632,9 @@ class AMAView(discord.ui.View):
                 if getattr(item, "custom_id", None) in {"ama_skip", "ama_new_hs"}:
                     self.remove_item(item)
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     async def _build_embed(self, host_name: str, payload: dict | None = None) -> discord.Embed:
         guild = self._game_msg.guild if self._game_msg else None
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="ama")
 
         def _name_resolver(uid: int) -> str:
             m = guild.get_member(uid) if guild else None
@@ -952,7 +944,7 @@ class AMAView(discord.ui.View):
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="ama_skip", row=1)
     async def skip_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
             return
         if self.hot_seat_id is None:
@@ -977,7 +969,7 @@ class AMAView(discord.ui.View):
     @discord.ui.button(label="🔄 New Hot Seat", style=discord.ButtonStyle.secondary, custom_id="ama_new_hs", row=1)
     async def new_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can select the hot seat.", ephemeral=True)
             return
         # Only members who volunteered (are in the queue) may be promoted —
@@ -1020,7 +1012,7 @@ class AMAView(discord.ui.View):
         total_q = stats["total_q"]
         unique_askers = stats["unique_askers"]
 
-        color = await resolve_accent_color(self.bot.ctx.db_path, channel.guild) if channel.guild else None
+        color = await safe_resolve_accent(self.bot, channel.guild, log_label="ama")
         embed = build_recap_embed(self.mode, stats, color=color)
         if channel.guild:
             from bot_modules.economy.game_rewards import append_payout_footer
@@ -1191,12 +1183,22 @@ async def _resend_ama_bottom(bot, game_id: str, channel):
         if hasattr(bottom_view, "message_id"):
             bottom_view.message_id = new_msg.id
         # Keep the persisted id in step so recovery rebinds the current bar.
+        # Best effort — the bar is already posted, so a failed write isn't
+        # worth unwinding — but never silent: the stored id now points at the
+        # message we just deleted, so after a restart recovery can't fetch it,
+        # leaves _bottom_msg unset, and this function starts returning early.
+        # The bar quietly stops following the conversation from then on.
         try:
             def _store_bottom(p, _mid=new_msg.id):
                 p["bottom_message_id"] = _mid
             await modify_payload(ama_view.db, game_id, _store_bottom)
         except Exception:
-            pass
+            log.warning(
+                "ama: failed to persist bottom-bar id for game %s; "
+                "the bar will stop re-sticking after a restart",
+                game_id,
+                exc_info=True,
+            )
     finally:
         ama_view._suppress_resend = False
 
@@ -1573,7 +1575,7 @@ class AMACog(commands.Cog):
         )
 
         launch_guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, launch_guild) if launch_guild else None
+        color = await safe_resolve_accent(self.bot, launch_guild, log_label="ama")
         if game_format == AMA_FORMAT_PANEL:
             embed = build_panel_embed(host_name, mode, [], str, color=color)
         else:

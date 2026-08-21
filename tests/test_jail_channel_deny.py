@@ -160,7 +160,9 @@ async def test_sweep_noop_when_guild_missing(tmp_path):
 
 
 def _cog(ctx) -> JailCog:
-    return JailCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    return JailCog(_bot)
 
 
 async def test_listener_stamps_new_channel(tmp_path):

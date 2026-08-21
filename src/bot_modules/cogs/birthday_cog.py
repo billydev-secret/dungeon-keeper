@@ -353,14 +353,13 @@ class BirthdayCog(commands.Cog):
         description="Birthday tracker.",
     )
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
         bot = self.bot
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
         # ``startup_task_factories`` is consumed exactly once during the
         # initial setup_hook (see app_context.Bot). Appending here from a
         # later hot-reload of the cog has no effect — the original
@@ -370,7 +369,7 @@ class BirthdayCog(commands.Cog):
 
     @birthday.command(name="set", description="Set your birthday.")
     async def birthday_set(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(_BirthdayModal(self.ctx))
+        await interaction.response.send_modal(_BirthdayModal(self.bot.ctx))
 
     @birthday.command(
         name="remove",
@@ -388,7 +387,7 @@ class BirthdayCog(commands.Cog):
         user_id = interaction.user.id
 
         def _do_delete_birthday():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return _delete_birthday(conn, gid, user_id)
 
         removed = await asyncio.to_thread(_do_delete_birthday)
@@ -404,4 +403,4 @@ class BirthdayCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(BirthdayCog(bot, bot.ctx))
+    await bot.add_cog(BirthdayCog(bot))

@@ -12,7 +12,7 @@ from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.settings import AUTO_DELETE_SETTINGS
 from bot_modules.services.replies import NO_PERMISSION
@@ -463,9 +463,8 @@ class HelpView(discord.ui.View):
 
 
 class ModCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     @app_commands.command(
@@ -474,8 +473,8 @@ class ModCog(commands.Cog):
     async def help_command(self, interaction: discord.Interaction) -> None:
         accent = None
         if interaction.guild is not None:
-            accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
-        pages = _build_help_pages(self.ctx, interaction, accent)
+            accent = await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="mod")
+        pages = _build_help_pages(self.bot.ctx, interaction, accent)
         view = HelpView(
             pages, invoker_id=interaction.user.id, bot=self.bot, color=accent
         )
@@ -498,7 +497,7 @@ class ModCog(commands.Cog):
         count: app_commands.Range[int, 1, 1000] | None = None,
         after: str | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -584,4 +583,4 @@ class ModCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(ModCog(bot, bot.ctx))
+    await bot.add_cog(ModCog(bot))

@@ -13,8 +13,9 @@ from bot_modules.games_config.embeds import (
     build_force_end_embed,
     build_game_status_embed,
 )
-from bot_modules.games_config.logic import has_mod_or_admin_permissions
-from bot_modules.core.branding import resolve_accent_color
+
+from bot_modules.core.utils import has_mod_or_admin_permissions, is_mod_or_admin
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games.command_groups import games
 from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
@@ -25,13 +26,6 @@ from bot_modules.games.utils.game_manager import (
 
 log = logging.getLogger(__name__)
 
-
-def is_mod_or_admin():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if not interaction.guild or not isinstance(interaction.user, discord.Member):
-            return False
-        return has_mod_or_admin_permissions(interaction.user.guild_permissions)
-    return app_commands.check(predicate)
 
 
 class GamesConfigCog(commands.Cog):
@@ -214,7 +208,7 @@ class GamesConfigCog(commands.Cog):
         from bot_modules.games.utils.game_manager import get_active_game
         row = await get_active_game(self.db, interaction.channel_id)
         guild = interaction.guild
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await safe_resolve_accent(self.bot, guild, log_label="games config")
         embed = build_game_status_embed(row, color=color)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

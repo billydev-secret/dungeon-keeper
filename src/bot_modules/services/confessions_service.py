@@ -419,27 +419,6 @@ def update_discord_thread_id(db_path: Path, guild_id: int, root_message_id: int,
         )
 
 
-def get_reply_button_message_id(db_path: Path, guild_id: int, root_message_id: int) -> int:
-    with open_db(db_path) as conn:
-        row = conn.execute(
-            "SELECT reply_button_message_id FROM confession_threads WHERE guild_id = ? AND message_id = ?",
-            (guild_id, root_message_id),
-        ).fetchone()
-    return int(row["reply_button_message_id"]) if row else 0
-
-
-def update_reply_button_message_id(
-    db_path: Path, guild_id: int, root_message_id: int, button_message_id: int
-) -> None:
-    with open_db(db_path) as conn:
-        conn.execute(
-            "UPDATE confession_threads SET reply_button_message_id = ? WHERE guild_id = ? AND message_id = ?",
-            (button_message_id, guild_id, root_message_id),
-        )
-
-
-
-
 def check_and_bump_limits(
     db_path: Path,
     guild_id: int,

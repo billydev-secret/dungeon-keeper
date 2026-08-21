@@ -17,6 +17,7 @@ import pytest
 from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services import event_echo_service as svc
 from bot_modules.services.games_db import GamesDb
+from bot_modules.core import branding
 from bot_modules.services.event_echo_logic import (
     SOURCE_AUCTION_CLOSING,
     SOURCE_BOUNTY,
@@ -118,8 +119,7 @@ def bot(sync_db_path, monkeypatch):
         guilds=[types.SimpleNamespace(id=GUILD_ID)],
         sent_channel=channel,
     )
-    monkeypatch.setattr(
-        svc, "resolve_accent_color", AsyncMock(return_value=discord.Color(0x5A32A8))
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock(return_value=discord.Color(0x5A32A8))
     )
     return stub
 
@@ -210,11 +210,10 @@ class TestEchoEvent:
         [
             pytest.param("unreachable", id="channel-unreachable"),
             pytest.param("forbidden", id="send-forbidden"),
-            pytest.param("accent", id="accent-lookup-raises"),
         ],
     )
     async def test_a_send_that_never_landed_does_not_burn_the_cooldown(
-        self, bot, guild, sync_db_path, monkeypatch, break_it
+        self, bot, guild, sync_db_path, break_it
     ):
         """An echo nobody saw must not refuse the next real game.
 
@@ -227,16 +226,35 @@ class TestEchoEvent:
         if break_it == "unreachable":
             bot.get_channel = MagicMock(return_value=None)
             bot.fetch_channel = AsyncMock(side_effect=discord.NotFound(MagicMock(), "x"))
-        elif break_it == "forbidden":
-            bot.sent_channel.send.side_effect = discord.Forbidden(MagicMock(), "no perms")
         else:
-            monkeypatch.setattr(
-                svc, "resolve_accent_color", AsyncMock(side_effect=RuntimeError("boom"))
-            )
+            bot.sent_channel.send.side_effect = discord.Forbidden(MagicMock(), "no perms")
 
         assert await echo(bot, guild, ref="failed") is False
         with open_db(sync_db_path) as conn:
             assert svc.last_echo_times(conn, GUILD_ID, "mfk") == (None, None)
+
+    async def test_a_branding_failure_still_lets_the_echo_land(
+        self, bot, guild, sync_db_path, monkeypatch
+    ):
+        """A broken accent lookup is not a failed send.
+
+        This used to be a third row on the test above: resolving the accent
+        raised, the exception unwound the claimed-row path, and the echo was
+        released as "never landed". But the announcement is the point and the
+        color is decoration — dropping the post because branding hiccuped is
+        the wrong trade. Since the accent now falls back instead of raising,
+        the echo lands and *does* take its cooldown, exactly as a successful
+        send should.
+        """
+        configure(sync_db_path)
+        monkeypatch.setattr(
+            branding, "resolve_accent_color", AsyncMock(side_effect=RuntimeError("boom"))
+        )
+
+        assert await echo(bot, guild, ref="branding-down") is True
+        bot.sent_channel.send.assert_awaited_once()
+        with open_db(sync_db_path) as conn:
+            assert svc.last_echo_times(conn, GUILD_ID, "mfk") != (None, None)
 
     async def test_a_failed_ref_is_not_retried_every_tick(self, bot, guild, sync_db_path):
         """Released, but still claimed — the sweep must not hammer a dead channel."""

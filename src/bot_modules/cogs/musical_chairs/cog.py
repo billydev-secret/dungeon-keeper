@@ -15,7 +15,7 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
@@ -49,13 +49,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         cached = self._accents.get(game_id)
         if cached is not None:
             return cached
-        ctx = getattr(self.bot, "ctx", None)
-        if guild is None or ctx is None:
-            return discord.Color(COLOR_YELLOW)
-        try:
-            color = await resolve_accent_color(ctx.db_path, guild)
-        except Exception:
-            log.debug("accent resolution failed for game %s", game_id, exc_info=True)
+        color = await safe_resolve_accent(self.bot, guild, log_label="musical chairs")
+        if color is None:
             return discord.Color(COLOR_YELLOW)
         self._accents[game_id] = color
         return color

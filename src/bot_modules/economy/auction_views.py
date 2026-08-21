@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, cast
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.sticky import PanelContent
 from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.economy.view_helpers import coins as _coins
@@ -246,7 +246,7 @@ async def _render(
     Returns None if the auction row is gone."""
     if settings is None:
         settings = await _load_settings(bot, guild.id)
-    accent = await resolve_accent_color(bot.ctx.db_path, guild)
+    accent = await safe_resolve_accent(bot, guild, log_label="auction", default=DEFAULT_ACCENT_COLOR)
 
     def _read():
         with bot.ctx.open_db() as conn:

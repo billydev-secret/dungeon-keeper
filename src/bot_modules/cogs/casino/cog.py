@@ -77,7 +77,7 @@ from bot_modules.cogs.casino.views import (
 )
 from bot_modules.core.app_context import Bot
 from bot_modules.core.sticky import PanelContent, StickyPanel
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.branding_service import resolve_casino_name_conn
 from bot_modules.services import casino_logic as logic
 from bot_modules.services import casino_service as svc
@@ -476,7 +476,6 @@ _HAND_UIS = (
 class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = bot.ctx
         self._bj_locks: dict[int, asyncio.Lock] = {}
         self._war_locks: dict[int, asyncio.Lock] = {}
         # Webhook handles for the private rounds' ephemeral messages, keyed
@@ -574,7 +573,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         await self.bot.wait_until_ready()
 
         def _sweep() -> tuple[list[sqlite3.Row], dict[str, dict[int, int]]]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return (
                     svc.refund_all_live_hands(conn),
                     svc.refund_live_rounds(conn),
@@ -620,7 +619,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         def _scan() -> tuple[
             dict[str, list[int]], dict[str, list[int]], dict[int, int]
         ]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 thresholds: dict[int, int] = {}
                 now = time.time()
 
@@ -734,7 +733,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         wallet after the member is gone."""
 
         def _refund() -> dict[str, int]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return svc.refund_member_live_stakes(
                     conn, member.guild.id, member.id
                 )
@@ -747,12 +746,12 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
     # ── hub panel stickiness (core.sticky) ─────────────────────────────
 
     def _panel_ids(self, guild_id: int) -> tuple[int, int]:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             settings = svc.load_casino_settings(conn, guild_id)
         return settings.panel_channel_id, settings.panel_message_id
 
     def _save_panel_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             svc.save_casino_settings(
                 conn, guild_id,
                 {"panel_message_id": message_id, "panel_channel_id": channel_id},
@@ -796,13 +795,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         invalidated on dashboard branding saves, so this stays cheap AND
         picks up accent changes without a restart.
         """
-        if guild is None:
-            return None
-        try:
-            return await resolve_accent_color(self.ctx.db_path, guild)
-        except Exception:
-            log.debug("casino accent resolve failed", exc_info=True)
-            return None
+        return await safe_resolve_accent(self.bot.ctx, guild, log_label="casino")
 
     async def _names(
         self,
@@ -829,7 +822,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         """
         return await build_name_fn(
             guild=guild,
-            db_path=self.ctx.db_path,
+            db_path=self.bot.ctx.db_path,
             guild_id=(
                 guild_id if guild_id is not None
                 else (guild.id if guild is not None else 0)
@@ -845,7 +838,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         tuple[svc.DailyStanding | None, svc.DailyStanding | None],
     ]:
         """Everything the hub panel renders from, in one connection."""
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             settings = svc.load_casino_settings(conn, guild_id)
             pot: int | None = None
             ticker: list[tuple[int, str, int, int]] = []
@@ -967,7 +960,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         """(limits label, last-bet prefill) for a bet modal."""
 
         def _read() -> tuple[svc.CasinoSettings, int, int]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 used, cap, _ = svc.daily_cap_status(conn, guild_id, user_id)
                 return svc.load_casino_settings(conn, guild_id), used, cap
 
@@ -1019,7 +1012,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _read():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 used, cap, reset_ts = svc.daily_cap_status(conn, guild.id, uid)
                 return (
                     load_econ_settings(conn, guild.id),
@@ -1075,7 +1068,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             return None
 
         def _read() -> int | None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return svc.win_percentile(conn, guild_id)
 
         try:
@@ -1090,7 +1083,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         that has already been decided."""
 
         def _write() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 svc.record_win(conn, guild_id, payout)
 
         try:
@@ -1192,7 +1185,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             str | None, EconSettings | None, str, svc.InstantResult,
             svc.CasinoSettings,
         ]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 err = svc.take_stake(
                     conn, guild.id, interaction.user.id, amount, "coinflip",
                     channel_id=interaction.channel_id,
@@ -1257,7 +1250,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             str | None, EconSettings | None, tuple[str, str, str],
             svc.InstantResult, svc.CasinoSettings, str,
         ]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 err = svc.take_stake(
                     conn, guild.id, interaction.user.id, amount, "slots",
                     channel_id=interaction.channel_id,
@@ -1353,7 +1346,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             return
 
         def _read() -> tuple[EconSettings, svc.CasinoSettings, str]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return (
                     load_econ_settings(conn, guild.id),
                     svc.load_casino_settings(conn, guild.id),
@@ -1380,7 +1373,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _deal() -> _HandOutcome:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 if svc.live_blackjack_hand(conn, guild.id, uid) is not None:
                     return _HandOutcome(
                         err="You already have a hand at the table — "
@@ -1461,7 +1454,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             )
 
             def _bind() -> None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     svc.set_blackjack_message(conn, hand_id, message.id)
 
             await asyncio.to_thread(_bind)
@@ -1498,7 +1491,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         def _step() -> tuple[
             svc.BlackjackStep, EconSettings | None, svc.CasinoSettings
         ]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 step = svc.resolve_blackjack_action(
                     conn, guild.id, hand_id, uid, action
                 )
@@ -1585,7 +1578,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         async with lock:
 
             def _resolve():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     row = get_hand(conn, hand_id)
                     if row is None:
                         return None
@@ -1700,7 +1693,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         def _play() -> tuple[
             svc.WarStep, EconSettings | None, svc.CasinoSettings
         ]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 step = svc.play_war(
                     conn, guild.id, interaction.channel_id, uid, amount
                 )
@@ -1740,7 +1733,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             )
 
             def _bind() -> None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     svc.set_war_message(conn, hand_id, message.id)
 
             await asyncio.to_thread(_bind)
@@ -1781,7 +1774,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         def _step() -> tuple[
             svc.WarStep, EconSettings | None, svc.CasinoSettings
         ]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 step = svc.resolve_war_action(
                     conn, guild.id, hand_id, uid, action
                 )
@@ -1920,7 +1913,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _deal() -> tuple[svc.MinesStep, EconSettings | None]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 step = svc.deal_mines_hand(
                     conn, guild.id, interaction.channel_id, uid, amount, bombs,
                 )
@@ -1953,7 +1946,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         self._remember_mines_handle(interaction, hand_id, message.id)
 
         def _bind() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 svc.set_mines_message(conn, hand_id, message.id)
 
         await asyncio.to_thread(_bind)
@@ -2022,7 +2015,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _act() -> tuple[svc.MinesStep, EconSettings | None, int]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 step = act(conn, guild.id, uid)
                 if step.err is not None:
                     return step, None, 0
@@ -2129,7 +2122,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _open() -> _RoundOpen:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 econ = load_econ_settings(conn, guild.id)
                 settings = svc.load_casino_settings(conn, guild.id)
                 if not econ.enabled or not settings.channel_id:
@@ -2198,7 +2191,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         )
 
         def _bind() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 ui.set_message(conn, round_id, message.id)
 
         await asyncio.to_thread(_bind)
@@ -2245,7 +2238,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _bet() -> str | None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return svc.place_roulette_bet(
                     conn, round_id, uid, bet_type, selection, amount
                 )
@@ -2263,7 +2256,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         try:
 
             def _read() -> _RoundBet:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     rnd = ui.get_round(conn, round_id)
                     if rnd is None or str(rnd["status"]) != "open":
                         return _RoundBet()
@@ -2337,7 +2330,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _check() -> str | None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 rnd = ui.get_round(conn, round_id)
                 if rnd is None or str(rnd["status"]) != "open":
                     return "That round is already finished."
@@ -2372,7 +2365,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         """
 
         def _settle():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 rnd = ui.get_round(conn, round_id)
                 if rnd is None or str(rnd["status"]) != "open":
                     return None
@@ -2467,7 +2460,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
 
     async def _void_window(self, ui: _WindowUI, round_id: int) -> None:
         def _void() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 ui.void(conn, round_id)
 
         try:
@@ -2506,7 +2499,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _bet() -> str | None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return svc.place_race_bet(conn, round_id, uid, runner, amount)
 
         await self._finish_window_bet(
@@ -2545,7 +2538,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _bet() -> str | None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return svc.place_baccarat_bet(conn, round_id, uid, side, amount)
 
         await self._finish_window_bet(
@@ -2584,7 +2577,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _bet() -> str | None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return svc.place_dice_bet(conn, round_id, uid, bet_type, amount)
 
         await self._finish_window_bet(
@@ -2622,7 +2615,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         uid = interaction.user.id
 
         def _bet() -> str | list[int]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return svc.place_keno_ticket(conn, round_id, uid, spots, amount)
 
         result = await asyncio.to_thread(_bet)

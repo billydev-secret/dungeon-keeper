@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import discord
 
-import bot_modules.cogs.games_ama_cog as ama_mod
+from bot_modules.core import branding
 from bot_modules.cogs.games_ama_cog import (
     AMABottomView,
     AMACog,
@@ -153,7 +153,7 @@ async def _restart_and_recover(sync_db_path, monkeypatch):
     async def _accent(_db_path, _guild):
         return discord.Color(0x5865F2)
 
-    monkeypatch.setattr(ama_mod, "resolve_accent_color", _accent)
+    monkeypatch.setattr(branding, "resolve_accent_color", _accent)
 
     db = GamesDb(sync_db_path)
     bot = _FakeBot(db)

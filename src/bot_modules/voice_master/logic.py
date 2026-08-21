@@ -902,21 +902,6 @@ def format_hide_result(*, hidden: bool) -> str:
     return f"Channel is now **{'hidden' if hidden else 'visible'}**."
 
 
-def format_spectator_result(*, spectator: bool, gated: bool = False) -> str:
-    """Confirmation reply after toggling spectator mode."""
-    if not spectator:
-        return "Spectator mode **off** — the channel is open again."
-    if gated:
-        return (
-            "Spectator mode **on** (gated) — role-holders can join muted, with "
-            "no camera, read-only in chat. Others can't join."
-        )
-    return (
-        "Spectator mode **on** — anyone can join muted, with no camera, "
-        "read-only in chat. Invite people to let them speak."
-    )
-
-
 def format_access_result(*, state: str, gated: bool = False) -> str:
     """Confirmation reply after setting the single access-state dial.
 

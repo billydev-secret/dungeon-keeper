@@ -30,7 +30,7 @@ _STUB_ACCENT = discord.Color(0x123456)
 @pytest.fixture(autouse=True)
 def _stub_resolve_accent(monkeypatch):
     monkeypatch.setattr(
-        "bot_modules.services.xp_service.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(return_value=_STUB_ACCENT),
     )
 

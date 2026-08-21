@@ -856,15 +856,17 @@ export function buildField(labelText, control, hint) {
 // buildField renders a bare <label>; `field` additionally pairs it with its
 // control by id so screen readers announce the label and a label tap focuses
 // the input (W-A7). Every panel wants that, so it lives here rather than
-// being re-derived per panel.
+// being re-derived per panel. These are now the only copies — the private
+// `field`/`labeledField`, `card` and `toggleField` that birthday-settings,
+// config-bios, config-cleanup, config-confessions, config-dms and
+// config-starboard used to carry all import from here instead.
 //
-// Note these are not yet the only copies: birthday-settings, config-cleanup,
-// config-confessions, config-dms and config-starboard each still carry a
-// byte-identical private `field` (config-bios calls its copy `labeledField`),
-// and config-cleanup/config-confessions/config-starboard duplicate a
-// `toggleField`/`buildNumberInput` pair that `checkbox`/`numInput` here
-// subsume. Converting them is a mechanical import swap and good follow-up
-// work; prefer importing from here in new code.
+// `buildNumberInput` is the one exception still outstanding: config-cleanup,
+// config-confessions and config-starboard keep private copies because they
+// aren't interchangeable with `numInput` below — different argument order
+// (config-confessions' differs again from the other two) and 140px against
+// numInput's 160px, so unifying is a visible change rather than an import
+// swap.
 let _fieldSeq = 0;
 
 export function field(labelText, control, hint) {
@@ -899,6 +901,32 @@ export function checkbox(name, checked, labelText) {
   inp.checked = !!checked;
   label.append(inp, document.createTextNode(" " + labelText));
   return label;
+}
+
+/** A checkbox row plus the hint that states what the toggle changes.
+ *
+ * Distinct from `checkbox` above: this returns `{ wrap, box }` rather than a
+ * bare label, because every caller needs the input back to read on submit and
+ * the wrapper back to append. Config panels settled on this shape
+ * independently three times; it lives here now.
+ */
+export function toggleField(name, labelText, checked, hint) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  const lbl = document.createElement("label");
+  lbl.style.cssText = "display:flex; align-items:center; gap:8px; cursor:pointer;";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.name = name;
+  box.checked = !!checked;
+  lbl.appendChild(box);
+  lbl.appendChild(document.createTextNode(labelText));
+  wrap.appendChild(lbl);
+  const h = document.createElement("div");
+  h.className = "field-hint";
+  h.textContent = hint;
+  wrap.appendChild(h);
+  return { wrap, box };
 }
 
 /** A titled `.card` section appended to `parent` (usually the panel's form). */

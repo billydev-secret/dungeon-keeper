@@ -74,7 +74,7 @@ def ctx(db):
 @pytest.fixture(autouse=True)
 def _patch_accent():
     with patch(
-        "bot_modules.economy.quest_views.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         new=AsyncMock(return_value=discord.Color(0x123456)),
     ):
         yield

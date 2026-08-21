@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.docs import db as docs_db
 from bot_modules.docs.render import EmbedSpec, render_doc
 
@@ -70,7 +70,7 @@ async def _resolve_color(
             return discord.Color(int(accent, 16))
         except ValueError:
             pass
-    return await resolve_accent_color(ctx.db_path, guild)
+    return await safe_resolve_accent(ctx, guild, log_label="docs", default=DEFAULT_ACCENT_COLOR)
 
 
 async def _resolve_channel(bot: "Bot", channel_id: int, guild: discord.Guild | None):

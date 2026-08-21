@@ -16,6 +16,7 @@ from bot_modules.services.economy_service import get_balance, save_econ_settings
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 from bot_modules.services.games_db import GamesDb
 from tests.fakes import FakeEconGamesBot, FakeGuild, fake_interaction
+from bot_modules.core import branding
 
 GUILD = 9001
 CH = 100
@@ -74,7 +75,7 @@ def test_build_view_has_sit_button(db):
 
 async def test_round_active_embed_uses_guild_accent(db, sync_db_path, monkeypatch):
     accent = discord.Color(0x3FA7FF)
-    monkeypatch.setattr(mc_cog, "resolve_accent_color", AsyncMock(return_value=accent))
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock(return_value=accent))
     cog = _econ_cog(db, sync_db_path)  # bot has ctx + a resolvable guild
     game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
     guild = cog.bot.get_guild(GUILD)
@@ -101,7 +102,7 @@ async def test_resolve_accent_guards_no_guild_no_ctx(cog, db):
 
 async def test_resolve_accent_error_falls_back(db, sync_db_path, monkeypatch):
     monkeypatch.setattr(
-        mc_cog, "resolve_accent_color", AsyncMock(side_effect=RuntimeError("boom"))
+        branding, "resolve_accent_color", AsyncMock(side_effect=RuntimeError("boom"))
     )
     cog = _econ_cog(db, sync_db_path)
     game = await _game(db, phase="MUSIC", alive=[1, 2, 3])

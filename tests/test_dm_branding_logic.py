@@ -178,7 +178,7 @@ def test_guild_icon_url_handles_no_icon_and_no_guild():
 async def test_resolve_accent_defers_to_shared_resolver():
     guild = _guild()
     with patch(
-        "bot_modules.services.dm_branding.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(return_value=ACCENT),
     ) as resolver:
         assert await resolve_dm_accent(Path("db"), guild) == ACCENT
@@ -189,7 +189,7 @@ async def test_resolve_accent_defers_to_shared_resolver():
 async def test_resolve_accent_survives_a_failing_lookup():
     """A branding failure must not cost the member the message."""
     with patch(
-        "bot_modules.services.dm_branding.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(side_effect=RuntimeError("avatar fetch exploded")),
     ):
         assert await resolve_dm_accent(Path("db"), _guild()) == discord.Color(
@@ -201,7 +201,7 @@ async def test_resolve_accent_survives_a_failing_lookup():
 async def test_resolve_accent_propagates_cancellation():
     """Swallowing CancelledError would break task shutdown."""
     with patch(
-        "bot_modules.services.dm_branding.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(side_effect=asyncio.CancelledError()),
     ):
         with pytest.raises(asyncio.CancelledError):
@@ -211,7 +211,7 @@ async def test_resolve_accent_propagates_cancellation():
 @pytest.mark.asyncio
 async def test_resolve_accent_without_a_db_path_skips_the_lookup():
     with patch(
-        "bot_modules.services.dm_branding.resolve_accent_color", AsyncMock()
+        "bot_modules.core.branding.resolve_accent_color", AsyncMock()
     ) as resolver:
         assert await resolve_dm_accent(None, _guild()) == discord.Color(DM_PRIMARY)
     resolver.assert_not_awaited()
@@ -220,7 +220,7 @@ async def test_resolve_accent_without_a_db_path_skips_the_lookup():
 @pytest.mark.asyncio
 async def test_resolve_accent_without_a_guild_skips_the_db():
     with patch(
-        "bot_modules.services.dm_branding.resolve_accent_color", AsyncMock()
+        "bot_modules.core.branding.resolve_accent_color", AsyncMock()
     ) as resolver:
         assert await resolve_dm_accent(Path("db"), None) == discord.Color(DM_PRIMARY)
     resolver.assert_not_awaited()
@@ -233,7 +233,7 @@ async def test_resolve_accent_without_a_guild_skips_the_db():
 async def test_send_brands_the_embed_and_passes_extras_through():
     sink, view = _Sink(), MagicMock()
     with patch(
-        "bot_modules.services.dm_branding.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(return_value=ACCENT),
     ):
         msg = await send_branded_dm(
@@ -254,7 +254,7 @@ async def test_send_leaves_content_only_dms_unbranded():
     """Branding applies to embeds; a text DM has nowhere to put an accent."""
     sink = _Sink()
     with patch(
-        "bot_modules.services.dm_branding.resolve_accent_color", AsyncMock()
+        "bot_modules.core.branding.resolve_accent_color", AsyncMock()
     ) as resolver:
         await send_branded_dm(
             sink, db_path=Path("db"), guild=_guild(), content="plain text"
@@ -275,7 +275,7 @@ async def test_send_leaves_content_only_dms_unbranded():
 async def test_send_returns_none_when_the_dm_bounces(exc):
     """Callers roll back DB state on None, so this must not raise."""
     with patch(
-        "bot_modules.services.dm_branding.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(return_value=ACCENT),
     ):
         result = await send_branded_dm(

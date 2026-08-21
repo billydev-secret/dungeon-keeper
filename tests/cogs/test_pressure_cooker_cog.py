@@ -42,7 +42,7 @@ async def test_bust_resolves_and_pays(db, sync_db_path, monkeypatch):
     # gauge card now takes the guild accent (was a red/yellow/green gradient).
     accent = discord.Color(0x123456)
     monkeypatch.setattr(
-        "bot_modules.cogs.pressure_cooker.cog.resolve_accent_color",
+        "bot_modules.core.branding.resolve_accent_color",
         AsyncMock(return_value=accent),
     )
     gid = await pdb.create_game(db, GUILD, CH, P1, P2, None)

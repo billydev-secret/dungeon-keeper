@@ -18,7 +18,6 @@ def _cog_with_role():
     bot.ctx.db_path = ":memory:"
     cog = WhisperCog.__new__(WhisperCog)
     cog.bot = bot
-    cog.ctx = bot.ctx
     return cog
 
 

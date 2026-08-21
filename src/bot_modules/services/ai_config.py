@@ -132,10 +132,6 @@ def list_prompts() -> list[PromptInfo]:
     return list(_PROMPTS)
 
 
-def get_prompt_info(key: str) -> PromptInfo | None:
-    return _PROMPTS_BY_KEY.get(key)
-
-
 # ── Read helpers ───────────────────────────────────────────────────────
 
 
@@ -215,14 +211,6 @@ def get_prompt_with_source(
     if raw:
         return raw, True
     return info.default_factory(), False
-
-
-def get_mod_model_from_path(db_path: Path, guild_id: int = 0) -> str:
-    try:
-        with open_db(db_path) as conn:
-            return get_mod_model(conn, guild_id)
-    except Exception:
-        return DEFAULT_MOD_MODEL
 
 
 def get_wellness_model_from_path(db_path: Path, guild_id: int = 0) -> str:

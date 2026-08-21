@@ -23,8 +23,8 @@ USER = 1001
 
 def _make_cog(db_path: Path):
     bot = MagicMock()
-    ctx = SimpleNamespace(db_path=db_path, open_db=lambda: open_db(db_path))
-    return UsageTelemetryCog(bot, ctx)  # type: ignore[arg-type]
+    bot.ctx = SimpleNamespace(db_path=db_path, open_db=lambda: open_db(db_path))
+    return UsageTelemetryCog(bot)  # type: ignore[arg-type]
 
 
 def _interaction(*, guild_id=GUILD, user_id=USER, is_bot=False, name="bank"):
@@ -122,6 +122,6 @@ async def test_no_row_for_guarded_invocations(sync_db_path: Path, interaction):
 async def test_db_failure_does_not_propagate(sync_db_path: Path, listener):
     """A telemetry write must never break the command it is measuring."""
     cog = _make_cog(sync_db_path)
-    cog.ctx.open_db = MagicMock(side_effect=RuntimeError("db is gone"))  # type: ignore[attr-defined]
+    cog.bot.ctx.open_db = MagicMock(side_effect=RuntimeError("db is gone"))  # type: ignore[attr-defined]
     await getattr(cog, listener)(_interaction(), MagicMock())
     assert _rows(sync_db_path) == []

@@ -28,7 +28,6 @@ def _make_cog():
     bot.ctx.db_path = ":memory:"
     cog = WhisperCog.__new__(WhisperCog)
     cog.bot = bot
-    cog.ctx = bot.ctx
     cog._launcher_locks = {}
     cog._pending_refresh = set()
     return cog

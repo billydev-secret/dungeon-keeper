@@ -63,9 +63,8 @@ class InactiveCog(commands.Cog):
         name="inactive", description="Inactive-channel management."
     )
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
@@ -73,7 +72,7 @@ class InactiveCog(commands.Cog):
         # which JailCog already registers via add_dynamic_items — no need to
         # re-register it here. Start the auto-sweep background loop.
         self.bot.startup_task_factories.append(
-            lambda: inactive_sweep_loop(self.bot, self.ctx)
+            lambda: inactive_sweep_loop(self.bot, self.bot.ctx)
         )
 
     # ── /inactive mark ────────────────────────────────────────────────
@@ -87,7 +86,7 @@ class InactiveCog(commands.Cog):
         user: discord.Member,
         reason: str | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member) or not _is_mod(member, ctx):
@@ -135,7 +134,7 @@ class InactiveCog(commands.Cog):
         user: discord.Member,
         reason: str | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member) or not _is_mod(member, ctx):
@@ -209,4 +208,4 @@ async def inactive_sweep_loop(bot: discord.Client, ctx: AppContext) -> None:
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(InactiveCog(bot, bot.ctx))
+    await bot.add_cog(InactiveCog(bot))

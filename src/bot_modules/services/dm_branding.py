@@ -31,14 +31,13 @@ where the guild genuinely is the most useful thing in the header.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.embeds import DM_PRIMARY
 
 log = logging.getLogger("dungeonkeeper.dm_branding")
@@ -129,19 +128,12 @@ async def resolve_dm_accent(
     stored row). A branding failure degrades to the default rather than
     costing the member the message.
     """
-    if guild is None or db_path is None:
-        return discord.Color(DM_PRIMARY)
-    try:
-        return await resolve_accent_color(db_path, guild)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        log.warning(
-            "dm_branding: accent lookup failed for guild %s — using the DM default.",
-            getattr(guild, "id", "?"),
-            exc_info=True,
-        )
-        return discord.Color(DM_PRIMARY)
+    # CancelledError derives from BaseException, so the shared helper's
+    # ``except Exception`` lets a cancellation through untouched — which is
+    # what the hand-rolled re-raise here used to spell out.
+    return await safe_resolve_accent(
+        db_path, guild, default=discord.Color(DM_PRIMARY), log_label="dm_branding"
+    )
 
 
 async def send_branded_dm(

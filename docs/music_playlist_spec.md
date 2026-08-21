@@ -236,7 +236,7 @@ tables with no code change.
 
 Deliberately thin: the source-message reactions, plus **`/playlist`** — one
 ephemeral panel (guarded on `enabled` + `playlist_id`, accent via
-`resolve_accent_color`) with three buttons: 🎶 Playlist (the window, newest
+`safe_resolve_accent`) with three buttons: 🎶 Playlist (the window, newest
 first), 🎧 My Songs, ❓ In Review (the caller's pending unmatched links).
 No other commands; all admin control is the dashboard.
 

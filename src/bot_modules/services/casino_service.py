@@ -1650,12 +1650,6 @@ def refund_live_rounds(
 # ── roulette rounds (thin wrappers over the shared machine) ────────────
 
 
-def live_roulette_round(
-    conn: sqlite3.Connection, channel_id: int
-) -> sqlite3.Row | None:
-    return _live_round(conn, ROULETTE_TABLES, channel_id)
-
-
 def live_roulette_player_round(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> sqlite3.Row | None:
@@ -1741,12 +1735,6 @@ def open_roulette_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 # ── derby races (docs/plans/casino-derby.md — same wrappers) ───────────
 
 
-def live_race_round(
-    conn: sqlite3.Connection, channel_id: int
-) -> sqlite3.Row | None:
-    return _live_round(conn, DERBY_TABLES, channel_id)
-
-
 def live_race_player_round(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> sqlite3.Row | None:
@@ -1829,12 +1817,6 @@ def open_race_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 # ── baccarat coups (Stage 1a of casino-classics — same wrappers) ───────
-
-
-def live_baccarat_round(
-    conn: sqlite3.Connection, channel_id: int
-) -> sqlite3.Row | None:
-    return _live_round(conn, BACCARAT_TABLES, channel_id)
 
 
 def live_baccarat_player_round(
@@ -1927,12 +1909,6 @@ def open_baccarat_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 # ── dice rolls (casino-classics Stage 1b — same wrappers) ──────────────
 
 
-def live_dice_round(
-    conn: sqlite3.Connection, channel_id: int
-) -> sqlite3.Row | None:
-    return _live_round(conn, DICE_TABLES, channel_id)
-
-
 def live_dice_player_round(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> sqlite3.Row | None:
@@ -2017,12 +1993,6 @@ def open_dice_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 # ── keno draws (casino-classics Stage 1d — same wrappers) ──────────────
-
-
-def live_keno_round(
-    conn: sqlite3.Connection, channel_id: int
-) -> sqlite3.Row | None:
-    return _live_round(conn, KENO_TABLES, channel_id)
 
 
 def live_keno_player_round(

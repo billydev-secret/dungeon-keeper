@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import (
     get_tz_offset_hours,
     open_db,
@@ -653,7 +653,7 @@ async def _fire_triggers(
         if member is None:
             continue
         try:
-            accent = await resolve_accent_color(db_path, guild)
+            accent = await safe_resolve_accent(db_path, guild, default=DEFAULT_ACCENT_COLOR, log_label="game rewards")
             await post_signoff_card(
                 bot, bot.ctx, guild, settings, accent, int(outcome.claim_id), member
             )

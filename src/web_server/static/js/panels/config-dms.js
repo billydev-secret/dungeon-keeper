@@ -1,34 +1,9 @@
 import { apiPost } from "../api.js";
 import {
-  loadConfig, loadChannels, loadRoles, apiPut, showStatus, buildField,
+  loadConfig, loadChannels, loadRoles, apiPut, showStatus, field, sectionCard as card,
   mountRolePicker, mountChannelPicker, guardForm, renderMetaWarning,
   mountAsync,
 } from "../config-helpers.js";
-
-let _fieldSeq = 0;
-
-// buildField renders a bare <label>; tie it to its control by id so screen
-// readers announce the label and a label tap focuses the field (W-A7).
-function field(labelText, control, hint) {
-  const div = buildField(labelText, control, hint);
-  if (control instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
-    const id = control.id || `dm-field-${++_fieldSeq}`;
-    control.id = id;
-    div.querySelector("label").htmlFor = id;
-  }
-  return div;
-}
-
-function card(parent, title) {
-  const el = document.createElement("div");
-  el.className = "card";
-  const lbl = document.createElement("div");
-  lbl.className = "section-label";
-  lbl.textContent = title;
-  el.appendChild(lbl);
-  parent.appendChild(el);
-  return el;
-}
 
 export function mount(container) {
   while (container.firstChild) container.removeChild(container.firstChild);

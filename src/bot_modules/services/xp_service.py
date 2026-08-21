@@ -13,13 +13,12 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import format_user_for_log, get_guild_channel_or_thread
 from bot_modules.core.xp_system import (
     DEFAULT_XP_SETTINGS,
     AwardResult,
     XpSettings,
-    is_channel_xp_eligible,
     role_grant_due,
 )
 from bot_modules.services import promotion_review_service as promo_svc
@@ -46,22 +45,6 @@ def nsfw_grant_role_id(grant_roles: dict) -> int:
     """The guild's configured NSFW/"spicy" access role id, or 0 if unset."""
     cfg = grant_roles.get("nsfw")
     return int(cfg["role_id"]) if cfg else 0
-
-
-def candidates_missing_grant_check(
-    level_by_user: dict[int, int], stripped_user_ids: set[int]
-) -> list[tuple[int, int]]:
-    """``(user_id, level)`` pairs worth checking for a missing grant role.
-
-    Excludes members currently on an inactive-channel hold or jailed: their
-    roles were stripped on purpose, not skipped by mistake, so they shouldn't
-    show up as "missing" a grant. Sorted highest level first.
-    """
-    out = [
-        (uid, lvl) for uid, lvl in level_by_user.items() if uid not in stripped_user_ids
-    ]
-    out.sort(key=lambda p: -p[1])
-    return out
 
 
 # A level-5 crossing this fresh reads as a burst, not a track record — the
@@ -135,18 +118,6 @@ def should_grant_level_role(
     if member_already_has_role:
         return LevelRoleDecision.SKIP_ALREADY_HAS
     return LevelRoleDecision.GRANT
-
-
-def channel_is_xp_allowed(
-    channel: GuildTextLike,
-    excluded_channel_ids: frozenset[int] | set[int],
-) -> bool:
-    """Check if XP should be awarded in a channel."""
-    channel_id = getattr(channel, "id", None)
-    if channel_id is None:
-        return False
-    parent_id = getattr(channel, "parent_id", None)
-    return is_channel_xp_eligible(channel_id, parent_id, excluded_channel_ids)
 
 
 async def maybe_grant_level_role(
@@ -512,7 +483,7 @@ async def handle_level_progress(
         level_5_log_channel_id,
     )
 
-    accent = await resolve_accent_color(db_path, member.guild)
+    accent = await safe_resolve_accent(db_path, member.guild, log_label="xp")
 
     if award.new_level >= settings.role_grant_level:
         await maybe_grant_level_role(
@@ -647,7 +618,7 @@ async def promotion_review_recheck_loop(
 
                 if guild is not None and member is not None:
                     cfg = guild_config_for(guild_id)
-                    accent = await resolve_accent_color(db_path, guild)
+                    accent = await safe_resolve_accent(db_path, guild, log_label="xp")
                     await maybe_log_level_5(
                         member,
                         total_xp,

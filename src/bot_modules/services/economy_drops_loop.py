@@ -27,8 +27,9 @@ from typing import TYPE_CHECKING, cast
 import discord
 
 from bot_modules.chat_revive.actions import channel_is_busy
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import open_db
+from bot_modules.core.background import run_forever
 from bot_modules.services.economy_drops_service import (
     create_drop,
     discard_drop,
@@ -173,7 +174,7 @@ class DropClaimButton(
                 "Too slow — this pouch is already gone!", ephemeral=True
             )
             return
-        accent = await resolve_accent_color(db_path, guild)
+        accent = await safe_resolve_accent(db_path, guild, log_label="economy drops loop", default=DEFAULT_ACCENT_COLOR)
         await interaction.response.edit_message(
             embed=claimed_embed(settings, credited, member, accent), view=None
         )
@@ -283,7 +284,7 @@ async def _consider_guild(
         now_ts=now_ts,
         expire_minutes=settings.drops_expire_minutes,
     )
-    accent = await resolve_accent_color(db_path, guild)
+    accent = await safe_resolve_accent(db_path, guild, log_label="economy drops loop", default=DEFAULT_ACCENT_COLOR)
     try:
         msg = await channel.send(
             embed=drop_embed(settings, amount, expires_at, accent),
@@ -318,7 +319,7 @@ async def _sweep_expired(bot: Bot, db_path: Path, now_ts: float) -> None:
             continue
         try:
             msg = await channel.fetch_message(message_id)
-            accent = await resolve_accent_color(db_path, guild)
+            accent = await safe_resolve_accent(db_path, guild, default=DEFAULT_ACCENT_COLOR, log_label="econ drops")
             await msg.edit(embed=expired_embed(accent), view=None)
         except discord.HTTPException:
             pass  # drop message deleted or unreachable — the row is settled
@@ -340,12 +341,10 @@ async def run_tick(bot: Bot, db_path: Path, now_ts: float) -> None:
 
 
 async def economy_drops_loop(bot: Bot, db_path: Path) -> None:
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            await run_tick(bot, db_path, time.time())
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("coin drop tick crashed")
-        await asyncio.sleep(TICK_SECONDS)
+    await run_forever(
+        bot,
+        tick=lambda: run_tick(bot, db_path, time.time()),
+        interval=TICK_SECONDS,
+        label="coin drop",
+        logger=log,
+    )

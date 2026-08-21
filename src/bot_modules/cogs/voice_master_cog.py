@@ -32,7 +32,7 @@ from bot_modules.commands.voice_master_commands import (
     build_panel_embed,
     build_panel_view,
 )
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.core.sticky import PanelContent, StickyPanel
@@ -100,7 +100,7 @@ from bot_modules.voice_master.logic import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.voice_master")
 
@@ -108,11 +108,6 @@ log = logging.getLogger("dungeonkeeper.voice_master")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _admin_only(ctx: AppContext, interaction: discord.Interaction) -> bool:
-    """True if the interaction's user passes the admin gate."""
-    return ctx.is_admin(interaction)
 
 
 # ---------------------------------------------------------------------------
@@ -139,9 +134,8 @@ class VoiceMasterCog(commands.Cog):
         default_permissions=discord.Permissions(administrator=True),
     )
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         # owner_id → last hub-join wallclock (anti-spam create cooldown)
         self._last_create: dict[int, float] = {}
         # owner_id → asyncio.Lock to serialize their own Hub joins
@@ -182,7 +176,7 @@ class VoiceMasterCog(commands.Cog):
         Reads the two keys directly rather than via ``load_voice_master_config``
         — that loads nineteen keys, and this runs on the message path.
         """
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             channel_id = get_config_value(
                 conn, "voice_master_panel_channel_id", "0", guild_id
             )
@@ -195,7 +189,7 @@ class VoiceMasterCog(commands.Cog):
             return 0, 0
 
     def _save_panel_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             set_voice_master_config_value(
                 conn, guild_id, "voice_master_panel_channel_id", str(channel_id)
             )
@@ -204,7 +198,7 @@ class VoiceMasterCog(commands.Cog):
             )
 
     async def _build_panel(self, guild: discord.Guild) -> PanelContent:
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="voice master")
         return PanelContent(
             embed=build_panel_embed(color=accent), view=build_panel_view()
         )
@@ -216,7 +210,7 @@ class VoiceMasterCog(commands.Cog):
     def _panel_guilds(self) -> set[int]:
         """Guilds with a panel actually posted — the only ones whose messages
         can move one."""
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             rows = conn.execute(
                 "SELECT guild_id FROM config"
                 " WHERE key = 'voice_master_panel_channel_id'"
@@ -234,7 +228,7 @@ class VoiceMasterCog(commands.Cog):
         # Background prune loop: runs daily, only does work when the per-guild
         # threshold is configured (default 0 = never).
         self.bot.startup_task_factories.append(
-            lambda: trusted_prune_loop(self.bot, self.ctx.db_path)
+            lambda: trusted_prune_loop(self.bot, self.bot.ctx.db_path)
         )
         # Reconciliation runs after the bot is connected; defer it onto the loop
         # so cog_load doesn't block bot startup.
@@ -256,7 +250,7 @@ class VoiceMasterCog(commands.Cog):
         guild_id = guild.id
 
         def _load():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return (
                     load_voice_master_config(conn, guild_id),
                     list_active_channels(conn, guild_id),
@@ -304,7 +298,7 @@ class VoiceMasterCog(commands.Cog):
             db_to_delete = list(plan.db_to_delete)
 
             def _del_db():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     for cid in db_to_delete:
                         delete_active_channel(conn, cid)
 
@@ -323,7 +317,7 @@ class VoiceMasterCog(commands.Cog):
         # posted before the restart) is harmless: first claim wins, and the
         # other button then refuses (claiming clears owner_left_at).
         now = time.time()
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="voice master")
         for row in tracked:
             if (
                 row.channel_id not in present_ids
@@ -365,7 +359,7 @@ class VoiceMasterCog(commands.Cog):
         await self.panel.on_channel_delete(channel)
 
         def _fetch_and_delete():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 cfg_ = load_voice_master_config(conn, _del_guild_id)
                 row_ = get_active_channel(conn, _del_channel_id)
                 if row_ is not None:
@@ -413,7 +407,7 @@ class VoiceMasterCog(commands.Cog):
             )
 
     async def _notify_admins(self, guild: discord.Guild, content: str) -> None:
-        mod_channel_id = self.ctx.guild_config(guild.id).mod_channel_id
+        mod_channel_id = self.bot.ctx.guild_config(guild.id).mod_channel_id
         if mod_channel_id == 0:
             return
         ch = guild.get_channel(mod_channel_id)
@@ -444,7 +438,7 @@ class VoiceMasterCog(commands.Cog):
         _guild_id = guild.id
 
         def _get_owned_rows():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return conn.execute(
                     "SELECT channel_id FROM voice_master_channels "
                     "WHERE guild_id = ? AND owner_id = ?",
@@ -457,7 +451,7 @@ class VoiceMasterCog(commands.Cog):
             ch = guild.get_channel(cid)
             if not isinstance(ch, discord.VoiceChannel):
                 def _del_missing(cid_: int) -> None:
-                    with self.ctx.open_db() as conn:
+                    with self.bot.ctx.open_db() as conn:
                         delete_active_channel(conn, cid_)
 
                 await asyncio.to_thread(_del_missing, cid)
@@ -469,7 +463,7 @@ class VoiceMasterCog(commands.Cog):
                 overwrite = ch.overwrites_for(new_owner)
                 overwrite.connect = True
                 overwrite.view_channel = True
-                _grant_speaker_if_spectating(self.ctx, ch, overwrite)
+                _grant_speaker_if_spectating(self.bot.ctx, ch, overwrite)
                 try:
                     await ch.set_permissions(
                         new_owner,
@@ -483,7 +477,7 @@ class VoiceMasterCog(commands.Cog):
                 _new_owner_id = new_owner.id
 
                 def _set_owner(cid_: int, new_owner_id_: int) -> None:
-                    with self.ctx.open_db() as conn:
+                    with self.bot.ctx.open_db() as conn:
                         set_owner(conn, cid_, new_owner_id_)
                         write_audit(
                             conn,
@@ -503,7 +497,7 @@ class VoiceMasterCog(commands.Cog):
                     log.exception("voice_master: failed to delete %d", cid)
 
                 def _del_active(cid_: int) -> None:
-                    with self.ctx.open_db() as conn:
+                    with self.bot.ctx.open_db() as conn:
                         delete_active_channel(conn, cid_)
                         write_audit(
                             conn,
@@ -516,7 +510,7 @@ class VoiceMasterCog(commands.Cog):
                 await asyncio.to_thread(_del_active, cid)
         # Remove the departed member from every other owner's trust + block list.
         def _remove_lists():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return remove_member_from_all_lists(conn, _guild_id, user_id)
 
         n = await asyncio.to_thread(_remove_lists)
@@ -539,7 +533,7 @@ class VoiceMasterCog(commands.Cog):
             return
 
         def _load_cfg():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return load_voice_master_config(conn, member.guild.id)
 
         cfg = await asyncio.to_thread(_load_cfg)
@@ -575,7 +569,7 @@ class VoiceMasterCog(commands.Cog):
             return
 
         def _mark_left():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 row = get_active_channel(conn, channel.id)
                 if row is None:
                     return None
@@ -604,7 +598,7 @@ class VoiceMasterCog(commands.Cog):
             return
 
         def _mark_joined():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 row = get_active_channel(conn, channel.id)
                 if row is None:
                     return None
@@ -693,13 +687,13 @@ class VoiceMasterCog(commands.Cog):
         _pca_channel_id = channel.id
 
         def _fetch_pca():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return get_active_channel(conn, _pca_channel_id)
 
         row = await asyncio.to_thread(_fetch_pca)
         if row is None or row.owner_left_at is None:
             return  # owner returned (cancel raced) — nothing to claim
-        accent = await resolve_accent_color(self.ctx.db_path, live.guild)
+        accent = await safe_resolve_accent(self.bot.ctx, live.guild, log_label="voice master")
         await post_claim_prompt(live, color=accent)
 
     async def _delete_after_grace(
@@ -716,7 +710,7 @@ class VoiceMasterCog(commands.Cog):
             cid = channel.id
 
             def _del_stale():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     delete_active_channel(conn, cid)
 
             await asyncio.to_thread(_del_stale)
@@ -736,7 +730,7 @@ class VoiceMasterCog(commands.Cog):
         _guild_id_del = channel.guild.id
 
         def _del_empty():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 delete_active_channel(conn, _ch_id)
                 write_audit(
                     conn,
@@ -762,7 +756,7 @@ class VoiceMasterCog(commands.Cog):
             member_id = member.id
 
             def _get_existing():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     return get_owned_channel(conn, guild_id, member_id)
 
             existing = await asyncio.to_thread(_get_existing)
@@ -779,7 +773,7 @@ class VoiceMasterCog(commands.Cog):
                 stale_cid = existing.channel_id
 
                 def _del_stale_hub(cid_: int) -> None:
-                    with self.ctx.open_db() as conn:
+                    with self.bot.ctx.open_db() as conn:
                         delete_active_channel(conn, cid_)
 
                 await asyncio.to_thread(_del_stale_hub, stale_cid)
@@ -795,10 +789,10 @@ class VoiceMasterCog(commands.Cog):
                 return
             self._last_create[member.id] = now
 
-            member_is_staff = self.ctx.member_is_mod(member)
+            member_is_staff = self.bot.ctx.member_is_mod(member)
 
             def _load_profile_data() -> tuple[bool, VoiceProfile, list[int], list[int], list[str]]:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     if active_channel_count(conn, guild_id, member_id) >= cfg.max_per_member:
                         return True, default_profile(), [], [], []
                     # Saves disabled? Treat every member as having no profile.
@@ -911,7 +905,7 @@ class VoiceMasterCog(commands.Cog):
             )
 
             def _insert_channel():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     insert_active_channel(
                         conn,
                         channel_id=new_channel_id,
@@ -962,7 +956,7 @@ class VoiceMasterCog(commands.Cog):
             # owner has the buttons right where they are. Non-fatal on failure
             # (perms missing, channel deleted out from under us, etc.).
             if cfg.post_inline_panel:
-                accent = await resolve_accent_color(self.ctx.db_path, guild)
+                accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="voice master")
                 await post_inline_panel(channel, member, color=accent)
 
             # DM the owner about anything we had to skip.
@@ -974,7 +968,7 @@ class VoiceMasterCog(commands.Cog):
             if notes_text is not None:
                 await send_branded_dm(
                     member,
-                    db_path=self.ctx.db_path,
+                    db_path=self.bot.ctx.db_path,
                     guild=guild,
                     embed=discord.Embed(description=notes_text),
                 )
@@ -1195,7 +1189,7 @@ class VoiceMasterCog(commands.Cog):
         _channel_id = channel.id
 
         def _fetch_claim_data():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return (
                     load_voice_master_config(conn, _guild_id),
                     get_active_channel(conn, _channel_id),
@@ -1229,7 +1223,7 @@ class VoiceMasterCog(commands.Cog):
         overwrite = channel.overwrites_for(member)
         overwrite.connect = True
         overwrite.view_channel = True
-        _grant_speaker_if_spectating(self.ctx, channel, overwrite)
+        _grant_speaker_if_spectating(self.bot.ctx, channel, overwrite)
         try:
             await channel.set_permissions(
                 member, overwrite=overwrite, reason="Voice Control: claim"
@@ -1241,7 +1235,7 @@ class VoiceMasterCog(commands.Cog):
         _claimer_id = member.id
 
         def _save_claim():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 set_owner(conn, _channel_id, _claimer_id)
                 write_audit(
                     conn,
@@ -1328,7 +1322,7 @@ class VoiceMasterCog(commands.Cog):
         _tl_user_id = interaction.user.id
 
         def _fetch_trusted():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return list_trusted(conn, _tl_guild_id, _tl_user_id)
 
         ids = await asyncio.to_thread(_fetch_trusted)
@@ -1345,7 +1339,7 @@ class VoiceMasterCog(commands.Cog):
         _ta_user_id = interaction.user.id
 
         def _do_trust_add() -> str | tuple[bool, int | None]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 cfg = load_voice_master_config(conn, _ta_guild_id)
                 err = validate_trust_add(
                     target_is_bot=member.bot,
@@ -1388,7 +1382,7 @@ class VoiceMasterCog(commands.Cog):
         _tr_user_id = interaction.user.id
 
         def _do_trust_remove():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return remove_trusted(conn, _tr_guild_id, _tr_user_id, member.id)
 
         removed = await asyncio.to_thread(_do_trust_remove)
@@ -1405,7 +1399,7 @@ class VoiceMasterCog(commands.Cog):
         _bl_user_id = interaction.user.id
 
         def _fetch_blocked():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return list_blocked(conn, _bl_guild_id, _bl_user_id)
 
         ids = await asyncio.to_thread(_fetch_blocked)
@@ -1422,7 +1416,7 @@ class VoiceMasterCog(commands.Cog):
         _ba_user_id = interaction.user.id
 
         def _do_block_add() -> str | tuple[bool, int | None]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 cfg = load_voice_master_config(conn, _ba_guild_id)
                 err = validate_block_add(
                     target_is_bot=member.bot,
@@ -1465,7 +1459,7 @@ class VoiceMasterCog(commands.Cog):
         _br_user_id = interaction.user.id
 
         def _do_block_remove():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return remove_blocked(conn, _br_guild_id, _br_user_id, member.id)
 
         removed = await asyncio.to_thread(_do_block_remove)
@@ -1489,7 +1483,7 @@ class VoiceMasterCog(commands.Cog):
         _knock_channel_id = channel.id
 
         def _fetch_knock_row():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return get_active_channel(conn, _knock_channel_id)
 
         row = await asyncio.to_thread(_fetch_knock_row)
@@ -1511,7 +1505,7 @@ class VoiceMasterCog(commands.Cog):
         if not isinstance(interaction.user, discord.Member):
             return
         ok = await post_knock_request(
-            self.ctx, channel=channel, requester=interaction.user, owner=owner
+            self.bot.ctx, channel=channel, requester=interaction.user, owner=owner
         )
         if ok:
             await _ephemeral(
@@ -1535,7 +1529,7 @@ class VoiceMasterCog(commands.Cog):
         _ps_user_id = interaction.user.id
 
         def _fetch_profile():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return (
                     load_profile(conn, _ps_guild_id, _ps_user_id) or default_profile(),
                     list_trusted(conn, _ps_guild_id, _ps_user_id),
@@ -1543,7 +1537,7 @@ class VoiceMasterCog(commands.Cog):
                 )
 
         profile, trusted, blocked = await asyncio.to_thread(_fetch_profile)
-        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        accent = await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="voice master")
         embed = build_profile_show_embed(
             saved_name=profile.saved_name,
             saved_limit=profile.saved_limit,
@@ -1578,7 +1572,7 @@ class VoiceMasterCog(commands.Cog):
         uid = interaction.user.id
 
         def _do_reset():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 if target == "all":
                     delete_profile(conn, gid, uid)
                     conn.execute(
@@ -1637,7 +1631,7 @@ class VoiceMasterCog(commands.Cog):
         _owner_channel_id = channel.id
 
         def _fetch_owner_row():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return get_active_channel(conn, _owner_channel_id)
 
         row = await asyncio.to_thread(_fetch_owner_row)
@@ -1674,9 +1668,9 @@ class VoiceMasterCog(commands.Cog):
         return await self.panel.place(guild, target)
 
     def _load_config_for(self, guild_id: int):
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return load_voice_master_config(conn, guild_id)
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(VoiceMasterCog(bot, bot.ctx))
+    await bot.add_cog(VoiceMasterCog(bot))

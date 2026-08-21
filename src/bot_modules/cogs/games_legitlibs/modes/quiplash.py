@@ -14,7 +14,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
 )
 from bot_modules.games.constants import GAME_ICONS, PHASE_RESULTS
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from ..data import (
     pick_template, mark_template_used, get_prompts, get_channel_max_tier,
     HEAT_LABELS,
@@ -53,10 +53,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
     # Resolve the guild accent once; every embed below follows it. Guard so a
     # branding/ctx hiccup falls back to each builder's phase color (via
     # ``color=None``), never crashing the game.
-    try:
-        accent = await resolve_accent_color(cog.bot.ctx.db_path, guild)
-    except Exception:
-        accent = None
+    accent = await safe_resolve_accent(cog.bot, guild, log_label="legitlibs quiplash")
 
     # Enforce per-channel tier cap
     max_tier = await get_channel_max_tier(db, channel.id)

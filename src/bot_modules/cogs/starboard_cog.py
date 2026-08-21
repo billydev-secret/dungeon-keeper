@@ -31,7 +31,7 @@ from bot_modules.starboard.filters import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.starboard")
 
@@ -46,9 +46,8 @@ _EXCLUDED_BUCKET = "starboard_excluded_channels"
 class StarboardCog(commands.Cog):
     """Listener-only cog; starboard configuration lives in the web dashboard."""
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def _fetch_sb_message(self, channel_id: int, message_id: int) -> Optional[discord.Message]:
@@ -82,7 +81,7 @@ class StarboardCog(commands.Cog):
         # Config read + reactor bookkeeping run off the event loop. Returns None
         # to signal "nothing to do" (no starboard, or this reaction is ignored).
         def _prep():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 cfg = get_starboard_config(conn, guild_id)
                 if cfg is None:
                     return None
@@ -120,7 +119,7 @@ class StarboardCog(commands.Cog):
             sb_message_id = int(existing_post["starboard_message_id"])
 
             def _update_count():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     ec = get_effective_star_count(conn, guild_id, message_id, author_id)
                     update_starboard_post_count(conn, guild_id, message_id, ec)
                     return ec
@@ -137,7 +136,7 @@ class StarboardCog(commands.Cog):
             # Drop the stale row so the rest of this handler can re-create
             # the post fresh below.
             def _drop_stale():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     delete_starboard_post(conn, guild_id, message_id)
 
             await asyncio.to_thread(_drop_stale)
@@ -170,7 +169,7 @@ class StarboardCog(commands.Cog):
         author_id = message.author.id
 
         def _check_threshold():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 ec = get_effective_star_count(conn, guild_id, message_id, author_id)
                 if ec < threshold:
                     return None
@@ -197,7 +196,7 @@ class StarboardCog(commands.Cog):
         )
 
         def _insert():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 insert_starboard_post(
                     conn, guild_id, message_id, sb_msg.id,
                     payload.channel_id, author_id, effective_count,
@@ -226,7 +225,7 @@ class StarboardCog(commands.Cog):
         message_id = payload.message_id
 
         def _prep_remove():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 cfg = get_starboard_config(conn, guild_id)
                 if cfg is None:
                     return None
@@ -274,11 +273,11 @@ class StarboardCog(commands.Cog):
             # Starboard message gone — clean up the stale row so the next
             # reaction creates a fresh post instead of trying to edit None.
             def _drop_stale():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     delete_starboard_post(conn, guild_id, message_id)
 
             await asyncio.to_thread(_drop_stale)
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(StarboardCog(bot, bot.ctx))
+    await bot.add_cog(StarboardCog(bot))

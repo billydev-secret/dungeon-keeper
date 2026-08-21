@@ -43,7 +43,7 @@ from bot_modules.emoji_stealer.logic import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.emoji_stealer")
 
@@ -346,9 +346,8 @@ class _StealView(discord.ui.View):
 # ---------------------------------------------------------------------------
 
 class EmojiStealerCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         # guild id -> {emoji id -> (sha256_hex, perceptual_hash | None)}.
         # Lazily warmed per guild and self-heals by id-set diff on each check.
         self._hash_cache: dict[int, dict[int, tuple[str, int | None]]] = {}
@@ -577,4 +576,4 @@ class EmojiStealerCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(EmojiStealerCog(bot, bot.ctx))
+    await bot.add_cog(EmojiStealerCog(bot))

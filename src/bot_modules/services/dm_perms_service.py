@@ -306,16 +306,6 @@ def remove_request(db_path: Path, guild_id: int, requester_id: int, target_id: i
     return (cur.rowcount or 0) > 0
 
 
-def update_request_status(
-    db_path: Path, guild_id: int, requester_id: int, target_id: int, status: str
-) -> None:
-    with open_db(db_path) as conn:
-        conn.execute(
-            "UPDATE dm_requests SET status = ? WHERE guild_id = ? AND requester_id = ? AND target_id = ?",
-            (status, guild_id, requester_id, target_id),
-        )
-
-
 def load_request_by_message_id(
     db_path: Path, message_id: int
 ) -> Optional[dict[str, Any]]:
@@ -573,27 +563,6 @@ def write_audit_log(
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (guild_id, actor_id, user_a_id, user_b_id, action, time.time(), notes),
         )
-
-
-def get_audit_log(
-    db_path: Path,
-    guild_id: int,
-    user_id: Optional[int] = None,
-    limit: int = 50,
-) -> list[dict[str, Any]]:
-    with open_db(db_path) as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                "SELECT * FROM dm_audit_log WHERE guild_id = ? AND (user_a_id = ? OR user_b_id = ? OR actor_id = ?) "
-                "ORDER BY timestamp DESC LIMIT ?",
-                (guild_id, user_id, user_id, user_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM dm_audit_log WHERE guild_id = ? ORDER BY timestamp DESC LIMIT ?",
-                (guild_id, limit),
-            ).fetchall()
-    return [dict(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------

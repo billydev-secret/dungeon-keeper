@@ -17,7 +17,7 @@ import wavelink
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.music.embeds import build_queue_embed
 from bot_modules.music.logic import (
     describe_track_failure,
@@ -46,7 +46,7 @@ from bot_modules.services.spotify_resolver import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.music")
 
@@ -64,9 +64,8 @@ _DEFAULT_VOLUME = 100
 
 
 class MusicCog(commands.Cog):
-    def __init__(self, bot: "Bot", ctx: "AppContext") -> None:
+    def __init__(self, bot: "Bot") -> None:
         self.bot = bot
-        self.ctx = ctx
         self._lavalink: LavalinkManager | None = None
         self._spotify: SpotifyResolver | None = None
         self._queues: dict[int, GuildQueue] = {}
@@ -87,7 +86,7 @@ class MusicCog(commands.Cog):
     async def cog_load(self) -> None:
         lavalink = LavalinkManager()
         self._lavalink = lavalink
-        self._spotify = SpotifyResolver(db_path=self.ctx.db_path)
+        self._spotify = SpotifyResolver(db_path=self.bot.ctx.db_path)
         self._startup_task = asyncio.create_task(self._start_lavalink(lavalink))
 
     async def _start_lavalink(self, lavalink: LavalinkManager) -> None:
@@ -440,7 +439,7 @@ class MusicCog(commands.Cog):
         start, end, total_pages, normalized_page = paginate_queue(total, page)
         items = list(queue.tracks)[start:end]
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="music")
         embed = build_queue_embed(
             current_summary=(
                 self._track_summary(queue.current)
@@ -510,7 +509,7 @@ class MusicCog(commands.Cog):
             if queue.requester_for(queue.current)
             else None
         )
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="music")
         embed = build_embed(
             queue.current, queue, requester, paused=player.paused, color=accent
         )
@@ -728,7 +727,7 @@ class MusicCog(commands.Cog):
 
         requester_id = queue.requester_for(track)
         requester = guild.get_member(requester_id) if requester_id else None
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="music")
         embed = build_embed(
             track, queue, requester, paused=player.paused, color=accent
         )
@@ -870,7 +869,7 @@ class MusicCog(commands.Cog):
         await player.pause(new_paused)
         queue = self._queue(guild.id)
         view.refresh_for(queue, paused=new_paused)
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="music")
         embed = build_embed(
             queue.current,
             queue,
@@ -941,7 +940,7 @@ class MusicCog(commands.Cog):
         player = self._player(guild)
         paused = bool(player and player.paused)
         view.refresh_for(queue, paused=paused)
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="music")
         embed = build_embed(
             queue.current,
             queue,
@@ -956,4 +955,4 @@ class MusicCog(commands.Cog):
 
 
 async def setup(bot: "Bot") -> None:
-    await bot.add_cog(MusicCog(bot, bot.ctx))
+    await bot.add_cog(MusicCog(bot))

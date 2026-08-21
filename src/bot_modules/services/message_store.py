@@ -335,19 +335,6 @@ def record_member_event(
     )
 
 
-def get_known_user(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    user_id: int,
-) -> str | None:
-    """Return display_name for a user, or None if unknown."""
-    row = conn.execute(
-        "SELECT display_name FROM known_users WHERE guild_id = ? AND user_id = ?",
-        (guild_id, user_id),
-    ).fetchone()
-    return row[0] if row else None
-
-
 def get_known_users_bulk(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -767,87 +754,3 @@ def clear_deleted_flag(
         (*ids, guild_id, source),
     )
     return max(cur.rowcount, 0)
-
-
-# GIF / image-link patterns: Tenor, Giphy, Imgur GIFs, Discord CDN GIFs, bare .gif URLs
-_GIF_PATTERNS = (
-    "://tenor.com/",
-    "://giphy.com/",
-    "://media.giphy.com/",
-    "://i.imgur.com/",
-    ".gif",
-)
-
-
-def _is_gif_only(content: str | None, has_attachment: bool) -> bool:
-    """Return True if a message contains nothing but a GIF/image link."""
-    if not content:
-        return has_attachment  # attachment-only with no text = media-only
-    text = content.strip()
-    if not text:
-        return has_attachment
-    # Single URL that looks like a GIF service
-    if " " not in text and text.startswith("http"):
-        lower = text.lower()
-        return any(p in lower for p in _GIF_PATTERNS)
-    return False
-
-
-def query_last_substantive_activity(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    user_ids: list[int],
-    *,
-    channel_id: int | None = None,
-    exclude_gif_only: bool = False,
-) -> dict:
-    """Like get_member_last_activity_map but with channel and GIF-only filters.
-
-    Returns dict[int, MemberActivity].
-    """
-    from bot_modules.core.xp_system import MemberActivity
-
-    if not user_ids:
-        return {}
-
-    activity_map: dict[int, MemberActivity] = {}
-    batch_size = 800
-
-    for i in range(0, len(user_ids), batch_size):
-        batch = user_ids[i : i + batch_size]
-        ph = ",".join("?" for _ in batch)
-
-        channel_clause = ""
-        params: list[object] = [guild_id, *batch]
-        if channel_id is not None:
-            channel_clause = " AND m.channel_id = ?"
-            params.append(channel_id)
-
-        rows = conn.execute(
-            f"""
-            SELECT m.author_id, m.channel_id, m.message_id, m.ts, m.content,
-                   EXISTS(SELECT 1 FROM message_attachments a WHERE a.message_id = m.message_id) AS has_attach
-            FROM messages m
-            WHERE m.guild_id = ? AND m.author_id IN ({ph}){channel_clause}
-            ORDER BY m.ts DESC
-            """,
-            params,
-        ).fetchall()
-
-        # Walk rows (newest first) and pick the first qualifying message per user
-        for row in rows:
-            uid = int(row["author_id"])
-            if uid in activity_map:
-                continue
-            if exclude_gif_only and _is_gif_only(
-                row["content"], bool(row["has_attach"])
-            ):
-                continue
-            activity_map[uid] = MemberActivity(
-                user_id=uid,
-                channel_id=int(row["channel_id"]),
-                message_id=int(row["message_id"]),
-                created_at=float(row["ts"]),
-            )
-
-    return activity_map

@@ -37,7 +37,7 @@ from discord.ext import commands
 from bot_modules.services.usage_telemetry_service import KIND_COMMAND, record_event
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.usage_telemetry")
 
@@ -55,9 +55,8 @@ def command_name(command: app_commands.Command | app_commands.ContextMenu | None
 
 
 class UsageTelemetryCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
 
     def _record(self, interaction: discord.Interaction, *, ok: bool) -> None:
         """Blocking; always call via :meth:`_record_async`."""
@@ -72,7 +71,7 @@ class UsageTelemetryCog(commands.Cog):
         if user is None or user.bot:
             return
         try:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 record_event(
                     conn,
                     interaction.guild_id,
@@ -114,4 +113,4 @@ class UsageTelemetryCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(UsageTelemetryCog(bot, bot.ctx))
+    await bot.add_cog(UsageTelemetryCog(bot))

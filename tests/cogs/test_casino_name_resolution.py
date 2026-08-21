@@ -36,7 +36,7 @@ def cog(tmp_path: Path):
             conn, GUILD_ID, DEPARTED, "left_lou", "Departed Lou", ts=1.0,
             current_member=False,
         )
-    return SimpleNamespace(ctx=SimpleNamespace(db_path=db_path))
+    return SimpleNamespace(bot=SimpleNamespace(ctx=SimpleNamespace(db_path=db_path)))
 
 
 @pytest.mark.asyncio

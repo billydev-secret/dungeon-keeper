@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TypeAlias
+import logging
+from typing import Any, TypeAlias
 
 import discord
+from discord import app_commands
+
+log = logging.getLogger(__name__)
 
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
@@ -15,6 +19,88 @@ def disable_all_items(view: discord.ui.View) -> None:
     for item in view.children:
         if isinstance(item, (discord.ui.Button, discord.ui.Select)):
             item.disabled = True
+
+
+async def safe_ephemeral(
+    interaction: discord.Interaction, text: str, *, log_label: str = "ephemeral"
+) -> None:
+    """Send ``text`` back to the clicker privately, whatever state we're in.
+
+    Answers the two ways a view can find itself needing to say something: if
+    the interaction was already responded to (deferred, or a modal handled
+    first) the reply has to go through ``followup``, otherwise through
+    ``response``. Getting that wrong raises, and a raise inside a button
+    callback surfaces to the member as "This interaction failed" — so the
+    send is best-effort and an HTTP failure is swallowed.
+
+    ``log_label`` names the caller in the debug line; the traceback would
+    otherwise point at this module rather than the view that failed.
+    """
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(text, ephemeral=True)
+        else:
+            await interaction.response.send_message(text, ephemeral=True)
+    except discord.HTTPException:
+        log.debug("%s: failed to send ephemeral", log_label, exc_info=True)
+
+
+def is_host_or_mod(interaction: discord.Interaction, host_id: int) -> bool:
+    """Is the clicker the game's host, or a server mod who can override?
+
+    The gate on every game view's host-only control — close the round, skip,
+    end early. One definition for all of them: the host always passes; anyone
+    else needs ``administrator`` or ``manage_guild`` *in a guild*, so a DM or
+    a non-member user never qualifies.
+
+    Deliberately **not** ``AppContext.is_mod``. That one reads
+    ``interaction.permissions`` and additionally honours the guild's
+    configured mod roles, so it answers a wider question ("is this person
+    staff?"). Routing game overrides through it would hand a configured
+    mod-role holder without ``manage_guild`` control over other people's
+    games — a permission widening, not a refactor. ``is_mod_or_admin`` below
+    is a third rule again (it also accepts ``manage_channels``). Three gates,
+    kept apart on purpose.
+    """
+    if interaction.user.id == host_id:
+        return True
+    if interaction.guild and isinstance(interaction.user, discord.Member):
+        perms = interaction.user.guild_permissions
+        return perms.administrator or perms.manage_guild
+    return False
+
+
+def has_mod_or_admin_permissions(perms: Any) -> bool:
+    """Return True if perms grant admin, manage_guild, or manage_channels.
+
+    Matches the cog's ``is_mod_or_admin`` rule: any one of the three
+    elevated perms qualifies a user to run mod-tier game commands.
+    """
+    if not perms:
+        return False
+    return bool(
+        getattr(perms, "administrator", False)
+        or getattr(perms, "manage_guild", False)
+        or getattr(perms, "manage_channels", False)
+    )
+
+
+def is_mod_or_admin():
+    """``app_commands.check`` gating the /games admin commands.
+
+    A third rule again, wider than ``is_host_or_mod`` above: it accepts
+    ``manage_channels`` as well, because the commands it guards are about
+    which channels games may run in — the perm that says "you arrange this
+    server's rooms" is the one that ought to say where games live. Kept
+    separate from the host gate on purpose; widening that to match this
+    would hand any channel manager control of other people's live games.
+    """
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return False
+        return has_mod_or_admin_permissions(interaction.user.guild_permissions)
+
+    return app_commands.check(predicate)
 
 
 def get_interaction_member(interaction: discord.Interaction) -> discord.Member | None:

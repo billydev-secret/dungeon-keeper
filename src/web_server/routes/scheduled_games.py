@@ -29,6 +29,7 @@ from bot_modules.services.scheduled_games_service import (
 )
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, run_query
+from web_server.helpers import parse_time_of_day
 
 log = logging.getLogger("dungeonkeeper.games.schedule")
 
@@ -51,18 +52,6 @@ class ScheduleBody(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _parse_time_of_day(raw: str) -> int:
-    """Parse 'HH:MM' into minutes since local midnight (0..1439)."""
-    try:
-        hh, mm = raw.split(":")
-        minutes = int(hh) * 60 + int(mm)
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="time must be 'HH:MM'")
-    if not 0 <= minutes < 24 * 60:
-        raise HTTPException(status_code=400, detail="time out of range")
-    return minutes
-
-
 def _validate(body: ScheduleBody) -> tuple[int, int, str | None]:
     """Validate body shape; return (channel_id, time_of_day_min, recur_days_json)."""
     if body.game_type not in SCHEDULABLE_GAME_TYPES:
@@ -74,7 +63,7 @@ def _validate(body: ScheduleBody) -> tuple[int, int, str | None]:
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="channel_id must be numeric")
 
-    tod = _parse_time_of_day(body.time)
+    tod = parse_time_of_day(body.time)
 
     recur_days_json: str | None = None
     if body.recurrence == "weekly":

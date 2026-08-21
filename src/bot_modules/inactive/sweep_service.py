@@ -196,7 +196,7 @@ async def setup_inactive_channel(ctx, guild, channel) -> tuple[bool, str]:
 
     import discord
 
-    from bot_modules.core.branding import resolve_accent_color
+    from bot_modules.core.branding import safe_resolve_accent
     from bot_modules.core.db_utils import get_config_value, set_config_value
     from bot_modules.commands.jail_commands import TicketPanelButton
     from bot_modules.inactive.apply import ensure_inactive_role
@@ -233,7 +233,7 @@ async def setup_inactive_channel(ctx, guild, channel) -> tuple[bool, str]:
             "check my channel permissions."
         )
 
-    accent = await resolve_accent_color(ctx.db_path, guild)
+    accent = await safe_resolve_accent(ctx, guild, log_label="sweep")
     embed = discord.Embed(
         title="💤 You're in the Inactive Channel",
         description=(

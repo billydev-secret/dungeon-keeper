@@ -25,13 +25,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import TYPE_CHECKING, cast
+from functools import partial
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.economy.leaderboard import _pad
 from bot_modules.economy.logic import resolve_notify_toggle
 from bot_modules.services.economy_service import load_econ_settings
+from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
@@ -175,15 +177,7 @@ def build_guide_embed(
     return embed
 
 
-async def _safe_ephemeral(interaction: discord.Interaction, message: str) -> None:
-    """Send an ephemeral note whether or not the interaction was answered."""
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
-    except discord.HTTPException:
-        log.debug("econ guide: failed to send ephemeral note", exc_info=True)
+_safe_ephemeral = partial(_core_safe_ephemeral, log_label="econ guide")
 
 
 class HowItWorksButton(discord.ui.Button):
@@ -221,7 +215,7 @@ class HowItWorksButton(discord.ui.Button):
                 return load_econ_settings(conn, guild.id)
 
         settings = await asyncio.to_thread(_read)
-        accent = await resolve_accent_color(bot.ctx.db_path, guild)
+        accent = await safe_resolve_accent(bot, guild, log_label="guide")
         embed = build_guide_embed(settings, color=accent)
         try:
             await interaction.response.send_message(embed=embed, ephemeral=True)

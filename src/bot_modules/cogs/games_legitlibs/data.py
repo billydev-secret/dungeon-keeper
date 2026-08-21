@@ -99,17 +99,6 @@ async def get_template_by_id(db, template_id: str) -> dict | None:
     return _row_to_template(row)
 
 
-async def get_template_for_preview(db, template_id: str) -> dict | None:
-    """Fetch any non-archived template by ID (for mod preview/authoring)."""
-    row = await db.fetchone(
-        "SELECT * FROM legitlibs_templates WHERE template_id = ? AND status != 'archived'",
-        (template_id,),
-    )
-    if not row:
-        return None
-    return _row_to_template(row)
-
-
 async def pick_template(
     db,
     guild_id: int,

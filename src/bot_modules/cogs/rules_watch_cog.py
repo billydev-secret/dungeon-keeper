@@ -105,13 +105,12 @@ class _ReportViolationModal(discord.ui.Modal, title="Report Rule Violation"):
 
 
 class RulesWatchCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
 
         async def _report_ctx_cb(
             interaction: discord.Interaction, message: discord.Message
@@ -151,7 +150,7 @@ class RulesWatchCog(commands.Cog):
             from bot_modules.core.db_utils import open_db
             from bot_modules.rules_watch.ledger import purge_old_dismissed_events
 
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 return purge_old_dismissed_events(conn)
 
         try:
@@ -167,4 +166,4 @@ class RulesWatchCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(RulesWatchCog(bot, bot.ctx))
+    await bot.add_cog(RulesWatchCog(bot))

@@ -19,7 +19,7 @@ from bot_modules.services.ai_moderation_service import (
 from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 
 def _ollama_unavailable_msg() -> str:
@@ -33,13 +33,12 @@ class AiModCog(commands.Cog):
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
-        ollama_client.start_loading(self.ctx.db_path)
+        ollama_client.start_loading(self.bot.ctx.db_path)
 
     @ai.command(
         name="review",
@@ -55,7 +54,7 @@ class AiModCog(commands.Cog):
         user: discord.Member,
         days: app_commands.Range[int, 1, 30] = 7,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.is_admin(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -94,7 +93,7 @@ class AiModCog(commands.Cog):
         interaction: discord.Interaction,
         count: app_commands.Range[int, 10, 200] = 50,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.is_admin(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -142,7 +141,7 @@ class AiModCog(commands.Cog):
         minutes: app_commands.Range[int, 1, 1440] = 60,
         channel: discord.TextChannel | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.is_admin(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -195,7 +194,7 @@ class AiModCog(commands.Cog):
         question: str,
         days: app_commands.Range[int, 1, 30] = 14,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.is_admin(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -226,4 +225,4 @@ class AiModCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(AiModCog(bot, bot.ctx))
+    await bot.add_cog(AiModCog(bot))

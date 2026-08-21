@@ -41,7 +41,7 @@ from bot_modules.services.qa_service import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.qa")
 
@@ -420,9 +420,8 @@ async def qa_archive_sweep_loop(bot: Bot) -> None:
 class QACog(commands.Cog):
     """No commands — just the dynamic-item registration for the card buttons."""
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
@@ -431,4 +430,4 @@ class QACog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(QACog(bot, bot.ctx))
+    await bot.add_cog(QACog(bot))

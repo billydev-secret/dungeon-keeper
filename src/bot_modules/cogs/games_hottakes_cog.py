@@ -7,8 +7,8 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -46,26 +46,6 @@ from bot_modules.games_hottakes.logic import (
 )
 
 log = logging.getLogger(__name__)
-
-
-async def _resolve_accent(bot, guild) -> "discord.Color | None":
-    """Resolve the guild accent color once, tolerantly.
-
-    Returns ``None`` (embed builders fall back to their old PHASE_*
-    color) when there's no guild, no bot.ctx/db_path, or resolution
-    fails for any reason — never raises into a game path.
-    """
-    if guild is None:
-        return None
-    ctx = getattr(bot, "ctx", None)
-    db_path = getattr(ctx, "db_path", None)
-    if db_path is None:
-        return None
-    try:
-        return await resolve_accent_color(db_path, guild)
-    except Exception as e:  # pragma: no cover - defensive
-        log.debug("hottakes accent resolve failed: %s", e)
-        return None
 
 
 class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
@@ -137,14 +117,6 @@ class HotTakesSubmitView(discord.ui.View):
         self.cog = cog
         self._message: discord.Message | None = None
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     @discord.ui.button(label="Submit Hot Take", style=discord.ButtonStyle.primary, custom_id="ht_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
@@ -154,7 +126,7 @@ class HotTakesSubmitView(discord.ui.View):
     @discord.ui.button(label="Start Voting", style=discord.ButtonStyle.primary, custom_id="ht_start")
     async def start_voting(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start voting.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
@@ -237,14 +209,6 @@ class HotTakeVoteView(discord.ui.View):
         self._closed = False
         self._advanced_event: asyncio.Event | None = None
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     def _build_embed(self, closed: bool = False) -> discord.Embed:
         return build_vote_embed(
             take_text=self.take_text,
@@ -300,7 +264,7 @@ class HotTakeVoteView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next Take", style=discord.ButtonStyle.secondary, custom_id="ht_next", row=1)
     async def next_take(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()
@@ -365,7 +329,7 @@ class HotTakesCog(commands.Cog):
             payload={"takes": [], "results": []},
         )
 
-        accent = await _resolve_accent(self.bot, getattr(channel, "guild", None))
+        accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="hottakes")
         embed = build_lobby_embed(host_name, color=accent)
 
         log.info("Game %s (hottakes) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
@@ -405,7 +369,7 @@ class HotTakesCog(commands.Cog):
 
         # Resolve the guild accent once for the whole game — never per vote /
         # per round. Every vote view + the recap reuse this cached value.
-        accent = await _resolve_accent(self.bot, getattr(channel, "guild", None))
+        accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="hottakes")
 
         view: HotTakeVoteView | None = None
         while True:

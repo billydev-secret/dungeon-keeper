@@ -27,7 +27,7 @@ def _make_cog() -> tuple[RulesWatchCog, MagicMock]:
     bot = MagicMock()
     add_command = MagicMock()
     bot.tree.add_command = add_command
-    return RulesWatchCog(bot, bot.ctx), add_command
+    return RulesWatchCog(bot), add_command
 
 
 def _registered_menu(add_command: MagicMock) -> app_commands.ContextMenu:
@@ -55,7 +55,7 @@ async def test_cog_load_registers_report_menu_behind_manage_guild():
 @pytest.mark.asyncio
 async def test_report_menu_rejects_non_mod():
     cog, add_command = _make_cog()
-    cog.ctx.is_mod.return_value = False
+    cog.bot.ctx.is_mod.return_value = False
     await cog.cog_load()
     menu = _registered_menu(add_command)
 
@@ -74,7 +74,7 @@ async def test_report_menu_rejects_non_mod():
 @pytest.mark.asyncio
 async def test_report_menu_refuses_bot_messages():
     cog, add_command = _make_cog()
-    cog.ctx.is_mod.return_value = True
+    cog.bot.ctx.is_mod.return_value = True
     await cog.cog_load()
     menu = _registered_menu(add_command)
 
@@ -92,7 +92,7 @@ async def test_report_menu_refuses_bot_messages():
 @pytest.mark.asyncio
 async def test_report_menu_opens_modal_for_mod_on_human_message():
     cog, add_command = _make_cog()
-    cog.ctx.is_mod.return_value = True
+    cog.bot.ctx.is_mod.return_value = True
     await cog.cog_load()
     menu = _registered_menu(add_command)
 

@@ -3,7 +3,7 @@ import {
   loadChannels,
   apiPut,
   showStatus,
-  buildField,
+  field,
   mountChannelPicker,
   guardForm,
   lockUnlessAdmin,
@@ -13,20 +13,6 @@ import {
 
 const DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}";
 const SAMPLE_REQUEST = "Ping me with cake reactions!";
-
-let _fieldSeq = 0;
-
-// buildField renders a bare <label>; tie it to its control by id so screen
-// readers announce the label and a label tap focuses the field (W-A7).
-function field(labelText, control, hint) {
-  const div = buildField(labelText, control, hint);
-  if (control instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
-    const id = control.id || `cbd-field-${++_fieldSeq}`;
-    control.id = id;
-    div.querySelector("label").htmlFor = id;
-  }
-  return div;
-}
 
 function buildTextarea(name, value) {
   const ta = document.createElement("textarea");

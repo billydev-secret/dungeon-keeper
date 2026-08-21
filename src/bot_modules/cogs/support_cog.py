@@ -15,17 +15,16 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games_help.embeds import build_support_embed
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 
 class SupportCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     @app_commands.command(
@@ -35,7 +34,7 @@ class SupportCog(commands.Cog):
     async def support(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         color = (
-            await resolve_accent_color(self.ctx.db_path, guild)
+            await safe_resolve_accent(self.bot.ctx, guild, log_label="support")
             if guild is not None
             else None
         )
@@ -45,4 +44,4 @@ class SupportCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(SupportCog(bot, bot.ctx))
+    await bot.add_cog(SupportCog(bot))

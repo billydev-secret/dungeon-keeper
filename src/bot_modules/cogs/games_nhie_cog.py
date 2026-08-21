@@ -6,8 +6,8 @@ if TYPE_CHECKING:
 
 import discord
 
-from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.utils import disable_all_items
+from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY
@@ -117,14 +117,6 @@ class NHIERoundView(discord.ui.View):
         # for every round-embed edit — never re-resolved on the per-vote path.
         self.accent = accent
 
-    def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.host_id:
-            return True
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            perms = interaction.user.guild_permissions
-            return perms.administrator or perms.manage_guild
-        return False
-
     def _build_embed(self, closed=False) -> discord.Embed:
         return build_round_embed(
             statement=self.statement,
@@ -185,7 +177,7 @@ class NHIERoundView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="nhie_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not self.is_host_or_mod(interaction):
+        if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         if self._closed:
@@ -207,25 +199,6 @@ class NHIECog(commands.Cog):
     @property
     def db(self):
         return self.bot.games_db
-
-    async def _resolve_accent(self, guild) -> discord.Color | None:
-        """Best-effort guild accent for NHIE embeds.
-
-        Returns ``None`` (embeds fall back to the phase palette) when
-        there's no guild, no bot context, or accent resolution fails —
-        a branding lookup must never take a game down.
-        """
-        if guild is None:
-            return None
-        ctx = getattr(self.bot, "ctx", None)
-        db_path = getattr(ctx, "db_path", None)
-        if db_path is None:
-            return None
-        try:
-            return await resolve_accent_color(db_path, guild)
-        except Exception:
-            log.debug("nhie accent resolution failed for guild %s", getattr(guild, "id", "?"), exc_info=True)
-            return None
 
     @app_commands.command(name="nhie", description="Start a Never Have I Ever game!")
     @app_commands.describe(
@@ -364,7 +337,7 @@ class NHIECog(commands.Cog):
         rounds_data[str(round_num)] = {"guilty": [], "innocent": [], "stmt": statement}
         await update_game_payload(self.db, game_id, payload)
 
-        accent = await self._resolve_accent(guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="nhie")
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,
@@ -558,7 +531,7 @@ class NHIECog(commands.Cog):
         host_name = resolve_name(guild, host_id) if guild else "Host"
         lives, eliminated, max_lives = payload_to_round_state(payload)
 
-        accent = await self._resolve_accent(guild)
+        accent = await safe_resolve_accent(self.bot, guild, log_label="nhie")
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,

@@ -32,7 +32,7 @@ from bot_modules.services.risky_roll.views import (
 from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.risky_roll")
 
@@ -40,14 +40,13 @@ log = logging.getLogger("dungeonkeeper.risky_roll")
 class RiskyRollCog(commands.Cog):
     risky = app_commands.Group(name="risky", description="Risky Rolls game commands")
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
-        rr_state.store = StateStore(self.ctx.db_path)
-        rr_state.db_path = self.ctx.db_path
+        rr_state.store = StateStore(self.bot.ctx.db_path)
+        rr_state.db_path = self.bot.ctx.db_path
 
         swept = await rr_state.store.sweep_old_posted_questions()
         if swept:
@@ -73,7 +72,7 @@ class RiskyRollCog(commands.Cog):
         # restart. Refill it from known_users before any restored round renders,
         # so players who have since left the guild — whom the member cache can
         # no longer resolve — still show a name instead of a raw id.
-        seeded = await seed_display_names_from_db(self.ctx.db_path, active_rounds)
+        seeded = await seed_display_names_from_db(self.bot.ctx.db_path, active_rounds)
         if seeded:
             log.info("Seeded %d risky-roll display names from known_users.", seeded)
 
@@ -420,7 +419,7 @@ class RiskyRollCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    cog = RiskyRollCog(bot, bot.ctx)
+    cog = RiskyRollCog(bot)
     await bot.add_cog(cog)
     bot.game_launchers["risky_roll"] = cog.launch
     bot.game_busy_checks["risky_roll"] = cog.channel_has_active_round

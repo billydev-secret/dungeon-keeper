@@ -46,6 +46,7 @@ import pytest
 from bot_modules.cogs import pen_pals_cog as pp
 from bot_modules.core.db_utils import open_db
 from tests.fakes import FakeGuild, FakeMember, FakeRole, FakeUser, fake_interaction
+from bot_modules.core import branding
 
 GUILD_ID = 9001
 _COOLDOWN = pp._MATCH_COOLDOWN_SECS
@@ -164,7 +165,7 @@ def pair_env(sync_db_path, monkeypatch):
 
     monkeypatch.setattr(pp, "_create_channel", fake_create_channel)
     monkeypatch.setattr(pp, "_post_intro", AsyncMock())
-    monkeypatch.setattr(pp, "resolve_accent_color", AsyncMock(return_value=None))
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock(return_value=None))
     return bot, channel, created
 
 
@@ -659,7 +660,7 @@ async def _capture_do_pair(
 
     monkeypatch.setattr(pp, "_create_channel", fake_create_channel)
     monkeypatch.setattr(pp, "_post_intro", AsyncMock())
-    monkeypatch.setattr(pp, "resolve_accent_color", AsyncMock(return_value=None))
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock(return_value=None))
     with open_db(sync_db_path) as conn:
         pp._add_to_pool(conn, GUILD_ID, 1)
         pp._add_to_pool(conn, GUILD_ID, 2)
@@ -1486,7 +1487,9 @@ async def test_penpals_pair_command_refuses_a_blocked_pair(sync_db_path):
         pp._add_block(conn, GUILD_ID, 10, 20)
 
     ctx = MagicMock(db_path=sync_db_path)
-    cog = pp.PenPalsCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = pp.PenPalsCog(_bot)
     g = FakeGuild(id=GUILD_ID)
     u1 = FakeUser(id=10, display_name="Ten")
     u2 = FakeUser(id=20, display_name="Twenty")
@@ -1532,7 +1535,9 @@ async def test_penpals_pair_command_refuses_a_member_who_never_opted_in(sync_db_
         pp._add_to_pool(conn, GUILD_ID, 10)  # only user1 opted in
 
     ctx = MagicMock(db_path=sync_db_path)
-    cog = pp.PenPalsCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = pp.PenPalsCog(_bot)
     g = FakeGuild(id=GUILD_ID)
     u1 = FakeUser(id=10, display_name="Ten")
     u2 = FakeUser(id=20, display_name="Twenty")
@@ -1589,7 +1594,7 @@ async def test_refresh_panel_noop_when_the_cog_is_unloaded(sync_db_path):
 async def test_panel_ids_are_zero_without_config(sync_db_path):
     """No pen_pals_config row: the panel reads as unposted, so nothing sticks."""
     cog = pp.PenPalsCog.__new__(pp.PenPalsCog)
-    cog.ctx = SimpleNamespace(db_path=sync_db_path)
+    cog.bot = SimpleNamespace(ctx=SimpleNamespace(db_path=sync_db_path))
     assert cog._panel_ids(GUILD_ID) == (0, 0)
 
 
@@ -2047,7 +2052,9 @@ async def test_on_member_remove_drops_pooled_member(sync_db_path, monkeypatch):
         pp._add_to_pool(conn, GUILD_ID, 7)
 
     ctx = MagicMock(db_path=sync_db_path)
-    cog = pp.PenPalsCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = pp.PenPalsCog(_bot)
     # The cog holds its own StickyPanel now, rather than bouncing through the
     # module-level helper to reach itself.
     monkeypatch.setattr(cog.panel, "refresh", AsyncMock())
@@ -2358,7 +2365,9 @@ async def test_channel_delete_forgets_the_panel_when_its_own_channel_goes(
     """The panel's ids used to outlive its channel, leaving the dashboard
     reporting a panel that could not exist (2026-08-06 review, F10). Runs before
     the session lookup so a deleted panel channel is cleared either way."""
-    cog = pp.PenPalsCog(MagicMock(), SimpleNamespace(db_path=sync_db_path))
+    _bot = MagicMock()
+    _bot.ctx = SimpleNamespace(db_path=sync_db_path)
+    cog = pp.PenPalsCog(_bot)
     cog.panel = MagicMock()
     cog.panel.on_channel_delete = AsyncMock()
     channel = MagicMock(spec=discord.TextChannel)
@@ -3142,7 +3151,9 @@ async def test_status_reports_the_paused_state(sync_db_path):
         pp._set_opt_out(conn, GUILD_ID, 1, at=1000.0)
 
     interaction = _join_interaction(1)
-    cog = pp.PenPalsCog(MagicMock(), MagicMock(db_path=sync_db_path))
+    _bot = MagicMock()
+    _bot.ctx = MagicMock(db_path=sync_db_path)
+    cog = pp.PenPalsCog(_bot)
     await cog.penpals_status.callback(cog, interaction)
 
     msg = interaction.response.send_message.await_args.args[0]
@@ -3159,7 +3170,9 @@ async def test_status_tells_a_matched_member_they_are_paused(sync_db_path):
         pp._set_opt_out(conn, GUILD_ID, 1)
 
     interaction = _join_interaction(1)
-    cog = pp.PenPalsCog(MagicMock(), MagicMock(db_path=sync_db_path))
+    _bot = MagicMock()
+    _bot.ctx = MagicMock(db_path=sync_db_path)
+    cog = pp.PenPalsCog(_bot)
     await cog.penpals_status.callback(cog, interaction)
 
     msg = interaction.response.send_message.await_args.args[0]

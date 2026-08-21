@@ -110,7 +110,9 @@ async def test_voice_state_update_noop_for_unconfigured_guild(ctx):
     """
     from bot_modules.cogs.voice_master_cog import VoiceMasterCog
 
-    cog = VoiceMasterCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = VoiceMasterCog(_bot)
 
     guild = MagicMock()
     guild.id = 7777  # not GUILD — and the DB is empty, so unconfigured

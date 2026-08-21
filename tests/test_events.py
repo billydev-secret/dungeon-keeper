@@ -109,7 +109,9 @@ def _make_interaction() -> MagicMock:
 
 @pytest.fixture
 def cog():
-    return EventsCog(_make_bot(), _make_ctx())
+    _bot = _make_bot()
+    _bot.ctx = _make_ctx()
+    return EventsCog(_bot)
 
 
 @patch("bot_modules.cogs.events_cog.record_member_activity")
@@ -163,7 +165,9 @@ def _greeting_watch_cog() -> EventsCog:
             greeting_watch_enabled=True, greeting_watch_channel_ids={10}
         )
     )
-    return EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    return EventsCog(_bot)
 
 
 @patch("bot_modules.cogs.events_cog.record_greeting")
@@ -284,7 +288,8 @@ async def test_system_message_archives_system_content_without_activity_or_xp(moc
 async def test_on_ready_does_not_spawn_duplicate_backfill_task(mock_create_task):
     ctx = _make_ctx()
     bot = _make_bot()
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     running_task = MagicMock()
     running_task.done.return_value = False
@@ -304,7 +309,9 @@ async def test_on_ready_does_not_spawn_duplicate_backfill_task(mock_create_task)
 @patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_message")
 async def test_no_guild_id_ignored_on_delete(mock_remove):
     ctx = _make_ctx()
-    cog = EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    cog = EventsCog(_bot)
     payload = MagicMock(spec=discord.RawMessageDeleteEvent)
     payload.guild_id = None
     await cog.on_raw_message_delete(payload)
@@ -354,7 +361,9 @@ def _ctx_with_archive(monkeypatch, *, message_ids=(999,)):
 async def test_with_guild_id_clears_auto_delete_tracking(mock_remove, monkeypatch):
     """Auto-delete tracking is per-message bookkeeping and is cleared."""
     ctx, _conn = _ctx_with_archive(monkeypatch)
-    cog = EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    cog = EventsCog(_bot)
     payload = MagicMock(spec=discord.RawMessageDeleteEvent)
     payload.guild_id = 1
     payload.channel_id = 10
@@ -370,7 +379,9 @@ async def test_delete_flags_the_row_but_keeps_the_archive(monkeypatch):
     from bot_modules.services.message_store import DELETE_SOURCE_DISCORD
 
     ctx, conn = _ctx_with_archive(monkeypatch)
-    cog = EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    cog = EventsCog(_bot)
     payload = MagicMock(spec=discord.RawMessageDeleteEvent)
     payload.guild_id = 1
     payload.channel_id = 10
@@ -392,7 +403,9 @@ async def test_delete_flags_the_row_but_keeps_the_archive(monkeypatch):
 @patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_messages")
 async def test_no_guild_id_ignored_on_bulk_delete(mock_remove):
     ctx = _make_ctx()
-    cog = EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    cog = EventsCog(_bot)
     payload = MagicMock(spec=discord.RawBulkMessageDeleteEvent)
     payload.guild_id = None
     await cog.on_raw_bulk_message_delete(payload)
@@ -406,7 +419,9 @@ async def test_with_guild_id_clears_bulk_auto_delete_tracking(mock_remove, monke
     from bot_modules.services.message_store import DELETE_SOURCE_DISCORD
 
     ctx, conn = _ctx_with_archive(monkeypatch, message_ids=(100, 101, 102))
-    cog = EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    cog = EventsCog(_bot)
     payload = MagicMock(spec=discord.RawBulkMessageDeleteEvent)
     payload.guild_id = 1
     payload.channel_id = 10
@@ -427,7 +442,9 @@ async def test_with_guild_id_clears_bulk_auto_delete_tracking(mock_remove, monke
 @patch("bot_modules.cogs.events_cog.award_image_reaction_xp", new_callable=AsyncMock)
 async def test_no_award_no_level_progress(mock_award, mock_level):
     ctx = _make_ctx()
-    cog = EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    cog = EventsCog(_bot)
     mock_award.return_value = None
     payload = MagicMock(spec=discord.RawReactionActionEvent)
     await cog.on_raw_reaction_add(payload)
@@ -438,7 +455,9 @@ async def test_no_award_no_level_progress(mock_award, mock_level):
 @patch("bot_modules.cogs.events_cog.award_image_reaction_xp", new_callable=AsyncMock)
 async def test_award_triggers_level_progress(mock_award, mock_level):
     ctx = _make_ctx()
-    cog = EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    cog = EventsCog(_bot)
     member = MagicMock(spec=discord.Member)
     award_result = MagicMock()
     mock_award.return_value = (member, award_result)
@@ -677,7 +696,7 @@ def _patch_join_deps():
         ),
         patch("bot_modules.cogs.events_cog.build_welcome_embed", return_value="<embed>"),
         patch(
-            "bot_modules.cogs.events_cog.resolve_accent_color",
+            "bot_modules.core.branding.resolve_accent_color",
             new_callable=AsyncMock,
             return_value=discord.Color.blurple(),
         ),
@@ -690,7 +709,7 @@ def _patch_leave_deps():
         patch("bot_modules.cogs.events_cog.record_member_event"),
         patch("bot_modules.cogs.events_cog.build_leave_embed", return_value="<embed>"),
         patch(
-            "bot_modules.cogs.events_cog.resolve_accent_color",
+            "bot_modules.core.branding.resolve_accent_color",
             new_callable=AsyncMock,
             return_value=discord.Color.blurple(),
         ),
@@ -706,7 +725,8 @@ async def test_on_member_join_uses_per_guild_welcome_channel():
     ctx.guild_config = MagicMock(
         return_value=_StubGuildConfig(welcome_channel_id=42, welcome_message="hi"),
     )
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     welcome_channel = MagicMock(spec=discord.TextChannel)
     welcome_channel.send = AsyncMock()
@@ -729,7 +749,8 @@ async def test_on_member_join_skips_welcome_when_channel_unset():
     ctx = _make_ctx()
     ctx.welcome_channel_id = 999  # home guild has one; this guild does not
     ctx.guild_config = MagicMock(return_value=_StubGuildConfig())  # all zeros
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     member = _make_member(guild_id=20)
     member.guild.get_channel = MagicMock(return_value=MagicMock(spec=discord.TextChannel))
@@ -750,7 +771,8 @@ async def test_on_member_join_includes_ping_role_when_set():
     ctx.guild_config = MagicMock(
         return_value=_StubGuildConfig(welcome_channel_id=42, welcome_ping_role_id=88),
     )
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     welcome_channel = MagicMock(spec=discord.TextChannel)
     welcome_channel.send = AsyncMock()
@@ -772,7 +794,8 @@ async def test_on_member_join_omits_ping_when_role_unset():
     ctx.guild_config = MagicMock(
         return_value=_StubGuildConfig(welcome_channel_id=42, welcome_ping_role_id=0),
     )
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     welcome_channel = MagicMock(spec=discord.TextChannel)
     welcome_channel.send = AsyncMock()
@@ -798,7 +821,8 @@ async def test_on_member_join_pings_member_when_enabled():
             welcome_ping_member=True,
         ),
     )
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     welcome_channel = MagicMock(spec=discord.TextChannel)
     welcome_channel.send = AsyncMock()
@@ -826,7 +850,8 @@ async def test_on_member_join_pings_only_member_without_role():
             welcome_ping_member=True,
         ),
     )
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     welcome_channel = MagicMock(spec=discord.TextChannel)
     welcome_channel.send = AsyncMock()
@@ -848,7 +873,8 @@ async def test_on_member_join_sends_greeter_ping():
     ctx.guild_config = MagicMock(
         return_value=_StubGuildConfig(greeter_chat_channel_id=77),
     )
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     greeter_channel = MagicMock(spec=discord.TextChannel)
     greeter_channel.send = AsyncMock()
@@ -885,7 +911,8 @@ async def test_on_member_update_verified_fires_without_bio():
             unverified_role_id=555,
         ),
     )
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
     cog._send_welcome = AsyncMock()
 
     member_role = _role(900, "Member")
@@ -912,7 +939,8 @@ async def test_on_member_update_verified_skips_when_unverified_role_kept():
             unverified_role_id=555,
         ),
     )
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
     cog._send_welcome = AsyncMock()
 
     unverified = _role(555, "Unverified")
@@ -949,7 +977,9 @@ async def test_on_member_update_level_5_card_refresh(
     ctx.guild_config = MagicMock(
         return_value=_StubGuildConfig(grant_roles=grant_roles),
     )
-    cog = EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    cog = EventsCog(_bot)
 
     before = _make_member(guild_id=7)
     before.roles = [_role(rid, f"R{rid}") for rid in before_ids]
@@ -987,7 +1017,9 @@ async def test_on_member_update_card_refresh_survives_a_welcome_failure():
             unverified_role_id=901,
         ),
     )
-    cog = EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    cog = EventsCog(_bot)
     cog._send_welcome = AsyncMock(side_effect=sqlite3.OperationalError("locked"))
 
     # One edit both strips the unverified role and adds the NSFW role.
@@ -1019,7 +1051,8 @@ async def test_on_member_remove_uses_per_guild_leave_channel():
     ctx.guild_config = MagicMock(
         return_value=_StubGuildConfig(leave_channel_id=44, leave_message="bye"),
     )
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     leave_channel = MagicMock(spec=discord.TextChannel)
     leave_channel.send = AsyncMock()
@@ -1042,7 +1075,8 @@ async def test_on_member_remove_skips_when_channel_unset():
     ctx = _make_ctx()
     ctx.leave_channel_id = 999  # home guild has one
     ctx.guild_config = MagicMock(return_value=_StubGuildConfig(leave_channel_id=0))
-    cog = EventsCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EventsCog(bot)
 
     member = _make_member(guild_id=20)
     member.guild.get_channel = MagicMock()
@@ -1071,7 +1105,9 @@ def econ_db(tmp_path):
 
 def _econ_cog(econ_db) -> EventsCog:
     ctx: Any = SimpleNamespace(db_path=econ_db, open_db=lambda: open_db(econ_db))
-    return EventsCog(_make_bot(), ctx)
+    _bot = _make_bot()
+    _bot.ctx = ctx
+    return EventsCog(_bot)
 
 
 def _enable_econ(econ_db, **overrides) -> None:
@@ -1165,7 +1201,7 @@ def _today() -> str:
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_disabled_is_noop(mock_notify, econ_db):
@@ -1179,7 +1215,7 @@ async def test_econ_disabled_is_noop(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_first_login_dms_daily_digest(mock_notify, econ_db):
@@ -1204,7 +1240,7 @@ async def test_econ_first_login_dms_daily_digest(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_repeat_same_day_no_second_login(mock_notify, econ_db):
@@ -1221,7 +1257,7 @@ async def test_econ_repeat_same_day_no_second_login(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_milestone_dms(mock_notify, econ_db):
@@ -1236,7 +1272,7 @@ async def test_econ_milestone_dms(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_grace_dms(mock_notify, econ_db):
@@ -1252,7 +1288,7 @@ async def test_econ_grace_dms(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_shield_consumed_dms_shield_copy(mock_notify, econ_db):
@@ -1281,7 +1317,7 @@ async def test_econ_shield_consumed_dms_shield_copy(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_grace_plus_shield_two_day_save(mock_notify, econ_db):
@@ -1298,7 +1334,7 @@ async def test_econ_grace_plus_shield_two_day_save(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_reset_below_three_omits_reset_field(mock_notify, econ_db):
@@ -1321,7 +1357,7 @@ async def test_econ_reset_below_three_omits_reset_field(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_reset_at_three_plus_dms(mock_notify, econ_db):
@@ -1337,7 +1373,7 @@ async def test_econ_reset_at_three_plus_dms(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_login_dm_includes_quest_recap(mock_notify, econ_db):
@@ -1369,7 +1405,7 @@ async def test_econ_login_dm_includes_quest_recap(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_reward_once_per_member(mock_notify, econ_db):
@@ -1389,7 +1425,7 @@ async def test_econ_qotd_reward_once_per_member(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_plain_message_earns_nothing(mock_notify, econ_db):
@@ -1404,7 +1440,7 @@ async def test_econ_qotd_plain_message_earns_nothing(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_stale_question_earns_nothing(mock_notify, econ_db):
@@ -1419,7 +1455,7 @@ async def test_econ_qotd_stale_question_earns_nothing(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_mod_tag_opens_the_question(mock_notify, econ_db):
@@ -1447,7 +1483,7 @@ async def test_econ_qotd_mod_tag_opens_the_question(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_tag_from_non_mod_opens_nothing(mock_notify, econ_db):
@@ -1463,7 +1499,7 @@ async def test_econ_qotd_tag_from_non_mod_opens_nothing(mock_notify, econ_db):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_qotd_tag_registers_once(mock_notify, econ_db):
@@ -1514,7 +1550,7 @@ def _community_message(**kwargs):
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_greeting_answered_fires_on_mention_of_pending_greeter(
@@ -1542,7 +1578,7 @@ async def test_econ_greeting_answered_fires_on_mention_of_pending_greeter(
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_greeting_answered_skips_resolved_greeting(mock_notify, econ_db):
@@ -1570,7 +1606,7 @@ async def test_econ_greeting_answered_skips_resolved_greeting(mock_notify, econ_
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_birthday_wish_targeted_and_phrase_paths(mock_notify, econ_db):
@@ -1609,7 +1645,7 @@ async def test_econ_birthday_wish_targeted_and_phrase_paths(mock_notify, econ_db
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_birthday_wish_never_fires_for_the_birthday_member(
@@ -1634,7 +1670,7 @@ async def test_econ_birthday_wish_never_fires_for_the_birthday_member(
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
 @patch(
-    "bot_modules.cogs.events_cog.resolve_accent_color",
+    "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
 async def test_econ_birthday_wish_needs_an_announcement(mock_notify, econ_db):

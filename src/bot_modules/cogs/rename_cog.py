@@ -10,16 +10,15 @@ from discord.ext import commands
 from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 # Discord caps nicknames at 32 characters.
 MAX_NICK_LENGTH = 32
 
 
 class RenameCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     @app_commands.command(
@@ -38,7 +37,7 @@ class RenameCog(commands.Cog):
         target: discord.Member,
         new_name: str | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -111,4 +110,4 @@ class RenameCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(RenameCog(bot, bot.ctx))
+    await bot.add_cog(RenameCog(bot))

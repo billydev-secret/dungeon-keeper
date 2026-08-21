@@ -27,7 +27,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import get_guild_channel_or_thread, jump_url
 from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import (
@@ -42,7 +42,7 @@ from bot_modules.services.no_contact_logic import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.no_contact")
 
@@ -72,9 +72,8 @@ class NoContactCog(commands.Cog):
         guild_only=True,
     )
 
-    def __init__(self, bot: "Bot", ctx: "AppContext") -> None:
+    def __init__(self, bot: "Bot") -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     # ── Member self-service ──────────────────────────────────────────────
@@ -104,7 +103,7 @@ class NoContactCog(commands.Cog):
 
         await asyncio.to_thread(
             no_contact_service.add_pair,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             interaction.guild.id,
             interaction.user.id,
             member.id,
@@ -127,7 +126,7 @@ class NoContactCog(commands.Cog):
             return
         entry = await asyncio.to_thread(
             no_contact_service.get_pair,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             interaction.guild.id,
             interaction.user.id,
             member.id,
@@ -153,7 +152,7 @@ class NoContactCog(commands.Cog):
 
         await asyncio.to_thread(
             no_contact_service.remove_pair,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             interaction.guild.id,
             interaction.user.id,
             member.id,
@@ -168,7 +167,7 @@ class NoContactCog(commands.Cog):
             return
         rows = await asyncio.to_thread(
             no_contact_service.list_pairs_for_user,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             interaction.guild.id,
             interaction.user.id,
         )
@@ -201,7 +200,7 @@ class NoContactCog(commands.Cog):
             tag = " *(set by a moderator)*" if row["protected_user_id"] is None else ""
             lines.append(f"• **{name}**{tag}")
 
-        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        accent = await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="no contact")
         embed = discord.Embed(
             title="Your no-contact list",
             description="\n".join(lines),
@@ -236,7 +235,7 @@ class NoContactCog(commands.Cog):
 
         partners = await asyncio.to_thread(
             no_contact_service.no_contact_partners,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             message.guild.id,
             message.author.id,
         )
@@ -254,12 +253,12 @@ class NoContactCog(commands.Cog):
 
         # Per-guild constants, read once rather than once per alert.
         settings = await asyncio.to_thread(
-            no_contact_service.get_settings, self.ctx.db_path, message.guild.id
+            no_contact_service.get_settings, self.bot.ctx.db_path, message.guild.id
         )
         for alert in alerts:
             await asyncio.to_thread(
                 no_contact_service.record_event,
-                self.ctx.db_path,
+                self.bot.ctx.db_path,
                 message.guild.id,
                 actor_id=alert.actor_id,
                 target_id=alert.target_id,
@@ -277,7 +276,7 @@ class NoContactCog(commands.Cog):
         )
         if channel is None:
             return
-        accent = await resolve_accent_color(self.ctx.db_path, message.guild)
+        accent = await safe_resolve_accent(self.bot.ctx, message.guild, log_label="no contact")
         for alert in alerts:
             await self._post_alert(message, alert, channel, settings, accent)
 
@@ -301,7 +300,7 @@ class NoContactCog(commands.Cog):
         def _lookup() -> Optional[int]:
             from bot_modules.core.db_utils import open_db  # noqa: PLC0415
 
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 row = conn.execute(
                     "SELECT author_id FROM messages WHERE message_id = ?",
                     (ref.message_id,),
@@ -368,4 +367,4 @@ class NoContactCog(commands.Cog):
 
 
 async def setup(bot: "Bot") -> None:
-    await bot.add_cog(NoContactCog(bot, bot.ctx))
+    await bot.add_cog(NoContactCog(bot))
