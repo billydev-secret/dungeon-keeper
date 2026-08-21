@@ -156,6 +156,60 @@ def test_build_system_no_context_block_when_absent(monkeypatch):
     assert len(adv.build_system()) == 2
 
 
+# ── public tutorial register ────────────────────────────────────────────────
+
+
+def test_build_system_appends_the_public_register_last(monkeypatch):
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE")
+    system = adv.build_system("SERVER CTX", public_tutorial=True)
+    assert len(system) == 4
+    assert system[-1]["text"] == adv.PUBLIC_TUTORIAL_INSTRUCTIONS
+    assert "cache_control" not in system[-1]
+
+
+def test_public_register_does_not_fork_the_prompt_cache(monkeypatch):
+    """It goes *after* the breakpoint, so a public ask reuses the same cached
+    prefix as every other ask instead of paying for a second cache entry."""
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE")
+    plain = adv.build_system("SERVER CTX")
+    public = adv.build_system("SERVER CTX", public_tutorial=True)
+    assert public[:2] == plain[:2]
+
+
+def test_no_public_register_by_default(monkeypatch):
+    """The dashboard Help panel and every private ask must be untouched."""
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE")
+    for system in (adv.build_system(), adv.build_system("SERVER CTX")):
+        assert all(
+            adv.PUBLIC_TUTORIAL_INSTRUCTIONS not in b["text"] for b in system
+        )
+
+
+def test_public_register_asks_for_a_brief_room_facing_tutorial():
+    text = adv.PUBLIC_TUTORIAL_INSTRUCTIONS
+    assert "PUBLIC CHANNEL" in text
+    # Billy's three asks: public-facing, simple, brief.
+    assert "Address the room" in text
+    assert "SIMPLE AND BRIEF" in text
+    assert "five short numbered steps" in text
+    # And it must not invite the model back onto the admin path.
+    assert "no special permissions" in text
+
+
+async def test_answer_advisor_passes_the_public_register_through(monkeypatch):
+    client = _mock_client(monkeypatch, content=[TextBlock(type="text", text="ok")])
+    await adv.answer_advisor("how do I play?", public_tutorial=True)
+    system = client.messages.create.call_args.kwargs["system"]
+    assert system[-1]["text"] == adv.PUBLIC_TUTORIAL_INSTRUCTIONS
+
+
+async def test_answer_advisor_is_private_register_by_default(monkeypatch):
+    client = _mock_client(monkeypatch, content=[TextBlock(type="text", text="ok")])
+    await adv.answer_advisor("how do I play?")
+    system = client.messages.create.call_args.kwargs["system"]
+    assert all(adv.PUBLIC_TUTORIAL_INSTRUCTIONS not in b["text"] for b in system)
+
+
 # ── config: model + server-context toggle ───────────────────────────────────
 
 

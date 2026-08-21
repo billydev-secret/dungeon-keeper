@@ -194,6 +194,19 @@ def is_staff(member: discord.Member | None) -> bool:
     )
 
 
+def can_post_public(member: discord.Member | None) -> bool:
+    """Whether this asker may push an ``/ask`` answer into the channel.
+
+    Staff-only, and for a different reason than :func:`is_staff`'s usual one:
+    a public post is the bot speaking to the whole room in a channel the asker
+    chose, so it is a moderation-shaped act, not a self-service one. Any mod
+    power is enough — the answer itself is stripped to what @everyone can see
+    (``build_asker_context(viewer=None)``) regardless of who asked, so a
+    higher bar would buy no extra safety.
+    """
+    return is_staff(member)
+
+
 # Never surface these — the config KV table holds at least one secret
 # (spotify_bot_refresh_token), and future *_token/*_secret keys must stay hidden.
 _SECRET_KEY_RE = re.compile(

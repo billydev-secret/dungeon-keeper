@@ -202,6 +202,18 @@ def test_is_staff_ignores_non_staff_manage_permissions():
     assert ac.is_staff(m) is False
 
 
+# ── can_post_public (who may put an answer in the channel) ─────────────────
+
+
+def test_can_post_public_matches_the_staff_set():
+    """Any mod power is enough; a plain member (or a DM asker) is not."""
+    assert ac.can_post_public(None) is False
+    assert ac.can_post_public(FakeMember(1, "Reg", FakeGuildPerms())) is False
+    mod = FakeMember(2, "Mod", FakeGuildPerms(manage_messages=True))
+    assert ac.can_post_public(mod) is True
+    assert ac.can_see_config(mod) is False  # a mod posts without seeing config
+
+
 # ── build_asker_context ─────────────────────────────────────────────────────
 
 
