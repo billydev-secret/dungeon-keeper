@@ -184,7 +184,11 @@ SQLite-backed. Tests in `tests/`.
   content at phone/tablet/desktop) and **panel-load health** (no JS exception /
   console error / broken fetch on mount). The browser suite runs scoped to
   changed panels in `gate.py` and fully in nightly; it auto-skips without a
-  browser (`python -m playwright install chromium` to enable). When you add or
+  browser (`python -m playwright install chromium` to enable). Both tiers
+  select by the **`browser` marker over `tests/web/`, never by filename** —
+  naming files is what once left five of the seven browser test files running
+  in no tier at all; `tests/test_gate_mobile_scope.py` fails if either tier
+  goes back to a list. When you add or
   restyle a panel, prefer wrapping/scrolling flex rows over fixed-width ones and
   add an interaction scenario if layout lives behind a click; measure with
   `scripts/mobile_layout_scan.py`.
