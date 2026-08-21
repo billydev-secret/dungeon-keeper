@@ -797,7 +797,7 @@ def test_post_qa_card_shells_out_to_the_poster(tmp_path, monkeypatch, capsys) ->
     assert seen["timeout"] == 300  # a hung API call must not wedge teardown
     assert "posted QA card" in capsys.readouterr().out
     # dk-ship throws teardown's output away, so the log is the only record.
-    assert "posted QA card" in (tmp_path / ".git" / "qa-card.log").read_text()
+    assert "posted QA card" in (tmp_path / ".git" / "qa-card.log").read_text(encoding="utf-8")
 
 
 def test_post_qa_card_without_the_poster_is_a_no_op(tmp_path, monkeypatch) -> None:
@@ -822,7 +822,7 @@ def test_post_qa_card_swallows_a_failure(tmp_path, monkeypatch, capsys) -> None:
     dk_session.post_qa_card(tmp_path, "widget")  # does not raise
 
     assert "skipped" in capsys.readouterr().err
-    assert "skipped" in (tmp_path / ".git" / "qa-card.log").read_text()
+    assert "skipped" in (tmp_path / ".git" / "qa-card.log").read_text(encoding="utf-8")
 
 
 def test_post_qa_card_records_a_nonzero_exit(tmp_path, monkeypatch) -> None:
@@ -840,7 +840,7 @@ def test_post_qa_card_records_a_nonzero_exit(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(dk_session.subprocess, "run", lambda *a, **k: Res())
     dk_session.post_qa_card(tmp_path, "widget")
 
-    logged = (tmp_path / ".git" / "qa-card.log").read_text()
+    logged = (tmp_path / ".git" / "qa-card.log").read_text(encoding="utf-8")
     assert "UnicodeDecodeError" in logged
     assert "poster exited 1" in logged
 
