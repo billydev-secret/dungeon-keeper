@@ -5,6 +5,7 @@ import json
 import time
 from typing import TYPE_CHECKING
 
+from bot_modules.games.utils import game_store
 from .game import ChickenGame, game_from_row
 
 if TYPE_CHECKING:
@@ -37,12 +38,7 @@ async def get_game(db: GamesDb, game_id: int) -> ChickenGame | None:
 
 
 async def set_game_state(db: GamesDb, game_id: int, state: str, **extra_fields) -> None:
-    fields = {"state": state, **extra_fields}
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
-    await db.execute(
-        f"UPDATE chicken_games SET {set_clause} WHERE id = ?",
-        (*fields.values(), game_id),
-    )
+    await game_store.set_game_state(db, "chicken_games", game_id, state, **extra_fields)
 
 
 async def fetch_active_games(db: GamesDb) -> list[ChickenGame]:
@@ -89,18 +85,6 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
 
 
 async def upsert_config(db: GamesDb, guild_id: int, **fields) -> None:
-    if not fields:
-        return
-    cols = ", ".join(fields.keys())
-    placeholders = ", ".join("?" * len(fields))
-    updates = ", ".join(f"{k} = excluded.{k}" for k in fields)
-    await db.execute(
-        f"""
-        INSERT INTO chicken_config (guild_id, {cols})
-        VALUES (?, {placeholders})
-        ON CONFLICT (guild_id) DO UPDATE SET {updates}
-        """,
-        (guild_id, *fields.values()),
-    )
+    await game_store.upsert_config(db, "chicken_config", guild_id, **fields)
 
 

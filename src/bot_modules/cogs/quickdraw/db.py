@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from bot_modules.games.utils import game_store
 from .game import QuickdrawGame, game_from_row
 
 if TYPE_CHECKING:
@@ -40,18 +41,8 @@ async def get_game(db: GamesDb, game_id: int) -> QuickdrawGame | None:
 async def get_active_game_for_pair(
     db: GamesDb, guild_id: int, user_a: int, user_b: int
 ) -> QuickdrawGame | None:
-    placeholders = ",".join("?" * len(_NON_TERMINAL))
-    row = await db.fetchone(
-        f"""
-        SELECT * FROM quickdraw_games
-        WHERE guild_id = ?
-          AND state IN ({placeholders})
-          AND (
-               (challenger_id = ? AND target_id = ?)
-            OR (challenger_id = ? AND target_id = ?)
-          )
-        """,
-        (guild_id, *_NON_TERMINAL, user_a, user_b, user_b, user_a),
+    row = await game_store.fetch_live_game_for_pair(
+        db, "quickdraw_games", guild_id, user_a, user_b, _NON_TERMINAL
     )
     return game_from_row(row) if row else None
 
@@ -59,24 +50,14 @@ async def get_active_game_for_pair(
 async def get_pending_game_for_challenger(
     db: GamesDb, guild_id: int, channel_id: int, challenger_id: int
 ) -> QuickdrawGame | None:
-    row = await db.fetchone(
-        """
-        SELECT * FROM quickdraw_games
-        WHERE guild_id = ? AND channel_id = ? AND challenger_id = ? AND state = 'PENDING'
-        ORDER BY created_at DESC LIMIT 1
-        """,
-        (guild_id, channel_id, challenger_id),
+    row = await game_store.fetch_pending_game_for_challenger(
+        db, "quickdraw_games", guild_id, channel_id, challenger_id
     )
     return game_from_row(row) if row else None
 
 
 async def set_game_state(db: GamesDb, game_id: int, state: str, **extra_fields) -> None:
-    fields = {"state": state, **extra_fields}
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
-    await db.execute(
-        f"UPDATE quickdraw_games SET {set_clause} WHERE id = ?",
-        (*fields.values(), game_id),
-    )
+    await game_store.set_game_state(db, "quickdraw_games", game_id, state, **extra_fields)
 
 
 async def fetch_active_games(db: GamesDb) -> list[QuickdrawGame]:
@@ -122,18 +103,6 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
 
 
 async def upsert_config(db: GamesDb, guild_id: int, **fields) -> None:
-    if not fields:
-        return
-    cols = ", ".join(fields.keys())
-    placeholders = ", ".join("?" * len(fields))
-    updates = ", ".join(f"{k} = excluded.{k}" for k in fields)
-    await db.execute(
-        f"""
-        INSERT INTO quickdraw_config (guild_id, {cols})
-        VALUES (?, {placeholders})
-        ON CONFLICT (guild_id) DO UPDATE SET {updates}
-        """,
-        (guild_id, *fields.values()),
-    )
+    await game_store.upsert_config(db, "quickdraw_config", guild_id, **fields)
 
 
