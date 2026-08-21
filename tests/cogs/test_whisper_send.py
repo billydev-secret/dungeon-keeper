@@ -39,7 +39,6 @@ def _make_cog():
     bot.ctx.db_path = ":memory:"
     cog = WhisperCog.__new__(WhisperCog)
     cog.bot = bot
-    cog.ctx = bot.ctx
     cog._last_send_at = {}
     cog._target_sends = {}
     return cog

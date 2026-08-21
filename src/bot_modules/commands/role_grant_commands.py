@@ -213,3 +213,6 @@ async def _execute_grant(
 
 # The old /grant_missing audit view moved to the web dashboard's Grant Audit
 # panel (GET /api/reports/grant-audit), backed by
+# bot_modules.services.role_grant_audit_service, which posts the same buckets
+# as an auto-updating channel card. The /grant_audit command that used to post
+# it from here was removed once nothing called it.

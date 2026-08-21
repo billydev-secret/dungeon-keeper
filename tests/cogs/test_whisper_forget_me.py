@@ -75,7 +75,6 @@ async def test_forget_me_shows_confirmation_view():
     bot.ctx.db_path = ":memory:"
     cog = WhisperCog.__new__(WhisperCog)
     cog.bot = bot
-    cog.ctx = bot.ctx
 
     user = FakeMember(id=USER_A)
     interaction = fake_interaction(user=user)
