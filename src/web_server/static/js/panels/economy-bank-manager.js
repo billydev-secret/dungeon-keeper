@@ -13,7 +13,7 @@ import { toast, confirmDialog } from "../ui.js";
 // Common ledger kinds for the audit filter (free text still allowed).
 const LEDGER_KINDS = [
   "quest", "quest_community", "qotd", "game_participation", "game_win",
-  "conversion", "grant", "transfer_in", "transfer_out", "rental",
+  "conversion", "grant", "admin_remove", "transfer_in", "transfer_out", "rental",
 ];
 
 // How many ledger rows the audit stream pulls. Named so the fetch and the
@@ -68,6 +68,26 @@ function render(container, members) {
         </form>
       </section>
 
+      <section class="card" data-sec="remove">
+        <div class="section-label">Remove Currency</div>
+        <form data-form-remove class="form">
+          <div class="field-row">
+            <div class="field"><label>Member</label>
+              <span data-picker="remove-member"></span></div>
+            <div class="field"><label>Amount</label>
+              <input type="number" name="amount" min="1" step="1" value="1" style="max-width:120px;" /></div>
+          </div>
+          <div class="field"><label>Reason</label>
+            <input type="text" name="reason" maxlength="300" /></div>
+          <div class="field-hint">Takes exactly the amount typed — no booster bonus.
+            Removing more than they hold empties the wallet; balances never go negative.</div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="submit" class="btn btn-danger">Remove</button>
+            <span data-status-remove></span>
+          </div>
+        </form>
+      </section>
+
       <section class="card" data-sec="rentals">
         <div class="section-label">Perk Rentals</div>
         <div data-rentals><div class="empty">Loading…</div></div>
@@ -89,6 +109,7 @@ function render(container, members) {
     </div>`;
 
   wireGrant(container, members);
+  wireRemove(container, members);
   wireLedger(container, members);
   refreshCommunity(container, members);
   refreshRentals(container, members);
@@ -299,6 +320,62 @@ function wireGrant(container, members) {
   });
 }
 
+// ── remove ───────────────────────────────────────────────────────────
+
+function wireRemove(container, members) {
+  const form = container.querySelector("[data-form-remove]");
+  const status = form.querySelector("[data-status-remove]");
+  const memberPicker = mountMemberPicker(
+    form.querySelector('[data-picker="remove-member"]'),
+    members, "0",
+    { emptyLabel: "(pick a member)" },
+  );
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const picked = memberPicker.getValue();
+    const rawAmount = String(form.querySelector("[name=amount]").value ?? "").trim();
+    const amount = parseInt(rawAmount, 10);
+    const body = {
+      // String, not parseInt: snowflakes past 2^53 round to a wrong id.
+      member_id: picked || "0",
+      amount,
+      reason: form.querySelector("[name=reason]").value,
+    };
+    if (body.member_id === "0" || !/^[1-9]\d*$/.test(body.member_id)) {
+      showStatus(status, false, "Pick a member first");
+      return;
+    }
+    if (rawAmount === "" || !Number.isFinite(amount) || amount < 1) {
+      showStatus(status, false, "Amount must be a whole number of 1 or more.");
+      form.querySelector("[name=amount]").focus();
+      return;
+    }
+    // The picker searches server-side, so the target can be someone the
+    // bounded member page never held — memberName() would then render a raw
+    // snowflake on the one dialog whose job is to catch a wrong target. The
+    // picker's own input carries the label it displayed.
+    const who = memberPicker.getInput().value.trim()
+      || memberName(members, body.member_id);
+    if (!(await confirmDialog(
+      `Remove ${amount} from ${who}? They keep nothing back — if they hold less, the wallet is emptied.`,
+      { confirmLabel: "Remove", danger: true },
+    ))) return;
+    try {
+      const res = await apiPost("/api/economy/remove", body);
+      // The server clamps at a zero balance, so a short removal is a normal
+      // outcome, not an error — say what actually went, not what was asked.
+      showStatus(status, true, res.removed < res.requested
+        ? `Removed ${res.removed} (all they had) — balance ${res.balance}`
+        : `Removed ${res.removed} — balance ${res.balance}`);
+      form.reset();
+      memberPicker.setValue("0");
+      refreshLedger(container, members);
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  });
+}
+
 // ── ledger audit ─────────────────────────────────────────────────────
 
 let _ledgerMemberPicker = null;
@@ -314,12 +391,15 @@ function wireLedger(container, members) {
   });
 }
 
-// Pull the pay memo out of a ledger row's meta JSON. `meta` arrives as a raw
+// Pull the note out of a ledger row's meta JSON. `meta` arrives as a raw
 // string and is absent on most kinds, so anything unparseable is just "no memo".
+// Transfers store it as `memo`; manual grants and removals as `reason` — both
+// are the human explanation this column exists to show.
 function memoOf(meta) {
   if (!meta) return null;
   try {
-    const memo = JSON.parse(meta).memo;
+    const parsed = JSON.parse(meta);
+    const memo = parsed.memo ?? parsed.reason;
     return typeof memo === "string" && memo ? memo : null;
   } catch {
     return null;

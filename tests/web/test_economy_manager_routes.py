@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import sqlite3
 import time
 import types
@@ -14,6 +15,7 @@ from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services.economy_service import (
     apply_credit,
     get_balance,
+    get_ledger,
     load_econ_settings,
     save_econ_settings,
 )
@@ -615,6 +617,132 @@ def test_grant_refused_when_economy_disabled(authed_client, fake_ctx):
     assert resp.json()["detail"] == "economy disabled"
     with open_db(fake_ctx.db_path) as conn:
         assert get_balance(conn, fake_ctx.guild_id, 314) == 0
+
+
+def test_remove_debits_and_ledgers(authed_client, fake_ctx):
+    _enable_economy(fake_ctx)
+    authed_client.post(
+        "/api/economy/grant", json={"member_id": 314, "amount": 100, "reason": "mvp"}
+    )
+    resp = authed_client.post(
+        "/api/economy/remove",
+        json={"member_id": 314, "amount": 40, "reason": "miscount"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "ok": True, "removed": 40, "requested": 40, "balance": 60
+    }
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, 314) == 60
+        rows = get_ledger(conn, fake_ctx.guild_id, 314)
+    assert rows[0]["amount"] == -40
+    assert rows[0]["kind"] == "admin_remove"
+
+
+def test_remove_clamps_at_zero_balance(authed_client, fake_ctx):
+    # Over-typing empties the wallet and reports the real figure; the panel
+    # shows "removed" rather than the requested amount because of this.
+    _enable_economy(fake_ctx)
+    authed_client.post(
+        "/api/economy/grant", json={"member_id": 314, "amount": 25, "reason": ""}
+    )
+    resp = authed_client.post(
+        "/api/economy/remove", json={"member_id": 314, "amount": 900, "reason": ""}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["removed"] == 25
+    assert resp.json()["requested"] == 900
+    assert resp.json()["balance"] == 0
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, 314) == 0
+
+
+def test_remove_ignores_the_booster_multiplier(authed_client, fake_ctx):
+    # A grant of 100 to a booster credits 150; a remove of 100 takes exactly
+    # 100. A removal is a correction, not an earning.
+    _enable_economy(fake_ctx)
+
+    class _Guild:
+        def get_member(self, uid):
+            return types.SimpleNamespace(
+                guild_permissions=types.SimpleNamespace(value=0x8),
+                roles=[],
+                display_name=f"member-{uid}",
+                premium_since=datetime.datetime(2020, 1, 1),
+            )
+
+    class _Bot:
+        def get_guild(self, gid):
+            return _Guild() if gid == fake_ctx.guild_id else None
+
+    fake_ctx.bot = _Bot()
+    try:
+        assert authed_client.post(
+            "/api/economy/grant",
+            json={"member_id": 314, "amount": 100, "reason": ""},
+        ).json()["credited"] == 150
+        resp = authed_client.post(
+            "/api/economy/remove",
+            json={"member_id": 314, "amount": 100, "reason": ""},
+        )
+    finally:
+        fake_ctx.bot = None
+    assert resp.json()["removed"] == 100
+    assert resp.json()["balance"] == 50
+
+
+def test_remove_accepts_string_member_id(authed_client, fake_ctx):
+    # Same snowflake-precision contract as grant: the panel posts a string.
+    _enable_economy(fake_ctx)
+    snowflake = 1234567890123456789  # > 2^53
+    fake_ctx.bot = _member_cache_bot(fake_ctx.guild_id, {1, snowflake})
+    try:
+        authed_client.post(
+            "/api/economy/grant",
+            json={"member_id": str(snowflake), "amount": 60, "reason": ""},
+        )
+        resp = authed_client.post(
+            "/api/economy/remove",
+            json={"member_id": str(snowflake), "amount": 10, "reason": ""},
+        )
+    finally:
+        fake_ctx.bot = None
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["removed"] == 10
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, snowflake) == 50
+
+
+def test_remove_rejects_non_member(authed_client, fake_ctx):
+    _enable_economy(fake_ctx)
+    fake_ctx.bot = _member_cache_bot(fake_ctx.guild_id, {1, 314})
+    try:
+        resp = authed_client.post(
+            "/api/economy/remove",
+            json={"member_id": 999, "amount": 5, "reason": ""},
+        )
+    finally:
+        fake_ctx.bot = None
+    assert resp.status_code == 404
+    assert "member" in resp.json()["detail"]
+
+
+def test_remove_rejects_zero_and_negative_amounts(authed_client):
+    for amount in (0, -5):
+        resp = authed_client.post(
+            "/api/economy/remove",
+            json={"member_id": 1, "amount": amount, "reason": ""},
+        )
+        assert resp.status_code == 422
+
+
+def test_remove_refused_when_economy_disabled(authed_client, fake_ctx):
+    # Economy disabled by default; remove mirrors grant's gate.
+    resp = authed_client.post(
+        "/api/economy/remove", json={"member_id": 314, "amount": 5, "reason": ""}
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "economy disabled"
 
 
 def test_ledger_filters_and_cap(authed_client, fake_ctx):

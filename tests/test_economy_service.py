@@ -35,6 +35,7 @@ from bot_modules.services.economy_service import (
     process_login,
     purchase_streak_shield,
     refund_streak_shield,
+    remove_currency,
     save_econ_settings,
     set_notify_muted,
     transfer_currency,
@@ -236,6 +237,76 @@ def test_debit_rejects_amount_below_one(db):
         with pytest.raises(ValueError):
             apply_debit(conn, GUILD, USER, 0, "spend")
         assert get_balance(conn, GUILD, USER) == 5
+
+
+def test_remove_takes_the_exact_amount(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        removed = remove_currency(conn, GUILD, USER, 30, actor_id=77, meta={"reason": "oops"})
+        assert removed == 30
+        assert get_balance(conn, GUILD, USER) == 70
+        rows = get_ledger(conn, GUILD, USER)
+    assert rows[0]["amount"] == -30
+    assert rows[0]["kind"] == "admin_remove"
+    assert rows[0]["actor_id"] == 77
+    assert '"reason": "oops"' in rows[0]["meta"]
+
+
+def test_remove_clamps_to_the_balance(db):
+    # Over-typing must empty the wallet, not fail and not owe a debt — and the
+    # ledger records what actually went, not what was asked for.
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 40, "grant")
+        removed = remove_currency(conn, GUILD, USER, 500)
+        assert removed == 40
+        assert get_balance(conn, GUILD, USER) == 0
+        rows = get_ledger(conn, GUILD, USER)
+    assert rows[0]["amount"] == -40
+
+
+def test_remove_from_empty_wallet_writes_nothing(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 5, "grant")
+        apply_debit(conn, GUILD, USER, 5, "spend")
+        removed = remove_currency(conn, GUILD, USER, 10)
+        assert removed == 0
+        rows = get_ledger(conn, GUILD, USER)
+    # Credit + spend only: a no-op removal must not leave a zero-value row.
+    assert len(rows) == 2
+
+
+def test_remove_from_missing_wallet_is_zero(db):
+    with open_db(db) as conn:
+        assert remove_currency(conn, GUILD, USER, 10) == 0
+        assert get_ledger(conn, GUILD, USER) == []
+
+
+def test_remove_rejects_amount_below_one(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 5, "grant")
+        with pytest.raises(ValueError):
+            remove_currency(conn, GUILD, USER, 0)
+        assert get_balance(conn, GUILD, USER) == 5
+
+
+def test_remove_reports_zero_if_the_wallet_drains_mid_call(db, monkeypatch):
+    # The balance read and the guarded UPDATE aren't atomic for a caller that
+    # isn't holding the write lock. If the wallet empties in between, the debit
+    # writes nothing — reporting "removed 40" then would be a lie to the mod.
+    import bot_modules.services.economy_service as svc
+
+    monkeypatch.setattr(svc, "apply_debit", lambda *a, **k: False)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 40, "grant")
+        assert svc.remove_currency(conn, GUILD, USER, 40) == 0
+
+
+def test_remove_leaves_other_wallets_alone(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 10, "grant")
+        apply_credit(conn, GUILD, OTHER, 10, "grant")
+        remove_currency(conn, GUILD, USER, 10)
+        assert get_balance(conn, GUILD, OTHER) == 10
 
 
 def test_wallets_isolated_per_user(db):

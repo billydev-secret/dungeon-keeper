@@ -1,5 +1,5 @@
 """Bank Manager endpoints — the quest library, claim sign-off, the sponsored
-QOTD queue, community goals, ledger audit, and manual grants.
+QOTD queue, community goals, ledger audit, and manual grants/removals.
 
 Every route is gated by ``require_economy_manager`` (admins OR holders of the
 configured ``manager_role_id``). Paths mount under ``/api/economy`` alongside
@@ -29,11 +29,14 @@ from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_qotd_sponsor_service as sponsor_svc
 from bot_modules.services import economy_rentals_service as rentals_svc
+from bot_modules.core.db_utils import open_db_immediate
 from bot_modules.services.economy_service import (
     apply_credit,
+    get_balance,
     load_econ_settings,
     member_is_booster,
     notify_member,
+    remove_currency,
 )
 from bot_modules.services.economy_stats_service import compute_live, compute_stats
 from web_server.auth import AuthenticatedUser
@@ -138,6 +141,13 @@ class ProgressBody(BaseModel):
 
 
 class GrantBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    member_id: int
+    amount: int = Field(ge=1)
+    reason: str = Field(default="", max_length=300)
+
+
+class RemoveBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     member_id: int
     amount: int = Field(ge=1)
@@ -1283,6 +1293,55 @@ async def grant(
                 multiplier=settings.booster_multiplier,
             )
             return {"ok": True, "credited": credited}
+
+    return await run_query(_q)
+
+
+@router.post("/economy/remove")
+async def remove(
+    request: Request,
+    body: RemoveBody,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """Take currency back off a member — the mirror of ``grant``.
+
+    Clamped at zero: removing more than the wallet holds empties it and
+    reports what actually went, rather than refusing or creating a debt, so
+    ``removed`` can be less than the requested ``amount``. No booster
+    multiplier — a removal takes exactly what was typed.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    # Same phantom-wallet guard as grant: a mistyped snowflake must not write
+    # ledger rows against a nonexistent member. Fails open with no member cache.
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is not None and guild.get_member(body.member_id) is None:
+        raise HTTPException(404, "member not found in this server")
+
+    def _q():
+        # Read-validate-then-write on a money path: the write lock is taken
+        # before the balance read so a concurrent spend can't be clamped
+        # against a stale snapshot.
+        with open_db_immediate(ctx.db_path) as conn:
+            settings = load_econ_settings(conn, guild_id)
+            if not settings.enabled:
+                # Mirror grant: no wallet writes while the economy is off.
+                raise HTTPException(409, "economy disabled")
+            removed = remove_currency(
+                conn,
+                guild_id,
+                body.member_id,
+                body.amount,
+                actor_id=user.user_id,
+                meta={"reason": body.reason, "removed_by": str(user.user_id)},
+            )
+            return {
+                "ok": True,
+                "removed": removed,
+                "requested": body.amount,
+                "balance": get_balance(conn, guild_id, body.member_id),
+            }
 
     return await run_query(_q)
 

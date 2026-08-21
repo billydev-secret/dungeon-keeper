@@ -48,9 +48,10 @@ DEFAULT_BUCKETS: tuple[int, ...] = (0, 1, 10, 50, 100, 250, 500, 1000)
 
 # Negative-amount ledger kinds that are NOT a member spending on something,
 # and so don't count as burn. ``transfer_out`` is sideways — the coins land in
-# another wallet, nothing leaves the economy. ``qa_void`` is a staff clawback:
-# a real removal, but reading it as spending would put someone at the top of a
-# "biggest spenders" board for having had a reward revoked. ``casino_stake``
+# another wallet, nothing leaves the economy. ``qa_void`` and ``admin_remove``
+# are staff clawbacks: a real removal, but reading one as spending would put
+# someone at the top of a "biggest spenders" board for having had a reward
+# revoked (or coins taken off them as a correction or a sanction). ``casino_stake``
 # is gross gambling turnover — a break-even slots player recycles the same
 # coins at ~93% RTP, so counting stakes would rank churn above members who
 # actually sank currency into perks (the status the board exists to reward).
@@ -60,6 +61,7 @@ DEFAULT_BUCKETS: tuple[int, ...] = (0, 1, 10, 50, 100, 250, 500, 1000)
 BURN_EXCLUDED_KINDS: tuple[str, ...] = (
     "transfer_out",
     "qa_void",
+    "admin_remove",
     "casino_stake",
     "tip_out",
 )
