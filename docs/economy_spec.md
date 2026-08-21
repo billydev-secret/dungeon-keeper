@@ -1732,7 +1732,13 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   N (all they had)" when they differ. The clamp is `remove_currency` in
   `economy_service` (`apply_debit` stays all-or-nothing for purchases); the
   route rides `open_db_immediate` so the balance read can't be clamped against
-  a stale snapshot. Every removal writes an `admin_remove` ledger row for the
+  a stale snapshot (and a wallet drained between the read and the debit yields
+  0, never an overstated figure). `admin_remove` joins `qa_void` in
+  `stats.BURN_EXCLUDED_KINDS`: it is a clawback, not spending, so it must not
+  put a member atop the "biggest spenders" board or inflate their `spent_7d`
+  velocity for having had coins taken off them. It is *not* excluded from the
+  pools mint/burn line, where the question is whether currency was destroyed —
+  and it was. Every removal writes an `admin_remove` ledger row for the
   amount actually taken, with the actor and the typed reason — a no-op removal
   from an empty wallet writes nothing at all.
 - **Role customization in v1** happens inside `/bank shop`'s ephemeral panel —
@@ -1893,7 +1899,12 @@ the wallet, and the metrics rollup; they are simply not news. `transfer_in` is
 skipped because a transfer writes two rows for one event: the register posts the
 `transfer_out` leg as a single consolidated "A → B" entry (unsigned, in its own
 neutral colour — the currency moved sideways rather than entering or leaving the
-economy) with the sender's resulting balance.
+economy) with the sender's resulting balance. `admin_remove` (§ manager
+surface) is skipped on a privacy call rather than a noise one: broadcasting "we
+took N coins off <member>" to the whole server is a different act from
+celebrating a grant, and the Operations page's Ledger Audit already records it
+for staff. It keeps its `_KIND_DISPLAY` entry, so the member still sees
+"🧾 Removed by staff" in their own wallet history.
 
 **Anonymous quest payouts are never posted** (fixed 2026-08-02; widened
 2026-08-17). A payout for a quest whose `trigger_kind` is in

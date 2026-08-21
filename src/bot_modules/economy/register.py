@@ -73,6 +73,12 @@ SKIP_KINDS: tuple[str, ...] = (
     # Like transfers, a tip writes both legs; posting only the payer's side
     # keeps one event to one feed entry.
     "tip_in",
+    # A staff removal is a correction or a sanction, not news: broadcasting
+    # "we took N coins off <member>" to the whole server is a different act
+    # from celebrating a grant, and nobody asked for it to be public. It stays
+    # on the Operations page's Ledger Audit, and keeps its ``_KIND_DISPLAY``
+    # entry so the member still sees it in their own /bank wallet history.
+    "admin_remove",
 )
 
 # Per-kind glyph + human label. The label is the fallback memo for kinds whose
@@ -98,6 +104,7 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "cat_catch": ("🐱", "Cat caught"),
     "mention_award": ("🪑", "Mention award"),
     "grant": ("🎁", "Staff grant"),
+    "admin_remove": ("🧾", "Removed by staff"),
     "quest_reroll": ("🔁", "Quest reroll"),
     "qa_reward": ("🧪", "QA testing reward"),
     "streak_shield": ("🛡️", "Streak shield"),

@@ -350,7 +350,12 @@ function wireRemove(container, members) {
       form.querySelector("[name=amount]").focus();
       return;
     }
-    const who = memberName(members, body.member_id);
+    // The picker searches server-side, so the target can be someone the
+    // bounded member page never held — memberName() would then render a raw
+    // snowflake on the one dialog whose job is to catch a wrong target. The
+    // picker's own input carries the label it displayed.
+    const who = memberPicker.getInput().value.trim()
+      || memberName(members, body.member_id);
     if (!(await confirmDialog(
       `Remove ${amount} from ${who}? They keep nothing back — if they hold less, the wallet is emptied.`,
       { confirmLabel: "Remove", danger: true },

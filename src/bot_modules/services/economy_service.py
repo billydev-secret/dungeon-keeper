@@ -554,14 +554,21 @@ def remove_currency(
     multiplier is deliberately never applied: a removal is a correction, not an
     earning, so a booster isn't penalised 1.5x for the same offence. Raises
     ValueError for ``amount < 1``. The read and the debit are not atomic on
-    their own — callers on a money path should ride ``open_db_immediate``.
+    their own — callers on a money path should ride ``open_db_immediate``; a
+    wallet drained in between yields 0, not an overstated figure.
     """
     if amount < 1:
         raise ValueError("remove amount must be >= 1")
     removed = min(amount, get_balance(conn, guild_id, user_id))
     if removed < 1:
         return 0
-    apply_debit(conn, guild_id, user_id, removed, kind, actor_id=actor_id, meta=meta)
+    # The read above and this guarded UPDATE aren't atomic on their own: a
+    # caller not holding the write lock can have the wallet drained in between,
+    # and apply_debit then writes nothing. Report 0, never a phantom removal.
+    if not apply_debit(
+        conn, guild_id, user_id, removed, kind, actor_id=actor_id, meta=meta
+    ):
+        return 0
     live_signal.mark_dirty(guild_id)
     return removed
 

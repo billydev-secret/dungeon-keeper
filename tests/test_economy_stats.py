@@ -540,9 +540,11 @@ def test_burn_leaderboard_empty_and_zero_total():
 
 def test_burn_top_excludes_transfers_and_clawbacks(db):
     _seed(db)
-    # Member 1 transferred 25 out (sideways) and had 40 clawed back by staff;
-    # neither is spending, so member 1 must not appear at all.
+    # Member 1 transferred 25 out (sideways) and had 40 clawed back by staff
+    # twice over — a QA void and a dashboard removal. None of it is spending,
+    # so member 1 must not appear at all.
     _ledger(db, 1, -40, "qa_void", NOW - DAY, actor=99)
+    _ledger(db, 1, -60, "admin_remove", NOW - DAY, actor=99)
     # Member 3 buys two rerolls — a consumable sink, counted.
     _ledger(db, 3, -10, "quest_reroll", NOW - DAY)
     _ledger(db, 3, -10, "quest_reroll", NOW - 2 * DAY)
@@ -572,10 +574,13 @@ def test_spent_7d_counts_every_sink_not_just_rentals(db):
     # the same column (it read kind='rental' only before consumables existed).
     _ledger(db, 2, -10, "quest_reroll", NOW - DAY)
     _ledger(db, 2, -25, "transfer_out", NOW - DAY, meta={"to": 1})
+    # A staff removal is a clawback, not a purchase — it must not inflate the
+    # velocity column any more than a transfer does.
+    _ledger(db, 2, -30, "admin_remove", NOW - DAY, actor=99)
     with open_db(db) as conn:
         out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
     m2 = next(m for m in out["members"] if m["user_id"] == "2")
-    assert m2["spent_7d"] == 28  # 18 rental + 10 reroll, transfer excluded
+    assert m2["spent_7d"] == 28  # 18 rental + 10 reroll; transfer/removal out
 
 
 # ── service: affordability ─────────────────────────────────────────────
