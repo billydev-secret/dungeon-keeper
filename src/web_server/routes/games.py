@@ -56,12 +56,6 @@ class BankBulkBody(BaseModel):
     lines: list[str]
 
 
-class BankImportItem(BaseModel):
-    game_type: str
-    tags: list[str] = []
-    question_text: str
-
-
 class PoolImportBody(BaseModel):
     game_type: str
     question_ids: list[int]

@@ -108,37 +108,9 @@ class MemberSnapshot:
 # ---------------------------------------------------------------------------
 
 
-class RoleGrowthSeries(TypedDict):
-    role: str
-    counts: list[int]
-
-
-class RoleGrowthData(TypedDict):
-    resolution: str
-    window_label: str
-    labels: list[str]
-    series: list[RoleGrowthSeries]
-
-
 # ---------------------------------------------------------------------------
 # Message cadence
 # ---------------------------------------------------------------------------
-
-
-class CadenceBucketDict(TypedDict):
-    label: str
-    min_gap: float
-    p20_gap: float
-    median_gap: float
-    p80_gap: float
-    max_gap: float
-
-
-class MessageCadenceData(TypedDict):
-    resolution: str
-    window_label: str
-    channel_id: str | None
-    buckets: list[CadenceBucketDict]
 
 
 # ---------------------------------------------------------------------------
@@ -234,13 +206,6 @@ def get_nsfw_gender_data(
 # ---------------------------------------------------------------------------
 # Message rate (10-min buckets over 24h)
 # ---------------------------------------------------------------------------
-
-
-class MessageRateData(TypedDict):
-    days: int
-    tz_label: str
-    buckets: list[int]
-    avg_per_day: list[float]
 
 
 # ---------------------------------------------------------------------------
@@ -1308,63 +1273,14 @@ def get_xp_leaderboard_data(
 # ---------------------------------------------------------------------------
 
 
-class EmojiRow(TypedDict):
-    emoji: str
-    total_count: int
-
-
-class ReactionUserRow(TypedDict):
-    user_id: str
-    user_name: str
-    given: int
-    received: int
-
-
-class ReactionAnalyticsData(TypedDict):
-    top_emoji: list[EmojiRow]
-    top_givers: list[ReactionUserRow]
-    top_receivers: list[ReactionUserRow]
-    total_reactions: int
-
-
 # ---------------------------------------------------------------------------
 # Message rate drops
 # ---------------------------------------------------------------------------
 
 
-class RateDropEntry(TypedDict):
-    user_id: str
-    user_name: str
-    prev_count: int
-    recent_count: int
-    drop_pct: float
-    adjusted_drop_pct: float
-
-
-class MessageRateDropsData(TypedDict):
-    period_days: int
-    server_prev: int
-    server_recent: int
-    server_drop_pct: float
-    entries: list[RateDropEntry]
-
-
 # ---------------------------------------------------------------------------
 # Burst ranking
 # ---------------------------------------------------------------------------
-
-
-class BurstEntry(TypedDict):
-    user_id: str
-    user_name: str
-    pre_avg: float
-    post_avg: float
-    increase: float
-    sessions: int
-
-
-class BurstRankingData(TypedDict):
-    entries: list[BurstEntry]
 
 
 # ---------------------------------------------------------------------------

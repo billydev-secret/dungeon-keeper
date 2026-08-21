@@ -31,7 +31,6 @@ from bot_modules.services.economy_service import (
     apply_debit,
     get_balance,
 )
-from bot_modules.services.economy_submission_store import list_rows
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
@@ -463,12 +462,6 @@ def open_board_count(conn: sqlite3.Connection, guild_id: int) -> int:
         (guild_id,),
     ).fetchone()
     return int(row["n"])
-
-
-def list_bounties(
-    conn: sqlite3.Connection, guild_id: int, state: str | None = None, limit: int = 100
-) -> list[sqlite3.Row]:
-    return list_rows(conn, "econ_bounties", guild_id, state, limit)
 
 
 def set_bounty_card(

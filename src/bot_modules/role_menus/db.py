@@ -203,13 +203,6 @@ def list_options_bulk(
     return out
 
 
-def get_option(conn: sqlite3.Connection, option_id: int) -> dict | None:
-    r = conn.execute(
-        "SELECT * FROM role_menu_options WHERE id = ?", (option_id,)
-    ).fetchone()
-    return _option_row(r) if r else None
-
-
 def replace_options(
     conn: sqlite3.Connection, menu_id: int, options: list[dict], now: float
 ) -> None:

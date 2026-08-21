@@ -123,20 +123,6 @@ async def fetch_sweepable_games(db: GamesDb, now: float) -> list[PressureGame]:
     return [game_from_row(r) for r in rows]
 
 
-async def get_pending_game_for_target(
-    db: GamesDb, guild_id: int, user_id: int
-) -> PressureGame | None:
-    row = await db.fetchone(
-        """
-        SELECT * FROM pressure_games
-        WHERE guild_id = ? AND target_id = ? AND state = 'PENDING'
-        ORDER BY created_at DESC LIMIT 1
-        """,
-        (guild_id, user_id),
-    )
-    return game_from_row(row) if row else None
-
-
 # ── Nicks (shim → duels/db) ───────────────────────────────────────────────────
 
 async def apply_nick(

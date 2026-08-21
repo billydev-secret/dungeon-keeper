@@ -55,15 +55,6 @@ class ChannelMeta(BaseModel):
 # ── Role growth ──────────────────────────────────────────────────────────
 
 
-class CadenceBucketSchema(BaseModel):
-    label: str
-    min_gap: float
-    p20_gap: float
-    median_gap: float
-    p80_gap: float
-    max_gap: float
-
-
 class JoinTimesResponse(BaseModel):
     resolution: str
     labels: list[str]
@@ -381,36 +372,6 @@ class XpLeaderboardResponse(BaseModel):
 
 
 # ── Reaction analytics ─────────────────────────────────────────────────
-
-
-class EmojiRowSchema(BaseModel):
-    emoji: str
-    total_count: int
-
-
-class ReactionUserRowSchema(BaseModel):
-    user_id: str
-    user_name: str = ""
-    given: int
-    received: int
-
-
-class RateDropEntrySchema(BaseModel):
-    user_id: str
-    user_name: str = ""
-    prev_count: int
-    recent_count: int
-    drop_pct: float
-    adjusted_drop_pct: float
-
-
-class BurstEntrySchema(BaseModel):
-    user_id: str
-    user_name: str = ""
-    pre_avg: float
-    post_avg: float
-    increase: float
-    sessions: int
 
 
 class ChannelRowSchema(BaseModel):
@@ -801,31 +762,6 @@ class ModerationStatsResponse(BaseModel):
 # ── Animated interaction heatmap ────────────────────────────────────────
 
 
-class ChillingVictim(BaseModel):
-    user_id: str
-    user_name: str = ""
-    last_message_ts: int
-    last_message_preview: str = ""
-
-
-class ChillingEvent(BaseModel):
-    channel_id: str
-    channel_name: str = ""
-    entry_ts: int
-    entry_user_id: str
-    entry_user_name: str = ""
-    entry_preview: str = ""
-    victims: list[ChillingVictim]
-
-
-class ChillingPersonRanked(BaseModel):
-    user_id: str
-    user_name: str = ""
-    silence_count: int
-    total_victims: int
-    sample_events: list[ChillingEvent]
-
-
 class MemberRowSchema(BaseModel):
     user_id: str
     display_name: str = ""
@@ -865,20 +801,6 @@ class GrantAuditResponse(BaseModel):
 
 
 # ── Welcome / leave preview ────────────────────────────────────────────
-
-
-class EmbedPreview(BaseModel):
-    title: str = ""
-    description: str = ""
-    color: int | None = None
-    thumbnail_url: str | None = None
-    footer: str = ""
-
-
-class WelcomePreviewResponse(BaseModel):
-    welcome: EmbedPreview
-    leave: EmbedPreview
-    sample_user_name: str = ""
 
 
 # ── Gender ─────────────────────────────────────────────────────────────

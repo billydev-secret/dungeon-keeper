@@ -210,13 +210,6 @@ async def update_game_payload(db, game_id: str, payload: dict):
     )
 
 
-async def update_game_host(db, game_id: str, new_host_id: int):
-    await db.execute(
-        "UPDATE games_active_games SET host_id = ? WHERE game_id = ?",
-        (new_host_id, game_id),
-    )
-
-
 async def get_game_payload(db, game_id: str) -> dict:
     row = await db.fetchone(
         "SELECT payload FROM games_active_games WHERE game_id = ?", (game_id,)
@@ -442,10 +435,6 @@ async def force_end_active_game(bot, db, game_id: str) -> None:
         player_count=len(players), round_count=rounds, payload=payload,
         bot=bot, player_ids=players,
     )
-
-
-async def get_all_active_games(db) -> list:
-    return await db.fetchall("SELECT * FROM games_active_games")
 
 
 async def is_game_expired(db, game_id: str, max_seconds: int = 86400) -> bool:

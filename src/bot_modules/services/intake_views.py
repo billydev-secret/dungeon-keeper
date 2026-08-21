@@ -201,10 +201,6 @@ def _is_mod(ctx: AppContext, member: discord.Member) -> bool:
     )
 
 
-def _is_greeter(member: discord.Member, greeter_role_id: int) -> bool:
-    return greeter_role_id > 0 and any(r.id == greeter_role_id for r in member.roles)
-
-
 # ---------------------------------------------------------------------------
 # Rendering helpers
 # ---------------------------------------------------------------------------

@@ -1,6 +1,4 @@
-import json
 import logging
-import uuid
 
 import discord
 
@@ -222,59 +220,3 @@ class ClassicRescueFillView(discord.ui.View):
         await self._on_cancel(interaction)
 
 
-class ReportView(discord.ui.View):
-    """Persistent view attached to reveal output so players can flag bad content."""
-
-    def __init__(self, db, game_id: str, snapshot: dict):
-        super().__init__(timeout=None)
-        self.db = db
-        self.game_id = game_id
-        # snapshot = {"title": str, "body": str, "reveals": [(name, fills_dict, filled_body), ...]}
-        self.snapshot = snapshot
-
-    @discord.ui.button(label="⚠️ Report", style=discord.ButtonStyle.secondary)
-    async def report(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        await interaction.response.send_modal(_ReportModal(self.db, self.game_id, self.snapshot))
-
-
-class _ReportModal(discord.ui.Modal):
-    reason = discord.ui.TextInput(
-        label="What's wrong? (optional)",
-        style=discord.TextStyle.paragraph,
-        required=False,
-        max_length=500,
-        placeholder="e.g. targeted harassment, slur, real-world PII…",
-    )
-
-    def __init__(self, db, game_id: str, snapshot: dict):
-        super().__init__(title="Report This Round")
-        self.db = db
-        self.game_id = game_id
-        self.snapshot = snapshot
-
-    async def on_submit(self, interaction: discord.Interaction):
-        report_id = str(uuid.uuid4())
-        content = json.dumps({
-            "title": self.snapshot.get("title"),
-            "body": self.snapshot.get("body"),
-            "reveals": [
-                {"name": name, "fills": fills, "filled": filled}
-                for name, fills, filled in self.snapshot.get("reveals", [])
-            ],
-            "reason": str(self.reason.value or "").strip(),
-        })
-        try:
-            await self.db.execute(
-                "INSERT INTO legitlibs_reports (report_id, game_id, submission_content, reporter_id) VALUES (?, ?, ?, ?)",
-                (report_id, self.game_id, content, interaction.user.id),
-            )
-            log.info("%s filed LegitLibs report %s for game %s", interaction.user.display_name, report_id, self.game_id)
-            await interaction.response.send_message(
-                "🛡️ Thanks — mods will review this round.", ephemeral=True
-            )
-        except Exception as e:
-            log.exception("Failed to store LegitLibs report: %s", e)
-            await interaction.response.send_message(
-                "Couldn't file that report — please ping a mod directly.", ephemeral=True
-            )

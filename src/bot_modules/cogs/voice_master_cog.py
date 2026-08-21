@@ -100,7 +100,7 @@ from bot_modules.voice_master.logic import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.voice_master")
 
@@ -108,11 +108,6 @@ log = logging.getLogger("dungeonkeeper.voice_master")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _admin_only(ctx: AppContext, interaction: discord.Interaction) -> bool:
-    """True if the interaction's user passes the admin gate."""
-    return ctx.is_admin(interaction)
 
 
 # ---------------------------------------------------------------------------

@@ -53,11 +53,6 @@ def get_doc(conn: sqlite3.Connection, guild_id: int, doc_key: str) -> dict | Non
     return _doc_row(r) if r else None
 
 
-def get_doc_by_id(conn: sqlite3.Connection, doc_id: int) -> dict | None:
-    r = conn.execute("SELECT * FROM docs WHERE id = ?", (doc_id,)).fetchone()
-    return _doc_row(r) if r else None
-
-
 def create_doc(
     conn: sqlite3.Connection,
     guild_id: int,
