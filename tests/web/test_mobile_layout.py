@@ -545,3 +545,107 @@ def test_survivor_live_season_fits_on_phone(dashboard, browser):
         "week stub shape drift?"
     )
     _assert_fits(res, "Survivor live-season panel")
+
+
+# Anonymised realistic shapes — ids are fake, names are the test-suite's stock
+# ones. 15 rows: 3 completed, 1 missed, 11 pending, like a lived-in list.
+_TODO_STUB = {
+    "pending_count": 11,
+    "completed_count": 3,
+    "missed_count": 1,
+    "todos": [
+        {
+            "id": i + 1,
+            "added_by": "1469491362444480666",
+            "added_by_name": "Billy",
+            "task": f"Sample outstanding task {i + 1} with enough words to fill its row",
+            "description": None,
+            "source_message_url": None,
+            "created_at": 1700000000,
+            "completed_at": 1700000500 if i < 3 else None,
+            "completed_by": "1469491362444480666" if i < 3 else None,
+            "completed_by_name": "Billy" if i < 3 else "",
+            "recurring_id": None,
+            "missed_at": 1700000900 if i == 3 else None,
+        }
+        for i in range(15)
+    ],
+    "board": {"kind": "all", "channel_id": "0", "message_id": "0",
+              "posted": False, "updated_at": 0},
+    "chore_board": {"kind": "chores", "channel_id": "0", "message_id": "0",
+                    "posted": False, "updated_at": 0},
+    "can_manage_board": True,
+}
+
+
+def test_todo_panel_populated_flows_top_to_bottom(dashboard, browser):
+    """A populated todo list must not collapse the tasks split.
+
+    ``.panel`` is a column flex container, and ``.mod-split`` was its one fully
+    shrinkable child (its panes carry ``min-height: 0`` and scroll internally).
+    On the one split panel with content *below* the split — mod-todo's add form
+    and three board cards — the flex algorithm crushed the split to ~0 height
+    and the panes painted over everything after it. All three audit signals
+    measure *width*, so a vertical pile-up scored clean.
+
+    The collapsed section still kept a small non-overlapping rect of its own —
+    only its panes' *content* spilled past it — so the check is on the pane
+    content boxes (list head, list, detail head/body) against the add form
+    below, not on the section rects. Those boxes are the scroll containers
+    themselves, whose rects never extend past their clip, so a healthy panel
+    with a scrolled task list can't false-positive here.
+    """
+    import json
+
+    for vp in ("desktop", "phone"):
+        context = browser.new_context(
+            viewport={"width": VIEWPORTS[vp], "height": 900}
+        )
+        try:
+            page = context.new_page()
+            page.route(
+                "**/api/todos",
+                lambda route: route.fulfill(
+                    status=200, content_type="application/json",
+                    body=json.dumps(_TODO_STUB),
+                ),
+            )
+            _goto_panel(page, f"{dashboard.base}/#/mod-todo")
+            page.wait_for_selector(".ticket-item", timeout=15_000)
+            _settle(page)
+            rows = page.evaluate(
+                "() => document.querySelectorAll('.ticket-item').length"
+            )
+            overlaps = page.evaluate(
+                """() => {
+                  const out = [];
+                  const formTop = document.querySelector('.todo-add')
+                    .getBoundingClientRect().top;
+                  for (const sel of ['.ticket-list-head', '.ticket-list',
+                                     '.td-head', '.td-body']) {
+                    const el = document.querySelector(sel);
+                    if (!el) continue;
+                    const b = el.getBoundingClientRect().bottom;
+                    if (formTop < b - 1) {
+                      out.push(`${sel} (bottom ${Math.round(b)}) overlaps the `
+                        + `add form (top ${Math.round(formTop)})`);
+                    }
+                  }
+                  const split = document.querySelector('.mod-split')
+                    .getBoundingClientRect();
+                  if (split.height < 200) {
+                    out.push(`.mod-split collapsed to ${Math.round(split.height)}px`
+                      + ' — 11 task rows need far more than that');
+                  }
+                  return out;
+                }"""
+            )
+            res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+        finally:
+            context.close()
+        assert rows == 11, (
+            f"[{vp}] expected the 11 pending stub rows, got {rows} — did the "
+            "/api/todos stub shape drift?"
+        )
+        assert not overlaps, f"[{vp}] panel sections overlap:\n" + "\n".join(overlaps)
+        _assert_fits(res, f"Todo panel ({vp})")
