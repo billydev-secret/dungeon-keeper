@@ -6,9 +6,28 @@ import asyncio
 import os
 
 import discord
+from fastapi import HTTPException
 
 from bot_modules.services.embeds import build_admin_mirror_embed
 from bot_modules.services.message_store import get_known_users_bulk
+
+
+def parse_time_of_day(raw: str, *, field: str = "time") -> int:
+    """Parse ``'HH:MM'`` into minutes since local midnight (0..1439).
+
+    Three scheduling panels take a time-of-day off a form and store it as a
+    minute offset — announcements, the photo challenge, and scheduled games.
+    ``field`` names the offending input in the 400 so the dashboard can point
+    at the right box; everything else about the answer is the same.
+    """
+    try:
+        hh, mm = raw.split(":")
+        minutes = int(hh) * 60 + int(mm)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"{field} must be 'HH:MM'")
+    if not 0 <= minutes < 24 * 60:
+        raise HTTPException(status_code=400, detail=f"{field} out of range")
+    return minutes
 
 
 async def mirror_admin_action_to_mod_log(

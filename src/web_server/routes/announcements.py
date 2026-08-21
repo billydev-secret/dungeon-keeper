@@ -41,6 +41,7 @@ from bot_modules.services.announcements_service import (
 from bot_modules.services.branding_service import DEFAULT_ACCENT
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from web_server.helpers import parse_time_of_day
 
 log = logging.getLogger("dungeonkeeper.web.announcements")
 
@@ -83,18 +84,6 @@ class AnnouncementBody(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _parse_time_of_day(raw: str) -> int:
-    """Parse 'HH:MM' into minutes since local midnight (0..1439)."""
-    try:
-        hh, mm = raw.split(":")
-        minutes = int(hh) * 60 + int(mm)
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="post_time must be 'HH:MM'")
-    if not 0 <= minutes < 24 * 60:
-        raise HTTPException(status_code=400, detail="post_time out of range")
-    return minutes
-
-
 def _validate(body: AnnouncementBody) -> dict:
     """Validate body shape; return normalized column values (sans post_at)."""
     try:
@@ -129,7 +118,7 @@ def _validate(body: AnnouncementBody) -> dict:
     post_time_min: int | None = None
     post_date: str | None = None
     if body.post_date is not None:
-        post_time_min = _parse_time_of_day(body.post_time or "")
+        post_time_min = parse_time_of_day(body.post_time or "", field="post_time")
         try:
             time.strptime(body.post_date, "%Y-%m-%d")
         except ValueError:

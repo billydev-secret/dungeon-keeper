@@ -35,6 +35,7 @@ from bot_modules.services.scheduled_games_service import (
 )
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, run_query
+from web_server.helpers import parse_time_of_day
 
 log = logging.getLogger("dungeonkeeper.photo_challenge")
 
@@ -60,23 +61,11 @@ class ScheduleBody(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _parse_time_of_day(raw: str) -> int:
-    """Parse 'HH:MM' into minutes since local midnight (0..1439)."""
-    try:
-        hh, mm = raw.split(":")
-        minutes = int(hh) * 60 + int(mm)
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="time must be 'HH:MM'")
-    if not 0 <= minutes < 24 * 60:
-        raise HTTPException(status_code=400, detail="time out of range")
-    return minutes
-
-
 def _validate_schedule(body: ScheduleBody) -> tuple[int, str | None]:
     """Validate schedule body; return (time_of_day_min, recur_days_json)."""
     if body.recurrence not in VALID_RECURRENCE:
         raise HTTPException(status_code=400, detail=f"Invalid recurrence: {body.recurrence}")
-    tod = _parse_time_of_day(body.time)
+    tod = parse_time_of_day(body.time)
     recur_days_json: str | None = None
     if body.recurrence == "weekly":
         days = sorted({int(d) for d in (body.recur_days or []) if 0 <= int(d) <= 6})
