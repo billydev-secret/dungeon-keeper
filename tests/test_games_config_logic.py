@@ -33,8 +33,8 @@ from bot_modules.games_config.logic import (
     describe_force_end,
     format_allowed_channels,
     has_admin_permissions,
-    has_mod_or_admin_permissions,
 )
+from bot_modules.core.utils import has_mod_or_admin_permissions
 
 
 # ── format_allowed_channels ──────────────────────────────────────────

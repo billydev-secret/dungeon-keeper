@@ -19,15 +19,23 @@ def parse_time_of_day(raw: str, *, field: str = "time") -> int:
     minute offset — announcements, the photo challenge, and scheduled games.
     ``field`` names the offending input in the 400 so the dashboard can point
     at the right box; everything else about the answer is the same.
+
+    Both components are range-checked, not just the total. The three copies
+    this replaces checked only the total, so "10:75" was accepted and quietly
+    stored as 11:15 — an admin who typoed a post time got a success toast and
+    a job that fired 75 minutes off, with nothing anywhere to explain it. The
+    dashboard's own ``<input type="time">`` can't produce that, so this only
+    changes what a hand-rolled API call gets: a 400 instead of a silent
+    reinterpretation.
     """
     try:
         hh, mm = raw.split(":")
-        minutes = int(hh) * 60 + int(mm)
+        hours, mins = int(hh), int(mm)
     except (ValueError, AttributeError):
         raise HTTPException(status_code=400, detail=f"{field} must be 'HH:MM'")
-    if not 0 <= minutes < 24 * 60:
+    if not (0 <= hours < 24 and 0 <= mins < 60):
         raise HTTPException(status_code=400, detail=f"{field} out of range")
-    return minutes
+    return hours * 60 + mins
 
 
 async def mirror_admin_action_to_mod_log(

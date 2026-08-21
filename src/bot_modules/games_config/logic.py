@@ -110,21 +110,6 @@ def has_admin_permissions(perms: Any) -> bool:
     return bool(getattr(perms, "administrator", False))
 
 
-def has_mod_or_admin_permissions(perms: Any) -> bool:
-    """Return True if perms grant admin, manage_guild, or manage_channels.
-
-    Matches the cog's ``is_mod_or_admin`` rule: any one of the three
-    elevated perms qualifies a user to run mod-tier game commands.
-    """
-    if not perms:
-        return False
-    return bool(
-        getattr(perms, "administrator", False)
-        or getattr(perms, "manage_guild", False)
-        or getattr(perms, "manage_channels", False)
-    )
-
-
 def channel_ids_from_rows(rows: Iterable[Sequence[Any]]) -> list[int]:
     """Project a sequence of channel-id rows down to a plain int list.
 

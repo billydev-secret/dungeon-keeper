@@ -2226,7 +2226,6 @@ class WhisperCog(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.bot.ctx = bot.ctx
         self._launcher_locks: dict[int, asyncio.Lock] = {}
         self._pending_refresh: set[int] = set()
         self._last_send_at: dict[int, float] = {}  # sender_id -> ts

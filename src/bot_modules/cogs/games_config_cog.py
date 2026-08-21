@@ -13,8 +13,8 @@ from bot_modules.games_config.embeds import (
     build_force_end_embed,
     build_game_status_embed,
 )
-from bot_modules.games_config.logic import has_mod_or_admin_permissions
-from bot_modules.core.utils import is_mod_or_admin
+
+from bot_modules.core.utils import has_mod_or_admin_permissions, is_mod_or_admin
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games.command_groups import games
 from bot_modules.games.utils.game_manager import (

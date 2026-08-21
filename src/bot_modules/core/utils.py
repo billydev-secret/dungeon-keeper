@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 import discord
 from discord import app_commands
-
-from bot_modules.games_config.logic import has_mod_or_admin_permissions
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +68,21 @@ def is_host_or_mod(interaction: discord.Interaction, host_id: int) -> bool:
         perms = interaction.user.guild_permissions
         return perms.administrator or perms.manage_guild
     return False
+
+
+def has_mod_or_admin_permissions(perms: Any) -> bool:
+    """Return True if perms grant admin, manage_guild, or manage_channels.
+
+    Matches the cog's ``is_mod_or_admin`` rule: any one of the three
+    elevated perms qualifies a user to run mod-tier game commands.
+    """
+    if not perms:
+        return False
+    return bool(
+        getattr(perms, "administrator", False)
+        or getattr(perms, "manage_guild", False)
+        or getattr(perms, "manage_channels", False)
+    )
 
 
 def is_mod_or_admin():
