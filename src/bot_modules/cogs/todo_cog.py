@@ -42,7 +42,6 @@ from bot_modules.todo.board_logic import (
     render_rows,
     tickable_chores,
 )
-from bot_modules.core.utils import has_mod_or_admin_permissions
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
