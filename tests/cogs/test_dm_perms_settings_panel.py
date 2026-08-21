@@ -40,7 +40,7 @@ def _member(user_id: int = 1, *, roles=None) -> MagicMock:
 
 def _cog(*, mutual: bool = False) -> MagicMock:
     cog = MagicMock()
-    cog.ctx.db_path = ":memory:"
+    cog.bot.ctx.db_path = ":memory:"
     cog._mode_roles_for.return_value = {}
     cog._is_mutual.return_value = mutual
     cog.revoke_connection = AsyncMock(return_value=True)

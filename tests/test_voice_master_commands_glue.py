@@ -1109,7 +1109,7 @@ def test_panel_ids_track_where_the_panel_actually_is(ctx):
     )
 
     cog = VoiceMasterCog.__new__(VoiceMasterCog)
-    cog.ctx = ctx
+    cog.bot = SimpleNamespace(ctx=ctx)
 
     assert cog._panel_ids(GUILD) == (0, 0)  # nothing posted yet
 

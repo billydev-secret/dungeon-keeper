@@ -53,7 +53,7 @@ from bot_modules.services.advisor_service import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger(__name__)
 
@@ -217,9 +217,8 @@ class _ApplyConfigView(discord.ui.View):
 
 
 class AdvisorCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     @app_commands.command(
@@ -239,7 +238,7 @@ class AdvisorCog(commands.Cog):
         tools: AdvisorTools | None = None
         proposals: list[ConfigProposal] = []
         if guild is not None:
-            db_path = self.ctx.db_path
+            db_path = self.bot.ctx.db_path
             member = (
                 interaction.user
                 if isinstance(interaction.user, discord.Member)
@@ -270,7 +269,7 @@ class AdvisorCog(commands.Cog):
             answer = answer[:_MAX_DESC].rstrip() + "…"
 
         color = (
-            await safe_resolve_accent(self.ctx, interaction.guild, log_label="advisor")
+            await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="advisor")
             if interaction.guild
             else None
         )
@@ -285,7 +284,7 @@ class AdvisorCog(commands.Cog):
         if proposals and guild is not None:
             _proposal_fields(embed, proposals)
         view = (
-            _ApplyConfigView(self.ctx.db_path, guild, proposals)
+            _ApplyConfigView(self.bot.ctx.db_path, guild, proposals)
             if proposals and guild is not None
             else discord.utils.MISSING
         )
@@ -307,4 +306,4 @@ class AdvisorCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(AdvisorCog(bot, bot.ctx))
+    await bot.add_cog(AdvisorCog(bot))

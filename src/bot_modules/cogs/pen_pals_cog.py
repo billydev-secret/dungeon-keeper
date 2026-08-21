@@ -23,7 +23,7 @@ from bot_modules.games.utils.question_source import _pick_least_recently_served
 from bot_modules.services.no_contact_service import is_no_contact_conn
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.pen_pals")
 
@@ -2367,9 +2367,8 @@ class PenPalsCog(commands.Cog):
         description="Pen Pals — get matched with someone for a private chat.",
     )
 
-    def __init__(self, bot: "Bot", ctx: "AppContext") -> None:
+    def __init__(self, bot: "Bot") -> None:
         self.bot = bot
-        self.ctx = ctx
         self._panel_channels: dict[int, int] = {}  # panel_channel_id → guild_id
         self.panel = StickyPanel(
             "pen pals",
@@ -2386,24 +2385,24 @@ class PenPalsCog(commands.Cog):
     # ── panel plumbing (core.sticky) ─────────────────────────────────────
 
     def _panel_ids(self, guild_id: int) -> tuple[int, int]:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             cfg = _get_config(conn, guild_id)
         if cfg is None:
             return 0, 0
         return int(cfg["panel_channel_id"] or 0), int(cfg["panel_message_id"] or 0)
 
     def _save_panel_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             _set_panel_message_id(conn, guild_id, message_id)
 
     async def _build_panel(self, guild: discord.Guild) -> PanelContent:
         def _load():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 cfg = _get_config(conn, guild.id)
                 return cfg, len(_get_pool(conn, guild.id))
 
         cfg, pool_size = await asyncio.to_thread(_load)
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="pen pals")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="pen pals")
         mode = _normalize_match_mode(
             cfg["match_mode"] if cfg is not None and "match_mode" in cfg.keys() else None
         )
@@ -2424,7 +2423,7 @@ class PenPalsCog(commands.Cog):
 
     async def cog_load(self) -> None:
         bot = self.bot
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
 
         bot.add_dynamic_items(_PenPalsPanelJoinButton)
         bot.add_dynamic_items(_PenPalsPanelLeaveButton)
@@ -2452,7 +2451,7 @@ class PenPalsCog(commands.Cog):
     async def _on_member_remove(self, member: discord.Member) -> None:
         """A member left / was kicked or banned. If they were mid-session,
         tear it down and re-queue their partner; if only pooled, drop them."""
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
         guild_id = member.guild.id
 
         def _lookup():
@@ -2485,7 +2484,7 @@ class PenPalsCog(commands.Cog):
         if not isinstance(channel, discord.TextChannel):
             return
         await self.panel.on_channel_delete(channel)
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
 
         def _lookup():
             with open_db(db_path) as conn:
@@ -2514,7 +2513,7 @@ class PenPalsCog(commands.Cog):
                     pass
 
             def _clear():
-                with open_db(self.ctx.db_path) as conn:
+                with open_db(self.bot.ctx.db_path) as conn:
                     _set_panel_message_id(conn, guild_id, 0)
 
             await asyncio.to_thread(_clear)
@@ -2530,7 +2529,7 @@ class PenPalsCog(commands.Cog):
 
     @penpals.command(name="join", description="Get matched with a pen pal now, or wait for the next person to join.")
     async def penpals_join(self, interaction: discord.Interaction) -> None:
-        await _handle_join(interaction, self.ctx.db_path, source="command")
+        await _handle_join(interaction, self.bot.ctx.db_path, source="command")
 
     # ── /penpals leave ────────────────────────────────────────────────
 
@@ -2539,7 +2538,7 @@ class PenPalsCog(commands.Cog):
         description="Leave the Pen Pals pool — works mid-chat, and holds until you rejoin.",
     )
     async def penpals_leave(self, interaction: discord.Interaction) -> None:
-        await _handle_leave(interaction, self.ctx.db_path, source="command")
+        await _handle_leave(interaction, self.bot.ctx.db_path, source="command")
 
     # ── /penpals block ────────────────────────────────────────────────
 
@@ -2548,7 +2547,7 @@ class PenPalsCog(commands.Cog):
         description="Manage who Pen Pals should never match you with.",
     )
     async def penpals_block(self, interaction: discord.Interaction) -> None:
-        await _handle_block(interaction, self.ctx.db_path)
+        await _handle_block(interaction, self.bot.ctx.db_path)
 
     # ── /penpals status ───────────────────────────────────────────────
 
@@ -2560,7 +2559,7 @@ class PenPalsCog(commands.Cog):
 
         guild_id = interaction.guild.id
         user_id = interaction.user.id
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
 
         def _check():
             with open_db(db_path) as conn:
@@ -2635,7 +2634,7 @@ class PenPalsCog(commands.Cog):
             await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
 
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
         if interaction.channel_id is None:
             await interaction.response.send_message("❌ This command only works in an active pen pal channel.", ephemeral=True)
             return
@@ -2703,7 +2702,7 @@ class PenPalsCog(commands.Cog):
             await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
 
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
         user_id = interaction.user.id
         if interaction.channel_id is None:
             await interaction.response.send_message("❌ This command only works in your active pen pal channel.", ephemeral=True)
@@ -2758,7 +2757,7 @@ class PenPalsCog(commands.Cog):
             await interaction.response.send_message("❌ You can't pair someone with themselves.", ephemeral=True)
             return
 
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
         guild_id = interaction.guild.id
 
         def _check() -> str:
@@ -2810,7 +2809,7 @@ class PenPalsCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        pairs, left = await _do_round(self.bot, self.ctx.db_path, interaction.guild.id)
+        pairs, left = await _do_round(self.bot, self.bot.ctx.db_path, interaction.guild.id)
         msg = f"✅ Paired **{pairs}** {'pair' if pairs == 1 else 'pairs'}."
         if left:
             msg += f" **{left}** member{'s' if left != 1 else ''} still in the pool (waiting or on cooldown)."
@@ -2820,4 +2819,4 @@ class PenPalsCog(commands.Cog):
 
 
 async def setup(bot: "Bot") -> None:
-    await bot.add_cog(PenPalsCog(bot, bot.ctx))
+    await bot.add_cog(PenPalsCog(bot))

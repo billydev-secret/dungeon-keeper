@@ -18,7 +18,7 @@ from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.bump_tracker")
 
@@ -427,14 +427,13 @@ class BumpTrackerCog(commands.Cog):
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
         bot = self.bot
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
         self.bot.startup_task_factories.append(lambda: _bump_tracker_loop(bot, db_path))
 
     # ── autocomplete ──────────────────────────────────────────────────────
@@ -448,7 +447,7 @@ class BumpTrackerCog(commands.Cog):
         guild_id = interaction.guild.id
 
         def _q():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 return _list_sites(conn, guild_id)
 
         rows = await asyncio.to_thread(_q)
@@ -474,7 +473,7 @@ class BumpTrackerCog(commands.Cog):
         invoker_id = interaction.user.id
 
         def _load():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 sites = [r["site_name"] for r in _list_sites(conn, guild_id)]
                 if name not in sites:
                     return None, None
@@ -515,7 +514,7 @@ class BumpTrackerCog(commands.Cog):
             )
             for r in log_rows
         ]
-        await _refresh_widget(self.bot, self.ctx.db_path, dict(cfg), statuses, {}, force_resend=False)
+        await _refresh_widget(self.bot, self.bot.ctx.db_path, dict(cfg), statuses, {}, force_resend=False)
 
     # ── /bump status ──────────────────────────────────────────────────────
 
@@ -525,7 +524,7 @@ class BumpTrackerCog(commands.Cog):
         guild_id = interaction.guild.id
 
         def _q():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 return _get_all_logs(conn, guild_id)
 
         log_rows = await asyncio.to_thread(_q)
@@ -544,7 +543,7 @@ class BumpTrackerCog(commands.Cog):
             )
             for r in log_rows
         ]
-        accent = await safe_resolve_accent(self.ctx, interaction.guild, log_label="bump tracker")
+        accent = await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="bump tracker")
         embed = _build_widget_embed(statuses, color=accent)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -560,7 +559,7 @@ class BumpTrackerCog(commands.Cog):
         guild_id = message.guild.id
 
         def _load():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 cfg = _get_config(conn, guild_id)
                 if cfg is None or not cfg["enabled"] or not cfg["channel_id"]:
                     return None, []
@@ -604,7 +603,7 @@ class BumpTrackerCog(commands.Cog):
         bumper_id = meta.user.id if meta is not None else 0
 
         def _do_log():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 _log_bump(conn, guild_id, matched_site, bumper_id)
                 logs = _get_all_logs(conn, guild_id)
                 return logs
@@ -632,8 +631,8 @@ class BumpTrackerCog(commands.Cog):
             )
             for r in log_rows
         ]
-        await _refresh_widget(self.bot, self.ctx.db_path, dict(cfg), statuses, {}, force_resend=True)
+        await _refresh_widget(self.bot, self.bot.ctx.db_path, dict(cfg), statuses, {}, force_resend=True)
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(BumpTrackerCog(bot, bot.ctx))
+    await bot.add_cog(BumpTrackerCog(bot))

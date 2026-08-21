@@ -64,7 +64,7 @@ from bot_modules.services.confessions_service import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
     from bot_modules.services.confessions_service import GuildConfig
 
 log = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         assert interaction.guild and interaction.user
-        db_path = self.cog.ctx.db_path
+        db_path = self.cog.bot.ctx.db_path
         cfg = get_config(db_path, interaction.guild.id)
         if not cfg:
             await _safe_ephemeral(interaction, ERROR_NOT_CONFIGURED)
@@ -216,7 +216,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
         except discord.HTTPException:
             return
 
-        accent = await safe_resolve_accent(self.cog.ctx, interaction.guild, log_label="confessions", default=DEFAULT_ACCENT_COLOR)
+        accent = await safe_resolve_accent(self.cog.bot.ctx, interaction.guild, log_label="confessions", default=DEFAULT_ACCENT_COLOR)
         confession_embed = build_confession_embed(content, color=accent)
 
         if isinstance(dest_channel, discord.ForumChannel):
@@ -345,7 +345,7 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         assert interaction.guild and interaction.user
-        db_path = self.cog.ctx.db_path
+        db_path = self.cog.bot.ctx.db_path
         cfg = get_config(db_path, interaction.guild.id)
         if not cfg:
             await _safe_ephemeral(interaction, "❌ Bot is not configured.")
@@ -570,14 +570,13 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
 # ---------------------------------------------------------------------------
 
 class ConfessionsCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         self._launcher_locks: dict[int, asyncio.Lock] = {}
         super().__init__()
 
     async def cog_load(self) -> None:
-        init_db(self.ctx.db_path)
+        init_db(self.bot.ctx.db_path)
         self._cleanup_loop.start()
 
     async def cog_unload(self) -> None:
@@ -588,7 +587,7 @@ class ConfessionsCog(commands.Cog):
     @tasks.loop(hours=1)
     async def _cleanup_loop(self) -> None:
         try:
-            purge_old_thread_posts(self.ctx.db_path)
+            purge_old_thread_posts(self.bot.ctx.db_path)
         except Exception:
             log.exception("Error during confession thread purge")
 
@@ -638,7 +637,7 @@ class ConfessionsCog(commands.Cog):
         self, guild_id: int, *, trigger_channel_id: Optional[int] = None
     ) -> None:
         async with self._get_launcher_lock(guild_id):
-            cfg = get_config(self.ctx.db_path, guild_id)
+            cfg = get_config(self.bot.ctx.db_path, guild_id)
             if not cfg or not cfg.launcher_channel_id:
                 return
             if trigger_channel_id is not None and trigger_channel_id != cfg.launcher_channel_id:
@@ -666,7 +665,7 @@ class ConfessionsCog(commands.Cog):
                 return
             cfg.launcher_channel_id = channel.id
             cfg.launcher_message_id = sent.id
-            upsert_config(self.ctx.db_path, cfg)
+            upsert_config(self.bot.ctx.db_path, cfg)
             await self._cleanup_duplicate_launchers(channel, guild_id, keep_message_id=sent.id)
 
     # ── View builders ────────────────────────────────────────────────────────
@@ -734,7 +733,7 @@ class ConfessionsCog(commands.Cog):
         # confession reply and must not be able to fire a ping.
         await send_branded_dm(
             user,
-            db_path=self.ctx.db_path,
+            db_path=self.bot.ctx.db_path,
             guild=guild,
             embed=discord.Embed(description=text),
             allowed_mentions=discord.AllowedMentions.none(),
@@ -752,7 +751,7 @@ class ConfessionsCog(commands.Cog):
     def is_valid_reply_target_message(self, guild_id: int, msg: discord.Message) -> bool:
         if not self.bot.user or msg.author.id != self.bot.user.id:
             return False
-        if get_thread_info(self.ctx.db_path, guild_id, msg.id):
+        if get_thread_info(self.bot.ctx.db_path, guild_id, msg.id):
             return True
         return message_exposes_reply_buttons(msg.components)
 
@@ -762,7 +761,7 @@ class ConfessionsCog(commands.Cog):
     async def _on_message_launcher_bump(self, message: discord.Message) -> None:
         if not message.guild or not self.bot.user or message.author.bot:
             return
-        cfg = get_config(self.ctx.db_path, message.guild.id)
+        cfg = get_config(self.bot.ctx.db_path, message.guild.id)
         if (
             cfg
             and cfg.launcher_channel_id
@@ -814,7 +813,7 @@ class ConfessionsCog(commands.Cog):
                 await _safe_ephemeral(interaction, HELP_TEXT)
                 return
 
-            cfg = get_config(self.ctx.db_path, interaction.guild.id)
+            cfg = get_config(self.bot.ctx.db_path, interaction.guild.id)
             if not cfg:
                 await _safe_ephemeral(interaction, "❌ Bot is not configured.")
                 return
@@ -834,10 +833,10 @@ class ConfessionsCog(commands.Cog):
                 if ephemeral_identity:
                     action = "ephemeral anonymous reply"
                 root_message_id = decoded.root_id
-                if not get_thread_info(self.ctx.db_path, interaction.guild.id, root_message_id):
+                if not get_thread_info(self.bot.ctx.db_path, interaction.guild.id, root_message_id):
                     await _safe_ephemeral(interaction, "❌ This confession can no longer be replied to.")
                     return
-                discord_thread_id = get_discord_thread_id(self.ctx.db_path, interaction.guild.id, root_message_id)
+                discord_thread_id = get_discord_thread_id(self.bot.ctx.db_path, interaction.guild.id, root_message_id)
                 if discord_thread_id:
                     thread_obj = self.bot.get_channel(discord_thread_id)
                     if isinstance(thread_obj, discord.Thread) and thread_obj.locked:
@@ -926,7 +925,7 @@ class ConfessionsCog(commands.Cog):
             target_channel = guild.get_channel(channel_id)
             if not isinstance(target_channel, discord.TextChannel):
                 return False
-            cfg = get_config(self.ctx.db_path, guild_id)
+            cfg = get_config(self.bot.ctx.db_path, guild_id)
             if cfg is None:
                 return False
             if cfg.launcher_channel_id and cfg.launcher_message_id:
@@ -942,10 +941,10 @@ class ConfessionsCog(commands.Cog):
                 return False
             cfg.launcher_channel_id = target_channel.id
             cfg.launcher_message_id = sent.id
-            upsert_config(self.ctx.db_path, cfg)
+            upsert_config(self.bot.ctx.db_path, cfg)
             await self._cleanup_duplicate_launchers(target_channel, guild_id, keep_message_id=sent.id)
             return True
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(ConfessionsCog(bot, bot.ctx))
+    await bot.add_cog(ConfessionsCog(bot))

@@ -341,9 +341,8 @@ async def _on_tree_error(
 
 
 class EventsCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         self._message_backfill_task: asyncio.Task[None] | None = None
         # Strong refs for fire-and-forget card refreshes, so they aren't GC'd
         # mid-flight. Discarded as each finishes.
@@ -383,11 +382,11 @@ class EventsCog(commands.Cog):
         try:
             enabled = await asyncio.to_thread(
                 nsfw_classifier_service.load_observe_policy,
-                self.ctx.db_path,
+                self.bot.ctx.db_path,
                 guild_id,
             )
             await nsfw_classifier_service.observe_images(
-                self.ctx.db_path, message, enabled=enabled
+                self.bot.ctx.db_path, message, enabled=enabled
             )
         except Exception:
             # Observation is a side effect of a side effect. It has no bearing
@@ -412,7 +411,7 @@ class EventsCog(commands.Cog):
         guild_id = message.guild.id if message.guild else 0
         try:
             policy = await asyncio.to_thread(
-                nsfw_classifier_service.load_sfw_policy, self.ctx.db_path, guild_id
+                nsfw_classifier_service.load_sfw_policy, self.bot.ctx.db_path, guild_id
             )
         except sqlite3.Error:
             log.exception("nsfw: could not load SFW policy — skipping enforcement")
@@ -426,7 +425,7 @@ class EventsCog(commands.Cog):
             bypass_role_ids=cfg.bypass_role_ids,
             log=log,
             classify=nsfw_classifier_service.classifier_for(
-                self.ctx.db_path, message, strict=True
+                self.bot.ctx.db_path, message, strict=True
             ),
             report=self._block_reporter(log_channel_id=policy.log_channel_id),
         )
@@ -478,7 +477,7 @@ class EventsCog(commands.Cog):
     def _persist_block(self, blocked: BlockedImage) -> None:
         message = blocked.message
         nsfw_classifier_service.record_block_safely(
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             nsfw_classifier_service.Block(
                 message_id=message.id,
                 attachment_id=blocked.attachment.id,
@@ -512,7 +511,7 @@ class EventsCog(commands.Cog):
 
         log.info("Logged in as %s (ID: %s)", self.bot.user, self.bot.user.id)
         _primary_guild = (
-            self.bot.get_guild(self.ctx.guild_id) if self.ctx.guild_id else None
+            self.bot.get_guild(self.bot.ctx.guild_id) if self.bot.ctx.guild_id else None
         )
 
         def _ch(cid: int) -> str:
@@ -523,11 +522,11 @@ class EventsCog(commands.Cog):
             r = _primary_guild.get_role(rid) if _primary_guild else None
             return f"@{r.name}" if r else str(rid)
 
-        cfg = self.ctx.guild_config(self.ctx.guild_id)
+        cfg = self.bot.ctx.guild_config(self.bot.ctx.guild_id)
         log.info(
             "Primary guild %s (ID: %s, guarding: %s)",
-            _primary_guild.name if _primary_guild else self.ctx.guild_id,
-            self.ctx.guild_id,
+            _primary_guild.name if _primary_guild else self.bot.ctx.guild_id,
+            self.bot.ctx.guild_id,
             [_ch(c) for c in cfg.spoiler_required_channels],
         )
         # The weights live in gitignored models/ and are deployed by hand, so
@@ -567,7 +566,7 @@ class EventsCog(commands.Cog):
             _guild_log = format_guild_for_log(g)
 
             def _do_upserts():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     for uid, uname, dname, is_bot in _guild_members:
                         upsert_known_user(
                             conn,
@@ -603,7 +602,7 @@ class EventsCog(commands.Cog):
 
         if self._message_backfill_task is None or self._message_backfill_task.done():
             self._message_backfill_task = asyncio.create_task(
-                _backfill_messages(self.bot, self.ctx)
+                _backfill_messages(self.bot, self.bot.ctx)
             )
             self._message_backfill_task.add_done_callback(
                 self._log_background_task_result
@@ -647,7 +646,7 @@ class EventsCog(commands.Cog):
         ts = int(time.time())
 
         def _record() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 record_voice_follow(
                     conn, guild_id, joiner_id, present_ids, channel_id, ts=ts
                 )
@@ -662,7 +661,7 @@ class EventsCog(commands.Cog):
         # closures below (pyright can't narrow `message.guild` across a
         # nested-function boundary).
         guild_id = message.guild.id
-        cfg = self.ctx.guild_config(guild_id)
+        cfg = self.bot.ctx.guild_config(guild_id)
         is_bot_author = message.author.bot
         # At storage level "none" (the default) content/media are dropped, so
         # skip building the attachment/embed payloads that store_message would
@@ -690,7 +689,7 @@ class EventsCog(commands.Cog):
             sentiment, emotion = await asyncio.to_thread(score_text, message.content)
 
             def _persist_bot_message():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     if should_track_auto_delete_message(
                         conn,
                         guild_id,
@@ -764,7 +763,7 @@ class EventsCog(commands.Cog):
             mention_ids = _message_mention_ids(cfg.recorded_bot_user_ids, message)
 
             def _persist_nonmember_message():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     if should_track_auto_delete_message(
                         conn,
                         guild_id,
@@ -827,7 +826,7 @@ class EventsCog(commands.Cog):
         ):
             from bot_modules.services.promotion_review_views import post_review_card
 
-            await post_review_card(self.ctx, message.author, message.channel.id)
+            await post_review_card(self.bot.ctx, message.author, message.channel.id)
 
         # Intake: a message addressing a newcomer with an open card may be
         # the greeting (greeter, in the intake channel), a step code, or the
@@ -846,7 +845,7 @@ class EventsCog(commands.Cog):
             # Guarded: an intake failure must never abort the rest of the
             # pipeline (spoiler enforcement, wellness, persistence, XP).
             try:
-                await handle_intake_message(self.ctx, message)
+                await handle_intake_message(self.bot.ctx, message)
             except Exception:
                 log.exception("intake: message hook failed in guild %s", guild_id)
 
@@ -864,7 +863,7 @@ class EventsCog(commands.Cog):
                 bypass_role_ids=cfg.bypass_role_ids,
                 log=log,
                 classify=nsfw_classifier_service.classifier_for(
-                    self.ctx.db_path, message, needs_labels=spoiler_channel
+                    self.bot.ctx.db_path, message, needs_labels=spoiler_channel
                 ),
                 report=self._block_reporter(),
             )
@@ -887,13 +886,13 @@ class EventsCog(commands.Cog):
         if await self._enforce_sfw_images(message, cfg):
             return
 
-        if await wellness_on_message(self.ctx, message):
+        if await wellness_on_message(self.bot.ctx, message):
             return
 
         sentiment, emotion = await asyncio.to_thread(score_text, message.content)
 
         def _persist_member_message():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 record_member_activity(
                     conn,
                     guild_id,
@@ -1012,7 +1011,7 @@ class EventsCog(commands.Cog):
         ):
 
             def _record_greeting():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     record_greeting(
                         conn,
                         guild_id=guild_id,
@@ -1027,8 +1026,8 @@ class EventsCog(commands.Cog):
         result = await award_message_xp(
             message,
             bot=self.bot,
-            db_path=self.ctx.db_path,
-            xp_pair_states=self.ctx.xp_pair_states,
+            db_path=self.bot.ctx.db_path,
+            xp_pair_states=self.bot.ctx.xp_pair_states,
             excluded_channel_ids=cfg.xp_excluded_channel_ids,
             settings=cfg.xp_settings,
         )
@@ -1041,7 +1040,7 @@ class EventsCog(commands.Cog):
                 level_up_log_channel_id=cfg.level_up_log_channel_id,
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
-                db_path=self.ctx.db_path,
+                db_path=self.bot.ctx.db_path,
                 nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
             )
 
@@ -1154,7 +1153,7 @@ class EventsCog(commands.Cog):
             tuple[EconSettings, LoginOutcome, int, list[dict], list[dict], str | None]
             | None
         ):
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
                 if not settings.enabled:
                     return None
@@ -1372,7 +1371,7 @@ class EventsCog(commands.Cog):
         # standalone wellness daily DM, and the public bank-channel
         # fallback carries the economy-only form, never the wellness
         # section.
-        accent = await safe_resolve_accent(self.ctx, message.guild, log_label="events", default=DEFAULT_ACCENT_COLOR)
+        accent = await safe_resolve_accent(self.bot.ctx, message.guild, log_label="events", default=DEFAULT_ACCENT_COLOR)
         embed = self._econ_login_embed(
             settings, outcome, prior_streak, quests_out, gains, accent,
             wellness_value=wellness_value,
@@ -1386,7 +1385,7 @@ class EventsCog(commands.Cog):
         )
         await notify_member(
             self.bot,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             guild_id,
             user_id,
             embed=embed,
@@ -1496,7 +1495,7 @@ class EventsCog(commands.Cog):
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         if payload.guild_id is None:
             return  # DM reactions earn no XP and have no reaction-count tracking
-        cfg = self.ctx.guild_config(payload.guild_id)
+        cfg = self.bot.ctx.guild_config(payload.guild_id)
 
         # One fetch feeds both awards (author's image XP + reactor's given XP).
         message = await self._fetch_reaction_message(payload)
@@ -1507,7 +1506,7 @@ class EventsCog(commands.Cog):
             given = await award_reaction_given_xp(
                 payload,
                 bot=self.bot,
-                db_path=self.ctx.db_path,
+                db_path=self.bot.ctx.db_path,
                 excluded_channel_ids=cfg.xp_excluded_channel_ids,
                 settings=cfg.xp_settings,
                 message=message,
@@ -1525,7 +1524,7 @@ class EventsCog(commands.Cog):
                 level_up_log_channel_id=cfg.level_up_log_channel_id,
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
-                db_path=self.ctx.db_path,
+                db_path=self.bot.ctx.db_path,
                 nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
             )
             # Reaction quest trigger — `given` is non-None only when the XP
@@ -1551,7 +1550,7 @@ class EventsCog(commands.Cog):
             )
 
             def _fire_reaction_quests():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     fire_trigger_inline(
                         conn,
                         _guild_id,
@@ -1580,7 +1579,7 @@ class EventsCog(commands.Cog):
             result = await award_image_reaction_xp(
                 payload,
                 bot=self.bot,
-                db_path=self.ctx.db_path,
+                db_path=self.bot.ctx.db_path,
                 excluded_channel_ids=cfg.xp_excluded_channel_ids,
                 settings=cfg.xp_settings,
                 message=message,
@@ -1598,7 +1597,7 @@ class EventsCog(commands.Cog):
                 level_up_log_channel_id=cfg.level_up_log_channel_id,
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
-                db_path=self.ctx.db_path,
+                db_path=self.bot.ctx.db_path,
                 nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
             )
 
@@ -1606,7 +1605,7 @@ class EventsCog(commands.Cog):
             gid = payload.guild_id  # bind so narrowing survives into the closure
 
             def _record_reaction_add():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     adjust_reaction_count(conn, payload.message_id, str(payload.emoji), +1)
                     row = conn.execute(
                         "SELECT author_id, channel_id FROM messages WHERE message_id = ?",
@@ -1631,7 +1630,7 @@ class EventsCog(commands.Cog):
     ) -> None:
         if payload.guild_id:
             def _record_reaction_remove():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     adjust_reaction_count(conn, payload.message_id, str(payload.emoji), -1)
 
             await asyncio.to_thread(_record_reaction_remove)
@@ -1652,7 +1651,7 @@ class EventsCog(commands.Cog):
         the IS NULL guard in mark_messages_deleted leaves those alone.
         """
         def _write():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 mark_messages_deleted(
                     conn, guild_id, message_ids, DELETE_SOURCE_DISCORD, int(time.time())
                 )
@@ -1668,7 +1667,7 @@ class EventsCog(commands.Cog):
         # Auto-delete tracking is per-message bookkeeping; clear it so we
         # don't try to re-delete a Discord message that's already gone.
         remove_tracked_auto_delete_message(
-            self.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
+            self.bot.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
         )
         await self._flag_messages_deleted(payload.guild_id, {payload.message_id})
 
@@ -1699,7 +1698,7 @@ class EventsCog(commands.Cog):
         _guild_id = member.guild.id
 
         def _do_welcome_db():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 _bio_link, _bios_ch_mention = resolve_bio_placeholders(conn, _guild_id)
                 try:
                     _sg_channel_id = int(
@@ -1711,7 +1710,7 @@ class EventsCog(commands.Cog):
 
         bio_link, bios_channel_mention, server_guide_channel_id = await asyncio.to_thread(_do_welcome_db)
         try:
-            member_bio_link = await resolve_member_bio_link(self.ctx, member)
+            member_bio_link = await resolve_member_bio_link(self.bot.ctx, member)
         except Exception:
             log.exception("Failed to resolve member bio link for %d", member.id)
             member_bio_link = ""
@@ -1723,7 +1722,7 @@ class EventsCog(commands.Cog):
         if cfg.welcome_ping_member:
             ping_parts.append(member.mention)
         ping = " ".join(ping_parts) or None
-        accent = await safe_resolve_accent(self.ctx, member.guild, log_label="events")
+        accent = await safe_resolve_accent(self.bot.ctx, member.guild, log_label="events")
         try:
             await channel.send(
                 content=ping,
@@ -1766,14 +1765,14 @@ class EventsCog(commands.Cog):
         _removed = [r.name for r in before.roles if r.id not in after_ids]
 
         def _do_log_role_events():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 for name in _granted:
                     log_role_event(conn, _guild_id, _member_id, name, "grant", ts=now)
                 for name in _removed:
                     log_role_event(conn, _guild_id, _member_id, name, "remove", ts=now)
 
         await asyncio.to_thread(_do_log_role_events)
-        cfg = self.ctx.guild_config(after.guild.id)
+        cfg = self.bot.ctx.guild_config(after.guild.id)
         # Keep the Level 5 card's "Spicy access" field honest — it is rendered
         # once at post time (see docs/promotion_review_spec.md). Detached rather
         # than awaited: its two HTTP round trips for a cosmetic embed edit must
@@ -1787,7 +1786,7 @@ class EventsCog(commands.Cog):
                 refresh_level_5_cards,
             )
 
-            task = asyncio.create_task(refresh_level_5_cards(self.ctx, after, has_nsfw))
+            task = asyncio.create_task(refresh_level_5_cards(self.bot.ctx, after, has_nsfw))
             self._card_refresh_tasks.add(task)
             task.add_done_callback(self._card_refresh_tasks.discard)
         # Welcome fires the moment the unverified role is stripped (e.g. once
@@ -1832,12 +1831,12 @@ class EventsCog(commands.Cog):
             if gained or unverified_removed:
                 from bot_modules.services.intake_views import handle_role_changes
 
-                await handle_role_changes(self.ctx, after, gained, unverified_removed)
+                await handle_role_changes(self.bot.ctx, after, gained, unverified_removed)
 
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
-        is_jailed = await check_jail_rejoin(self.ctx, member)
+        is_jailed = await check_jail_rejoin(self.bot.ctx, member)
 
         _guild_id = member.guild.id
         _member_id = member.id
@@ -1847,7 +1846,7 @@ class EventsCog(commands.Cog):
 
         def _do_member_join():
             _now = time.time()
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 upsert_known_user(
                     conn,
                     guild_id=_guild_id,
@@ -1874,7 +1873,7 @@ class EventsCog(commands.Cog):
             _inv_booster = _inviter is not None and _inviter.premium_since is not None
 
             def _do_record_invite():
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     record_invite(conn, _guild_id, _inv_id, _member_id, _inv_code)
                     # Invite quest trigger for the inviter. Occurrence = the
                     # invitee, so a rejoin (or a re-fire off the OR IGNOREd
@@ -1896,7 +1895,7 @@ class EventsCog(commands.Cog):
                 invite_code,
             )
 
-        cfg = self.ctx.guild_config(member.guild.id)
+        cfg = self.bot.ctx.guild_config(member.guild.id)
 
         if cfg.welcome_channel_id > 0 and cfg.welcome_trigger == "join":
             await self._send_welcome(member, cfg)
@@ -1910,7 +1909,7 @@ class EventsCog(commands.Cog):
             from bot_modules.services.intake_views import post_intake_card
 
             try:
-                intake_posted = await post_intake_card(self.ctx, member)
+                intake_posted = await post_intake_card(self.bot.ctx, member)
             except Exception:
                 log.exception("intake: card post failed for %s", member.id)
 
@@ -1994,7 +1993,7 @@ class EventsCog(commands.Cog):
 
             try:
                 await close_member_card(
-                    self.ctx, guild, user.id, intake_svc.RESOLUTION_BANNED
+                    self.bot.ctx, guild, user.id, intake_svc.RESOLUTION_BANNED
                 )
             except Exception:
                 log.exception("intake: ban-close failed for %s", user.id)
@@ -2006,7 +2005,7 @@ class EventsCog(commands.Cog):
 
         def _do_member_leave():
             _now = time.time()
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 mark_member_left(conn, _guild_id, _member_id)
                 record_member_event(conn, _guild_id, _member_id, "leave", _now)
 
@@ -2019,12 +2018,12 @@ class EventsCog(commands.Cog):
             # leave-channel announcement below.
             try:
                 await close_member_card(
-                    self.ctx, member.guild, _member_id, intake_svc.RESOLUTION_LEFT
+                    self.bot.ctx, member.guild, _member_id, intake_svc.RESOLUTION_LEFT
                 )
             except Exception:
                 log.exception("intake: leave-close failed for %s", _member_id)
 
-        cfg = self.ctx.guild_config(member.guild.id)
+        cfg = self.bot.ctx.guild_config(member.guild.id)
         if cfg.leave_channel_id <= 0:
             return
         channel = member.guild.get_channel(cfg.leave_channel_id)
@@ -2036,7 +2035,7 @@ class EventsCog(commands.Cog):
         from bot_modules.services.welcome_service import server_guide_mention_for
 
         def _do_leave_db():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 _bio_link, _bios_ch_mention = resolve_bio_placeholders(conn, _guild_id)
                 _stored = bios_db.get_user_bio(conn, _guild_id, _member_id)
                 try:
@@ -2060,7 +2059,7 @@ class EventsCog(commands.Cog):
         else:
             member_bio_link = ""
 
-        accent = await safe_resolve_accent(self.ctx, member.guild, log_label="events")
+        accent = await safe_resolve_accent(self.bot.ctx, member.guild, log_label="events")
         try:
             await channel.send(
                 embed=build_leave_embed(
@@ -2095,7 +2094,7 @@ class EventsCog(commands.Cog):
         # The messages table is a permanent archive (see on_raw_message_delete
         # for the rationale) — clear the auto-delete queue, then flag the rows.
         remove_tracked_auto_delete_messages(
-            self.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_ids
+            self.bot.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_ids
         )
         await self._flag_messages_deleted(payload.guild_id, set(payload.message_ids))
 
@@ -2129,4 +2128,4 @@ class EventsCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(EventsCog(bot, bot.ctx))
+    await bot.add_cog(EventsCog(bot))

@@ -118,7 +118,7 @@ class PoolsMixin:
         user_id = interaction.user.id
 
         def _place() -> str | None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 rnd = svc.live_pools_round(
                     conn, svc.pools_channel(svc.load_casino_settings(conn, guild.id))
                 )
@@ -143,7 +143,7 @@ class PoolsMixin:
     # ── panel ──────────────────────────────────────────────────────────
 
     def _read_pools_round(self, guild_id: int):
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             settings = svc.load_casino_settings(conn, guild_id)
             if not settings.pools_enabled:
                 return None
@@ -224,7 +224,7 @@ class PoolsMixin:
         await asyncio.to_thread(self._save_pools_message, int(rnd["id"]), sent.id)
 
     def _read_pools_panel(self, guild_id: int):
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             settings = svc.load_casino_settings(conn, guild_id)
             if not settings.pools_enabled:
                 return None
@@ -258,7 +258,7 @@ class PoolsMixin:
             )
 
     def _save_pools_message(self, round_id: int, message_id: int) -> None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             svc.set_pools_message(conn, round_id, message_id)
 
     # ── the day roll ───────────────────────────────────────────────────
@@ -296,7 +296,7 @@ class PoolsMixin:
                 await self.render_pools_panel(guild)
 
     def _plan_pools(self, guild_id: int):
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             settings = svc.load_casino_settings(conn, guild_id)
             if not settings.pools_enabled or not svc.pools_channel(settings):
                 return None
@@ -311,7 +311,7 @@ class PoolsMixin:
             )
 
     def _open_pools(self, guild_id: int, channel_id: int, job) -> bool:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return svc.open_pools_round(
                 conn, guild_id, channel_id, job.day, job.line, job.closes_at,
                 metric=job.metric,
@@ -322,7 +322,7 @@ class PoolsMixin:
         days: list[pools_logic.DayMetric],
     ) -> None:
         def _run():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 if job.unsettleable:
                     # No spec, no outcome — refund rather than invent one.
                     refunds = svc.void_pools_round(conn, job.round_id)
@@ -419,7 +419,7 @@ class PoolsMixin:
             await msg.edit(view=None)
 
     def _pools_message_id(self, round_id: int) -> int:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             rnd = svc.get_pools_round(conn, round_id)
             return int(rnd["message_id"]) if rnd else 0
 

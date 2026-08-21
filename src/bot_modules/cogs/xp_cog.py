@@ -173,9 +173,8 @@ def _build_xp_leaderboard_embed(
 
 
 class XpCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     @app_commands.command(
@@ -192,7 +191,7 @@ class XpCog(commands.Cog):
             "hour", "day", "week", "month", "year", "alltime"
         ] = "alltime",
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         if not guild:
             await interaction.response.send_message(
@@ -268,7 +267,7 @@ class XpCog(commands.Cog):
     async def xp_give(
         self, interaction: discord.Interaction, member: discord.Member
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.can_use_xp_grant(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -334,4 +333,4 @@ class XpCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(XpCog(bot, bot.ctx))
+    await bot.add_cog(XpCog(bot))

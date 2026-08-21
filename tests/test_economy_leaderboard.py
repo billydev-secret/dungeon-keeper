@@ -492,7 +492,9 @@ def _patch_accents():
 def _make_cog(ctx):
     from bot_modules.cogs.economy_cog import EconomyCog
 
-    return EconomyCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    return EconomyCog(_bot)
 
 
 def _channel(channel_id: int) -> MagicMock:
@@ -570,7 +572,8 @@ def _loop_world(ctx, guild):
 
     bot = MagicMock()
     bot.get_guild = MagicMock(return_value=guild)
-    cog = EconomyCog(bot, ctx)
+    bot.ctx = ctx
+    cog = EconomyCog(bot)
     bot.get_cog = MagicMock(return_value=cog)
     return bot, cog
 

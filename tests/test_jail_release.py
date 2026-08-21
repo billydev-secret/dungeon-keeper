@@ -693,7 +693,9 @@ async def test_leaving_while_jailed_is_recorded_and_keeps_the_channel(tmp_path):
     member.guild = guild
     jail_id = _seed_jail(ctx, user_id=42, channel_id=6000)
 
-    cog = JailCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = JailCog(_bot)
     await cog._note_jailed_member_left(member)
 
     rows = _audit_rows(ctx, "jail_member_left")
@@ -720,7 +722,9 @@ async def test_banning_a_jailed_member_is_not_reported_as_leaving(tmp_path):
     member.guild = guild
     _seed_jail(ctx, user_id=42, channel_id=6000)
 
-    cog = JailCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = JailCog(_bot)
     await cog._note_jailed_member_left(member)
 
     assert json.loads(_audit_rows(ctx, "jail_member_left")[0]["extra"])["banned"] is True
@@ -742,7 +746,9 @@ async def test_leaving_falls_back_to_neutral_wording_without_ban_perms(tmp_path)
     member.guild = guild
     _seed_jail(ctx, user_id=42)
 
-    cog = JailCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = JailCog(_bot)
     await cog._note_jailed_member_left(member)
 
     assert json.loads(_audit_rows(ctx, "jail_member_left")[0]["extra"])["banned"] is False
@@ -757,7 +763,9 @@ async def test_leaving_without_an_active_jail_records_nothing(tmp_path):
     guild = _guild(guild_id=ctx.guild_id, members=[member])
     member.guild = guild
 
-    cog = JailCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = JailCog(_bot)
     await cog._note_jailed_member_left(member)
 
     assert _audit_rows(ctx, "jail_member_left") == []

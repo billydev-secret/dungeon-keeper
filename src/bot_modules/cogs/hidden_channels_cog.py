@@ -38,7 +38,7 @@ from bot_modules.hidden_channels.store import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.hidden_channels")
 
@@ -82,9 +82,8 @@ async def _ensure_hidden_category(
 
 
 class HiddenChannelsCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     hidden = app_commands.Group(
@@ -98,7 +97,7 @@ class HiddenChannelsCog(commands.Cog):
         self, interaction: discord.Interaction
     ) -> tuple[discord.Guild, discord.Member] | str:
         """Shared admin + bot-permission gate. Returns (guild, me) or an error."""
-        if not self.ctx.is_admin(interaction):
+        if not self.bot.ctx.is_admin(interaction):
             return "❌ You need to be an admin to use this command."
         guild = interaction.guild
         if guild is None or guild.me is None:
@@ -123,7 +122,7 @@ class HiddenChannelsCog(commands.Cog):
         guild, me = pre
 
         def _load_existing():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return get_active_hidden(conn, guild.id, channel.id)
 
         existing = await asyncio.to_thread(_load_existing)
@@ -147,7 +146,7 @@ class HiddenChannelsCog(commands.Cog):
         # DB failure leaves the channel untouched, and an edit failure only
         # leaves a row — which we delete below.
         def _write_row() -> int:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return create_hidden(
                     conn,
                     guild_id=guild.id,
@@ -170,7 +169,7 @@ class HiddenChannelsCog(commands.Cog):
             return
 
         def _rollback_row() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 delete_hidden(conn, hidden_id)
 
         try:
@@ -222,7 +221,7 @@ class HiddenChannelsCog(commands.Cog):
         guild, _me = pre
 
         def _load_row():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return get_active_hidden(conn, guild.id, channel.id)
 
         row = await asyncio.to_thread(_load_row)
@@ -272,7 +271,7 @@ class HiddenChannelsCog(commands.Cog):
             log.warning("Could not restore position for channel %s", channel.id)
 
         def _mark_restored() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 mark_restored(conn, row["id"])
 
         await asyncio.to_thread(_mark_restored)
@@ -292,7 +291,7 @@ class HiddenChannelsCog(commands.Cog):
         guild, _me = pre
 
         def _load_rows():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return list_active_hidden(conn, guild.id)
 
         rows = await asyncio.to_thread(_load_rows)
@@ -317,4 +316,4 @@ class HiddenChannelsCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(HiddenChannelsCog(bot, bot.ctx))
+    await bot.add_cog(HiddenChannelsCog(bot))

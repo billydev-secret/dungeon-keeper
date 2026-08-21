@@ -42,7 +42,7 @@ from bot_modules.survivor.views import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.survivor")
 
@@ -56,9 +56,8 @@ class SurvivorCog(commands.Cog):
         guild_only=True,
     )
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         # The channel panel is sticky (Billy, 2026-08-18: "the game panel
         # doesn't drop to the bottom") — chat under it reposts it below,
         # debounced by the house machinery. restick_on_bot because the
@@ -82,24 +81,24 @@ class SurvivorCog(commands.Cog):
     # ── sticky plumbing ────────────────────────────────────────────────
 
     def _read_panel_ids(self, guild_id: int) -> tuple[int, int]:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             return panel_ids(conn, guild_id)
 
     def _write_panel_ids(
         self, guild_id: int, channel_id: int, message_id: int
     ) -> None:
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             set_panel_ids(conn, guild_id, channel_id, message_id)
             conn.commit()
 
     async def _build_panel(self, guild: discord.Guild) -> PanelContent:
         def _q():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 return get_active_season(conn, guild.id)
 
         season = await asyncio.to_thread(_q)
         built = (
-            await build_live_panel(self.bot, self.ctx.db_path, season["id"])
+            await build_live_panel(self.bot, self.bot.ctx.db_path, season["id"])
             if season is not None else None
         )
         if built is None:
@@ -130,7 +129,7 @@ class SurvivorCog(commands.Cog):
         from bot_modules.services.survivor_loop import survivor_poll_loop
 
         bot = self.bot
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
         self.bot.startup_task_factories.append(
             lambda: survivor_poll_loop(bot, db_path)
         )
@@ -139,7 +138,7 @@ class SurvivorCog(commands.Cog):
 
     async def _season_and_offset(self, guild_id: int) -> tuple[dict | None, float]:
         def _q():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 return (
                     get_active_season(conn, guild_id),
                     get_tz_offset_hours(conn, guild_id),
@@ -162,7 +161,7 @@ class SurvivorCog(commands.Cog):
         now = self._now()
 
         def _q():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 season = get_active_season(conn, guild_id)
                 if season is None:
                     return [], 0.0
@@ -205,7 +204,7 @@ class SurvivorCog(commands.Cog):
         now = self._now()
 
         def _week_and_games():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 week = logic.pick_week(conn, season["season_year"], now)
                 games = (
                     logic.legal_teams(
@@ -261,7 +260,7 @@ class SurvivorCog(commands.Cog):
         now = self._now()
 
         def _q():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 return logic.player_status(conn, season, interaction.user.id, now)
 
         st = await asyncio.to_thread(_q)
@@ -272,7 +271,7 @@ class SurvivorCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        color = await safe_resolve_accent(self.ctx, interaction.guild, log_label="survivor")
+        color = await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="survivor")
         await interaction.response.send_message(
             embed=build_status_embed(st, season_name=season["name"], color=color),
             ephemeral=True,
@@ -292,7 +291,7 @@ class SurvivorCog(commands.Cog):
         now = self._now()
 
         def _q():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 from bot_modules.services.economy_service import (
                     load_econ_settings,
                 )
@@ -313,7 +312,7 @@ class SurvivorCog(commands.Cog):
             # a name like "**everyone** ·" must not reformat the board.
             return discord.utils.escape_markdown(member.display_name)
 
-        color = await safe_resolve_accent(self.ctx, guild, log_label="survivor")
+        color = await safe_resolve_accent(self.bot.ctx, guild, log_label="survivor")
         await interaction.response.send_message(
             embed=build_board_embed(
                 board,
@@ -348,7 +347,7 @@ class SurvivorCog(commands.Cog):
         revealed = int(season["config"].get("last_reckoned_week") or 0)
 
         def _q():
-            with open_db(self.ctx.db_path) as conn:
+            with open_db(self.bot.ctx.db_path) as conn:
                 return logic.history_rows(
                     conn, season, target.id, through_week=revealed
                 )
@@ -363,7 +362,7 @@ class SurvivorCog(commands.Cog):
             return
         from bot_modules.survivor.embeds import build_history_embed
 
-        color = await safe_resolve_accent(self.ctx, interaction.guild, log_label="survivor")
+        color = await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="survivor")
         await interaction.response.send_message(
             embed=build_history_embed(
                 rows,
@@ -376,4 +375,4 @@ class SurvivorCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(SurvivorCog(bot, bot.ctx))
+    await bot.add_cog(SurvivorCog(bot))

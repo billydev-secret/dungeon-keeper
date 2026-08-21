@@ -158,7 +158,8 @@ async def test_a_raced_second_deal_apologizes_instead_of_exploding(monkeypatch):
     monkeypatch.setattr(cog_module, "safe_ephemeral", _say)
 
     cog = SimpleNamespace(
-        ctx=SimpleNamespace(open_db=lambda: _NullDB()), _last_bets={},
+        bot=SimpleNamespace(ctx=SimpleNamespace(open_db=lambda: _NullDB())),
+        _last_bets={},
     )
     interaction = SimpleNamespace(
         guild=SimpleNamespace(id=1), user=SimpleNamespace(id=2), channel_id=3,

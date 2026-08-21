@@ -23,7 +23,7 @@ from bot_modules.bios.views import PersistentTriggerView, ResumeRestartView
 from bot_modules.bios.wizard import WizardSession, build_session
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.bios")
 
@@ -31,9 +31,8 @@ _WIZARD_CHANNEL_RE = re.compile(r"^bio-(\d+)$")
 
 
 class BiosCog(commands.Cog):
-    def __init__(self, bot: "Bot", ctx: "AppContext") -> None:
+    def __init__(self, bot: "Bot") -> None:
         self.bot = bot
-        self.ctx = ctx
         self._sessions: dict[tuple[int, int], WizardSession] = {}
         super().__init__()
 
@@ -55,7 +54,7 @@ class BiosCog(commands.Cog):
         returned) — see bios_db.purge_stale_archived_bios."""
         try:
             def _purge() -> int:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     return bios_db.purge_stale_archived_bios(conn)
 
             purged = await asyncio.to_thread(_purge)
@@ -73,7 +72,7 @@ class BiosCog(commands.Cog):
         for guild in list(self.bot.guilds):
             try:
                 def _load_cfg(gid: int = guild.id) -> BiosConfig:
-                    with self.ctx.open_db() as conn:
+                    with self.bot.ctx.open_db() as conn:
                         return BiosConfig.load(conn, gid)
 
                 cfg = await asyncio.to_thread(_load_cfg)
@@ -125,7 +124,7 @@ class BiosCog(commands.Cog):
         guild = interaction.guild
 
         def _read_state() -> tuple[BiosConfig, bool]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 cfg = BiosConfig.load(conn, guild.id)
                 tmpl = bios_db.get_template(conn, guild.id)
                 has_active = (
@@ -284,7 +283,7 @@ class BiosCog(commands.Cog):
     async def on_member_remove(self, member: discord.Member) -> None:
         try:
             def _load() -> bios_db.StoredBio | None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     return bios_db.get_user_bio(conn, member.guild.id, member.id)
 
             bio = await asyncio.to_thread(_load)
@@ -301,7 +300,7 @@ class BiosCog(commands.Cog):
                     log.exception("Failed to delete bio msg for %d", member.id)
 
             def _archive() -> None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     bios_db.archive_user_bio(conn, member.guild.id, member.id)
 
             await asyncio.to_thread(_archive)
@@ -310,4 +309,4 @@ class BiosCog(commands.Cog):
 
 
 async def setup(bot: "Bot") -> None:
-    await bot.add_cog(BiosCog(bot, bot.ctx))
+    await bot.add_cog(BiosCog(bot))

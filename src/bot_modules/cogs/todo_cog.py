@@ -131,7 +131,7 @@ class TodoCompleteSelect(discord.ui.Select):
 
         def _complete() -> int:
             done = 0
-            with cog.ctx.open_db() as conn:
+            with cog.bot.ctx.open_db() as conn:
                 for todo_id in ids:
                     if complete_todo(conn, todo_id, guild_id, user_id):
                         done += 1
@@ -173,7 +173,7 @@ class TodoBoardView(discord.ui.View):
         if cog is None:
             await _unavailable(interaction)
             return
-        if not await _require_mod(interaction, cog.ctx):
+        if not await _require_mod(interaction, cog.bot.ctx):
             return
         await interaction.response.send_modal(TodoAddModal())
 
@@ -190,12 +190,12 @@ class TodoBoardView(discord.ui.View):
         if cog is None or interaction.guild is None:
             await _unavailable(interaction)
             return
-        if not await _require_mod(interaction, cog.ctx):
+        if not await _require_mod(interaction, cog.bot.ctx):
             return
         guild_id = interaction.guild.id
 
         def _load() -> list[dict]:
-            with cog.ctx.open_db() as conn:
+            with cog.bot.ctx.open_db() as conn:
                 return [dict(r) for r in pending_todos(conn, guild_id, limit=25)]
 
         rows = await asyncio.to_thread(_load)
@@ -238,12 +238,12 @@ class TodoChoreBoardView(discord.ui.View):
         if cog is None or interaction.guild is None:
             await _unavailable(interaction)
             return
-        if not await _require_mod(interaction, cog.ctx, "tick off chores"):
+        if not await _require_mod(interaction, cog.bot.ctx, "tick off chores"):
             return
         guild_id = interaction.guild.id
 
         def _load() -> tuple[list[dict], str]:
-            with cog.ctx.open_db() as conn:
+            with cog.bot.ctx.open_db() as conn:
                 # The same slice the board renders. Reading fewer than the
                 # board shows lets "Every chore is already ticked off" appear
                 # while open rows are visible in the message above it.
@@ -309,9 +309,8 @@ async def _require_mod(
 
 
 class TodoCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         self.board = StickyPanel(
             "todo board",
             bot,
@@ -350,7 +349,7 @@ class TodoCog(commands.Cog):
             return
         # The todo list is a mod worklist, curated from the dashboard — only
         # moderators may add to it (the web endpoints are mod-gated too).
-        if not await _require_mod(interaction, self.ctx, "add to the todo list"):
+        if not await _require_mod(interaction, self.bot.ctx, "add to the todo list"):
             return
         task = task.strip()
         if not task:
@@ -386,7 +385,7 @@ class TodoCog(commands.Cog):
         """
 
         def _create() -> int:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return create_todo(
                     conn, guild_id, user_id, task, description=description
                 )
@@ -400,33 +399,33 @@ class TodoCog(commands.Cog):
     # and what the panel should look like.
 
     def _read_ids(self, guild_id: int) -> tuple[int, int]:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             board = get_board(conn, guild_id, BOARD_ALL)
         return board.channel_id, board.message_id
 
     def _write_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             if channel_id and message_id:
                 save_board(conn, guild_id, channel_id, message_id, kind=BOARD_ALL)
             else:
                 clear_board(conn, guild_id, kind=BOARD_ALL)
 
     def _read_chore_ids(self, guild_id: int) -> tuple[int, int]:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             board = get_board(conn, guild_id, BOARD_CHORES)
         return board.channel_id, board.message_id
 
     def _write_chore_ids(
         self, guild_id: int, channel_id: int, message_id: int
     ) -> None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             if channel_id and message_id:
                 save_board(conn, guild_id, channel_id, message_id, kind=BOARD_CHORES)
             else:
                 clear_board(conn, guild_id, kind=BOARD_CHORES)
 
     def _read_rows(self, guild_id: int) -> tuple[list[dict], int]:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             # One screenful plus a sentinel: enough to render and to know the
             # list overflows, without hauling every pending row.
             rows = [
@@ -438,7 +437,7 @@ class TodoCog(commands.Cog):
 
     async def build_panel(self, guild: discord.Guild) -> PanelContent:
         rows, total = await asyncio.to_thread(self._read_rows, guild.id)
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="todo")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="todo")
         embed = discord.Embed(
             title="📋 Server Todo",
             description=render_rows(rows, total=total),
@@ -459,14 +458,14 @@ class TodoCog(commands.Cog):
         return member.display_name if member is not None else "someone"
 
     def _read_chore_rows(self, guild_id: int) -> list[dict]:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return chore_board_rows(conn, guild_id, limit=_CHORE_FETCH)
 
     async def build_chore_panel(self, guild: discord.Guild) -> PanelContent:
         rows = await asyncio.to_thread(self._read_chore_rows, guild.id)
         for row in rows:
             row["completed_by_name"] = self._display_name(guild, row.get("completed_by"))
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="todo")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="todo")
         embed = discord.Embed(
             title="🔁 Mod Chores",
             description=render_chore_rows(rows),
@@ -614,4 +613,4 @@ async def todo_board_loop(bot: Bot) -> None:
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(TodoCog(bot, bot.ctx))
+    await bot.add_cog(TodoCog(bot))

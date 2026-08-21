@@ -186,7 +186,7 @@ from bot_modules.services.voice_master_service import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.economy")
 
@@ -1125,7 +1125,7 @@ async def _rent_perk_flow(
     Every reply is ephemeral to the clicker, and a successful rent carries the
     perk's customise button so styling happens without leaving the message.
     """
-    ctx = cog.ctx
+    ctx = cog.bot.ctx
     user_id = interaction.user.id
     # A comped member is already entitled, so there is nothing to buy — take
     # the money-free path rather than opening a rental they'd then be billed
@@ -1319,9 +1319,8 @@ class EconomyCog(commands.Cog):
     async def auction_end(self, interaction: discord.Interaction) -> None:
         await end_open_auction(interaction)
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         # guild_id → (monotonic expiry, trigger quests). TTL-refreshed in the
         # message listener; empty lists are cached too so guilds without
         # trigger quests cost one dict lookup per message.
@@ -1423,7 +1422,7 @@ class EconomyCog(commands.Cog):
         idle guilds cost nothing; only those are then swept. Best-effort — a
         per-guild failure is logged, never fatal to the loop."""
         def _live() -> set[int]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return open_auction_guild_ids(conn)
 
         try:
@@ -1467,7 +1466,7 @@ class EconomyCog(commands.Cog):
                 member_casino_stats,
             )
 
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
                 if not settings.enabled:
                     # The caller refuses before rendering, so the other five
@@ -1487,7 +1486,7 @@ class EconomyCog(commands.Cog):
         if await self._refuse_disabled(interaction, settings):
             return
 
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         embed = build_wallet_embed(
             settings,
             balance=balance,
@@ -1545,7 +1544,7 @@ class EconomyCog(commands.Cog):
         meta = {"reason": reason, "granted_by": actor.display_name}
 
         def _grant() -> int:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return apply_credit(
                     conn,
                     guild_id,
@@ -1560,7 +1559,7 @@ class EconomyCog(commands.Cog):
 
         credited = await asyncio.to_thread(_grant)
 
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         embed = discord.Embed(
             title=f"{settings.currency_emoji} Currency Granted",
             description=(
@@ -1596,14 +1595,14 @@ class EconomyCog(commands.Cog):
             return
 
         def _toggle() -> bool:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 new_muted = not get_notify_muted(conn, guild_id, user_id)
                 set_notify_muted(conn, guild_id, user_id, new_muted)
                 return new_muted
 
         muted = await asyncio.to_thread(_toggle)
 
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         embed = discord.Embed(
             title="🔔 Notifications Muted" if muted else "🔔 Notifications On",
             description=(
@@ -1664,7 +1663,7 @@ class EconomyCog(commands.Cog):
             return
 
         if amount > _PAY_CONFIRM_THRESHOLD:
-            accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
+            accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
             desc = (
                 f"Send {settings.currency_emoji} **{amount:,}** "
                 f"{_unit(settings, amount)} to {member.mention}?"
@@ -1704,7 +1703,7 @@ class EconomyCog(commands.Cog):
         """Execute the transfer and report — shared by the direct and confirm paths."""
 
         def _tx() -> int:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 transfer_currency(
                     conn, guild.id, sender.id, recipient.id, amount, memo=memo
                 )
@@ -1724,7 +1723,7 @@ class EconomyCog(commands.Cog):
             await self._reply(interaction, text, via_confirm=via_confirm)
             return
 
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         safe_memo = discord.utils.escape_markdown(memo) if memo else None
         desc = (
             f"{settings.currency_emoji} **{amount:,}** {_unit(settings, amount)} "
@@ -1750,7 +1749,7 @@ class EconomyCog(commands.Cog):
         if safe_memo:
             note += f' — "{discord.utils.escape_mentions(safe_memo)}"'
         await notify_member(
-            self.bot, self.ctx.db_path, guild.id, recipient.id, content=note,
+            self.bot, self.bot.ctx.db_path, guild.id, recipient.id, content=note,
         )
 
     # ── shop ─────────────────────────────────────────────────────────────
@@ -1771,7 +1770,7 @@ class EconomyCog(commands.Cog):
         user_id = interaction.user.id
 
         shop = await asyncio.to_thread(
-            self._shop_context, guild.id, user_id, self.ctx.is_mod(interaction)
+            self._shop_context, guild.id, user_id, self.bot.ctx.is_mod(interaction)
         )
         settings = shop.settings
         if await self._refuse_disabled(interaction, settings):
@@ -1779,7 +1778,7 @@ class EconomyCog(commands.Cog):
 
         gated = await self._gated_perks(guild.id)
 
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         embed = build_shop_embed(
             settings,
             gated,
@@ -1815,7 +1814,7 @@ class EconomyCog(commands.Cog):
         user_id = interaction.user.id
 
         def _buy() -> int:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return purchase_streak_shield(conn, settings, guild.id, user_id)
 
         try:
@@ -1862,7 +1861,7 @@ class EconomyCog(commands.Cog):
             return
 
         def _buy() -> raffle_svc.TicketPurchase:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 offset = get_tz_offset_hours(conn, guild.id)
                 week = quest_rules.iso_week_for(local_day_for(time.time(), offset))
                 return raffle_svc.buy_tickets(
@@ -1925,7 +1924,7 @@ class EconomyCog(commands.Cog):
         user_id = interaction.user.id
 
         def _load() -> tuple[dict | None, int]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 if target == "shield":
                     return None, get_streak_shield_price(
                         conn, guild.id, user_id, settings
@@ -1984,7 +1983,7 @@ class EconomyCog(commands.Cog):
         if target == "shield":
 
             def _refund_shield() -> int:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     return refund_streak_shield(conn, guild.id, user_id, settings)
 
             try:
@@ -2006,7 +2005,7 @@ class EconomyCog(commands.Cog):
         rental_id = int(target.split(":", 1)[1])
 
         def _refund_rental() -> RentalRefund:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return refund_rental(
                     conn, guild.id, rental_id, requester_id=user_id
                 )
@@ -2025,7 +2024,7 @@ class EconomyCog(commands.Cog):
         # this dispatcher uses for the same reason (economy_loop.py).
         try:
             await revoke_perk_effect(
-                self.bot, self.ctx.db_path, guild.id, result.perk, result.rental_id,
+                self.bot, self.bot.ctx.db_path, guild.id, result.perk, result.rental_id,
                 result.beneficiary_id,
             )
         except asyncio.CancelledError:
@@ -2073,7 +2072,7 @@ class EconomyCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         def _submit():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return submit_sponsor(
                     conn, settings, guild.id, member.id, question
                 )
@@ -2087,10 +2086,10 @@ class EconomyCog(commands.Cog):
         # The money is already taken and the row exists; a card failure must
         # never surface as an error to the member (it's still resolvable from
         # the dashboard), so this is best-effort inside post_review_card.
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
         await post_review_card(
             self.bot,
-            self.ctx,
+            self.bot.ctx,
             guild,
             settings,
             accent,
@@ -2150,7 +2149,7 @@ class EconomyCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         def _submit():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return submit_pin(conn, settings, guild.id, member.id, message)
 
         try:
@@ -2161,9 +2160,9 @@ class EconomyCog(commands.Cog):
 
         # Money's taken and the row exists; a card failure must never surface as
         # an error to the member (it's still resolvable), so it's best-effort.
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
         await post_pin_review_card(
-            self.bot, self.ctx, guild, settings, accent, outcome.submission_id, member
+            self.bot, self.bot.ctx, guild, settings, accent, outcome.submission_id, member
         )
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(
@@ -2228,7 +2227,7 @@ class EconomyCog(commands.Cog):
             return
 
         def _create():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return create_bounty(
                     conn, settings, guild.id, member.id,
                     title=title, description=description, stake=stake,
@@ -2240,9 +2239,9 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
             return
 
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
         await post_bounty_card(
-            self.bot, self.ctx, guild, settings, accent, outcome.bounty_id
+            self.bot, self.bot.ctx, guild, settings, accent, outcome.bounty_id
         )
         # The new bounty belongs on the hub's open list straight away.
         await self.refresh_bounty_hub_panel(guild)
@@ -2311,7 +2310,7 @@ class EconomyCog(commands.Cog):
         guild_has_room = len(same_kind) < max(0, guild.emoji_limit - 1)
 
         ext = "gif" if animated else "png"
-        directory = self.ctx.db_path.parent / "econ_emoji" / str(guild.id)
+        directory = self.bot.ctx.db_path.parent / "econ_emoji" / str(guild.id)
         path = directory / f"{int(time.time())}_{member.id}.{ext}"
 
         taken = {e.name for e in guild.emojis}
@@ -2323,7 +2322,7 @@ class EconomyCog(commands.Cog):
             # unlink below still undoes a rejected submission.
             directory.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 for row in emoji_svc.list_submissions(conn, guild.id):
                     if row["state"] in ("pending", "approved", "live"):
                         taken.add(str(row["name"]))
@@ -2365,7 +2364,7 @@ class EconomyCog(commands.Cog):
         """Bare /bank emoji: show the member's in-flight sponsorship, if any."""
 
         def _load():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return emoji_svc.open_submission(conn, guild.id, member.id)
 
         row = await asyncio.to_thread(_load)
@@ -2400,7 +2399,7 @@ class EconomyCog(commands.Cog):
         self, interaction: discord.Interaction, submission_id: int
     ) -> None:
         def _cancel():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return emoji_svc.cancel_submission(
                     conn, submission_id, user_id=interaction.user.id
                 )
@@ -2475,8 +2474,8 @@ class EconomyCog(commands.Cog):
             # The recipient's staff comp counts here — gifting a mod a perk
             # they already get free should hit the "already has it" confirm,
             # not silently take the gifter's coins.
-            recipient_is_staff = self.ctx.member_is_mod(member)
-            with self.ctx.open_db() as conn:
+            recipient_is_staff = self.bot.ctx.member_is_mod(member)
+            with self.bot.ctx.open_db() as conn:
                 return effective_entitlements(
                     conn, guild.id, member.id, is_staff=recipient_is_staff
                 )
@@ -2511,7 +2510,7 @@ class EconomyCog(commands.Cog):
         """Charge the gifter and open the rental with the friend as beneficiary."""
 
         def _rent() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 rent_perk(
                     conn, settings, guild.id, gifter.id, perk,
                     beneficiary_id=member.id, now=time.time(),
@@ -2539,7 +2538,7 @@ class EconomyCog(commands.Cog):
         # the charged gifter staring at "This interaction failed."
         await self._defer(interaction, via_confirm=via_confirm)
         if perk in SELF_PERKS:
-            await apply_role_perks(self.bot, self.ctx.db_path, guild.id, member.id)
+            await apply_role_perks(self.bot, self.bot.ctx.db_path, guild.id, member.id)
         # `/bank role icon` (upload) hard-refuses catalog servers, so only hint it
         # off-catalog; on a catalog server the recipient picks from /bank shop.
         note = ""
@@ -2554,7 +2553,7 @@ class EconomyCog(commands.Cog):
         else:
             gift_hint = "Set it up from /bank shop."
         await notify_member(
-            self.bot, self.ctx.db_path, guild.id, member.id,
+            self.bot, self.bot.ctx.db_path, guild.id, member.id,
             content=(
                 f"{gifter.display_name} gifted you **{label}**! {gift_hint}"
             ),
@@ -2643,7 +2642,7 @@ class EconomyCog(commands.Cog):
         user_id = interaction.user.id
 
         def _load() -> tuple[EconSettings, dict | None, int | None]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild.id)
                 row = get_catalog_color(conn, guild.id, color_id)
                 pair = color_ints(row) if row is not None else None
@@ -2674,14 +2673,14 @@ class EconomyCog(commands.Cog):
 
         primary, secondary = color["pair"]
         colors_patch = {"color": primary, "color2": secondary}
-        comped = settings.mod_perk_comp and self.ctx.is_mod(interaction)
+        comped = settings.mod_perk_comp and self.bot.ctx.is_mod(interaction)
         if existing_id is None and comped:
             # The comp entitles role_preset, and a palette colour IS that perk at
             # a per-colour price — charging staff here would make the curated
             # colours the one thing the comp didn't cover. No rental row: a comp
             # never creates one.
             def _set_comped_color() -> None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     upsert_personal_role(conn, guild.id, user_id, colors_patch)
 
             await asyncio.to_thread(_set_comped_color)
@@ -2691,7 +2690,7 @@ class EconomyCog(commands.Cog):
             # failed upfront debit rolls the whole thing back (the ValueError
             # must propagate out of the `with` block — never caught inside it).
             def _rent() -> None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     rent_perk(
                         conn, settings, guild.id, user_id, "role_preset",
                         catalog_color_id=color_id, now=time.time(),
@@ -2715,7 +2714,7 @@ class EconomyCog(commands.Cog):
             verb = "Rented"
         else:
             def _switch() -> None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     set_rental_catalog_color(conn, guild.id, existing_id, color_id)
                     upsert_personal_role(conn, guild.id, user_id, colors_patch)
 
@@ -2725,7 +2724,7 @@ class EconomyCog(commands.Cog):
         # Defer before apply_role_perks — its rate-limited role edits can exceed
         # the 3s budget, and the rent/switch is already committed.
         await interaction.response.defer(ephemeral=True, thinking=True)
-        ok = await apply_role_perks(self.bot, self.ctx.db_path, guild.id, user_id)
+        ok = await apply_role_perks(self.bot, self.bot.ctx.db_path, guild.id, user_id)
         tail = (
             "" if ok else " (I couldn't update your role right now — try again shortly.)"
         )
@@ -2755,7 +2754,7 @@ class EconomyCog(commands.Cog):
         user_id = interaction.user.id
 
         def _load() -> tuple[EconSettings, dict | None, int | None]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild.id)
                 row = get_catalog_icon(conn, guild.id, icon_id)
                 icon = (
@@ -2783,7 +2782,7 @@ class EconomyCog(commands.Cog):
         if not await self._role_icon_gate_ok(interaction, guild.id):
             return
 
-        comped = settings.mod_perk_comp and self.ctx.is_mod(interaction)
+        comped = settings.mod_perk_comp and self.bot.ctx.is_mod(interaction)
         if existing_id is None and comped:
             # The comp entitles role_icon, and a catalog icon IS that perk at a
             # per-icon price — so charging staff here would have made the
@@ -2791,7 +2790,7 @@ class EconomyCog(commands.Cog):
             # a comp never creates one, and without it this branch stays the
             # path every time they change icon.
             def _set_comped_icon() -> None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     upsert_personal_role(
                         conn, guild.id, user_id, {"icon_path": icon["image_path"]}
                     )
@@ -2803,7 +2802,7 @@ class EconomyCog(commands.Cog):
             # upfront debit rolls the whole thing back (the ValueError must
             # propagate out of the `with` block — never caught inside it).
             def _rent() -> None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     rent_perk(
                         conn, settings, guild.id, user_id, "role_icon",
                         catalog_icon_id=icon_id, now=time.time(),
@@ -2829,7 +2828,7 @@ class EconomyCog(commands.Cog):
             verb = "Rented"
         else:
             def _switch() -> None:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     set_rental_catalog_icon(conn, guild.id, existing_id, icon_id)
                     upsert_personal_role(
                         conn, guild.id, user_id, {"icon_path": icon["image_path"]}
@@ -2841,7 +2840,7 @@ class EconomyCog(commands.Cog):
         # Defer before apply_role_perks — its rate-limited role edits can exceed
         # the 3s budget, and the rent/switch is already committed.
         await interaction.response.defer(ephemeral=True, thinking=True)
-        ok = await apply_role_perks(self.bot, self.ctx.db_path, guild.id, user_id)
+        ok = await apply_role_perks(self.bot, self.bot.ctx.db_path, guild.id, user_id)
         tail = (
             "" if ok else " (I couldn't update your role right now — try again shortly.)"
         )
@@ -2873,7 +2872,7 @@ class EconomyCog(commands.Cog):
         user_id = interaction.user.id
 
         def _load() -> tuple[EconSettings, dict | None]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 fresh = load_econ_settings(conn, guild.id)
                 row = get_live_role_icon_rental(conn, guild.id, user_id)
                 existing = (
@@ -2907,12 +2906,12 @@ class EconomyCog(commands.Cog):
             return
 
         def _switch() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 set_rental_catalog_icon(conn, guild.id, existing["id"], None)
                 upsert_personal_role(conn, guild.id, user_id, {"icon_path": ""})
 
         await asyncio.to_thread(_switch)
-        await apply_role_perks(self.bot, self.ctx.db_path, guild.id, user_id)
+        await apply_role_perks(self.bot, self.bot.ctx.db_path, guild.id, user_id)
         await interaction.response.send_message(
             f"Switched to a **custom icon** ({settings.currency_emoji} "
             f"{settings.price_role_icon:,}/week from your next renewal). "
@@ -3099,7 +3098,7 @@ class EconomyCog(commands.Cog):
         # win). Refunding only their row leaves the rest of the pot intact
         # for the players still in the game.
         def _refund_wagers() -> int:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 total = 0
                 for row in wager_svc.live_stakes_for_member(
                     conn, guild.id, member.id
@@ -3124,7 +3123,7 @@ class EconomyCog(commands.Cog):
             )
 
         def _cancel() -> list:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return cancel_all_for_member(
                     conn, guild.id, member.id, now=time.time()
                 )
@@ -3138,7 +3137,7 @@ class EconomyCog(commands.Cog):
         for beneficiary_id in affected:
             try:
                 await revoke_role_perks(
-                    self.bot, self.ctx.db_path, guild.id, beneficiary_id
+                    self.bot, self.bot.ctx.db_path, guild.id, beneficiary_id
                 )
             except Exception:
                 log.exception(
@@ -3155,7 +3154,7 @@ class EconomyCog(commands.Cog):
         # interaction budget — leaving the member with "This interaction failed"
         # even though the perk saved.
         await interaction.response.defer(ephemeral=True, thinking=True)
-        ok = await apply_role_perks(self.bot, self.ctx.db_path, guild_id, user_id)
+        ok = await apply_role_perks(self.bot, self.bot.ctx.db_path, guild_id, user_id)
         if ok:
             await interaction.edit_original_response(content=msg)
         else:
@@ -3202,7 +3201,7 @@ class EconomyCog(commands.Cog):
             self._load_role_ctx,
             guild_id,
             interaction.user.id,
-            self.ctx.is_mod(interaction),
+            self.bot.ctx.is_mod(interaction),
         )
         if await self._refuse_disabled(interaction, settings):
             return False
@@ -3259,7 +3258,7 @@ class EconomyCog(commands.Cog):
         """
         def _write() -> None:
             # _icon_store_path mkdirs, so it belongs on the worker thread too.
-            path = _icon_store_path(self.ctx.db_path, guild_id, user_id)
+            path = _icon_store_path(self.bot.ctx.db_path, guild_id, user_id)
             path.write_bytes(data)
             self._upsert_role(guild_id, user_id, {"icon_path": str(path)})
 
@@ -3302,7 +3301,7 @@ class EconomyCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
     def _balance(self, guild_id: int, user_id: int) -> int:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return get_balance(conn, guild_id, user_id)
 
     async def _short_funds_text(
@@ -3336,7 +3335,7 @@ class EconomyCog(commands.Cog):
         before rendering anything, so reading the rest would be paying five
         queries to say "the economy is off".
         """
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             if not settings.enabled:
                 return _ShopContext(settings, set(), set(), 0, None, None, [], 0, 0)
@@ -3370,7 +3369,7 @@ class EconomyCog(commands.Cog):
         No balance: the shop header is the only surface that shows one, and it
         reads the whole page through ``_shop_context``.
         """
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             ent = effective_entitlements(
                 conn, guild_id, user_id, is_staff=is_staff
@@ -3378,18 +3377,18 @@ class EconomyCog(commands.Cog):
         return settings, ent
 
     def _name_blocklist(self, guild_id: int) -> list[str]:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return list_name_blocklist(conn, guild_id)
 
     def _upsert_role(
         self, guild_id: int, user_id: int, values: dict[str, object]
     ) -> None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             upsert_personal_role(conn, guild_id, user_id, values)
 
     def _load_catalog(self, guild_id: int) -> list[dict]:
         """Enabled catalog icons a member may rent, as plain dicts for the view."""
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return [
                 {"id": int(r["id"]), "name": r["name"], "price": int(r["price"])}
                 for r in list_catalog(conn, guild_id, enabled_only=True)
@@ -3402,7 +3401,7 @@ class EconomyCog(commands.Cog):
         here, so the select's descriptions quote what the member will actually be
         charged rather than a raw 0.
         """
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             return [
                 {
@@ -3417,7 +3416,7 @@ class EconomyCog(commands.Cog):
 
     def _icon_price_range(self, guild_id: int) -> tuple[int, int, int] | None:
         """(min, max, count) over enabled icons, or None with no catalog set up."""
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return catalog_price_range(conn, guild_id)
 
     def _catalog_locked(self, guild_id: int, user_id: int) -> bool:
@@ -3429,7 +3428,7 @@ class EconomyCog(commands.Cog):
         rental — the entitlement check upstream handles that) uploads freely,
         catalog or not.
         """
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             row = get_live_role_icon_rental(conn, guild_id, user_id)
         return row is not None and row["catalog_icon_id"] is not None
 
@@ -3452,7 +3451,7 @@ class EconomyCog(commands.Cog):
         if await self._refuse_disabled(interaction, settings):
             return
 
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         embed = build_quest_board_embed(settings, quests_state, color=accent)
         if not quests_state:
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -3465,7 +3464,7 @@ class EconomyCog(commands.Cog):
             "embed": embed,
             "ephemeral": True,
             "view": QuestClaimView(
-                self.ctx, settings, guild, claimable,
+                self.bot.ctx, settings, guild, claimable,
                 rerollable=rerollable if show_reroll else None,
                 reroll_cost=board_meta.get("reroll_cost"),
                 local_day=str(board_meta.get("local_day") or ""),
@@ -3483,7 +3482,7 @@ class EconomyCog(commands.Cog):
         Community quests carry their running total (no self-claim); daily/weekly
         carry ``claimable``/``pending``/``done`` for this period's key.
         """
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             if not settings.enabled:
                 return settings, [], {}
@@ -3540,7 +3539,7 @@ class EconomyCog(commands.Cog):
         if cached is None or cached[0] <= now:
 
             def _load() -> list[quests_svc.TriggerQuest]:
-                with self.ctx.open_db() as conn:
+                with self.bot.ctx.open_db() as conn:
                     return quests_svc.load_trigger_index(conn, guild_id)
 
             try:
@@ -3572,7 +3571,7 @@ class EconomyCog(commands.Cog):
         booster = member.premium_since is not None
 
         def _claim():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return quests_svc.claim_trigger_word(
                     conn, guild.id, member.id, trig,
                     booster=booster, now=time.time(),
@@ -3613,9 +3612,9 @@ class EconomyCog(commands.Cog):
         else:
             # Sign-off trigger quest: the phrase files the claim; a manager
             # still approves the payout from the bank-channel card.
-            accent = await safe_resolve_accent(self.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
+            accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
             await post_signoff_card(
-                self.bot, self.ctx, guild, settings, accent,
+                self.bot, self.bot.ctx, guild, settings, accent,
                 int(outcome.claim_id), member,
             )
             reaction = "📝"
@@ -3643,7 +3642,7 @@ class EconomyCog(commands.Cog):
             return cached[1]
 
         def _read() -> int:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return photo_svc.read_photo_channel(conn, guild_id)
 
         try:
@@ -3683,7 +3682,7 @@ class EconomyCog(commands.Cog):
         guild_id = message.guild.id
 
         def _possible() -> bool:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return photo_svc.payout_possible(conn, guild_id)
 
         try:
@@ -3699,7 +3698,7 @@ class EconomyCog(commands.Cog):
         booster = member.premium_since is not None
 
         def _claim():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return photo_svc.award_photo_post(
                     conn, guild_id, member.id,
                     channel_id=channel_id, booster=booster, now=time.time(),
@@ -3743,13 +3742,13 @@ class EconomyCog(commands.Cog):
         """
         if before.roles == after.roles:
             return
-        was_staff = self.ctx.member_is_mod(before)
-        now_staff = self.ctx.member_is_mod(after)
+        was_staff = self.bot.ctx.member_is_mod(before)
+        now_staff = self.bot.ctx.member_is_mod(after)
         if was_staff == now_staff:
             return
 
         def _comp_on() -> bool:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, after.guild.id)
             return settings.enabled and settings.mod_perk_comp
 
@@ -3757,11 +3756,11 @@ class EconomyCog(commands.Cog):
             return
         if now_staff:
             await apply_role_perks(
-                self.bot, self.ctx.db_path, after.guild.id, after.id
+                self.bot, self.bot.ctx.db_path, after.guild.id, after.id
             )
         else:
             await revoke_role_perks(
-                self.bot, self.ctx.db_path, after.guild.id, after.id
+                self.bot, self.bot.ctx.db_path, after.guild.id, after.id
             )
 
     @commands.Cog.listener("on_member_update")
@@ -3781,7 +3780,7 @@ class EconomyCog(commands.Cog):
         occurrence = str(int(after.premium_since.timestamp()))
 
         def _fire():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 return fire_trigger_inline(
                     conn,
                     guild_id,
@@ -3820,7 +3819,7 @@ class EconomyCog(commands.Cog):
         booster = member.premium_since is not None
 
         def _claim():
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
                 if not settings.enabled:
                     return None
@@ -3946,7 +3945,7 @@ class EconomyCog(commands.Cog):
         accent = (
             None
             if card_file is not None
-            else await safe_resolve_accent(self.ctx, guild, log_label="economy")
+            else await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         )
 
         content: str | None = None
@@ -3988,7 +3987,7 @@ class EconomyCog(commands.Cog):
         posted_question = question
 
         def _record() -> None:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 offset = get_tz_offset_hours(conn, guild_id)
                 today = local_day_for(time.time(), offset)
                 qotd_id = create_qotd(
@@ -4070,7 +4069,7 @@ class EconomyCog(commands.Cog):
 
     def _panel_ids(self, guild_id: int, kind: str) -> tuple[int, int]:
         chan_field, msg_field = self._PANEL_FIELDS[kind]
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             s = load_econ_settings(conn, guild_id)
         if not s.enabled:
             return 0, 0
@@ -4080,7 +4079,7 @@ class EconomyCog(commands.Cog):
         self, guild_id: int, kind: str, channel_id: int, message_id: int
     ) -> None:
         chan_field, msg_field = self._PANEL_FIELDS[kind]
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             save_econ_settings(
                 conn, guild_id, {chan_field: channel_id, msg_field: message_id}
             )
@@ -4099,7 +4098,7 @@ class EconomyCog(commands.Cog):
         hub, and fail to delete the first — leaving two live hubs, the stale
         one listing bounties whose cards now post elsewhere.
         """
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             s = load_econ_settings(conn, guild_id)
         if not s.enabled or not bounty_enabled(s):
             return 0, 0
@@ -4117,7 +4116,7 @@ class EconomyCog(commands.Cog):
         with it; ``post_bounty_panel`` refuses any channel but the board, so
         these two agree on every normal path and diverge only after a repoint.
         """
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             save_econ_settings(
                 conn,
                 guild_id,
@@ -4137,7 +4136,7 @@ class EconomyCog(commands.Cog):
         the ids are cleared either way so this can't be retried forever.
         """
         def _read() -> tuple[int, int, int]:
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 s = load_econ_settings(conn, guild.id)
                 return (
                     int(s.bounty_panel_channel_id),
@@ -4205,7 +4204,7 @@ class EconomyCog(commands.Cog):
         return await self.bounty_panel.place_or_refresh(guild, channel)
 
     def _bot_chasing_rival(self, guild_id: int, channel_id: int) -> str | None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return bot_chasing_resident(
                 conn, guild_id, channel_id, excluding="bounty"
             )
@@ -4235,7 +4234,7 @@ class EconomyCog(commands.Cog):
             # runs on every sticky repost, so a second connect+PRAGMA for one
             # settings row was the most-repeated waste in the cog.
             #
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild.id)
                 data = collect_leaderboard_data(conn, guild.id, now_ts)
                 known = get_known_users_bulk(
@@ -4251,7 +4250,7 @@ class EconomyCog(commands.Cog):
                 return member.display_name
             return known.get(uid) or f"User {uid}"
 
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         return PanelContent(
             embed=build_leaderboard_embed(
                 settings, data, _name, now_ts=now_ts, color=accent
@@ -4276,7 +4275,7 @@ class EconomyCog(commands.Cog):
         catalog / no colour palette.
         """
         gated = await self._gated_perks(guild.id)
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="economy")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         return build_shop_embed(
             settings, gated, accent, panel=True, icon_catalog=icon_range,
             color_catalog=color_range,
@@ -4288,7 +4287,7 @@ class EconomyCog(commands.Cog):
         ]:
             # One connection for all three, like _build_economy_panel — this
             # runs on every debounced sticky repost.
-            with self.ctx.open_db() as conn:
+            with self.bot.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild.id)
                 return (
                     settings,
@@ -4311,7 +4310,7 @@ class EconomyCog(commands.Cog):
     # guild — so they go through the service instead of _PANEL_FIELDS.
 
     def _auction_card_ids(self, guild_id: int) -> tuple[int, int]:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             if not load_econ_settings(conn, guild_id).enabled:
                 return 0, 0
             return card_ids(conn, guild_id)
@@ -4319,7 +4318,7 @@ class EconomyCog(commands.Cog):
     def _save_auction_card_ids(
         self, guild_id: int, channel_id: int, message_id: int
     ) -> None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             attach_card_to_latest(conn, guild_id, channel_id, message_id)
 
     async def _build_auction_panel(self, guild: discord.Guild) -> PanelContent:
@@ -4522,7 +4521,7 @@ class EconomyCog(commands.Cog):
         settings loads to save five settings loads would be silly.
         """
         keys = ("econ_enabled", *self._PANEL_CHANNEL_KEYS.values())
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             rows = conn.execute(
                 "SELECT guild_id, key, value FROM config WHERE key IN "
                 f"({','.join('?' * len(keys))})",
@@ -4565,21 +4564,21 @@ class EconomyCog(commands.Cog):
         self.bounty_panel.set_known_guilds(by_kind["bounty"])
 
     def _load_settings(self, guild_id: int) -> EconSettings:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return load_econ_settings(conn, guild_id)
 
     def _save_settings(self, guild_id: int, values: dict[str, object]) -> None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             save_econ_settings(conn, guild_id, values)
 
     def _claim_sponsored(self, guild_id: int):
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             return claim_next_approved(conn, guild_id)
 
     def _release_sponsored(self, submission_id: int) -> None:
-        with self.ctx.open_db() as conn:
+        with self.bot.ctx.open_db() as conn:
             release_claim(conn, submission_id)
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(EconomyCog(bot, bot.ctx))
+    await bot.add_cog(EconomyCog(bot))

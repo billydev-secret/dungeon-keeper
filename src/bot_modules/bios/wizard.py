@@ -264,7 +264,7 @@ class WizardSession:
         navigates Prev/Next, or clicks Done."""
 
         def _load() -> list[BioQuestion]:
-            with self.cog.ctx.open_db() as conn:
+            with self.cog.bot.ctx.open_db() as conn:
                 return bios_db.list_active_questions(conn, self.member.guild.id)
 
         pool = await asyncio.to_thread(_load)
@@ -492,7 +492,7 @@ class WizardSession:
 
     async def _load_question(self, qid: int) -> BioQuestion | None:
         def _load() -> BioQuestion | None:
-            with self.cog.ctx.open_db() as conn:
+            with self.cog.bot.ctx.open_db() as conn:
                 return bios_db.get_question(conn, qid)
 
         return await asyncio.to_thread(_load)
@@ -598,7 +598,7 @@ class WizardSession:
         # tap it without scrolling.
         if is_new_post:
             try:
-                await reposition_trigger_button(self.cog.ctx, bios_channel)
+                await reposition_trigger_button(self.cog.bot.ctx, bios_channel)
             except Exception:
                 log.exception(
                     "Failed to reposition trigger button in guild %d",
@@ -611,7 +611,7 @@ class WizardSession:
     def _load_existing_bio_sync(
         self, guild_id: int, user_id: int
     ) -> bios_db.StoredBio | None:
-        with self.cog.ctx.open_db() as conn:
+        with self.cog.bot.ctx.open_db() as conn:
             return bios_db.get_user_bio(conn, guild_id, user_id)
 
     def _persist_sync(
@@ -635,7 +635,7 @@ class WizardSession:
             if not answer:
                 continue
             answer_rows.append((slot, q.id, q.prompt, answer))
-        with self.cog.ctx.open_db() as conn:
+        with self.cog.bot.ctx.open_db() as conn:
             bios_db.upsert_bio(
                 conn,
                 guild_id=guild_id,
@@ -796,7 +796,7 @@ async def build_session(
     guild_id = member.guild.id
 
     def _load() -> tuple[list[BioField], bios_db.StoredBio | None]:
-        with cog.ctx.open_db() as conn:
+        with cog.bot.ctx.open_db() as conn:
             tmpl = bios_db.get_template(conn, guild_id)
             fields: list[BioField] = []
             if tmpl is not None:

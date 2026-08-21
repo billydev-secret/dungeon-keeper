@@ -45,7 +45,7 @@ def cog(tmp_path: Path):
     """A stand-in carrying only what the broadcast path touches."""
     db_path = tmp_path / "casino.db"
     migrated_db(db_path)
-    ns = SimpleNamespace(ctx=SimpleNamespace(open_db=lambda: open_db(db_path)))
+    ns = SimpleNamespace(bot=SimpleNamespace(ctx=SimpleNamespace(open_db=lambda: open_db(db_path))))
     ns._top_pct_payout = MethodType(CasinoCog._top_pct_payout, ns)
     ns._bank_announced_win = MethodType(CasinoCog._bank_announced_win, ns)
     ns.db_path = db_path
@@ -195,7 +195,7 @@ async def test_a_failed_percentile_read_still_broadcasts(cog):
     def _boom():
         raise RuntimeError("db gone")
 
-    cog.ctx = SimpleNamespace(open_db=_boom)
+    cog.bot = SimpleNamespace(ctx=SimpleNamespace(open_db=_boom))
     channel = _Channel()
     await _broadcast(cog, channel, 50_000)
     assert len(channel.sends) == 1

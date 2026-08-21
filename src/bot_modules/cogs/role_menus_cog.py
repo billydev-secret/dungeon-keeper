@@ -10,14 +10,13 @@ from __future__ import annotations
 
 from discord.ext import commands
 
-from bot_modules.core.app_context import AppContext, Bot
+from bot_modules.core.app_context import Bot
 from bot_modules.role_menus.views import ROLE_MENU_DYNAMIC_ITEMS
 
 
 class RoleMenusCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
 
     async def cog_load(self) -> None:
         for cls in ROLE_MENU_DYNAMIC_ITEMS:
@@ -25,4 +24,4 @@ class RoleMenusCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(RoleMenusCog(bot, bot.ctx))
+    await bot.add_cog(RoleMenusCog(bot))

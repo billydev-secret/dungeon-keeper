@@ -454,14 +454,13 @@ class WellnessCog(commands.Cog):
         parent=wellness,
     )
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     async def cog_load(self) -> None:
         bot = self.bot
-        db_path = self.ctx.db_path
+        db_path = self.bot.ctx.db_path
         self.bot.startup_task_factories.append(lambda: wellness_tick_loop(bot, db_path))
         self.bot.startup_task_factories.append(
             lambda: wellness_active_list_loop(bot, db_path)
@@ -476,7 +475,7 @@ class WellnessCog(commands.Cog):
         name="setup", description="Opt in — pick your timezone and enforcement style."
     )
     async def setup_cmd(self, interaction: discord.Interaction) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("❌ Server only.", ephemeral=True)
@@ -525,7 +524,7 @@ class WellnessCog(commands.Cog):
         state: app_commands.Choice[str],
         message: str | None = None,
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         guild = interaction.guild
         if guild is None:
             return
@@ -574,4 +573,4 @@ class WellnessCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(WellnessCog(bot, bot.ctx))
+    await bot.add_cog(WellnessCog(bot))

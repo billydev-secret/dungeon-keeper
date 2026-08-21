@@ -37,7 +37,8 @@ def _make_cog() -> MusicPlaylistCog:
     bot = MagicMock()
     ctx = MagicMock()
     ctx.db_path = Path(":memory:")
-    cog = MusicPlaylistCog(bot, ctx)
+    bot.ctx = ctx
+    cog = MusicPlaylistCog(bot)
     cog.service = AsyncMock()
     return cog
 

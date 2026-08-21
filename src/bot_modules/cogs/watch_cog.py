@@ -14,7 +14,7 @@ from bot_modules.services.watch_service import add_watched_user, remove_watched_
 from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.watch")
 
@@ -26,9 +26,8 @@ class WatchCog(commands.Cog):
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         super().__init__()
 
     @watch.command(
@@ -39,7 +38,7 @@ class WatchCog(commands.Cog):
     async def watch_add(
         self, interaction: discord.Interaction, user: discord.Member
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -89,7 +88,7 @@ class WatchCog(commands.Cog):
     async def watch_remove(
         self, interaction: discord.Interaction, user: discord.Member
     ) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -125,7 +124,7 @@ class WatchCog(commands.Cog):
         name="list", description="List everyone you are currently watching."
     )
     async def watch_list(self, interaction: discord.Interaction) -> None:
-        ctx = self.ctx
+        ctx = self.bot.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
@@ -159,12 +158,12 @@ class WatchCog(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
-        if message.author.id not in self.ctx.watched_users:
+        if message.author.id not in self.bot.ctx.watched_users:
             return
         await self._notify_watchers(message)
 
     async def _notify_watchers(self, message: discord.Message) -> None:
-        watchers = list(self.ctx.watched_users.get(message.author.id, set()))
+        watchers = list(self.bot.ctx.watched_users.get(message.author.id, set()))
         if not watchers:
             return
 
@@ -174,7 +173,7 @@ class WatchCog(commands.Cog):
             from bot_modules.services.ai_moderation_service import ai_check_watched_message
             try:
                 is_violation, reason = await ai_check_watched_message(
-                    message, db_path=self.ctx.db_path
+                    message, db_path=self.bot.ctx.db_path
                 )
             except Exception as exc:
                 log.warning(
@@ -224,4 +223,4 @@ class WatchCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(WatchCog(bot, bot.ctx))
+    await bot.add_cog(WatchCog(bot))

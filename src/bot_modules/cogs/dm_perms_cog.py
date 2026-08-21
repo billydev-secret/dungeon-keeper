@@ -68,7 +68,7 @@ from bot_modules.services.dm_perms_service import (
 from bot_modules.services.no_contact_service import is_no_contact
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ class AskConsentView(discord.ui.View):
             )
             return
 
-        record = load_request_by_message_id(self.cog.ctx.db_path, message.id)
+        record = load_request_by_message_id(self.cog.bot.ctx.db_path, message.id)
         if record is None:
             try:
                 await interaction.response.edit_message(
@@ -176,7 +176,7 @@ class AskConsentView(discord.ui.View):
             )
             return
 
-        record = load_request_by_message_id(self.cog.ctx.db_path, message.id)
+        record = load_request_by_message_id(self.cog.bot.ctx.db_path, message.id)
         if record is None:
             try:
                 await interaction.response.edit_message(
@@ -202,7 +202,7 @@ class AskConsentView(discord.ui.View):
         if guild is None:
             # Bot was removed from the guild after the request was sent.
             self.cog._drop_request_from_memory(guild_id, requester_id, target_id)
-            remove_request(self.cog.ctx.db_path, guild_id, requester_id, target_id)
+            remove_request(self.cog.bot.ctx.db_path, guild_id, requester_id, target_id)
             try:
                 await interaction.response.edit_message(
                     embed=build_guild_unavailable_embed(), view=None
@@ -265,12 +265,12 @@ class AskConsentView(discord.ui.View):
         self.cog.consent_pairs[guild.id].add((target_id, requester_id))
 
         add_consent_pair(
-            self.cog.ctx.db_path, guild.id, requester_id, target_id,
+            self.cog.bot.ctx.db_path, guild.id, requester_id, target_id,
             rel_type=req_type, reason=reason,
             source_msg_id=source_msg_id, source_channel_id=source_channel_id,
         )
         self.cog._drop_request_from_memory(guild.id, requester_id, target_id)
-        remove_request(self.cog.ctx.db_path, guild.id, requester_id, target_id)
+        remove_request(self.cog.bot.ctx.db_path, guild.id, requester_id, target_id)
 
         type_label = request_type_label(req_type)
         success_embed = build_acceptance_embed(
@@ -283,11 +283,11 @@ class AskConsentView(discord.ui.View):
         )
 
         await interaction.response.edit_message(embed=success_embed, view=None)
-        await _dm(requester, self.cog.ctx.db_path, guild, embed=success_embed)
-        await _dm(target, self.cog.ctx.db_path, guild, embed=success_embed)
+        await _dm(requester, self.cog.bot.ctx.db_path, guild, embed=success_embed)
+        await _dm(target, self.cog.bot.ctx.db_path, guild, embed=success_embed)
 
         write_audit_log(
-            self.cog.ctx.db_path, guild.id, "request_accepted",
+            self.cog.bot.ctx.db_path, guild.id, "request_accepted",
             actor_id=target_id, user_a_id=requester_id, user_b_id=target_id,
             notes=f"type={req_type}",
         )
@@ -346,7 +346,7 @@ class AskConsentView(discord.ui.View):
         type_label = request_type_label(req_type)
 
         self.cog._drop_request_from_memory(guild.id, requester_id, target_id)
-        remove_request(self.cog.ctx.db_path, guild.id, requester_id, target_id)
+        remove_request(self.cog.bot.ctx.db_path, guild.id, requester_id, target_id)
 
         if requester:
             target_name = target.display_name if target else str(target_id)
@@ -357,10 +357,10 @@ class AskConsentView(discord.ui.View):
                 reason=reason,
                 reply=reply,
             )
-            await _dm(requester, self.cog.ctx.db_path, guild, embed=req_embed)
+            await _dm(requester, self.cog.bot.ctx.db_path, guild, embed=req_embed)
 
         write_audit_log(
-            self.cog.ctx.db_path, guild.id, "request_denied",
+            self.cog.bot.ctx.db_path, guild.id, "request_denied",
             actor_id=target_id, user_a_id=requester_id, user_b_id=target_id,
             notes=f"type={req_type}" + ("; replied" if reply else ""),
         )
@@ -481,7 +481,7 @@ class DmDenyReplyModal(discord.ui.Modal, title="Decline With a Reply"):
         reply = str(self.reply.value or "").strip()
         view = self._view
 
-        record = load_request_by_message_id(view.cog.ctx.db_path, self._message.id)
+        record = load_request_by_message_id(view.cog.bot.ctx.db_path, self._message.id)
         if record is None:
             await interaction.response.send_message(
                 "❌ That request is no longer pending.", ephemeral=True
@@ -593,7 +593,7 @@ class DmSettingsView(discord.ui.View):
 
     async def _embed(self) -> discord.Embed:
         guild = self.member.guild
-        accent = await safe_resolve_accent(self.cog.ctx, guild, log_label="dm perms")
+        accent = await safe_resolve_accent(self.cog.bot.ctx, guild, log_label="dm perms")
         return build_dm_settings_embed(
             self._current_mode(),
             guild.icon.url if guild.icon else None,
@@ -673,7 +673,7 @@ class DmSettingsView(discord.ui.View):
         # it away?" could only be answered by trawling role_events.
         await asyncio.to_thread(
             write_audit_log,
-            self.cog.ctx.db_path,
+            self.cog.bot.ctx.db_path,
             self.member.guild.id,
             "mode_set",
             actor_id=self.member.id,
@@ -817,9 +817,8 @@ async def _dm(
 # ---------------------------------------------------------------------------
 
 class DmPermsCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         self.consent_pairs: dict[int, set[tuple[int, int]]] = {}
         self.dm_requests: dict[int, dict[tuple[int, int], dict[str, Any]]] = {}
         self.request_channels: dict[int, int] = {}
@@ -840,13 +839,13 @@ class DmPermsCog(commands.Cog):
 
     async def cog_load(self) -> None:
         def _load_all() -> dict[str, Any]:
-            init_db(self.ctx.db_path)
+            init_db(self.bot.ctx.db_path)
             return {
-                "consent_pairs": load_consent_pairs(self.ctx.db_path),
-                "dm_requests": load_requests(self.ctx.db_path),
-                "request_channels": load_request_channels(self.ctx.db_path),
-                "panel_settings": load_panel_settings(self.ctx.db_path),
-                "mode_role_ids": load_dm_mode_roles(self.ctx.db_path),
+                "consent_pairs": load_consent_pairs(self.bot.ctx.db_path),
+                "dm_requests": load_requests(self.bot.ctx.db_path),
+                "request_channels": load_request_channels(self.bot.ctx.db_path),
+                "panel_settings": load_panel_settings(self.bot.ctx.db_path),
+                "mode_role_ids": load_dm_mode_roles(self.bot.ctx.db_path),
             }
 
         loaded = await asyncio.to_thread(_load_all)
@@ -936,7 +935,7 @@ class DmPermsCog(commands.Cog):
     async def _expire_stale_now(self) -> None:
         expired = await asyncio.to_thread(
             expire_stale_pending_requests,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             max_age_seconds=REQUEST_TIMEOUT_SECONDS,
         )
         for row in expired:
@@ -952,7 +951,7 @@ class DmPermsCog(commands.Cog):
             req_type = row["request_type"]
             type_label = request_type_label(req_type)
             write_audit_log(
-                self.ctx.db_path, gid, "request_expired",
+                self.bot.ctx.db_path, gid, "request_expired",
                 user_a_id=row["requester_id"], user_b_id=row["target_id"],
                 notes=f"type={req_type}",
             )
@@ -967,7 +966,7 @@ class DmPermsCog(commands.Cog):
                     type_label=type_label,
                     request_timeout_label=REQUEST_TIMEOUT_LABEL,
                 )
-                await _dm(requester, self.ctx.db_path, guild, embed=exp_embed)
+                await _dm(requester, self.bot.ctx.db_path, guild, embed=exp_embed)
 
     # ── State helpers ────────────────────────────────────────────────────────
 
@@ -982,12 +981,12 @@ class DmPermsCog(commands.Cog):
         """Read fresh from DB so changes via the web UI take effect immediately."""
         # Reuses load_audit_channels — small dict for all guilds; fine for the
         # expected scale and avoids a stale cache after web-side edits.
-        channels = load_audit_channels(self.ctx.db_path)
+        channels = load_audit_channels(self.bot.ctx.db_path)
         ch = channels.get(guild_id)
         return int(ch) if ch else None
 
     async def _post_audit(self, guild: discord.Guild, message: str) -> None:
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="dm perms")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="dm perms")
         await post_audit_event(
             guild, self._audit_channel_for(guild.id), message, color=accent
         )
@@ -1009,7 +1008,7 @@ class DmPermsCog(commands.Cog):
         # ``check_no_contact=False`` is for the one caller that has already
         # made this exact query and folds the result in itself; it must never
         # be passed by a caller that hasn't.
-        if check_no_contact and is_no_contact(self.ctx.db_path, guild_id, a, b):
+        if check_no_contact and is_no_contact(self.bot.ctx.db_path, guild_id, a, b):
             return False
         pairs = self.consent_pairs.get(guild_id, set())
         return (a, b) in pairs and (b, a) in pairs
@@ -1051,7 +1050,7 @@ class DmPermsCog(commands.Cog):
         # an existing refusal verbatim, and it is the right kind of lie: it
         # describes a general setting of hers rather than anything about him,
         # so it reads the same whether or not he is the reason.
-        no_contact = is_no_contact(self.ctx.db_path, guild.id, requester.id, target.id)
+        no_contact = is_no_contact(self.bot.ctx.db_path, guild.id, requester.id, target.id)
         if target_in_guild and no_contact:
             target_mode = "closed"
         return classify_dm_request(
@@ -1095,7 +1094,7 @@ class DmPermsCog(commands.Cog):
         # Per-requester rate limit: cap concurrent pending requests so a single
         # user can't spam DM prompts to dozens of targets at once.
         pending_count = count_pending_for_requester(
-            self.ctx.db_path, guild.id, requester.id
+            self.bot.ctx.db_path, guild.id, requester.id
         )
         if pending_count >= MAX_PENDING_PER_REQUESTER:
             limit_msg = (
@@ -1112,7 +1111,7 @@ class DmPermsCog(commands.Cog):
             await interaction.response.defer(ephemeral=True)
 
         type_label = request_type_label(req_type)
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="dm perms")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="dm perms")
         embed = build_request_dm_embed(
             guild_name=guild.name,
             requester_display_name=requester.display_name,
@@ -1124,7 +1123,7 @@ class DmPermsCog(commands.Cog):
         )
 
         message = await _dm(
-            user, self.ctx.db_path, guild, embed=embed, view=AskConsentView(self)
+            user, self.bot.ctx.db_path, guild, embed=embed, view=AskConsentView(self)
         )
         if message is None:
             await interaction.followup.send(
@@ -1140,7 +1139,7 @@ class DmPermsCog(commands.Cog):
             "created_at": now_ts, "status": "pending",
         }
         upsert_request(
-            self.ctx.db_path, guild.id, requester.id, user.id,
+            self.bot.ctx.db_path, guild.id, requester.id, user.id,
             req_type, reason_clean, message.id, None,
         )
 
@@ -1152,10 +1151,10 @@ class DmPermsCog(commands.Cog):
             reason=reason_clean,
             color=accent,
         )
-        await _dm(requester, self.ctx.db_path, guild, embed=sender_embed)
+        await _dm(requester, self.bot.ctx.db_path, guild, embed=sender_embed)
 
         write_audit_log(
-            self.ctx.db_path, guild.id, "request_asked",
+            self.bot.ctx.db_path, guild.id, "request_asked",
             actor_id=requester.id, user_a_id=requester.id, user_b_id=user.id,
             notes=f"type={req_type}",
         )
@@ -1181,7 +1180,7 @@ class DmPermsCog(commands.Cog):
             "panel_channel_id": channel_id or None,
             "panel_message_id": message_id or None,
         }
-        set_panel_settings(self.ctx.db_path, guild_id, channel_id, message_id)
+        set_panel_settings(self.bot.ctx.db_path, guild_id, channel_id, message_id)
         self._publish_panel_guilds()
 
     def _publish_panel_guilds(self) -> None:
@@ -1196,7 +1195,7 @@ class DmPermsCog(commands.Cog):
         )
 
     async def _build_panel(self, guild: discord.Guild) -> PanelContent:
-        accent = await safe_resolve_accent(self.ctx, guild, log_label="dm perms")
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="dm perms")
         return PanelContent(
             embed=build_panel_embed(
                 color=accent, role_names=self._mode_role_names_for(guild)
@@ -1286,9 +1285,9 @@ class DmPermsCog(commands.Cog):
         """
         guild_id = guild.id
         pair_set = self.consent_pairs.get(guild_id, set())
-        meta = get_consent_pair_meta(self.ctx.db_path, guild_id, actor.id, target.id)
+        meta = get_consent_pair_meta(self.bot.ctx.db_path, guild_id, actor.id, target.id)
         db_removed = remove_consent_pair(
-            self.ctx.db_path, guild_id, actor.id, target.id
+            self.bot.ctx.db_path, guild_id, actor.id, target.id
         )
         in_memory_removed = discard_consent_pair(pair_set, actor.id, target.id)
 
@@ -1312,11 +1311,11 @@ class DmPermsCog(commands.Cog):
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     pass
 
-        await _dm(actor, self.ctx.db_path, guild, embed=revoked_embed)
-        await _dm(target, self.ctx.db_path, guild, embed=revoked_embed)
+        await _dm(actor, self.bot.ctx.db_path, guild, embed=revoked_embed)
+        await _dm(target, self.bot.ctx.db_path, guild, embed=revoked_embed)
 
         write_audit_log(
-            self.ctx.db_path, guild_id, "relationship_revoked",
+            self.bot.ctx.db_path, guild_id, "relationship_revoked",
             actor_id=actor.id, user_a_id=actor.id, user_b_id=target.id,
         )
         await self._post_audit(
@@ -1329,4 +1328,4 @@ class DmPermsCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(DmPermsCog(bot, bot.ctx))
+    await bot.add_cog(DmPermsCog(bot))

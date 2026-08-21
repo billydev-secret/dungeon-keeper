@@ -128,7 +128,9 @@ def _guild_with_roles(*roles):
 @pytest.fixture
 def grant_setup():
     ctx = _make_ctx(can_grant_any_role=True, denizen_role_id=999)
-    cog = RoleGrantCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = RoleGrantCog(_bot)
     cmd = RoleGrantCog.grant_cmd.callback
 
     async def grant(interaction, member):
@@ -265,7 +267,9 @@ def prereq_setup():
     """/grant where the Member grant requires the verified role first."""
     ctx = _make_ctx(can_grant_any_role=True, denizen_role_id=999)
     ctx.grant_roles["denizen"]["required_role_id"] = PREREQ_ROLE_ID
-    cog = RoleGrantCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = RoleGrantCog(_bot)
     cmd = RoleGrantCog.grant_cmd.callback
 
     async def grant(interaction, member):
@@ -431,7 +435,9 @@ def grant_audit_setup(tmp_path):
     ctx.grant_roles["nsfw"]["role_id"] = 555
     ctx.open_db = lambda: open_db(db_path)
     ctx.db_path = db_path
-    cog = RoleGrantCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = RoleGrantCog(_bot)
 
     # /grant_audit was replaced by the dashboard's Grant Audit panel on
     # 2026-07-28. The card placement is the same; only its entry point moved,

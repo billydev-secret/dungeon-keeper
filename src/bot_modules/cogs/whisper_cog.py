@@ -2226,7 +2226,7 @@ class WhisperCog(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = bot.ctx
+        self.bot.ctx = bot.ctx
         self._launcher_locks: dict[int, asyncio.Lock] = {}
         self._pending_refresh: set[int] = set()
         self._last_send_at: dict[int, float] = {}  # sender_id -> ts
@@ -2285,7 +2285,7 @@ class WhisperCog(commands.Cog):
             self._pending_refresh.discard(guild_id)
 
             cfg = await asyncio.to_thread(
-                _load_config, self.ctx.db_path, guild_id
+                _load_config, self.bot.ctx.db_path, guild_id
             )
             if cfg.channel_id == 0:
                 return
@@ -2313,7 +2313,7 @@ class WhisperCog(commands.Cog):
                 )
                 return
             await asyncio.to_thread(
-                _do_set_launcher_id, self.ctx.db_path, guild_id, sent.id
+                _do_set_launcher_id, self.bot.ctx.db_path, guild_id, sent.id
             )
 
     @commands.Cog.listener("on_guild_remove")
@@ -2322,7 +2322,7 @@ class WhisperCog(commands.Cog):
 
     def _clear_guild_config(self, guild_id: int) -> None:
         from bot_modules.core.db_utils import delete_config_value  # noqa: PLC0415
-        with open_db(self.ctx.db_path) as conn:
+        with open_db(self.bot.ctx.db_path) as conn:
             for key in (
                 "whisper_role_id",
                 "whisper_channel_id",
@@ -2338,7 +2338,7 @@ class WhisperCog(commands.Cog):
         if not message.guild:
             return
         cfg = await asyncio.to_thread(
-            _load_config, self.ctx.db_path, message.guild.id
+            _load_config, self.bot.ctx.db_path, message.guild.id
         )
         if cfg.channel_id == 0 or message.channel.id != cfg.channel_id:
             return
@@ -2350,7 +2350,7 @@ class WhisperCog(commands.Cog):
     async def _optin_impl(self, interaction: discord.Interaction) -> None:
         """Pure shared implementation, easy to test directly."""
         assert interaction.guild is not None
-        cfg = await asyncio.to_thread(_load_config, self.ctx.db_path, interaction.guild.id)
+        cfg = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, interaction.guild.id)
         if cfg.role_id == 0:
             await interaction.response.send_message(
                 "❌ Whisper role hasn't been configured yet.", ephemeral=True
@@ -2372,7 +2372,7 @@ class WhisperCog(commands.Cog):
 
     async def _optout_impl(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
-        cfg = await asyncio.to_thread(_load_config, self.ctx.db_path, interaction.guild.id)
+        cfg = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, interaction.guild.id)
         if cfg.role_id == 0:
             await interaction.response.send_message(
                 "❌ Whisper role hasn't been configured yet.", ephemeral=True
@@ -2428,15 +2428,15 @@ class WhisperCog(commands.Cog):
             return
         whispers = await asyncio.to_thread(
             _do_list_sent,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             guild_id=interaction.guild.id,
             sender_id=interaction.user.id,
         )
         active = [w for w in whispers if not is_terminal_for_sender(w)]
-        accent = await safe_resolve_accent(self.ctx, interaction.guild, log_label="whisper")
+        accent = await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="whisper")
         name_fn = await build_name_fn(
             guild=interaction.guild,
-            db_path=self.ctx.db_path,
+            db_path=self.bot.ctx.db_path,
             guild_id=interaction.guild.id,
             user_ids=[w.target_id for w in active],
         )
@@ -2456,7 +2456,7 @@ class WhisperCog(commands.Cog):
         message: str,
     ) -> None:
         assert interaction.guild is not None
-        cfg = await asyncio.to_thread(_load_config, self.ctx.db_path, interaction.guild.id)
+        cfg = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, interaction.guild.id)
 
         sender_role_ids = {r.id for r in getattr(interaction.user, "roles", [])}
         target_role_ids = {r.id for r in getattr(target, "roles", [])}
@@ -2521,7 +2521,7 @@ class WhisperCog(commands.Cog):
         # the escalation this feature exists to prevent.
         if await asyncio.to_thread(
             no_contact_service.check_and_record,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             interaction.guild.id,
             actor_id=interaction.user.id,
             target_id=target.id,
@@ -2545,7 +2545,7 @@ class WhisperCog(commands.Cog):
 
         whisper_id = await asyncio.to_thread(
             _do_insert_whisper,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             guild_id=interaction.guild.id,
             sender_id=interaction.user.id,
             target_id=target.id,
@@ -2554,7 +2554,7 @@ class WhisperCog(commands.Cog):
 
         dm_msg = await send_branded_dm(
             target,
-            db_path=self.ctx.db_path,
+            db_path=self.bot.ctx.db_path,
             guild=interaction.guild,
             embed=discord.Embed(
                 description=format_send_dm_body(
@@ -2565,7 +2565,7 @@ class WhisperCog(commands.Cog):
         )
         if dm_msg is None:
             # rollback inserted row if DM fails
-            await asyncio.to_thread(_do_delete_whisper, self.ctx.db_path, whisper_id)
+            await asyncio.to_thread(_do_delete_whisper, self.bot.ctx.db_path, whisper_id)
             await interaction.response.send_message(ERROR_BOT_DM_FAILED, ephemeral=True)
             return
 
@@ -2575,10 +2575,10 @@ class WhisperCog(commands.Cog):
             # awaited and rolls back on failure), so the feed post doesn't need
             # to ping. Post the embed only — it names the recipient visibly,
             # once, without firing a redundant channel notification.
-            accent = await safe_resolve_accent(self.ctx, interaction.guild, log_label="whisper")
+            accent = await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="whisper")
             name_fn = await build_name_fn(
                 guild=interaction.guild,
-                db_path=self.ctx.db_path,
+                db_path=self.bot.ctx.db_path,
                 guild_id=interaction.guild.id,
                 user_ids=[target.id],
             )
@@ -2592,7 +2592,7 @@ class WhisperCog(commands.Cog):
 
         await asyncio.to_thread(
             _do_set_message_ids,
-            self.ctx.db_path,
+            self.bot.ctx.db_path,
             whisper_id,
             channel_msg_id=feed_msg.id if feed_msg else 0,
             dm_msg_id=dm_msg.id,
@@ -2622,7 +2622,7 @@ class WhisperCog(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         cfg = await asyncio.to_thread(
-            _load_config, self.ctx.db_path, interaction.guild.id
+            _load_config, self.bot.ctx.db_path, interaction.guild.id
         )
         if not is_configured(cfg):
             await interaction.followup.send(ERROR_NOT_CONFIGURED, ephemeral=True)

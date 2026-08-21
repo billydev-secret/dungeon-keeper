@@ -188,6 +188,11 @@ SQLite-backed. Tests in `tests/`.
   restyle a panel, prefer wrapping/scrolling flex rows over fixed-width ones and
   add an interaction scenario if layout lives behind a click; measure with
   `scripts/mobile_layout_scan.py`.
+- **A cog holds `self.bot`, and reaches the app context through it**
+  (`self.bot.ctx`). Cogs take `(self, bot)` only — there is no second `ctx`
+  parameter and no `self.ctx` field, so shared helpers can rely on the bot
+  being there rather than duck-typing what a caller happens to hold. Views
+  and services that aren't cogs still take whatever they need directly.
 - New embeds take their color from `safe_resolve_accent(source, guild)`
   (`core/branding`), where `source` is whatever you hold — a bot, an
   AppContext, or a db_path; pass `default=DEFAULT_ACCENT_COLOR` if you need a

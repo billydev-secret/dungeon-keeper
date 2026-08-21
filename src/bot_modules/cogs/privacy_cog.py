@@ -432,9 +432,8 @@ async def _run_deletion(
 # ---------------------------------------------------------------------------
 
 class PrivacyCog(commands.Cog):
-    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self.ctx = ctx
         self._active_deletions: set[int] = set()
         super().__init__()
 
@@ -480,7 +479,7 @@ class PrivacyCog(commands.Cog):
             confirm_label=confirm_button_label(mode_value, self_service=True),
         )
         retains_content = await asyncio.to_thread(
-            _guild_retains_content, self.ctx.db_path, interaction.guild.id
+            _guild_retains_content, self.bot.ctx.db_path, interaction.guild.id
         )
         await interaction.response.send_message(
             render_confirm_prompt(mode=mode_value, retains_content=retains_content),
@@ -494,12 +493,12 @@ class PrivacyCog(commands.Cog):
             if not view.confirmed:
                 return
             await _run_deletion(
-                self.ctx,
+                self.bot.ctx,
                 interaction.guild,
                 interaction.user.id,
                 interaction,
                 mode=mode_value,
-                accent=await safe_resolve_accent(self.ctx, interaction.guild, log_label="privacy"),
+                accent=await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="privacy"),
             )
         finally:
             self._active_deletions.discard(interaction.user.id)
@@ -532,7 +531,7 @@ class PrivacyCog(commands.Cog):
             )
             return
 
-        if not self.ctx.is_mod(interaction):
+        if not self.bot.ctx.is_mod(interaction):
             await interaction.response.send_message(
                 NO_PERMISSION, ephemeral=True
             )
@@ -552,7 +551,7 @@ class PrivacyCog(commands.Cog):
             confirm_label=confirm_button_label(mode_value, self_service=False),
         )
         retains_content = await asyncio.to_thread(
-            _guild_retains_content, self.ctx.db_path, interaction.guild.id
+            _guild_retains_content, self.bot.ctx.db_path, interaction.guild.id
         )
         await interaction.response.send_message(
             render_confirm_prompt(
@@ -570,16 +569,16 @@ class PrivacyCog(commands.Cog):
             if not view.confirmed:
                 return
             await _run_deletion(
-                self.ctx,
+                self.bot.ctx,
                 interaction.guild,
                 member.id,
                 interaction,
                 mode=mode_value,
-                accent=await safe_resolve_accent(self.ctx, interaction.guild, log_label="privacy"),
+                accent=await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="privacy"),
             )
         finally:
             self._active_deletions.discard(member.id)
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(PrivacyCog(bot, bot.ctx))
+    await bot.add_cog(PrivacyCog(bot))

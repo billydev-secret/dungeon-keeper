@@ -78,7 +78,9 @@ def _patch_accent():
 def _make_cog(ctx):
     from bot_modules.cogs.economy_cog import EconomyCog
 
-    return EconomyCog(MagicMock(), ctx)
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    return EconomyCog(_bot)
 
 
 def _enable(db, **overrides) -> None:

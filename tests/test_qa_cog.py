@@ -419,7 +419,8 @@ async def test_sweep_leaves_passed_on_transient_discord_error(db):
 @pytest.mark.asyncio
 async def test_cog_load_registers_dynamic_items(ctx):
     bot = MagicMock()
-    cog = QACog(bot, ctx)
+    bot.ctx = ctx
+    cog = QACog(bot)
     await cog.cog_load()
     bot.add_dynamic_items.assert_called_once_with(
         _QAPassButton, _QAFailButton, _QABlockedButton
@@ -430,7 +431,8 @@ async def test_cog_load_registers_dynamic_items(ctx):
 async def test_cog_load_registers_archive_sweep_task(ctx):
     bot = MagicMock()
     bot.startup_task_factories = []
-    cog = QACog(bot, ctx)
+    bot.ctx = ctx
+    cog = QACog(bot)
     await cog.cog_load()
     assert len(bot.startup_task_factories) == 1
     assert callable(bot.startup_task_factories[0])

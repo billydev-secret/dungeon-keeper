@@ -43,11 +43,12 @@ def _interaction(user: MagicMock) -> MagicMock:
 
 
 def _cog() -> TodoCog:
-    ctx = MagicMock()
-    ctx.is_mod = lambda ix: bool(
+    _bot = MagicMock()
+    _bot.ctx = MagicMock()
+    _bot.ctx.is_mod = lambda ix: bool(
         getattr(ix.user.guild_permissions, "administrator", False)
     )
-    return TodoCog(MagicMock(), ctx)
+    return TodoCog(_bot)
 
 
 @pytest.mark.asyncio
@@ -72,11 +73,11 @@ async def test_mod_gate_delegates_to_app_context():
     place; what that rule decides is tests/test_todo_mod_tier_parity.py.
     """
     cog = _cog()
-    cog.ctx.is_mod = MagicMock(return_value=False)
+    cog.bot.ctx.is_mod = MagicMock(return_value=False)
     interaction = _interaction(_member(mod=True))  # elevated bits, not on the team
     with patch("bot_modules.cogs.todo_cog.create_todo") as create:
         await cog.todo.callback(cog, interaction, "clean up the channels")
-    cog.ctx.is_mod.assert_called_once_with(interaction)
+    cog.bot.ctx.is_mod.assert_called_once_with(interaction)
     create.assert_not_called()
 
 
@@ -174,7 +175,8 @@ class _FakeCtx:
 def _board_cog(db_path, guild):
     bot = MagicMock()
     bot.get_guild.return_value = guild
-    cog = TodoCog(bot, _FakeCtx(db_path))
+    bot.ctx = _FakeCtx(db_path)
+    cog = TodoCog(bot)
     return cog
 
 
