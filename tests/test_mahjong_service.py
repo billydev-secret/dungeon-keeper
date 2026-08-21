@@ -458,3 +458,27 @@ async def test_export_flags_mahjong_tables_for_review(service, db):
         export = export_user_data(conn, GUILD, HOST)
     assert "mahjong_tables" in export["review_required"]
     assert "mahjong_seats" in export["tables"]
+
+
+# ── No-contact (D7): joining consults the list, refusal is the stale-race copy
+
+
+async def test_no_contact_blocks_the_join_indistinguishably(service, db):
+    from bot_modules.games.mahjong.mahjong_service import STALE_TABLE
+    from bot_modules.services.no_contact_service import add_pair
+
+    add_pair(db, GUILD, HOST, GUEST, reason="test", created_by=1)
+    table_id = await service.create_table(GUILD, CHANNEL, HOST, 2, 1)
+    with pytest.raises(TableError) as e:
+        await service.join_table(table_id, GUEST)
+    # the exact copy the cog also uses for genuine stale-table races —
+    # indistinguishable by construction (docs/no_contact_spec.md)
+    assert str(e.value) == STALE_TABLE
+    # not seated, nothing debited
+    with open_db(db) as conn:
+        seats = conn.execute(
+            "SELECT user_id FROM mahjong_seats WHERE table_id = ? AND live = 1",
+            (table_id,),
+        ).fetchall()
+    assert [int(r["user_id"]) for r in seats] == [HOST]
+    assert balances(db, GUEST) == [1000]

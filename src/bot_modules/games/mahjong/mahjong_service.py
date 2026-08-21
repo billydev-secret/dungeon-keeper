@@ -43,6 +43,7 @@ from bot_modules.games.mahjong.game_logic import (
 )
 from bot_modules.games.mahjong.tiles import shuffled_wall
 from bot_modules.services import economy_wager_service as wager_svc
+from bot_modules.services.no_contact_service import is_no_contact_conn
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +108,13 @@ def load_settings(conn, guild_id: int) -> MahjongSettings:
             conn, "mahjong_second_charleston", "1", guild_id) == "1",
         stakes_allowed=stakes or (1, 2, 5),
     )
+
+
+#: The surface's ordinary failure — used for genuine stale-table races AND
+#: for the no-contact refusal on join, so the two are indistinguishable by
+#: construction (docs/no_contact_spec.md: a believable race that explains
+#: the absence). Never used for anything a member could falsify.
+STALE_TABLE = "That didn't go through — the table moved on before your tap landed."
 
 
 class TableError(Exception):
@@ -317,16 +325,26 @@ class MahjongService:
                 ) from e
             raise
 
-    async def join_table(self, table_id: int, member_id: int) -> None:
+    async def join_table(self, table_id: int, member_id: int) -> list[engine.Event]:
         async with self._lock(table_id):
             deadline = await asyncio.to_thread(self._tx_join, table_id, member_id)
+            events = self._last_events(table_id)
             await self._notify_and_arm(table_id, deadline)
+            return events
 
     def _tx_join(self, table_id: int, member_id: int) -> float | None:
         with open_db(self.db_path) as conn:
             row = self._table_row(conn, table_id)
             state = engine.state_from_dict(json.loads(row["state"]))
             card = self._card_for(conn, row)
+            for seat_state in state.seats:
+                # any surface seating two members consults the no-contact
+                # list (CLAUDE.md); the refusal is the surface's ordinary
+                # stale-race failure, per docs/no_contact_spec.md
+                if is_no_contact_conn(
+                    conn, int(row["guild_id"]), member_id, seat_state.member_id
+                ):
+                    raise TableError(STALE_TABLE)
             try:
                 state, events = engine.join_table(state, member_id)
             except ActionRejected as e:
@@ -354,12 +372,16 @@ class MahjongService:
 
     # ── Actions from the cog ─────────────────────────────────────────────
 
-    async def act(self, table_id: int, action: str, /, **kwargs) -> None:
-        """Apply one member action by name. ActionRejected/TableError raise
-        through to the cog (ephemeral ❌); anything else is a bug."""
+    async def act(self, table_id: int, action: str, /, **kwargs) -> list[engine.Event]:
+        """Apply one member action by name; returns the transition's events so
+        the tap's handler can deliver any private ones ephemerally.
+        ActionRejected/TableError raise through to the cog (ephemeral ❌);
+        anything else is a bug."""
         async with self._lock(table_id):
             deadline = await asyncio.to_thread(self._tx_act, table_id, action, kwargs)
+            events = self._last_events(table_id)
             await self._notify_and_arm(table_id, deadline)
+            return events
 
     def _tx_act(self, table_id: int, action: str, kwargs: dict) -> float | None:
         with open_db(self.db_path) as conn:
@@ -633,6 +655,10 @@ class MahjongService:
         )
 
     # events collected inside the transaction, delivered after commit
+    def _last_events(self, table_id: int) -> list[engine.Event]:
+        stash = self._pending_events.get(table_id)
+        return list(stash[1]) if stash else []
+
     def _stash_events(
         self, table_id: int, state: GameState, events: list[engine.Event]
     ) -> None:
@@ -649,6 +675,53 @@ class MahjongService:
                 log.exception("mahjong listener failed for table %d", table_id)
 
     # ── Boot / shutdown ──────────────────────────────────────────────────
+
+    async def load_state(self, table_id: int) -> GameState | None:
+        """Current state for a render; None when the table is gone."""
+        def _q():
+            with open_db(self.db_path) as conn:
+                row = self._table_row_opt(conn, table_id)
+                if row is None:
+                    return None
+                return engine.state_from_dict(json.loads(row["state"]))
+        return await asyncio.to_thread(_q)
+
+    async def table_meta(self, table_id: int) -> dict | None:
+        """The row's render-relevant columns (stake, mode, sticky id, deadline)."""
+        def _q():
+            with open_db(self.db_path) as conn:
+                row = self._table_row_opt(conn, table_id)
+                if row is None:
+                    return None
+                return {
+                    "guild_id": int(row["guild_id"]),
+                    "channel_id": int(row["channel_id"]),
+                    "mode": int(row["mode"]),
+                    "stake": int(row["stake"]),
+                    "status": str(row["status"]),
+                    "sticky_message_id": row["sticky_message_id"],
+                    "deadline_at": row["deadline_at"],
+                    "card_row_id": int(row["card_row_id"]),
+                }
+        return await asyncio.to_thread(_q)
+
+    async def set_sticky_message(self, table_id: int, message_id: int | None) -> None:
+        def _q():
+            with open_db(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE mahjong_tables SET sticky_message_id = ? WHERE id = ?",
+                    (message_id, table_id),
+                )
+        await asyncio.to_thread(_q)
+
+    async def card_for_table(self, table_id: int) -> Card | None:
+        def _q():
+            with open_db(self.db_path) as conn:
+                row = self._table_row_opt(conn, table_id)
+                if row is None:
+                    return None
+                return self._card_for(conn, row)
+        return await asyncio.to_thread(_q)
 
     async def dissolve_table(self, table_id: int, reason: str = "dissolved") -> None:
         """Force-close from outside the engine's own flow (mod tool, purge
