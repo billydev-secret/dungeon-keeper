@@ -3151,7 +3151,9 @@ async def test_status_reports_the_paused_state(sync_db_path):
         pp._set_opt_out(conn, GUILD_ID, 1, at=1000.0)
 
     interaction = _join_interaction(1)
-    cog = pp.PenPalsCog(MagicMock(), MagicMock(db_path=sync_db_path))
+    _bot = MagicMock()
+    _bot.ctx = MagicMock(db_path=sync_db_path)
+    cog = pp.PenPalsCog(_bot)
     await cog.penpals_status.callback(cog, interaction)
 
     msg = interaction.response.send_message.await_args.args[0]
@@ -3168,7 +3170,9 @@ async def test_status_tells_a_matched_member_they_are_paused(sync_db_path):
         pp._set_opt_out(conn, GUILD_ID, 1)
 
     interaction = _join_interaction(1)
-    cog = pp.PenPalsCog(MagicMock(), MagicMock(db_path=sync_db_path))
+    _bot = MagicMock()
+    _bot.ctx = MagicMock(db_path=sync_db_path)
+    cog = pp.PenPalsCog(_bot)
     await cog.penpals_status.callback(cog, interaction)
 
     msg = interaction.response.send_message.await_args.args[0]
