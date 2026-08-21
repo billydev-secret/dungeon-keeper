@@ -1,0 +1,701 @@
+{
+  "card_id": "meadow-first-light",
+  "display_name": "Meadow Card — First Light",
+  "season": "2026-autumn",
+  "hands": [
+    {
+      "id": "gh-1",
+      "section": "Golden Hour",
+      "name": "Golden Hour",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "6",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "8",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "gh-2",
+      "section": "Golden Hour",
+      "name": "Dawn Chorus",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 3,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "gh-3",
+      "section": "Golden Hour",
+      "name": "First Light",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 6,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        }
+      ]
+    },
+    {
+      "id": "mr-1",
+      "section": "Meadow Runs",
+      "name": "Meadow Run",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 3,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "x+2",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+3",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "mr-2",
+      "section": "Meadow Runs",
+      "name": "Terrace Run",
+      "concealed": false,
+      "value": 35,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x+1",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "x+2",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "N"
+        }
+      ]
+    },
+    {
+      "id": "mr-3",
+      "section": "Meadow Runs",
+      "name": "River Bend",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x+2",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "D"
+        }
+      ]
+    },
+    {
+      "id": "eg-1",
+      "section": "Even Ground",
+      "name": "Even Ground",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "8",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "eg-2",
+      "section": "Even Ground",
+      "name": "Split Rail",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "8",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "2",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "eg-3",
+      "section": "Even Ground",
+      "name": "Skipping Stones",
+      "concealed": true,
+      "value": 40,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 1,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "8",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "2",
+          "suit": "b"
+        },
+        {
+          "count": 1,
+          "rank": "4",
+          "suit": "b"
+        },
+        {
+          "count": 1,
+          "rank": "6",
+          "suit": "b"
+        },
+        {
+          "count": 1,
+          "rank": "8",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "8",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "sb-1",
+      "section": "Switchbacks",
+      "name": "Trailheads",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 3,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "7",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "sb-2",
+      "section": "Switchbacks",
+      "name": "Scree",
+      "concealed": false,
+      "value": 35,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "7",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "sb-3",
+      "section": "Switchbacks",
+      "name": "Ridgeline",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "7",
+          "suit": "b"
+        }
+      ]
+    },
+    {
+      "id": "ws-1",
+      "section": "Windstorm",
+      "name": "Four Winds",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "N"
+        },
+        {
+          "count": 3,
+          "rank": "E"
+        },
+        {
+          "count": 3,
+          "rank": "W"
+        },
+        {
+          "count": 4,
+          "rank": "S"
+        }
+      ]
+    },
+    {
+      "id": "ws-2",
+      "section": "Windstorm",
+      "name": "High Lonesome",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "N"
+        },
+        {
+          "count": 4,
+          "rank": "S"
+        },
+        {
+          "count": 4,
+          "rank": "D"
+        }
+      ]
+    },
+    {
+      "id": "ws-3",
+      "section": "Windstorm",
+      "name": "Fire on the Mountain",
+      "concealed": false,
+      "value": 35,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "R"
+        },
+        {
+          "count": 4,
+          "rank": "G"
+        },
+        {
+          "count": 4,
+          "rank": "soap"
+        }
+      ]
+    },
+    {
+      "id": "ws-4",
+      "section": "Windstorm",
+      "name": "Weathervane",
+      "concealed": true,
+      "value": 40,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "N"
+        },
+        {
+          "count": 2,
+          "rank": "E"
+        },
+        {
+          "count": 2,
+          "rank": "W"
+        },
+        {
+          "count": 2,
+          "rank": "S"
+        },
+        {
+          "count": 3,
+          "rank": "R"
+        },
+        {
+          "count": 3,
+          "rank": "G"
+        }
+      ]
+    },
+    {
+      "id": "tt-1",
+      "section": "Tall Timber",
+      "name": "Sequoia",
+      "concealed": false,
+      "value": 45,
+      "groups": [
+        {
+          "count": 5,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 5,
+          "rank": "x+2",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "tt-2",
+      "section": "Tall Timber",
+      "name": "Lodgepole",
+      "concealed": false,
+      "value": 40,
+      "groups": [
+        {
+          "count": 5,
+          "rank": "N"
+        },
+        {
+          "count": 5,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        }
+      ]
+    },
+    {
+      "id": "tt-3",
+      "section": "Tall Timber",
+      "name": "Old Growth",
+      "concealed": false,
+      "value": 45,
+      "groups": [
+        {
+          "count": 5,
+          "rank": "F"
+        },
+        {
+          "count": 5,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        }
+      ]
+    },
+    {
+      "id": "qp-1",
+      "section": "Quiet Pairs",
+      "name": "Quiet Pairs",
+      "concealed": true,
+      "value": 50,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "7",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "N"
+        }
+      ]
+    },
+    {
+      "id": "qp-2",
+      "section": "Quiet Pairs",
+      "name": "The Long Trail",
+      "concealed": true,
+      "value": 50,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+2",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+3",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+4",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "N"
+        }
+      ]
+    },
+    {
+      "id": "qp-3",
+      "section": "Quiet Pairs",
+      "name": "Echo",
+      "concealed": true,
+      "value": 75,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "2",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "R"
+        }
+      ]
+    }
+  ]
+}
