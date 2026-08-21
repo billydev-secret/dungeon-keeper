@@ -7,6 +7,10 @@ import json
 import sqlite3
 from itertools import islice
 
+from bot_modules.services.economy_wager_service import (
+    refund_game as wager_refund_game,
+)
+
 log = logging.getLogger("dungeonkeeper.privacy")
 
 # SQLite's default variable cap is 32,766; stay far below it so the purge can
@@ -271,6 +275,62 @@ def purge_user_data(
             table=table,
         )
 
+    # Meadow Mahjong (migration 175; register rows in docs/data_register.md).
+    # A LIVE seat can't just be deleted — the table dies with it: close the
+    # table (the service's next timer fire sees status != 'live' and stands
+    # down), free every seat, and refund all escrow still held for it, so the
+    # other players get their coins back rather than a wedged hand. Escrow
+    # rides econ_game_wagers at game_id = table_id·100000 + hand_no, so the
+    # whole range is swept rather than trusting the state JSON to parse.
+    try:
+        live_tables = [
+            int(r[0])
+            for r in conn.execute(
+                "SELECT DISTINCT t.id FROM mahjong_tables t "
+                "JOIN mahjong_seats s ON s.table_id = t.id "
+                "WHERE t.status = 'live' AND s.guild_id = ? AND s.user_id = ? "
+                "AND s.live = 1",
+                (guild_id, user_id),
+            ).fetchall()
+        ]
+        for table_id in live_tables:
+            for r in conn.execute(
+                "SELECT DISTINCT game_id FROM econ_game_wagers "
+                "WHERE game_type = 'mahjong' AND state = 'held' "
+                "AND game_id >= ? AND game_id < ?",
+                (table_id * 100_000, (table_id + 1) * 100_000),
+            ).fetchall():
+                wager_refund_game(conn, "mahjong", int(r[0]))
+            conn.execute(
+                "UPDATE mahjong_tables SET status = 'closed', "
+                "closed_reason = 'purged', deadline_at = NULL WHERE id = ?",
+                (table_id,),
+            )
+            conn.execute(
+                "UPDATE mahjong_seats SET live = 0 WHERE table_id = ?",
+                (table_id,),
+            )
+    except sqlite3.Error as exc:
+        log.warning("Purge: failed dissolving mahjong tables (%s)", exc)
+
+    # The member's own rows go; results they WON are anonymised instead of
+    # deleted (winner_id → NULL) because the row also carries the other
+    # seats' hand history via mahjong_result_seats.
+    for table in ("mahjong_seats", "mahjong_result_seats", "mahjong_stats"):
+        _delete(
+            conn,
+            f"DELETE FROM {table} WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+            table=table,
+        )
+    _scrub(
+        conn,
+        "UPDATE mahjong_results SET winner_id = NULL "
+        "WHERE guild_id = ? AND winner_id = ?",
+        (guild_id, user_id),
+        table="mahjong_results.winner_id",
+    )
+
     # Shared todo list — ANONYMISED, NOT DELETED, and deliberately so.
     #
     # A todos row is two different things at once: the task text, which is the
@@ -477,6 +537,7 @@ THIRD_PARTY_TABLES = frozenset(
         "jails", "no_contact_events", "no_contact_pairs", "pen_pals_blocks",
         "pen_pals_sessions", "quote_audit_log", "reaction_log",
         "reaction_tip_awards", "rules_events", "rules_ledger", "starboard_reactors",
+        "mahjong_tables",
         "tickets", "user_interactions", "user_interactions_log", "warnings",
         "watched_users", "wellness_partners", "whisper_guesses", "whisper_replies",
         "whisper_reports", "whispers",

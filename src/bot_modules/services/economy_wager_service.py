@@ -41,6 +41,7 @@ from bot_modules.services.economy_service import (
 STAKE_KIND = "wager_stake"
 PAYOUT_KIND = "wager_payout"
 REFUND_KIND = "wager_refund"
+SPLIT_KIND = "wager_split"  # settle_split: escrow + signed delta, zero-sum
 
 
 class Settlement(NamedTuple):
@@ -313,6 +314,73 @@ def settle(
         )
     drop_pending(conn, game_type, game_id)
     return Settlement(paid, rake)
+
+
+def settle_split(
+    conn: sqlite3.Connection,
+    game_type: str,
+    game_id: int,
+    deltas: dict[int, int],
+) -> dict[int, int]:
+    """Settle a game whose payout is not winner-takes-pot: every staked
+    player gets ``escrow + deltas[user_id]`` back in one credit.
+
+    Built for Meadow Mahjong (docs/plans/meadow-mahjong.md D4), whose hand
+    settlement shifts coins *between* seats while every escrow returns — the
+    winner's gain is exactly the losers' losses, expressed as signed deltas
+    that must sum to zero over the staked players. Escrow is sized so no
+    loss can exceed it, so a negative credit is an engine bug and refuses
+    the whole settlement rather than minting or burning.
+
+    Exactly-once like :func:`settle`: the settling UPDATE predicates on
+    ``settled_at IS NULL``, so a replayed terminal hook pays nothing twice.
+    No rake and no booster — a transfer between members must never mint,
+    and v1 mahjong is deliberately rake-free like the duel wagers were.
+    Returns {user_id: amount credited}.
+    """
+    if sum(deltas.values()) != 0:
+        raise ValueError(f"split deltas must sum to zero, got {deltas}")
+    now = time.time()
+    rows = conn.execute(
+        "UPDATE econ_game_wagers SET state = 'settled', settled_at = ? "
+        "WHERE game_type = ? AND game_id = ? AND state = 'held' "
+        "AND settled_at IS NULL "
+        "RETURNING *",
+        (now, game_type, game_id),
+    ).fetchall()
+    if not rows:
+        return {}
+    staked = {int(r["user_id"]) for r in rows}
+    if staked != set(deltas):
+        # Callers pass one delta per seat; a mismatch means the game and its
+        # escrow disagree about who is playing. Refuse loudly — the rows are
+        # already marked settled in this transaction, so raising rolls the
+        # caller's transaction back rather than stranding escrow.
+        raise ValueError(
+            f"deltas name {sorted(deltas)} but escrow holds {sorted(staked)}"
+        )
+    credits: dict[int, int] = {}
+    for r in rows:
+        user_id = int(r["user_id"])
+        amount = int(r["amount"]) + deltas[user_id]
+        if amount < 0:
+            raise ValueError(
+                f"split would credit {amount} to {user_id} — delta exceeds escrow"
+            )
+        credits[user_id] = amount
+    for r in rows:
+        user_id = int(r["user_id"])
+        if credits[user_id] > 0:
+            apply_credit(
+                conn, int(r["guild_id"]), user_id, credits[user_id], SPLIT_KIND,
+                meta={
+                    "game_type": game_type, "game_id": game_id,
+                    "escrow": int(r["amount"]), "delta": deltas[user_id],
+                },
+                booster=False,  # a transfer between members must never mint
+            )
+    drop_pending(conn, game_type, game_id)
+    return credits
 
 
 def live_stakes_for_member(
