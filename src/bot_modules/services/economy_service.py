@@ -532,6 +532,40 @@ def apply_debit(
     return True
 
 
+def remove_currency(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    amount: int,
+    kind: str = "admin_remove",
+    *,
+    actor_id: int | None = None,
+    meta: dict | None = None,
+) -> int:
+    """Take up to ``amount`` off a wallet, clamped at a zero balance.
+
+    ``apply_debit`` is all-or-nothing because a purchase either happens or it
+    doesn't. This is the moderator's correction lever instead: an over-typed
+    amount leaves the member at zero rather than failing or owing a debt.
+
+    Returns the amount actually removed — 0 when the wallet is empty or absent,
+    and then nothing is written at all (no zero-value ledger row). The ledger
+    row records the removed amount, not the requested one, and the booster
+    multiplier is deliberately never applied: a removal is a correction, not an
+    earning, so a booster isn't penalised 1.5x for the same offence. Raises
+    ValueError for ``amount < 1``. The read and the debit are not atomic on
+    their own — callers on a money path should ride ``open_db_immediate``.
+    """
+    if amount < 1:
+        raise ValueError("remove amount must be >= 1")
+    removed = min(amount, get_balance(conn, guild_id, user_id))
+    if removed < 1:
+        return 0
+    apply_debit(conn, guild_id, user_id, removed, kind, actor_id=actor_id, meta=meta)
+    live_signal.mark_dirty(guild_id)
+    return removed
+
+
 def transfer_currency(
     conn: sqlite3.Connection,
     guild_id: int,

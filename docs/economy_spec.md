@@ -485,7 +485,9 @@ to currency.
   recruitment lever the games programme needed: hosting is currently ~77%
   one person (§ live review), and the quest makes it a rewarded, visible task.
 - **Event host 30 (mod grant):** `/bank grant @member amount reason` + Operations
-  page button; manager-role or admin gated; audit-tagged in the ledger.
+  page button; manager-role or admin gated; audit-tagged in the ledger. The
+  Operations page carries the inverse too — **Remove Currency** (§ manager
+  surface), ledger kind `admin_remove`.
 
 ### 3.5 Coin Drops (built — migration 105)
 - The bot drops a pouch of coins into `drops_channel_id` at random moments;
@@ -544,8 +546,9 @@ manager-role holders, since `GET/PUT /economy/config` is admin-gated) → quest
 editor → AI ideas) with in-place editing (PUT); the sign-off inbox is the
 **Claims** page (pending queue with Approve/Deny plus a state filter over the
 paid/denied/expired history); the remaining operational cards — community
-goals → grant → rentals → ledger, with member pickers for grant/ledger and a
-ledger kind datalist — live on the **Operations** page.
+goals → grant → remove → rentals → ledger, with member pickers for
+grant/remove/ledger and a ledger kind datalist — live on the **Operations**
+page.
 
 **AI idea generator.** The New-quest form has a "Generate ideas" button
 (`POST /api/economy/quests/generate`, manager-gated) that batches suggestions for
@@ -1707,8 +1710,8 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   `require_game_host`). Its pages: **Operations** (community progress +
   manual Settle, grant (the panel sends `member_id` as a string to keep
   snowflake precision, and the endpoint 404s any id not in the guild's
-  member cache so a bad id can't credit a phantom wallet), rentals,
-  ledger audit), **Claims** (the pending
+  member cache so a bad id can't credit a phantom wallet), **remove**,
+  rentals, ledger audit), **Claims** (the pending
   sign-off queue with Approve/Deny + a state filter over paid/denied/expired
   history), **Quests** (library + authoring + AI ideas), **Income Sources**
   (trigger switches + faucet rates), **Statistics**, and admin-only
@@ -1718,6 +1721,20 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   home dashboard's **Moderation tile** also surfaces the pending-claims
   count (+ latest claimant/quest) via the `/api/home` moderation group, so
   waiting sign-offs are visible without opening the Economy section.
+- **Remove Currency (`POST /api/economy/remove`)** is grant's mirror on the
+  Operations page: same manager gate, same string `member_id` + member-cache
+  404, same "economy disabled" 409, and a confirm dialog before it fires.
+  Two deliberate asymmetries: it applies **no booster multiplier** (a removal
+  is a correction, not an earning — a booster must not be penalised 1.5x for
+  the same offence), and it **clamps at a zero balance** rather than refusing
+  or going negative, so the response reports `removed` alongside the
+  `requested` amount and the resulting `balance`, and the panel says "Removed
+  N (all they had)" when they differ. The clamp is `remove_currency` in
+  `economy_service` (`apply_debit` stays all-or-nothing for purchases); the
+  route rides `open_db_immediate` so the balance read can't be clamped against
+  a stale snapshot. Every removal writes an `admin_remove` ledger row for the
+  amount actually taken, with the actor and the typed reason — a no-op removal
+  from an empty wallet writes nothing at all.
 - **Role customization in v1** happens inside `/bank shop`'s ephemeral panel —
   customise buttons opening modals (name / color hex / gradient / server-emoji
   icon), plus `/bank role icon` for image uploads — proxied through the bot.
