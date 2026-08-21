@@ -901,6 +901,32 @@ export function checkbox(name, checked, labelText) {
   return label;
 }
 
+/** A checkbox row plus the hint that states what the toggle changes.
+ *
+ * Distinct from `checkbox` above: this returns `{ wrap, box }` rather than a
+ * bare label, because every caller needs the input back to read on submit and
+ * the wrapper back to append. Config panels settled on this shape
+ * independently three times; it lives here now.
+ */
+export function toggleField(name, labelText, checked, hint) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  const lbl = document.createElement("label");
+  lbl.style.cssText = "display:flex; align-items:center; gap:8px; cursor:pointer;";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.name = name;
+  box.checked = !!checked;
+  lbl.appendChild(box);
+  lbl.appendChild(document.createTextNode(labelText));
+  wrap.appendChild(lbl);
+  const h = document.createElement("div");
+  h.className = "field-hint";
+  h.textContent = hint;
+  wrap.appendChild(h);
+  return { wrap, box };
+}
+
 /** A titled `.card` section appended to `parent` (usually the panel's form). */
 export function sectionCard(parent, title) {
   const el = document.createElement("div");

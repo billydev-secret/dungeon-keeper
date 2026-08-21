@@ -3,47 +3,14 @@ import {
   loadChannels,
   apiPut,
   showStatus,
-  buildField,
+  field,
   mountChannelPicker,
   mountChannelMultiPicker,
   guardForm,
   renderMetaWarning,
   mountAsync,
+  toggleField,
 } from "../config-helpers.js";
-
-let _fieldSeq = 0;
-
-// buildField renders a bare <label>; tie it to its control by id so screen
-// readers announce the label and a label tap focuses the field (W-A7).
-function field(labelText, control, hint) {
-  const div = buildField(labelText, control, hint);
-  if (control instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
-    const id = control.id || `sb-field-${++_fieldSeq}`;
-    control.id = id;
-    div.querySelector("label").htmlFor = id;
-  }
-  return div;
-}
-
-// The one toggle idiom: a checkbox row plus a hint that states what changes.
-function toggleField(name, labelText, checked, hint) {
-  const wrap = document.createElement("div");
-  wrap.className = "field";
-  const lbl = document.createElement("label");
-  lbl.style.cssText = "display:flex; align-items:center; gap:8px; cursor:pointer;";
-  const box = document.createElement("input");
-  box.type = "checkbox";
-  box.name = name;
-  box.checked = !!checked;
-  lbl.appendChild(box);
-  lbl.appendChild(document.createTextNode(labelText));
-  wrap.appendChild(lbl);
-  const h = document.createElement("div");
-  h.className = "field-hint";
-  h.textContent = hint;
-  wrap.appendChild(h);
-  return { wrap, box };
-}
 
 function buildNumberInput(name, min, value) {
   const inp = document.createElement("input");

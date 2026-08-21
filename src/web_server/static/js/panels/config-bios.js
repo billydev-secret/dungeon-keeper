@@ -3,7 +3,7 @@ import { confirmDialog } from "../ui.js";
 import {
   apiDelete,
   apiPut,
-  buildField,
+  field as labeledField,
   loadCategories,
   loadChannels,
   showStatus,
@@ -13,8 +13,6 @@ import {
   mountCategoryPicker,
   mountAsync,
 } from "../config-helpers.js";
-
-let _fieldSeq = 0;
 
 // A bios channel can be correctly configured here and still reach nobody —
 // deleting a role silently takes its channel permission overwrite with it.
@@ -33,18 +31,6 @@ function renderChannelIssues(issues) {
       <ul style="margin:0.4rem 0 0; padding-left:1.2rem;">${rows}</ul>
     </div>
   `;
-}
-
-// buildField renders a bare <label>; tie it to its control by id so screen
-// readers announce the label and a label tap focuses the field (W-A7).
-function labeledField(labelText, control, hint) {
-  const div = buildField(labelText, control, hint);
-  if (control instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
-    const id = control.id || `bio-field-${++_fieldSeq}`;
-    control.id = id;
-    div.querySelector("label").htmlFor = id;
-  }
-  return div;
 }
 
 export function mount(container) {
