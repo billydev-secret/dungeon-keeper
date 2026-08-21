@@ -1183,12 +1183,22 @@ async def _resend_ama_bottom(bot, game_id: str, channel):
         if hasattr(bottom_view, "message_id"):
             bottom_view.message_id = new_msg.id
         # Keep the persisted id in step so recovery rebinds the current bar.
+        # Best effort — the bar is already posted, so a failed write isn't
+        # worth unwinding — but never silent: the stored id now points at the
+        # message we just deleted, so after a restart recovery can't fetch it,
+        # leaves _bottom_msg unset, and this function starts returning early.
+        # The bar quietly stops following the conversation from then on.
         try:
             def _store_bottom(p, _mid=new_msg.id):
                 p["bottom_message_id"] = _mid
             await modify_payload(ama_view.db, game_id, _store_bottom)
         except Exception:
-            pass
+            log.warning(
+                "ama: failed to persist bottom-bar id for game %s; "
+                "the bar will stop re-sticking after a restart",
+                game_id,
+                exc_info=True,
+            )
     finally:
         ama_view._suppress_resend = False
 
