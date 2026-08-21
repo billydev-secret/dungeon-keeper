@@ -28,6 +28,7 @@ from bot_modules.chat_revive.actions import send_revive
 from bot_modules.chat_revive.logic import FLOURISHES, should_ping
 from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.question_source import channel_allows_nsfw
+from bot_modules.core.background import run_forever
 from bot_modules.services.chat_revive_service import (
     ChannelConfig,
     Evaluation,
@@ -280,12 +281,10 @@ async def run_tick(bot: Bot, db_path: Path, now_ts: float) -> None:
 
 
 async def chat_revive_loop(bot: Bot, db_path: Path) -> None:
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            await run_tick(bot, db_path, time.time())
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("chat revive tick crashed")
-        await asyncio.sleep(TICK_SECONDS)
+    await run_forever(
+        bot,
+        tick=lambda: run_tick(bot, db_path, time.time()),
+        interval=TICK_SECONDS,
+        label="chat revive",
+        logger=log,
+    )

@@ -31,6 +31,7 @@ import discord
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services import intake_service as svc
+from bot_modules.core.background import run_forever
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
@@ -144,12 +145,10 @@ async def run_tick(bot: Bot, db_path: Path, now: float) -> None:
 
 
 async def intake_loop(bot: Bot, db_path: Path) -> None:
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            await run_tick(bot, db_path, time.time())
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("intake nudge tick crashed")
-        await asyncio.sleep(TICK_SECONDS)
+    await run_forever(
+        bot,
+        tick=lambda: run_tick(bot, db_path, time.time()),
+        interval=TICK_SECONDS,
+        label="intake nudge",
+        logger=log,
+    )

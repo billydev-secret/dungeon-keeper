@@ -29,6 +29,7 @@ import discord
 from bot_modules.chat_revive.actions import channel_is_busy
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import open_db
+from bot_modules.core.background import run_forever
 from bot_modules.services.economy_drops_service import (
     create_drop,
     discard_drop,
@@ -340,12 +341,10 @@ async def run_tick(bot: Bot, db_path: Path, now_ts: float) -> None:
 
 
 async def economy_drops_loop(bot: Bot, db_path: Path) -> None:
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            await run_tick(bot, db_path, time.time())
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("coin drop tick crashed")
-        await asyncio.sleep(TICK_SECONDS)
+    await run_forever(
+        bot,
+        tick=lambda: run_tick(bot, db_path, time.time()),
+        interval=TICK_SECONDS,
+        label="coin drop",
+        logger=log,
+    )
