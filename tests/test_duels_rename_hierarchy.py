@@ -189,3 +189,53 @@ def _wrap_async(spy):
         return spy(*a, **k)
 
     return _fn
+
+
+# ── owner heads-up before the game, not a surprise at the end ────────────────
+# Discord blocks renaming the guild owner outright, so _unrenameable_members
+# deliberately excludes them (the rename flow has its own branch). Nothing
+# warned about it up front, though — the owner lost their name on 2026-08-21
+# and had to apply it by hand with no sign anywhere that it would work that way.
+
+
+def test_owner_notice_names_the_owner():
+    cog = _cog()
+    guild = _guild(bot_role_pos=99)
+    owner = _member(OWNER_ID, role_pos=1, name="Billy")
+    notice = cog._owner_notice(guild, [owner, _member(1, role_pos=1)])
+    assert notice is not None
+    assert "Billy" in notice
+    assert "apply it themselves" in notice
+
+
+def test_owner_notice_is_silent_when_the_owner_is_not_playing():
+    cog = _cog()
+    assert cog._owner_notice(_guild(bot_role_pos=99), [_member(1, role_pos=1)]) is None
+
+
+def test_rename_warning_combines_hierarchy_and_owner_cases():
+    """Both can be true at once — a staff member above the bot *and* the owner
+    in the same lobby — and the challenger needs to hear about both."""
+    cog = _cog()
+    guild = _guild(bot_role_pos=5)
+    staff = _member(1, role_pos=9, name="Staff")
+    owner = _member(OWNER_ID, role_pos=1, name="Billy")
+    warning = cog._rename_warning(guild, [staff, owner])
+    assert warning is not None
+    assert "Staff" in warning       # role above mine
+    assert "Billy" in warning       # server owner
+
+
+def test_rename_warning_is_silent_when_everyone_is_renameable():
+    cog = _cog()
+    guild = _guild(bot_role_pos=9)
+    assert cog._rename_warning(guild, [_member(1, role_pos=1)]) is None
+
+
+def test_owner_is_still_excluded_from_the_unrenameable_list():
+    """The two paths must stay separate: the owner's sentence is recorded and
+    self-applied, which the hierarchy branch would short-circuit."""
+    cog = _cog()
+    guild = _guild(bot_role_pos=1)
+    owner = _member(OWNER_ID, role_pos=9, name="Billy")
+    assert cog._unrenameable_members(guild, [owner]) == []

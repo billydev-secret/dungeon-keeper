@@ -694,6 +694,9 @@ _DUEL_SHARED_DEFAULTS: dict = {
     "channel_allowlist": "[]",
     "max_nick_length": 32,
     "max_stakes_length": 200,
+    # 0 = no limit. Was a hardcoded 3 in the bot, which is a spam brake set at
+    # the pace of an idle channel — a game night ran into it repeatedly.
+    "challenge_limit_per_hour": 30,
 }
 
 # game_key == duel_config.game_type for every game (no renaming needed).
@@ -787,7 +790,7 @@ def _duel_game_section(conn, guild_id: int, game_key: str) -> dict:
 
 
 def _duel_shared_updates(body) -> dict:
-    """The five knobs every duel game shares, clamped.
+    """The knobs every duel game shares, clamped.
 
     Written out rather than table-driven so the bounds stay greppable — they
     are the contract, and they used to be copy-pasted into all six handlers.
@@ -804,6 +807,9 @@ def _duel_shared_updates(body) -> dict:
         out["max_nick_length"] = max(1, min(32, body.max_nick_length))
     if body.max_stakes_length is not None:
         out["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
+    if body.challenge_limit_per_hour is not None:
+        # 0 means unlimited; the ceiling is a sanity bound, not a policy.
+        out["challenge_limit_per_hour"] = max(0, min(999, body.challenge_limit_per_hour))
     return out
 
 
@@ -2464,6 +2470,7 @@ class DuelSharedConfigUpdate(BaseModel):
     channel_allowlist: list[str] | None = None
     max_nick_length: int | None = None
     max_stakes_length: int | None = None
+    challenge_limit_per_hour: int | None = None
 
 
 class PressureConfigUpdate(DuelSharedConfigUpdate):

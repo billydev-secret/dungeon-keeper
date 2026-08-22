@@ -33,14 +33,18 @@ from bot_modules.games_clapback.logic import (
     AI_USER_PROMPT,
     MAX_PLAYERS,
     MIN_PLAYERS,
+    admit_pending_players,
     calculate_bye_award,
     calculate_matchup_score,
+    drain_pending_players,
     clamp_config_values,
     create_matchups,
     find_best_answer_record,
     find_closest_matchup_record,
+    pick_round_bye,
     shuffled_replay_config,
     sort_scores,
+    vote_button_label,
 )
 
 
@@ -863,7 +867,7 @@ def test_build_reveal_embed_shows_prompt_when_supplied():
 
 def test_build_scoreboard_embed_no_bye_omits_bye_field():
     payload = {"scores": {"1": 100, "2": 50}}
-    embed = build_scoreboard_embed(payload, 1, 5, bye_player=None)
+    embed = build_scoreboard_embed(payload, 1, 5, bye_players=None)
     field_names = [f.name for f in embed.fields]
     assert "📊 Scoreboard" in field_names
     assert "Bye" not in field_names
@@ -871,7 +875,7 @@ def test_build_scoreboard_embed_no_bye_omits_bye_field():
 
 def test_build_scoreboard_embed_with_bye_includes_bye_field():
     payload = {"scores": {"1": 100, "2": 50, "3": 0}}
-    embed = build_scoreboard_embed(payload, 1, 5, bye_player=3)
+    embed = build_scoreboard_embed(payload, 1, 5, bye_players=[3])
     field_names = [f.name for f in embed.fields]
     assert "Bye" in field_names
     bye_field = next(f for f in embed.fields if f.name == "Bye")
@@ -881,7 +885,7 @@ def test_build_scoreboard_embed_with_bye_includes_bye_field():
 
 def test_build_scoreboard_embed_bye_field_shows_the_actual_award():
     payload = {"scores": {"1": 10, "3": 62}}
-    embed = build_scoreboard_embed(payload, 1, 5, bye_player=3, bye_award=62)
+    embed = build_scoreboard_embed(payload, 1, 5, bye_players=[3], bye_award=62)
     bye_field = next(f for f in embed.fields if f.name == "Bye")
     assert bye_field.value is not None
     assert "62" in bye_field.value
@@ -892,7 +896,7 @@ def test_build_scoreboard_embed_bye_award_defaults_to_fifty_for_old_records():
     """Round records written before the award went dynamic have no
     bye_award — the embed still renders rather than showing None."""
     payload = {"scores": {"1": 10, "3": 50}}
-    embed = build_scoreboard_embed(payload, 1, 5, bye_player=3)
+    embed = build_scoreboard_embed(payload, 1, 5, bye_players=[3])
     bye_field = next(f for f in embed.fields if f.name == "Bye")
     assert bye_field.value is not None
     assert "50" in bye_field.value
@@ -900,7 +904,7 @@ def test_build_scoreboard_embed_bye_award_defaults_to_fifty_for_old_records():
 
 def test_build_scoreboard_embed_sorts_scores_highest_first():
     payload = {"scores": {"1": 30, "2": 100, "3": 50}}
-    embed = build_scoreboard_embed(payload, 2, 5, bye_player=None)
+    embed = build_scoreboard_embed(payload, 2, 5, bye_players=None)
     sb_field = next(f for f in embed.fields if f.name == "📊 Scoreboard")
     assert sb_field.value is not None
     # Player 2 (100) should appear before player 3 (50) before player 1 (30)
@@ -912,7 +916,7 @@ def test_build_scoreboard_embed_sorts_scores_highest_first():
 
 def test_build_scoreboard_embed_final_round_uses_no_remaining_text():
     payload = {"scores": {"1": 10}}
-    embed = build_scoreboard_embed(payload, 5, 5, bye_player=None)
+    embed = build_scoreboard_embed(payload, 5, 5, bye_players=None)
     last_field = embed.fields[-1]
     assert last_field.value is not None
     assert "Final round" in last_field.value
@@ -920,14 +924,14 @@ def test_build_scoreboard_embed_final_round_uses_no_remaining_text():
 
 def test_build_scoreboard_embed_with_remaining_rounds_shows_count():
     payload = {"scores": {"1": 10}}
-    embed = build_scoreboard_embed(payload, 2, 5, bye_player=None)
+    embed = build_scoreboard_embed(payload, 2, 5, bye_players=None)
     last_field = embed.fields[-1]
     assert last_field.value is not None
     assert "3 round(s) remaining" in last_field.value
 
 
 def test_build_scoreboard_embed_empty_scores_shows_placeholder():
-    embed = build_scoreboard_embed({"scores": {}}, 1, 5, bye_player=None)
+    embed = build_scoreboard_embed({"scores": {}}, 1, 5, bye_players=None)
     sb_field = next(f for f in embed.fields if f.name == "📊 Scoreboard")
     assert sb_field.value == "No scores yet"
 
@@ -1178,3 +1182,173 @@ async def test_post_recap_passes_players_to_end_game(monkeypatch):
     assert call is not None and spy.await_count == 1
     assert call.kwargs["player_ids"] == [1, 2, 3]
     assert call.kwargs["bot"] is cog.bot
+
+
+# ── pick_round_bye: benched before the prompt, not after ─────────────────────
+
+
+def test_pick_round_bye_none_for_even_field():
+    assert pick_round_bye(["1", "2", "3", "4"]) is None
+
+
+def test_pick_round_bye_none_for_three_players():
+    """Three players run a full round-robin, so nobody sits out — the rule
+    has to match create_matchups or the round would lose a player."""
+    assert pick_round_bye(["1", "2", "3"]) is None
+
+
+def test_pick_round_bye_picks_one_for_odd_field():
+    bye = pick_round_bye(["1", "2", "3", "4", "5"], rng=random.Random(0))
+    assert bye in {"1", "2", "3", "4", "5"}
+
+
+def test_pick_round_bye_skips_players_who_already_sat_out():
+    for seed in range(10):
+        bye = pick_round_bye(
+            ["1", "2", "3", "4", "5"], bye_history=["3"], rng=random.Random(seed)
+        )
+        assert bye != "3"
+
+
+def test_pick_round_bye_rotates_everyone_before_repeating():
+    history: list[str] = []
+    for round_num in range(5):
+        bye = pick_round_bye(
+            ["1", "2", "3", "4", "5"], bye_history=history, rng=random.Random(round_num)
+        )
+        history.append(bye)
+    assert sorted(history) == ["1", "2", "3", "4", "5"]
+
+
+def test_pick_round_bye_leaves_an_even_field_for_create_matchups():
+    """The point of picking up front: the remaining submitters pair cleanly,
+    so create_matchups hands out no second bye."""
+    players = ["1", "2", "3", "4", "5"]
+    bye = pick_round_bye(players, rng=random.Random(1))
+    answers = {p: f"answer{p}" for p in players if p != bye}
+    _, late_bye = create_matchups(answers, rng=random.Random(1))
+    assert late_bye is None
+
+
+def test_pick_round_bye_a_missing_submitter_still_forces_a_late_bye():
+    """A player who never answers leaves an odd submitter count, so a second
+    bye is real and both have to be paid."""
+    players = [str(i) for i in range(1, 8)]  # 7: pre-bye leaves 6 submitters
+    bye = pick_round_bye(players, rng=random.Random(1))
+    answers = {p: f"answer{p}" for p in players if p != bye}
+    answers.pop(next(iter(answers)))  # someone misses the window → 5 left
+    _, late_bye = create_matchups(answers, rng=random.Random(1))
+    assert late_bye is not None and late_bye != bye
+
+
+# ── vote_button_label: the answer goes on the button ─────────────────────────
+
+
+def test_vote_button_label_carries_the_answer():
+    assert vote_button_label("🅰️", "pineapple on pizza") == "🅰️: pineapple on pizza"
+
+
+def test_vote_button_label_flattens_newlines():
+    assert "\n" not in vote_button_label("🅱️", "two\nlines")
+    assert vote_button_label("🅱️", "two\nlines") == "🅱️: two lines"
+
+
+def test_vote_button_label_truncates_to_fit_a_discord_button():
+    label = vote_button_label("🅰️", "x" * 200)
+    assert len(label) <= 80
+    assert label.endswith("…")
+
+
+def test_vote_button_label_falls_back_when_the_answer_is_blank():
+    assert vote_button_label("🅰️", "   ") == "Vote 🅰️"
+    assert vote_button_label("🅱️", "") == "Vote 🅱️"
+
+
+# ── admit_pending_players: joining at a round boundary ───────────────────────
+
+
+def test_admit_pending_players_adds_them_in_order():
+    roster, admitted, turned_away = admit_pending_players([1, 2], [3, 4], 10)
+    assert roster == [1, 2, 3, 4]
+    assert admitted == [3, 4]
+    assert turned_away == []
+
+
+def test_admit_pending_players_ignores_someone_already_playing():
+    roster, admitted, _ = admit_pending_players([1, 2], [2], 10)
+    assert roster == [1, 2]
+    assert admitted == []
+
+
+def test_admit_pending_players_ignores_a_double_press():
+    roster, admitted, _ = admit_pending_players([1], [2, 2], 10)
+    assert roster == [1, 2]
+    assert admitted == [2]
+
+
+def test_admit_pending_players_turns_away_over_the_cap():
+    """Over-cap joiners are reported, not silently dropped — the caller says
+    so in channel rather than leaving someone waiting for a round that never
+    includes them."""
+    roster, admitted, turned_away = admit_pending_players([1, 2, 3], [4, 5], 4)
+    assert roster == [1, 2, 3, 4]
+    assert admitted == [4]
+    assert turned_away == [5]
+
+
+def test_admit_pending_players_handles_no_queue():
+    roster, admitted, turned_away = admit_pending_players([1, 2], None, 10)
+    assert (roster, admitted, turned_away) == ([1, 2], [], [])
+
+
+# ── scoreboard renders two byes when a round produces two ────────────────────
+
+
+def test_build_scoreboard_embed_renders_multiple_byes():
+    payload = {"scores": {"1": 10, "2": 5}}
+    embed = build_scoreboard_embed(payload, 1, 5, bye_players=[3, 4], bye_award=40)
+    field = next(f for f in embed.fields if f.name == "Byes")
+    assert "<@3>" in (field.value or "") and "<@4>" in (field.value or "")
+    assert "+40" in (field.value or "") and "each" in (field.value or "")
+
+
+def test_build_scoreboard_embed_accepts_a_bare_bye_id():
+    """Round records written before a round could produce two byes store a
+    single id; the builder still has to render them."""
+    embed = build_scoreboard_embed({"scores": {"1": 10}}, 1, 5, bye_players=3)
+    assert any(f.name == "Bye" for f in embed.fields)
+
+
+# ── submit embed names who is sitting out ────────────────────────────────────
+
+
+def test_build_submit_embed_names_the_benched_player():
+    embed = build_submit_embed(
+        prompt="p", round_num=1, total_rounds=3, deadline_str="⏰ 60s",
+        answers_in=0, total_players=4, bye_player=7,
+    )
+    field = next(f for f in embed.fields if "Sitting out" in (f.name or ""))
+    assert "<@7>" in (field.value or "")
+
+
+def test_build_submit_embed_omits_the_field_with_no_bye():
+    embed = build_submit_embed(
+        prompt="p", round_num=1, total_rounds=3, deadline_str="⏰ 60s",
+        answers_in=0, total_players=4,
+    )
+    assert not any("Sitting out" in (f.name or "") for f in embed.fields)
+
+
+def test_drain_pending_players_returns_and_clears_the_queue():
+    """Admission only happens at a round boundary, so anyone who pressed Join
+    during the final round is queued for a round that never comes. The game end
+    has to clear them and say so."""
+    payload = {"pending_players": [7, 8]}
+    assert drain_pending_players(payload) == [7, 8]
+    assert payload["pending_players"] == []
+
+
+def test_drain_pending_players_is_a_no_op_on_an_empty_queue():
+    payload = {"players": [1, 2]}
+    assert drain_pending_players(payload) == []
+    assert payload["pending_players"] == []

@@ -20,16 +20,18 @@ async def create_game(
     challenger_id: int,
     target_id: int,
     stakes_text: str | None,
+    nick_stake: bool = False,
 ) -> int:
     now = time.time()
     return await db.lastrowid(
         """
         INSERT INTO quickdraw_games
             (guild_id, channel_id, challenger_id, target_id, stakes_text,
-             state, qd_state, created_at, last_action_at)
-        VALUES (?, ?, ?, ?, ?, 'PENDING', 'WAITING', ?, ?)
+             nick_stake, state, qd_state, created_at, last_action_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 'WAITING', ?, ?)
         """,
-        (guild_id, channel_id, challenger_id, target_id, stakes_text, now, now),
+        (guild_id, channel_id, challenger_id, target_id, stakes_text, int(nick_stake),
+         now, now),
     )
 
 

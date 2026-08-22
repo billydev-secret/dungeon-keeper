@@ -85,6 +85,9 @@ export function mount(container) {
             ${numField("cooldown_hours", "Wait Between Games (hours)", cfg.cooldown_hours,
               "How long a player must wait after one game before joining another. 0 lets people play back to back.",
               { min: 0, max: 8760 })}
+            ${numField("challenge_limit_per_hour", "Games Started Per Person Per Hour", cfg.challenge_limit_per_hour,
+              "How many of these games one person may open in an hour. Set to 0 for no limit. This is a spam brake, not a pacing rule &mdash; a busy games night can easily run through a low number.",
+              { min: 0, max: 999 })}
             <div class="field">
               <label>Allowed Channels</label>
               <div data-picker="channel_allowlist"></div>
@@ -112,6 +115,7 @@ export function mount(container) {
 
     const NUMS = [
       ["cooldown_hours", "Wait Between Games", 0, 8760, false],
+      ["challenge_limit_per_hour", "Games Started Per Person Per Hour", 0, 999, false],
       ["sentence_hours", "Nickname Lasts", 1, 8760, false],
       ["min_fuse", "Shortest Fuse", 5, 600, true],
       ["max_fuse", "Longest Fuse", 10, 600, true],

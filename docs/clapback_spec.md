@@ -43,16 +43,52 @@ Player bounds are `MIN_PLAYERS = 3` / `MAX_PLAYERS = 16`.
 
 ## 2. Round flow
 
-1. Prompt is drawn from the bank and posted; players submit via an ephemeral
+1. Latecomers queued during the previous round are admitted — see §2.2.
+2. The round's bye is picked **before** the prompt goes out — see §2.1.
+3. Prompt is drawn from the bank and posted; players submit via an ephemeral
    modal (resubmitting before the timer overwrites the previous answer).
-2. Submitted answers are bracketed — see §3.
-3. Each matchup is voted on **sequentially**, `vote_timer` seconds each.
-   Contestants cannot vote on their own matchup.
-4. Each matchup's reveal shows the split; then the round scoreboard.
+4. Submitted answers are bracketed — see §3.
+5. Each matchup is voted on **sequentially**, `vote_timer` seconds each.
+   Contestants cannot vote on their own matchup. Each vote button carries the
+   answer text (`logic.vote_button_label`), not a bare 🅰️/🅱️ emoji.
+6. Each matchup's reveal shows the split; then the round scoreboard.
 
 A round with fewer than 2 answers is skipped entirely ("Not enough answers this
 round — moving on!"). Only players who actually submitted are in that round's
-bracket; a missed submit window is not scored and not a bye.
+bracket; a missed submit window is not scored (but see §3.2 — it can still
+force a second bye).
+
+### 2.1 The bye is chosen up front (`logic.pick_round_bye`)
+
+`pick_round_bye(player_ids, bye_history, rng)` runs against the **roster**
+before the prompt posts, and returns `None` for an even field or exactly 3
+players (§3.1). The benched player is then left out of the round-start ping and
+the `Answers In` denominator, is named on the submit embed and in the ping, and
+their Submit button refuses with an explanation. `round_bye` is stored on the
+payload so the button gate survives a reload.
+
+Why: the bye used to fall out of `create_matchups`, i.e. *after* everyone had
+written an answer, so the benched player composed something that was never used
+and found out at the scoreboard ("It should really let you know when you're
+sitting out" — game night 2026-08-21).
+
+Both functions use the same fewest-byes-first rotation, so they agree when a
+missing submitter forces a **second** bye on top of the pre-picked one. A round
+can therefore hand out two byes; both are paid the round average, both are
+appended to `bye_history`, and the round record carries `bye_players` (a list)
+alongside the legacy singular `bye_player`.
+
+### 2.2 Joining mid-game
+
+The submit panel carries a **🙋 Join next round** button for anyone not
+playing. It only queues (`pending_players`); admission happens at the next
+round boundary via `logic.admit_pending_players`, so a live round's matchups
+and answer count never shift underneath it. Admitted players start on **0
+points** and are announced in channel; anyone over `MAX_PLAYERS` is turned
+away out loud rather than silently dropped. Pressing Join during the **last**
+round would otherwise queue someone for a boundary that never arrives, so the
+game end calls `logic.drain_pending_players` and tells them the game is over
+instead of leaving them waiting.
 
 ## 3. Bracketing (`logic.create_matchups`)
 
@@ -71,7 +107,10 @@ avoidance does not apply in this branch — the round-robin is the whole pairing
 
 ### 3.2 Odd counts → one bye, fewest-byes-first
 
-With an odd number of submitters (5, 7, …) one player sits the round out.
+With an odd number of submitters (5, 7, …) one player sits the round out. In
+normal play the roster's bye was already taken out before the prompt (§2.1) and
+the submitters pair cleanly, so this branch only fires when someone misses the
+submit window and leaves an odd count behind.
 
 `bye_history` is every bye handed out this game, in order; the same id can
 appear more than once across a long game. The bye goes to whoever among **this
@@ -154,7 +193,9 @@ record; the embed builder resolves names, keeping the logic layer Discord-free.
 
 Game payload keys specific to Clapback: `answers`, `matchups`, `scores`,
 `scores_checkpoint`, `clapbacks`, `round_history`, `used_prompts`,
-`bye_history`, `last_bye` (legacy, still written), `current_round`, `phase`.
+`bye_history`, `last_bye` (legacy, still written), `round_bye` (this round's
+pre-picked bye), `pending_players` (queued latecomers), `current_round`,
+`phase`.
 
 `scores_checkpoint` snapshots scores as of the last fully-completed round so a
 crash mid-scoring can't double-count on resume.

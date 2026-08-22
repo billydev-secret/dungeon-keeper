@@ -191,7 +191,7 @@ CASES = [
     case(
         "clapback.scoreboard",
         lambda **kw: clapback_embeds.build_scoreboard_embed(
-            {"scores": {"1": 10}}, 1, 5, bye_player=None, **kw
+            {"scores": {"1": 10}}, 1, 5, bye_players=None, **kw
         ),
         None,
     ),

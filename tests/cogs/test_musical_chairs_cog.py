@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest_asyncio
@@ -15,7 +16,12 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_service import get_balance, save_econ_settings
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 from bot_modules.services.games_db import GamesDb
-from tests.fakes import FakeEconGamesBot, FakeGuild, fake_interaction
+from tests.fakes import (
+    FakeEconGamesBot,
+    FakeGuild,
+    FakeMessageableChannel,
+    fake_interaction,
+)
 from bot_modules.core import branding
 
 GUILD = 9001
@@ -320,3 +326,146 @@ async def test_lobby_start_below_min_players_refused(cog, db):
     interaction.guild = FakeGuild()
     await cog._handle_lobby_start(interaction, gid)
     assert (await mcdb.get_game(db, gid)).state == "LOBBY"
+
+
+# ── announcing every elimination, and why (game night 2026-08-21) ──────────────
+
+
+class _AnnounceBot(FakeBot):
+    """FakeBot with a resolvable guild and a real Messageable channel, so the
+    public call-outs actually land somewhere a test can read."""
+
+    def __init__(self, db: GamesDb, member_ids=(1, 2, 3, 4)) -> None:
+        super().__init__(db)
+        self.channel = FakeMessageableChannel(CH)
+        self.guild = FakeGuild(
+            id=GUILD,
+            members={
+                uid: SimpleNamespace(id=uid, display_name=f"U{uid}", mention=f"<@{uid}>")
+                for uid in member_ids
+            },
+        )
+
+    def get_guild(self, gid):
+        return self.guild if gid == GUILD else None
+
+    def get_channel(self, cid):
+        return self.channel
+
+
+@pytest_asyncio.fixture
+async def announce_cog(db: GamesDb) -> MusicalChairsCog:
+    return MusicalChairsCog(_AnnounceBot(db))  # type: ignore[arg-type]
+
+
+async def test_false_start_is_announced_publicly(announce_cog, db):
+    """An early sit used to be an ephemeral only, so the room watched the
+    survivor count drop with no idea who had gone or why."""
+    game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
+    interaction = fake_interaction(guild=FakeGuild())
+    interaction.user.id = 1
+    await announce_cog._on_sit(interaction, game.id)
+    posts = announce_cog.bot.channel.texts
+    assert any("U1" in t and "sat before the music stopped" in t for t in posts)
+    assert any("2 left" in t for t in posts)
+
+
+async def test_false_start_ephemeral_says_what_went_wrong(announce_cog, db):
+    game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
+    interaction = fake_interaction(guild=FakeGuild())
+    interaction.user.id = 1
+    await announce_cog._on_sit(interaction, game.id)
+    (text,) = interaction.followup.send.await_args.args
+    assert "music was still playing" in text
+
+
+async def test_final_round_eliminations_are_announced(announce_cog, db):
+    """The last round resolved straight into the result embed, so whoever
+    missed the final chair was never named."""
+    game = await _game(db, phase="SCRAMBLE", alive=[1, 2], seated=[2])
+    await announce_cog._close_round_locked(game)
+    assert any("U1" in t and "didn't find a chair" in t
+               for t in announce_cog.bot.channel.texts)
+
+
+async def test_terminal_false_start_still_announced(announce_cog, db):
+    """Eliminating the second-to-last player ends the game — the call-out has
+    to go out before the result embed, not be swallowed by it."""
+    game = await _game(db, phase="MUSIC", alive=[1, 2])
+    interaction = fake_interaction(guild=FakeGuild())
+    interaction.user.id = 1
+    await announce_cog._on_sit(interaction, game.id)
+    assert any("sat before the music stopped" in t
+               for t in announce_cog.bot.channel.texts)
+
+
+# ── the panel follows the conversation down (game night 2026-08-21) ───────────
+
+
+async def test_scramble_reposts_panel_at_channel_bottom(announce_cog, db):
+    game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
+    await mcdb.set_game_state(db, game.id, "ACTIVE", message_id=555)
+    try:
+        await announce_cog._start_scramble(game.id)
+    finally:
+        announce_cog._cancel_timer(game.id)
+    channel = announce_cog.bot.channel
+    g = await mcdb.get_game(db, game.id)
+    assert g.message_id != 555          # a brand-new message, at the bottom
+    assert channel.deleted == [555]     # and the buried one is cleaned up
+    posted = [s["embed"] for s in channel.sent if s.get("embed")]
+    assert posted and "Sit" in (posted[-1].title or "")
+
+
+async def test_repost_keeps_old_panel_when_send_fails(announce_cog, db):
+    """Post-before-delete: a channel the bot can no longer post in must keep
+    its working panel rather than lose it to the move."""
+    game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
+    await mcdb.set_game_state(db, game.id, "ACTIVE", message_id=555)
+    channel = announce_cog.bot.channel
+
+    async def _boom(*a, **k):
+        raise discord.Forbidden(MagicMock(status=403), "no send")
+
+    channel.send = _boom  # type: ignore[method-assign]
+    moved = await announce_cog._repost_panel(game.id, announce_cog.bot.guild)
+    assert moved is False
+    assert channel.deleted == []
+    g = await mcdb.get_game(db, game.id)
+    assert g.message_id == 555
+
+
+async def test_lobby_embed_explains_the_rules(announce_cog, db):
+    """Nobody could find the rules before the first round, so three separate
+    players sat during the music without ever being told not to."""
+    gid = await mcdb.create_lobby(db, GUILD, CH, 1, None)
+    await mcdb.set_game_state(db, gid, "LOBBY", roster=json.dumps([1, 2, 3]))
+    game = await mcdb.get_game(db, gid)
+    embed = announce_cog._render_lobby(game, announce_cog.bot.guild, 3, 10)
+    how = next(f for f in embed.fields if f.name and "How to play" in f.name)
+    assert "don't" in (how.value or "").lower() or "do nothing" in (how.value or "").lower()
+    assert "Last player seated wins" in (how.value or "")
+
+
+async def test_music_phase_embed_warns_against_sitting_early(announce_cog, db):
+    game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
+    embed = announce_cog.render_game_state(game, announce_cog.bot.guild)
+    assert "don't sit yet" in (embed.description or "")
+
+
+async def test_sit_survives_the_panel_being_reposted_mid_press(announce_cog, db):
+    """A press already in flight when the round flips is answered against the
+    old panel, which _repost_panel has since deleted. The seat still counts and
+    the dead edit must not escape the button callback."""
+    game = await _game(db, phase="SCRAMBLE", alive=[1, 2, 3], seated=[])
+    interaction = fake_interaction(guild=FakeGuild())
+    interaction.user.id = 2
+    interaction.edit_original_response = AsyncMock(
+        side_effect=discord.NotFound(MagicMock(status=404), "panel was moved")
+    )
+
+    await announce_cog._on_sit(interaction, game.id)
+
+    g = await mcdb.get_game(db, game.id)
+    assert g.seated == [2]      # the seat is recorded regardless
+    assert g.state == "ACTIVE"

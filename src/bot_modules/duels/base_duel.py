@@ -23,11 +23,15 @@ import discord
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
-from bot_modules.services.economy_service import EconSettings
 
 from . import db as duels_db
-from .base_game import _RATE_LIMIT_MAX, BaseGame, _fmt_coins
-from .filters import resolve_stakes_text, validate_stakes
+from .base_game import BaseGame, _fmt_coins
+from .filters import (
+    game_is_nick_stake,
+    resolve_nick_stake,
+    resolve_stakes_text,
+    validate_stakes,
+)
 from .views import ChallengeView, ResultView
 
 
@@ -46,6 +50,7 @@ class BaseDuel(BaseGame):
         target: discord.Member,
         stakes_text: str | None,
         wager: int | None = None,
+        nickname: bool | None = None,
     ) -> None:
         """Run all pre-game checks and create a challenge embed. Called by subclass command.
 
@@ -81,43 +86,20 @@ class BaseDuel(BaseGame):
             )
             return
 
-        if self._check_rate_limit(challenger.id):
+        limit = self._challenge_limit(cfg)
+        if self._check_rate_limit(challenger.id, limit):
             await interaction.response.send_message(
                 f"You've issued too many challenges recently. "
-                f"Maximum {_RATE_LIMIT_MAX} per hour.",
+                f"Maximum {limit} per hour.",
                 ephemeral=True,
             )
             return
 
-        # Nickname-mode preflight only applies when nicknames are the stake —
-        # no custom stakes text AND no wager (a wager becomes the stake below).
-        # Non-nickname games never rename anyone, so they don't need the
-        # Manage Nicknames permission or a clear nickname slate.
-        nick_notice: str | None = None
-        if stakes_text is None and wager is None:
-            perm_error = await self._check_bot_can_nick(guild)
-            if perm_error:
-                await interaction.response.send_message(perm_error, ephemeral=True)
-                return
-
-            nick_error = await self._check_no_active_nick(guild, [challenger, target])  # type: ignore[list-item]
-            if nick_error:
-                await interaction.response.send_message(nick_error, ephemeral=True)
-                return
-
-            # A player outranking the bot doesn't block the challenge — warn,
-            # then continue; the rename is skipped if that player loses.
-            nick_notice = self._unrenameable_notice(
-                self._unrenameable_members(guild, [challenger, target])  # type: ignore[list-item]
-            )
-
-        existing = await self._db_get_active_game_for_pair(guild.id, challenger.id, target.id)
-        if existing:
-            await interaction.response.send_message(
-                "You two already have a game in progress.", ephemeral=True
-            )
-            return
-
+        # Validate and normalise the stakes text *before* deciding whether this
+        # is a nickname game. Whitespace-only stakes clean to None, and reading
+        # the raw string would answer "something else is staked" for a game
+        # that ends up staking nothing — skipping the preflights below and then
+        # falling through to nickname mode at settlement anyway.
         if stakes_text:
             stakes_result = validate_stakes(
                 stakes_text,
@@ -131,15 +113,64 @@ class BaseDuel(BaseGame):
                 return
             stakes_text = stakes_result.value or None
 
+        # Nickname-mode preflight only applies when the loser is actually going
+        # to be renamed. Non-nickname games never rename anyone, so they don't
+        # need the Manage Nicknames permission or a clear nickname slate.
+        nick_stake = resolve_nick_stake(stakes_text, wager, nickname)
+        if not nick_stake and stakes_text is None and wager is None:
+            # nickname:False with nothing else on the table would be a duel
+            # with no stake at all, which every downstream reader would then
+            # have to guess about. Say so instead.
+            await interaction.response.send_message(
+                "Turning the nickname stake off means you need to stake "
+                "something else — add `wager:` or `stakes:`.",
+                ephemeral=True,
+            )
+            return
+        nick_notice: str | None = None
+        if nick_stake:
+            perm_error = await self._check_bot_can_nick(guild)
+            if perm_error:
+                await interaction.response.send_message(perm_error, ephemeral=True)
+                return
+
+            nick_error = await self._check_no_active_nick(guild, [challenger, target])  # type: ignore[list-item]
+            if nick_error:
+                await interaction.response.send_message(nick_error, ephemeral=True)
+                return
+
+            # A player outranking the bot doesn't block the challenge — warn,
+            # then continue; the rename is skipped if that player loses.
+            nick_notice = self._rename_warning(
+                guild, [challenger, target]  # type: ignore[list-item]
+            )
+
+        existing = await self._db_get_active_game_for_pair(guild.id, challenger.id, target.id)
+        if existing:
+            await interaction.response.send_message(
+                "You two already have a game in progress.", ephemeral=True
+            )
+            return
+
         if wager is not None:
             err = await self._wager_precheck(guild.id, challenger.id, wager)
             if err:
                 await interaction.response.send_message(err, ephemeral=True)
                 return
 
-        # A wager stands in as the stake — record the label so the duel is in
-        # announce-only mode (no rename, no nickname copy) everywhere downstream.
-        stakes_text = resolve_stakes_text(stakes_text, wager)
+        # Every live stake goes into the persisted text, so the "📋 Stakes"
+        # field on every downstream embed lists all of them — the coins used to
+        # be visible only on the challenge card and then again at settlement
+        # ("Oh there were 2 stakes 👀").
+        settings = await self._econ_settings(guild.id) if wager is not None else None
+        wager_line = None
+        if wager is not None:
+            each = _fmt_coins(settings, wager) if settings else f"**{wager:,}**"
+            takes = _fmt_coins(settings, wager * 2) if settings else f"**{wager * 2:,}**"
+            wager_line = f"💰 {each} each — winner takes {takes}."
+        stakes_text = resolve_stakes_text(
+            stakes_text, wager, nick_stake=nick_stake, wager_line=wager_line
+        )
 
         game_id = await self._db_create_game(
             guild_id=guild.id,
@@ -147,6 +178,7 @@ class BaseDuel(BaseGame):
             challenger_id=challenger.id,
             target_id=target.id,
             stakes_text=stakes_text,
+            nick_stake=nick_stake,
         )
         self._record_challenge(challenger.id)
 
@@ -154,9 +186,8 @@ class BaseDuel(BaseGame):
             await self._declare_wager(guild.id, game_id, challenger.id, wager)
 
         accent = await safe_resolve_accent(self.bot, guild, log_label="base duel")
-        settings = await self._econ_settings(guild.id) if wager is not None else None
         embed = self._build_challenge_embed(
-            challenger, target, stakes_text, accent, wager=wager, settings=settings,  # type: ignore[arg-type]
+            challenger, target, stakes_text, accent, wager=wager,  # type: ignore[arg-type]
         )
         view = ChallengeView(
             game_id=game_id,
@@ -180,11 +211,23 @@ class BaseDuel(BaseGame):
         color: "discord.Color | None" = None,
         *,
         wager: int | None = None,
-        settings: EconSettings | None = None,
     ) -> discord.Embed:
+        """The pending-challenge card.
+
+        ``stakes`` already lists every live stake, one line each and already in
+        the guild's currency vocabulary (custom text, wager, nickname forfeit —
+        see :func:`filters.resolve_stakes_text`), so a separate wager field
+        here would only repeat the amount. ``wager`` survives purely to decide
+        whether to add the escrow caveat, which is true only while a challenge
+        is pending and so is never persisted.
+        """
         if color is None:
             color = discord.Color(COLOR_GOLD)
         stakes_text = stakes or "Loser surrenders their nickname for 24 hours."
+        if wager:
+            stakes_text += (
+                "\n_Nothing is charged unless the challenge is accepted._"
+            )
         embed = discord.Embed(
             title=f"⚔️ {self.GAME_DISPLAY_NAME} Challenge",
             color=color,
@@ -195,29 +238,37 @@ class BaseDuel(BaseGame):
             inline=False,
         )
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
-        if wager:
-            each = _fmt_coins(settings, wager) if settings else f"**{wager:,}**"
-            takes = (
-                _fmt_coins(settings, wager * 2) if settings else f"**{wager * 2:,}**"
-            )
-            embed.add_field(
-                name="💰 Wager",
-                value=(
-                    f"{each} each — winner takes {takes}.\n"
-                    "_Nothing is charged unless the challenge is accepted._"
-                ),
-                inline=False,
-            )
         embed.set_footer(text="⏱️ 60 seconds to respond.")
         return embed
 
     # ── View callbacks ────────────────────────────────────────────────────────
 
+    #: Why a challenge is no longer acceptable, in the words of what actually
+    #: happened. "This challenge is no longer active" left a player who clicked
+    #: a second too late with no idea whether they'd been beaten to it, blocked,
+    #: or hit a bug ("LMAO that did not let me accept" — game night 2026-08-21).
+    _STALE_CHALLENGE_REASONS = {
+        "EXPIRED_PENDING": (
+            "⏱️ That challenge timed out before you pressed — challenges expire "
+            "60 seconds after they're posted. Ask them to send another one."
+        ),
+        "DECLINED": "❌ That challenge was already declined.",
+        "ACTIVE": "▶️ That challenge has already been accepted — the game is running.",
+    }
+    _STALE_CHALLENGE_FALLBACK = "This challenge has already finished."
+
+    def _stale_challenge_message(self, game: Any) -> str:
+        if game is None:
+            return "That challenge is gone — it may have been cleaned up."
+        return self._STALE_CHALLENGE_REASONS.get(
+            game.state, self._STALE_CHALLENGE_FALLBACK
+        )
+
     async def _handle_accept(self, interaction: discord.Interaction, game_id: int) -> None:
         game = await self._db_get_game(game_id)
         if not game or game.state != "PENDING":
             await interaction.response.send_message(
-                "This challenge is no longer active.", ephemeral=True
+                self._stale_challenge_message(game), ephemeral=True
             )
             return
 
@@ -269,7 +320,7 @@ class BaseDuel(BaseGame):
         game = await self._db_get_game(game_id)
         if not game or game.state != "PENDING":
             await interaction.response.send_message(
-                "This challenge is no longer active.", ephemeral=True
+                self._stale_challenge_message(game), ephemeral=True
             )
             return
         await self._db_set_state(game_id, "DECLINED")
@@ -341,7 +392,7 @@ class BaseDuel(BaseGame):
 
         # Two modes: nickname (no custom stakes → winner renames the loser) and
         # custom stakes (loser owes the agreed-upon stakes, no bot enforcement).
-        nick_mode = game.stakes_text is None
+        nick_mode = game_is_nick_stake(game)
 
         result_embed = self.render_result_state(game, guild)  # type: ignore[arg-type]
 

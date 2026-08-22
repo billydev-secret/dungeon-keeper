@@ -18,17 +18,18 @@ async def create_lobby(
     channel_id: int,
     host_id: int,
     stakes_text: str | None,
+    nick_stake: bool = False,
 ) -> int:
     now = time.time()
     roster = json.dumps([host_id])
     return await db.lastrowid(
         """
         INSERT INTO hp_group_games
-            (guild_id, channel_id, host_id, stakes_text, state, roster, alive,
-             created_at, last_action_at)
-        VALUES (?, ?, ?, ?, 'LOBBY', ?, '[]', ?, ?)
+            (guild_id, channel_id, host_id, stakes_text, nick_stake, state, roster,
+             alive, created_at, last_action_at)
+        VALUES (?, ?, ?, ?, ?, 'LOBBY', ?, '[]', ?, ?)
         """,
-        (guild_id, channel_id, host_id, stakes_text, roster, now, now),
+        (guild_id, channel_id, host_id, stakes_text, int(nick_stake), roster, now, now),
     )
 
 

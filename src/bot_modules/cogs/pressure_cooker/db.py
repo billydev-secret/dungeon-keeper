@@ -37,14 +37,17 @@ async def create_game(
     challenger_id: int,
     target_id: int,
     stakes_text: str | None,
+    nick_stake: bool = False,
 ) -> int:
     return await db.lastrowid(
         """
         INSERT INTO pressure_games
-            (guild_id, channel_id, challenger_id, target_id, stakes_text, state, created_at)
-        VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+            (guild_id, channel_id, challenger_id, target_id, stakes_text, nick_stake,
+             state, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?)
         """,
-        (guild_id, channel_id, challenger_id, target_id, stakes_text, time.time()),
+        (guild_id, channel_id, challenger_id, target_id, stakes_text, int(nick_stake),
+         time.time()),
     )
 
 

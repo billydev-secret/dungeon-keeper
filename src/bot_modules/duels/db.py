@@ -15,6 +15,9 @@ _CONFIG_DEFAULTS: dict = {
     "nick_denylist": "[]",
     "max_nick_length": 32,
     "max_stakes_length": 200,
+    # Challenges one person may open per hour; 0 = no limit. Kept in step with
+    # the dashboard default in web_server/routes/config.py.
+    "challenge_limit_per_hour": 30,
 }
 
 

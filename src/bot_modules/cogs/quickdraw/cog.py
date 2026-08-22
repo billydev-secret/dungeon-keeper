@@ -16,6 +16,7 @@ from discord import app_commands
 
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.duels.base_duel import BaseDuel
+from bot_modules.duels.filters import game_is_nick_stake
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
@@ -67,9 +68,11 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         challenger_id: int,
         target_id: int,
         stakes_text: str | None,
+        nick_stake: bool = False,
     ) -> int:
         return await qdb.create_game(
-            self.db, guild_id, channel_id, challenger_id, target_id, stakes_text
+            self.db, guild_id, channel_id, challenger_id, target_id, stakes_text,
+            nick_stake,
         )
 
     async def _db_get_game(self, game_id: int) -> QuickdrawGame | None:
@@ -214,7 +217,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                     # leave the row ACTIVE for the sweep to abandon).
                     await self._db_set_state(
                         game.id,
-                        "RESOLVED" if game.stakes_text is None else "RESOLVED_NO_NICK",
+                        "RESOLVED" if game_is_nick_stake(game) else "RESOLVED_NO_NICK",
                         winner_id=game.winner_id,
                         loser_id=game.loser_id,
                     )
@@ -357,6 +360,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         *,
         imposed_nick: str | None = None,
         original_name: str | None = None,
+        self_apply_nick: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner = guild.get_member(game.winner_id)  # type: ignore[arg-type]
@@ -401,13 +405,26 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         stakes_text = game.stakes_text or "24-hour nickname surrender."
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
 
-        if imposed_nick:
+        if self_apply_nick:
+            # Discord blocks the bot from renaming the guild owner, so the
+            # sentence is real but has to be applied by hand. Saying "is now
+            # known as" here would be a plain lie about what happened.
+            embed.add_field(
+                name="🏷️ Nickname — Over To You",
+                value=(
+                    f"Discord won't let me rename the server owner, so "
+                    f"**{original_name or loser_name}** has to set "
+                    f"**{self_apply_nick}** themselves. It stands for 24 hours."
+                ),
+                inline=False,
+            )
+        elif imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
                 value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
-        elif game.stakes_text is None:
+        elif game_is_nick_stake(game):
             embed.add_field(
                 name="⏳ Awaiting Nickname",
                 value=(
@@ -528,6 +545,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         user="The player you're challenging",
         stakes="Optional custom stakes text (max 200 chars)",
         wager="Optional coin wager — you both ante this; winner takes the pot",
+        nickname="Also stake nicknames? Winner renames the loser for 24h (default: only when nothing else is staked)",
     )
     async def quickdraw_challenge(
         self,
@@ -535,8 +553,9 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         user: discord.Member,
         stakes: str | None = None,
         wager: int | None = None,
+        nickname: bool | None = None,
     ) -> None:
-        await self._base_challenge(interaction, user, stakes, wager)
+        await self._base_challenge(interaction, user, stakes, wager, nickname)
 
 
 async def setup(bot: Bot) -> None:
