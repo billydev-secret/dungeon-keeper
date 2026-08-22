@@ -105,11 +105,22 @@ it can't invent commands or promise unbuilt features.
   - `public_tutorial=True` → `PUBLIC_TUTORIAL_INSTRUCTIONS` appended *after* the
     cache breakpoint, so the register switch doesn't fork the prompt cache.
 
+  Being staff is not on its own permission to speak in the channel the command
+  was run in, so the gate also requires `permissions_for(member).send_messages`
+  — read-only #rules and #announcements are precisely the channels a mod can
+  see but shouldn't post in, and the bot must not be the way round that.
+
   The answer still lands ephemerally, carrying a `_PublicPostView` (Post /
   Discard, author-locked, 10-min timeout); the channel only sees it on the click,
   posted with `channel.send` rather than a followup so it isn't bound to the
   interaction token, and the embed posted is the object that was previewed. A
-  failed answer is never offered a Post button.
+  failed answer is never offered a Post button. Post claims the click with an
+  in-flight flag before awaiting the send (the buttons stay live client-side
+  until the edit lands, so a double-click would otherwise post twice),
+  acknowledges the component interaction before the send (a rate-limited
+  `send` can outlast the 3s window), and re-checks `can_post_public` on the
+  clicker as the Apply buttons do — Discard stays open to a demoted mod, since
+  tidying the preview away is never the harmful direction.
 
 ## Architecture
 

@@ -98,6 +98,8 @@ def _interaction(user):
     i.response.defer = AsyncMock()
     i.followup = MagicMock()
     i.followup.send = AsyncMock()
+    i.response.edit_message = AsyncMock()
+    i.edit_original_response = AsyncMock()
     return i
 
 
@@ -215,14 +217,15 @@ async def test_post_button_publishes_the_previewed_embed(monkeypatch):
     )
     view = advisor_cog._PublicPostView(channel=channel, embed=embed, asker_id=7)
     interaction = _interaction(_member(manage_messages=True))
-    interaction.response.edit_message = AsyncMock()
 
     await view.post.callback(interaction)
 
     assert channel.send.await_args.kwargs["embed"] is embed
     assert channel.send.await_args.kwargs["allowed_mentions"].everyone is False
     assert all(c.disabled for c in view.children)
-    assert "Posted" in interaction.response.edit_message.await_args.kwargs["content"]
+    # Acknowledged before the send, so a slow channel can't blow the 3s window.
+    interaction.response.defer.assert_awaited_once()
+    assert "Posted" in interaction.edit_original_response.await_args.kwargs["content"]
 
 
 async def test_post_button_survives_a_missing_permission(monkeypatch):
@@ -236,11 +239,10 @@ async def test_post_button_survives_a_missing_permission(monkeypatch):
         channel=channel, embed=discord.Embed(title="x"), asker_id=7
     )
     interaction = _interaction(_member(manage_messages=True))
-    interaction.response.edit_message = AsyncMock()
 
     await view.post.callback(interaction)
 
-    content = interaction.response.edit_message.await_args.kwargs["content"]
+    content = interaction.edit_original_response.await_args.kwargs["content"]
     assert "can't post" in content
     assert all(c.disabled for c in view.children)
 
@@ -290,3 +292,52 @@ def test_a_long_question_fits_discords_title_cap():
     )
     assert len(embed.title) <= 256
     assert embed.title.endswith("…")
+
+
+async def test_public_ask_is_refused_where_the_mod_cannot_speak(monkeypatch):
+    """A read-only #rules is exactly the channel a mod can see but shouldn't
+    post in — the bot must not be the way round that."""
+    with _patched(monkeypatch) as mod:
+        interaction = _interaction(_member(manage_messages=True))
+        interaction.channel.permissions_for = MagicMock(
+            return_value=discord.Permissions(send_messages=False)
+        )
+        await mod.AdvisorCog.ask.callback(
+            _cog(), interaction, "how do I earn coins?", public=True
+        )
+    mod.answer_advisor.assert_not_awaited()
+    assert "can't post in this channel" in interaction.followup.send.await_args.args[0]
+
+
+async def test_post_button_ignores_a_second_press():
+    """The buttons stay live in the client until the edit lands, so an
+    impatient double-click would otherwise post the tutorial twice."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.send = AsyncMock()
+    view = advisor_cog._PublicPostView(
+        channel=channel, embed=discord.Embed(title="x"), asker_id=7
+    )
+    interaction = _interaction(_member(manage_messages=True))
+
+    await view.post.callback(interaction)
+    await view.post.callback(interaction)
+
+    assert channel.send.await_count == 1
+
+
+async def test_post_button_rechecks_the_mod_power_at_click_time():
+    """A mod stripped of their role mid-preview holds a live Post button for
+    the rest of the window otherwise — the Apply buttons re-check too."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.send = AsyncMock()
+    view = advisor_cog._PublicPostView(
+        channel=channel, embed=discord.Embed(title="x"), asker_id=7
+    )
+    demoted = _member()  # same person, no powers left
+    interaction = _interaction(demoted)
+
+    await view.post.callback(interaction)
+
+    channel.send.assert_not_called()
+    assert "no longer" in interaction.response.edit_message.await_args.kwargs["content"]
+    assert all(c.disabled for c in view.children)

@@ -66,6 +66,20 @@ log = logging.getLogger(__name__)
 
 # Discord embed descriptions cap at 4096 chars; leave room for the trailer.
 _MAX_DESC = 3900
+
+# Where a public answer may be posted: messageable, and able to answer "may
+# this member speak here?". Deliberately concrete rather than
+# ``discord.abc.Messageable`` — a DM channel is messageable but has no
+# ``permissions_for``, and a category or forum parent has no ``send``.
+_POSTABLE = (
+    discord.TextChannel,
+    discord.Thread,
+    discord.VoiceChannel,
+    discord.StageChannel,
+)
+_Postable = (
+    discord.TextChannel | discord.Thread | discord.VoiceChannel | discord.StageChannel
+)
 _MAX_PROPOSALS = 4  # buttons on one reply; also caps blast radius per ask
 
 
@@ -264,7 +278,7 @@ class _PublicPostView(discord.ui.View):
     def __init__(
         self,
         *,
-        channel: discord.abc.Messageable,
+        channel: _Postable,
         embed: discord.Embed,
         asker_id: int,
     ) -> None:
@@ -274,6 +288,7 @@ class _PublicPostView(discord.ui.View):
         self._channel = channel
         self._embed = embed
         self._asker_id = asker_id
+        self._posted = False
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         # The preview is ephemeral, so only the asker can see these buttons —
@@ -295,6 +310,35 @@ class _PublicPostView(discord.ui.View):
     async def post(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        # Claim the click before doing anything slow. The buttons stay live in
+        # the mod's client until the edit below lands, so an impatient second
+        # press arrives while the first send is still in flight and would post
+        # the tutorial twice.
+        if self._posted:
+            return
+        self._posted = True
+        # Re-check the power at click time, like the Apply buttons do: a mod
+        # stripped of their role mid-preview holds a live Post button for the
+        # rest of the ten minutes otherwise. Identity is checked in
+        # ``interaction_check``; Discard stays open to them either way, since
+        # tidying the preview away is never the harmful direction.
+        clicker = (
+            interaction.user
+            if isinstance(interaction.user, discord.Member)
+            else None
+        )
+        if not can_post_public(clicker):
+            self._freeze()
+            await interaction.response.edit_message(
+                content="❌ You can no longer post answers to the channel.",
+                view=self,
+            )
+            return
+        # Acknowledge first: a component interaction has to be answered within
+        # 3s, and ``send`` can sit out a channel rate-limit for longer than
+        # that. Without this the post lands but the reply reads "interaction
+        # failed", which invites exactly the second press guarded above.
+        await interaction.response.defer()
         try:
             # Embeds never ping, but the allow-list is explicit so a future
             # edit that moves text into the message body can't start pinging.
@@ -304,7 +348,7 @@ class _PublicPostView(discord.ui.View):
             )
         except discord.Forbidden:
             self._freeze()
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content="❌ I can't post in this channel — check my permissions here.",
                 view=self,
             )
@@ -312,7 +356,7 @@ class _PublicPostView(discord.ui.View):
         except discord.HTTPException:
             log.exception("advisor: public post failed")
             self._freeze()
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content="❌ Discord wouldn't take that post. Try again in a moment.",
                 view=self,
             )
@@ -323,7 +367,7 @@ class _PublicPostView(discord.ui.View):
             getattr(self._channel, "name", "?"),
         )
         self._freeze()
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content="✅ Posted to the channel.", view=self
         )
 
@@ -372,13 +416,13 @@ class AdvisorCog(commands.Cog):
             else None
         )
         channel = interaction.channel
-        # Set only once a public ask has cleared both gates below, so it doubles
+        # Set only once a public ask has cleared every gate below, so it doubles
         # as "this answer is allowed to be published, and here".
-        post_to: discord.abc.Messageable | None = None
+        post_to: _Postable | None = None
         if public:
-            # Both refusals happen before the answer round-trip: no point
+            # Every refusal happens before the answer round-trip: no point
             # spending a model call on something that can't be posted.
-            if guild is None or not isinstance(channel, discord.abc.Messageable):
+            if guild is None or not isinstance(channel, _POSTABLE):
                 await interaction.followup.send(
                     "❌ I can only post to a channel from inside a server.",
                     ephemeral=True,
@@ -389,6 +433,18 @@ class AdvisorCog(commands.Cog):
                     "❌ Only mods can post an answer to the channel. Run "
                     "`/ask` again without **public** and I'll answer just for "
                     "you.",
+                    ephemeral=True,
+                )
+                return
+            # Being a mod isn't permission to speak everywhere: read-only
+            # #rules and #announcements are exactly the channels a mod can see
+            # but shouldn't post in, and the bot must not become the way round
+            # that. Send Messages is a separate permission from the mod powers
+            # can_post_public accepts, so this is not implied by the check above.
+            if member is None or not channel.permissions_for(member).send_messages:
+                await interaction.followup.send(
+                    "❌ You can't post in this channel, so neither will I. "
+                    "Run `/ask` again without **public** for a private answer.",
                     ephemeral=True,
                 )
                 return
