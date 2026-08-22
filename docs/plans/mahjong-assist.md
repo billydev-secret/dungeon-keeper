@@ -35,7 +35,7 @@ each line on the active card. Four levels, each player picks their own.
 | A7 | No caching | Measured 4.3 ms for a full 22-hand scan of a 13-tile rack (0.45 ms for the existing reachability pass). Far inside any interaction budget, including the 6–8 s claim window. A cache keyed on rack state would be more code and more staleness risk than it saves. |
 | A8 | Default for a member who has never chosen: `gap`, overridable by a guild dial | Assistance-by-default matches the user's stated instinct ("everyone, always on"); the dial exists so a house can make pure play the norm without a code change. One select on the existing dashboard panel, enforced — not a dead toggle. |
 | A9 | New table `mahjong_prefs`, PK `(guild_id, user_id)` | The house pattern is a small per-feature prefs table (`econ_notify_prefs` is three columns, same key shape); DK has no member-settings hub to hook into. Purged on erasure — a preference tied to a member id is personal data with no Art 17(3) ground to keep. |
-| A10 | The member surface is one **Assistance** button on the existing `/mahjong` panel | `MemberPanelView` already carries Create Table / Card Viewer / My Stats. A personal play setting is member self-service, so it belongs in Discord (CLAUDE.md), while the *house default* of A8 is admin config and belongs on the dashboard. |
+| A10 | The member surface is a **My Settings** button on the existing `/mahjong` panel, opening an ephemeral menu; assistance is its first tenant | `MemberPanelView` already carries Create Table / Card Viewer / My Stats. A single-purpose Assistance button works for one setting and sprawls at the second — a container costs nothing now and means no future per-player preference has to touch the play panel again (CLAUDE.md: collapse controls; one ephemeral panel over a sprawl). Scoped to mahjong, not a bot-wide member hub — DK has none, and inventing one is not this addon's job. A personal play setting is member self-service and so belongs in Discord, while the *house default* of A8 is admin config and belongs on the dashboard. |
 
 ---
 
@@ -82,11 +82,12 @@ window, Charleston pick, courtesy, joker redemption, rack panel. One builder in
 Honest limit to note in the manual: at deal time every line sits 8–10 away and
 the ranking is close to noise. It earns its keep mid-hand.
 
-Same commit: the `/mahjong` Assistance button and its select; `manual.html`
-player-guide section; a new § in the mahjong spec.
+Same commit: the `/mahjong` **My Settings** button and the ephemeral menu behind
+it (one select today — the mode); `manual.html` player-guide section; a new § in
+the mahjong spec.
 
-**Tests**: embed builder per mode (including `off` rendering nothing); the
-A6 safety rail — a suggested discard never names a tile completing a visible
+**Tests**: embed builder per mode (including `off` rendering nothing); My Settings
+reflects the stored mode and writes the chosen one back; the A6 safety rail — a suggested discard never names a tile completing a visible
 exposure; cog wiring for the new button.
 
 ## Stage 4 — gate + QA
