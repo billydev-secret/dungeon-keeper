@@ -295,10 +295,8 @@ async def test_a_cancelled_flush_does_not_evict_its_replacement():
     """A cancel that lands *mid-render* unwinds after the next task is armed.
 
     The doomed task's cleanup then popped a slot that no longer belonged to
-    it, evicting the live replacement: that task keeps running, the slot reads
-    empty, and the next ``_arm`` starts a second coalescer — two of them
-    editing one card. Reaching it needs the cancel to arrive while a render is
-    in flight, which is why the render here blocks on a gate.
+    it, evicting the live replacement: that task kept running, the slot read
+    empty, and the next ``_arm`` started a second coalescer editing one card.
     """
     calls, render = _counter()
     refresher = CardRefresher(interval=INTERVAL)
@@ -326,5 +324,71 @@ async def test_a_cancelled_flush_does_not_evict_its_replacement():
     assert refresher._tasks.get(GUILD) is replacement, "the live task was evicted"
 
     await asyncio.sleep(INTERVAL * 3)
-    assert calls == ["first", "second", "queued-again"]
+    assert calls[-1] == "queued-again", "the replacement never flushed"
+    refresher.cancel_all()
+
+
+@pytest.mark.asyncio
+async def test_a_render_in_flight_when_drain_lands_still_finishes():
+    """``render_card`` posts before it records the id it posted.
+
+    A cancel landing between those two would leave the message in the channel
+    with nothing pointing at it — a card nobody can edit and nobody deletes.
+    So the render is shielded, and ``drain`` waits for it: the caller that goes
+    on to read those ids has to see the ones the render just wrote.
+    """
+    refresher = CardRefresher(interval=INTERVAL)
+    gate = asyncio.Event()
+    posted: list[str] = []
+
+    async def _slow_post() -> None:
+        await gate.wait()
+        posted.append("recorded the id")
+
+    await refresher.submit(GUILD, lambda: asyncio.sleep(0))
+    await refresher.submit(GUILD, _slow_post)
+    await asyncio.sleep(INTERVAL * 2)  # now inside _slow_post
+    assert not posted
+
+    drained = asyncio.ensure_future(refresher.drain(GUILD))
+    await asyncio.sleep(0)
+    assert not drained.done(), "drain returned while a render was still in flight"
+
+    gate.set()
+    await drained
+    assert posted == ["recorded the id"]
+    refresher.cancel_all()
+
+
+@pytest.mark.asyncio
+async def test_two_renders_for_one_guild_do_not_interleave():
+    """A slow inline render could otherwise land *after* the coalesced one and
+    overwrite it, leaving the card naming the track before last."""
+    order: list[str] = []
+    refresher = CardRefresher(interval=INTERVAL)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _slow() -> None:
+        order.append("slow-start")
+        started.set()
+        await release.wait()
+        order.append("slow-end")
+
+    async def _quick() -> None:
+        order.append("quick")
+
+    inline = asyncio.ensure_future(refresher.submit(GUILD, _slow))
+    await started.wait()
+    # A refresh arriving mid-render is queued and flushed on the timer — but it
+    # still has to wait for the lock, so it cannot start yet.
+    await refresher.submit(GUILD, _quick)
+    await asyncio.sleep(INTERVAL * 3)
+    assert order == ["slow-start"], "the quick render jumped the lock"
+
+    release.set()
+    await inline
+    await asyncio.sleep(INTERVAL * 3)
+    # The newest state still lands last, which is the point of coalescing.
+    assert order == ["slow-start", "slow-end", "quick"]
     refresher.cancel_all()

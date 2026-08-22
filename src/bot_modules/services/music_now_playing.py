@@ -342,6 +342,8 @@ class CardRefresher:
         self._last: dict[int, float] = {}
         self._pending: dict[int, Callable[[], Awaitable[None]]] = {}
         self._tasks: dict[int, asyncio.Task[None]] = {}
+        self._locks: dict[int, asyncio.Lock] = {}
+        self._inflight: dict[int, asyncio.Future[None]] = {}
 
     async def submit(
         self, guild_id: int, render: Callable[[], Awaitable[None]]
@@ -353,15 +355,66 @@ class CardRefresher:
             self._arm(guild_id, self._interval - (now - last))
             return
         self._last[guild_id] = now
-        await render()
+        await self._render_once(guild_id, render)
+
+    async def _render_once(
+        self, guild_id: int, render: Callable[[], Awaitable[None]]
+    ) -> None:
+        """One render for one guild — serialized, and atomic to cancellation.
+
+        **Serialized**, because ``submit`` renders inline while ``_flush``
+        renders from a task. A slow inline render — a rate-limited edit during
+        a burst of skips, which is exactly when two are in flight — could
+        otherwise finish *after* the coalesced one and overwrite it, leaving
+        the card naming the previous track until the next change.
+
+        **Atomic**, because a cancel from ``drain`` landing inside
+        ``channel.send`` would let the message reach Discord with its id never
+        recorded: a card nobody can edit and nobody will delete. ``core.sticky``
+        shields its placements for the same reason.
+
+        The two don't compose perfectly: a cancelled render outlives the lock,
+        since unwinding the ``async with`` releases it while the shielded task
+        runs on. That is why ``drain`` waits for the in-flight render rather
+        than only cancelling — every caller that cancels goes through it.
+        """
+        lock = self._locks.setdefault(guild_id, asyncio.Lock())
+        async with lock:
+            task = asyncio.ensure_future(render())
+            self._inflight[guild_id] = task
+            try:
+                await asyncio.shield(task)
+            finally:
+                if self._inflight.get(guild_id) is task and task.done():
+                    self._inflight.pop(guild_id, None)
 
     def forget(self, guild_id: int) -> None:
-        """Drop a guild's state — its session ended and its queue went with it."""
+        """Drop a guild's coalescing state and cancel its pending refresh.
+
+        Does **not** wait for a render already in flight — see ``drain`` for
+        the caller that has to.
+        """
         self._pending.pop(guild_id, None)
         self._last.pop(guild_id, None)
         task = self._tasks.pop(guild_id, None)
         if task is not None:
             task.cancel()
+
+    async def drain(self, guild_id: int) -> None:
+        """``forget``, then wait for any render already under way to land.
+
+        Callers that go on to *read* the card's ids — retiring it at the end of
+        a session, replacing it from ``/nowplaying`` — have to, or they read
+        ids a shielded render is about to overwrite and strand the card it
+        posted.
+        """
+        inflight = self._inflight.get(guild_id)
+        self.forget(guild_id)
+        if inflight is not None:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await inflight
+            if self._inflight.get(guild_id) is inflight:
+                self._inflight.pop(guild_id, None)
 
     def cancel_all(self) -> None:
         for task in self._tasks.values():
@@ -369,6 +422,8 @@ class CardRefresher:
         self._tasks.clear()
         self._pending.clear()
         self._last.clear()
+        self._locks.clear()
+        self._inflight.clear()
 
     def _arm(self, guild_id: int, delay: float) -> None:
         task = self._tasks.get(guild_id)
@@ -385,7 +440,7 @@ class CardRefresher:
                     return
                 self._last[guild_id] = asyncio.get_running_loop().time()
                 try:
-                    await render()
+                    await self._render_once(guild_id, render)
                 except Exception:
                     log.exception("now-playing refresh failed in guild %s", guild_id)
                 delay = self._interval

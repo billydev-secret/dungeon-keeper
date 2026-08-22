@@ -256,7 +256,7 @@ def test_every_sticky_panel_is_in_the_registry(db, seed, key, name, blocks):
     with open_db(db) as conn:
         seed(conn, channel_id)
         found = sticky_panel_channels(conn, GUILD)
-        assert panel_channels(conn, GUILD)[key][0] == channel_id
+        assert channel_id in panel_channels(conn, GUILD)[key][0]
     assert found[channel_id].name == name
     assert found[channel_id].restick_on_bot is blocks
 
@@ -353,9 +353,8 @@ def test_survivor_with_no_live_season_is_not_a_resident(db):
         assert sticky_panel_channels(conn, GUILD) == {}
 
 
-def test_survivor_falls_back_to_where_the_panel_actually_is(db):
-    """Between an admin repointing the channel and the next repost, the panel
-    is still sitting in the old one."""
+def test_survivor_covers_where_the_panel_actually_is(db):
+    """A configured channel isn't the only place the panel can be."""
     from bot_modules.services.survivor_service import create_season, set_panel_ids
 
     with open_db(db) as conn:
@@ -363,6 +362,45 @@ def test_survivor_falls_back_to_where_the_panel_actually_is(db):
         set_panel_ids(conn, GUILD, 6011, 1)
         found = sticky_panel_channels(conn, GUILD)
     assert found[6011].name == "the Survivor panel"
+
+
+def test_survivor_holds_both_channels_while_a_move_settles(db):
+    """An `or` chain here reported only the configured channel, and the live
+    bot-chasing panel sitting in the old one went unmentioned — so an auction
+    started there was waved through and buried by the next repost."""
+    from bot_modules.services.survivor_service import (
+        create_season,
+        set_panel_ids,
+        update_config,
+    )
+
+    with open_db(db) as conn:
+        season_id = create_season(conn, GUILD, "S", 2035)
+        set_panel_ids(conn, GUILD, 6012, 1)      # panel is here
+        update_config(conn, season_id, {"channel_id": 6013})  # repointed here
+        found = sticky_panel_channels(conn, GUILD)
+        assert bot_chasing_resident(conn, GUILD, 6012, excluding="casino") == (
+            "the Survivor panel"
+        )
+    assert found[6012].name == "the Survivor panel", "the old channel was dropped"
+    assert found[6013].name == "the Survivor panel", "the new channel was dropped"
+
+
+def test_survivor_in_one_channel_is_named_once(db):
+    """Configured and recorded are normally the same channel; a panel holding
+    it must not read as "the Survivor panel and the Survivor panel"."""
+    from bot_modules.services.survivor_service import (
+        create_season,
+        set_panel_ids,
+        update_config,
+    )
+
+    with open_db(db) as conn:
+        season_id = create_season(conn, GUILD, "S", 2035)
+        update_config(conn, season_id, {"channel_id": 6014})
+        set_panel_ids(conn, GUILD, 6014, 1)
+        found = sticky_panel_channels(conn, GUILD)
+    assert found[6014].name == "the Survivor panel"
 
 
 # ── which panels the collision rules apply to at all ─────────────────────────

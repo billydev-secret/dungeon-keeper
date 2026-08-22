@@ -242,6 +242,15 @@ Three corrections from the review of that work, same day:
   been posted once, which is exactly the window where something else gets
   placed in the channel unopposed and the Wednesday repost then buries it.
 
+A second review pass then found that correction had shipped as
+`channel_id or announcement_channel_id`, which short-circuits: in the one
+window the fallback was written for — an admin repoints the channel and the
+live panel is still sitting in the old one — the configured id is truthy and
+the recorded one is never read, so an auction started in the old channel was
+waved through and buried by the next repost. A registry entry now resolves to
+*every* channel its panel occupies rather than one, and Survivor is the entry
+that uses it.
+
 ### Test to land with it
 
 `tests/test_core_sticky.py` has 37 tests and no multi-panel scenario — every one

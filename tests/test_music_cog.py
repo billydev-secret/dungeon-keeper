@@ -30,7 +30,7 @@ def cog(monkeypatch):
         "safe_resolve_accent",
         AsyncMock(return_value=discord.Color(0xC9A961)),
     )
-    bot = SimpleNamespace(ctx=SimpleNamespace(db_path=":memory:"))
+    bot = SimpleNamespace(ctx=SimpleNamespace(db_path=":memory:"), user=None)
     cog = MusicCog(bot)  # type: ignore[arg-type]
     # No quiet window: this is about what a track change does, not when.
     cog._card = CardRefresher(interval=0.0)
@@ -222,3 +222,52 @@ async def test_nowplaying_cancels_a_queued_refresh_for_the_old_channel(cog):
 
     await cog.now_playing_cmd.callback(cog, interaction)
     assert cog._card._pending.get(GUILD) is None
+
+
+@pytest.mark.asyncio
+async def test_the_bot_being_pulled_out_of_voice_ends_the_session(cog):
+    """Nothing used to notice: the listener ignored every bot, so the queue
+    survived with the card's channel still on it — and the next /play from a
+    different channel kept editing the card in the old one while the people
+    who started the new session saw nothing."""
+    channel = _text_channel()
+    guild = MagicMock()
+    guild.id = GUILD
+    guild.get_channel.return_value = channel
+    queue = cog._queue(GUILD)
+    queue.now_playing_message_id = CARD
+    queue.now_playing_channel_id = CHANNEL
+
+    me = MagicMock()
+    me.id = 55
+    cog.bot.user = me
+    member = MagicMock()
+    member.id = 55
+    member.guild = guild
+
+    await cog.on_voice_state_update(
+        member, MagicMock(channel=MagicMock()), MagicMock(channel=None)
+    )
+
+    assert GUILD not in cog._queues
+    channel.get_partial_message(CARD).delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_the_bot_moving_between_voice_channels_is_not_a_session_end(cog):
+    """A drag from one voice channel to another keeps playing."""
+    guild = MagicMock()
+    guild.id = GUILD
+    cog._queue(GUILD)
+
+    me = MagicMock()
+    me.id = 55
+    cog.bot.user = me
+    member = MagicMock()
+    member.id = 55
+    member.guild = guild
+
+    await cog.on_voice_state_update(
+        member, MagicMock(channel=MagicMock()), MagicMock(channel=MagicMock())
+    )
+    assert GUILD in cog._queues

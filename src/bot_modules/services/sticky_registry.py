@@ -52,75 +52,88 @@ class StickyResident:
     restick_on_bot: bool
 
 
-def _economy_panel_channel(conn: sqlite3.Connection, guild_id: int) -> int:
+def _one(channel_id: int | None) -> tuple[int, ...]:
+    """A single channel as the tuple every resolver returns, or nothing."""
+    return (int(channel_id),) if channel_id else ()
+
+
+def _economy_panel_channel(conn: sqlite3.Connection, guild_id: int) -> tuple[int, ...]:
     from bot_modules.services.economy_service import (  # noqa: PLC0415
         load_econ_settings,
     )
 
-    return int(load_econ_settings(conn, guild_id).guide_channel_id or 0)
+    return _one(load_econ_settings(conn, guild_id).guide_channel_id)
 
 
-def _economy_shop_channel(conn: sqlite3.Connection, guild_id: int) -> int:
+def _economy_shop_channel(conn: sqlite3.Connection, guild_id: int) -> tuple[int, ...]:
     from bot_modules.services.economy_service import (  # noqa: PLC0415
         load_econ_settings,
     )
 
-    return int(load_econ_settings(conn, guild_id).shop_channel_id or 0)
+    return _one(load_econ_settings(conn, guild_id).shop_channel_id)
 
 
-def _economy_bounty_channel(conn: sqlite3.Connection, guild_id: int) -> int:
+def _economy_bounty_channel(
+    conn: sqlite3.Connection, guild_id: int
+) -> tuple[int, ...]:
     from bot_modules.services.economy_service import (  # noqa: PLC0415
         load_econ_settings,
     )
 
-    return int(load_econ_settings(conn, guild_id).bounty_channel_id or 0)
+    return _one(load_econ_settings(conn, guild_id).bounty_channel_id)
 
 
-def _casino_channel(conn: sqlite3.Connection, guild_id: int) -> int:
+def _casino_channel(conn: sqlite3.Connection, guild_id: int) -> tuple[int, ...]:
     from bot_modules.services.casino_service import (  # noqa: PLC0415
         load_casino_settings,
     )
 
-    return int(load_casino_settings(conn, guild_id).panel_channel_id or 0)
+    return _one(load_casino_settings(conn, guild_id).panel_channel_id)
 
 
-def _pen_pals_channel(conn: sqlite3.Connection, guild_id: int) -> int:
+def _pen_pals_channel(conn: sqlite3.Connection, guild_id: int) -> tuple[int, ...]:
     row = conn.execute(
         "SELECT panel_channel_id FROM pen_pals_config WHERE guild_id = ?",
         (guild_id,),
     ).fetchone()
-    return int(row["panel_channel_id"] or 0) if row is not None else 0
+    return _one(row["panel_channel_id"]) if row is not None else ()
 
 
-def _dm_perms_channel(conn: sqlite3.Connection, guild_id: int) -> int:
+def _dm_perms_channel(conn: sqlite3.Connection, guild_id: int) -> tuple[int, ...]:
     row = conn.execute(
         "SELECT panel_channel_id FROM dm_panel_settings WHERE guild_id = ?",
         (guild_id,),
     ).fetchone()
-    return int(row["panel_channel_id"] or 0) if row is not None else 0
+    return _one(row["panel_channel_id"]) if row is not None else ()
 
 
-def _voice_control_channel(conn: sqlite3.Connection, guild_id: int) -> int:
-    return int(
-        get_config_value(conn, "voice_master_panel_channel_id", "0", guild_id) or 0
+def _voice_control_channel(
+    conn: sqlite3.Connection, guild_id: int
+) -> tuple[int, ...]:
+    return _one(
+        int(get_config_value(conn, "voice_master_panel_channel_id", "0", guild_id) or 0)
     )
 
 
-def _guess_prompt_channel(conn: sqlite3.Connection, guild_id: int) -> int:
+def _guess_prompt_channel(
+    conn: sqlite3.Connection, guild_id: int
+) -> tuple[int, ...]:
     from bot_modules.services.guess_repo import get_guess_config  # noqa: PLC0415
 
     config = get_guess_config(conn, guild_id)
     # Same legacy fallback the cog's own ``_panel_ids`` carries: guilds whose
     # prompt predates ``guess_prompt_channel_id`` have a message id and no
     # channel id, and their prompt is in the Guess channel.
-    return int(
+    return _one(
         config.prompt_channel_id
         or (config.guess_channel_id if config.prompt_message_id else 0)
     )
 
 
-def _todo_board_channel(chores: bool) -> Callable[[sqlite3.Connection, int], int]:
-    def read(conn: sqlite3.Connection, guild_id: int) -> int:
+def _todo_board_channel(
+    chores: bool,
+) -> Callable[[sqlite3.Connection, int], tuple[int, ...]]:
+    def read(conn: sqlite3.Connection, guild_id: int) -> tuple[int, ...]:
         from bot_modules.services.todo_service import (  # noqa: PLC0415
             BOARD_ALL,
             BOARD_CHORES,
@@ -128,22 +141,27 @@ def _todo_board_channel(chores: bool) -> Callable[[sqlite3.Connection, int], int
         )
 
         kind = BOARD_CHORES if chores else BOARD_ALL
-        return int(get_board(conn, guild_id, kind).channel_id or 0)
+        return _one(get_board(conn, guild_id, kind).channel_id)
 
     return read
 
 
-def _survivor_channel(conn: sqlite3.Connection, guild_id: int) -> int:
-    """The season's configured channel, not where the panel was last posted.
+def _survivor_channel(
+    conn: sqlite3.Connection, guild_id: int
+) -> tuple[int, ...]:
+    """Both channels the panel can be holding, newest intent first.
 
-    ``panel_ids`` answers "where is it now", which is empty until the first
-    post — and a Survivor panel that hasn't landed yet is exactly when this
-    matters: something else gets placed in that channel unopposed, and the
-    Wednesday repost then buries it. The configured channel is where the panel
-    is going to live, which is the same rule the bounty hub already follows
-    (it keys off the board channel, not its last placement). Falls back to the
-    recorded location for the window after an admin repoints the channel and
-    before the next repost moves the panel off the old one.
+    ``announcement_channel_id`` is where the panel last landed and is empty
+    until the first post — a Survivor panel that hasn't landed yet is exactly
+    when this matters, because something else gets placed in the channel
+    unopposed and the Wednesday repost then buries it. So the season's
+    configured ``channel_id`` counts too.
+
+    Both, not one or the other: after an admin repoints the channel the live
+    ``restick_on_bot`` panel is still sitting in the old one until the next
+    repost moves it, so the old channel is genuinely occupied *and* the new one
+    is genuinely spoken for. Returning only the configured channel would wave
+    an auction into the room the panel is about to repost into.
     """
     from bot_modules.services.survivor_service import (  # noqa: PLC0415
         get_active_season,
@@ -151,22 +169,29 @@ def _survivor_channel(conn: sqlite3.Connection, guild_id: int) -> int:
 
     season = get_active_season(conn, guild_id)
     if season is None:
-        return 0
+        return ()
     config = season["config"]
-    return int(
-        config.get("channel_id") or config.get("announcement_channel_id") or 0
+    channels = (
+        int(config.get("channel_id") or 0),
+        int(config.get("announcement_channel_id") or 0),
     )
+    # dict.fromkeys dedupes while keeping order — normally both are the same.
+    return tuple(dict.fromkeys(c for c in channels if c))
 
 
 #: Every sticky panel a plain config read can find, as
-#: ``(key, name, restick_on_bot, resolver)``.
+#: ``(key, name, restick_on_bot, resolver)``, where the resolver answers with
+#: *every* channel that panel occupies. Almost always one — Survivor is the
+#: exception, holding its old channel and its new one while a move settles.
 #:
 #: ``key`` is stable so a caller can exclude *itself* when asking who else is
 #: in a channel (see ``bot_chasing_resident``), and it matches the panel's
 #: ``PanelSpec.key`` in ``panel_registry`` wherever the dashboard can post it —
 #: that is what lets ``routes/panels.py`` run this check for any panel without
 #: a translation table.
-_STICKY_PANELS: tuple[tuple[str, str, bool, Callable[..., int]], ...] = (
+_STICKY_PANELS: tuple[
+    tuple[str, str, bool, Callable[..., tuple[int, ...]]], ...
+] = (
     # One entry where there were two: the guide and leaderboard panels merged
     # on 2026-08-18, and the survivor lives on the guide's ids.
     ("economy-panel", "the economy panel", False, _economy_panel_channel),
@@ -205,17 +230,17 @@ def is_sticky_panel(key: str) -> bool:
 
 def panel_channels(
     conn: sqlite3.Connection, guild_id: int
-) -> dict[str, tuple[int, str, bool]]:
-    """``key -> (channel_id, name, restick_on_bot)`` for every configured panel.
+) -> dict[str, tuple[tuple[int, ...], str, bool]]:
+    """``key -> (channel_ids, name, restick_on_bot)`` for every configured panel.
 
     Panels with no channel configured are absent rather than present with a
     zero, so a caller can never match "unconfigured" against "channel 0".
     """
-    out: dict[str, tuple[int, str, bool]] = {}
+    out: dict[str, tuple[tuple[int, ...], str, bool]] = {}
     for key, name, on_bot, resolve in _STICKY_PANELS:
-        channel_id = resolve(conn, guild_id)
-        if channel_id:
-            out[key] = (channel_id, name, on_bot)
+        channel_ids = resolve(conn, guild_id)
+        if channel_ids:
+            out[key] = (channel_ids, name, on_bot)
     return out
 
 
@@ -252,8 +277,8 @@ def resident_in(
     return _merge(
         [
             (name, on_bot)
-            for key, (cid, name, on_bot) in panel_channels(conn, guild_id).items()
-            if cid == channel_id and key != excluding
+            for key, (cids, name, on_bot) in panel_channels(conn, guild_id).items()
+            if channel_id in cids and key != excluding
         ]
     )
 
@@ -269,8 +294,9 @@ def sticky_panel_channels(
     feeds, and ``routes/panel_posting.py`` for the same split on the dashboard.
     """
     by_channel: dict[int, list[tuple[str, bool]]] = {}
-    for channel_id, name, on_bot in panel_channels(conn, guild_id).values():
-        by_channel.setdefault(channel_id, []).append((name, on_bot))
+    for channel_ids, name, on_bot in panel_channels(conn, guild_id).values():
+        for channel_id in channel_ids:
+            by_channel.setdefault(channel_id, []).append((name, on_bot))
     merged = {cid: _merge(entries) for cid, entries in by_channel.items()}
     return {cid: resident for cid, resident in merged.items() if resident is not None}
 
@@ -289,7 +315,7 @@ def bot_chasing_resident(
     ``excluding`` is the asking panel's own key: the bounty hub lives in the
     bounty channel by definition, so it would otherwise always find itself.
     """
-    for key, (cid, name, on_bot) in panel_channels(conn, guild_id).items():
-        if key != excluding and on_bot and cid == channel_id:
+    for key, (cids, name, on_bot) in panel_channels(conn, guild_id).items():
+        if key != excluding and on_bot and channel_id in cids:
             return name
     return None

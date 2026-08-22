@@ -159,7 +159,7 @@ class MusicCog(commands.Cog):
         channel right now". The next /play would post a second one beside it,
         which is how the channel filled up with cards before.
         """
-        self._card.forget(guild.id)
+        await self._card.drain(guild.id)
         queue = self._queues.pop(guild.id, None)
         if queue is not None:
             await retire_card(
@@ -542,7 +542,7 @@ class MusicCog(commands.Cog):
         # of seconds. It closed over the *old* channel, so once the ids below
         # move it would stop matching, decide there is no card there and post
         # one — the second card this command exists to get rid of.
-        self._card.forget(guild.id)
+        await self._card.drain(guild.id)
         # Post the replacement, record it, and only then delete the old one.
         # Clearing the ids first leaves a window across these two awaits where
         # a fresh track change finds no card on record and posts a third.
@@ -843,9 +843,21 @@ class MusicCog(commands.Cog):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ) -> None:
+        guild = member.guild
+        me = self.bot.user
+        if me is not None and member.id == me.id:
+            # Dragged out, disconnected by a mod, or the voice connection
+            # dropped. Nothing else notices: /stop and /disconnect end the
+            # session themselves, and this listener used to ignore every bot.
+            # The queue survived with the card's channel still on it, so the
+            # next /play in a *different* channel kept editing the card in the
+            # old one and the listeners who started the new session saw
+            # nothing at all.
+            if after.channel is None and before.channel is not None:
+                await self._end_session(guild)
+            return
         if member.bot:
             return
-        guild = member.guild
         player = self._player(guild)
         if player is None or player.channel is None:
             return
