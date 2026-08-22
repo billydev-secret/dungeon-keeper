@@ -29,7 +29,7 @@ from bot_modules.services.scheduled_games_service import (
 )
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, run_query
-from web_server.helpers import parse_time_of_day
+from web_server.helpers import parse_time_of_day, require_channel_in_guild
 
 log = logging.getLogger("dungeonkeeper.games.schedule")
 
@@ -75,17 +75,6 @@ def _validate(body: ScheduleBody) -> tuple[int, int, str | None]:
         raise HTTPException(status_code=400, detail="once needs a start_date")
 
     return channel_id, tod, recur_days_json
-
-
-def _channel_in_guild(ctx, guild_id: int, channel_id: int) -> bool:
-    """True if the live bot can see this channel in the active guild (best-effort)."""
-    bot = getattr(ctx, "bot", None)
-    if bot is None:
-        return True  # bot not attached (e.g. tests) — skip the guard
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        return True
-    return guild.get_channel(channel_id) is not None
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -156,8 +145,7 @@ async def create_schedule(
     guild_id = get_active_guild_id(request)
     channel_id, tod, recur_days_json = _validate(body)
 
-    if not _channel_in_guild(ctx, guild_id, channel_id):
-        raise HTTPException(status_code=400, detail="Channel is not in this server")
+    require_channel_in_guild(ctx, guild_id, channel_id)
 
     now = time.time()
 
@@ -209,8 +197,7 @@ async def update_schedule(
     guild_id = get_active_guild_id(request)
     channel_id, tod, recur_days_json = _validate(body)
 
-    if not _channel_in_guild(ctx, guild_id, channel_id):
-        raise HTTPException(status_code=400, detail="Channel is not in this server")
+    require_channel_in_guild(ctx, guild_id, channel_id)
 
     now = time.time()
 

@@ -41,7 +41,7 @@ from bot_modules.services.announcements_service import (
 from bot_modules.services.branding_service import DEFAULT_ACCENT
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
-from web_server.helpers import parse_time_of_day
+from web_server.helpers import parse_time_of_day, require_channel_in_guild
 
 log = logging.getLogger("dungeonkeeper.web.announcements")
 
@@ -216,17 +216,6 @@ def _check_buttons_against_guild(ctx, guild_id: int, buttons: list[dict]) -> Non
             raise HTTPException(status_code=400, detail=f"Can't add that button — {reason}.")
 
 
-def _channel_in_guild(ctx, guild_id: int, channel_id: int) -> bool:
-    """True if the live bot can see this channel in the active guild (best-effort)."""
-    bot = getattr(ctx, "bot", None)
-    if bot is None:
-        return True  # bot not attached (e.g. tests) — skip the guard
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        return True
-    return guild.get_channel(channel_id) is not None
-
-
 def _button_dict(row: sqlite3.Row) -> dict:
     return {
         "role_id": str(row["role_id"]),
@@ -322,8 +311,7 @@ async def create(
     fields = _validate(body)
     buttons = _validate_buttons(body)
 
-    if not _channel_in_guild(ctx, guild_id, fields["channel_id"]):
-        raise HTTPException(status_code=400, detail="Channel is not in this server")
+    require_channel_in_guild(ctx, guild_id, fields["channel_id"])
     _check_buttons_against_guild(ctx, guild_id, buttons)
 
     now = time.time()
@@ -359,8 +347,7 @@ async def update(
     fields = _validate(body)
     buttons = _validate_buttons(body)
 
-    if not _channel_in_guild(ctx, guild_id, fields["channel_id"]):
-        raise HTTPException(status_code=400, detail="Channel is not in this server")
+    require_channel_in_guild(ctx, guild_id, fields["channel_id"])
     _check_buttons_against_guild(ctx, guild_id, buttons)
 
     now = time.time()

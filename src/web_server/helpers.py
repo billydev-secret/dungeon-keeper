@@ -12,6 +12,36 @@ from bot_modules.services.embeds import build_admin_mirror_embed
 from bot_modules.services.message_store import get_known_users_bulk
 
 
+def channel_in_guild(ctx, guild_id: int, channel_id: int) -> bool:
+    """Can the live bot see this channel in the active guild?
+
+    A guard on the write routes that store a channel to post into later:
+    announcements and scheduled games both take a channel id from the form and
+    refuse one belonging to a different server.
+
+    Deliberately **permissive when it cannot tell**. The bot may not be
+    attached (tests, the dashboard running alone) or the guild may not be
+    cached yet, and in neither case has the caller done anything wrong — so an
+    unanswerable question returns True rather than blocking a legitimate save.
+    Membership is re-checked at post time by the code that actually sends;
+    this only catches the obvious mistake while the admin is still looking at
+    the form.
+    """
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        return True  # bot not attached (e.g. tests) — skip the guard
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return True
+    return guild.get_channel(channel_id) is not None
+
+
+def require_channel_in_guild(ctx, guild_id: int, channel_id: int) -> None:
+    """``channel_in_guild`` as a 400, which is what both callers wanted."""
+    if not channel_in_guild(ctx, guild_id, channel_id):
+        raise HTTPException(status_code=400, detail="Channel is not in this server")
+
+
 def parse_time_of_day(raw: str, *, field: str = "time") -> int:
     """Parse ``'HH:MM'`` into minutes since local midnight (0..1439).
 
