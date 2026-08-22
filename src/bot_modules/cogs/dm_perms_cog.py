@@ -386,6 +386,17 @@ class DmRequestLookupView(discord.ui.View):
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Select a user", min_values=1, max_values=1)
     async def user_select(self, interaction: discord.Interaction, select: discord.ui.UserSelect) -> None:
         self._selected_user = select.values[0]
+        # Pin the pick as the select's default value. A UserSelect carries its
+        # chosen user only in the client until the message is edited: the type
+        # buttons below re-send this same view with ``edit_message``, and a
+        # payload with no ``default_values`` redraws the select empty. The
+        # Python-side ``_selected_user`` survived that, so Continue still
+        # worked -- but the member watched their pick vanish every time they
+        # switched between Direct Message and Friend Request, and picked it
+        # again.
+        select.default_values = [
+            discord.SelectDefaultValue.from_user(self._selected_user)
+        ]
         await interaction.response.defer()
 
     def _set_type_styles(self, selected: str) -> None:
