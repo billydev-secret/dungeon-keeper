@@ -101,3 +101,16 @@ def test_onboarding_blurbs_fit_discord_limits():
         assert entry.blurb, f"{entry.key} has no onboarding blurb"
         assert len(entry.blurb) <= MAX_OPTION_DESCRIPTION, entry.key
         assert len(entry.spec.name) <= MAX_OPTION_TITLE, entry.key
+
+
+def test_only_the_economy_notify_dial_ignores_a_stored_none():
+    """``none_means_off=False`` is a real exception, not a default to spread.
+
+    The dashboard panels save as whole forms and write "0" for any untouched
+    picker, so a stored 0 is weak evidence everywhere. It is still a *documented
+    wanted state* for the QOTD and promotion-review pings (a silent post), and
+    only the economy opt-in role has no coherent "off" at all — the role IS the
+    opt-in mechanism.
+    """
+    exempt = {e.key for e in fr.CONFIG_ROLES if not e.none_means_off}
+    assert exempt == {"econ_game_role_id"}

@@ -259,6 +259,7 @@ class GuideNotifyButton(discord.ui.Button):
             bot.ctx, guild, ECONOMY_NOTIFY.key, ECONOMY_NOTIFY.spec,
             feature=ECONOMY_NOTIFY.feature,
             allow_legacy_fallback=ECONOMY_NOTIFY.legacy_fallback,
+            respect_opt_out=ECONOMY_NOTIFY.none_means_off,
         )
         if role is None:
             # Opted out, or the role couldn't be made (no Manage Roles). Reads

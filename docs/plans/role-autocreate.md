@@ -290,6 +290,28 @@ a guild with no opt-in role used to dead-end at "ask an admin". It is also the
 only trigger that is a *member asking for the role* rather than the bot needing
 one — so it is the only one of the five that will actually gain members.
 
+**Amendment, 2026-08-22 — the "(none)" evidence is weaker than decision 7
+assumed.** Every one of these dials lives on a panel that saves as a whole form
+and writes `"0"` for an untouched picker: `economy-config.js:409`,
+`config-welcome.js:277`, `config-risky-rolls.js:97`. So saving the Economy page
+to change a payout writes `econ_game_role_id = 0`, and one save of a config page
+locks that dial out of provisioning forever. Prod bears it out —
+`econ_game_role_id` is 0 in two guilds and `welcome_ping_role_id` is 0 in a
+third, almost certainly save artifacts rather than decisions.
+
+`FeatureRole.none_means_off` is the per-dial answer, and **only
+`econ_game_role_id` sets it False** (Billy: *"the economy game should make a
+ping role if it doesn't exist"*). Two conditions have to hold together before
+any other dial may follow:
+
+1. its panel writes 0 on an unrelated save, **and**
+2. the dial has no coherent "off" — for the economy role the role *is* the
+   opt-in mechanism, so "(none)" only ever means "the 🔔 button is broken".
+
+The QOTD and promotion-review pings meet (1) but not (2): a silent post is a
+documented, wanted state in both specs, so a 0 there is still respected.
+`tests/test_feature_roles.py` pins the exemption set to exactly one key.
+
 `services/feature_roles.py` is the registry: one auditable list, with the
 exclusions above recorded in its docstring so the next person doesn't "finish
 the job". `tests/test_feature_roles.py` guards the rules (ping-only, never

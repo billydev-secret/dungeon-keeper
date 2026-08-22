@@ -209,7 +209,11 @@ def test_untargeted_prompts_survive_the_write(authed_client, fake_ctx):
 
 
 def test_a_role_switched_off_is_never_provisioned(authed_client, fake_ctx):
-    """An admin's "(none)" beats a request to add it."""
+    """An admin's "(none)" beats a request to add it.
+
+    Risky Rolls, not the economy dial: that one treats a stored 0 as a save
+    artifact and provisions anyway — see the next test.
+    """
     with open_db(fake_ctx.db_path) as conn:
         set_config_value(conn, "risky_ping_role_id", "0", fake_ctx.guild_id)
         conn.commit()
@@ -290,3 +294,29 @@ def test_a_successful_add_writes_an_audit_row(authed_client, fake_ctx):
             "SELECT action FROM audit_log WHERE guild_id = ?", (fake_ctx.guild_id,)
         ).fetchall()
     assert any(r["action"] == "onboarding_roles_added" for r in rows)
+
+
+def test_the_economy_dial_is_addable_despite_a_stored_zero(authed_client, fake_ctx):
+    """Economy Settings writes "0" for an untouched picker on every save, so a 0
+    there records a save rather than a decision — and an opt-in role with no
+    role is just a broken button. It stays addable."""
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, "econ_game_role_id", "0", fake_ctx.guild_id)
+        set_config_value(conn, "risky_ping_role_id", "0", fake_ctx.guild_id)
+        conn.commit()
+    guild = _attach(fake_ctx, prompts=[_prompt(111, "P")])
+
+    states = {
+        r["key"]: r["state"]
+        for r in authed_client.get("/api/onboarding").json()["roles"]
+    }
+    assert states["econ_game_role_id"] == "uncreated"
+    assert states["risky_ping_role_id"] == "off", "the exception is scoped to one dial"
+
+    resp = authed_client.post(
+        "/api/onboarding/add-roles",
+        json={"keys": ["econ_game_role_id"], "prompt_id": "111"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["added"] == ["Economy Notifications"]
+    guild.edit_onboarding.assert_awaited_once()

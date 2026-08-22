@@ -401,3 +401,17 @@ async def test_inherited_id_creates_without_announcing():
     )
     assert role is not None
     assert said == [], "no deletion happened, so the mods hear nothing"
+
+
+@pytest.mark.asyncio
+async def test_respect_opt_out_false_provisions_over_a_stored_zero():
+    """For a dial where 0 records a save rather than a decision.
+
+    ``ensure_feature_role`` is told ``opted_out=False`` by its caller in that
+    case, so the stored 0 reads as "nothing here yet" and a role gets made.
+    """
+    guild = FakeGuild()
+    role, stored = await _ensure(guild, 0, opted_out=False)
+
+    assert role is not None
+    assert stored == role.id

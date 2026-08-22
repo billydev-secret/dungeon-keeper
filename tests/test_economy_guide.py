@@ -523,9 +523,15 @@ async def test_notify_button_provisions_the_role_when_never_configured(db):
 
 
 @pytest.mark.asyncio
-async def test_notify_button_stays_inert_when_an_admin_chose_none(db):
-    """A stored 0 is a preference. Provisioning over it would take away the
-    only way to say "no opt-in role here"."""
+async def test_notify_button_provisions_even_over_a_stored_zero(db):
+    """A stored 0 on THIS dial is not a decision (Billy, 2026-08-22).
+
+    Economy Settings saves as one form and writes ``game_role_id: "0"`` for an
+    untouched picker on every save, so changing a payout leaves a 0 here — and
+    prod has exactly that in two guilds. There is also no coherent "off" for an
+    opt-in role: with no role, nobody can opt in at all. So unlike every other
+    ping dial, a 0 here still provisions.
+    """
     _enable(db, game_role_id=0)
     guild = FakeGuild(id=GUILD_ID)
     member = _notify_member_mock(role_ids=())
@@ -533,9 +539,10 @@ async def test_notify_button_stays_inert_when_an_admin_chose_none(db):
 
     await GuideNotifyButton().callback(inter)
 
-    assert not list(guild.roles), "nothing should have been created"
-    member.add_roles.assert_not_awaited()
-    assert inter.response.send_message.await_args.args[0] == NOTIFY_UNCONFIGURED_MSG
+    made = list(guild.roles)
+    assert [r.name for r in made] == ["Economy Notifications"]
+    member.add_roles.assert_awaited_once()
+    assert inter.response.send_message.await_args.args[0] != NOTIFY_UNCONFIGURED_MSG
 
 
 @pytest.mark.asyncio

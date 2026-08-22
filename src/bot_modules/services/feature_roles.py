@@ -55,6 +55,9 @@ class FeatureRole:
     blurb: str = ""
     #: Suggested emoji for the onboarding option.
     emoji: str = ""
+    #: Whether a stored ``0`` means "an admin turned this off" and must be left
+    #: alone. **Read the note below before setting this False.**
+    none_means_off: bool = True
     #: Whether a missing row falls back to the legacy ``guild_id=0`` row, which
     #: has to match how the feature itself reads the key or we'd provision a
     #: role for a guild that is really inheriting an answer. Economy settings
@@ -70,6 +73,7 @@ def _ping(
     blurb: str = "",
     emoji: str = "",
     legacy_fallback: bool = True,
+    none_means_off: bool = True,
 ) -> FeatureRole:
     """A ping-only role: no permissions, and not mentionable.
 
@@ -83,6 +87,7 @@ def _ping(
         blurb=blurb,
         emoji=emoji,
         legacy_fallback=legacy_fallback,
+        none_means_off=none_means_off,
         spec=RoleSpec(
             name=name,
             reason=f"Dungeon Keeper {feature} setup",
@@ -117,6 +122,22 @@ ECONOMY_NOTIFY = _ping(
     blurb="Get your streak digest and event alerts in your DMs.",
     emoji="🔔",
     legacy_fallback=False,
+    # A stored 0 here is not a decision (Billy, 2026-08-22: "the economy game
+    # should make a ping role if it doesn't exist"). Two reasons, and both have
+    # to hold before any other dial may follow:
+    #
+    #   1. Economy Settings saves as one form — `economy-config.js` sends
+    #      `game_role_id: picker.getValue() || "0"` on EVERY save — so changing
+    #      a payout writes a 0 here. Prod shows exactly that: 0 in two guilds.
+    #   2. There is no coherent "off" for this dial. The role IS the opt-in;
+    #      a member who doesn't want economy DMs simply doesn't hold it, and
+    #      with no role nobody can opt in at all. "(none)" only ever means
+    #      "the 🔔 button is broken".
+    #
+    # Contrast the QOTD and promotion-review pings, where a silent post is a
+    # documented, wanted state — those keep none_means_off=True even though
+    # their panels write 0 the same way.
+    none_means_off=False,
 )
 
 #: Every dial the bot provisions. All five live in the ``config`` KV — that is

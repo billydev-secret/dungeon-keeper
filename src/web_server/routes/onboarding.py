@@ -105,7 +105,7 @@ def _role_states(ctx, guild: discord.Guild, prompts) -> list[dict]:
     out: list[dict] = []
     with ctx.open_db() as conn:
         for entry in fr.CONFIG_ROLES:
-            opted_out = role_dial_opted_out(
+            opted_out = entry.none_means_off and role_dial_opted_out(
                 conn, entry.key, guild.id,
                 allow_legacy_fallback=entry.legacy_fallback,
             )
@@ -200,6 +200,7 @@ async def add_roles(
             ctx, guild, entry.key, entry.spec,
             feature=entry.feature,
             allow_legacy_fallback=entry.legacy_fallback,
+            respect_opt_out=entry.none_means_off,
         )
         if role is None:
             unavailable.append(entry.spec.name)

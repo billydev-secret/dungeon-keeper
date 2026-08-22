@@ -300,6 +300,7 @@ async def ensure_config_role(
     *,
     feature: str = "",
     allow_legacy_fallback: bool = True,
+    respect_opt_out: bool = True,
 ) -> discord.Role | None:
     """:func:`ensure_feature_role` for a role dial living in the ``config`` KV.
 
@@ -307,6 +308,12 @@ async def ensure_config_role(
     provisions. Returns ``None`` when the admin opted out, so a caller can
     write ``role = await ensure_config_role(...)`` / ``if role is not None:``
     and keep exactly the "unset means don't" behaviour it had before.
+
+    ``respect_opt_out=False`` provisions even over a stored ``0``. Only for a
+    dial where 0 cannot mean "off" — the dashboard panels save as whole forms
+    and write ``"0"`` for any untouched picker, so on those dials a 0 records a
+    save, not a decision. ``feature_roles.none_means_off`` carries the per-dial
+    answer and the reasoning; don't set it from a call site.
     """
     import asyncio
 
@@ -314,7 +321,7 @@ async def ensure_config_role(
 
     def _read() -> tuple[int, bool, bool]:
         with ctx.open_db() as conn:
-            opted_out = role_dial_opted_out(
+            opted_out = respect_opt_out and role_dial_opted_out(
                 conn, key, guild.id, allow_legacy_fallback=allow_legacy_fallback
             )
             own = conn.execute(
