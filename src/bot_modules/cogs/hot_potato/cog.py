@@ -17,6 +17,7 @@ from discord import app_commands
 
 from bot_modules.core.branding import prime_accent_cache
 from bot_modules.duels.base_duel import BaseDuel
+from bot_modules.duels.filters import game_is_nick_stake
 from bot_modules.games.command_groups import games
 from bot_modules.duels.views import ResultView
 from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
@@ -54,9 +55,11 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         challenger_id: int,
         target_id: int,
         stakes_text: str | None,
+        nick_stake: bool = False,
     ) -> int:
         return await hpdb.create_game(
-            self.db, guild_id, channel_id, challenger_id, target_id, stakes_text
+            self.db, guild_id, channel_id, challenger_id, target_id, stakes_text,
+            nick_stake,
         )
 
     async def _db_get_game(self, game_id: int) -> HotPotatoGame | None:
@@ -144,7 +147,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
             # Same two stake modes as _finalize_result: nickname (no custom
             # stakes → rename button) vs announce-only. The timer path used to
             # skip this gate and always post the rename view.
-            nick_mode = game.stakes_text is None
+            nick_mode = game_is_nick_stake(game)
             channel = self.bot.get_channel(game.channel_id)
             result_message_id = None
             if channel and guild:
@@ -289,6 +292,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         *,
         imposed_nick: str | None = None,
         original_name: str | None = None,
+        self_apply_nick: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner = guild.get_member(game.winner_id)  # type: ignore[arg-type]
@@ -336,13 +340,26 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                     inline=False,
                 )
 
-        if imposed_nick:
+        if self_apply_nick:
+            # Discord blocks the bot from renaming the guild owner, so the
+            # sentence is real but has to be applied by hand. Saying "is now
+            # known as" here would be a plain lie about what happened.
+            embed.add_field(
+                name="🏷️ Nickname — Over To You",
+                value=(
+                    f"Discord won't let me rename the server owner, so "
+                    f"**{original_name or loser_name}** has to set "
+                    f"**{self_apply_nick}** themselves. It stands for 24 hours."
+                ),
+                inline=False,
+            )
+        elif imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
                 value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
-        elif game.stakes_text is None:
+        elif game_is_nick_stake(game):
             embed.add_field(
                 name="⏳ Awaiting Nickname",
                 value=(
@@ -398,6 +415,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         user="The player you're challenging",
         stakes="Optional custom stakes text (max 200 chars)",
         wager="Optional coin wager — you both ante this; winner takes the pot",
+        nickname="Also stake nicknames? Winner renames the loser for 24h (default: only when nothing else is staked)",
     )
     async def hp_challenge(
         self,
@@ -405,8 +423,9 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         user: discord.Member,
         stakes: str | None = None,
         wager: int | None = None,
+        nickname: bool | None = None,
     ) -> None:
-        await self._base_challenge(interaction, user, stakes, wager)
+        await self._base_challenge(interaction, user, stakes, wager, nickname)
 
 async def setup(bot: Bot) -> None:
     cog = HotPotatoDuel(bot)

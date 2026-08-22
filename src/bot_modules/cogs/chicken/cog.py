@@ -18,6 +18,7 @@ from bot_modules.core import meters
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
+from bot_modules.duels.filters import game_is_nick_stake
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
@@ -61,9 +62,12 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         await chdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_create_lobby(
-        self, guild_id: int, channel_id: int, host_id: int, stakes_text: str | None
+        self, guild_id: int, channel_id: int, host_id: int, stakes_text: str | None,
+        nick_stake: bool = False,
     ) -> int:
-        return await chdb.create_lobby(self.db, guild_id, channel_id, host_id, stakes_text)
+        return await chdb.create_lobby(
+            self.db, guild_id, channel_id, host_id, stakes_text, nick_stake
+        )
 
     async def _db_fetch_active_games(self) -> list[ChickenGame]:
         return await chdb.fetch_active_games(self.db)
@@ -324,6 +328,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         *,
         imposed_nick: str | None = None,
         original_name: str | None = None,
+        self_apply_nick: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         if game.loser_id is not None:
@@ -346,13 +351,26 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             embed.add_field(name="💀 Takes the stake", value=loser_name, inline=False)
             stakes = game.stakes_text or "24-hour nickname surrender."
             embed.add_field(name="📋 Stakes", value=stakes, inline=False)
-            if imposed_nick:
+            if self_apply_nick:
+                # Discord blocks the bot from renaming the guild owner, so the
+                # sentence is real but has to be applied by hand. Saying "is now
+                # known as" here would be a plain lie about what happened.
+                embed.add_field(
+                    name="🏷️ Nickname — Over To You",
+                    value=(
+                        f"Discord won't let me rename the server owner, so "
+                        f"**{original_name or loser_name}** has to set "
+                        f"**{self_apply_nick}** themselves. It stands for 24 hours."
+                    ),
+                    inline=False,
+                )
+            elif imposed_nick:
                 embed.add_field(
                     name="🏷️ Nickname Applied",
                     value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                     inline=False,
                 )
-            elif game.stakes_text is None:
+            elif game_is_nick_stake(game):
                 embed.add_field(
                     name="⏳ Awaiting Nickname",
                     value=(
@@ -395,14 +413,16 @@ class ChickenCog(BaseGame, name="ChickenCog"):
     @app_commands.describe(
         stakes="Optional custom stakes text (max 200 chars)",
         wager="Optional coin wager — every player antes this; winner takes the pot",
+        nickname="Also stake nicknames? Winner renames the loser for 24h (default: only when nothing else is staked)",
     )
     async def ch_start(
         self,
         interaction: discord.Interaction,
         stakes: str | None = None,
         wager: int | None = None,
+        nickname: bool | None = None,
     ) -> None:
-        await self._base_lobby(interaction, stakes, wager)
+        await self._base_lobby(interaction, stakes, wager, nickname)
 
 async def setup(bot: Bot) -> None:
     cog = ChickenCog(bot)

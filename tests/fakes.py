@@ -53,6 +53,10 @@ class FakeMember(FakeUser):
     """A FakeUser that also satisfies isinstance checks for discord.Member-like usage."""
     joined_at: float | None = None
     guild: object | None = None
+    #: Role-hierarchy position, compared against the bot's own by the duel
+    #: rename guards. Defaults low so a fake member is renameable.
+    top_role: int = 0
+    nick: str | None = None
     add_roles: AsyncMock = field(default_factory=AsyncMock)
     remove_roles: AsyncMock = field(default_factory=AsyncMock)
 

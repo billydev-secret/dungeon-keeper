@@ -6,7 +6,9 @@ from unittest.mock import MagicMock
 
 import discord
 
+from bot_modules.cogs.quickdraw.cog import QuickdrawDuel
 from bot_modules.duels.base_duel import BaseDuel
+from bot_modules.duels.filters import resolve_stakes_text
 from bot_modules.duels.base_game import BaseGame, _fmt_coins
 from bot_modules.services.economy_service import EconSettings
 
@@ -58,14 +60,70 @@ def test_lobby_embed_without_settings_still_renders_bare_amount():
     assert "**10**" in (wager.value or "")
 
 
-def test_challenge_embed_uses_accent_and_currency_vocabulary():
+def test_challenge_embed_lists_every_stake_in_one_field():
+    """The wager used to sit in its own field while the in-game and result
+    embeds showed only the custom stakes, so a two-stake game read as
+    one-stake until settlement. The persisted text now carries all of them,
+    already in the guild's currency vocabulary, and the card renders it."""
+    challenger = SimpleNamespace(mention="<@1>")
+    target = SimpleNamespace(mention="<@2>")
+    stakes = resolve_stakes_text(
+        "loser sings", 50, nick_stake=True,
+        wager_line="💰 💎 **50** gems each — winner takes 💎 **100** gems.",
+    )
+    embed = BaseDuel._build_challenge_embed(
+        _self("Quickdraw"), challenger, target, stakes, _ACCENT, wager=50,
+    )
+    assert embed.color == _ACCENT
+    field = next(f for f in embed.fields if f.name == "📋 Stakes")
+    value = field.value or ""
+    assert "loser sings" in value
+    assert "💎 **50** gems each" in value
+    assert "💎 **100** gems" in value  # winner takes 2×
+    assert "nickname" in value.lower()
+    assert "Nothing is charged" in value
+
+
+def test_challenge_embed_plain_duel_keeps_the_nickname_fallback():
     challenger = SimpleNamespace(mention="<@1>")
     target = SimpleNamespace(mention="<@2>")
     embed = BaseDuel._build_challenge_embed(
         _self("Quickdraw"), challenger, target, None, _ACCENT,
-        wager=50, settings=_SETTINGS,
     )
-    assert embed.color == _ACCENT
-    wager = next(f for f in embed.fields if f.name == "💰 Wager")
-    assert "💎 **50** gems each" in (wager.value or "")
-    assert "💎 **100** gems" in (wager.value or "")  # winner takes 2×
+    field = next(f for f in embed.fields if f.name == "📋 Stakes")
+    assert "nickname" in (field.value or "").lower()
+    assert "Nothing is charged" not in (field.value or "")
+
+
+# ── the owner's sentence is honest about not having been applied ─────────────
+
+
+def test_result_embed_self_apply_does_not_claim_the_rename_happened():
+    """Discord blocks renaming the guild owner, so the sentence stands but the
+    bot never applied it. The embed used to say "is now known as", which is
+    simply untrue — the owner had to do it by hand (game night 2026-08-21)."""
+    game = SimpleNamespace(
+        winner_id=1, loser_id=2, stakes_text=None, nick_stake=True, roster=[1, 2],
+        fired_at=None, resolved_at=None, loser_fired_at=None,
+    )
+    embed = QuickdrawDuel.render_result_state(
+        _self("Quickdraw"), game, _guild(), self_apply_nick="Wet Willy",
+        original_name="Billy",
+    )
+    field = next(f for f in embed.fields if "Nickname" in (f.name or ""))
+    assert "Wet Willy" in (field.value or "")
+    assert "themselves" in (field.value or "")
+    assert "is now known as" not in (field.value or "")
+
+
+def test_result_embed_normal_rename_still_says_it_was_applied():
+    game = SimpleNamespace(
+        winner_id=1, loser_id=2, stakes_text=None, nick_stake=True, roster=[1, 2],
+        fired_at=None, resolved_at=None, loser_fired_at=None,
+    )
+    embed = QuickdrawDuel.render_result_state(
+        _self("Quickdraw"), game, _guild(), imposed_nick="Wet Willy",
+        original_name="Billy",
+    )
+    field = next(f for f in embed.fields if "Nickname" in (f.name or ""))
+    assert "is now known as" in (field.value or "")

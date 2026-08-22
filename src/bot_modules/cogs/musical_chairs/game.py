@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from bot_modules.games.utils.game_store import row_value
 
 
 @dataclass
@@ -23,6 +24,9 @@ class MusicalChairsGame:
     winner_id: int | None = None
     loser_id: int | None = None
     stakes_text: str | None = None
+    #: Loser gets renamed. Independent of stakes_text/wager since
+    #: migration 177 — see duels.filters.resolve_nick_stake.
+    nick_stake: bool = False
     message_id: int | None = None
     result_message_id: int | None = None
     phase_started_at: float | None = None
@@ -53,6 +57,7 @@ def game_from_row(row) -> MusicalChairsGame:
         winner_id=row["winner_id"],
         loser_id=row["loser_id"],
         stakes_text=row["stakes_text"],
+        nick_stake=bool(row_value(row, "nick_stake", 0)),
         message_id=row["message_id"],
         result_message_id=row["result_message_id"],
         phase_started_at=row["phase_started_at"],

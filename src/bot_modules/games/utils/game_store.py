@@ -35,6 +35,21 @@ if TYPE_CHECKING:
     from bot_modules.services.games_db import GamesDb
 
 
+def row_value(row, name: str, default=None):
+    """Read a column that may not be present on this row.
+
+    ``sqlite3.Row`` raises ``IndexError`` for an unknown column and
+    dict-shaped rows raise ``KeyError``. A column added by a recent migration
+    has to be readable from either while a process is still holding rows
+    fetched with an older ``SELECT *``, so the accessor answers with the
+    default rather than blowing up mid-game.
+    """
+    try:
+        return row[name]
+    except (KeyError, IndexError):
+        return default
+
+
 async def upsert_config(
     db: GamesDb, table: str, guild_id: int, **fields: Any
 ) -> None:

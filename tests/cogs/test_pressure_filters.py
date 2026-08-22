@@ -183,24 +183,59 @@ def test_stakes_empty_string_ok():
 
 
 # ── resolve_stakes_text ────────────────────────────────────────────────────────
-# A game is in nickname mode iff its persisted stakes_text is None. This helper
-# is what keeps a wagered game *out* of that mode: the loser forfeits coins, not
-# their nickname.
+# The persisted text lists every live stake, one line each, so every embed that
+# renders it shows all of them. Nickname mode itself is carried by the separate
+# nick_stake flag (migration 177), not inferred from this string.
 
 def test_resolve_plain_game_stays_nick_mode():
-    # No custom stakes, no wager → None persists → nickname mode (the default).
+    # No custom stakes, no wager → None persists → nickname mode (the default),
+    # and every cog's own fallback wording still renders.
     assert resolve_stakes_text(None, None) is None
 
 
 def test_resolve_wager_becomes_a_stakes_label():
-    # A wager with no custom stakes gets the label, flipping it out of nick mode.
-    assert resolve_stakes_text(None, 100) == WAGER_STAKES_TEXT
+    # A wager with no custom stakes and no rename gets its own line, with the
+    # amount on it — the coins used to be invisible until settlement.
+    text = resolve_stakes_text(None, 100, nick_stake=False)
+    assert text is not None and "100" in text and "winner takes the pot" in text
+
+
+def test_resolve_lists_every_live_stake():
+    """Coins, custom text and the rename are independent since migration 177,
+    so a game can carry all three and the field has to show all three."""
+    text = resolve_stakes_text("loser sings", 100, nick_stake=True)
+    assert text is not None
+    assert "loser sings" in text
+    assert "100" in text
+    assert "nickname" in text.lower()
+    assert text.count("\n") == 2  # one line per stake
+
+
+def test_resolve_uses_a_caller_supplied_wager_line():
+    text = resolve_stakes_text(None, 100, nick_stake=False, wager_line="💰 🪙 100 coins each")
+    assert text == "💰 🪙 100 coins each"
 
 
 def test_resolve_custom_stakes_pass_through_without_wager():
     assert resolve_stakes_text("Loser buys pizza", None) == "Loser buys pizza"
 
 
-def test_resolve_custom_stakes_win_over_wager():
-    # If the host typed real stakes, keep them even alongside a wager.
-    assert resolve_stakes_text("Loser buys pizza", 100) == "Loser buys pizza"
+def test_resolve_custom_stakes_are_kept_alongside_a_wager():
+    # If the host typed real stakes, keep them — and show the wager too.
+    text = resolve_stakes_text("Loser buys pizza", 100, nick_stake=False)
+    assert text is not None
+    assert text.startswith("Loser buys pizza")
+    assert "100" in text
+
+
+def test_resolve_legacy_wager_label_is_still_recognised_as_non_nick():
+    """Rows written before migration 177 carry this exact phrase and no flag;
+    game_is_nick_stake has to keep reading them as announce-only."""
+    from types import SimpleNamespace
+
+    from bot_modules.duels.filters import game_is_nick_stake
+
+    assert not game_is_nick_stake(SimpleNamespace(stakes_text=WAGER_STAKES_TEXT))
+    assert game_is_nick_stake(SimpleNamespace(stakes_text=None))
+    assert game_is_nick_stake(SimpleNamespace(stakes_text="loser sings", nick_stake=True))
+    assert not game_is_nick_stake(SimpleNamespace(stakes_text="loser sings", nick_stake=False))

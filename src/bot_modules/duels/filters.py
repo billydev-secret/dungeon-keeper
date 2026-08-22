@@ -104,22 +104,87 @@ def validate_stakes(
     return FilterResult(ok=True, value=cleaned, reason=None)
 
 
-# A coin wager with no custom stakes text is its own stake: the pot replaces
-# the nickname forfeit. Recording this as the game's stakes_text at creation
-# is what routes every downstream consumer (nick preflights, the rename
-# button, per-cog embed fallbacks) into announce-only mode.
+# A coin wager with no custom stakes text and no rename is its own stake: the
+# pot replaces the nickname forfeit. Recorded as the game's stakes_text at
+# creation so every embed has something to render.
 WAGER_STAKES_TEXT = "Coins on the line — winner takes the pot."
 
+#: What the "📋 Stakes" line says when the loser's nickname is on the table
+#: alongside something else. A nickname-only game keeps ``stakes_text = None``
+#: and each cog's own fallback wording, exactly as before.
+NICK_STAKES_LINE = "🏷️ Loser surrenders their nickname for 24 hours."
 
-def resolve_stakes_text(stakes_text: str | None, wager: int | None) -> str | None:
-    """The stakes string to persist for a game.
 
-    A wager *is* the stake — the loser forfeits their ante, not their nickname
-    — so a wagered game with no custom stakes gets the wager label, which flips
-    it out of nickname mode everywhere (nickname mode is exactly
-    ``stakes_text is None``). Custom stakes and plain (no-wager) games pass
-    through untouched, so a plain game still defaults to the nickname forfeit.
+def resolve_nick_stake(
+    stakes_text: str | None, wager: int | None, nickname: bool | None
+) -> bool:
+    """Whether this game renames the loser.
+
+    ``nickname`` is the challenger's explicit choice; ``None`` means they said
+    nothing, in which case a game with no other stake on it is a nickname game
+    (that is the historic default and what "just challenge someone" should
+    still mean) and a game that already has coins or custom stakes riding on it
+    is not.
+
+    The point of the flag is that the three stakes are now independent. Before
+    it, nickname mode was inferred as ``stakes_text is None``, so naming any
+    other stake silently cancelled the rename — a Pressure Cooker game staked
+    as "24 hour nickname change" *plus* 500 coins offered nobody a rename
+    button, and the players spent the aftermath asking where it was ("It
+    didn't give me the option!", game night 2026-08-21).
     """
-    if stakes_text is None and wager is not None:
-        return WAGER_STAKES_TEXT
-    return stakes_text
+    if nickname is not None:
+        return bool(nickname)
+    return stakes_text is None and wager is None
+
+
+def resolve_stakes_text(
+    stakes_text: str | None,
+    wager: int | None,
+    nick_stake: bool | None = None,
+    wager_line: str | None = None,
+) -> str | None:
+    """The stakes string to persist for a game — one line per live stake.
+
+    A nickname-only game (nothing else staked) still persists ``None``, which
+    keeps every cog's own fallback wording and every pre-flag row rendering
+    exactly as it did. Anything else composes: the challenger's own text
+    first, then the wager, then the nickname forfeit, so all of a game's
+    stakes are visible on every embed that renders this field rather than the
+    coins only turning up at settlement ("Oh there were 2 stakes 👀").
+
+    ``wager_line`` lets the caller pass a line already formatted in the
+    guild's currency vocabulary; without it the amount is rendered plainly.
+    ``nick_stake`` defaults to the legacy inference so existing callers that
+    don't know about the flag behave as before.
+    """
+    if nick_stake is None:
+        nick_stake = stakes_text is None and wager is None
+    lines: list[str] = []
+    if stakes_text:
+        lines.append(stakes_text)
+    if wager is not None:
+        lines.append(wager_line or f"💰 **{wager:,}** each — winner takes the pot.")
+    if nick_stake:
+        lines.append(NICK_STAKES_LINE)
+    if not lines:
+        return None
+    if lines == [NICK_STAKES_LINE]:
+        # Plain nickname duel: leave it null so nothing about the oldest and
+        # most common shape of game changes.
+        return None
+    return "\n".join(lines)
+
+
+def game_is_nick_stake(game: object) -> bool:
+    """Whether this game's loser gets renamed.
+
+    The explicit ``nick_stake`` flag decides it. When the flag is off *and*
+    nothing else is staked either, the game is still a nickname duel: a duel
+    with no stake at all isn't a thing, that has always been the default, and
+    it is what keeps rows written before migration 177 — and rows created
+    straight through the db helper — meaning what they meant.
+    """
+    if getattr(game, "nick_stake", None):
+        return True
+    return getattr(game, "stakes_text", None) is None

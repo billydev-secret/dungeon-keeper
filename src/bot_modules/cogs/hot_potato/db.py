@@ -20,16 +20,18 @@ async def create_game(
     challenger_id: int,
     target_id: int,
     stakes_text: str | None,
+    nick_stake: bool = False,
 ) -> int:
     now = time.time()
     return await db.lastrowid(
         """
         INSERT INTO hot_potato_games
             (guild_id, channel_id, challenger_id, target_id, stakes_text,
-             state, created_at, last_action_at)
-        VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)
+             nick_stake, state, created_at, last_action_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
         """,
-        (guild_id, channel_id, challenger_id, target_id, stakes_text, now, now),
+        (guild_id, channel_id, challenger_id, target_id, stakes_text, int(nick_stake),
+         now, now),
     )
 
 

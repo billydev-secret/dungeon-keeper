@@ -165,8 +165,21 @@ rejoins before expiry, `on_member_join` re-applies the nick so they can't dodge 
 
 ## 4. The nickname stake mechanic
 
-The signature mechanic: in **nickname mode** (no custom stakes given **and no wager**) the
-winner replaces the loser's nickname for `sentence_hours` (default 24h).
+The signature mechanic: in **nickname mode** the winner replaces the loser's nickname for
+`sentence_hours` (default 24h).
+
+Nickname mode is an explicit per-game flag (`nick_stake`, migration 177), **not** an
+inference from `stakes_text`. Every challenge/lobby command takes `nickname:`; left unset it
+defaults to on when nothing else is staked and off otherwise, so a bare challenge still means
+what it always did. Turning it off with nothing else staked is refused — a duel with no stake
+is not a duel. `filters.resolve_nick_stake` decides it at creation and
+`filters.game_is_nick_stake` reads it back, falling through to the old
+`stakes_text is None` inference for rows written before the flag existed.
+
+> Until 2026-08-22 nickname mode *was* `stakes_text is None`, which made the rename mutually
+> exclusive with coins and with custom stakes. A Pressure Cooker game staked as "24 hour
+> nickname change" **plus** 500 coins (pressure_games 41) therefore offered nobody a rename
+> button, and the players spent the aftermath asking where it had gone.
 
 - On resolution, the result embed carries one persistent **`📝 Name the loser`** button
   (`ResultView`), clickable **only by the winner**. Pressing it opens a `NicknameModal`
@@ -183,23 +196,36 @@ winner replaces the loser's nickname for `sentence_hours` (default 24h).
   `forbidden`; on other HTTP errors it's logged and retried next tick.
 - **Server owner:** Discord won't let the bot rename the guild owner, so the sentence is
   announced and the owner is asked to apply it themselves (state `NICKED`, no enforcement).
+  The result embed says so plainly ("has to set … themselves") via
+  `render_result_state(self_apply_nick=…)` rather than claiming the rename happened, the
+  follow-up mentions the loser so it can't be scrolled past, and `_owner_notice` warns at
+  challenge/lobby time that this is how it will go. Same treatment for a loser whose role
+  outranks the bot: the winner's chosen name is handed over publicly instead of dying in an
+  ephemeral only the winner sees.
 - **Overlap guard:** a player already serving a sentence can't have a second applied (that
   would snapshot the imposed nick as the "original" and corrupt the revert). The win stands
   but no new nick is applied (`NO_NICK_SET`).
 
-**Custom stakes (optional):** if `stakes` free-text is provided at challenge/lobby time, the
-game runs in **custom-stakes mode** — the result is announced only, no `📝 Name the loser`
-button, no rename, no expiry sweep. Enforcement is honor-based. Custom stakes are validated
-(≤ `max_stakes_length`, default 200, run through the denylist).
+**Custom stakes (optional):** `stakes` free-text at challenge/lobby time is honour-based —
+DK announces it and enforces nothing. Validated (≤ `max_stakes_length`, default 200, run
+through the denylist).
 
-**Wager without stakes text:** a `wager:` with no custom stakes is its own stake — creation
-records `WAGER_STAKES_TEXT` ("Coins on the line — winner takes the pot.") as the game's
-`stakes_text`, so the game runs in custom-stakes mode end to end: no nickname preflight
-(Manage Nicknames / active-sentence / group cooldown checks are skipped), no rename button,
-terminal state `RESOLVED_NO_NICK` (which still pays the pot — it's in the settling set). The
-pot pays out minus an optional house rake (`wager_rake_pct`, economy-side, default 0 —
-named on the payout when priced). The
-nickname stake only ever applies when the default "name" stake is what's actually on the line.
+**Wagers:** a `wager:` escrows an ante from each side at accept (duels) or join (lobbies) and
+pays the pot to the winner, minus an optional house rake (`wager_rake_pct`, economy-side,
+default 0 — named on the payout when priced). A wagered game that isn't also a nickname game
+skips the nickname preflight (Manage Nicknames / active-sentence / group cooldown) and lands
+in `RESOLVED_NO_NICK`, which still pays the pot (it's in the settling set).
+
+**All three combine.** `filters.resolve_stakes_text` composes the persisted `stakes_text` from
+whichever are live, one line each — custom text, then the wager (already formatted in the
+guild's currency vocabulary), then the nickname forfeit. That one string is what every
+downstream embed renders as "📋 Stakes", so a two-stake game reads as a two-stake game on the
+challenge card, during play *and* at settlement — the coins used to appear only on the
+challenge card and again at payout ("Oh there were 2 stakes 👀", game night 2026-08-21). A
+plain nickname-only game still persists `stakes_text = NULL` and each cog's own fallback
+wording, so the commonest shape of game is untouched. The challenge card adds the
+"nothing is charged unless accepted" caveat, which is true only while pending and so is never
+persisted.
 
 There is **no per-loser `stake_target` selection** in the current build: duels rename the one
 loser; group games rename a single deterministic loser (see per-game specs). The multi-target
@@ -211,10 +237,14 @@ variants (`last_eliminated` / `all_eliminated` / etc.) are roadmap — see §13.
 
 **Stake types**
 
-1. **Nickname (default):** winner renames the loser for `sentence_hours`, bot-enforced with
-   auto-revert.
-2. **Custom free-text (optional):** ≤ `max_stakes_length` chars, cosmetic/honor-based,
-   announce-only. No custom stakes → nickname mode.
+1. **Nickname (`nickname:`, default on when nothing else is staked):** winner renames the
+   loser for `sentence_hours`, bot-enforced with auto-revert.
+2. **Custom free-text (`stakes:`):** ≤ `max_stakes_length` chars, cosmetic/honour-based,
+   announce-only.
+3. **Coin wager (`wager:`):** escrowed ante per player, pot to the winner.
+
+All three are independent and combine freely (§4); the persisted `stakes_text` lists whichever
+are live. Only "none of the three" is refused.
 
 **Nickname / stakes validation** (`src/bot_modules/duels/filters.py`, applied to the winner's
 chosen nick and to custom stakes)
@@ -225,8 +255,11 @@ chosen nick and to custom stakes)
 
 **Anti-grief**
 
-- **Challenge/start rate limit:** at most **3 per hour** per user (`_RATE_LIMIT_MAX`, in-memory
-  sliding window).
+- **Challenge/start rate limit:** `challenge_limit_per_hour` per user per game, an in-memory
+  sliding window over `duel_config`'s per-guild dial (default **30**, `0` = no limit; set from
+  each game's dashboard Config panel). It was a hardcoded 3 until 2026-08-22, which is a spam
+  brake set at the pace of an idle channel — the most engaged player at a games night hit it
+  twice in one evening.
 - **Cooldowns:** duels use a **per-pair** cooldown (`duel_cooldowns`, keyed on the sorted
   player pair); group games use a **per-user** cooldown. Both default to `cooldown_hours` = 48.
   Cooldowns and the preflight below apply in nickname mode only (custom-stakes games skip them).
@@ -275,6 +308,7 @@ CREATE TABLE duel_config (           -- per-guild, per-game config
     allow_early_revert INTEGER DEFAULT 0, channel_allowlist TEXT DEFAULT '[]',
     nick_denylist TEXT DEFAULT '[]', max_nick_length INTEGER DEFAULT 32,
     max_stakes_length INTEGER DEFAULT 200,
+    challenge_limit_per_hour INTEGER NOT NULL DEFAULT 30,   -- 177; 0 = no limit
     PRIMARY KEY (guild_id, game_type)
 );
 ```
@@ -296,6 +330,10 @@ the web dashboard's Games nav section (one "Config" panel per game) — see §8.
 | hot potato group | `036_hot_potato_group.sql` | rounds, fuse, clockwise passing |
 | `musical_chairs_*` | `038_musical_chairs.sql` | rounds, chairs, seated, phase timers |
 | `chicken_*` | `039_chicken.sql` | meter, bail log |
+
+`177_duel_nick_stake.sql` adds `nick_stake INTEGER NOT NULL DEFAULT 0` to all six state
+tables (backfilled to `stakes_text IS NULL`, reproducing the old inference exactly) and
+`challenge_limit_per_hour` to `duel_config`.
 
 Each per-game row carries the game-specific hidden + visible state as columns/JSON so a game
 fully rehydrates after a restart.
@@ -362,14 +400,15 @@ the web dashboard's **Games** nav section, one "Config" panel per game
 
 | Game | Panel fields |
 |---|---|
-| Pressure Cooker | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length` |
+| Pressure Cooker | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `challenge_limit_per_hour` |
 | Quickdraw | same shared fields, plus `min_delay`, `max_delay`, `draw_window` |
 | Hot Potato (duel) | same shared fields, plus `min_timer`, `max_timer` |
-| Hot Potato (group) | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `min_fuse`, `max_fuse`, `min_hold`, `min_players`, `max_players` |
-| Chicken | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `climb_duration`, `min_players`, `max_players` |
-| Musical Chairs | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `min_music`, `max_music`, `scramble_window`, `false_start_elim`, `min_players`, `max_players` |
+| Hot Potato (group) | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `challenge_limit_per_hour`, `min_fuse`, `max_fuse`, `min_hold`, `min_players`, `max_players` |
+| Chicken | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `challenge_limit_per_hour`, `climb_duration`, `min_players`, `max_players` |
+| Musical Chairs | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `challenge_limit_per_hour`, `min_music`, `max_music`, `scramble_window`, `false_start_elim`, `min_players`, `max_players` |
 
-`channel_allowlist`/`max_nick_length`/`max_stakes_length` are exposed for all six games, not
+`channel_allowlist`/`max_nick_length`/`max_stakes_length`/`challenge_limit_per_hour` are exposed
+for all six games, not
 just Pressure Cooker as the old (dead) commands had it — they were always enforced
 generically in the shared base classes, so this closes a real gap rather than adding scope.
 
@@ -407,7 +446,8 @@ press (`ROLL_MIN`/`ROLL_MAX` constants in `game.py`). When it reaches/exceeds **
 double-press race; turn ownership is enforced.
 
 **Config knobs:** none game-specific (gauge ceiling and roll are hardcoded constants). Shared:
-`cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`.
+`cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`,
+`challenge_limit_per_hour`.
 
 ### 9.2 Quickdraw
 
@@ -573,11 +613,13 @@ out the wait-then-press rule.
 **Shared `duel_config`** (all games, via `duels/db.py._CONFIG_DEFAULTS`)
 - `cooldown_hours` 48 · `sentence_hours` 24
 - `channel_allowlist` `[]` · `max_nick_length` 32 · `max_stakes_length` 200
+- `challenge_limit_per_hour` 30 (0 = no limit)
 - `allow_early_revert` 0 · `nick_denylist` `[]` — real columns, but unused: no command or
   web panel reads or writes either one (the games that carried a `revert` command never had
   it wired into the live tree — see §8)
 
-**Rate limit:** 3 challenges/starts per user per hour (in-memory, not configurable).
+**Rate limit:** `challenge_limit_per_hour` challenges/starts per user per hour, per game
+(in-memory sliding window, per-guild dial on each game's dashboard Config panel).
 
 **Per-game knobs:** see each §9 entry's "Config knobs" line. Group games also default
 `lobby_timeout` to 60.0s.

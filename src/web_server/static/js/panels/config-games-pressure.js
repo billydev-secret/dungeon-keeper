@@ -65,6 +65,9 @@ export function mount(container) {
             ${numField("cooldown_hours", "Wait Before a Rematch (hours)", cfg.cooldown_hours,
               "How long the same two people must wait before they can duel each other again. 0 allows endless rematches.",
               { min: 0, max: 8760 })}
+            ${numField("challenge_limit_per_hour", "Challenges Per Person Per Hour", cfg.challenge_limit_per_hour,
+              "How many challenges one person may start in an hour. Set to 0 for no limit. This is a spam brake, not a pacing rule &mdash; a busy games night can easily run through a low number.",
+              { min: 0, max: 999 })}
             <div class="field">
               <label>Allowed Channels</label>
               <div data-picker="channel_allowlist"></div>
@@ -92,6 +95,7 @@ export function mount(container) {
 
     const NUMS = [
       ["cooldown_hours", "Wait Before a Rematch", 0, 8760, false],
+      ["challenge_limit_per_hour", "Challenges Per Person Per Hour", 0, 999, false],
       ["sentence_hours", "Nickname Lasts", 1, 8760, false],
       ["max_nick_length", "Longest Nickname", 1, 32, false],
       ["max_stakes_length", "Longest Stakes Text", 1, 2000, false],

@@ -36,7 +36,13 @@ from bot_modules.services.economy_service import (
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
-from .filters import resolve_stakes_text, validate_nickname, validate_stakes
+from .filters import (
+    game_is_nick_stake,
+    resolve_nick_stake,
+    resolve_stakes_text,
+    validate_nickname,
+    validate_stakes,
+)
 from .lobby import LobbyView
 from .modals import NicknameModal
 from .views import ResultView
@@ -383,6 +389,45 @@ class BaseGame(commands.Cog):
             f"is applied. Ask an admin to move my role higher to enable it."
         )
 
+    def _rename_warning(
+        self, guild: discord.Guild, members: list[discord.Member]
+    ) -> str | None:
+        """Everything worth warning about before a nickname game starts.
+
+        Combines the role-hierarchy heads-up with an owner heads-up. The owner
+        is deliberately outside :meth:`_unrenameable_members` (the rename flow
+        has its own branch for them) but Discord blocks that rename just the
+        same, so without this the room only found out at the end — the owner
+        lost their name on 2026-08-21 and had to apply it by hand with no
+        warning anywhere that it would work that way.
+        """
+        parts = [
+            n
+            for n in (
+                self._unrenameable_notice(self._unrenameable_members(guild, members)),
+                self._owner_notice(guild, members),
+            )
+            if n
+        ]
+        return "\n".join(parts) or None
+
+    def _owner_notice(
+        self, guild: discord.Guild, members: list[discord.Member]
+    ) -> str | None:
+        """Heads-up that the server owner is playing for their nickname.
+
+        Discord lets nobody rename a guild owner, bot or not. The game runs and
+        the sentence is still recorded — the owner just applies it themselves.
+        """
+        owner = next((m for m in members if m.id == guild.owner_id), None)
+        if owner is None:
+            return None
+        return (
+            f"👑 Heads up: Discord won't let *anyone* rename the server owner, so "
+            f"if **{owner.display_name}** loses I'll post the nickname and they "
+            f"apply it themselves. The win still counts."
+        )
+
     async def _check_no_active_nick(
         self,
         guild: discord.Guild,
@@ -399,12 +444,30 @@ class BaseGame(commands.Cog):
 
     # ── Rate limit ────────────────────────────────────────────────────────────
 
-    def _check_rate_limit(self, user_id: int) -> bool:
+    def _challenge_limit(self, cfg: dict) -> int:
+        """This guild's per-hour challenge cap for this game (0 = no limit).
+
+        Was a hardcoded 3, which is a spam brake set at the pace of an idle
+        channel rather than a game night — the room's most engaged player hit
+        it twice in one evening ("Wait I can't challenge anybody this hour
+        anyway"). It is a dashboard dial now, defaulting high enough that only
+        genuine spam reaches it.
+        """
+        try:
+            return max(0, int(cfg.get("challenge_limit_per_hour", _RATE_LIMIT_MAX)))
+        except (TypeError, ValueError):
+            return _RATE_LIMIT_MAX
+
+    def _check_rate_limit(self, user_id: int, limit: int = _RATE_LIMIT_MAX) -> bool:
+        """True when the user has already used up ``limit`` challenges this
+        hour. ``limit`` of 0 disables the cap entirely."""
+        if limit <= 0:
+            return False
         dq = self._challenge_rate[user_id]
         now = time.time()
         while dq and now - dq[0] > _RATE_LIMIT_WINDOW:
             dq.popleft()
-        return len(dq) >= _RATE_LIMIT_MAX
+        return len(dq) >= limit
 
     def _record_challenge(self, user_id: int) -> None:
         self._challenge_rate[user_id].append(time.time())
@@ -484,12 +547,21 @@ class BaseGame(commands.Cog):
         # than erroring out, mirroring the owner / left-server / active-sentence
         # paths above and below.
         if self._unrenameable_members(guild, [loser]):
+            # Same shape as the owner branch below: the rename can't happen, so
+            # hand the name over publicly rather than swallowing it in an
+            # ephemeral the loser and the room never see.
             await interaction.response.send_message(
                 f"**{loser.display_name}**'s role is above mine, so I can't "
-                f"rename them — but your win stands.",
+                f"rename them — but your win stands, and they've been told.",
                 ephemeral=True,
             )
             await self._db_set_state(game_id, "NO_NICK_SET")
+            await self._announce_to_channel(
+                game_id,
+                f"{loser.mention} 📋 {interaction.user.mention} won, and named you "
+                f"**{cleaned_nick}** — but your role sits above mine so I can't "
+                f"apply it. Honour system for the next 24 hours.",
+            )
             return
 
         # Guard against overlapping sentences: if the loser is already serving a
@@ -529,14 +601,21 @@ class BaseGame(commands.Cog):
             )
             await self._db_set_state(game_id, "NICKED")
             embed = self.render_result_state(
-                game, guild, imposed_nick=cleaned_nick, original_name=original_display_name
+                game,
+                guild,
+                self_apply_nick=cleaned_nick,
+                original_name=original_display_name,
             )
             await interaction.response.edit_message(
                 embed=embed, view=self._disabled_result_view(game)
             )
+            # Mention the loser: the embed edit is easy to scroll past, and the
+            # rename genuinely will not happen unless they act on it.
             await interaction.followup.send(
-                f"📋 Discord won't let me rename the server owner. "
-                f"**{loser.display_name}**, your sentence is: **{cleaned_nick}** — please apply it yourself.",
+                f"{loser.mention} 📋 Discord won't let me rename the server owner, "
+                f"so this one is on the honour system — your sentence is "
+                f"**{cleaned_nick}**, for the next 24 hours. "
+                f"{interaction.user.mention} won it fair and square.",
             )
             return
 
@@ -686,6 +765,7 @@ class BaseGame(commands.Cog):
         interaction: discord.Interaction,
         stakes_text: str | None,
         wager: int | None = None,
+        nickname: bool | None = None,
     ) -> None:
         """Open a join lobby for an N-player game. Called by a subclass /start command.
 
@@ -712,17 +792,27 @@ class BaseGame(commands.Cog):
             )
             return
 
-        if self._check_rate_limit(host.id):
+        limit = self._challenge_limit(cfg)
+        if self._check_rate_limit(host.id, limit):
             await interaction.response.send_message(
-                f"You've started too many games recently. Maximum {_RATE_LIMIT_MAX} per hour.",
+                f"You've started too many games recently. Maximum {limit} per hour.",
                 ephemeral=True,
             )
             return
 
-        # Nickname-mode preflight only applies when nicknames are the stake —
-        # no custom stakes text AND no wager (a wager becomes the stake below).
+        # Nickname-mode preflight only applies when the loser is going to be
+        # renamed; every other stake leaves nicknames alone.
+        nick_stake = resolve_nick_stake(stakes_text, wager, nickname)
+        if not nick_stake and stakes_text is None and wager is None:
+            # See _base_challenge: a game with nothing staked is not a game.
+            await interaction.response.send_message(
+                "Turning the nickname stake off means you need to stake "
+                "something else — add `wager:` or `stakes:`.",
+                ephemeral=True,
+            )
+            return
         nick_notice: str | None = None
-        if stakes_text is None and wager is None:
+        if nick_stake:
             err = await self._check_bot_can_nick(guild)
             if err:
                 await interaction.response.send_message(err, ephemeral=True)
@@ -732,9 +822,7 @@ class BaseGame(commands.Cog):
                 await interaction.response.send_message(err, ephemeral=True)
                 return
             # The host outranking the bot doesn't block the lobby — warn later.
-            nick_notice = self._unrenameable_notice(
-                self._unrenameable_members(guild, [host])  # type: ignore[list-item]
-            )
+            nick_notice = self._rename_warning(guild, [host])  # type: ignore[list-item]
             cd = await duels_db.check_group_cooldown(
                 self.db, guild.id, self.GAME_KEY, host.id, cfg["cooldown_hours"]
             )
@@ -765,9 +853,16 @@ class BaseGame(commands.Cog):
                 await interaction.response.send_message(err, ephemeral=True)
                 return
 
-        # A wager stands in as the stake — record the label so the lobby is in
-        # announce-only mode (no rename, no nickname copy) everywhere downstream.
-        stakes_text = resolve_stakes_text(stakes_text, wager)
+        # Every live stake goes into the persisted text so the lobby, the
+        # round embeds and the result all list the same set.
+        settings = await self._econ_settings(guild.id) if wager is not None else None
+        wager_line = None
+        if wager is not None:
+            each = _fmt_coins(settings, wager) if settings else f"**{wager:,}**"
+            wager_line = f"💰 {each} to join — winner takes the pot."
+        stakes_text = resolve_stakes_text(
+            stakes_text, wager, nick_stake=nick_stake, wager_line=wager_line
+        )
 
         min_players, max_players, _timeout = await self.get_lobby_params(guild.id)
         game_id = await self._db_create_lobby(
@@ -775,6 +870,7 @@ class BaseGame(commands.Cog):
             channel_id=interaction.channel_id,  # type: ignore[arg-type]
             host_id=host.id,
             stakes_text=stakes_text,
+            nick_stake=nick_stake,
         )
         self._record_challenge(host.id)
 
@@ -821,16 +917,14 @@ class BaseGame(commands.Cog):
 
             member = guild.get_member(uid)
             nick_notice: str | None = None
-            if game.stakes_text is None and member is not None:
+            if game_is_nick_stake(game) and member is not None:
                 err = await self._check_bot_can_nick(guild) or \
                     await self._check_no_active_nick(guild, [member])
                 if err:
                     await interaction.response.send_message(err, ephemeral=True)
                     return
                 # Joining while outranking the bot is allowed — warn, don't block.
-                nick_notice = self._unrenameable_notice(
-                    self._unrenameable_members(guild, [member])
-                )
+                nick_notice = self._rename_warning(guild, [member])
                 cfg = await duels_db.get_config(self.db, game.guild_id, self.GAME_KEY)
                 cd = await duels_db.check_group_cooldown(
                     self.db, game.guild_id, self.GAME_KEY, uid, cfg["cooldown_hours"]
@@ -949,7 +1043,7 @@ class BaseGame(commands.Cog):
 
             guild: discord.Guild = interaction.guild  # type: ignore[assignment]
             nick_notice: str | None = None
-            if game.stakes_text is None:
+            if game_is_nick_stake(game):
                 members = [m for m in (guild.get_member(u) for u in game.roster) if m]
                 err = await self._check_bot_can_nick(guild) or \
                     await self._check_no_active_nick(guild, members)
@@ -958,9 +1052,7 @@ class BaseGame(commands.Cog):
                     return
                 # Players outranking the bot don't block the start — warn, and
                 # skip their rename if one of them loses.
-                nick_notice = self._unrenameable_notice(
-                    self._unrenameable_members(guild, members)
-                )
+                nick_notice = self._rename_warning(guild, members)
 
             await self._db_set_state(
                 game_id, "ACTIVE",
@@ -997,7 +1089,7 @@ class BaseGame(commands.Cog):
         for uid in game.roster:
             await duels_db.set_group_cooldown(self.db, game.guild_id, self.GAME_KEY, uid)
 
-        nick_mode = game.stakes_text is None
+        nick_mode = game_is_nick_stake(game)
 
         if guild and game.message_id:
             disabled = self.build_game_view(game.id)
@@ -1159,6 +1251,7 @@ class BaseGame(commands.Cog):
         challenger_id: int,
         target_id: int,
         stakes_text: str | None,
+        nick_stake: bool = False,
     ) -> int:
         raise NotImplementedError
 
@@ -1426,7 +1519,8 @@ class BaseGame(commands.Cog):
     # ── Lobby hooks (N-player games implement; duels leave as defaults) ───────
 
     async def _db_create_lobby(
-        self, guild_id: int, channel_id: int, host_id: int, stakes_text: str | None
+        self, guild_id: int, channel_id: int, host_id: int, stakes_text: str | None,
+        nick_stake: bool = False,
     ) -> int:
         """Create a LOBBY-state game with roster=[host_id]. Returns its id."""
         raise NotImplementedError
