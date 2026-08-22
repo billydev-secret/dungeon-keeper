@@ -42,6 +42,8 @@ from bot_modules.games.mahjong import embeds as mahjong_embeds
 from bot_modules.games.mahjong import game_logic as mahjong_game
 from bot_modules.games.mahjong.card_logic import load_first_light
 from bot_modules.games.mahjong.tiles import Tile as MahjongTile
+from bot_modules.member_info import embeds as member_info_embeds
+from bot_modules.member_info import logic as member_info_logic
 from bot_modules.music_playlist import embeds as music_playlist_embeds
 from bot_modules.core import branding
 from bot_modules.services import branding_service
@@ -75,6 +77,21 @@ def case(case_id, build, fallback):
     return pytest.param(build, fallback, id=case_id)
 
 
+def _member_info_facts():
+    return member_info_logic.AccountFacts(
+        account_age_days=400,
+        created_ts=1_700_000_000,
+        joined_ts=1_710_000_000,
+        role_names=["Denizen"],
+        level=7,
+        total_xp=12_345,
+        xp_by_source={"text": 10_000},
+        msgs_30d=312,
+        top_channels=[(123, 90)],
+        last_seen_ts=1_720_000_000,
+    )
+
+
 def _econ_settings():
     return economy_service.EconSettings(
         currency_emoji="💎", currency_name="gem", currency_plural="gems"
@@ -100,6 +117,17 @@ def _welcome_member() -> MagicMock:
 
 
 CASES = [
+    case(
+        "member_info.panel",
+        lambda **kw: member_info_embeds.build_member_info_embed(
+            display_name="Ada",
+            avatar_url=None,
+            facts=_member_info_facts(),
+            optin_rows=[],
+            **kw,
+        ),
+        discord.Color(services_embeds.MOD_INFO),
+    ),
     case(
         "event_echo.game_starting",
         lambda **kw: event_echo_logic.build_echo_embed(

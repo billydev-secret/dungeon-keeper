@@ -31,6 +31,10 @@ import matplotlib.ticker as ticker  # noqa: E402
 
 matplotlib.use("Agg")
 
+from bot_modules.services.pyplot_lock import (  # noqa: E402
+    serialized_render as _serialized_render,
+)
+
 Resolution = Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"]
 
 _DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -1227,6 +1231,7 @@ def query_dropoff_profiles(
 # ---------------------------------------------------------------------------
 
 
+@_serialized_render
 def render_level_histogram(
     durations_seconds: list[float],
     target_level: int,
@@ -1302,6 +1307,7 @@ def render_level_histogram(
     return buf.read()
 
 
+@_serialized_render
 def render_activity_chart(
     labels: list[str],
     msg_counts: list[int] | list[float],
@@ -1474,6 +1480,7 @@ class CadenceBucket:
 # ---------------------------------------------------------------------------
 
 
+@_serialized_render
 def render_join_histogram(
     labels: list[str],
     counts: list[int],
@@ -1614,6 +1621,7 @@ def query_nsfw_gender_activity(
     return labels, gender_counts
 
 
+@_serialized_render
 def render_nsfw_gender_chart(
     labels: list[str],
     gender_counts: dict[str, list[int]],
@@ -1686,6 +1694,7 @@ def render_nsfw_gender_chart(
     return buf.read()
 
 
+@_serialized_render
 def render_nsfw_gender_line_chart(
     labels: list[str],
     gender_counts: dict[str, list[int]],
@@ -1821,6 +1830,7 @@ def query_greeter_response_times(
     return response_times
 
 
+@_serialized_render
 def render_greeter_response_chart(
     response_times: list[float],
     title: str,

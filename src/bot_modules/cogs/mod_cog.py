@@ -108,6 +108,12 @@ def _build_help_pages(
                 [
                     ("/help", "This guide."),
                     (
+                        "/info",
+                        "Your own card — join date, level, roles, activity, "
+                        "wallet and every opt-in you hold, with buttons to "
+                        "change them. Only you can see it.",
+                    ),
+                    (
                         "/xp_leaderboards timescale:week",
                         "See the top XP earners and your own rank. "
                         "Pick a window: hour, day, week, month, year, or alltime.",

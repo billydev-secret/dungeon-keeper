@@ -94,6 +94,23 @@ def list_all_birthdays(
     ]
 
 
+def has_birthday(conn: sqlite3.Connection, guild_id: int, user_id: int) -> bool:
+    """Whether a birthday is on file at all.
+
+    Distinct from ``get_birthday_preference``, which returns ``None`` both for
+    "no birthday stored" and for "stored, with no preference set" — a
+    difference that matters to ``/info``, where the two states offer opposite
+    buttons.
+    """
+    return (
+        conn.execute(
+            "SELECT 1 FROM member_birthdays WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        ).fetchone()
+        is not None
+    )
+
+
 def get_birthday_preference(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> str | None:

@@ -475,6 +475,15 @@ class WellnessCog(commands.Cog):
         name="setup", description="Opt in — pick your timezone and enforcement style."
     )
     async def setup_cmd(self, interaction: discord.Interaction) -> None:
+        await self.open_setup(interaction)
+
+    async def open_setup(self, interaction: discord.Interaction) -> None:
+        """Shared by ``/wellness setup`` and the ``/info`` panel's button.
+
+        The timezone wizard *is* the opt-in — there is no way to be opted in
+        without one — so the panel re-enters this flow rather than writing an
+        opt-in row of its own.
+        """
         ctx = self.bot.ctx
         guild = interaction.guild
         if guild is None:

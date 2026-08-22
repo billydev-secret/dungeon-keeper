@@ -213,6 +213,7 @@ def main() -> None:
         "bot_modules.cogs.hidden_channels_cog",
         "bot_modules.cogs.rename_cog",
         "bot_modules.cogs.privacy_cog",
+        "bot_modules.cogs.member_info_cog",
         "bot_modules.cogs.todo_cog",
         "bot_modules.cogs.qa_cog",
         "bot_modules.cogs.role_menus_cog",

@@ -2108,6 +2108,15 @@ class GuessCog(commands.Cog):
 
     @guess.command(name="optin", description="Join the Guess pool — add the Guess role to yourself.")
     async def guess_optin(self, interaction: discord.Interaction) -> None:
+        await self._optin_impl(interaction)
+
+    async def _optin_impl(self, interaction: discord.Interaction) -> None:
+        """Shared by ``/guess optin`` and the ``/info`` panel's Join button.
+
+        Factored out for the same reason ``WhisperCog._optin_impl`` was: the
+        consent gate below is the whole feature's compliance story, and a
+        second caller must go through it rather than around it.
+        """
         assert interaction.guild
         await interaction.response.defer(ephemeral=True)
 
@@ -2157,6 +2166,10 @@ class GuessCog(commands.Cog):
         description="Leave the Guess pool — removes the Guess role from you.",
     )
     async def guess_optout(self, interaction: discord.Interaction) -> None:
+        await self._optout_impl(interaction)
+
+    async def _optout_impl(self, interaction: discord.Interaction) -> None:
+        """Shared by ``/guess optout`` and the ``/info`` panel's Leave button."""
         assert interaction.guild
         await interaction.response.defer(ephemeral=True)
 

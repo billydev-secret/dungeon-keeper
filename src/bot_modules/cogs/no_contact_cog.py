@@ -163,6 +163,16 @@ class NoContactCog(commands.Cog):
 
     @nocontact.command(name="list", description="See your own no-contact entries.")
     async def list_entries(self, interaction: discord.Interaction) -> None:
+        await self.list_impl(interaction)
+
+    async def list_impl(self, interaction: discord.Interaction) -> None:
+        """Shared by ``/nocontact list`` and the ``/info`` panel's button.
+
+        The ``is_visible_to`` filter below is the reason the panel opens *this*
+        rather than counting rows itself: an entry the other party created
+        against the viewer must stay invisible, and there is exactly one
+        implementation of that rule.
+        """
         if interaction.guild is None:
             return
         rows = await asyncio.to_thread(

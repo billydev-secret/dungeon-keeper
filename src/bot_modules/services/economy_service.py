@@ -963,6 +963,52 @@ def refund_streak_shield(
     return price
 
 
+def get_streak_summary(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, *, today: str | None = None
+) -> tuple[int, int]:
+    """``(current_streak, longest_streak)`` for a member, zeros if unseen.
+
+    The shield helpers next door read the same row for its ``shields`` column
+    only, which left the streak itself with no reader at all — so ``/info``
+    could show the shield that protects a streak while having no way to show
+    the streak.
+
+    ``current_streak`` is **stored, not live**: it is only ever rewritten by
+    ``process_login``, which runs on a message or a voice award. A member who
+    stopped posting a week ago still has yesterday's number sitting in the
+    column, so reading it verbatim would announce a 12-day streak that the
+    member's next message will reset to 1. Pass ``today`` (a local day string
+    from ``local_day_for``) and the streak is checked against the very rules a
+    login would apply — ``evaluate_login``, unchanged and unduplicated — so a
+    streak that cannot survive is reported as zero. Omit ``today`` to get the
+    raw stored value.
+    """
+    row = conn.execute(
+        "SELECT current_streak, longest_streak, last_login_day, last_grace_day, "
+        "shields FROM econ_streaks WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    if row is None:
+        return 0, 0
+
+    current = int(row["current_streak"] or 0)
+    longest = int(row["longest_streak"] or 0)
+    if today is None or not current:
+        return current, longest
+
+    outcome = logic.evaluate_login(
+        today=today,
+        last_login_day=row["last_login_day"],
+        current_streak=current,
+        last_grace_day=row["last_grace_day"],
+        shields_held=int(row["shields"] or 0),
+    )
+    # `reset` means a login right now would start over — the run is already
+    # gone, whether or not the member has noticed. The personal best stands
+    # regardless; that one is history, not a live claim.
+    return (0 if outcome.reset else current), longest
+
+
 def get_streak_shields(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> int:
