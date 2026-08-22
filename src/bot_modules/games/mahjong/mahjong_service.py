@@ -74,6 +74,7 @@ class MahjongSettings:
     duel_wall_trim: int = 0
     second_charleston: bool = True
     stakes_allowed: tuple[int, ...] = (1, 2, 5)
+    assist_default: str = "gap"  # house default for members with no pick (A8)
 
     def claim_window(self, seat_count: int) -> float:
         return self.claim_window_2 if seat_count == 2 else self.claim_window_4
@@ -107,7 +108,47 @@ def load_settings(conn, guild_id: int) -> MahjongSettings:
         second_charleston=get_config_value(
             conn, "mahjong_second_charleston", "1", guild_id) == "1",
         stakes_allowed=stakes or (1, 2, 5),
+        assist_default=_assist(
+            get_config_value(conn, "mahjong_assist_default", "gap", guild_id)
+        ),
     )
+
+
+ASSIST_MODES = ("off", "target", "gap", "coach")
+"""Assistance levels (plans/mahjong-assist.md): nothing; the closest lines
+and their distances; plus the tiles still needed; plus dead weight and a
+suggested discard."""
+
+
+def _assist(raw: str) -> str:
+    """Clamp to a known mode — a corrupt store degrades, never raises."""
+    return raw if raw in ASSIST_MODES else "gap"
+
+
+def get_assist_mode(conn, guild_id: int, user_id: int, settings: MahjongSettings) -> str:
+    """The member's chosen level, or the guild default when they never chose
+    (or the stored value is no longer a mode we know)."""
+    row = conn.execute(
+        "SELECT mode FROM mahjong_prefs WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    if row is None:
+        return settings.assist_default
+    raw = str(row[0])
+    return raw if raw in ASSIST_MODES else settings.assist_default
+
+
+def set_assist_mode(conn, guild_id: int, user_id: int, mode: str) -> None:
+    if mode not in ASSIST_MODES:
+        raise ValueError(f"unknown assist mode: {mode!r}")
+    conn.execute(
+        "INSERT INTO mahjong_prefs (guild_id, user_id, mode, updated_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (guild_id, user_id) DO UPDATE SET mode = excluded.mode, "
+        "updated_at = excluded.updated_at",
+        (guild_id, user_id, mode, time.time()),
+    )
+    conn.commit()
 
 
 #: The surface's ordinary failure — used for genuine stale-table races AND

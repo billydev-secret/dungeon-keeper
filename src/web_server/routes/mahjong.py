@@ -46,6 +46,7 @@ class ConfigBody(BaseModel):
     duel_wall_trim: int = Field(ge=0, le=100)
     second_charleston: bool
     stakes_allowed: list[int] = Field(min_length=1, max_length=8)
+    assist_default: str = Field(pattern="^(off|target|gap|coach)$")
 
 
 class CardUploadBody(BaseModel):
@@ -68,6 +69,7 @@ def _settings_payload(conn, guild_id: int) -> dict:
         "duel_wall_trim": s.duel_wall_trim,
         "second_charleston": s.second_charleston,
         "stakes_allowed": list(s.stakes_allowed),
+        "assist_default": s.assist_default,
     }
 
 
@@ -141,6 +143,7 @@ async def put_config(request: Request, body: ConfigBody, user=_ADMIN):
                 "1" if body.second_charleston else "0", guild_id)
             set_config_value(
                 conn, "mahjong_stakes_allowed", ",".join(map(str, stakes)), guild_id)
+            set_config_value(conn, "mahjong_assist_default", body.assist_default, guild_id)
             return _settings_payload(conn, guild_id)
 
     return await run_query(_q)

@@ -528,3 +528,79 @@ async def test_member_left_unseated_is_a_noop(service, db):
     await make_duel(service, db)
     await service.member_left(GUILD, THIRD)  # not seated anywhere
     assert balances(db, HOST, GUEST) == [1000 - DUEL_ESCROW] * 2
+
+
+# ── Assistance preference (plans/mahjong-assist.md stage 2) ──────────────────
+
+
+def test_assist_mode_round_trip(db):
+    from bot_modules.games.mahjong.mahjong_service import (
+        get_assist_mode, load_settings, set_assist_mode,
+    )
+
+    with open_db(db) as conn:
+        settings = load_settings(conn, GUILD)
+        # never chose → the guild default, and the shipped default is 'gap'
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "gap"
+        set_assist_mode(conn, GUILD, HOST, "coach")
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "coach"
+        set_assist_mode(conn, GUILD, HOST, "off")
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "off"
+        # another member is untouched
+        assert get_assist_mode(conn, GUILD, GUEST, settings) == "gap"
+
+
+def test_assist_guild_default_dial_respected_and_overridden(db):
+    from bot_modules.core.db_utils import set_config_value
+    from bot_modules.games.mahjong.mahjong_service import (
+        get_assist_mode, load_settings, set_assist_mode,
+    )
+
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_assist_default", "off", GUILD)
+        settings = load_settings(conn, GUILD)
+        assert settings.assist_default == "off"
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "off"
+        # a member's own pick beats the dial
+        set_assist_mode(conn, GUILD, HOST, "target")
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "target"
+
+
+def test_assist_corrupt_values_degrade_never_raise(db):
+    from bot_modules.core.db_utils import set_config_value
+    from bot_modules.games.mahjong.mahjong_service import (
+        get_assist_mode, load_settings, set_assist_mode,
+    )
+
+    with open_db(db) as conn:
+        # corrupt dial → shipped default
+        set_config_value(conn, "mahjong_assist_default", "banana", GUILD)
+        assert load_settings(conn, GUILD).assist_default == "gap"
+        # corrupt stored row → guild default, not an exception
+        conn.execute(
+            "INSERT INTO mahjong_prefs (guild_id, user_id, mode, updated_at) "
+            "VALUES (?, ?, 'banana', 0)",
+            (GUILD, HOST),
+        )
+        settings = load_settings(conn, GUILD)
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "gap"
+        # and the writer refuses garbage outright
+        with pytest.raises(ValueError):
+            set_assist_mode(conn, GUILD, HOST, "banana")
+
+
+def test_purge_clears_the_assist_preference(db):
+    from bot_modules.games.mahjong.mahjong_service import set_assist_mode
+    from bot_modules.services.privacy_service import purge_user_data
+
+    with open_db(db) as conn:
+        set_assist_mode(conn, GUILD, HOST, "coach")
+        set_assist_mode(conn, GUILD, GUEST, "target")
+        purge_user_data(conn, GUILD, HOST)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM mahjong_prefs WHERE user_id = ?", (HOST,)
+        ).fetchone()[0] == 0
+        # the other member's preference survives
+        assert conn.execute(
+            "SELECT mode FROM mahjong_prefs WHERE user_id = ?", (GUEST,)
+        ).fetchone()[0] == "target"

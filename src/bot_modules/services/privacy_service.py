@@ -316,7 +316,12 @@ def purge_user_data(
     # The member's own rows go; results they WON are anonymised instead of
     # deleted (winner_id → NULL) because the row also carries the other
     # seats' hand history via mahjong_result_seats.
-    for table in ("mahjong_seats", "mahjong_result_seats", "mahjong_stats"):
+    for table in (
+        "mahjong_seats",
+        "mahjong_result_seats",
+        "mahjong_stats",
+        "mahjong_prefs",
+    ):
         _delete(
             conn,
             f"DELETE FROM {table} WHERE guild_id = ? AND user_id = ?",

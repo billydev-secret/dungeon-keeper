@@ -91,6 +91,19 @@ export function mount(container) {
                 <option value="0" ${s.second_charleston ? "" : "selected"}>Off — straight to courtesy</option>
               </select>
             </div>
+            <div class="field">
+              <label for="mj-assist">Default Assistance</label>
+              <select name="assist_default" id="mj-assist">
+                ${[["off", "Off — pure card-reading"],
+                   ["target", "Target — closest hands + distance"],
+                   ["gap", "Target + gap — ...and the tiles still needed"],
+                   ["coach", "Coach — ...and a suggested discard"]].map(([v, label]) =>
+                  `<option value="${v}" ${s.assist_default === v ? "selected" : ""}>${label}</option>`).join("")}
+              </select>
+              <div class="field-hint">What a member sees before they pick their own
+                level in the /mahjong panel's My Settings. A member's own choice
+                always wins.</div>
+            </div>
           </div>
 
           <div class="card">
@@ -174,6 +187,7 @@ export function mount(container) {
           duel_wall_trim: parseInt(fd.get("duel_wall_trim"), 10),
           second_charleston: fd.get("second_charleston") === "1",
           stakes_allowed: stakes,
+          assist_default: fd.get("assist_default"),
         });
         form.querySelector("[name=stakes_allowed]").value = saved.stakes_allowed.join(", ");
         showStatus(status, true);

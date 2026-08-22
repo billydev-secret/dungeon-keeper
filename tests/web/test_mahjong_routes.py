@@ -51,6 +51,7 @@ def test_config_round_trip_and_staged_key_sweep(authed_client):
         "enabled": True, "claim_window_4": 10, "claim_window_2": 5,
         "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 60,
         "second_charleston": False, "stakes_allowed": [1, 5],
+        "assist_default": "coach",
     }
     r = authed_client.put("/api/mahjong/config", json=body)
     assert r.status_code == 200, r.text
@@ -60,6 +61,7 @@ def test_config_round_trip_and_staged_key_sweep(authed_client):
     assert got["duel_wall_trim"] == 60
     assert got["second_charleston"] is False
     assert got["stakes_allowed"] == [1, 5]
+    assert got["assist_default"] == "coach"
     # staged-config sweep: every key the PUT writes has a dataclass reader —
     # the settings payload echoes exactly the fields the PUT accepts
     assert set(got) == set(body)
@@ -70,9 +72,13 @@ def test_config_rejects_out_of_bounds(authed_client):
         "enabled": True, "claim_window_4": 1, "claim_window_2": 5,
         "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 0,
         "second_charleston": True, "stakes_allowed": [1],
+        "assist_default": "gap",
     }
     assert authed_client.put("/api/mahjong/config", json=bad).status_code == 422
     bad["claim_window_4"] = 8
+    bad["assist_default"] = "banana"
+    assert authed_client.put("/api/mahjong/config", json=bad).status_code == 422
+    bad["assist_default"] = "gap"
     bad["stakes_allowed"] = [0]
     assert authed_client.put("/api/mahjong/config", json=bad).status_code == 400
 
