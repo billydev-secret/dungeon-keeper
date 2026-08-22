@@ -92,6 +92,7 @@ def build_submit_embed(
     deadline_str: str,
     answers_in: int,
     total_players: int,
+    bye_player: Any = None,
     color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the per-round submission prompt embed.
@@ -99,6 +100,11 @@ def build_submit_embed(
     ``deadline_str`` is a pre-formatted countdown string (the cog uses
     ``format_deadline(now_plus(timer))``) — kept as a string here so
     the builder stays free of timer / datetime imports.
+
+    ``bye_player`` is whoever is benched this round, decided before the
+    prompt goes out. Naming them on the embed is half of the fix for players
+    discovering they'd sat out only once the round was over; ``total_players``
+    should already exclude them.
     """
     if color is None:
         color = FALLBACK_COLOR
@@ -111,6 +117,16 @@ def build_submit_embed(
     embed.add_field(
         name="Answers In", value=f"{answers_in}/{total_players}", inline=True
     )
+    if bye_player is not None:
+        embed.add_field(
+            name="🪑 Sitting out",
+            value=(
+                f"<@{bye_player}> — odd number of players, so no answer needed "
+                f"this round. You're paid the round's average and you can still "
+                f"vote."
+            ),
+            inline=False,
+        )
     embed.set_footer(text=f"{ICON} Clapback")
     return embed
 
@@ -288,7 +304,7 @@ def build_scoreboard_embed(
     payload: dict[str, Any],
     round_num: int,
     total_rounds: int,
-    bye_player: int | None,
+    bye_players: Any = None,
     bye_award: int | None = None,
     final: bool = False,
     color: "discord.Color | None" = None,
@@ -328,12 +344,24 @@ def build_scoreboard_embed(
         value="\n".join(lines) or "No scores yet",
         inline=False,
     )
-    if bye_player:
+    # A round normally benches at most one player, but a missing submitter can
+    # leave an odd number of answers and force a second, late bye — so this
+    # takes a list. A bare id still works for older call sites and records.
+    byes = (
+        []
+        if not bye_players
+        else list(bye_players)
+        if isinstance(bye_players, (list, tuple))
+        else [bye_players]
+    )
+    if byes:
+        who = ", ".join(f"<@{b}>" for b in byes)
+        pts = 50 if bye_award is None else bye_award
+        each = " each" if len(byes) > 1 else ""
         embed.add_field(
-            name="Bye",
+            name="Bye" if len(byes) == 1 else "Byes",
             value=(
-                f"<@{bye_player}> sat this round out — "
-                f"**+{50 if bye_award is None else bye_award}** pts "
+                f"{who} sat this round out — **+{pts}** pts{each} "
                 f"(the round's average)"
             ),
             inline=False,

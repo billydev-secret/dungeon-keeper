@@ -45,7 +45,10 @@ from bot_modules.games.command_groups import play
 from bot_modules.games_clapback.logic import (
     MAX_PLAYERS,
     MIN_PLAYERS,
+    admit_pending_players,
     calculate_bye_award,
+    pick_round_bye,
+    vote_button_label,
     calculate_matchup_score,
     clamp_config_values,
     create_matchups,
@@ -328,6 +331,15 @@ class ClapbackSubmitView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
+        bye_player = payload.get("round_bye")
+        if bye_player is not None and str(interaction.user.id) == str(bye_player):
+            await interaction.response.send_message(
+                "🪑 You're sitting this round out — no answer needed. You'll be "
+                "paid the round's average, and you can still vote on everyone "
+                "else's matchups.",
+                ephemeral=True,
+            )
+            return
         if interaction.user.id not in players:
             await interaction.response.send_message(
                 "You're not in this game. Join next round!", ephemeral=True,
@@ -336,12 +348,52 @@ class ClapbackSubmitView(discord.ui.View):
         modal = ClapbackAnswerModal(self.game_id, self.round_num, self.db, self.cog)
         await interaction.response.send_modal(modal)
 
+    @discord.ui.button(
+        label="🙋 Join next round", style=discord.ButtonStyle.secondary,
+        custom_id="ql_join_midgame",
+    )
+    async def join_next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Queue a latecomer for the next round.
+
+        The roster used to be sealed at start, so a game running on odd
+        numbers could not be evened out and people tried another bot's `&add`
+        at it. Admission happens at the round boundary (see `_run_game`), not
+        here, so a live round's matchups and answer count never move.
+        """
+        uid = interaction.user.id
+        payload = await get_game_payload(self.db, self.game_id)
+        if uid in payload.get("players", []):
+            await interaction.response.send_message(
+                "You're already in this game.", ephemeral=True,
+            )
+            return
+        if uid in payload.get("pending_players", []):
+            await interaction.response.send_message(
+                "You're already queued — you'll be in from the next round.",
+                ephemeral=True,
+            )
+            return
+
+        def _queue(p):
+            queued = p.setdefault("pending_players", [])
+            if uid not in queued:
+                queued.append(uid)
+
+        await modify_payload(self.db, self.game_id, _queue)
+        log.info("%s queued to join game %s mid-game", interaction.user.display_name, self.game_id)
+        await interaction.response.send_message(
+            "🙋 You're in from the **next** round — this round's matchups are "
+            "already set. You'll start on 0 points.",
+            ephemeral=True,
+        )
+
 
 class ClapbackVoteView(discord.ui.View):
     def __init__(
         self, game_id: str, host_id: int, matchup_index: int,
         player_a: int, player_b: int, players: list[int],
         db, bot, cog,
+        answer_a: str = "", answer_b: str = "",
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -354,6 +406,11 @@ class ClapbackVoteView(discord.ui.View):
         self.bot = bot
         self.cog = cog
         self._closed = False
+        # The buttons carried the bare 🅰️/🅱️ emoji, so voting meant mapping
+        # "the left one" back to an answer and people plainly weren't ("I can
+        # never remember if left is yes or no"). Put the answer on the button.
+        self.vote_a.label = vote_button_label("🅰️", answer_a)
+        self.vote_b.label = vote_button_label("🅱️", answer_b)
 
     @discord.ui.button(label="🅰️", style=discord.ButtonStyle.primary, custom_id="ql_vote_a", row=0)
     async def vote_a(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -682,7 +739,33 @@ class ClapbackCog(commands.Cog):
             payload["current_round"] = round_num
             payload["phase"] = "submitting"
             payload["answers"] = {}
+
+            # Latecomers queued during the previous round join here, at the
+            # boundary, so nothing about a live round shifts under it.
+            roster, admitted, turned_away = admit_pending_players(
+                payload.get("players", []),
+                payload.get("pending_players", []),
+                MAX_PLAYERS,
+            )
+            if admitted or turned_away:
+                payload["players"] = roster
+                payload["pending_players"] = []
+                for uid in admitted:
+                    payload.setdefault("scores", {}).setdefault(str(uid), 0)
+                    payload.setdefault("scores_checkpoint", {}).setdefault(str(uid), 0)
+                    payload.setdefault("clapbacks", {}).setdefault(str(uid), 0)
             await update_game_payload(self.db, game_id, payload)
+            if admitted:
+                joined = ", ".join(f"<@{uid}>" for uid in admitted)
+                await channel.send(
+                    f"🙋 {joined} joined the game — starting on 0 points."
+                )
+            if turned_away:
+                names = ", ".join(f"<@{uid}>" for uid in turned_away)
+                await channel.send(
+                    f"🙅 {names} couldn't join — Clapback is full at "
+                    f"{MAX_PLAYERS} players."
+                )
 
             # Get prompt
             prompt = await fetch_prompt(self.db, config, payload.get("used_prompts", []))
@@ -694,11 +777,29 @@ class ClapbackCog(commands.Cog):
 
             payload["prompt"] = prompt
             payload["used_prompts"] = payload.get("used_prompts", []) + [prompt]
+
+            # Who sits out is settled before the prompt goes out, so the
+            # benched player is never asked for an answer nobody will read.
+            # bye_history is every bye handed out so far; games started before
+            # it existed carry only `last_bye`, so seed from that on
+            # crash-resume rather than restarting the rotation. Ids are
+            # normalised to str — that is how answers/scores are keyed, and
+            # the rotation counts wouldn't match across types.
+            bye_history = payload.get("bye_history")
+            if bye_history is None:
+                legacy = payload.get("last_bye")
+                bye_history = [legacy] if legacy is not None else []
+            bye_history = [str(b) for b in bye_history]
+            round_bye = pick_round_bye(
+                [str(p) for p in payload["players"]], bye_history
+            )
+            payload["round_bye"] = round_bye
             await update_game_payload(self.db, game_id, payload)
 
             # Submit phase
             answers = await self._submit_phase(
                 game_id, channel, payload, prompt, round_num, config, host_id,
+                bye_player=round_bye,
             )
             if self._is_cancelled(game_id):
                 return
@@ -707,14 +808,12 @@ class ClapbackCog(commands.Cog):
                 await channel.send("Not enough answers this round — moving on!")
                 continue
 
-            # Create matchups. bye_history is every bye handed out so far;
-            # games started before it existed carry only `last_bye`, so seed
-            # from that on crash-resume rather than restarting the rotation.
-            bye_history = payload.get("bye_history")
-            if bye_history is None:
-                legacy = payload.get("last_bye")
-                bye_history = [legacy] if legacy is not None else []
-            matchups, bye_player = create_matchups(answers, bye_history)
+            # The pre-picked bye never submitted, so they are already out of
+            # `answers`. A second bye can still fall out here when someone
+            # else misses the window and leaves an odd number of submitters —
+            # both get paid the round average.
+            matchups, late_bye = create_matchups(answers, bye_history)
+            byes = [b for b in (round_bye, late_bye) if b is not None]
             payload = await get_game_payload(self.db, game_id)
             payload["matchups"] = matchups
             payload["phase"] = "voting"
@@ -747,21 +846,26 @@ class ClapbackCog(commands.Cog):
             # Bye pays the field's average for this round, so it's settled
             # here — after the matchups have scored, not before they run.
             bye_award = None
-            if bye_player is not None:
+            if byes:
                 bye_award = calculate_bye_award(round_points)
-                payload["scores"][str(bye_player)] = (
-                    payload["scores"].get(str(bye_player), 0) + bye_award
-                )
-                payload.setdefault("bye_history", list(bye_history)).append(bye_player)
-                payload["last_bye"] = bye_player
+                history = payload.setdefault("bye_history", list(bye_history))
+                for bye in byes:
+                    payload["scores"][str(bye)] = (
+                        payload["scores"].get(str(bye), 0) + bye_award
+                    )
+                    history.append(bye)
+                payload["last_bye"] = byes[-1]
 
             round_record = {
                 "round": round_num,
                 "prompt": prompt,
                 "matchups": round_matchup_results,
             }
-            if bye_player is not None:
-                round_record["bye_player"] = bye_player
+            if byes:
+                # bye_player (singular) is kept for round records written
+                # before a round could produce two byes.
+                round_record["bye_player"] = byes[0]
+                round_record["bye_players"] = list(byes)
                 round_record["bye_award"] = bye_award
             payload.setdefault("round_history", []).append(round_record)
             # Round fully scored — checkpoint so a later crash resumes from here.
@@ -774,7 +878,7 @@ class ClapbackCog(commands.Cog):
             if not is_last:
                 should_continue = await self._round_summary(
                     game_id, channel, payload, round_num, total_rounds, host_id,
-                    bye_player, bye_award,
+                    byes, bye_award,
                 )
                 if not should_continue or self._is_cancelled(game_id):
                     return
@@ -783,7 +887,7 @@ class ClapbackCog(commands.Cog):
                 # Show final summary scoreboard briefly before recap
                 await self._post_scoreboard(
                     game_id, channel, payload, round_num, total_rounds,
-                    bye_player, bye_award, final=True,
+                    byes, bye_award, final=True,
                 )
 
         if self._is_cancelled(game_id):
@@ -797,9 +901,16 @@ class ClapbackCog(commands.Cog):
 
     async def _submit_phase(
         self, game_id, channel, payload, prompt, round_num, config, host_id,
+        bye_player=None,
     ):
         from bot_modules.games.utils.timer import format_deadline, now_plus
-        players = payload["players"]
+        # The benched player is left out of the ping, the answer count and the
+        # submit gate: being asked for an answer that will never be shown is
+        # what made sitting out read as a bug rather than a rotation.
+        players = [
+            uid for uid in payload["players"]
+            if bye_player is None or str(uid) != str(bye_player)
+        ]
         timer_secs = config["timer"]
         deadline = now_plus(timer_secs)
 
@@ -810,6 +921,7 @@ class ClapbackCog(commands.Cog):
             deadline_str=format_deadline(deadline),
             answers_in=0,
             total_players=len(players),
+            bye_player=bye_player,
             color=self._accents.get(game_id),
         )
 
@@ -828,6 +940,14 @@ class ClapbackCog(commands.Cog):
             )
             if mentions:
                 content = f"{ICON} **Round {round_num} starting!** {mentions}"
+            if bye_player is not None:
+                # Told up front and by name, rather than discovered at the
+                # scoreboard once the round is already over.
+                content = (
+                    f"{content or ''}\n🪑 <@{bye_player}> is **sitting this "
+                    f"round out** — no answer needed, you'll be paid the "
+                    f"round's average. You can still vote!"
+                ).strip()
 
         msg = await channel.send(content=content, embed=embed, view=view)
         await update_game_message(self.db, game_id, msg.id)
@@ -919,6 +1039,7 @@ class ClapbackCog(commands.Cog):
             game_id, host_id, matchup_index,
             player_a, player_b, players,
             self.db, self.bot, self,
+            answer_a=answer_a, answer_b=answer_b,
         )
         self.bot.active_views[game_id] = view
 
@@ -1026,10 +1147,10 @@ class ClapbackCog(commands.Cog):
 
     async def _round_summary(
         self, game_id, channel, payload, round_num, total_rounds, host_id,
-        bye_player, bye_award=None,
+        bye_players, bye_award=None,
     ):
         embed = build_scoreboard_embed(
-            payload, round_num, total_rounds, bye_player, bye_award=bye_award,
+            payload, round_num, total_rounds, bye_players, bye_award=bye_award,
             final=False, color=self._accents.get(game_id),
         )
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
@@ -1055,10 +1176,10 @@ class ClapbackCog(commands.Cog):
 
     async def _post_scoreboard(
         self, game_id, channel, payload, round_num, total_rounds,
-        bye_player, bye_award=None, final=False,
+        bye_players, bye_award=None, final=False,
     ):
         embed = build_scoreboard_embed(
-            payload, round_num, total_rounds, bye_player, bye_award=bye_award,
+            payload, round_num, total_rounds, bye_players, bye_award=bye_award,
             final=final, color=self._accents.get(game_id),
         )
         await channel.send(embed=embed)

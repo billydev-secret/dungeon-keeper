@@ -48,6 +48,103 @@ AI_USER_PROMPT: str = (
 )
 
 
+def admit_pending_players(
+    players: list[Any],
+    pending: list[Any] | None,
+    max_players: int,
+) -> tuple[list[Any], list[Any], list[Any]]:
+    """Fold latecomers into the roster at a round boundary.
+
+    Returns ``(roster, admitted, turned_away)``. A game night regularly wants
+    one more body to even the numbers out and there was no way to add one
+    mid-game — players resorted to typing another bot's ``&add`` syntax at it
+    (2026-08-21). Admitting only at a round boundary is what keeps a live
+    round's matchups and answer count stable.
+
+    Anyone already in ``players`` is dropped silently (a double press), the
+    order of ``pending`` is preserved, and anyone over ``max_players`` is
+    turned away rather than quietly ignored so the caller can say so. They
+    start on zero points, which is a real disadvantage — that is the honest
+    consequence of joining late, not a bug.
+    """
+    roster = list(players)
+    admitted: list[Any] = []
+    turned_away: list[Any] = []
+    seen = {str(p) for p in roster}
+    for uid in pending or []:
+        if str(uid) in seen:
+            continue
+        if len(roster) >= max_players:
+            turned_away.append(uid)
+            continue
+        seen.add(str(uid))
+        roster.append(uid)
+        admitted.append(uid)
+    return roster, admitted, turned_away
+
+
+#: Discord caps a button label at 80 characters; leave room for the side
+#: marker and the ellipsis.
+VOTE_LABEL_MAX = 55
+
+
+def vote_button_label(side: str, answer: str, max_length: int = VOTE_LABEL_MAX) -> str:
+    """Label for one of the two head-to-head vote buttons.
+
+    The buttons used to be bare 🅰️/🅱️ emoji, which meant voters had to hold
+    "left is the top answer" in their heads and several of them plainly
+    didn't ("I can never remember if left is yes or no" — game night
+    2026-08-21). Putting the answer itself on the button removes the mapping
+    step entirely.
+
+    Newlines are flattened (Discord renders labels on one line) and the text
+    is truncated with an ellipsis. Falls back to ``"Vote A"`` / ``"Vote B"``
+    when the answer is blank or is nothing but whitespace. ``side`` is the
+    single letter, so the marker still matches the embed for anyone reading
+    the two together.
+    """
+    flat = " ".join(str(answer or "").split())
+    if not flat:
+        return f"Vote {side}"
+    if len(flat) > max_length:
+        flat = flat[: max_length - 1].rstrip() + "…"
+    return f"{side}: {flat}"
+
+
+def pick_round_bye(
+    player_ids: list[Any],
+    bye_history: list[Any] | None = None,
+    rng: random.Random | None = None,
+) -> Any:
+    """Who sits the coming round out, decided *before* the prompt goes out.
+
+    The bye used to fall out of :func:`create_matchups`, i.e. after everyone
+    had already written an answer — so the benched player spent the round
+    composing something that was never used and only found out at the
+    scoreboard ("It should really let you know when you're sitting out" —
+    game night, 2026-08-21). Picking up front lets the round skip them
+    entirely: no ping, no submit button, no wasted answer.
+
+    Same rotation rule as :func:`create_matchups` — fewest byes so far wins,
+    picked at random within the tied group — so the two stay consistent when
+    a missing submitter forces a second, late bye on top of this one.
+
+    Returns ``None`` when nobody needs to sit out: an even field pairs
+    cleanly, and exactly 3 players run a round-robin instead.
+
+    ``player_ids`` should be the same id type used as ``answers`` keys and in
+    ``bye_history`` (strings in production) — ``history.count`` is what makes
+    the rotation work, and it will not match across types.
+    """
+    ids = list(player_ids)
+    if len(ids) == 3 or len(ids) % 2 == 0:
+        return None
+    chooser = rng if rng is not None else random
+    chooser.shuffle(ids)
+    history = list(bye_history or [])
+    return min(ids, key=history.count)
+
+
 def create_matchups(
     answers: dict[str, str],
     bye_history: list[Any] | None = None,
