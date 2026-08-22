@@ -1,5 +1,12 @@
 # Meadow Mahjong — build plan
 
+**Status: complete 2026-08-21** — stages 0–8 all landed on this branch, with
+adversarial review rounds after stages 1, 3 and 6 (their findings and the
+decisions they forced are D15–D18 below and the fix commits). Full gate green
+(13,118 tests). What prod still needs: a restart (migration 175 + the cog),
+`python scripts/register_tile_emoji.py` once for real tile art, and the
+dashboard dials (enable + stakes; Duel wall trim ~60 recommended).
+
 **Spec:** [../meadow_mahjong_spec.md](../meadow_mahjong_spec.md) (Design, v1.0 +
 two amendments recorded at the top of that file).
 **Branch:** `meadow-mahjong`, one worktree, **one merge at the end** — nothing
