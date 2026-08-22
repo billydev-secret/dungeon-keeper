@@ -228,6 +228,7 @@ def main() -> None:
         "bot_modules.cogs.no_contact_cog",
         "bot_modules.cogs.birthday_cog",
         "bot_modules.cogs.survivor_cog",
+        "bot_modules.cogs.mahjong_cog",
         "bot_modules.cogs.dev_cog",
         "bot_modules.cogs.starboard_cog",
         "bot_modules.cogs.music_cog",

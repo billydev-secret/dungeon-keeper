@@ -48,6 +48,11 @@ Pressure Cooker (1v1 gauge duel), Quickdraw (hidden-timer reflex duel), Hot
 Potato (duel or group free-for-all), Chicken (bail before the crash), and
 Musical Chairs (3+ players).
 
+- **Meadow Mahjong** — Card-driven American-style mahjong at 2 or 4 seats, with
+  the full Charleston, claim windows, joker redemption, and coin stakes held in
+  escrow. Hands are matched against an original seasonal Meadow Card managed
+  from the dashboard. `docs/meadow_mahjong_spec.md`.
+
 ### Economy & perk shop
 - **Coins & wallet** — Earn server currency from daily logins, chatting, voice, games, reactions, and QOTD answers, all recorded in a full ledger with a per-member wallet view.
 - **Quests & daily boards** — A personal daily/weekly/monthly quest board draws each member their own slice of the guild's quest pool, alongside tiered community weeklies with a live tracker.

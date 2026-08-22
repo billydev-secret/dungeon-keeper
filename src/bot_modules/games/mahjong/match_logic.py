@@ -1,0 +1,322 @@
+"""The §3.3 matcher and the reachability pass — the most-tested unit in the cog.
+
+Stage 2 of docs/plans/meadow-mahjong.md. Two pure entry points share one
+binding enumerator:
+
+* :func:`match_hand` — does this exact 14 (concealed + exposures) match a card
+  line? Returns every matching line; settlement takes the highest value and
+  computes jokerless from the actual tiles.
+* :func:`reachable_lines` — amendment 2's *live line* test for the Duel fallow
+  payout: which lines could this seat still complete, given the tiles they
+  hold, their locked exposures, and the copies not yet seen elsewhere?
+
+A binding is (x, suit-letter map, dragon): one ``x`` per hand with every
+offset landing in 1–9, suit letters mapping injectively onto physical suits
+(≤ 3! = 6), one dragon for ``D``. Brute force is fine (spec §3.3): ≤ ~30
+lines × ≤ 9 x-bindings × 6 suit maps × 3 dragon bindings.
+
+In American mahjong every group is same-tile (a pung/kong/quint of one tile,
+flowers interchangeable), so a group under a binding resolves to exactly one
+natural tile — that is what makes the concealed fit a counting argument
+instead of a search: pairs/singles must be covered by held naturals (jokers
+never stand in a count ≤ 2 group, §2.6), any 3+ deficit is joker-covered,
+and every held tile must be consumed.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Mapping
+from dataclasses import dataclass
+from itertools import permutations
+
+from bot_modules.games.mahjong.card_logic import Card, Group, Hand, RankKind
+from bot_modules.games.mahjong.tiles import SUITS, Tile, copies
+
+_WIND_TILES = {"N": Tile.NORTH, "E": Tile.EAST, "W": Tile.WEST, "S": Tile.SOUTH}
+_DRAGON_TILES = {"R": Tile.RED, "G": Tile.GREEN, "soap": Tile.SOAP}
+HAND_TILES = 14
+
+
+@dataclass(frozen=True)
+class Exposure:
+    """A face-up called group: ``count`` tiles representing ``natural``, of
+    which ``jokers`` are jokers standing in (§2.5/§2.6). Exposures are always
+    3+ and never pairs, by the claim rules; the matcher still checks."""
+
+    natural: Tile
+    count: int
+    jokers: int = 0
+
+    def __post_init__(self) -> None:
+        if self.natural is Tile.JOKER:
+            raise ValueError("an exposure represents a natural, never a joker")
+        if self.count < 3:
+            raise ValueError("exposures are 3+ — pairs and singles can't be called")
+        if not 0 <= self.jokers <= self.count:
+            raise ValueError("joker count outside the exposure")
+
+    @property
+    def naturals(self) -> int:
+        return self.count - self.jokers
+
+
+@dataclass(frozen=True)
+class Match:
+    """One card line this 14 matches, with the binding that made it work."""
+
+    hand: Hand
+    x: int | None
+    suit_map: tuple[tuple[str, str], ...]  # (letter, physical suit), sorted
+    dragon: str | None                     # tile code "dr"/"dg"/"soap"
+    jokers_used: int
+
+    @property
+    def jokerless(self) -> bool:
+        """No jokers among the winning 14. Whether that *pays* is scoring's
+        call — a line with no 3+ group is jokerless by definition and gets
+        no extra (§2.9)."""
+        return self.jokers_used == 0
+
+
+# ── Binding enumeration ──────────────────────────────────────────────────────
+
+
+def _bindings(hand: Hand):
+    """Yield every (x, suit_map, dragon_code) binding the hand's shape allows."""
+    offsets = [g.offset for g in hand.groups if g.offset is not None]
+    xs: list[int | None] = (
+        list(range(1, 10 - max(offsets))) if offsets else [None]
+    )
+
+    letters = sorted({g.suit for g in hand.groups if g.suit is not None})
+    if letters:
+        suit_maps = [dict(zip(letters, perm)) for perm in permutations(SUITS, len(letters))]
+    else:
+        suit_maps = [{}]
+
+    dragons: list[str | None] = (
+        ["dr", "dg", "soap"]
+        if any(g.kind is RankKind.ANY_DRAGON for g in hand.groups)
+        else [None]
+    )
+
+    for x in xs:
+        for suit_map in suit_maps:
+            for dragon in dragons:
+                yield x, suit_map, dragon
+
+
+def _group_natural(
+    g: Group, x: int | None, suit_map: Mapping[str, str], dragon: str | None
+) -> Tile:
+    """The one natural tile this group demands under the binding."""
+    if g.kind is RankKind.CONCRETE:
+        assert g.concrete is not None and g.suit is not None
+        return Tile(f"{g.concrete}{suit_map[g.suit]}")
+    if g.kind is RankKind.VAR:
+        assert x is not None and g.offset is not None and g.suit is not None
+        return Tile(f"{x + g.offset}{suit_map[g.suit]}")
+    if g.kind is RankKind.ZERO:
+        return Tile.SOAP  # soap doubles as zero (§2.1)
+    if g.kind is RankKind.WIND:
+        assert g.wind is not None
+        return _WIND_TILES[g.wind]
+    if g.kind is RankKind.DRAGON:
+        assert g.dragon is not None
+        return _DRAGON_TILES[g.dragon]
+    if g.kind is RankKind.ANY_DRAGON:
+        assert dragon is not None
+        return Tile(dragon)
+    return Tile.FLOWER
+
+
+# ── Exposure → group assignment ──────────────────────────────────────────────
+
+
+def _exposure_assignments(
+    exposures: list[Exposure], resolved: list[tuple[Group, Tile]]
+):
+    """Yield every injective exposures→groups assignment (as a frozenset of
+    group indices used). Tiny search: exposures ≤ 4, groups ≤ ~10."""
+    if not exposures:
+        yield frozenset()
+        return
+    first, rest = exposures[0], exposures[1:]
+    for i, (group, natural) in enumerate(resolved):
+        if group.count != first.count or natural != first.natural:
+            continue
+        if first.jokers and not group.takes_jokers:
+            continue  # jokers never sit in a count <= 2 group (§2.6)
+        for used in _exposure_assignments(rest, resolved):
+            if i not in used:
+                yield used | {i}
+
+
+# ── The exact fit (§3.3) ─────────────────────────────────────────────────────
+
+
+def _concealed_fit(
+    concealed_counts: Counter[Tile],
+    jokers_held: int,
+    remaining: list[tuple[Group, Tile]],
+) -> int | None:
+    """Can the concealed tiles exactly fill these groups? Returns jokers used,
+    or None. Counting argument (see module docstring): pairs/singles need
+    held naturals; 3+ deficits take jokers; everything must be consumed."""
+    demand: Counter[Tile] = Counter()
+    small: Counter[Tile] = Counter()
+    for group, natural in remaining:
+        demand[natural] += group.count
+        if not group.takes_jokers:
+            small[natural] += group.count
+
+    for tile, n in concealed_counts.items():
+        if n > demand.get(tile, 0):
+            return None  # leftover tile the line has no slot for
+    for tile, n in small.items():
+        if concealed_counts.get(tile, 0) < n:
+            return None  # a pair/single slot would need a joker
+    jokers_needed = sum(
+        n - concealed_counts.get(tile, 0) for tile, n in demand.items()
+    )
+    if jokers_needed != jokers_held:
+        return None  # too few jokers to fill, or spare jokers with no slot
+    return jokers_held
+
+
+def match_hand(
+    concealed: list[Tile], exposures: list[Exposure], card: Card
+) -> list[Match]:
+    """Every card line this exact 14 matches (§3.3). Pure."""
+    if len(concealed) + sum(e.count for e in exposures) != HAND_TILES:
+        return []
+    counts = Counter(concealed)
+    jokers_held = counts.pop(Tile.JOKER, 0)
+    exposure_jokers = sum(e.jokers for e in exposures)
+
+    matches: list[Match] = []
+    for hand in card.hands:
+        if hand.concealed and exposures:
+            continue  # a concealed line rejects any exposure
+        match = _match_line(hand, counts, jokers_held, exposures, exposure_jokers)
+        if match is not None:
+            matches.append(match)
+    return matches
+
+
+def _match_line(
+    hand: Hand,
+    concealed_counts: Counter[Tile],
+    jokers_held: int,
+    exposures: list[Exposure],
+    exposure_jokers: int,
+) -> Match | None:
+    for x, suit_map, dragon in _bindings(hand):
+        resolved = [(g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups]
+        for used in _exposure_assignments(exposures, resolved):
+            remaining = [rg for i, rg in enumerate(resolved) if i not in used]
+            fit = _concealed_fit(concealed_counts, jokers_held, remaining)
+            if fit is not None:
+                return Match(
+                    hand=hand,
+                    x=x,
+                    suit_map=tuple(sorted(suit_map.items())),
+                    dragon=dragon,
+                    jokers_used=fit + exposure_jokers,
+                )
+    return None
+
+
+def resolved_groups(match: Match) -> list[tuple[Tile, int]]:
+    """(natural, count) per group of the matched line, under its binding —
+    the reveal embed's §6.12 "groups" rendering. Joker placement within a
+    group isn't part of the match, so groups render as their naturals."""
+    suit_map = dict(match.suit_map)
+    return [
+        (_group_natural(g, match.x, suit_map, match.dragon), g.count)
+        for g in match.hand.groups
+    ]
+
+
+def best_match(matches: list[Match]) -> Match | None:
+    """Settlement's pick: the highest-value line (§3.3)."""
+    return max(matches, key=lambda m: m.hand.value, default=None)
+
+
+# ── Reachability (amendment 2 — the Duel fallow payout) ──────────────────────
+
+
+def reachable_lines(
+    concealed: list[Tile],
+    exposures: list[Exposure],
+    card: Card,
+    seen_elsewhere: Counter[Tile],
+) -> list[Hand]:
+    """Lines this seat could still complete, in card order.
+
+    ``seen_elsewhere`` counts every tile visible *outside* this seat's own
+    hand: the discard pile plus other seats' exposures (a joker in an
+    exposure counts as a joker there, not as its impersonated natural).
+    A line is live when its groups can absorb the locked exposures and, for
+    every remaining group, held naturals + unseen copies + joker cover meet
+    the count — with pairs/singles still needing naturals. Extra held tiles
+    don't kill a line (they can be discarded on later turns).
+    """
+    counts = Counter(concealed)
+    jokers_held = counts.pop(Tile.JOKER, 0)
+
+    own: Counter[Tile] = Counter(concealed)
+    for e in exposures:
+        own[e.natural] += e.naturals
+        own[Tile.JOKER] += e.jokers
+
+    def unseen(tile: Tile) -> int:
+        return max(0, copies(tile) - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
+
+    live: list[Hand] = []
+    for hand in card.hands:
+        if hand.concealed and exposures:
+            continue
+        if _line_reachable(hand, counts, jokers_held, exposures, unseen):
+            live.append(hand)
+    return live
+
+
+def _line_reachable(hand, concealed_counts, jokers_held, exposures, unseen) -> bool:
+    for x, suit_map, dragon in _bindings(hand):
+        resolved = [(g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups]
+        for used in _exposure_assignments(exposures, resolved):
+            remaining = [rg for i, rg in enumerate(resolved) if i not in used]
+            demand: Counter[Tile] = Counter()
+            small: Counter[Tile] = Counter()
+            for group, natural in remaining:
+                demand[natural] += group.count
+                if not group.takes_jokers:
+                    small[natural] += group.count
+
+            obtainable = {
+                tile: concealed_counts.get(tile, 0) + unseen(tile) for tile in demand
+            }
+            if any(obtainable[tile] < n for tile, n in small.items()):
+                continue  # a pair/single can no longer find its naturals
+            joker_deficit = sum(
+                max(0, n - obtainable[tile]) for tile, n in demand.items()
+            )
+            if joker_deficit <= jokers_held + unseen(Tile.JOKER):
+                return True
+    return False
+
+
+def fallow_base_value(
+    concealed: list[Tile],
+    exposures: list[Exposure],
+    card: Card,
+    seen_elsewhere: Counter[Tile],
+) -> int:
+    """The Duel fallow payout's base: the survivor's lowest-value live line,
+    or the card minimum when nothing is live (amendment 2)."""
+    live = reachable_lines(concealed, exposures, card, seen_elsewhere)
+    if live:
+        return min(h.value for h in live)
+    return min(h.value for h in card.hands)

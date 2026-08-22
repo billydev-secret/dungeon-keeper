@@ -38,7 +38,12 @@ from bot_modules.games_rushmore import embeds as rushmore_embeds
 from bot_modules.games_traditional import embeds as traditional_embeds
 from bot_modules.games_ttl import embeds as ttl_embeds
 from bot_modules.games_wyr import embeds as wyr_embeds
+from bot_modules.games.mahjong import embeds as mahjong_embeds
+from bot_modules.games.mahjong import game_logic as mahjong_game
+from bot_modules.games.mahjong.card_logic import load_first_light
+from bot_modules.games.mahjong.tiles import Tile as MahjongTile
 from bot_modules.music_playlist import embeds as music_playlist_embeds
+from bot_modules.core import branding
 from bot_modules.services import branding_service
 from bot_modules.services import casino_service
 from bot_modules.services import dm_branding
@@ -719,7 +724,63 @@ CASES = [
         lambda **kw: music_playlist_embeds.build_my_review_embed([], color=kw["color"]),
         None,
     ),
+    # ── meadow mahjong (accent kwarg named `accent`; None → the house
+    #    default, so the fallback path is accent=None) ─────────────────────
+    case(
+        "mahjong.member_panel",
+        lambda **kw: mahjong_embeds.build_member_panel(
+            _mahjong_card(), (1, 2), 100, accent=kw.get("color")),
+        branding.DEFAULT_ACCENT_COLOR,
+    ),
+    case(
+        "mahjong.table_panel",
+        lambda **kw: mahjong_embeds.build_table_panel(
+            _mahjong_state(), {100: "A", 101: "B"}, 1, 450,
+            accent=kw.get("color")),
+        branding.DEFAULT_ACCENT_COLOR,
+    ),
+    case(
+        "mahjong.rack_panel",
+        lambda **kw: mahjong_embeds.build_rack_panel(
+            _mahjong_dealt(), 0, accent=kw.get("color")),
+        branding.DEFAULT_ACCENT_COLOR,
+    ),
+    case(
+        "mahjong.joker_redeemed",
+        lambda **kw: mahjong_embeds.build_joker_redeemed(
+            "A", "B", MahjongTile("5b"), accent=kw.get("color")),
+        branding.DEFAULT_ACCENT_COLOR,
+    ),
+    case(
+        "mahjong.card_viewer",
+        lambda **kw: mahjong_embeds.build_card_viewer(
+            _mahjong_card(), accent=kw.get("color"))[0],
+        branding.DEFAULT_ACCENT_COLOR,
+    ),
+    case(
+        "mahjong.my_stats",
+        lambda **kw: mahjong_embeds.build_my_stats([], accent=kw.get("color")),
+        branding.DEFAULT_ACCENT_COLOR,
+    ),
 ]
+
+
+def _mahjong_card():
+    return load_first_light()
+
+
+def _mahjong_state():
+    return mahjong_game.create_table(
+        mahjong_game.TableConfig(seat_count=2), 100)
+
+
+def _mahjong_dealt():
+    import random
+    from bot_modules.games.mahjong.tiles import shuffled_wall
+    state = _mahjong_state()
+    state, _ = mahjong_game.join_table(state, 101)
+    state, _ = mahjong_game.deal(state, shuffled_wall(random.Random(3)))
+    return state
 
 
 def _survivor_status() -> dict:
@@ -755,6 +816,11 @@ def test_builder_falls_back_without_accent(build, fallback):
 # (adding an entry is an explicit, reviewable decision to skip the contract,
 # e.g. for content-string builders or semantic-color-only surfaces).
 KNOWN_UNCOVERED = {
+    # Semantic-color-only surfaces (CLAUDE.md: green stays where the color IS
+    # the meaning): the Mahjong reveal and settlement are results-green, and
+    # the settlement's void variants are deliberately grey — no accent path.
+    "bot_modules.games.mahjong.embeds.build_mahjong_reveal",
+    "bot_modules.games.mahjong.embeds.build_settlement",
     # Bios carries its own per-guild dial (`bios_embed_color`, BiosConfig) and
     # takes it as a required `embed_color=` argument rather than the optional
     # `color=` the contract probes — there is no accent path to pass through and

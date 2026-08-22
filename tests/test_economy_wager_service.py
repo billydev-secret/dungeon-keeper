@@ -28,6 +28,7 @@ from bot_modules.services.economy_wager_service import (
     refund_game,
     refund_player,
     settle,
+    settle_split,
     staked_players,
 )
 from tests.db_template import migrated_db
@@ -380,3 +381,67 @@ def test_failed_debit_leaves_a_declared_stake_pending(db):
             "SELECT state, amount FROM econ_game_wagers WHERE game_id = ?", (GID,)
         ).fetchone()
         assert (row["state"], row["amount"]) == ("pending", 40)
+
+
+# ── settle_split (Meadow Mahjong's zero-sum settlement, plan D4) ─────────────
+
+
+def _held_game(conn, stakes: dict[int, int], game_id: int = GID):
+    for user_id, amount in stakes.items():
+        _fund(conn, user_id, amount)
+        hold_stake(conn, GUILD, GAME, game_id, user_id, amount)
+
+
+def test_settle_split_moves_deltas_and_conserves(db):
+    with open_db(db) as conn:
+        _held_game(conn, {A: 300, B: 300})
+        credits = settle_split(conn, GAME, GID, {A: 150, B: -150})
+        assert credits == {A: 450, B: 150}
+        assert get_balance(conn, GUILD, A) == 450
+        assert get_balance(conn, GUILD, B) == 150
+        # conserved: total coins equal total funded
+        assert get_balance(conn, GUILD, A) + get_balance(conn, GUILD, B) == 600
+        kinds = dict(_kinds(conn, A))
+        assert kinds.get("wager_split") == 450
+
+
+def test_settle_split_is_exactly_once(db):
+    with open_db(db) as conn:
+        _held_game(conn, {A: 300, B: 300})
+        settle_split(conn, GAME, GID, {A: 150, B: -150})
+        again = settle_split(conn, GAME, GID, {A: 150, B: -150})
+        assert again == {}
+        assert get_balance(conn, GUILD, A) == 450  # unchanged
+
+
+def test_settle_split_zero_deltas_is_a_full_refund_shape(db):
+    with open_db(db) as conn:
+        _held_game(conn, {A: 300, B: 300, C: 300})
+        credits = settle_split(conn, GAME, GID, {A: 0, B: 0, C: 0})
+        assert credits == {A: 300, B: 300, C: 300}
+        assert get_balance(conn, GUILD, C) == 300
+
+
+def test_settle_split_rejects_nonzero_sum(db):
+    with open_db(db) as conn:
+        _held_game(conn, {A: 300, B: 300})
+        with pytest.raises(ValueError, match="sum to zero"):
+            settle_split(conn, GAME, GID, {A: 150, B: -100})
+        # nothing settled, nothing moved
+        assert get_balance(conn, GUILD, A) == 0
+        credits = settle_split(conn, GAME, GID, {A: 0, B: 0})
+        assert credits == {A: 300, B: 300}
+
+
+def test_settle_split_rejects_player_mismatch(db):
+    with open_db(db) as conn:
+        _held_game(conn, {A: 300, B: 300})
+        with pytest.raises(ValueError, match="escrow holds"):
+            settle_split(conn, GAME, GID, {A: 150, C: -150})
+
+
+def test_settle_split_rejects_delta_beyond_escrow(db):
+    with open_db(db) as conn:
+        _held_game(conn, {A: 300, B: 300})
+        with pytest.raises(ValueError, match="exceeds escrow"):
+            settle_split(conn, GAME, GID, {A: 400, B: -400})
