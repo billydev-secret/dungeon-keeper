@@ -963,6 +963,26 @@ def refund_streak_shield(
     return price
 
 
+def get_streak_summary(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> tuple[int, int]:
+    """``(current_streak, longest_streak)`` for a member, zeros if unseen.
+
+    The shield helpers next door read the same row for its ``shields`` column
+    only, which left the streak itself with no reader at all — so ``/info``
+    could show the shield that protects a streak while having no way to show
+    the streak.
+    """
+    row = conn.execute(
+        "SELECT current_streak, longest_streak FROM econ_streaks "
+        "WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    if row is None:
+        return 0, 0
+    return int(row["current_streak"] or 0), int(row["longest_streak"] or 0)
+
+
 def get_streak_shields(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> int:

@@ -280,9 +280,14 @@ class MemberInfoCog(commands.Cog):
         since = datetime.now(timezone.utc).timestamp() - _ACTIVITY_WINDOW_DAYS * _DAY_SECONDS
 
         def _fetch() -> dict[str, Any]:
+            from bot_modules.core.xp_system import (  # noqa: PLC0415
+                load_xp_settings,
+                xp_required_for_level,
+            )
             from bot_modules.services.economy_service import (  # noqa: PLC0415
                 get_balance,
                 get_streak_shields,
+                get_streak_summary,
                 load_econ_settings,
             )
             from bot_modules.services.economy_rentals_service import (  # noqa: PLC0415
@@ -328,13 +333,39 @@ class MemberInfoCog(commands.Cog):
                     conn, guild_id, "day", user_id=user_id, utc_offset_hours=tz_off
                 )
 
+                # The curve factor is a live guild dial, so the next-level
+                # threshold is read per guild rather than assumed.
+                next_level_xp = (
+                    xp_required_for_level(
+                        int(xp_row["level"]) + 1, load_xp_settings(conn, guild_id)
+                    )
+                    if xp_row
+                    else None
+                )
+
                 econ = load_econ_settings(conn, guild_id)
                 if econ.enabled:
                     balance = get_balance(conn, guild_id, user_id)
                     rentals = list_member_rentals(conn, guild_id, user_id)
                     shields = get_streak_shields(conn, guild_id, user_id)
+                    streak, longest_streak = get_streak_summary(
+                        conn, guild_id, user_id
+                    )
                 else:
                     balance, rentals, shields = 0, [], 0
+                    streak, longest_streak = 0, 0
+
+                assistant_name = ""
+                if self.bot.get_cog("AdvisorCog") is not None:
+                    # Per-guild branding — never hardcode the default name.
+                    from bot_modules.services.branding_service import (  # noqa: PLC0415
+                        resolve_assistant_name_conn,
+                    )
+
+                    try:
+                        assistant_name = resolve_assistant_name_conn(conn, guild_id)
+                    except Exception:
+                        log.exception("info panel: assistant name lookup failed")
 
                 states = _feature_states(conn, guild_id, member, self.bot)
 
@@ -351,6 +382,10 @@ class MemberInfoCog(commands.Cog):
                 "balance": balance,
                 "rentals": rentals,
                 "shields": shields,
+                "streak": streak,
+                "longest_streak": longest_streak,
+                "next_level_xp": next_level_xp,
+                "assistant_name": assistant_name,
                 "states": states,
             }
 
@@ -370,6 +405,9 @@ class MemberInfoCog(commands.Cog):
             msgs_30d=data["msgs_30d"],
             top_channels=visible_top_channels(data["top_channels"], viewable),
             last_seen_ts=data["last_ts"],
+            next_level_xp=data["next_level_xp"],
+            current_streak=data["streak"],
+            longest_streak=data["longest_streak"],
         )
 
         wallet_line, wallet_extra = self._wallet_summary(data, user_id)
@@ -396,6 +434,7 @@ class MemberInfoCog(commands.Cog):
             optin_rows=rows,
             wallet_line=wallet_line,
             wallet_extra=wallet_extra,
+            help_lines=self._help_lines(data["assistant_name"]),
             color=accent,
         )
         await interaction.followup.send(
@@ -404,6 +443,26 @@ class MemberInfoCog(commands.Cog):
             view=MemberInfoView(self.bot, rows),
             ephemeral=True,
         )
+
+    def _help_lines(self, assistant_name: str) -> list[str]:
+        """Where to go next: the assistant, and the member's own data.
+
+        An info card is exactly where someone wonders "what does this bot know
+        about me?", so the erasure command is named here rather than left to be
+        found. Each line is gated on its cog being loaded — the same rule the
+        opt-in rows follow: never name a command this server does not run.
+        """
+        lines: list[str] = []
+        if assistant_name:
+            lines.append(
+                f"`/ask` — ask {assistant_name} how anything here works."
+            )
+        if self.bot.get_cog("PrivacyCog") is not None:
+            lines.append(
+                "`/delete_me` — erase your messages. "
+                "The Help guide's **Your Data & Privacy** lists everything stored."
+            )
+        return lines
 
     def _wallet_summary(
         self, data: dict[str, Any], user_id: int
@@ -423,6 +482,10 @@ class MemberInfoCog(commands.Cog):
 
         balance = data["balance"]
         line = f"{econ.currency_emoji} **{balance:,}** {unit(econ, balance)}"
+        if data["streak"]:
+            line += f" · 🔥 {data['streak']:,}-day streak"
+            if data["longest_streak"] > data["streak"]:
+                line += f" (best: {data['longest_streak']:,})"
         if data["shields"]:
             line += " · 🛡️ streak shield held"
         # The viewer id is what renders gift attribution ("gift received" /

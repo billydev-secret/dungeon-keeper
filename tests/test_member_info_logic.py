@@ -359,3 +359,69 @@ def test_activity_still_says_nothing_recorded_when_there_was_nothing():
     )
     activity = next(f for f in embed.fields if "Activity" in f.name)
     assert "No messages recorded" in (activity.value or "")
+
+
+# ── Level progress ───────────────────────────────────────────────────────
+
+
+def test_level_field_shows_xp_to_the_next_level():
+    embed = build_member_info_embed(
+        display_name="Ada",
+        avatar_url=None,
+        facts=_facts(level=7, total_xp=12_345, next_level_xp=13_585),
+        optin_rows=[],
+    )
+    level = next(f for f in embed.fields if "Level" in f.name)
+    assert "1,240 XP to Level 8" in (level.value or "")
+
+
+def test_level_field_omits_progress_when_there_is_no_next_level():
+    embed = build_member_info_embed(
+        display_name="Ada",
+        avatar_url=None,
+        facts=_facts(level=None, total_xp=0, next_level_xp=None),
+        optin_rows=[],
+    )
+    level = next(f for f in embed.fields if "Level" in f.name)
+    assert "to Level" not in (level.value or "")
+
+
+@pytest.mark.parametrize(
+    ("total_xp", "next_level_xp", "expected"),
+    [
+        (12_345, 13_585, 1_240),
+        (100, 100, 0),
+        # The stored level lags the XP that earns it, and the curve factor is a
+        # live dial — so "already past the threshold" is reachable and must not
+        # render as a negative.
+        (14_000, 13_585, 0),
+        (0, None, None),
+    ],
+)
+def test_xp_to_next_level_never_goes_negative(total_xp, next_level_xp, expected):
+    from bot_modules.member_info.logic import xp_to_next_level
+
+    assert xp_to_next_level(total_xp, next_level_xp) == expected
+
+
+# ── The "More" field names only what this server runs ────────────────────
+
+
+def test_help_lines_render_when_given():
+    embed = build_member_info_embed(
+        display_name="Ada",
+        avatar_url=None,
+        facts=_facts(),
+        optin_rows=[],
+        help_lines=["`/ask` — ask Meadow-bot how anything here works."],
+    )
+    more = next(f for f in embed.fields if "More" in f.name)
+    assert "Meadow-bot" in (more.value or "")
+
+
+def test_no_more_field_without_help_lines():
+    """A server with neither cog loaded gets no empty section."""
+    embed = build_member_info_embed(
+        display_name="Ada", avatar_url=None, facts=_facts(), optin_rows=[]
+    )
+    assert not any("More" in f.name for f in embed.fields)

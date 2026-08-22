@@ -275,3 +275,48 @@ def test_the_render_lock_survives_a_nested_render():
         assert acquired, "render lock is not reentrant — nested render deadlocks"
         _RENDER_LOCK.release()
     assert isinstance(_RENDER_LOCK, type(threading.RLock()))
+
+
+# ── Streak, and the "More" field's gating ────────────────────────────────
+
+
+def test_streak_summary_reads_zeros_for_an_unseen_member(sync_db_path):
+    from bot_modules.services.economy_service import get_streak_summary
+
+    with open_db(sync_db_path) as conn:
+        assert get_streak_summary(conn, 1, 42) == (0, 0)
+
+
+def test_streak_summary_reads_the_row(sync_db_path):
+    from bot_modules.services.economy_service import get_streak_summary
+
+    with open_db(sync_db_path) as conn:
+        conn.execute(
+            "INSERT INTO econ_streaks (guild_id, user_id, current_streak, "
+            "longest_streak) VALUES (?, ?, ?, ?)",
+            (1, 42, 12, 31),
+        )
+        conn.commit()
+        assert get_streak_summary(conn, 1, 42) == (12, 31)
+
+
+def test_help_lines_name_nothing_when_no_cog_is_loaded():
+    """Same rule as the opt-in rows: never name a command this server
+    doesn't run."""
+    import bot_modules.cogs.member_info_cog as mod
+
+    cog = mod.MemberInfoCog.__new__(mod.MemberInfoCog)
+    cog.bot = _bot(cogs_loaded=False)
+    assert cog._help_lines("") == []
+
+
+def test_help_lines_use_the_guilds_own_assistant_name():
+    """The assistant's name is per-guild branding; the default must never be
+    baked into the copy."""
+    import bot_modules.cogs.member_info_cog as mod
+
+    cog = mod.MemberInfoCog.__new__(mod.MemberInfoCog)
+    cog.bot = _bot(cogs_loaded=True)
+    lines = cog._help_lines("Meadow-bot")
+    assert any("Meadow-bot" in ln for ln in lines)
+    assert not any("Billy-bot" in ln for ln in lines)

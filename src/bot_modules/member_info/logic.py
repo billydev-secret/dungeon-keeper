@@ -257,6 +257,24 @@ class AccountFacts:
     msgs_30d: int = 0
     top_channels: Sequence[tuple[int, int]] = field(default_factory=tuple)
     last_seen_ts: float | None = None
+    # Total XP needed for the next level, from the guild's own curve. None
+    # when the member has no XP row yet (there is no "next" to point at).
+    next_level_xp: float | None = None
+    current_streak: int = 0
+    longest_streak: int = 0
+
+
+def xp_to_next_level(total_xp: float, next_level_xp: float | None) -> int | None:
+    """Whole XP still owed for the next level, or None when unknowable.
+
+    Clamped at zero rather than allowed to go negative: the stored level lags
+    the XP that earns it (it is written on award, and the curve factor is a
+    live guild dial), so a member can briefly hold more XP than their level's
+    successor requires. "0 XP to Level 8" is odd; "-40 XP" is broken.
+    """
+    if next_level_xp is None:
+        return None
+    return max(0, int(round(next_level_xp - total_xp)))
 
 
 def visible_top_channels(

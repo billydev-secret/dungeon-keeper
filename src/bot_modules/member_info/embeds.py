@@ -18,7 +18,12 @@ from collections.abc import Sequence
 
 import discord
 
-from bot_modules.member_info.logic import AccountFacts, OptInRow, displayable_roles
+from bot_modules.member_info.logic import (
+    AccountFacts,
+    OptInRow,
+    displayable_roles,
+    xp_to_next_level,
+)
 from bot_modules.services.embeds import (
     EMBED_FIELD_LIMIT,
     MOD_INFO,
@@ -37,6 +42,9 @@ def _level_value(facts: AccountFacts) -> str:
     if facts.level is None:
         return "No XP yet — chat a little and it starts counting."
     text = f"Level **{facts.level}** · {facts.total_xp:,.0f} XP"
+    remaining = xp_to_next_level(facts.total_xp, facts.next_level_xp)
+    if remaining is not None:
+        text += f"\n{remaining:,} XP to Level {facts.level + 1}"
     parts = xp_breakdown_parts(dict(facts.xp_by_source))
     if parts:
         text += "\n" + " · ".join(parts)
@@ -105,6 +113,7 @@ def build_member_info_embed(
     optin_rows: Sequence[OptInRow],
     wallet_line: str = "",
     wallet_extra: Sequence[str] = (),
+    help_lines: Sequence[str] = (),
     has_chart: bool = True,
     color: "discord.Color | None" = None,
 ) -> discord.Embed:
@@ -140,6 +149,9 @@ def build_member_info_embed(
     if optin_rows:
         lines = [f"{row.emoji} **{row.label}** — {row.text}" for row in optin_rows]
         embed.add_field(name="🔔 Your Opt-ins", value=fit_lines(lines), inline=False)
+
+    if help_lines:
+        embed.add_field(name="❓ More", value=fit_lines(list(help_lines)), inline=False)
 
     if has_chart:
         embed.set_image(url="attachment://info_activity.png")
