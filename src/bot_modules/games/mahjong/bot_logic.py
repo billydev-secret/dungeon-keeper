@@ -108,8 +108,10 @@ def worst_tiles(state: GameState, seat: int, card: Card, n: int) -> list[Tile]:
 
 
 def _choose_discard(state: GameState, seat: int, card: Card) -> Tile:
-    """suggest_discard when it speaks; otherwise the least useful non-joker.
-    The fallback ignores the danger rail — a bot cannot stall (module doc)."""
+    """suggest_discard when it speaks; otherwise the least useful non-joker;
+    a joker only when the rack holds nothing else (heavy exposures can leave
+    an all-joker rack, and a bot must always discard — review round P5).
+    The fallbacks ignore the danger rail — a bot cannot stall (module doc)."""
     rack = list(state.seats[seat].rack)
     prospects = _prospects(state, seat, card)
     if prospects:
@@ -124,7 +126,8 @@ def _choose_discard(state: GameState, seat: int, card: Card) -> Tile:
         pick = suggest_discard(rack, prospects, danger)
         if pick is not None:
             return pick
-    return worst_tiles(state, seat, card, 1)[0]
+    worst = worst_tiles(state, seat, card, 1)
+    return worst[0] if worst else Tile.JOKER
 
 
 # ── Claim judgement ──────────────────────────────────────────────────────────
@@ -183,6 +186,18 @@ def decide(
 ) -> BotAction | None:
     """This bot seat's next action, or None when it has nothing to do."""
     seat_state = state.seats[seat]
+    if state.phase is Phase.SETTLE:
+        # a fallow seat still votes rematch — the engine accepts it and the
+        # next deal resets fallow, so blocking here hung the table until
+        # the settle window expired (review round P7)
+        if seat not in state.rematch_votes:
+            humans = [
+                i for i, s in enumerate(state.seats)
+                if not is_bot_id(s.member_id)
+            ]
+            if humans and all(h in state.rematch_votes for h in humans):
+                return BotAction("rematch")  # follow the humans, never lead
+        return None
     if seat_state.fallow:
         return None
 
@@ -237,15 +252,6 @@ def decide(
             if tiles is not None:
                 return BotAction("claim", {"kind": "call", "tiles": tiles})
         return BotAction("claim", {"kind": "pass", "tiles": []})
-
-    if state.phase is Phase.SETTLE and seat not in state.rematch_votes:
-        humans = [
-            i
-            for i, s in enumerate(state.seats)
-            if not is_bot_id(s.member_id)
-        ]
-        if humans and all(h in state.rematch_votes for h in humans):
-            return BotAction("rematch")  # follow the humans, never lead
 
     return None
 

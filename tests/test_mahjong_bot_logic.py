@@ -251,3 +251,37 @@ def test_bots_finish_every_game(seat_count, seed):
     assert all(s.strikes == 0 for s in state.seats)
     if state.outcome.kind == "mahjong":
         assert state.outcome.winner is not None
+
+
+# ── Bots review round (2026-08-22): P5/P7 brain fixes ────────────────────────
+
+
+def test_all_joker_rack_still_discards():
+    # P5: heavy exposures can leave a rack of nothing but jokers; a bot must
+    # still discard — a joker, as the last resort, rather than crash.
+    from bot_modules.games.mahjong.game_logic import ExposureState
+
+    exposures = {0: [
+        ExposureState(exposure_id=1, natural=Tile("wn"), count=4, jokers=0),
+        ExposureState(exposure_id=2, natural=Tile("2d"), count=4, jokers=0),
+        ExposureState(exposure_id=3, natural=Tile("6b"), count=3, jokers=0),
+    ]}
+    state = play_state(2, {0: "joker*3", 1: "9c*13"}, exposures=exposures)
+    action = decide(state, 0, CARD, random.Random(0))
+    assert action is not None and action.action == "discard"
+    assert action.kwargs["tile"] is Tile.JOKER   # nothing else to throw
+    state2, _ = G.discard(state, 0, action.kwargs["tile"])
+    assert state2.phase is Phase.CLAIM_WINDOW
+
+
+def test_fallow_bot_still_follows_a_rematch():
+    # P7: the engine accepts (and deal() resets) a fallow seat's rematch
+    # vote; the blanket fallow guard used to sit before the SETTLE branch,
+    # so a table with a folded bot hung at settle until expiry.
+    state = play_state(2, {0: "9c*13", 1: "8b*13"})
+    state.seats[1].member_id = bot_member_id(1, 1)
+    state.seats[1].fallow = True
+    state.phase = Phase.SETTLE
+    state.rematch_votes = {0}                    # the human wants another
+    action = decide(state, 1, CARD, random.Random(0))
+    assert action == BotAction("rematch")

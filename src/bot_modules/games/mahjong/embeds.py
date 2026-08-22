@@ -116,7 +116,7 @@ def build_table_panel(
         e.description = "\n".join(rows)
         e.add_field(
             name="Stake",
-            value=("Practice — no stakes, nothing recorded" if practice
+            value=("Practice — no stakes, no stats" if practice
                    else f"{stake} coins per point ({escrow} escrow per seat)"),
             inline=False,
         )

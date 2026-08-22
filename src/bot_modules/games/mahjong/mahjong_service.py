@@ -851,53 +851,75 @@ class MahjongService:
     # ── The bot driver (bots plan B4) ────────────────────────────────────
 
     def _schedule_bot_pump(self, table_id: int) -> None:
-        """After every transition, give any bot seat its next move. One pump
-        per table at a time; each successful act re-enters _notify_and_arm,
-        which schedules the next — so a bot's whole turn (redeem, redeem,
-        discard) plays out as separate, humanly-paced actions. If a pump
-        dies, the ordinary phase timers still fold the bot AFK: degraded,
-        never wedged."""
+        """After a transition, make sure a pump is driving this table's bot
+        seats. The pump is a LOOP — it keeps playing bot actions, humanly
+        paced, until no bot has a move — because a schedule attempt from
+        inside the pump's own act() necessarily sees the pump alive and is
+        swallowed (the bots review round's P1: the one-action pump stalled
+        every bot-after-bot chain onto the phase timers, striking bots
+        toward fallow). If a pump dies, the ordinary phase timers still
+        fold the bot AFK: degraded, never wedged."""
         existing = self._bot_pumps.get(table_id)
         if existing is not None and not existing.done():
             return
         task = asyncio.get_event_loop().create_task(self._pump_bots(table_id))
         self._bot_pumps[table_id] = task
-        task.add_done_callback(
-            lambda _t: self._bot_pumps.pop(table_id, None)
-        )
+
+        def _clear(_t, task=task):
+            # identity-checked: a stale done-callback must never evict a
+            # newer pump it doesn't own (review P9)
+            if self._bot_pumps.get(table_id) is task:
+                del self._bot_pumps[table_id]
+
+        task.add_done_callback(_clear)
 
     async def _pump_bots(self, table_id: int) -> None:
+        def _q():
+            with open_db(self.db_path) as conn:
+                row = self._table_row_opt(conn, table_id)
+                if row is None or row["status"] != "live":
+                    return None
+                state = engine.state_from_dict(json.loads(row["state"]))
+                if not any(is_bot_id(s.member_id) for s in state.seats):
+                    return None
+                return (state, self._card_for(conn, row),
+                        bool(row["practice"]), row["deadline_at"])
+
         try:
-            await asyncio.sleep(self._rng.uniform(*BOT_DELAY))
-
-            def _q():
-                with open_db(self.db_path) as conn:
-                    row = self._table_row_opt(conn, table_id)
-                    if row is None or row["status"] != "live":
-                        return None
-                    state = engine.state_from_dict(json.loads(row["state"]))
-                    if not any(is_bot_id(s.member_id) for s in state.seats):
-                        return None
-                    return state, self._card_for(conn, row), bool(row["practice"])
-
-            got = await asyncio.to_thread(_q)
-            if got is None:
-                return
-            state, card, practice = got
-            for seat, seat_state in enumerate(state.seats):
-                if not is_bot_id(seat_state.member_id):
-                    continue
-                action = decide(state, seat, card, self._rng, practice=practice)
-                if action is None:
-                    continue
-                try:
-                    await self.act(
-                        table_id, action.action,
-                        member_id=seat_state.member_id, **action.kwargs,
-                    )
-                except (TableError, ActionRejected):
-                    pass  # the table moved; that transition pumps again
-                return  # one action per pump — act() scheduled the next
+            # generous cap: a full 4-seat practice hand is ~400 bot actions
+            for _ in range(1000):
+                delay = self._rng.uniform(*BOT_DELAY)
+                got = await asyncio.to_thread(_q)
+                if got is None:
+                    return
+                state, card, practice, deadline_at = got
+                if deadline_at:
+                    # never sleep past the armed window (a 3s claim window
+                    # is dial-legal; a late claim is silently a forfeit)
+                    delay = max(0.1, min(delay, float(deadline_at) - time.time() - 0.75))
+                await asyncio.sleep(delay)
+                got = await asyncio.to_thread(_q)
+                if got is None:
+                    return
+                state, card, practice, _ = got
+                acted = False
+                for seat, seat_state in enumerate(state.seats):
+                    if not is_bot_id(seat_state.member_id):
+                        continue
+                    action = decide(state, seat, card, self._rng, practice=practice)
+                    if action is None:
+                        continue
+                    try:
+                        await self.act(
+                            table_id, action.action,
+                            member_id=seat_state.member_id, **action.kwargs,
+                        )
+                    except (TableError, ActionRejected):
+                        pass  # the table moved under us; loop re-reads
+                    acted = True
+                    break
+                if not acted:
+                    return  # no bot has a move; the next transition re-pumps
         except Exception:
             log.exception("bot pump failed for table %d", table_id)
 
@@ -1073,6 +1095,23 @@ class MahjongService:
                         ).fetchall()
                         for r in held:
                             wager_svc.refund_game(conn, GAME_TYPE, int(r["game_id"]))
+                        # the refunds may have landed on house-bot wallets;
+                        # the state is unloadable, so sweep by the seat
+                        # table instead (review P2 — same pattern as the
+                        # privacy purge's dissolve)
+                        for r in conn.execute(
+                            "SELECT DISTINCT user_id FROM mahjong_seats "
+                            "WHERE table_id = ? AND user_id < 0", (table_id,),
+                        ).fetchall():
+                            bot_id = int(r[0])
+                            balance = get_balance(
+                                conn, int(row["guild_id"]), bot_id)
+                            if balance > 0:
+                                apply_debit(
+                                    conn, int(row["guild_id"]), bot_id,
+                                    balance, "mahjong_house_settle",
+                                    meta={"table_id": table_id},
+                                )
                         conn.execute(
                             "UPDATE mahjong_tables SET status = 'closed', "
                             "closed_reason = 'unloadable', deadline_at = NULL "

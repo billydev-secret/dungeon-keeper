@@ -1,7 +1,8 @@
 # Meadow Mahjong — AI seats (addon plan)
 
-**Status: stages 1–3 built 2026-08-22** (brain 646fc2f5, driver + money
-d98f0390, surface with this commit); stage 4 is the gate + review + QA.
+**Status: complete 2026-08-22** — stages 1–4 (brain 646fc2f5, driver +
+money d98f0390, surface 4c26b339, review fixes with the stage-4 commit;
+the review round's P-table below).
 Second addon to the shipped v1 ([meadow-mahjong.md](meadow-mahjong.md));
 builds directly on the assistance engine
 ([mahjong-assist.md](mahjong-assist.md)), which is the playing brain.
@@ -72,3 +73,24 @@ amendment 4; register notes (B9).
 Full gate, browser checks for the dials, adversarial review round (the
 assist addon's three rounds each paid for themselves), QA card — practice
 solo game first, then a 3-human + 1-bot fill game at real stakes.
+
+### Review round (2026-08-22)
+
+Four lenses, two isolated skeptics per finding, every verdict an executed
+reproduction. Twelve raw confirmations deduped to seven fixes; one candidate
+was killed as documented-intended (bot names on the *dashboard* report show
+the raw id — B11 scopes flora names to Discord surfaces):
+
+| # | Finding | Fix |
+|---|---|---|
+| P1 | **The pump never scheduled its successor after a bot's own act** (three lenses converged): the schedule attempt fires inside the pump's own `await act()`, sees itself alive, and is swallowed — every bot-after-bot chain stalled to the phase timers and bots struck themselves toward fallow, house-staked ones included. The stage-2 test missed it by calling `_pump_bots` directly. | The pump is now a **loop**: it keeps playing bot actions, humanly paced, until no bot has a move. Regression test drives the real funnel — human discard, then bot pass → draw → discard with zero timers. |
+| P2 | **The unloadable-table net stranded house coins**: it refunds every hold — the bot's included — but couldn't run the state-based sweep (the state is what's broken), leaving the escrow on the synthetic wallet forever. | The net sweeps by the seat table (`user_id < 0`), the same pattern the privacy purge already used. |
+| P3 | **"User -11" ranked on the public Top Earners board** — house top-ups and settle credits are positive ledger rows, and the board summed all of them. | Both boards exclude negative ids: they are not members. |
+| P5 | **All-joker rack crashed the discard fallback** (heavy exposures make it reachable): `worst_tiles` excludes jokers and the fallback indexed an empty list. | A joker is the last-resort discard — a bot must always act. |
+| P7 | **A fallow bot never voted rematch** though the engine accepts it (and the next deal resets fallow) — the table hung to settle expiry. | The rematch-follow rule now precedes the fallow guard. |
+| P9 | The pump done-callback popped its registry key without an identity check, able to evict a newer pump. | Identity-checked callback. |
+| P4 | Practice copy said "nothing recorded anywhere"; the table row and seat row are kept (B5 always said "nothing but the table row"). | Copy made precise at all four sites. |
+
+Also from the review, contested but fixed as cheap robustness: the pump's
+sleep now clamps to the armed deadline, so a dial-legal 3-second claim
+window can't structurally out-race the bot's 1.5–4 s reaction delay.

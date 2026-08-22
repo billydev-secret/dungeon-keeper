@@ -110,8 +110,8 @@ export function mount(container) {
                 <option value="1" ${s.practice_bots ? "selected" : ""}>Open — solo play against house bots, no stakes</option>
                 <option value="0" ${s.practice_bots ? "" : "selected"}>Closed</option>
               </select>
-              <div class="field-hint">Stake-free and recorded nowhere — nothing a
-                practice game does touches coins, stats, or quests.</div>
+              <div class="field-hint">Stake-free — nothing a practice game does
+                touches coins, stats, or quests; only the table itself is kept.</div>
             </div>
             <div class="field">
               <label for="mj-fill">House Bots in Real Games</label>

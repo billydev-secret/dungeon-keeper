@@ -282,7 +282,7 @@ def collect_leaderboard_data(
         for r in conn.execute(
             "SELECT user_id, SUM(amount) AS s FROM econ_ledger "
             "WHERE guild_id = ? AND created_at >= ? AND amount > 0 "
-            "AND kind != 'transfer_in' "
+            "AND kind != 'transfer_in' AND user_id > 0 "  # <0 = house bots
             "GROUP BY user_id ORDER BY s DESC, user_id LIMIT ?",
             (guild_id, cutoff, TOP_N),
         ).fetchall()

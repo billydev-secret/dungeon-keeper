@@ -272,7 +272,7 @@ def _members(
     # below are read solely for these ids, so filtering here scopes them too.
     top = conn.execute(
         "SELECT user_id, balance FROM econ_wallets "
-        "WHERE guild_id = ? AND balance > 0" + _ACTIVE
+        "WHERE guild_id = ? AND balance > 0 AND user_id > 0" + _ACTIVE
         + " ORDER BY balance DESC, user_id ASC LIMIT ?",
         (guild_id, limit),
     ).fetchall()

@@ -420,7 +420,7 @@ class MahjongCog(commands.Cog):
             await panel.place_or_refresh(guild, channel)
         await interaction.followup.send(
             "🌱 Practice table's open — the bots are seated and the deal is "
-            "coming. No stakes, nothing recorded.", ephemeral=True,
+            "coming. No stakes, no stats — just practice.", ephemeral=True,
         )
 
     async def handle_card_viewer(self, interaction: discord.Interaction) -> None:
