@@ -1100,6 +1100,27 @@ def seen_elsewhere(state: GameState, seat: int) -> Counter[Tile]:
     return seen
 
 
+def obtainable_seen(state: GameState, seat: int) -> Counter[Tile]:
+    """:func:`seen_elsewhere`, minus the live discard for a seat that can
+    still take it — not the discarder, and not a seat whose recorded claim
+    response was a pass (a renounced tile is gone for good). The one shared
+    definition of "truly out of reach": the assistance readout and the
+    fallow valuation must never disagree about a claimable tile (review
+    round 2, F1/F4 — the R1 fix applied to the readout but the coin
+    settlement one call-site away kept the unadjusted view)."""
+    seen = seen_elsewhere(state, seat)
+    if (
+        state.phase is Phase.CLAIM_WINDOW
+        and state.live_discard is not None
+        and state.live_discarder != seat
+        and state.claims.get(seat, ("", []))[0] != "pass"
+    ):
+        seen[state.live_discard] -= 1
+        if seen[state.live_discard] <= 0:
+            del seen[state.live_discard]
+    return seen
+
+
 @dataclass(frozen=True)
 class AssistReadout:
     """What one seat's assistance level shows right now
@@ -1141,21 +1162,7 @@ def assist_readout(
     ):
         return None
     exposures = [e.as_match() for e in seat_state.exposures]
-    seen = seen_elsewhere(state, seat)
-    if (
-        state.phase is Phase.CLAIM_WINDOW
-        and state.live_discard is not None
-        and state.live_discarder != seat
-    ):
-        # The live discard is the one tile this window exists to acquire —
-        # for a seat that may claim it, it is obtainable, not gone. Without
-        # this, a member one tile from Mahjong is told a sister-binding lie
-        # (or "play for the wall") at the exact moment the winning claim is
-        # in front of them (stage-4 review finding). The discarder keeps the
-        # unadjusted view: their own tile can never come back to them.
-        seen[state.live_discard] -= 1
-        if seen[state.live_discard] <= 0:
-            del seen[state.live_discard]
+    seen = obtainable_seen(state, seat)
     prospects = closest_lines(
         list(seat_state.rack), exposures, card, seen, limit=None,
     )
@@ -1187,7 +1194,7 @@ def _settle_fallow_end(state: GameState, card: Card) -> list[Event]:
     survivor = live[0]
     seat_state = state.seats[survivor]
 
-    seen = seen_elsewhere(state, survivor)
+    seen = obtainable_seen(state, survivor)
 
     base = fallow_base_value(
         list(seat_state.rack),

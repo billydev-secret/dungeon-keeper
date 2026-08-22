@@ -519,17 +519,29 @@ def suggest_discard(
     concealed: list[Tile],
     prospects: list[Prospect],
     dangerous: frozenset[Tile] = frozenset(),
+    *,
+    shown: int = 3,
 ) -> Tile | None:
-    """Coach's pick: of the closest line's dead weight, the tile useful to
-    the fewest live lines — never a joker (A5), never a tile in ``dangerous``
-    (A6). None when there is no safe suggestion: silence beats advice that
-    hands another seat the pot."""
+    """Coach's pick: a tile in the dead-weight *intersection* of the hands
+    actually shown (the same set the embed prints), useful to the fewest
+    live lines — never a joker (A5), never a tile in ``dangerous`` (A6).
+    None when there is no safe suggestion: silence beats advice that hands
+    another seat the pot.
+
+    The intersection is what makes the advice self-consistent (review
+    round 2, F2): excess beyond a hand's demand implies zero deficit, so a
+    tile dead for every shown hand provably appears in none of their need
+    lists — drawing candidates from the closest hand alone suggested tiles
+    a shown sister hand was still waiting on (~16% of coach racks)."""
     if not prospects:
         return None
     have = Counter(t for t in concealed if t is not Tile.JOKER)
-    candidates = [
-        tile for tile, _ in prospects[0].dead_weight if tile not in dangerous
-    ]
+    display = prospects[:shown]
+    common = dict(display[0].dead_weight)
+    for p in display[1:]:
+        dw = dict(p.dead_weight)
+        common = {t: min(n, dw[t]) for t, n in common.items() if t in dw}
+    candidates = [tile for tile in common if tile not in dangerous]
     if not candidates:
         return None
 

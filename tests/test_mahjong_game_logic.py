@@ -18,7 +18,7 @@ from collections import Counter
 import pytest
 
 from bot_modules.games.mahjong import game_logic as G
-from bot_modules.games.mahjong.card_logic import load_first_light
+from bot_modules.games.mahjong.card_logic import load_card, load_first_light
 from bot_modules.games.mahjong.game_logic import (
     ActionRejected,
     GameState,
@@ -1658,3 +1658,78 @@ def test_claim_window_live_discard_counts_as_obtainable_for_claimants():
     assert r1 is not None
     gh1_d = next((p for p in r1.prospects if p.hand.id == "gh-1"), None)
     assert gh1_d is None or gh1_d.distance > 1
+
+
+# ── Review round 2 (code-review 2026-08-22): fallow settle vs live discard ───
+
+FALLOW_VALUE_CARD = load_card({
+    "card_id": "t-fallow-value", "display_name": "Fallow Value", "season": "t",
+    "hands": [
+        {"id": "cheap", "section": "T", "name": "Cheap", "concealed": False,
+         "value": 25,
+         "groups": [{"count": 4, "rank": "F"}, {"count": 4, "rank": "1", "suit": "a"},
+                    {"count": 4, "rank": "6", "suit": "b"}, {"count": 2, "rank": "8", "suit": "c"}]},
+        {"id": "rich", "section": "T", "name": "Rich", "concealed": False,
+         "value": 50,
+         "groups": [{"count": 4, "rank": "F"}, {"count": 4, "rank": "N"},
+                    {"count": 4, "rank": "S"}, {"count": 2, "rank": "R"}]},
+    ],
+})
+
+
+def test_fallow_settle_counts_the_live_discard_as_takeable():
+    # A leaver folds during the claim window. The survivor sits one 8c from
+    # the cheap 25-pointer, every sister-suit 8 is dead in the pit, and the
+    # live discard IS the missing 8c — a tile the survivor could have
+    # claimed. Valuing their hand as if that tile were extinct calls the
+    # cheap line dead and pays the survivor the rich line's 50 per seat:
+    # a real-coin overpayment. Amendment 2's "still reachable" must see the
+    # claimable tile (the same view the readout was fixed to in R1).
+    state = play_state(
+        2, {0: "flower*4 1d*4 6b*4 8c", 1: "9c*12 8c"}, turn=1,
+    )
+    state.discards = (
+        [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4 + [(1, Tile("8c"))] * 2
+    )
+    state, _ = G.discard(state, 1, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    state, ev = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
+    assert state.outcome is not None and state.outcome.kind == "fallow_end"
+    assert state.outcome.value == 25  # cheap line live via the claimable 8c
+
+
+def test_fallow_settle_discarders_own_tile_stays_gone():
+    # Same shape, but the SURVIVOR is the one who discarded the 8c — their
+    # own tile can never come back to them, so the cheap line is truly dead
+    # and the valuation correctly lands on the rich line.
+    state = play_state(
+        2, {0: "flower*4 1d*4 6b*4 8c*2", 1: "9c*13"}, turn=0,
+    )
+    state.discards = (
+        [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4 + [(1, Tile("8c"))] * 2
+    )
+    state, _ = G.discard(state, 0, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    state, ev = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
+    assert state.outcome is not None and state.outcome.kind == "fallow_end"
+    assert state.outcome.value == 50
+
+
+def test_claim_window_discount_stops_after_a_pass():
+    # F4: a seat that already passed has renounced the tile — its readout
+    # must not keep calling the live discard takeable. 4-seat, so two other
+    # claimants keep the window open after seat 0's pass.
+    state = play_state(
+        4, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*12 8c"}, turn=1,
+    )
+    state.discards = [(2, Tile("8c")), (3, Tile("8c"))]
+    state, _ = G.discard(state, 1, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    before = G.assist_readout(state, 0, CARD, "gap")
+    gh1 = next(p for p in before.prospects if p.hand.id == "gh-1")
+    assert gh1.distance == 1  # takeable while unresponded
+    state, _ = G.claim(state, 0, "pass", [], CARD, rng())
+    assert state.phase is Phase.CLAIM_WINDOW  # seats 2 and 3 still out
+    after = G.assist_readout(state, 0, CARD, "gap")
+    gh1_after = next((p for p in after.prospects if p.hand.id == "gh-1"), None)
+    assert gh1_after is None or gh1_after.distance > 1

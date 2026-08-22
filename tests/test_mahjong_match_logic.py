@@ -663,4 +663,29 @@ def test_assist_invariants_hold_on_random_racks(card, seed):
     pick = suggest_discard(rack, prospects)
     if pick is not None:
         assert pick is not Tile.JOKER
-        assert pick in dict(prospects[0].dead_weight)
+        for p in prospects[:3]:  # dead for EVERY shown hand, needed by none
+            assert pick in dict(p.dead_weight)
+            assert pick not in dict(p.needed)
+
+
+# ── Review round 2 (code-review 2026-08-22): coach self-consistency ──────────
+
+
+def test_suggestion_never_contradicts_a_shown_hands_need(card):
+    # The reproduced contradiction: this rack used to get "discard 5d" while
+    # shown hand #3 (sb-2) printed "need 5d ×3" in the same embed. The
+    # suggestion must come from the dead-weight intersection of the hands
+    # actually shown — the same set the embed prints — which provably
+    # excludes every shown hand's needed tile.
+    rack = tiles("1c 1c 2b 2b 2b 3c 5c 5d 8b 9b dr soap ww")
+    prospects = closest_lines(rack, [], card, Counter(), limit=None)
+    shown = prospects[:3]
+    assert any(Tile.DOT5 in dict(p.needed) for p in shown)  # the trap exists
+    pick = suggest_discard(rack, prospects)
+    assert pick is not Tile.DOT5
+    if pick is not None:
+        for p in shown:
+            assert pick not in dict(p.needed)
+        # and it is dead weight for every shown hand, not just the closest
+        for p in shown:
+            assert pick in dict(p.dead_weight)
