@@ -176,11 +176,12 @@ async def test_nowplaying_posts_the_new_card_before_deleting_the_old(cog):
         # Mid-flight the old card is still the one on record, so a refresh
         # arriving here edits it rather than posting a rival.
         assert queue.now_playing_message_id == CARD
+        return new_message
 
     interaction = MagicMock()
     interaction.guild = guild
-    interaction.response.send_message = _send
-    interaction.original_response = AsyncMock(return_value=new_message)
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = _send
     old_channel.get_partial_message(CARD).delete = AsyncMock(
         side_effect=lambda: order.append("delete")
     )
@@ -217,8 +218,8 @@ async def test_nowplaying_cancels_a_queued_refresh_for_the_old_channel(cog):
     new_message.channel = MagicMock(id=CHANNEL)
     interaction = MagicMock()
     interaction.guild = guild
-    interaction.response.send_message = AsyncMock()
-    interaction.original_response = AsyncMock(return_value=new_message)
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock(return_value=new_message)
 
     await cog.now_playing_cmd.callback(cog, interaction)
     assert cog._card._pending.get(GUILD) is None

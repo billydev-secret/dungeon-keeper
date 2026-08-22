@@ -215,7 +215,7 @@ async def test_the_first_refresh_renders_straight_away():
     refresher = CardRefresher(interval=INTERVAL)
     await refresher.submit(GUILD, render("a"))
     assert calls == ["a"]
-    refresher.cancel_all()
+    await refresher.cancel_all()
 
 
 @pytest.mark.asyncio
@@ -229,7 +229,7 @@ async def test_a_burst_costs_one_extra_render_showing_the_newest_state():
 
     await asyncio.sleep(INTERVAL * 3)
     assert calls == ["first", "fourth"]
-    refresher.cancel_all()
+    await refresher.cancel_all()
 
 
 @pytest.mark.asyncio
@@ -239,7 +239,7 @@ async def test_two_guilds_do_not_share_a_quiet_window():
     await refresher.submit(GUILD, render("a"))
     await refresher.submit(GUILD + 1, render("b"))
     assert calls == ["a", "b"]
-    refresher.cancel_all()
+    await refresher.cancel_all()
 
 
 @pytest.mark.asyncio
@@ -257,7 +257,7 @@ async def test_a_refresh_that_raises_does_not_strand_the_next_one():
     await refresher.submit(GUILD, render("c"))
     await asyncio.sleep(INTERVAL * 3)
     assert calls == ["a", "c"]
-    refresher.cancel_all()
+    await refresher.cancel_all()
 
 
 @pytest.mark.asyncio
@@ -274,7 +274,7 @@ async def test_forgetting_a_guild_drops_its_queued_refresh():
     # And the next session starts on a clean window, not the old one's.
     await refresher.submit(GUILD, render("c"))
     assert calls == ["a", "c"]
-    refresher.cancel_all()
+    await refresher.cancel_all()
 
 
 @pytest.mark.asyncio
@@ -284,10 +284,33 @@ async def test_cancel_all_drops_every_guild_s_queued_refresh():
     for guild_id in (GUILD, GUILD + 1):
         await refresher.submit(guild_id, render(f"{guild_id}-first"))
         await refresher.submit(guild_id, render(f"{guild_id}-queued"))
-    refresher.cancel_all()
+    await refresher.cancel_all()
 
     await asyncio.sleep(INTERVAL * 3)
     assert calls == [f"{GUILD}-first", f"{GUILD + 1}-first"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_stops_a_render_already_in_flight():
+    """A shielded render outliving the unload posts a card and records its id
+    on a queue the reloaded cog has never heard of — an orphan with live
+    buttons that nothing will ever edit or retire."""
+    posted: list[str] = []
+    refresher = CardRefresher(interval=INTERVAL)
+    gate = asyncio.Event()
+
+    async def _slow_post() -> None:
+        await gate.wait()
+        posted.append("posted after the unload")
+
+    await refresher.submit(GUILD, lambda: asyncio.sleep(0))
+    await refresher.submit(GUILD, _slow_post)
+    await asyncio.sleep(INTERVAL * 2)  # now inside _slow_post
+
+    await refresher.cancel_all()
+    gate.set()
+    await asyncio.sleep(INTERVAL * 3)
+    assert posted == []
 
 
 @pytest.mark.asyncio
@@ -325,7 +348,7 @@ async def test_a_cancelled_flush_does_not_evict_its_replacement():
 
     await asyncio.sleep(INTERVAL * 3)
     assert calls[-1] == "queued-again", "the replacement never flushed"
-    refresher.cancel_all()
+    await refresher.cancel_all()
 
 
 @pytest.mark.asyncio
@@ -357,7 +380,7 @@ async def test_a_render_in_flight_when_drain_lands_still_finishes():
     gate.set()
     await drained
     assert posted == ["recorded the id"]
-    refresher.cancel_all()
+    await refresher.cancel_all()
 
 
 @pytest.mark.asyncio
@@ -391,4 +414,4 @@ async def test_two_renders_for_one_guild_do_not_interleave():
     await asyncio.sleep(INTERVAL * 3)
     # The newest state still lands last, which is the point of coalescing.
     assert order == ["slow-start", "slow-end", "quick"]
-    refresher.cancel_all()
+    await refresher.cancel_all()

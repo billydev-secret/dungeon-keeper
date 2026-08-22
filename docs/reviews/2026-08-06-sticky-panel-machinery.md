@@ -248,8 +248,26 @@ window the fallback was written for — an admin repoints the channel and the
 live panel is still sitting in the old one — the configured id is truthy and
 the recorded one is never read, so an auction started in the old channel was
 waved through and buried by the next repost. A registry entry now resolves to
-*every* channel its panel occupies rather than one, and Survivor is the entry
-that uses it.
+*every* channel its panel occupies rather than one.
+
+A third pass then split Survivor in two rather than giving one entry two
+channels, because the two channels do not deserve the same verdict.
+`survivor` is where the panel actually is and blocks; `survivor-pending` is
+where it is configured to go and only warns — `get_active_season` matches any
+season that is not `complete`, so an `enrolling` season pointed at a channel
+and then abandoned would otherwise hard-refuse every panel and every auction
+there forever, naming a message nobody can find to delete. `excluding` takes a
+collection so a feature holding several keys can ignore all of them, and
+`occupies` skips claim-only entries so an unposted panel can't count as
+"already here".
+
+**A panel already in the channel is warned, never blocked** (`occupies`). The
+block is there to stop an admin *creating* a collision; once one exists,
+refusing the re-post does not undo it, it only locks them out of maintaining a
+panel that is in the channel right now — the trap the plan doc named as
+"refusing there could lock an admin out of a valid setup", which the first cut
+of this walked straight into for the economy panel, the todo boards and the DM
+request panel.
 
 ### Test to land with it
 

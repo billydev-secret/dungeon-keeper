@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Collection
 
 from bot_modules.core.db_utils import get_config_value
 
@@ -146,22 +146,34 @@ def _todo_board_channel(
     return read
 
 
-def _survivor_channel(
+def _survivor_posted_channel(
     conn: sqlite3.Connection, guild_id: int
 ) -> tuple[int, ...]:
-    """Both channels the panel can be holding, newest intent first.
+    """Where the Survivor panel actually is — empty until it has been posted."""
+    from bot_modules.services.survivor_service import (  # noqa: PLC0415
+        get_active_season,
+    )
 
-    ``announcement_channel_id`` is where the panel last landed and is empty
-    until the first post — a Survivor panel that hasn't landed yet is exactly
-    when this matters, because something else gets placed in the channel
-    unopposed and the Wednesday repost then buries it. So the season's
-    configured ``channel_id`` counts too.
+    season = get_active_season(conn, guild_id)
+    if season is None:
+        return ()
+    return _one(int(season["config"].get("announcement_channel_id") or 0))
 
-    Both, not one or the other: after an admin repoints the channel the live
-    ``restick_on_bot`` panel is still sitting in the old one until the next
-    repost moves it, so the old channel is genuinely occupied *and* the new one
-    is genuinely spoken for. Returning only the configured channel would wave
-    an auction into the room the panel is about to repost into.
+
+def _survivor_pending_channel(
+    conn: sqlite3.Connection, guild_id: int
+) -> tuple[int, ...]:
+    """Where it is *going* to be, when that is somewhere else.
+
+    Two reasons this is a separate entry rather than a second channel on the
+    one above. It has to exist at all because a season whose panel has not been
+    posted yet would otherwise be invisible: something else gets placed in the
+    channel unopposed and the Wednesday repost then buries it. And it has to
+    **warn rather than block**, because ``get_active_season`` matches anything
+    that is not ``complete`` — so an ``enrolling`` season pointed at #general
+    and then abandoned would otherwise hard-refuse every sticky panel and every
+    auction in #general forever, naming a message that does not exist and that
+    nobody can find to delete.
     """
     from bot_modules.services.survivor_service import (  # noqa: PLC0415
         get_active_season,
@@ -171,12 +183,12 @@ def _survivor_channel(
     if season is None:
         return ()
     config = season["config"]
-    channels = (
-        int(config.get("channel_id") or 0),
-        int(config.get("announcement_channel_id") or 0),
-    )
-    # dict.fromkeys dedupes while keeping order — normally both are the same.
-    return tuple(dict.fromkeys(c for c in channels if c))
+    configured = int(config.get("channel_id") or 0)
+    if not configured or configured == int(
+        config.get("announcement_channel_id") or 0
+    ):
+        return ()
+    return (configured,)
 
 
 #: Every sticky panel a plain config read can find, as
@@ -185,7 +197,8 @@ def _survivor_channel(
 #: exception, holding its old channel and its new one while a move settles.
 #:
 #: ``key`` is stable so a caller can exclude *itself* when asking who else is
-#: in a channel (see ``bot_chasing_resident``), and it matches the panel's
+#: in a channel (see ``bot_chasing_resident``) — one feature may hold more than
+#: one key, and then it excludes all of them. The key matches the panel's
 #: ``PanelSpec.key`` in ``panel_registry`` wherever the dashboard can post it —
 #: that is what lets ``routes/panels.py`` run this check for any panel without
 #: a translation table.
@@ -210,7 +223,13 @@ _STICKY_PANELS: tuple[
     ("todo-chores", "the chore board", False, _todo_board_channel(chores=True)),
     # restick_on_bot: the Reckoning and last-call posts are the panel's own
     # main buriers, so it follows them down — and blocks anything else here.
-    ("survivor", "the Survivor panel", True, _survivor_channel),
+    ("survivor", "the Survivor panel", True, _survivor_posted_channel),
+    (
+        "survivor-pending",
+        "the Survivor panel, which is set to post here",
+        False,
+        _survivor_pending_channel,
+    ),
 )
 
 
@@ -266,20 +285,58 @@ def resident_in(
     guild_id: int,
     channel_id: int,
     *,
-    excluding: str | None = None,
+    excluding: str | Collection[str] | None = None,
 ) -> StickyResident | None:
     """What already holds this channel's bottom slot, if anything.
 
-    ``excluding`` is the asking panel's own key, for a caller deciding whether
-    to *re*-post itself somewhere: a panel already recorded in its destination
-    would otherwise always find itself and refuse.
+    ``excluding`` is the asking panel's own key — or keys, since one feature
+    can hold several (Survivor has one for where its panel is and one for where
+    it is going). A caller deciding whether to *re*-post itself somewhere would
+    otherwise always find itself and refuse.
     """
+    skip = _key_set(excluding)
     return _merge(
         [
             (name, on_bot)
             for key, (cids, name, on_bot) in panel_channels(conn, guild_id).items()
-            if channel_id in cids and key != excluding
+            if channel_id in cids and key not in skip
         ]
+    )
+
+
+def _key_set(excluding: str | Collection[str] | None) -> frozenset[str]:
+    if excluding is None:
+        return frozenset()
+    if isinstance(excluding, str):
+        return frozenset((excluding,))
+    return frozenset(excluding)
+
+
+#: Entries that describe where a panel is *going*, not where it is. They earn
+#: their place in the table — a panel about to land somewhere is worth warning
+#: about — but they are not a placement, so they cannot make ``occupies`` true.
+_CLAIM_ONLY_KEYS = frozenset({"survivor-pending"})
+
+
+def occupies(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    keys: str | Collection[str],
+) -> bool:
+    """Whether this panel is already sitting in that channel.
+
+    A panel that is *already there* must never be refused: refusing does not
+    undo the collision, it only stops the admin maintaining a panel that is in
+    the channel right now, with no remedy available in Discord. The 2026-08-06
+    plan doc names this trap — "refusing there could lock an admin out of a
+    valid setup".
+    """
+    configured = panel_channels(conn, guild_id)
+    return any(
+        channel_id in configured[key][0]
+        for key in _key_set(keys)
+        if key in configured and key not in _CLAIM_ONLY_KEYS
     )
 
 
@@ -302,7 +359,11 @@ def sticky_panel_channels(
 
 
 def bot_chasing_resident(
-    conn: sqlite3.Connection, guild_id: int, channel_id: int, *, excluding: str
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    *,
+    excluding: str | Collection[str],
 ) -> str | None:
     """Name of *another* bot-chasing sticky panel already in ``channel_id``.
 
@@ -315,7 +376,8 @@ def bot_chasing_resident(
     ``excluding`` is the asking panel's own key: the bounty hub lives in the
     bounty channel by definition, so it would otherwise always find itself.
     """
+    skip = _key_set(excluding)
     for key, (cids, name, on_bot) in panel_channels(conn, guild_id).items():
-        if key != excluding and on_bot and channel_id in cids:
+        if key not in skip and on_bot and channel_id in cids:
             return name
     return None

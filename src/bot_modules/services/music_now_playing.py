@@ -411,14 +411,32 @@ class CardRefresher:
         inflight = self._inflight.get(guild_id)
         self.forget(guild_id)
         if inflight is not None:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await inflight
+            # ``asyncio.wait``, not ``await`` under a suppress: suppressing
+            # CancelledError around a bare await swallows *our own*
+            # cancellation too, so a shutdown landing here would be ignored and
+            # the caller would carry on past it. wait() reports the task's
+            # outcome without raising it, and still propagates ours.
+            await asyncio.wait([inflight])
             if self._inflight.get(guild_id) is inflight:
                 self._inflight.pop(guild_id, None)
 
-    def cancel_all(self) -> None:
+    async def cancel_all(self) -> None:
+        """Stop everything — a cog unload or a shutdown.
+
+        The in-flight renders are cancelled too, not just the coalescers.
+        Leaving them to finish would post a card and record its id on a
+        ``GuildQueue`` the reloaded cog no longer holds: an orphan with live
+        buttons that nothing will ever edit or retire, which is the pile-up
+        this module exists to prevent. ``asyncio.shield`` protects a render
+        from its *waiter's* cancellation, not from being cancelled directly.
+        """
         for task in self._tasks.values():
             task.cancel()
+        inflight = [t for t in self._inflight.values() if not t.done()]
+        for task in inflight:
+            task.cancel()
+        if inflight:
+            await asyncio.wait(inflight)
         self._tasks.clear()
         self._pending.clear()
         self._last.clear()

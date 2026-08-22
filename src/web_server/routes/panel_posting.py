@@ -11,11 +11,16 @@ second thing to keep in step with the first.
 from __future__ import annotations
 
 import asyncio
+from typing import Collection
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from bot_modules.services.sticky_registry import StickyResident, resident_in
+from bot_modules.services.sticky_registry import (
+    StickyResident,
+    occupies,
+    resident_in,
+)
 
 
 class ChannelIdBody(BaseModel):
@@ -91,7 +96,7 @@ def require_post_permissions(guild, channel, *required: str) -> None:
 
 
 async def sticky_conflict(
-    ctx, guild_id: int, channel_id: int, *, excluding: str
+    ctx, guild_id: int, channel_id: int, *, excluding: str | Collection[str]
 ) -> str | None:
     """Refuse — or warn about — posting a panel where one already sits.
 
@@ -105,18 +110,28 @@ async def sticky_conflict(
     Returns a warning for the survivable collision — a resident that only
     moves under human messages, which is intermittent, visible and the admin's
     call — and raises 400 for the one that cannot be lived with. ``excluding``
-    is the posting panel's own registry key, so re-posting a panel into the
-    channel it already occupies is not refused on account of itself.
+    is the posting panel's own registry key (or keys — one feature can hold
+    several), so re-posting a panel into the channel it already occupies is not
+    refused on account of itself.
+
+    A panel that is **already in** the target channel is never blocked, only
+    warned, whoever else is there. The block exists to stop an admin *creating*
+    a collision; once one exists, refusing does not undo it, it just locks them
+    out of maintaining a panel that is sitting in the channel right now with no
+    remedy available in Discord.
     """
 
-    def _resident() -> StickyResident | None:
+    def _read() -> tuple[StickyResident | None, bool]:
         with ctx.open_db() as conn:
-            return resident_in(conn, guild_id, channel_id, excluding=excluding)
+            return (
+                resident_in(conn, guild_id, channel_id, excluding=excluding),
+                occupies(conn, guild_id, channel_id, excluding),
+            )
 
-    resident = await asyncio.to_thread(_resident)
+    resident, already_here = await asyncio.to_thread(_read)
     if resident is None:
         return None
-    if resident.restick_on_bot:
+    if resident.restick_on_bot and not already_here:
         raise HTTPException(
             400,
             f"This channel is {resident.name}'s, and that panel follows the "
@@ -127,6 +142,11 @@ async def sticky_conflict(
         f"Posted, but this channel already has {resident.name} stuck to the "
         "bottom. Both can't be last, so the two will keep pushing each other "
         "up as people chat."
+        + (
+            " Move one of them to a channel of its own to settle it."
+            if resident.restick_on_bot
+            else ""
+        )
     )
 
 

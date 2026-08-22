@@ -123,7 +123,17 @@ class MusicCog(commands.Cog):
         for task in self._idle_tasks.values():
             task.cancel()
         self._idle_tasks.clear()
-        self._card.cancel_all()
+        await self._card.cancel_all()
+        # The card's ids live only in memory, so a reload would strand every
+        # posted card: live buttons, and a fresh cog that has never heard of
+        # them. Retiring them here is the same thing /stop does, for the same
+        # reason.
+        for guild_id in list(self._queues):
+            guild = self.bot.get_guild(guild_id)
+            if guild is not None:
+                with contextlib.suppress(Exception):
+                    await self._end_session(guild)
+        self._queues.clear()
 
         for guild in list(self.bot.guilds):
             vc = guild.voice_client
@@ -513,8 +523,8 @@ class MusicCog(commands.Cog):
 
         with contextlib.suppress(Exception):
             await player.disconnect()
-        await self._end_session(guild)
         await interaction.response.send_message("Stopped and disconnected.")
+        await self._end_session(guild)
 
     @app_commands.command(name="nowplaying", description="Repost the now-playing embed.")
     async def now_playing_cmd(self, interaction: discord.Interaction) -> None:
@@ -527,6 +537,11 @@ class MusicCog(commands.Cog):
         if queue.current is None or player is None:
             await self._ephemeral(interaction, "Nothing playing right now.")
             return
+        # Defer before the slow part. Resolving the accent is a threaded DB
+        # read and the drain below waits on a render that may be parked behind
+        # a rate limit — together they can outrun Discord's 3s initial-response
+        # window, and then the reply fails while the old card has already gone.
+        await interaction.response.defer(thinking=True)
         requester = (
             guild.get_member(queue.requester_for(queue.current) or 0)
             if queue.requester_for(queue.current)
@@ -547,8 +562,7 @@ class MusicCog(commands.Cog):
         # Clearing the ids first leaves a window across these two awaits where
         # a fresh track change finds no card on record and posts a third.
         old_card = (queue.now_playing_channel_id, queue.now_playing_message_id)
-        await interaction.response.send_message(embed=embed, view=view)
-        msg = await interaction.original_response()
+        msg = await interaction.followup.send(embed=embed, view=view, wait=True)
         queue.now_playing_message_id = msg.id
         queue.now_playing_channel_id = msg.channel.id
         await retire_card(guild, *old_card)
@@ -566,9 +580,8 @@ class MusicCog(commands.Cog):
         await player.stop()
         with contextlib.suppress(Exception):
             await player.disconnect()
-        await self._end_session(guild)
-
         await interaction.response.send_message("Disconnected.")
+        await self._end_session(guild)
 
     # ------------------------------------------------------------------
     # Wavelink event handlers
@@ -972,8 +985,8 @@ class MusicCog(commands.Cog):
         await player.stop()
         with contextlib.suppress(Exception):
             await player.disconnect()
-        await self._end_session(guild)
         await interaction.response.send_message("Stopped.", ephemeral=True)
+        await self._end_session(guild)
 
     async def handle_view_shuffle(
         self, interaction: discord.Interaction, view: NowPlayingView

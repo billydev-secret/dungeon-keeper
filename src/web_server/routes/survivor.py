@@ -697,7 +697,7 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
         ctx,
         guild_id,
         int(season["config"]["channel_id"] or 0),
-        excluding="survivor",
+        excluding=("survivor", "survivor-pending"),
     )
 
     from bot_modules.survivor.views import PanelError, repost_panel

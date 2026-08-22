@@ -20,6 +20,7 @@ from bot_modules.services.economy_service import save_econ_settings
 from bot_modules.services.sticky_registry import (
     bot_chasing_resident,
     is_sticky_panel,
+    occupies,
     panel_channels,
     resident_in,
     sticky_panel_channels,
@@ -343,8 +344,12 @@ def test_survivor_is_a_resident_before_its_panel_has_been_posted(db):
     with open_db(db) as conn:
         _seed_survivor_unposted(conn, 6010)
         found = sticky_panel_channels(conn, GUILD)
-    assert found[6010].name == "the Survivor panel"
-    assert found[6010].restick_on_bot is True
+    assert "Survivor" in found[6010].name
+    # But it only *warns*. get_active_season matches any season that is not
+    # complete, so an `enrolling` season pointed at a channel and then
+    # abandoned would otherwise hard-refuse every panel and every auction
+    # there forever, naming a message nobody can find or delete.
+    assert found[6010].restick_on_bot is False
 
 
 def test_survivor_with_no_live_season_is_not_a_resident(db):
@@ -383,7 +388,9 @@ def test_survivor_holds_both_channels_while_a_move_settles(db):
             "the Survivor panel"
         )
     assert found[6012].name == "the Survivor panel", "the old channel was dropped"
-    assert found[6013].name == "the Survivor panel", "the new channel was dropped"
+    assert found[6012].restick_on_bot is True, "the live panel must still block"
+    assert "Survivor" in found[6013].name, "the new channel was dropped"
+    assert found[6013].restick_on_bot is False, "nothing is posted there yet"
 
 
 def test_survivor_in_one_channel_is_named_once(db):
@@ -421,3 +428,45 @@ def test_survivor_in_one_channel_is_named_once(db):
 )
 def test_is_sticky_panel(key, sticky):
     assert is_sticky_panel(key) is sticky
+
+
+def test_an_abandoned_enrolling_season_only_warns(db):
+    """`get_active_season` matches anything that isn't complete, so a season
+    created, pointed at a channel and forgotten would otherwise hard-refuse
+    every sticky panel and every auction in that channel forever — naming a
+    panel that was never posted and that nobody can find to delete."""
+    with open_db(db) as conn:
+        _seed_survivor_unposted(conn, 6020)
+        assert bot_chasing_resident(conn, GUILD, 6020, excluding="casino") is None
+        resident = resident_in(conn, GUILD, 6020)
+    assert resident is not None
+    assert resident.restick_on_bot is False
+
+
+def test_excluding_takes_more_than_one_key(db):
+    """Survivor holds two — where the panel is, and where it is going — and
+    its own repost has to ignore both."""
+    from bot_modules.services.survivor_service import (
+        create_season,
+        set_panel_ids,
+        update_config,
+    )
+
+    with open_db(db) as conn:
+        season_id = create_season(conn, GUILD, "S", 2035)
+        set_panel_ids(conn, GUILD, 6021, 1)
+        update_config(conn, season_id, {"channel_id": 6022})
+        both = ("survivor", "survivor-pending")
+        assert resident_in(conn, GUILD, 6021, excluding=both) is None
+        assert resident_in(conn, GUILD, 6022, excluding=both) is None
+        # Excluding only one still finds the other.
+        assert resident_in(conn, GUILD, 6022, excluding="survivor") is not None
+
+
+def test_occupies_is_true_only_where_the_panel_actually_is(db):
+    with open_db(db) as conn:
+        _seed_pen_pals(conn, 6023)
+        assert occupies(conn, GUILD, 6023, "pen-pals") is True
+        assert occupies(conn, GUILD, 6024, "pen-pals") is False
+        assert occupies(conn, GUILD, 6023, "dm-perms") is False
+        assert occupies(conn, GUILD, 6023, ("dm-perms", "pen-pals")) is True
