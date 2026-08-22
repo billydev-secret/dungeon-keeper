@@ -22,6 +22,7 @@ from discord.ext import commands, tasks
 
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, parse_bool
+from bot_modules.core.role_provision import ensure_config_role
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.economy.leaderboard import (
     build_leaderboard_embed,
@@ -79,6 +80,7 @@ from bot_modules.economy.auction_views import (
     settle_and_announce,
     start_auction,
 )
+from bot_modules.services.feature_roles import QOTD_PING
 from bot_modules.services.economy_auction_service import (
     attach_card_to_latest,
     card_ids,
@@ -3959,9 +3961,22 @@ class EconomyCog(commands.Cog):
 
         content: str | None = None
         mentions = discord.AllowedMentions.none()
-        if settings.qotd_ping_role_id:
-            content = f"<@&{settings.qotd_ping_role_id}>"
-            mentions = discord.AllowedMentions(roles=True)
+        # Provisions @QOTD on a guild that never configured a ping role; a
+        # stored "(none)" comes back None and the post stays silent.
+        qotd_role = await ensure_config_role(
+            self.bot.ctx, guild, QOTD_PING.key, QOTD_PING.spec,
+            feature=QOTD_PING.feature,
+            allow_legacy_fallback=QOTD_PING.legacy_fallback,
+        )
+        if qotd_role is not None:
+            content = qotd_role.mention
+            # everyone/users/replied_user pinned False: AllowedMentions' unset
+            # fields default to ALLOW, so a bare roles=[...] would still let a
+            # question containing @everyone ping the server.
+            mentions = discord.AllowedMentions(
+                everyone=False, users=False, roles=[qotd_role],
+                replied_user=False,
+            )
 
         try:
             if card_file is not None:

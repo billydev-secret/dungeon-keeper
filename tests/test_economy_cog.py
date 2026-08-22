@@ -12,7 +12,12 @@ import discord
 import pytest
 from discord import app_commands
 
-from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.core.db_utils import (
+    get_config_value,
+    get_tz_offset_hours,
+    open_db,
+    set_config_value,
+)
 from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
@@ -39,7 +44,7 @@ from bot_modules.services.economy_service import (
 from bot_modules.services.quote_renderer import THEMES
 from bot_modules.services.voice_master_service import add_name_blocklist
 from tests.db_template import migrated_db
-from tests.fakes import FakeGuild, fake_interaction
+from tests.fakes import FakeGuild, FakeRole, fake_interaction
 
 GUILD_ID = 9001
 MANAGER_ROLE_ID = 7007
@@ -57,11 +62,19 @@ def ctx(db):
     # is_mod/member_is_mod answer False by default: these tests are about the
     # ordinary member's paid path, and the staff comp has its own coverage in
     # test_economy_rentals_logic / test_economy_mod_comp.
+    def _set(key, value, guild_id=GUILD_ID):
+        # core.role_provision persists a provisioned role id through this.
+        with open_db(db) as conn:
+            set_config_value(conn, key, value, guild_id)
+            conn.commit()
+        return value
+
     return SimpleNamespace(
         db_path=db,
         open_db=lambda: open_db(db),
         is_mod=lambda _interaction: False,
         member_is_mod=lambda _member: False,
+        set_config_value=_set,
     )
 
 
@@ -296,9 +309,14 @@ async def test_qotd_admin_posts_and_records(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_qotd_no_ping_role_posts_silently(ctx, db):
-    """Default (unset) ping role keeps the original silent post."""
-    _enable(db)
+async def test_qotd_ping_role_set_to_none_posts_silently(ctx, db):
+    """An admin who picked "(none)" keeps the silent post.
+
+    A stored 0 is a preference, not an empty slot: provisioning over it would
+    both delete the only way to say "don't ping" and start mentioning a role
+    nobody holds. See docs/plans/role-autocreate.md.
+    """
+    _enable(db, qotd_ping_role_id=0)
     cog = _make_cog(ctx)
     interaction, channel = _qotd_interaction(_member(admin=True))
     await _qotd(cog, interaction, "Quiet question?")
@@ -306,6 +324,26 @@ async def test_qotd_no_ping_role_posts_silently(ctx, db):
     kwargs = channel.send.await_args.kwargs
     assert kwargs["content"] is None
     assert kwargs["allowed_mentions"].roles is False
+    assert not interaction.guild.roles, "nothing should have been created"
+
+
+@pytest.mark.asyncio
+async def test_qotd_provisions_a_ping_role_when_never_configured(ctx, db):
+    """A guild that never touched the dial gets @QOTD made for it."""
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction, channel = _qotd_interaction(_member(admin=True))
+    await _qotd(cog, interaction, "First question?")
+
+    made = list(interaction.guild.roles)
+    assert [r.name for r in made] == ["QOTD"]
+    kwargs = channel.send.await_args.kwargs
+    assert kwargs["content"] == f"<@&{made[0].id}>"
+    # The id is persisted, so the next QOTD reuses it instead of making another.
+    with open_db(db) as conn:
+        assert get_config_value(
+            conn, "econ_qotd_ping_role_id", "0", GUILD_ID
+        ) == str(made[0].id)
 
 
 @pytest.mark.asyncio
@@ -313,12 +351,14 @@ async def test_qotd_pings_configured_role(ctx, db):
     _enable(db, qotd_ping_role_id=4242)
     cog = _make_cog(ctx)
     interaction, channel = _qotd_interaction(_member(admin=True))
+    interaction.guild.roles[4242] = FakeRole(id=4242, name="QOTD")
     await _qotd(cog, interaction, "Loud question?")
 
     kwargs = channel.send.await_args.kwargs
     assert kwargs["content"] == "<@&4242>"
-    # Without this the mention posts as inert text.
-    assert kwargs["allowed_mentions"].roles is True
+    # Without this the mention posts as inert text. Allow-listed to exactly
+    # this role rather than a blanket roles=True.
+    assert [r.id for r in kwargs["allowed_mentions"].roles] == [4242]
 
 
 @pytest.mark.asyncio
@@ -327,6 +367,7 @@ async def test_qotd_pings_on_card_path_too(ctx, db):
     _enable(db, qotd_ping_role_id=4242)
     cog = _make_cog(ctx)
     interaction, channel = _qotd_interaction(_member(admin=True))
+    interaction.guild.roles[4242] = FakeRole(id=4242, name="QOTD")
     with (
         patch(
             "bot_modules.cogs.economy_cog._resolve_qotd_image",
@@ -339,7 +380,7 @@ async def test_qotd_pings_on_card_path_too(ctx, db):
     kwargs = channel.send.await_args.kwargs
     assert "file" in kwargs
     assert kwargs["content"] == "<@&4242>"
-    assert kwargs["allowed_mentions"].roles is True
+    assert [r.id for r in kwargs["allowed_mentions"].roles] == [4242]
 
 
 @pytest.mark.asyncio
@@ -3680,3 +3721,20 @@ async def test_merge_survives_a_guild_that_raises(ctx, db):
     await cog._merge_panels_once()
 
     assert seen == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_qotd_ping_cannot_smuggle_an_everyone_mention(ctx, db):
+    """AllowedMentions' unset fields default to ALLOW, so the ping's
+    allow-list has to pin everyone/users off explicitly — otherwise a question
+    containing @everyone would ping the whole server."""
+    _enable(db, qotd_ping_role_id=4242)
+    cog = _make_cog(ctx)
+    interaction, channel = _qotd_interaction(_member(admin=True))
+    interaction.guild.roles[4242] = FakeRole(id=4242, name="QOTD")
+    await _qotd(cog, interaction, "@everyone what's for dinner?")
+
+    allowed = channel.send.await_args.kwargs["allowed_mentions"]
+    assert allowed.everyone is False
+    assert allowed.users is False
+    assert allowed.replied_user is False

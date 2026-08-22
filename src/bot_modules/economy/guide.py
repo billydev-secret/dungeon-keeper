@@ -32,6 +32,8 @@ import discord
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.economy.leaderboard import _pad
 from bot_modules.economy.logic import resolve_notify_toggle
+from bot_modules.core.role_provision import ensure_config_role
+from bot_modules.services.feature_roles import ECONOMY_NOTIFY
 from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 
@@ -248,25 +250,26 @@ class GuideNotifyButton(discord.ui.Button):
 
         bot = cast("Bot", interaction.client)
 
-        def _read() -> EconSettings:
-            with bot.ctx.open_db() as conn:
-                return load_econ_settings(conn, guild.id)
+        # A member pressing 🔔 on a guild that never set an opt-in role used to
+        # hit a dead end telling them to find an admin. Make the role instead —
+        # this is the one place in the feature where "first use" is a member
+        # actually asking for it. An admin who stored "(none)" still gets None
+        # back, and the dead end with it.
+        role = await ensure_config_role(
+            bot.ctx, guild, ECONOMY_NOTIFY.key, ECONOMY_NOTIFY.spec,
+            feature=ECONOMY_NOTIFY.feature,
+            allow_legacy_fallback=ECONOMY_NOTIFY.legacy_fallback,
+        )
+        if role is None:
+            # Opted out, or the role couldn't be made (no Manage Roles). Reads
+            # the same to the member either way.
+            await _safe_ephemeral(interaction, NOTIFY_UNCONFIGURED_MSG)
+            return
 
-        settings = await asyncio.to_thread(_read)
         action = resolve_notify_toggle(
-            role_id=settings.game_role_id,
+            role_id=role.id,
             member_role_ids={r.id for r in member.roles},
         )
-        if action == "unconfigured":
-            await _safe_ephemeral(interaction, NOTIFY_UNCONFIGURED_MSG)
-            return
-
-        role = guild.get_role(settings.game_role_id)
-        if role is None:
-            # Configured but deleted since — same dead end as unconfigured
-            # from the member's side, so it reads the same.
-            await _safe_ephemeral(interaction, NOTIFY_UNCONFIGURED_MSG)
-            return
 
         try:
             if action == "grant":

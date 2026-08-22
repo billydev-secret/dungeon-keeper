@@ -50,6 +50,8 @@ from bot_modules.services.invite_tracker import (
     refresh_invite_cache,
 )
 from bot_modules.services import intake_service as intake_svc
+from bot_modules.core.role_provision import ensure_config_role
+from bot_modules.services.feature_roles import WELCOME_PING
 from bot_modules.services import promotion_review_service as promo_review
 from bot_modules.services.message_store import (
     DELETE_SOURCE_DISCORD,
@@ -1716,8 +1718,21 @@ class EventsCog(commands.Cog):
         # Mentions inside an embed don't notify anyone, so the user/role ping
         # has to ride in the message content to actually fire a notification.
         ping_parts: list[str] = []
-        if cfg.welcome_ping_role_id > 0:
-            ping_parts.append(f"<@&{cfg.welcome_ping_role_id}>")
+        ping_role_id = cfg.welcome_ping_role_id
+        if ping_role_id <= 0:
+            # Nothing configured. Either the dial was never touched — in which
+            # case make @Welcome Ping now — or an admin stored "(none)", which
+            # comes back None and keeps the welcome silent. Only ever reached
+            # on an unconfigured guild, so a configured one still pings off the
+            # cached snapshot without touching the DB.
+            provisioned = await ensure_config_role(
+                self.bot.ctx, member.guild, WELCOME_PING.key, WELCOME_PING.spec,
+                feature=WELCOME_PING.feature,
+                allow_legacy_fallback=WELCOME_PING.legacy_fallback,
+            )
+            ping_role_id = provisioned.id if provisioned is not None else 0
+        if ping_role_id > 0:
+            ping_parts.append(f"<@&{ping_role_id}>")
         if cfg.welcome_ping_member:
             ping_parts.append(member.mention)
         ping = " ".join(ping_parts) or None

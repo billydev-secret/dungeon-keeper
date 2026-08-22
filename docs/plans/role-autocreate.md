@@ -1,6 +1,6 @@
 # Implementation plan — features auto-create the roles they need
 
-**Status:** Stage 1 built 2026-08-22. Stages 2–4 not started.
+**Status:** Stages 1–2 built 2026-08-22. Stages 3–4 not started.
 **Source:** todo #105 (Billy, 2026-08-18, during the Survivor first-look review).
 **Reference implementation:** Survivor (`web_server/routes/survivor.py` create_season
 + `survivor/tasks.py::reconcile_roles`).
@@ -20,6 +20,9 @@
    `intake_verified_role_id` are not about *enabling a feature* — they name
    membership state a human already curates. Class C, not converted.
 4. **Stage 1 lands as one commit**, not five.
+7. **Ping roles are provisioned only where the dial was never configured** — a
+   stored "(none)" is a preference and is left alone. (Taken at Stage 2; see
+   that section for what it cost.)
 5. **Adopt-by-name is exact-match only** — what Survivor and DM modes already
    do. `"Jailed"` adopts `@Jailed` and nothing else; `@jailed` gets a twin.
    Never grabbing the wrong role beats adopting a few more.
@@ -240,15 +243,83 @@ roles drop to `Permissions.none()`; a role remade after a deletion posts to the
 mod log and writes an audit row (Jail, Inactive, and Survivor's — not DM modes,
 see above).
 
-## Stage 2 — the conversions
+## Stage 2 — the conversions *(built)*
 
-Class A has exactly one entry left: **Voice Control's spectate gate**. It joins
-the ten Class B ping roles in a single stage — call `ensure_feature_role` at the
-point of first use, keep the dashboard dropdown as the repoint, log which of
-use/adopt/create happened. Ping roles take `mentionable=False` (DK pings via
-`allowed_mentions(roles=[role])`, which does not need the mentionable bit).
+Decision 7, taken before building: **provision only where the dial was never
+configured.** A ping dial's "(none)" is a working preference — features read
+`if role_id:` and stay silent — so provisioning over a stored 0 would delete the
+only way to say "don't ping" *and* put a mention nobody holds into every post.
+Prod already records the difference: a deliberate "(none)" writes a row holding
+`"0"`, a dial nobody touched has no row at all. `role_dial_opted_out` reads
+exactly that, legacy `guild_id=0` fallback included.
 
-## Stage 3 — the dashboard side
+**That test also decides which dials are eligible, and it cost five of the
+eleven this stage was scoped to.** Three cannot express "never configured":
+
+| Dropped | Why |
+| --- | --- |
+| `bump_tracker_config.role_id` | `NOT NULL DEFAULT 0` — both cases store 0 |
+| `revive_guild_config.role_id` | nullable, but the panel's "(none)" is `value=""`, saved as NULL — same as never set |
+| scheduled games / photo challenge / revive per-channel | per-instance: "unset" was chosen by an admin in a form offering "(none)", so there is no unconfigured state at all |
+
+Two more were dropped for a harder reason — **an empty role is worse than no
+role**, which makes them gates rather than pings, and Class C after all:
+
+* **Voice Control's spectate gate** — the one Class A conversion this stage was
+  supposed to deliver. Ungated spectate makes `@everyone` the audience; a gate
+  role *denies* `@everyone` Connect and hands the room to the role instead. An
+  empty gate role is a spectate room nobody can enter. **Class A is now empty.**
+* **`guess_role_id`** — unset means "Guess isn't set up" and the game says so
+  plainly. Provisioning turns that into a configured game refusing every member
+  with "you need the Guess role".
+
+What shipped — all in the `config` KV, which is not a coincidence: it is the
+only store where the two states are distinguishable.
+
+| Dial | Role | Trigger |
+| --- | --- | --- |
+| `welcome_ping_role_id` | @Welcome Ping | a welcome post |
+| `econ_qotd_ping_role_id` | @QOTD | a QOTD post |
+| `risky_ping_role_id` | @Risky Rolls | a Risky Rolls round |
+| `promotion_review_ping_role_id` | @Promotion Reviewers | a review card |
+| `econ_game_role_id` | @Economy Notifications | a member pressing 🔔 |
+
+The last is the only one that makes something work that didn't: pressing 🔔 on
+a guild with no opt-in role used to dead-end at "ask an admin". It is also the
+only trigger that is a *member asking for the role* rather than the bot needing
+one — so it is the only one of the five that will actually gain members.
+
+`services/feature_roles.py` is the registry: one auditable list, with the
+exclusions above recorded in its docstring so the next person doesn't "finish
+the job". `tests/test_feature_roles.py` guards the rules (ping-only, never
+mentionable, no known hazard creeping back in).
+
+Three traps worth remembering, all found against the live config rather than by
+reading code.
+
+The econ keys carry the **`econ_` prefix** and are guild-scoped with **no legacy
+fallback** — reading them as bare `qotd_ping_role_id` finds nothing and would
+provision over a guild that is already configured.
+
+The welcome path reads the **cached snapshot** first and only provisions when
+that is 0, so the provisioner is not touched on every join.
+
+And the one that would have shipped a visible mistake: **an id inherited from
+the legacy `guild_id=0` row names a role in a different guild.** Prod has
+exactly this — `welcome_ping_role_id` is set at `guild_id=0`, and three guilds
+have no row of their own. That id can never resolve in those guilds, and the
+first draft read "stored id that doesn't resolve" as "an admin deleted the
+role", which would have posted a *false* deletion warning to three mod channels
+on the next join. `choose_role_action` now takes `stored_is_own`, and only a
+guild's **own** stored id can count as a deletion; an inherited one is a first
+run, and silent.
+
+Fixed along the way: the QOTD ping's allow-list was widened to
+`AllowedMentions(roles=[...])`, whose *unset fields default to allow* — a
+question containing `@everyone` would have pinged the server. `everyone`,
+`users` and `replied_user` are now pinned False, with a regression test.
+
+## Stage 3 — the dashboard side *(not started)*
 
 The dial stops being the *only* way a role gets set, so the panel has to say so.
 A role dial whose feature auto-creates renders "created automatically — pick a
@@ -257,7 +328,7 @@ Config → Roles status card lists each managed role with its live state
 (present / missing / no Manage Roles). Existing route ids are frozen; this rides
 `config-roles`.
 
-## Stage 4 — docs
+## Stage 4 — docs *(not started)*
 
 New `docs/role_provisioning_spec.md` (Reference) + `docs/INDEX.md` row;
 `manual.html` gets a line under each converted feature saying the role appears
@@ -269,8 +340,13 @@ storage that already exists.
 ## Open questions
 
 1. **Class B ping roles will sit empty** — accepted per decision 2. Worth a
-   follow-up todo for opt-in surfaces, or leave it? *(Non-blocking; does not
-   hold up any stage.)*
+   follow-up todo for opt-in surfaces, or leave it? Stage 2 sharpened this:
+   only @Economy Notifications has a way for members to take it, so the other
+   four will stay empty until something hands them out. *(Non-blocking.)*
+2. **`econ_game_role_id` is stored as 0 in two prod guilds**, so the 🔔 dead end
+   persists there by the opt-out rule. Setting the dial (or clearing the row)
+   is a one-line dashboard fix if that 0 was never a deliberate "no".
 
 *Resolved:* verification roles stay manual (3); Stage 1 lands as one commit (4);
-adopt-by-name is exact (5); a re-create hits the mod log (6).
+adopt-by-name is exact (5); a re-create hits the mod log (6); provision only
+where the dial was never configured (7).

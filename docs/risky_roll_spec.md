@@ -19,7 +19,7 @@ A channel-scoped dice game. Anyone in the channel presses **Roll** to roll 1–1
 
 ### Starting a round
 
-`/risky start` opens a new round. The bot checks Send Messages + Embed Links in the channel, refuses if the channel already has 10 active games, then posts the round embed with the **Roll / How to Play / Close Round** buttons. If a ping role is configured, the bot also posts a one-line ping ("A new Risky Rolls round has begun!"). Passing `ping:false` skips the role ping and bypasses the min-game-time floor — the two move together, since the floor exists to give pinged members time to arrive. (This replaced the separate `/risky start_no_ping` command on 2026-07-28.)
+`/risky start` opens a new round. The bot checks Send Messages + Embed Links in the channel, refuses if the channel already has 10 active games, then posts the round embed with the **Roll / How to Play / Close Round** buttons. If a ping role is configured, the bot also posts a one-line ping ("A new Risky Rolls round has begun!") — allow-listing exactly that role rather than a blanket `roles=True`. A guild that has **never** set the dial gets a `@Risky Rolls` role created on the first pinged round (`core/role_provision.py`); an admin who picked "(none)" keeps silent rounds. Passing `ping:false` skips the role ping and bypasses the min-game-time floor — the two move together, since the floor exists to give pinged members time to arrive. (This replaced the separate `/risky start_no_ping` command on 2026-07-28.)
 
 An auto-close is scheduled at start: by default the round auto-closes 120 minutes after start, or sooner once 25 distinct players have rolled (whichever comes first, never before the min-game-time floor).
 

@@ -27,6 +27,8 @@ from functools import partial
 
 import discord
 
+from bot_modules.core.role_provision import ensure_config_role
+from bot_modules.services.feature_roles import PROMOTION_REVIEW_PING
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.utils import get_guild_channel_or_thread
 from bot_modules.inactive.apply import reactivate_member
@@ -435,7 +437,7 @@ async def post_review_card(
             svc.discard(guild_id, user_id)
         return
 
-    _, kind, card_id, review_ch_id, pruned_roles, level, ping_role = prepared
+    _, kind, card_id, review_ch_id, pruned_roles, level, _stored_ping = prepared
 
     channel = guild.get_channel(review_ch_id)
     if not isinstance(channel, discord.abc.Messageable):
@@ -444,6 +446,16 @@ async def post_review_card(
             "promo review: review channel %s missing in guild %s", review_ch_id, guild_id
         )
         return
+
+    # Provisions @Promotion Reviewers on a guild that never set a ping role, so
+    # the first card has somewhere to shout. A stored "(none)" returns None and
+    # the card posts silent, exactly as before.
+    provisioned = await ensure_config_role(
+        ctx, guild, PROMOTION_REVIEW_PING.key, PROMOTION_REVIEW_PING.spec,
+        feature=PROMOTION_REVIEW_PING.feature,
+            allow_legacy_fallback=PROMOTION_REVIEW_PING.legacy_fallback,
+    )
+    ping_role = provisioned.id if provisioned is not None else 0
 
     accent = await safe_resolve_accent(ctx, guild, log_label="promotion review", default=DEFAULT_ACCENT_COLOR)
     hint = (

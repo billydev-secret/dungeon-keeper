@@ -19,6 +19,7 @@ from bot_modules.core.role_provision import (
     choose_role_action,
     ensure_feature_role,
     recreate_notice,
+    role_dial_opted_out,
 )
 
 
@@ -285,3 +286,118 @@ async def test_on_create_fires_only_for_a_genuinely_new_role(
     assert bool(seen) is should_fire
     if should_fire:
         assert seen == [role.id]
+
+
+# ── the opted-out rule (Stage 2) ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "stored_id, stored_resolves, named",
+    [
+        # Opting out beats every other signal, including a stored live role,
+        # a same-named role sitting there, and a stale id that would otherwise
+        # be read as a deletion worth announcing.
+        pytest.param(10, True, [10], id="over-a-live-stored-role"),
+        pytest.param(0, False, [11], id="over-an-adoptable-name"),
+        pytest.param(10, False, [], id="over-a-would-be-recreate"),
+        pytest.param(0, False, [], id="over-a-would-be-create"),
+    ],
+)
+def test_opted_out_always_skips(stored_id, stored_resolves, named):
+    assert choose_role_action(
+        stored_id, stored_resolves, named, opted_out=True
+    ) == ("skip", None)
+
+
+@pytest.mark.asyncio
+async def test_opted_out_creates_nothing_and_writes_nothing():
+    """An admin who picked \"(none)\" must not get a role made for them."""
+    guild = FakeGuild([FakeRole(11, "Jailed")])
+    role, stored = await _ensure(guild, 0, opted_out=True)
+    assert role is None
+    assert guild.created == []
+    assert stored == 0
+
+
+def test_role_dial_opted_out_distinguishes_never_set_from_chosen_none():
+    """The distinction Stage 2 rests on: no row vs a row holding \"0\"."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE config (guild_id INTEGER, key TEXT, value TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO config VALUES (?, ?, ?)", (7, "chose_none_role_id", "0")
+    )
+    conn.execute(
+        "INSERT INTO config VALUES (?, ?, ?)", (7, "chose_role_id", "123")
+    )
+
+    # Never touched: ours to provision.
+    assert role_dial_opted_out(conn, "never_set_role_id", 7) is False
+    # Explicitly "(none)": hands off.
+    assert role_dial_opted_out(conn, "chose_none_role_id", 7) is True
+    # A real choice is not an opt-out.
+    assert role_dial_opted_out(conn, "chose_role_id", 7) is False
+
+
+def test_role_dial_opted_out_follows_the_legacy_fallback():
+    """A guild inheriting a home-guild \"(none)\" is opted out, not unconfigured.
+
+    ``get_config_value`` falls back to guild 0, so reading only the guild's own
+    row would provision a role the admin had already declined.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE config (guild_id INTEGER, key TEXT, value TEXT)"
+    )
+    conn.execute("INSERT INTO config VALUES (?, ?, ?)", (0, "ping_role_id", "0"))
+
+    assert role_dial_opted_out(conn, "ping_role_id", 7) is True
+    # ...and a guild that opts out of the fallback is unconfigured again.
+    assert (
+        role_dial_opted_out(conn, "ping_role_id", 7, allow_legacy_fallback=False)
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "stored_is_own, expected",
+    [
+        # This guild configured a role and it's gone: an admin deleted it, and
+        # the members who held it are gone with it. Say so.
+        pytest.param(True, ("recreate", None), id="own-row-is-a-deletion"),
+        # The id came from the legacy guild_id=0 row, so it names a role in a
+        # DIFFERENT guild and was never going to resolve here. Announcing a
+        # deletion would be a lie told to every guild inheriting the row.
+        pytest.param(False, ("create", None), id="inherited-id-is-a-first-run"),
+    ],
+)
+def test_an_inherited_id_is_not_a_deletion(stored_is_own, expected):
+    assert choose_role_action(
+        1470278713504694302, False, [], stored_is_own=stored_is_own
+    ) == expected
+
+
+@pytest.mark.asyncio
+async def test_inherited_id_creates_without_announcing():
+    guild = FakeGuild()
+    said: list[str] = []
+
+    async def announce(msg):
+        said.append(msg)
+
+    role = await ensure_feature_role(
+        guild, SPEC,
+        load=lambda: 999_999,          # a real id, but from another guild
+        store=lambda _rid: None,
+        announce=announce,
+        stored_is_own=False,
+    )
+    assert role is not None
+    assert said == [], "no deletion happened, so the mods hear nothing"

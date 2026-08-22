@@ -39,6 +39,12 @@ Neither is the approver gate — that is `_can_action`: administrator, Manage
 Roles, or a configured mod. A card pings the ping role only; leave it "(none)"
 and all three cards post silently, as they did before this shipped.
 
+Since 2026-08-22 a guild that has **never touched** the ping dial gets a
+`@Promotion Reviewers` role created when the first card posts
+(`core/role_provision.py`). Explicitly choosing "(none)" is a different state —
+it writes a stored 0 and is respected forever; only the never-configured case
+provisions.
+
 The mention goes in the message **content** (a role mention inside an embed
 renders but never notifies) and allow-lists exactly that one role via
 `ping_send_kwargs`. Note `discord.AllowedMentions`' unset fields default to

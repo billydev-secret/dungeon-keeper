@@ -60,7 +60,7 @@ log = logging.getLogger("dungeonkeeper.core.role_provision")
 #:
 #: ``create`` and ``recreate`` both end in ``guild.create_role``; they are
 #: separate outcomes because only one of them means an admin deleted something.
-RoleAction = Literal["use", "adopt", "create", "recreate"]
+RoleAction = Literal["use", "adopt", "create", "recreate", "skip"]
 
 
 @dataclass(frozen=True)
@@ -90,12 +90,28 @@ def choose_role_action(
     stored_id: int,
     stored_resolves: bool,
     named_role_ids: Sequence[int],
+    *,
+    opted_out: bool = False,
+    stored_is_own: bool = True,
 ) -> tuple[RoleAction, int | None]:
     """Decide what to do about a feature role, without touching Discord.
 
     ``stored_resolves`` is whether ``stored_id`` still names a live role — the
     caller answers that with ``guild.get_role``, a cache hit, rather than
     handing over every id in the guild.
+
+    ``stored_is_own`` says the id came from *this guild's* row rather than the
+    legacy ``guild_id=0`` fallback. It only changes create vs recreate, and it
+    matters: an inherited id names a role in a **different** guild, so it never
+    resolves here — reading that as "an admin deleted it" would announce a
+    deletion that never happened, in every guild inheriting the row.
+
+    ``opted_out`` says an admin deliberately chose "no role here", which beats
+    every other consideration — see :func:`role_dial_opted_out` for how that is
+    told apart from a dial nobody has ever touched. Ping dials offer "(none)"
+    on the dashboard and features read it as "don't ping"; provisioning a role
+    over that would delete a working preference and put a mention nobody holds
+    into every post.
 
     ``named_role_ids`` is the ids of roles whose name matches the spec exactly,
     **in guild order** (``guild.roles`` runs lowest position first) — so when a
@@ -104,13 +120,16 @@ def choose_role_action(
 
     Returns the action and, for ``use``/``adopt``, the id to use.
     """
+    if opted_out:
+        return ("skip", None)
     if stored_id and stored_resolves:
         return ("use", stored_id)
     if named_role_ids:
         return ("adopt", named_role_ids[0])
     # Nothing to point at. Whether this is a first run or a deletion is the
-    # whole difference between silence and telling the mods.
-    return ("recreate", None) if stored_id else ("create", None)
+    # whole difference between silence and telling the mods — and only this
+    # guild's own stored id can have been deleted out from under us.
+    return ("recreate", None) if (stored_id and stored_is_own) else ("create", None)
 
 
 def recreate_notice(spec_name: str, feature: str) -> str:
@@ -144,6 +163,8 @@ async def ensure_feature_role(
     store: Callable[[int], Any],
     announce: Callable[[str], Awaitable[None]] | None = None,
     on_create: Callable[[discord.Role], Awaitable[None]] | None = None,
+    opted_out: bool = False,
+    stored_is_own: bool = True,
     feature: str = "",
 ) -> discord.Role | None:
     """Return the feature's role, adopting or creating it if need be.
@@ -166,14 +187,23 @@ async def ensure_feature_role(
     are the feature's business and are set per channel, explicitly, because
     category grants do not cascade.
 
-    ``None`` means the role could not be provisioned (no **Manage Roles**, or
-    Discord refused) — the caller degrades, it does not crash.
+    ``opted_out`` short-circuits everything: an admin said "no role here", so
+    nothing is created, adopted or written and ``None`` comes straight back.
+
+    ``None`` means the role could not be provisioned (no **Manage Roles**,
+    Discord refused, or the dial is opted out) — the caller degrades, it does
+    not crash.
     """
+    if opted_out:
+        return None
     stored_id = int(await _resolve(load()) or 0)
     stored_role = guild.get_role(stored_id) if stored_id else None
     named = [r.id for r in guild.roles if r.name == spec.name]
 
-    action, role_id = choose_role_action(stored_id, stored_role is not None, named)
+    action, role_id = choose_role_action(
+        stored_id, stored_role is not None, named,
+        opted_out=opted_out, stored_is_own=stored_is_own,
+    )
 
     if action == "use":
         return stored_role
@@ -230,6 +260,89 @@ async def ensure_feature_role(
     return role
 
 
+def role_dial_opted_out(
+    conn: Any,
+    key: str,
+    guild_id: int,
+    *,
+    allow_legacy_fallback: bool = True,
+) -> bool:
+    """Whether an admin explicitly chose "no role" for a ``config`` dial.
+
+    The distinction this draws is the whole reason ping roles can be
+    provisioned at all. A dial nobody has touched has **no row**; picking
+    "(none)" on the dashboard writes a row holding ``"0"``. Same effective
+    value to the feature, opposite meanings to us: one is "set this up for me",
+    the other is "I said no pings". Overriding the second would both delete a
+    working preference and start mentioning a role nobody holds.
+
+    Mirrors ``get_config_value``'s lookup, legacy fallback included, so a guild
+    that inherits a home-guild "(none)" is read as opted out rather than
+    unconfigured.
+    """
+    row = conn.execute(
+        "SELECT value FROM config WHERE guild_id = ? AND key = ?", (guild_id, key)
+    ).fetchone()
+    if row is None and guild_id != 0 and allow_legacy_fallback:
+        row = conn.execute(
+            "SELECT value FROM config WHERE guild_id = ? AND key = ?", (0, key)
+        ).fetchone()
+    if row is None:
+        return False  # never configured — ours to provision
+    return str(row["value"]).strip() in ("", "0", "-1")
+
+
+async def ensure_config_role(
+    ctx: "AppContext",
+    guild: discord.Guild,
+    key: str,
+    spec: RoleSpec,
+    *,
+    feature: str = "",
+    allow_legacy_fallback: bool = True,
+) -> discord.Role | None:
+    """:func:`ensure_feature_role` for a role dial living in the ``config`` KV.
+
+    Reads the stored id and the opted-out question in one thread hop, then
+    provisions. Returns ``None`` when the admin opted out, so a caller can
+    write ``role = await ensure_config_role(...)`` / ``if role is not None:``
+    and keep exactly the "unset means don't" behaviour it had before.
+    """
+    import asyncio
+
+    from bot_modules.core.db_utils import get_config_value
+
+    def _read() -> tuple[int, bool, bool]:
+        with ctx.open_db() as conn:
+            opted_out = role_dial_opted_out(
+                conn, key, guild.id, allow_legacy_fallback=allow_legacy_fallback
+            )
+            own = conn.execute(
+                "SELECT 1 FROM config WHERE guild_id = ? AND key = ?",
+                (guild.id, key),
+            ).fetchone()
+            raw = get_config_value(
+                conn, key, "0", guild.id,
+                allow_legacy_fallback=allow_legacy_fallback,
+            )
+        try:
+            return int(raw or "0"), opted_out, own is not None
+        except ValueError:
+            return 0, opted_out, own is not None
+
+    stored_id, opted_out, stored_is_own = await asyncio.to_thread(_read)
+    return await ensure_feature_role(
+        guild,
+        spec,
+        load=lambda: stored_id,
+        store=lambda rid: ctx.set_config_value(key, str(rid), guild.id),
+        announce=mod_log_announcer(ctx, guild),
+        opted_out=opted_out,
+        stored_is_own=stored_is_own,
+        feature=feature or spec.name,
+    )
+
+
 def mod_log_announcer(
     ctx: "AppContext", guild: discord.Guild, *, action: str = "feature_role_recreated"
 ) -> Callable[[str], Awaitable[None]]:
@@ -251,7 +364,9 @@ def mod_log_announcer(
                     conn,
                     guild_id=guild.id,
                     action=action,
-                    actor_id=guild.me.id if guild.me else 0,
+                    # Off-gateway, guild.me is None (and a fake may lack it
+                    # entirely); the row still wants writing.
+                    actor_id=getattr(getattr(guild, "me", None), "id", 0) or 0,
                     extra={"message": message},
                 )
                 conn.commit()
