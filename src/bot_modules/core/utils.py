@@ -210,6 +210,34 @@ async def resolve_bot_channel(bot, channel_id: int):
         return None
 
 
+#: Channel types the bot can post a panel or a doc into.
+POSTABLE_CHANNELS = (discord.TextChannel, discord.Thread, discord.VoiceChannel)
+
+
+async def resolve_postable_channel_in_guild(
+    bot, channel_id: int, guild: discord.Guild | None = None
+):
+    """A postable channel by id, refusing anything outside ``guild``.
+
+    This is a permission check, not a convenience. ``channel_id`` arrives from
+    a dashboard route, and both ``get_channel`` and ``fetch_channel`` search
+    every guild the bot is in — so without the ownership test a moderator of
+    one guild could post, edit and pin into a co-tenant guild's channels. The
+    docs sync and the role-menu sync each carried this verbatim; a rule about
+    who may write where should have exactly one statement.
+
+    ``guild`` is None only on paths acting on an already-stored placement,
+    where the channel was vetted when it was first chosen.
+    """
+    channel = await resolve_bot_channel(bot, channel_id)
+    if not isinstance(channel, POSTABLE_CHANNELS):
+        return None
+    owner = getattr(channel, "guild", None)
+    if guild is not None and owner is not None and owner.id != guild.id:
+        return None
+    return channel
+
+
 def jump_url(guild_id: int, channel_id: int, message_id: int) -> str:
     """A permalink to one message.
 

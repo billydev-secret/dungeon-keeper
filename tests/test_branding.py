@@ -286,3 +286,62 @@ def test_the_wrapper_still_lives_where_the_sweep_left_it():
     """Guards the exemption above: if branding.py moves, the sweep test would
     silently start exempting nothing (or the wrong file)."""
     assert _repo_root().joinpath(RESOLVER_HOME).is_file()
+
+
+# ── prime_accent_cache ────────────────────────────────────────────────
+#
+# Both hot-potato cogs resolve a game's accent once and reuse it for every
+# subsequent embed edit. What's worth pinning is the miss policy: a failure
+# must leave the key unset, not cache a fallback.
+
+
+@pytest.mark.asyncio
+async def test_a_resolved_accent_is_cached(monkeypatch):
+    monkeypatch.setattr(
+        branding, "resolve_accent_color", AsyncMock(return_value=discord.Color(0x00FF00))
+    )
+    cache: dict = {}
+    await branding.prime_accent_cache(
+        cache, 7, _Bot(), SimpleNamespace(id=1), log_label="hot potato"
+    )
+    assert cache == {7: discord.Color(0x00FF00)}
+
+
+@pytest.mark.asyncio
+async def test_an_already_primed_key_is_not_resolved_again(monkeypatch):
+    monkeypatch.setattr(branding, "resolve_accent_color", AsyncMock())
+    cache = {7: discord.Color(0x123456)}
+    await branding.prime_accent_cache(
+        cache, 7, _Bot(), SimpleNamespace(id=1), log_label="x"
+    )
+    branding.resolve_accent_color.assert_not_awaited()
+    assert cache == {7: discord.Color(0x123456)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param("raises", id="resolve-fails"),
+        pytest.param("no_guild", id="no-guild"),
+        pytest.param("no_ctx", id="no-ctx"),
+    ],
+)
+async def test_a_failure_leaves_the_key_unset(monkeypatch, case):
+    """Not cached-as-fallback: the render's own default applies now, and a
+    later prime can still succeed. Caching the fallback would pin a wrong
+    colour for the life of the game on one transient hiccup."""
+    monkeypatch.setattr(
+        branding,
+        "resolve_accent_color",
+        AsyncMock(side_effect=RuntimeError("boom") if case == "raises" else None),
+    )
+    cache: dict = {}
+    await branding.prime_accent_cache(
+        cache,
+        7,
+        _Bot(db_path=None) if case == "no_ctx" else _Bot(),
+        None if case == "no_guild" else SimpleNamespace(id=1),
+        log_label="hot potato",
+    )
+    assert cache == {}

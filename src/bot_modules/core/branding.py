@@ -176,6 +176,24 @@ async def safe_resolve_accent(
         return default
 
 
+async def prime_accent_cache(
+    cache: dict, key: Any, source: Any, guild: discord.Guild | None, *, log_label: str
+) -> None:
+    """Resolve ``guild``'s accent once and remember it under ``key``.
+
+    For games that render the same embed repeatedly and don't want a branding
+    read per edit. Already-cached keys short-circuit, and a failed resolve
+    leaves the key *unset* rather than caching a fallback — so the render's own
+    default applies now and a later prime can still succeed, instead of the
+    first hiccup pinning a wrong colour for the life of the game.
+    """
+    if key in cache:
+        return
+    accent = await safe_resolve_accent(source, guild, log_label=log_label)
+    if accent is not None:
+        cache[key] = accent
+
+
 def invalidate_accent_cache(guild_id: int) -> None:
     """Drop any cached avatar-derived color for a guild.
 
