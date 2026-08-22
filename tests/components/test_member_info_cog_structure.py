@@ -210,3 +210,68 @@ def test_viewable_ids_include_threads():
     guild.channels = [_chan(1), _chan(2, visible=False)]
     guild.threads = [_chan(10), _chan(11, visible=False)]
     assert _viewable_channel_ids(guild, _member()) == {1, 10}
+
+
+def test_an_unimportable_feature_module_costs_only_its_own_row(sync_db_path):
+    """Lazy imports were still outside the guards, so one bad module took the
+    whole card — the outcome the per-feature guarding exists to prevent."""
+    import builtins
+
+    import bot_modules.cogs.member_info_cog as mod
+
+    real_import = builtins.__import__
+
+    def _fail_wellness(name, *args, **kwargs):
+        if name == "bot_modules.services.wellness_service":
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    with open_db(sync_db_path) as conn:
+        builtins.__import__ = _fail_wellness
+        try:
+            states = mod._feature_states(conn, 1, _member(), _bot())
+        finally:
+            builtins.__import__ = real_import
+
+    assert "wellness" not in states
+    assert states["birthday"].configured
+    assert states["no_contact"].configured
+
+
+def test_pen_pals_info_panel_source_is_labelled_on_the_dashboard():
+    """The pool-activity panel renders `REASONS[v] || v`, so an unlabelled
+    source shows moderators a raw identifier among readable sentences."""
+    from pathlib import Path as _Path
+
+    from bot_modules.member_info.views import PEN_PALS_SOURCE
+
+    panel = _Path("src/web_server/static/js/panels/pen-pals-pool-activity.js")
+    if not panel.exists():  # partial checkout on the remote runner
+        pytest.skip("web_server assets not present in this checkout")
+    assert f"{PEN_PALS_SOURCE}:" in panel.read_text(encoding="utf-8")
+
+
+def test_every_chart_renderer_is_serialized():
+    """All of them share pyplot's global figure registry; a partially covered
+    lock protects nothing the moment one of the others gets a caller."""
+    import inspect
+
+    from bot_modules.services import activity_graphs
+
+    for name, fn in inspect.getmembers(activity_graphs, inspect.isfunction):
+        if name.startswith("render_"):
+            assert getattr(fn, "__wrapped__", None) is not None, name
+
+
+def test_the_render_lock_survives_a_nested_render():
+    """`render_nsfw_gender_line_chart` delegates to `render_nsfw_gender_chart`,
+    which a non-reentrant lock would deadlock on."""
+    import threading
+
+    from bot_modules.services.activity_graphs import _RENDER_LOCK
+
+    with _RENDER_LOCK:
+        acquired = _RENDER_LOCK.acquire(timeout=2)
+        assert acquired, "render lock is not reentrant — nested render deadlocks"
+        _RENDER_LOCK.release()
+    assert isinstance(_RENDER_LOCK, type(threading.RLock()))

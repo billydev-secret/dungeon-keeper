@@ -330,3 +330,32 @@ def test_wellness_opted_in_label_does_not_say_settings():
     """The only entry point re-runs opt-in, which resets notification prefs."""
     rows = _rows({"wellness": FeatureState(configured=True, state=STATE_IN)})
     assert "settings" not in rows["wellness"].action_label.lower()
+
+
+# ── Regression: the activity field must not contradict its own header ────
+# Discord evicts a thread from the guild cache when it archives, and
+# processed_messages holds only the thread's own id — so a member whose month
+# was spent in now-archived threads has a real count and nothing nameable.
+
+
+def test_activity_does_not_claim_no_messages_when_there_were_messages():
+    embed = build_member_info_embed(
+        display_name="Ada",
+        avatar_url=None,
+        facts=_facts(msgs_30d=150, top_channels=[]),
+        optin_rows=[],
+    )
+    activity = next(f for f in embed.fields if "Activity" in f.name)
+    assert "150" in activity.name
+    assert "No messages recorded" not in (activity.value or "")
+
+
+def test_activity_still_says_nothing_recorded_when_there_was_nothing():
+    embed = build_member_info_embed(
+        display_name="Ada",
+        avatar_url=None,
+        facts=_facts(msgs_30d=0, top_channels=[]),
+        optin_rows=[],
+    )
+    activity = next(f for f in embed.fields if "Activity" in f.name)
+    assert "No messages recorded" in (activity.value or "")

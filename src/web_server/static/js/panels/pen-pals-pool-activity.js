@@ -19,6 +19,7 @@ const REASONS = {
   panel: "used the signup panel",
   command: "ran /penpals",
   dm: "used the button in their DM",
+  info_panel: "used their /info card",
   requeue_expired: "chat ended — back in the pool",
   requeue_abnormal: "chat ended early — back in the pool",
   backfill: "seeded from an earlier chat",

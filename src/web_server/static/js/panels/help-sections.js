@@ -66,6 +66,7 @@ export const HELP_GROUPS = [
     { page: "help-wellness",  anchor: "wellness",      label: "Wellness" },
     { page: "help-dms",       anchor: "dm-perms",      label: "DM Permissions" },
     { page: "help-no-contact", anchor: "no-contact",   label: "No-Contact List" },
+    { page: "help-info",      anchor: "info",          label: "Your Info Card" },
     { page: "help-self",      anchor: "self-service",  label: "Member Self-Service" },
     { page: "help-your-data", anchor: "your-data",     label: "Your Data & Privacy" },
     { page: "help-privacy",   anchor: "privacy",       label: "Data Erasure" },

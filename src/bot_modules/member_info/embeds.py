@@ -67,12 +67,31 @@ def _roles_value(facts: AccountFacts) -> str:
 
 
 def _activity_value(facts: AccountFacts) -> str:
+    """Last seen, then the busiest nameable channels.
+
+    The empty case is split in two on purpose. The channel list is filtered to
+    what the member can currently open, and some rows can never be resolved:
+    Discord evicts a thread from the guild cache the moment it archives (which
+    it does after 24h–1 week of quiet), and ``processed_messages`` stores only
+    the thread's own id — there is no parent to fall back to. So a member whose
+    month was spent in threads that have since archived has a real message
+    count and nothing nameable to attribute it to.
+
+    Printing "No messages recorded" there would have the field contradict the
+    header directly above it, which counts those very messages. Saying we can't
+    name the places is both true and non-leaking.
+    """
     last_seen = f"<t:{int(facts.last_seen_ts)}:R>" if facts.last_seen_ts else "—"
     lines = [f"Last seen: {last_seen}"]
     if facts.top_channels:
         lines += [
             f"<#{channel_id}> — {count:,} msgs" for channel_id, count in facts.top_channels
         ]
+    elif facts.msgs_30d:
+        lines.append(
+            "Posted in threads or channels we can't list here "
+            "(archived threads, or channels you no longer have access to)."
+        )
     else:
         lines.append("No messages recorded in the last 30 days.")
     return fit_lines(lines)

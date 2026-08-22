@@ -95,14 +95,29 @@ The same reasoning caps the Roles field by length, not just by count: Discord
 allows 100-character role names, twelve of them overrun the 1024-byte field
 limit, and a rejected embed past the defer is a card that never arrives.
 
-### Threads count as channels
+### Threads count as channels — and archived ones can't be named
 
 `award_message_xp` accepts a `discord.Thread` and stores `message.channel.id`,
 so `processed_messages` holds rows keyed by *thread* id — while
 `guild.channels` excludes threads. `_viewable_channel_ids` unions
-`guild.threads` in for exactly this reason; filtering against channels alone
-drops every thread row, and a member who talks mostly in threads is told "No
-messages recorded" under a header counting those messages.
+`guild.threads` in for exactly this reason.
+
+That covers live threads only, and it cannot be made to cover archived ones.
+discord.py drops a thread from the guild cache the moment it archives
+(`state.parse_thread_update` → `guild._remove_thread`), Discord archives after
+24h–1 week of quiet, and `processed_messages` stores no parent id — so for an
+archived thread there is no cached object *and* no parent channel whose
+visibility could stand in. `get_channel_or_thread` does not help: it reads the
+same two caches. Those rows stay excluded, because visibility that cannot be
+verified is not visibility.
+
+What that must not do is make the field contradict its own header. A member
+whose month was spent in since-archived threads has a real 30-day count and
+nothing nameable to attribute it to, so `_activity_value` distinguishes the
+two empty cases: "no messages recorded" only when the count is genuinely zero,
+and otherwise a line saying the places can't be listed. Fixing this properly
+would mean storing `parent_id` on `processed_messages` — a migration plus an
+ingest change in the XP path, out of scope here.
 
 ## The buttons re-enter existing flows
 

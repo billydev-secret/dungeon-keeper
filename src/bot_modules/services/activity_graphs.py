@@ -41,7 +41,10 @@ matplotlib.use("Agg")
 # renders are serialized. Rendering is ~100ms, so the queue is not a
 # bottleneck — and interleaved access to that registry is not a slow
 # chart, it is the wrong chart or a crash.
-_RENDER_LOCK = threading.Lock()
+# Reentrant on purpose: `render_nsfw_gender_line_chart` delegates to
+# `render_nsfw_gender_chart` for its single-bucket case, so a plain Lock
+# would deadlock the worker thread the first time that path ran.
+_RENDER_LOCK = threading.RLock()
 
 
 def _serialized_render(fn):
@@ -50,6 +53,11 @@ def _serialized_render(fn):
     A decorator rather than a ``with`` inside each body: the bodies are long
     and each has several early returns, and a lock released on one path but
     not another is worse than no lock at all.
+
+    Applied to **every** renderer in this module, not only the ones with a
+    caller today. They all mutate the same global pyplot figure registry, so a
+    partially-covered lock protects nothing the moment someone wires up one of
+    the others — and the omission would look deliberate.
     """
 
     @functools.wraps(fn)
@@ -1645,6 +1653,7 @@ def query_nsfw_gender_activity(
     return labels, gender_counts
 
 
+@_serialized_render
 def render_nsfw_gender_chart(
     labels: list[str],
     gender_counts: dict[str, list[int]],
@@ -1717,6 +1726,7 @@ def render_nsfw_gender_chart(
     return buf.read()
 
 
+@_serialized_render
 def render_nsfw_gender_line_chart(
     labels: list[str],
     gender_counts: dict[str, list[int]],
@@ -1852,6 +1862,7 @@ def query_greeter_response_times(
     return response_times
 
 
+@_serialized_render
 def render_greeter_response_chart(
     response_times: list[float],
     title: str,

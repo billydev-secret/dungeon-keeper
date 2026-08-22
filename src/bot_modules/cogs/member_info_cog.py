@@ -68,29 +68,20 @@ def _feature_states(conn, guild_id: int, member: discord.Member, bot) -> dict[st
     the tree's error handler only speaks when the interaction is unanswered,
     so an escaping exception leaves the member on "thinking…" forever.
     """
-    # Imported lazily: this cog must load even if a feature's cog does not.
-    from bot_modules.cogs.pen_pals_cog import (  # noqa: PLC0415
-        _get_active_session,
-        _get_config as _pen_pals_config,
-        _in_pool,
-        _is_opted_out,
-    )
-    from bot_modules.services.birthday_service import has_birthday  # noqa: PLC0415
-    from bot_modules.services.dm_perms_service import (  # noqa: PLC0415
-        get_dm_mode_role_ids_with_conn,
-        resolve_mode,
-    )
-    from bot_modules.services.guess_repo import get_guess_config  # noqa: PLC0415
-    from bot_modules.services.wellness_service import (  # noqa: PLC0415
-        get_wellness_config,
-        get_wellness_user,
-    )
-    from bot_modules.services.whisper_repo import get_whisper_config  # noqa: PLC0415
-
+    # Every import is lazy *and* inside its own feature's guard. Lazy alone
+    # was not enough: an ImportError raised at call time from any one of these
+    # modules escaped `_feature_states` entirely and cost the whole card — the
+    # exact outcome the per-feature guarding exists to prevent.
     role_ids = {r.id for r in member.roles}
     states: dict[str, FeatureState] = {}
 
     try:
+        from bot_modules.cogs.pen_pals_cog import (  # noqa: PLC0415
+            _get_active_session,
+            _get_config as _pen_pals_config,
+            _in_pool,
+            _is_opted_out,
+        )
         # ── Pen Pals ─────────────────────────────────────────────────────────
         cfg = _pen_pals_config(conn, guild_id)
         if cfg is not None and cfg["enabled"]:
@@ -122,6 +113,9 @@ def _feature_states(conn, guild_id: int, member: discord.Member, bot) -> dict[st
     except Exception:
         log.exception("info panel: reading %s state failed", "pen_pals")
     try:
+        from bot_modules.services.whisper_repo import (  # noqa: PLC0415
+            get_whisper_config,
+        )
         # ── Whispers ─────────────────────────────────────────────────────────
         whisper_cfg = get_whisper_config(conn, guild_id)
         if whisper_cfg.role_id:
@@ -134,6 +128,7 @@ def _feature_states(conn, guild_id: int, member: discord.Member, bot) -> dict[st
     except Exception:
         log.exception("info panel: reading %s state failed", "whispers")
     try:
+        from bot_modules.services.guess_repo import get_guess_config  # noqa: PLC0415
         # ── Guess pool ───────────────────────────────────────────────────────
         guess_cfg = get_guess_config(conn, guild_id)
         if guess_cfg.guess_role_id:
@@ -146,6 +141,10 @@ def _feature_states(conn, guild_id: int, member: discord.Member, bot) -> dict[st
     except Exception:
         log.exception("info panel: reading %s state failed", "guess")
     try:
+        from bot_modules.services.dm_perms_service import (  # noqa: PLC0415
+            get_dm_mode_role_ids_with_conn,
+            resolve_mode,
+        )
         # ── DM mode ──────────────────────────────────────────────────────────
         # Gate on the cog, not on configured role ids: with no `dm_mode_roles` row
         # the ids are all 0, but the feature still works — `resolve_mode` falls back
@@ -164,6 +163,10 @@ def _feature_states(conn, guild_id: int, member: discord.Member, bot) -> dict[st
     except Exception:
         log.exception("info panel: reading %s state failed", "dm_mode")
     try:
+        from bot_modules.services.wellness_service import (  # noqa: PLC0415
+            get_wellness_config,
+            get_wellness_user,
+        )
         # ── Wellness ─────────────────────────────────────────────────────────
         wellness_cfg = get_wellness_config(conn, guild_id)
         if wellness_cfg is not None and wellness_cfg.role_id:
@@ -181,6 +184,9 @@ def _feature_states(conn, guild_id: int, member: discord.Member, bot) -> dict[st
     except Exception:
         log.exception("info panel: reading %s state failed", "wellness")
     try:
+        from bot_modules.services.birthday_service import (  # noqa: PLC0415
+            has_birthday,
+        )
         # ── Birthday ─────────────────────────────────────────────────────────
         if bot.get_cog("BirthdayCog") is not None:
             states["birthday"] = FeatureState(
@@ -213,6 +219,14 @@ def _viewable_channel_ids(guild: discord.Guild, member: discord.Member) -> set[i
 
     ``Thread.permissions_for`` delegates to the parent channel, so one check
     covers both kinds.
+
+    This still cannot see **archived** threads: discord.py drops a thread from
+    the guild cache as soon as it archives (``state.parse_thread_update`` ->
+    ``guild._remove_thread``), Discord archives after 24h-1 week of quiet, and
+    ``processed_messages`` stores the thread id with no parent to fall back to.
+    Those rows are excluded rather than shown unchecked — visibility we cannot
+    verify is not visibility. ``_activity_value`` says so plainly instead of
+    claiming the member posted nothing.
     """
     return {
         channel.id
