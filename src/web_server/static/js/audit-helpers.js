@@ -45,7 +45,14 @@ export function jumpAnchor(channelId, messageId, label) {
   );
 }
 
-function fmtTs(ts) {
+/** "Mar 4 14:05" from a unix timestamp; an em dash for a missing one.
+ *
+ * mod-jails and mod-warnings each carried this verbatim. Not the same as
+ * api.js's `fmtTs`, which also accepts Dates and ISO strings and appends the
+ * year outside the current one — that one renders differently, so the two are
+ * not interchangeable and both are kept.
+ */
+export function fmtTs(ts) {
   if (!ts) return "—";
   const d = new Date(ts * 1000);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +

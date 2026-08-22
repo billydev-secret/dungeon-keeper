@@ -23,6 +23,7 @@ import discord
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.docs import db as docs_db
 from bot_modules.docs.render import EmbedSpec, render_doc
+from bot_modules.core.utils import resolve_postable_channel_in_guild
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.docs")
 
 # Channel types we can post a doc into.
-_POSTABLE = (discord.TextChannel, discord.Thread, discord.VoiceChannel)
+_resolve_channel = resolve_postable_channel_in_guild
 
 
 @dataclass
@@ -71,29 +72,6 @@ async def _resolve_color(
         except ValueError:
             pass
     return await safe_resolve_accent(ctx, guild, log_label="docs", default=DEFAULT_ACCENT_COLOR)
-
-
-async def _resolve_channel(bot: "Bot", channel_id: int, guild: discord.Guild | None):
-    """Resolve a postable channel, refusing anything outside ``guild``.
-
-    ``channel_id`` arrives from the dashboard placement route, and both
-    ``bot.get_channel`` and ``bot.fetch_channel`` search every guild the bot is
-    in — so without the ownership check a moderator of one guild could post,
-    edit and pin docs into a co-tenant guild's channels. ``guild`` is None only
-    on paths that act on an already-stored placement.
-    """
-    channel = bot.get_channel(channel_id)
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(channel_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            channel = None
-    if not isinstance(channel, _POSTABLE):
-        return None
-    if guild is not None and getattr(channel, "guild", None) is not None:
-        if channel.guild.id != guild.id:
-            return None
-    return channel
 
 
 async def _sync_channel(

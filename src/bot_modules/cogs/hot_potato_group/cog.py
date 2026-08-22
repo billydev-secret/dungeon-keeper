@@ -15,7 +15,7 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.branding import prime_accent_cache
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
@@ -177,12 +177,13 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         """Resolve & cache this game's guild accent once; never raise into a game
         path. Leaves the entry unset (render falls back to COLOR_YELLOW) when
         there's no guild, no bot.ctx/db_path, or resolution fails."""
-        if game.id in self._accents:
-            return
-        guild = self.bot.get_guild(game.guild_id)
-        accent = await safe_resolve_accent(self.bot, guild, log_label="hot potato group")
-        if accent is not None:
-            self._accents[game.id] = accent
+        await prime_accent_cache(
+            self._accents,
+            game.id,
+            self.bot,
+            self.bot.get_guild(game.guild_id),
+            log_label="hot potato group",
+        )
 
     async def on_game_start(self, game: HotPotatoGroupGame) -> None:
         await self._prime_accent(game)

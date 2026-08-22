@@ -3,7 +3,7 @@ import { showTranscript } from "../transcript-modal.js";
 import { toast, promptDialog, confirmDialog } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
-import { syncHash } from "../report-helpers.js";
+import { syncHash, updatedStampText } from "../report-helpers.js";
 import { mountPanelPoster } from "../panel-post.js";
 
 // The queue is a live workspace, so it re-fetches itself while you have it
@@ -409,21 +409,7 @@ export function mount(container, initialParams = {}) {
   let loadFailed = false;
 
   function renderUpdatedStamp() {
-    if (loadFailed) {
-      updatedEl.textContent = "Last refresh failed";
-      return;
-    }
-    if (!lastLoadedAt) {
-      updatedEl.textContent = "Loading…";
-      return;
-    }
-    const secs = Math.max(0, Math.round((Date.now() - lastLoadedAt) / 1000));
-    if (secs < 5) updatedEl.textContent = "Updated just now";
-    else if (secs < 60) updatedEl.textContent = `Updated ${secs} seconds ago`;
-    else {
-      const mins = Math.round(secs / 60);
-      updatedEl.textContent = `Updated ${mins} minute${mins === 1 ? "" : "s"} ago`;
-    }
+    updatedEl.textContent = updatedStampText(lastLoadedAt, loadFailed);
   }
 
   function currentTicketSource() {

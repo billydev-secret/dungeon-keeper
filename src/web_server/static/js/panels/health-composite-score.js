@@ -1,6 +1,6 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
-import { botToggleHtml, wireBotToggle } from "../report-helpers.js";
+import { mountBotToggle } from "../report-helpers.js";
 
 const DIM_COLORS = ["#E6B84C", "#B88A2C", "#7F8F3A", "#B36A92", "#9E3B2E", "#949ba4"];
 
@@ -130,11 +130,7 @@ export function mount(container) {
   // Bots are excluded from every metric by default; this is the per-report
   // opt-in. Re-injected after each render because load() rewrites the panel.
   function decorate() {
-    const panel = container.querySelector(".panel");
-    const hdr = panel && panel.querySelector("header");
-    if (!hdr || hdr.querySelector(".bot-toggle")) return;
-    hdr.insertAdjacentHTML("beforeend", botToggleHtml(includeBots));
-    wireBotToggle(hdr, (v) => {
+    mountBotToggle(container, includeBots, (v) => {
       includeBots = v;
       reload();
     });

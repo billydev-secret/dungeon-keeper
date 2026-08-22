@@ -3,7 +3,8 @@ import { showTranscript } from "../transcript-modal.js";
 import { toast, promptDialog } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
-import { syncHash } from "../report-helpers.js";
+import { syncHash, updatedStampText } from "../report-helpers.js";
+import { fmtTs } from "../audit-helpers.js";
 
 // Jails expire on a timer, so the queue re-fetches itself while open and the
 // "time left" figures re-render every second in between.
@@ -23,13 +24,6 @@ function avatarColor(key) {
 function initial(name) {
   const s = String(name || "?").trim();
   return (s[0] || "?").toUpperCase();
-}
-
-function fmtTs(ts) {
-  if (!ts) return "—";
-  const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
-         d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
 function fmtAge(ts) {
@@ -311,15 +305,7 @@ export function mount(container, initialParams = {}) {
   let loadFailed = false;
 
   function renderUpdatedStamp() {
-    if (loadFailed) { updatedEl.textContent = "Last refresh failed"; return; }
-    if (!lastLoadedAt) { updatedEl.textContent = "Loading…"; return; }
-    const secs = Math.max(0, Math.round((Date.now() - lastLoadedAt) / 1000));
-    if (secs < 5) updatedEl.textContent = "Updated just now";
-    else if (secs < 60) updatedEl.textContent = `Updated ${secs} seconds ago`;
-    else {
-      const mins = Math.round(secs / 60);
-      updatedEl.textContent = `Updated ${mins} minute${mins === 1 ? "" : "s"} ago`;
-    }
+    updatedEl.textContent = updatedStampText(lastLoadedAt, loadFailed);
   }
 
   function render() {

@@ -1,12 +1,6 @@
 import { api, esc } from "../api.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
-
-function fmtTs(ts) {
-  if (!ts) return "—";
-  const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
-         d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
+import { fmtTs } from "../audit-helpers.js";
 
 function fmtAge(ts) {
   const s = Math.round(Date.now() / 1000 - ts);

@@ -135,3 +135,51 @@ export function wireBotToggle(root, onChange) {
   if (el) el.addEventListener("change", () => onChange(el.checked));
   return el;
 }
+
+/**
+ * Put the bot toggle in a panel's header and wire it, idempotently.
+ *
+ * The pairing of {@link botToggleHtml} and {@link wireBotToggle} is always
+ * the same six lines, and seven health panels each carried their own copy —
+ * which meant seven copies of the *header's DOM shape*: that the panel root
+ * holds a `.panel`, that the toggle belongs at the end of its `<header>`,
+ * and that a re-render must not append a second one. Change that markup and
+ * seven panels break together, which is the duplication worth removing here;
+ * the line savings are incidental.
+ *
+ * A no-op when the header is missing (the panel failed to render) or already
+ * carries a toggle (`decorate` runs after every reload, not just the first).
+ *
+ * @param {HTMLElement} container       the panel's mount point
+ * @param {boolean} checked             current state, so it survives a re-render
+ * @param {(v:boolean)=>void} onChange  called with the new state
+ */
+export function mountBotToggle(container, checked, onChange) {
+  const panel = container.querySelector(".panel");
+  const hdr = panel && panel.querySelector("header");
+  if (!hdr || hdr.querySelector(".bot-toggle")) return;
+  hdr.insertAdjacentHTML("beforeend", botToggleHtml(checked));
+  wireBotToggle(hdr, onChange);
+}
+
+/**
+ * "Updated 3 minutes ago" for a panel that auto-refreshes.
+ *
+ * Returns the text rather than writing it, so the caller keeps ownership of
+ * its element. mod-jails and mod-tickets had the same ladder verbatim (down
+ * to the "just now" cutoff and the singular minute), and a queue that refreshes
+ * itself is exactly where two panels disagreeing about how stale "stale" looks
+ * would be confusing.
+ *
+ * @param {number|null} lastLoadedAt  Date.now() of the last successful load
+ * @param {boolean} loadFailed        the last attempt errored
+ */
+export function updatedStampText(lastLoadedAt, loadFailed = false) {
+  if (loadFailed) return "Last refresh failed";
+  if (!lastLoadedAt) return "Loading…";
+  const secs = Math.max(0, Math.round((Date.now() - lastLoadedAt) / 1000));
+  if (secs < 5) return "Updated just now";
+  if (secs < 60) return `Updated ${secs} seconds ago`;
+  const mins = Math.round(secs / 60);
+  return `Updated ${mins} minute${mins === 1 ? "" : "s"} ago`;
+}

@@ -12,6 +12,7 @@ from bot_modules.core.utils import (
     format_user_for_log,
     is_host_or_mod,
     is_mod_or_admin,
+    resolve_postable_channel_in_guild,
     safe_ephemeral,
     resolve_guild_for_log,
     resolve_user_for_log,
@@ -336,3 +337,91 @@ async def test_refused_outside_a_guild_and_for_a_non_member():
 
     user = MagicMock(spec=discord.User)
     assert await _predicate()(_interaction(user)) is False
+
+
+# ── resolve_postable_channel_in_guild ─────────────────────────────────
+#
+# A permission check, not a convenience: channel_id arrives from a dashboard
+# route and get_channel/fetch_channel search every guild the bot is in, so the
+# ownership test is the only thing stopping a moderator of one guild writing
+# into a co-tenant's channels. docs/sync and role_menus/sync each had it.
+
+
+def _guild(gid: int):
+    g = MagicMock(spec=discord.Guild)
+    g.id = gid
+    return g
+
+
+def _channel(kind, guild=None):
+    ch = MagicMock(spec=kind)
+    ch.guild = guild
+    return ch
+
+
+def _bot(cached=None, fetched=None, fetch_error=None):
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=cached)
+    bot.fetch_channel = AsyncMock(
+        side_effect=fetch_error, return_value=fetched
+    )
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_a_channel_in_the_right_guild_resolves():
+    home = _guild(1)
+    ch = _channel(discord.TextChannel, home)
+    assert await resolve_postable_channel_in_guild(_bot(cached=ch), 55, home) is ch
+
+
+@pytest.mark.asyncio
+async def test_a_channel_in_another_guild_is_refused():
+    """The whole point: a co-tenant guild's channel must not be writable."""
+    ch = _channel(discord.TextChannel, _guild(999))
+    assert await resolve_postable_channel_in_guild(_bot(cached=ch), 55, _guild(1)) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind",
+    [
+        pytest.param(discord.TextChannel, id="text"),
+        pytest.param(discord.Thread, id="thread"),
+        pytest.param(discord.VoiceChannel, id="voice"),
+    ],
+)
+async def test_every_postable_kind_is_allowed(kind):
+    home = _guild(1)
+    ch = _channel(kind, home)
+    assert await resolve_postable_channel_in_guild(_bot(cached=ch), 55, home) is ch
+
+
+@pytest.mark.asyncio
+async def test_an_unpostable_channel_is_refused():
+    """A category or a stage channel is not somewhere a panel can go."""
+    ch = _channel(discord.CategoryChannel, _guild(1))
+    assert await resolve_postable_channel_in_guild(_bot(cached=ch), 55, _guild(1)) is None
+
+
+@pytest.mark.asyncio
+async def test_a_cache_miss_falls_back_to_one_fetch():
+    home = _guild(1)
+    ch = _channel(discord.TextChannel, home)
+    bot = _bot(cached=None, fetched=ch)
+    assert await resolve_postable_channel_in_guild(bot, 55, home) is ch
+    bot.fetch_channel.assert_awaited_once_with(55)
+
+
+@pytest.mark.asyncio
+async def test_an_unfetchable_channel_is_refused_not_raised():
+    """A deleted channel must not take down the route that asked for it."""
+    bot = _bot(cached=None, fetch_error=discord.NotFound(MagicMock(status=404), "gone"))
+    assert await resolve_postable_channel_in_guild(bot, 55, _guild(1)) is None
+
+
+@pytest.mark.asyncio
+async def test_no_guild_skips_the_ownership_check():
+    """Paths acting on an already-stored placement vetted it when it was set."""
+    ch = _channel(discord.TextChannel, _guild(999))
+    assert await resolve_postable_channel_in_guild(_bot(cached=ch), 55, None) is ch

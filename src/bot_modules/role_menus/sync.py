@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
-from bot_modules.core.utils import get_bot_member
+from bot_modules.core.utils import get_bot_member, resolve_postable_channel_in_guild
 from bot_modules.role_menus import db as menus_db
 from bot_modules.role_menus.views import build_disabled_view, build_view
 
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.role_menus")
 
-_POSTABLE = (discord.TextChannel, discord.Thread, discord.VoiceChannel)
+_resolve_channel = resolve_postable_channel_in_guild
 
 
 @dataclass
@@ -63,30 +63,6 @@ async def build_embed(
     if thumb.startswith(("http://", "https://")):
         embed.set_thumbnail(url=thumb)
     return embed
-
-
-async def _resolve_channel(
-    bot: "Bot", channel_id: int, guild: "discord.Guild | None" = None
-):
-    """Resolve a postable channel, refusing anything outside ``guild``.
-
-    The publish route takes ``channel_id`` from the caller, and bot.get_channel /
-    fetch_channel both search every guild the bot is in — so without this a
-    moderator of one guild could publish a role menu into another guild's
-    channel. ``guild`` is None only when acting on an already-stored message.
-    """
-    channel = bot.get_channel(channel_id)
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(channel_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            channel = None
-    if not isinstance(channel, _POSTABLE):
-        return None
-    if guild is not None and getattr(channel, "guild", None) is not None:
-        if channel.guild.id != guild.id:
-            return None
-    return channel
 
 
 async def _fetch_message(bot: "Bot", channel_id: int, message_id: int):
