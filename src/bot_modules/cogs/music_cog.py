@@ -34,9 +34,12 @@ from bot_modules.music.logic import (
 )
 from bot_modules.services.lavalink_manager import LavalinkManager
 from bot_modules.services.music_now_playing import (
+    CardRefresher,
     NowPlayingView,
     build_embed,
     cycle_loop_mode,
+    render_card,
+    retire_card,
 )
 from bot_modules.services.music_queue import GuildQueue, LoopMode
 from bot_modules.services.spotify_resolver import (
@@ -77,6 +80,8 @@ class MusicCog(commands.Cog):
         # guild_id -> identifier of the substitute currently covering a
         # blocked track; guards against a failed substitute re-substituting
         self._substituted: dict[int, str] = {}
+        # Coalesces the card refreshes a burst of track changes asks for.
+        self._card = CardRefresher()
         super().__init__()
 
     # ------------------------------------------------------------------
@@ -118,6 +123,7 @@ class MusicCog(commands.Cog):
         for task in self._idle_tasks.values():
             task.cancel()
         self._idle_tasks.clear()
+        self._card.cancel_all()
 
         for guild in list(self.bot.guilds):
             vc = guild.voice_client
@@ -142,6 +148,15 @@ class MusicCog(commands.Cog):
             q = GuildQueue(guild_id=guild_id)
             self._queues[guild_id] = q
         return q
+
+    def _end_session(self, guild_id: int) -> None:
+        """Drop everything keyed to a finished session.
+
+        The queue carries the card's ids, so a refresh coalesced behind the
+        old session's quiet window would edit a card that belongs to nothing.
+        """
+        self._queues.pop(guild_id, None)
+        self._card.forget(guild_id)
 
     def _player(self, guild: discord.Guild) -> wavelink.Player | None:
         vc = guild.voice_client
@@ -490,7 +505,7 @@ class MusicCog(commands.Cog):
 
         with contextlib.suppress(Exception):
             await player.disconnect()
-        self._queues.pop(guild.id, None)
+        self._end_session(guild.id)
         await interaction.response.send_message("Stopped and disconnected.")
 
     @app_commands.command(name="nowplaying", description="Repost the now-playing embed.")
@@ -515,9 +530,15 @@ class MusicCog(commands.Cog):
         )
         view = NowPlayingView()
         view.refresh_for(queue, paused=player.paused)
+        # Retire the card on record first. This command exists to bring the
+        # card back into view (or into another channel), and leaving the old
+        # one behind would leave a second card with working buttons in the
+        # channel it was rescued from.
+        await retire_card(guild, queue)
         await interaction.response.send_message(embed=embed, view=view)
         msg = await interaction.original_response()
         queue.now_playing_message_id = msg.id
+        queue.now_playing_channel_id = msg.channel.id
 
     @app_commands.command(name="disconnect", description="Force-disconnect from voice.")
     async def disconnect_cmd(self, interaction: discord.Interaction) -> None:
@@ -532,7 +553,7 @@ class MusicCog(commands.Cog):
         await player.stop()
         with contextlib.suppress(Exception):
             await player.disconnect()
-        self._queues.pop(guild.id, None)
+        self._end_session(guild.id)
 
         await interaction.response.send_message("Disconnected.")
 
@@ -549,7 +570,7 @@ class MusicCog(commands.Cog):
             return
         queue = self._queue(player.guild.id)
         queue.current = payload.track
-        await self._post_now_playing(player, payload.track)
+        await self._refresh_now_playing(player, payload.track)
 
     @commands.Cog.listener()
     async def on_wavelink_track_end(
@@ -711,33 +732,48 @@ class MusicCog(commands.Cog):
         # Schedule 60s idle disconnect
         self._schedule_idle_disconnect(guild, _IDLE_DISCONNECT_S)
 
-    async def _post_now_playing(
+    def _card_channel(
+        self, guild: discord.Guild, queue: GuildQueue
+    ) -> discord.TextChannel | discord.Thread | None:
+        """Where this guild's card lives, or where a first one would go.
+
+        The card stays in the channel it was posted in for the life of the
+        session, even after someone runs ``/play`` from somewhere else —
+        moving it would strand the old one, buttons and all. ``/nowplaying``
+        is how you move it: it retires the old card first.
+        """
+        for channel_id in (queue.now_playing_channel_id, queue.text_channel_id):
+            if not channel_id:
+                continue
+            channel = guild.get_channel(channel_id) or guild.get_thread(channel_id)
+            if isinstance(channel, (discord.TextChannel, discord.Thread)):
+                return channel
+        return None
+
+    async def _refresh_now_playing(
         self, player: wavelink.Player, track: wavelink.Playable
     ) -> None:
+        """Bring the guild's one card up to date with what is playing now."""
         guild = player.guild
         if guild is None:
             return
         queue = self._queue(guild.id)
-        text_id = queue.text_channel_id
-        if text_id is None:
-            return
-        channel = guild.get_channel(text_id) or guild.get_thread(text_id)
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+        channel = self._card_channel(guild, queue)
+        if channel is None:
             return
 
-        requester_id = queue.requester_for(track)
-        requester = guild.get_member(requester_id) if requester_id else None
-        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="music")
-        embed = build_embed(
-            track, queue, requester, paused=player.paused, color=accent
-        )
-        view = NowPlayingView()
-        view.refresh_for(queue, paused=player.paused)
-        try:
-            msg = await channel.send(embed=embed, view=view)
-            queue.now_playing_message_id = msg.id
-        except discord.HTTPException:
-            log.warning("failed to post now-playing in #%s", text_id)
+        async def _render() -> None:
+            requester_id = queue.requester_for(track)
+            requester = guild.get_member(requester_id) if requester_id else None
+            accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="music")
+            embed = build_embed(
+                track, queue, requester, paused=player.paused, color=accent
+            )
+            view = NowPlayingView()
+            view.refresh_for(queue, paused=player.paused)
+            await render_card(channel, queue, embed=embed, view=view)
+
+        await self._card.submit(guild.id, _render)
 
     async def _notify_text(
         self, player: wavelink.Player | None, message: str
@@ -819,7 +855,7 @@ class MusicCog(commands.Cog):
         if player is not None and player.channel and player.channel.id == channel.id:
             with contextlib.suppress(Exception):
                 await player.disconnect(force=True)
-            self._queues.pop(guild.id, None)
+            self._end_session(guild.id)
 
     def _schedule_idle_disconnect(self, guild: discord.Guild, after_s: int) -> None:
         existing = self._idle_tasks.pop(guild.id, None)
@@ -849,7 +885,7 @@ class MusicCog(commands.Cog):
         )
         with contextlib.suppress(Exception):
             await player.disconnect()
-        self._queues.pop(guild.id, None)
+        self._end_session(guild.id)
         self._idle_tasks.pop(guild.id, None)
 
     # ------------------------------------------------------------------
@@ -911,7 +947,7 @@ class MusicCog(commands.Cog):
         await player.stop()
         with contextlib.suppress(Exception):
             await player.disconnect()
-        self._queues.pop(guild.id, None)
+        self._end_session(guild.id)
         await interaction.response.send_message("Stopped.", ephemeral=True)
 
     async def handle_view_shuffle(

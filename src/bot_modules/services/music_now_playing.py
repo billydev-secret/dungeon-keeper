@@ -9,8 +9,10 @@ hot reload.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import discord
 
@@ -255,6 +257,142 @@ class NowPlayingView(discord.ui.View):
                 child.emoji = _PLAY_EMOJI if paused else _PAUSE_EMOJI
             elif cid == "music:np:loop":
                 child.emoji = _LOOP_EMOJI[queue.loop_mode]
+
+
+# ----------------------------------------------------------------------
+# The one card per guild
+# ----------------------------------------------------------------------
+
+#: Quiet period between two renders of one guild's card. Every track start
+#: asks for a refresh, so a member leaning on Skip asks for several a second,
+#: and message edits share the channel's rate-limit bucket. Coalescing is also
+#: what the listeners want: the card should show the track that won the burst,
+#: not flicker through the ones nobody heard.
+CARD_REFRESH_INTERVAL = 2.0
+
+
+async def render_card(
+    channel: Any, queue: GuildQueue, *, embed: discord.Embed, view: discord.ui.View
+) -> None:
+    """Put the guild's one now-playing card in front of the listeners.
+
+    Edits the existing card in place. Track change used to ``send`` a fresh
+    card every time, so a ten-track queue left ten cards in the channel — nine
+    of them naming a track that had already finished, and all nine still
+    carrying working buttons, because the view is persistent and every card
+    shares its custom_ids. From the channel that reads exactly as the report
+    put it: the card you are watching never changes, another one just appears
+    under it.
+
+    Reposts only when there is no card, or when the one on record is gone
+    because somebody deleted it. A transient edit failure keeps the ids, so
+    the next track change aims at the same message instead of starting a pile.
+    """
+    message_id = queue.now_playing_message_id
+    if message_id and queue.now_playing_channel_id == channel.id:
+        try:
+            await channel.get_partial_message(message_id).edit(embed=embed, view=view)
+            return
+        except discord.NotFound:
+            queue.now_playing_message_id = None
+            queue.now_playing_channel_id = None
+        except discord.HTTPException:
+            log.warning("now-playing edit failed in #%s", channel.id)
+            return
+    try:
+        message = await channel.send(embed=embed, view=view)
+    except discord.HTTPException:
+        log.warning("failed to post now-playing in #%s", channel.id)
+        return
+    queue.now_playing_message_id = message.id
+    queue.now_playing_channel_id = channel.id
+
+
+async def retire_card(guild: Any, queue: GuildQueue) -> None:
+    """Delete the card on record and forget it, best-effort.
+
+    ``/nowplaying`` reposts, and a repost that left the old card behind would
+    re-create the pile this module exists to avoid — the old one keeps working
+    buttons whether or not it is still accurate.
+    """
+    channel_id = queue.now_playing_channel_id
+    message_id = queue.now_playing_message_id
+    queue.now_playing_channel_id = None
+    queue.now_playing_message_id = None
+    if not channel_id or not message_id:
+        return
+    channel = guild.get_channel(channel_id) or guild.get_thread(channel_id)
+    if channel is None or not hasattr(channel, "get_partial_message"):
+        return
+    with contextlib.suppress(discord.HTTPException):
+        await channel.get_partial_message(message_id).delete()
+
+
+class CardRefresher:
+    """At most one card render per guild per interval; newest state wins.
+
+    Trailing-edge coalescing rather than a plain cooldown: a refresh that
+    arrives inside the quiet window is not dropped, it *replaces* whatever was
+    queued and runs when the window closes. So a burst of skips costs one edit
+    and that edit shows the track actually playing when the dust settles.
+    """
+
+    def __init__(self, interval: float = CARD_REFRESH_INTERVAL) -> None:
+        self._interval = interval
+        self._last: dict[int, float] = {}
+        self._pending: dict[int, Callable[[], Awaitable[None]]] = {}
+        self._tasks: dict[int, asyncio.Task[None]] = {}
+
+    async def submit(
+        self, guild_id: int, render: Callable[[], Awaitable[None]]
+    ) -> None:
+        now = asyncio.get_running_loop().time()
+        last = self._last.get(guild_id)
+        if last is not None and now - last < self._interval:
+            self._pending[guild_id] = render
+            self._arm(guild_id, self._interval - (now - last))
+            return
+        self._last[guild_id] = now
+        await render()
+
+    def forget(self, guild_id: int) -> None:
+        """Drop a guild's state — its session ended and its queue went with it."""
+        self._pending.pop(guild_id, None)
+        self._last.pop(guild_id, None)
+        task = self._tasks.pop(guild_id, None)
+        if task is not None:
+            task.cancel()
+
+    def cancel_all(self) -> None:
+        for task in self._tasks.values():
+            task.cancel()
+        self._tasks.clear()
+        self._pending.clear()
+        self._last.clear()
+
+    def _arm(self, guild_id: int, delay: float) -> None:
+        task = self._tasks.get(guild_id)
+        if task is not None and not task.done():
+            return
+        self._tasks[guild_id] = asyncio.create_task(self._flush(guild_id, delay))
+
+    async def _flush(self, guild_id: int, delay: float) -> None:
+        try:
+            while True:
+                await asyncio.sleep(delay)
+                render = self._pending.pop(guild_id, None)
+                if render is None:
+                    return
+                self._last[guild_id] = asyncio.get_running_loop().time()
+                try:
+                    await render()
+                except Exception:
+                    log.exception("now-playing refresh failed in guild %s", guild_id)
+                delay = self._interval
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._tasks.pop(guild_id, None)
 
 
 def cycle_loop_mode(current: LoopMode) -> LoopMode:

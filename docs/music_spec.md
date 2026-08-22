@@ -18,6 +18,8 @@ A music playback cog for shared listening in voice channels. Supports YouTube tr
 
 The now-playing card is a persistent message with five buttons: **Pause/Resume**, **Skip**, **Stop**, **Shuffle**, and **Loop** (cycles off → track → queue). Buttons require the clicker to be in the same voice channel as the bot.
 
+**One card per session, edited in place.** Every track change edits the existing card rather than posting another; a new one is posted only when there is none, or when the card has been deleted. Refreshes are coalesced to at most one every 2 seconds per guild, so a run of skips costs one edit showing the track that actually won. The card stays in the channel it was posted in even if `/play` is later run somewhere else — `/nowplaying` is how it moves, and it deletes the previous card before reposting.
+
 ## Behavior
 
 ### `/play`
@@ -151,4 +153,4 @@ full bot restart — respawning the JVM alone only picks up `application.yml`.
 
 ## Stored data
 
-No persistent tables. The per-channel 24/7 settings table (`music_channel_settings`) is no longer read or written; it survives as an empty orphan. All queue state, playback position, and now-playing message ids are in-memory only and don't survive a restart.
+No persistent tables. The per-channel 24/7 settings table (`music_channel_settings`) is no longer read or written; it survives as an empty orphan. All queue state, playback position, and the now-playing card's channel and message ids are in-memory only and don't survive a restart — after a restart the first track change posts a fresh card, and the old one keeps working buttons because the view is persistent.

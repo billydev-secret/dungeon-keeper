@@ -29,6 +29,11 @@ class GuildQueue:
     loop_mode: LoopMode = LoopMode.OFF
     history: Deque[Any] = field(default_factory=lambda: deque(maxlen=50))
     now_playing_message_id: int | None = None
+    #: Where that card actually is. The card is edited in place on
+    #: every track change, and ``text_channel_id`` moves whenever
+    #: someone runs /play from a different channel — so the edit has to
+    #: aim at the card's own channel, not the queue's current one.
+    now_playing_channel_id: int | None = None
     requesters: dict[str, int] = field(default_factory=dict)
 
     def add(self, track: Any, requester_id: int | None = None) -> None:
