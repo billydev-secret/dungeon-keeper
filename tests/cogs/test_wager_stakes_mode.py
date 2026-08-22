@@ -385,3 +385,61 @@ async def test_accepting_a_vanished_challenge_does_not_crash(db, sync_db_path):
 
     (text,) = interaction.response.send_message.await_args.args
     assert "gone" in text
+
+
+# ── nickname:False must not be undone by stakes text that cleans away ───────
+
+
+async def test_blank_stakes_with_nickname_off_is_refused(db, sync_db_path):
+    """Whitespace-only stakes clean to None. Reading the raw string when
+    deciding nickname mode answered "something else is staked", so the guard
+    was skipped, the Manage Nicknames / active-sentence preflights were
+    skipped — and the game then fell through to nickname mode at settlement
+    anyway, renaming someone who had explicitly opted out."""
+    bot = FakeEconGamesBot(db, sync_db_path, [1, 2])
+    cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
+    interaction = _creation_interaction(bot, 1)
+
+    await cog._base_challenge(interaction, FakeMember(id=2), "   ", nickname=False)
+
+    assert await hpdb.get_game(db, 1) is None
+    (text,) = interaction.response.send_message.await_args.args
+    assert "stake something else" in text
+
+
+async def test_blank_stakes_without_a_flag_is_a_plain_nickname_game(db, sync_db_path):
+    """The same normalisation the other way: blank stakes and no wager is just
+    a plain duel, and it must still run the nickname preflight."""
+    bot = FakeEconGamesBot(db, sync_db_path, [1, 2])
+    cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
+
+    interaction = _creation_interaction(bot, 1)  # clears guild.me
+    bot.guild.me = SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_nicknames=True), top_role=99
+    )
+    bot.guild.owner_id = 0
+
+    await cog._base_challenge(interaction, FakeMember(id=2), "   ")
+
+    game = await hpdb.get_game(db, 1)
+    assert game is not None
+    assert game.nick_stake
+    assert game.stakes_text is None
+
+
+async def test_manage_nicknames_gate_still_fires_for_blank_stakes(db, sync_db_path):
+    """The preflight has to see the normalised value: without Manage
+    Nicknames this game cannot run, and blank stakes must not smuggle it past."""
+    bot = FakeEconGamesBot(db, sync_db_path, [1, 2])
+    cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
+    interaction = _creation_interaction(bot, 1)  # clears guild.me
+    bot.guild.me = SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_nicknames=False), top_role=99
+    )
+    bot.guild.owner_id = 0
+
+    await cog._base_challenge(interaction, FakeMember(id=2), "   ")
+
+    assert await hpdb.get_game(db, 1) is None
+    (text,) = interaction.response.send_message.await_args.args
+    assert "Manage Nicknames" in text

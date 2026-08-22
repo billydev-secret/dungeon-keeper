@@ -709,16 +709,18 @@ class BaseGame(commands.Cog):
         stakes = game.stakes_text or "Last one standing wins; the final loser surrenders their nickname for 24h."
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
         if ante > 0:
-            join = _fmt_coins(settings, ante) if settings else f"**{ante:,}**"
             pot = (
                 _fmt_coins(settings, ante * len(game.roster))
                 if settings
                 else f"**{ante * len(game.roster):,}**"
             )
+            # The ante itself is already a line in the stakes field (see
+            # filters.resolve_stakes_text); this field only carries what that
+            # string can't — the pot, which grows as people join.
             embed.add_field(
-                name="💰 Wager",
+                name="💰 Pot",
                 value=(
-                    f"{join} to join — pot is {pot} and grows with each player.\n"
+                    f"{pot} so far, and it grows with each player.\n"
                     "_Leaving the lobby refunds you._"
                 ),
                 inline=False,
@@ -800,6 +802,23 @@ class BaseGame(commands.Cog):
             )
             return
 
+        # Normalise the stakes text before deciding whether this is a nickname
+        # game — see the same reordering in _base_challenge: whitespace-only
+        # stakes clean to None, and reading the raw string here would skip the
+        # preflights for a game that turns out to stake the nickname after all.
+        if stakes_text:
+            stakes_result = validate_stakes(
+                stakes_text,
+                max_length=cfg["max_stakes_length"],
+                denylist=json.loads(cfg.get("nick_denylist") or "[]"),
+            )
+            if not stakes_result.ok:
+                await interaction.response.send_message(
+                    f"Stakes rejected: {stakes_result.reason}", ephemeral=True
+                )
+                return
+            stakes_text = stakes_result.value or None
+
         # Nickname-mode preflight only applies when the loser is going to be
         # renamed; every other stake leaves nicknames alone.
         nick_stake = resolve_nick_stake(stakes_text, wager, nickname)
@@ -833,19 +852,6 @@ class BaseGame(commands.Cog):
                     ephemeral=True,
                 )
                 return
-
-        if stakes_text:
-            stakes_result = validate_stakes(
-                stakes_text,
-                max_length=cfg["max_stakes_length"],
-                denylist=json.loads(cfg.get("nick_denylist") or "[]"),
-            )
-            if not stakes_result.ok:
-                await interaction.response.send_message(
-                    f"Stakes rejected: {stakes_result.reason}", ephemeral=True
-                )
-                return
-            stakes_text = stakes_result.value or None
 
         if wager is not None:
             err = await self._wager_precheck(guild.id, host.id, wager)

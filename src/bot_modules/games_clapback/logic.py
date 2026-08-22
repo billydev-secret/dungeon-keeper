@@ -83,6 +83,20 @@ def admit_pending_players(
     return roster, admitted, turned_away
 
 
+def drain_pending_players(payload: dict) -> list[Any]:
+    """Empty the join queue and return whoever was still waiting in it.
+
+    :func:`admit_pending_players` only runs at a round boundary, so anyone who
+    pressed Join during the **final** round is queued for a round that never
+    comes — no admission, no notice, no place in the payout. A finished game
+    has to clear the queue and tell them, or they are left waiting on a game
+    that already ended.
+    """
+    pending = list(payload.get("pending_players") or [])
+    payload["pending_players"] = []
+    return pending
+
+
 #: Discord caps a button label at 80 characters; leave room for the side
 #: marker and the ellipsis.
 VOTE_LABEL_MAX = 55
@@ -98,10 +112,10 @@ def vote_button_label(side: str, answer: str, max_length: int = VOTE_LABEL_MAX) 
     step entirely.
 
     Newlines are flattened (Discord renders labels on one line) and the text
-    is truncated with an ellipsis. Falls back to ``"Vote A"`` / ``"Vote B"``
-    when the answer is blank or is nothing but whitespace. ``side`` is the
-    single letter, so the marker still matches the embed for anyone reading
-    the two together.
+    is truncated with an ellipsis. A blank or whitespace-only answer falls back
+    to ``"Vote <side>"``. ``side`` is the embed's own marker for that answer
+    (the 🅰️/🅱️ emoji in production), so button and embed stay legible read
+    together.
     """
     flat = " ".join(str(answer or "").split())
     if not flat:

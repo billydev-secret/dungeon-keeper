@@ -225,7 +225,13 @@ challenge card and again at payout ("Oh there were 2 stakes 👀", game night 20
 plain nickname-only game still persists `stakes_text = NULL` and each cog's own fallback
 wording, so the commonest shape of game is untouched. The challenge card adds the
 "nothing is charged unless accepted" caveat, which is true only while pending and so is never
-persisted.
+persisted; the lobby's own money field shows the **pot** (which grows as people join) rather
+than repeating the ante the stakes field already names.
+
+`resolve_nick_stake` is called only **after** `validate_stakes` has normalised the text —
+whitespace-only stakes clean away to `None`, and reading the raw string would answer
+"something else is staked" for a game that ends up staking nothing, skipping the nickname
+preflights and then falling back into nickname mode at settlement anyway.
 
 There is **no per-loser `stake_target` selection** in the current build: duels rename the one
 loser; group games rename a single deterministic loser (see per-game specs). The multi-target

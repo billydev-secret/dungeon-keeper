@@ -85,7 +85,10 @@ playing. It only queues (`pending_players`); admission happens at the next
 round boundary via `logic.admit_pending_players`, so a live round's matchups
 and answer count never shift underneath it. Admitted players start on **0
 points** and are announced in channel; anyone over `MAX_PLAYERS` is turned
-away out loud rather than silently dropped.
+away out loud rather than silently dropped. Pressing Join during the **last**
+round would otherwise queue someone for a boundary that never arrives, so the
+game end calls `logic.drain_pending_players` and tells them the game is over
+instead of leaving them waiting.
 
 ## 3. Bracketing (`logic.create_matchups`)
 

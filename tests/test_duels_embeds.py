@@ -46,9 +46,28 @@ def test_lobby_embed_uses_accent_and_currency_vocabulary():
     )
     assert embed.color == _ACCENT
     assert embed.color != discord.Color(0xFFD700)  # not the old COLOR_GOLD
-    wager = next(f for f in embed.fields if f.name == "💰 Wager")
-    assert "💎 **10** gems to join" in (wager.value or "")
-    assert "💎 **20** gems" in (wager.value or "")  # pot = ante × 2 players
+    pot = next(f for f in embed.fields if f.name == "💰 Pot")
+    assert "💎 **20** gems" in (pot.value or "")  # pot = ante × 2 players
+
+
+def test_lobby_embed_pot_field_does_not_repeat_the_ante():
+    """The ante is already a line in the stakes field since the stakes started
+    stacking, so printing it here too showed the same number twice on every
+    join/leave re-render. This field's job is the pot, which the stakes string
+    can't carry because it grows."""
+    game = SimpleNamespace(
+        roster=[1, 2], host_id=1,
+        stakes_text="💰 💎 **10** gems to join — winner takes the pot.",
+    )
+    embed = BaseGame._render_lobby(
+        _self("Chicken"), game, _guild(), 2, 8, 10,
+        color=_ACCENT, settings=_SETTINGS,
+    )
+    stakes = next(f for f in embed.fields if f.name == "📋 Stakes")
+    pot = next(f for f in embed.fields if f.name == "💰 Pot")
+    assert "💎 **10** gems to join" in (stakes.value or "")
+    assert "to join" not in (pot.value or "")
+    assert "**10**" not in (pot.value or "")
 
 
 def test_lobby_embed_without_settings_still_renders_bare_amount():
@@ -56,8 +75,8 @@ def test_lobby_embed_without_settings_still_renders_bare_amount():
     embed = BaseGame._render_lobby(
         _self("Chicken"), game, _guild(), 2, 8, 10, color=_ACCENT, settings=None
     )
-    wager = next(f for f in embed.fields if f.name == "💰 Wager")
-    assert "**10**" in (wager.value or "")
+    pot = next(f for f in embed.fields if f.name == "💰 Pot")
+    assert "**10**" in (pot.value or "")  # one player in the lobby → pot == ante
 
 
 def test_challenge_embed_lists_every_stake_in_one_field():

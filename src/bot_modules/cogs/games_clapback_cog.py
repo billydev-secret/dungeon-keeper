@@ -47,6 +47,7 @@ from bot_modules.games_clapback.logic import (
     MIN_PLAYERS,
     admit_pending_players,
     calculate_bye_award,
+    drain_pending_players,
     pick_round_bye,
     vote_button_label,
     calculate_matchup_score,
@@ -382,8 +383,9 @@ class ClapbackSubmitView(discord.ui.View):
         await modify_payload(self.db, self.game_id, _queue)
         log.info("%s queued to join game %s mid-game", interaction.user.display_name, self.game_id)
         await interaction.response.send_message(
-            "🙋 You're in from the **next** round — this round's matchups are "
-            "already set. You'll start on 0 points.",
+            "🙋 You're queued for the **next** round — this round's matchups are "
+            "already set, so you'll start on 0 points. If this turns out to be "
+            "the last round, you'll be told and can join the next game.",
             ephemeral=True,
         )
 
@@ -895,6 +897,17 @@ class ClapbackCog(commands.Cog):
 
         # Final recap
         payload = await get_game_payload(self.db, game_id)
+        # Anyone who pressed Join during the last round was promised a round
+        # that never arrives — admission only happens at a round boundary, and
+        # there are none left. Tell them rather than leaving them queued.
+        stranded = drain_pending_players(payload)
+        if stranded:
+            await update_game_payload(self.db, game_id, payload)
+            names = ", ".join(f"<@{uid}>" for uid in stranded)
+            await channel.send(
+                f"🙅 {names} — that was the last round, so you didn't make it "
+                f"into this game. Jump into the next one!"
+            )
         await self._post_recap(game_id, channel, payload, config)
 
     # ── Submit phase ─────────────────────────────────────────────────────

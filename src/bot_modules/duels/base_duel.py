@@ -95,6 +95,24 @@ class BaseDuel(BaseGame):
             )
             return
 
+        # Validate and normalise the stakes text *before* deciding whether this
+        # is a nickname game. Whitespace-only stakes clean to None, and reading
+        # the raw string would answer "something else is staked" for a game
+        # that ends up staking nothing — skipping the preflights below and then
+        # falling through to nickname mode at settlement anyway.
+        if stakes_text:
+            stakes_result = validate_stakes(
+                stakes_text,
+                max_length=cfg["max_stakes_length"],
+                denylist=json.loads(cfg.get("nick_denylist") or "[]"),
+            )
+            if not stakes_result.ok:
+                await interaction.response.send_message(
+                    f"Stakes rejected: {stakes_result.reason}", ephemeral=True
+                )
+                return
+            stakes_text = stakes_result.value or None
+
         # Nickname-mode preflight only applies when the loser is actually going
         # to be renamed. Non-nickname games never rename anyone, so they don't
         # need the Manage Nicknames permission or a clear nickname slate.
@@ -133,19 +151,6 @@ class BaseDuel(BaseGame):
                 "You two already have a game in progress.", ephemeral=True
             )
             return
-
-        if stakes_text:
-            stakes_result = validate_stakes(
-                stakes_text,
-                max_length=cfg["max_stakes_length"],
-                denylist=json.loads(cfg.get("nick_denylist") or "[]"),
-            )
-            if not stakes_result.ok:
-                await interaction.response.send_message(
-                    f"Stakes rejected: {stakes_result.reason}", ephemeral=True
-                )
-                return
-            stakes_text = stakes_result.value or None
 
         if wager is not None:
             err = await self._wager_precheck(guild.id, challenger.id, wager)

@@ -36,6 +36,7 @@ from bot_modules.games_clapback.logic import (
     admit_pending_players,
     calculate_bye_award,
     calculate_matchup_score,
+    drain_pending_players,
     clamp_config_values,
     create_matchups,
     find_best_answer_record,
@@ -1336,3 +1337,18 @@ def test_build_submit_embed_omits_the_field_with_no_bye():
         answers_in=0, total_players=4,
     )
     assert not any("Sitting out" in (f.name or "") for f in embed.fields)
+
+
+def test_drain_pending_players_returns_and_clears_the_queue():
+    """Admission only happens at a round boundary, so anyone who pressed Join
+    during the final round is queued for a round that never comes. The game end
+    has to clear them and say so."""
+    payload = {"pending_players": [7, 8]}
+    assert drain_pending_players(payload) == [7, 8]
+    assert payload["pending_players"] == []
+
+
+def test_drain_pending_players_is_a_no_op_on_an_empty_queue():
+    payload = {"players": [1, 2]}
+    assert drain_pending_players(payload) == []
+    assert payload["pending_players"] == []

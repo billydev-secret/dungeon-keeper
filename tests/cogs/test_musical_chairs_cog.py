@@ -451,3 +451,21 @@ async def test_music_phase_embed_warns_against_sitting_early(announce_cog, db):
     game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
     embed = announce_cog.render_game_state(game, announce_cog.bot.guild)
     assert "don't sit yet" in (embed.description or "")
+
+
+async def test_sit_survives_the_panel_being_reposted_mid_press(announce_cog, db):
+    """A press already in flight when the round flips is answered against the
+    old panel, which _repost_panel has since deleted. The seat still counts and
+    the dead edit must not escape the button callback."""
+    game = await _game(db, phase="SCRAMBLE", alive=[1, 2, 3], seated=[])
+    interaction = fake_interaction(guild=FakeGuild())
+    interaction.user.id = 2
+    interaction.edit_original_response = AsyncMock(
+        side_effect=discord.NotFound(MagicMock(status=404), "panel was moved")
+    )
+
+    await announce_cog._on_sit(interaction, game.id)
+
+    g = await mcdb.get_game(db, game.id)
+    assert g.seated == [2]      # the seat is recorded regardless
+    assert g.state == "ACTIVE"

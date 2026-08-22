@@ -322,9 +322,16 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                     resolved = await self._close_round_locked(game)
                 else:
                     guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-                    await interaction.edit_original_response(
-                        embed=self.render_game_state(game, guild)
-                    )
+                    # A press already in flight when the round flipped is
+                    # answered against the *old* panel, which _repost_panel has
+                    # since deleted. The seat is already recorded above, so a
+                    # dead edit costs nothing but must not escape the callback.
+                    try:
+                        await interaction.edit_original_response(
+                            embed=self.render_game_state(game, guild)
+                        )
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
                 return
         if resolved:
             self._game_locks.pop(game_id, None)
