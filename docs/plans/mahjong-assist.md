@@ -131,6 +131,20 @@ A second, independent review over the finished addon confirmed 11 findings
 | F5/F6 | Three DB round-trips per rack render; pure gates ran after the paid work. | `assist_relevant()` gates before any I/O; `get_assist_mode` reads one dial key instead of nine; parsed cards cache by row id + json hash. |
 | F9–F12 | `dangerous_tiles` rescanned the card per opponent; `_TILE_ORDER` duplicated `tiles._ORDER`; the mode clamp existed twice; a redundant `conn.commit()`. | Enumeration hoisted; `TILE_ORDER` public in tiles.py and shared; `_assist(raw, fallback)`; commit removed (open_db commits on exit). |
 
+A verify pass over the three fix commits (3 isolated skeptics, executed
+attacks) then caught round 2's own bug and one toothless test:
+
+| # | Finding | Fix |
+|---|---|---|
+| V1 | **`obtainable_seen`'s discount was unconditional** for any non-passed claimant, but §2.5 gives a seat only two routes to a live discard: an instant Mahjong, or a call stood up by two matching rack tiles. A pair-mate two tiles out has no route (pairs can't be called), and a discarded **joker** is unclaimable by anyone — the naive discount resurrected dead lines and, since fallow pays the *minimum* live line, **underpaid** survivors. | The discount now requires a legal route: `match_hand(rack + tile)` or pool (matching naturals + jokers) ≥ 2; jokers never discount. Route table + both underpay repros are named tests. Fixture lesson pinned alongside: sister-suit bindings must be exhausted too, or reachability just re-binds the line. |
+| V2 | The F6 wiring test was **toothless**: its exploding stub's `AssertionError` was swallowed by `_assist_for`'s never-raise contract, so it passed on pre-gate code. | Counter-based stub asserting zero service calls; verified to fail with the gate removed. |
+
+Observation left standing (pre-existing v1 behavior, out of scope): a seat
+that records a claim and *then* goes fallow can still win that one in-flight
+window — `_resolve_claim_window` doesn't filter fallow. Self-healing (the
+turn timeout path recovers), touched by no addon commit, noted here so a
+future reader doesn't rediscover it as an assist bug.
+
 One process note stood: the stage-2 dial commit broke the same-commit
 manual/Testing letter (mitigated — stage 3 closed both 11 minutes later,
 and the QA card assembles per branch). Refuted and dropped: pydantic

@@ -113,17 +113,25 @@ def test_my_settings_select_offers_every_mode_and_marks_current():
 
 def test_assist_for_skips_the_service_outside_decision_phases():
     # F6: the pure gates run before the DB round-trip — a rack press on a
-    # settled table must not touch the service at all.
+    # settled table must not touch the service at all. Counted, not raised:
+    # _assist_for's never-raise contract swallows any exception a stub
+    # throws, so an exploding stub passes on pre-gate code too (the verify
+    # round proved it — the original version of this test was toothless).
     import asyncio
 
     from tests.test_mahjong_game_logic import play_state
 
-    class _Exploding:
+    class _Counting:
+        calls = 0
+
         async def assist_context(self, *a, **k):
-            raise AssertionError("service round-trip paid for a None readout")
+            self.calls += 1
+            return None
 
     cog = _cog()
-    cog.service = _Exploding()  # type: ignore[assignment]
+    svc = _Counting()
+    cog.service = svc  # type: ignore[assignment]
     state = play_state(2, {0: "9c*13", 1: "9c*13"})
     state.phase = Phase.SETTLE
     assert asyncio.run(cog._assist_for(1, state, 0)) is None
+    assert svc.calls == 0  # the gate fired before any service work

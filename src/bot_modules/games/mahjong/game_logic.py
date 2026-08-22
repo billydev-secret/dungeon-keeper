@@ -1108,24 +1108,43 @@ re-exports it, the route derives its validation pattern from it, and the
 views' choices are test-pinned to it (review round 2, F7)."""
 
 
-def obtainable_seen(state: GameState, seat: int) -> Counter[Tile]:
-    """:func:`seen_elsewhere`, minus the live discard for a seat that can
-    still take it — not the discarder, and not a seat whose recorded claim
-    response was a pass (a renounced tile is gone for good). The one shared
-    definition of "truly out of reach": the assistance readout and the
-    fallow valuation must never disagree about a claimable tile (review
-    round 2, F1/F4 — the R1 fix applied to the readout but the coin
-    settlement one call-site away kept the unadjusted view)."""
+def obtainable_seen(state: GameState, seat: int, card: Card) -> Counter[Tile]:
+    """:func:`seen_elsewhere`, minus the live discard when the seat has a
+    LEGAL route to it. The one shared definition of "truly out of reach":
+    the assistance readout and the fallow valuation must never disagree
+    about a claimable tile (review round 2, F1/F4; the routes themselves
+    from the verify round, V1 — an unconditional discount resurrected dead
+    lines and UNDERPAID fallow survivors).
+
+    The routes, per §2.5: an instant **Mahjong** (the tile completes the
+    hand right now), or a **call** stood up by two matching rack tiles
+    (naturals or jokers). No route exists for the discarder, for a seat
+    whose recorded response was a pass (renounced), for a discarded joker
+    (unclaimable by anyone), or for a pair-mate the seat can't win on —
+    pairs can't be called."""
     seen = seen_elsewhere(state, seat)
+    tile = state.live_discard
     if (
-        state.phase is Phase.CLAIM_WINDOW
-        and state.live_discard is not None
-        and state.live_discarder != seat
-        and state.claims.get(seat, ("", []))[0] != "pass"
+        state.phase is not Phase.CLAIM_WINDOW
+        or tile is None
+        or tile is Tile.JOKER
+        or state.live_discarder == seat
+        or state.claims.get(seat, ("", []))[0] == "pass"
     ):
-        seen[state.live_discard] -= 1
-        if seen[state.live_discard] <= 0:
-            del seen[state.live_discard]
+        return seen
+    seat_state = state.seats[seat]
+    pool = sum(1 for t in seat_state.rack if t is tile or t is Tile.JOKER)
+    can_take = pool >= 2 or bool(
+        match_hand(
+            list(seat_state.rack) + [tile],
+            [e.as_match() for e in seat_state.exposures],
+            card,
+        )
+    )
+    if can_take:
+        seen[tile] -= 1
+        if seen[tile] <= 0:
+            del seen[tile]
     return seen
 
 
@@ -1183,7 +1202,7 @@ def assist_readout(
     ):
         return None
     exposures = [e.as_match() for e in seat_state.exposures]
-    seen = obtainable_seen(state, seat)
+    seen = obtainable_seen(state, seat, card)
     prospects = closest_lines(
         list(seat_state.rack), exposures, card, seen, limit=None,
     )
@@ -1217,7 +1236,7 @@ def _settle_fallow_end(state: GameState, card: Card) -> list[Event]:
     survivor = live[0]
     seat_state = state.seats[survivor]
 
-    seen = obtainable_seen(state, survivor)
+    seen = obtainable_seen(state, survivor, card)
 
     base = fallow_base_value(
         list(seat_state.rack),

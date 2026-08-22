@@ -1759,3 +1759,78 @@ def test_every_assist_mode_is_understood_by_the_gate(mode):
     state = play_state(2, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*13"})
     r = G.assist_readout(state, 0, CARD, mode)
     assert (r is None) == (mode == "off")
+
+
+# ── Verify round on the round-2 fixes (V1): a legal route, or no discount ────
+
+
+def test_fallow_settle_pair_mate_two_away_is_not_takeable():
+    # V1a: a pair tile can only arrive as an instant Mahjong (pairs can't be
+    # called). Two tiles out, the claim wouldn't complete the hand and the
+    # seat holds only one matching tile — no legal route, so the cheap line
+    # is truly dead and the discount must not resurrect it (which would
+    # UNDERPAY the survivor: fallow pays the minimum live line).
+    state = play_state(
+        2, {0: "flower*4 1d*4 6b*3 8c 9b", 1: "9c*12 8c"}, turn=1,
+    )
+    state.discards = (
+        [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4 + [(1, Tile("8c"))] * 2
+    )
+    state, _ = G.discard(state, 1, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    state, _ = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
+    assert state.outcome is not None
+    assert state.outcome.value == 50  # cheap stays dead: no route to the 8c
+
+
+def test_fallow_settle_discarded_joker_is_unclaimable():
+    # V1b: a discarded joker can never be claimed by anyone (§2.5). It must
+    # never be discounted — doing so loosens the joker-deficit liveness test
+    # for every line at once.
+    state = play_state(
+        2, {0: "flower*4 1d*4 6b*3 8c*2", 1: "9c*12 joker"}, turn=1,
+    )
+    # every sister-suit binding must die too, or reachability just re-binds
+    # the line to an open suit and the joker question never arises
+    state.discards = (
+        [(0, Tile("6b"))] + [(0, Tile.JOKER)] * 7
+        + [(0, Tile("6d"))] * 4 + [(0, Tile("6c"))] * 4
+        + [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4
+    )
+    state, _ = G.discard(state, 1, Tile.JOKER)
+    assert state.phase is Phase.CLAIM_WINDOW
+    state, _ = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
+    assert state.outcome is not None
+    assert state.outcome.value == 50  # the joker route does not exist
+
+
+@pytest.mark.parametrize(
+    "rack0, discard, discounted",
+    [
+        # two matching rack tiles: the CALL route is legal → takeable
+        ("flower*4 1d*4 6b*2 8c*2 9b", "6b", True),
+        # one matching + one joker also stands the call up
+        ("flower*4 1d*4 6b joker 8c*2 9b", "6b", True),
+        # one matching, no joker, not hand-completing: no route → not takeable
+        ("flower*4 1d*4 6b*3 8c 9b", "8c", False),
+        # a discarded joker is unclaimable by anyone, ever
+        ("flower*4 1d*4 6b*3 8c*2", "joker", False),
+        # hand-completing tile: the MAHJONG route applies even with pool < 2
+        ("flower*4 1d*4 6b*4 8c", "8c", True),
+    ],
+    ids=["call-pool-2", "call-with-joker", "no-route", "joker", "mahjong-route"],
+)
+def test_obtainable_seen_discounts_only_legal_routes(rack0, discard, discounted):
+    # V1: "takeable" means a LEGAL route — instant mahjong, or a call stood
+    # up by two matching rack tiles (naturals or jokers, §2.5). Anything
+    # else, the live discard stays counted as gone.
+    state = play_state(2, {0: rack0, 1: f"9c*12 {discard}"}, turn=1)
+    state, _ = G.discard(state, 1, Tile(discard))
+    assert state.phase is Phase.CLAIM_WINDOW
+    raw = G.seen_elsewhere(state, 0)
+    adjusted = G.obtainable_seen(state, 0, FALLOW_VALUE_CARD)
+    tile = Tile(discard)
+    if discounted:
+        assert adjusted.get(tile, 0) == raw[tile] - 1
+    else:
+        assert adjusted.get(tile, 0) == raw[tile]
