@@ -10,8 +10,16 @@ second thing to keep in step with the first.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import HTTPException
 from pydantic import BaseModel
+
+from bot_modules.services.sticky_registry import (
+    StickyResident,
+    panel_channels,
+    resident_in,
+)
 
 
 class ChannelIdBody(BaseModel):
@@ -84,3 +92,58 @@ def require_post_permissions(guild, channel, *required: str) -> None:
             f"The bot can't post in #{channel.name} — missing permissions: "
             f"{', '.join(missing)}",
         )
+
+
+async def sticky_conflict(
+    ctx, guild_id: int, channel_id: int, *, excluding: str
+) -> str | None:
+    """Refuse — or warn about — posting a panel where one already sits.
+
+    Discord has one bottom slot per channel. Two sticky panels sharing it take
+    turns being second, and when the resident re-sticks under *bot* messages
+    the newcomer is buried after every render with nothing the admin can do in
+    the channel about it. ``/bank auction start`` has refused that since
+    2026-07-28; the dashboard's panel buttons posted straight into it, which is
+    the configuration-time half of the 2026-08-06 review's F1 fix.
+
+    Returns a warning for the survivable collision — a resident that only
+    moves under human messages, which is intermittent, visible and the admin's
+    call — and raises 400 for the one that cannot be lived with. ``excluding``
+    is the posting panel's own registry key, so re-posting a panel into the
+    channel it already occupies is not refused on account of itself.
+    """
+
+    def _resident() -> StickyResident | None:
+        with ctx.open_db() as conn:
+            return resident_in(conn, guild_id, channel_id, excluding=excluding)
+
+    resident = await asyncio.to_thread(_resident)
+    if resident is None:
+        return None
+    if resident.restick_on_bot:
+        raise HTTPException(
+            400,
+            f"This channel is {resident.name}'s, and that panel follows the "
+            "bot's own posts to stay at the bottom — whatever you post here "
+            "would be pushed out of view and stay there. Pick another channel.",
+        )
+    return (
+        f"Posted, but this channel already has {resident.name} stuck to the "
+        "bottom. Both can't be last, so the two will keep pushing each other "
+        "up as people chat."
+    )
+
+
+async def own_channel_id(ctx, guild_id: int, key: str) -> int:
+    """Where a panel that owns its destination is configured to post.
+
+    Voice Control and the Guess Who prompt take no channel from the caller, so
+    the collision check has to ask the registry where they are going.
+    """
+
+    def _read() -> int:
+        with ctx.open_db() as conn:
+            entry = panel_channels(conn, guild_id).get(key)
+        return entry[0] if entry else 0
+
+    return await asyncio.to_thread(_read)

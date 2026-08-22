@@ -338,6 +338,24 @@ to its feature, and refusing there could lock an admin out of a valid setup.
 was built by comprehension, so a shared channel reported only whichever panel
 came last in the table.
 
+**Registry-wide, 2026-08-22.** That table knew only the four economy and casino
+panels — its docstring conceded the rest were "not worth four cross-cog
+imports", which left the other seven sticky panels invisible to every
+collision check. It now lives in `services/sticky_registry.py` as one entry per
+panel with a resolver for its channel, covering pen pals, DM perms, Voice
+Control, the Guess Who prompt, both todo boards and the Survivor panel. The
+Survivor panel is `restick_on_bot`, so sharing its channel was a *blocking*
+collision nothing could see.
+
+`routes/panels.py` runs the same block/warn split for every panel in
+`panel_registry` (`panel_posting.sticky_conflict`), which closes the hoist F1
+recommended. Keys are the `PanelSpec` keys so a panel excludes itself — a
+refresh in place must never be refused — and a panel that owns its destination
+(Voice Control, Guess Who) has that destination looked up from the registry
+rather than taken from the caller. The DM request panel, the todo boards and
+the Survivor repost still post through their own routes and have not adopted
+the guard yet; each is a two-line change.
+
 ### The last hand-rolled copy (`guess`)
 
 Note for the next migration: adding a "where is it actually" id key needs a

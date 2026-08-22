@@ -154,6 +154,12 @@ export async function mountPanelPoster(slotEl, key, opts = {}) {
       status.innerHTML = res.message_url
         ? `<a href="${esc(res.message_url)}" target="_blank" rel="noopener">Posted — open in Discord</a>`
         : "Posted.";
+      // A survivable sticky collision: the post went through, but two panels
+      // are now fighting over one bottom slot and the admin should know.
+      if (res.warning) {
+        status.innerHTML += `<div class="field-hint">${esc(res.warning)}</div>`;
+        toast(res.warning, "info");
+      }
     } catch (err) {
       status.textContent = "";
       toast(err.message, "error");

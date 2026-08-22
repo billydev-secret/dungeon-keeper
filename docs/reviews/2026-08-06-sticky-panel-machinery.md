@@ -210,6 +210,18 @@ removed and the `on_message` check left in.
 applied to the casino's own channel setting, which belongs to its feature.
 `sticky_panel_channels` merges residents instead of overwriting.
 
+**The hoist landed 2026-08-22.** The registry moved to
+`services/sticky_registry.py` and grew the six panels it never knew about —
+pen pals, DM perms, Voice Control, both todo boards, the Guess Who prompt —
+plus the Survivor panel, which is `restick_on_bot` and so was an invisible
+*blocking* collision. `routes/panels.py` now runs the block/warn split for
+every panel in `panel_registry`, which is what this section recommended;
+panels that own their destination (Voice Control, Guess Who) have it looked up
+from the registry, and each panel excludes itself so a refresh in place is
+never refused. Still on their own routes and not covered: the DM request
+panel's `/config/dms/post-panel`, the todo boards, and the Survivor panel's
+repost — each is a two-line adoption of `panel_posting.sticky_conflict`.
+
 ### Test to land with it
 
 `tests/test_core_sticky.py` has 37 tests and no multi-panel scenario — every one

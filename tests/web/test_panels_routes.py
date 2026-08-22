@@ -262,3 +262,105 @@ def test_a_panel_refusal_reason_reaches_the_admin(client_with_bot):
     r = client.post("/api/panels/grant-audit/post", json={"channel_id": "123"})
     assert r.status_code == 400
     assert "not configured" in r.json()["detail"]
+
+
+# ── the sticky-collision guard ───────────────────────────────────────────
+
+
+def _occupy(fake_ctx, channel_id: int, *, key: str) -> None:
+    """Put one sticky panel's channel on record for the test guild."""
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(fake_ctx.db_path) as conn:
+        if key == "casino":
+            conn.execute(
+                "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+                (fake_ctx.guild_id, "casino_panel_channel_id", str(channel_id)),
+            )
+        elif key == "pen-pals":
+            conn.execute(
+                "INSERT INTO pen_pals_config (guild_id, panel_channel_id)"
+                " VALUES (?, ?)",
+                (fake_ctx.guild_id, channel_id),
+            )
+        elif key == "voice-control":
+            conn.execute(
+                "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+                (
+                    fake_ctx.guild_id,
+                    "voice_master_panel_channel_id",
+                    str(channel_id),
+                ),
+            )
+        else:  # pragma: no cover - guards a typo in a test, not a code path
+            raise AssertionError(f"no seeder for {key}")
+
+
+def test_posting_into_a_bot_chasing_panels_channel_is_refused(
+    fake_ctx, client_with_bot
+):
+    """The half of the 2026-08-06 F1 fix that never landed.
+
+    /bank auction start has refused this since 2026-07-28, but the dashboard's
+    panel buttons posted straight into it — and the casino hub re-takes the
+    bottom after every render, so whatever else goes in that channel is buried
+    on every repaint with nothing the admin can do about it.
+    """
+    client, bot, guild, channel = client_with_bot()
+    channel.id = 123
+    _occupy(fake_ctx, 123, key="casino")
+
+    r = client.post("/api/panels/economy-panel/post", json={"channel_id": "123"})
+    assert r.status_code == 400
+    assert "casino hub panel" in r.json()["detail"]
+    bot.get_cog.return_value.post_economy_panel.assert_not_awaited()
+
+
+def test_posting_beside_a_human_only_panel_succeeds_with_a_warning(
+    fake_ctx, client_with_bot
+):
+    """That collision is intermittent and visible, so it is the admin's call."""
+    client, bot, guild, channel = client_with_bot()
+    channel.id = 123
+    _occupy(fake_ctx, 123, key="pen-pals")
+
+    r = client.post("/api/panels/economy-panel/post", json={"channel_id": "123"})
+    assert r.status_code == 200, r.text
+    assert "pen pals panel" in r.json()["warning"]
+    bot.get_cog.return_value.post_economy_panel.assert_awaited_once()
+
+
+def test_an_empty_channel_posts_with_no_warning(fake_ctx, client_with_bot):
+    client, *_ = client_with_bot()
+    r = client.post("/api/panels/economy-panel/post", json={"channel_id": "123"})
+    assert r.status_code == 200, r.text
+    assert r.json()["warning"] is None
+
+
+def test_a_panel_is_not_refused_on_account_of_itself(fake_ctx, client_with_bot):
+    """Voice Control posts into its own configured channel, so it is always
+    already there — without the exclusion it would become unpostable."""
+    client, bot, guild, channel = client_with_bot()
+    channel.id = 456
+    guild.get_channel.return_value = channel
+    _occupy(fake_ctx, 456, key="voice-control")
+
+    r = client.post("/api/panels/voice-control/post", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["warning"] is None
+
+
+def test_an_own_channel_panel_still_sees_the_other_residents(
+    fake_ctx, client_with_bot
+):
+    """Its destination comes from its own config, so the guard has to look it
+    up rather than take one from the caller."""
+    client, bot, guild, channel = client_with_bot()
+    channel.id = 456
+    _occupy(fake_ctx, 456, key="voice-control")
+    _occupy(fake_ctx, 456, key="casino")
+
+    r = client.post("/api/panels/voice-control/post", json={})
+    assert r.status_code == 400
+    assert "casino hub panel" in r.json()["detail"]
+    bot.get_cog.return_value.post_control_panel.assert_not_awaited()

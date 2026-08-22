@@ -26,14 +26,11 @@ from bot_modules.services.economy_auction_service import (
     place_bid,
     place_bid_now,
     settle_due_auctions,
-    bot_chasing_resident,
-    sticky_panel_channels,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
     get_balance,
-    save_econ_settings,
 )
 from tests.db_template import migrated_db
 
@@ -531,133 +528,3 @@ def test_attach_card_to_latest_is_a_no_op_without_an_auction(db):
     with open_db(db) as conn:
         attach_card_to_latest(conn, GUILD, CH, 9999)  # must not raise
         assert card_ids(conn, GUILD) == (0, 0)
-
-
-# ── the panel-collision warning ─────────────────────────────────────────────
-
-
-def test_sticky_panel_channels_lists_configured_panels(db):
-    """The two panels that only re-stick under human messages, so an auction
-    sharing their channel is warned about rather than refused.
-
-    A retired ``leaderboard_channel_id`` must not resurface as a resident: the
-    panel it named merged into the economy panel on 2026-08-18, so warning
-    about it would name a channel that no longer holds anything.
-    """
-    with open_db(db) as conn:
-        save_econ_settings(conn, GUILD, {
-            "guide_channel_id": 11,
-            "leaderboard_channel_id": 22,
-            "shop_channel_id": 33,
-        })
-        found = sticky_panel_channels(conn, GUILD)
-    assert {cid: r.name for cid, r in found.items()} == {
-        11: "the economy panel",
-        33: "the shop panel",
-    }
-    assert not any(r.restick_on_bot for r in found.values())
-
-
-def test_sticky_panel_channels_includes_the_casino_hub(db):
-    """The verified real collision: auction #1 in prod ran in the casino hub's
-    channel, and the hub re-sticks under bot messages where the card does not."""
-    with open_db(db) as conn:
-        conn.execute(
-            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
-            (GUILD, "casino_panel_channel_id", "1530328883449040967"),
-        )
-        found = sticky_panel_channels(conn, GUILD)
-    assert found[1530328883449040967].name == "the casino hub panel"
-    assert found[1530328883449040967].restick_on_bot is True
-
-
-def test_sticky_panel_channels_includes_the_bounty_board(db):
-    """The bounty hub is the fifth sticky panel reachable from a config read.
-    It keys off bounty_channel_id, not where the panel was last posted — the
-    board channel is where the hub lives and where its cards land."""
-    with open_db(db) as conn:
-        save_econ_settings(conn, GUILD, {"bounty_channel_id": 44})
-        found = sticky_panel_channels(conn, GUILD)
-    assert found[44].name == "the bounty board panel"
-
-
-@pytest.mark.parametrize(
-    ("setting", "channel_id", "blocks"),
-    [
-        # These two chase the bot's own posts, so an auction card here is
-        # buried after every render and never resurfaces → refuse.
-        pytest.param("bounty_channel_id", 44, True, id="bounty-board-blocks"),
-        pytest.param("shop_channel_id", 33, False, id="shop-only-warns"),
-    ],
-)
-def test_restick_on_bot_marks_the_residents_that_block_an_auction(
-    db, setting, channel_id, blocks
-):
-    """The flag is what splits refuse-outright from merely-warn, so it is worth
-    pinning per resident rather than trusting the tuple table by eye."""
-    with open_db(db) as conn:
-        save_econ_settings(conn, GUILD, {setting: channel_id})
-        found = sticky_panel_channels(conn, GUILD)
-    assert found[channel_id].restick_on_bot is blocks
-
-
-def test_sticky_panel_channels_is_empty_when_nothing_is_configured(db):
-    """An unconfigured guild must not warn about channel 0."""
-    with open_db(db) as conn:
-        assert sticky_panel_channels(conn, GUILD) == {}
-
-
-def test_sticky_panel_channels_merges_two_residents_in_one_channel(db):
-    """This was built by comprehension, so a shared channel reported only
-    whichever panel came last in the table — a mod warned about a shared channel
-    was told about one of the two things they were sharing it with
-    (2026-08-06 review, F1)."""
-    with open_db(db) as conn:
-        save_econ_settings(conn, GUILD, {"shop_channel_id": 77})
-        conn.execute(
-            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
-            (GUILD, "casino_panel_channel_id", "77"),
-        )
-        found = sticky_panel_channels(conn, GUILD)
-    assert "the shop panel" in found[77].name
-    assert "the casino hub panel" in found[77].name
-    # restick_on_bot is the union: one bot-chaser in the channel is enough to
-    # bury an auction card reliably, so the block must still fire.
-    assert found[77].restick_on_bot is True
-
-
-# ── the two-bot-chasers collision ───────────────────────────────────────────
-
-
-def test_bot_chasing_resident_finds_the_other_opted_in_panel(db):
-    """Two panels that both chase bot posts in one channel take the bottom slot
-    from each other on every trigger, and before core.sticky learned to ignore
-    another panel's placement they re-posted forever with nobody typing. A live
-    guild had bounty_channel_id == casino_panel_channel_id (2026-08-06, F1)."""
-    with open_db(db) as conn:
-        save_econ_settings(conn, GUILD, {"bounty_channel_id": 99})
-        conn.execute(
-            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
-            (GUILD, "casino_panel_channel_id", "99"),
-        )
-        assert bot_chasing_resident(
-            conn, GUILD, 99, excluding="bounty"
-        ) == "the casino hub panel"
-
-
-def test_bot_chasing_resident_excludes_the_asking_panel(db):
-    """The bounty hub lives in the bounty channel by definition, so without the
-    exclusion it would always find itself and never be postable at all."""
-    with open_db(db) as conn:
-        save_econ_settings(conn, GUILD, {"bounty_channel_id": 99})
-        assert bot_chasing_resident(conn, GUILD, 99, excluding="bounty") is None
-
-
-def test_bot_chasing_resident_ignores_human_only_panels(db):
-    """The guide/leaderboard/shop panels only move under human messages, so they
-    trade places visibly rather than looping — that warns, it does not block."""
-    with open_db(db) as conn:
-        save_econ_settings(
-            conn, GUILD, {"bounty_channel_id": 99, "shop_channel_id": 99}
-        )
-        assert bot_chasing_resident(conn, GUILD, 99, excluding="bounty") is None
