@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import bisect
-import functools
 import io
 import os
 import sqlite3
 import statistics
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,39 +31,9 @@ import matplotlib.ticker as ticker  # noqa: E402
 
 matplotlib.use("Agg")
 
-# pyplot keeps a global figure registry (``Gcf``) that is not thread-safe,
-# and every renderer below goes through ``plt.subplots`` / ``plt.close``.
-# These run on worker threads via ``asyncio.to_thread``. That was low-risk
-# while the only Discord caller was mod-only ``/modinfo``; member-facing
-# ``/info`` makes two concurrent renders an ordinary Tuesday, so the
-# renders are serialized. Rendering is ~100ms, so the queue is not a
-# bottleneck — and interleaved access to that registry is not a slow
-# chart, it is the wrong chart or a crash.
-# Reentrant on purpose: `render_nsfw_gender_line_chart` delegates to
-# `render_nsfw_gender_chart` for its single-bucket case, so a plain Lock
-# would deadlock the worker thread the first time that path ran.
-_RENDER_LOCK = threading.RLock()
-
-
-def _serialized_render(fn):
-    """Serialize a pyplot-based renderer against every other one.
-
-    A decorator rather than a ``with`` inside each body: the bodies are long
-    and each has several early returns, and a lock released on one path but
-    not another is worse than no lock at all.
-
-    Applied to **every** renderer in this module, not only the ones with a
-    caller today. They all mutate the same global pyplot figure registry, so a
-    partially-covered lock protects nothing the moment someone wires up one of
-    the others — and the omission would look deliberate.
-    """
-
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        with _RENDER_LOCK:
-            return fn(*args, **kwargs)
-
-    return wrapper
+from bot_modules.services.pyplot_lock import (  # noqa: E402
+    serialized_render as _serialized_render,
+)
 
 Resolution = Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"]
 

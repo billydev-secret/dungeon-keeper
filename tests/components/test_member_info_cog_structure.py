@@ -252,15 +252,23 @@ def test_pen_pals_info_panel_source_is_labelled_on_the_dashboard():
 
 
 def test_every_chart_renderer_is_serialized():
-    """All of them share pyplot's global figure registry; a partially covered
-    lock protects nothing the moment one of the others gets a caller."""
+    """Every pyplot renderer in the process, not just this module's.
+
+    The lock used to live in `activity_graphs`, which serialized that module
+    against itself and left `pools_charts` — the casino Pools panel, also
+    rendered on a worker thread — free to touch the same global registry
+    concurrently.
+    """
     import inspect
 
-    from bot_modules.services import activity_graphs
+    from bot_modules.services import activity_graphs, pools_charts
 
-    for name, fn in inspect.getmembers(activity_graphs, inspect.isfunction):
-        if name.startswith("render_"):
-            assert getattr(fn, "__wrapped__", None) is not None, name
+    for module in (activity_graphs, pools_charts):
+        for name, fn in inspect.getmembers(module, inspect.isfunction):
+            if name.startswith("render_"):
+                assert getattr(fn, "__wrapped__", None) is not None, (
+                    f"{module.__name__}.{name}"
+                )
 
 
 def test_the_render_lock_survives_a_nested_render():
@@ -268,13 +276,13 @@ def test_the_render_lock_survives_a_nested_render():
     which a non-reentrant lock would deadlock on."""
     import threading
 
-    from bot_modules.services.activity_graphs import _RENDER_LOCK
+    from bot_modules.services.pyplot_lock import RENDER_LOCK
 
-    with _RENDER_LOCK:
-        acquired = _RENDER_LOCK.acquire(timeout=2)
+    with RENDER_LOCK:
+        acquired = RENDER_LOCK.acquire(timeout=2)
         assert acquired, "render lock is not reentrant — nested render deadlocks"
-        _RENDER_LOCK.release()
-    assert isinstance(_RENDER_LOCK, type(threading.RLock()))
+        RENDER_LOCK.release()
+    assert isinstance(RENDER_LOCK, type(threading.RLock()))
 
 
 # ── Streak, and the "More" field's gating ────────────────────────────────
@@ -320,3 +328,85 @@ def test_help_lines_use_the_guilds_own_assistant_name():
     lines = cog._help_lines("Meadow-bot")
     assert any("Meadow-bot" in ln for ln in lines)
     assert not any("Billy-bot" in ln for ln in lines)
+
+
+# ── Round-3 review regressions ───────────────────────────────────────────
+
+
+def test_info_is_listed_in_the_general_help_page():
+    """CLAUDE.md names /help and manual.html as the command reference, and the
+    General page is a hand-maintained list — so a new member command has to be
+    added to it by hand or it is only reachable through the module pager."""
+    from bot_modules.cogs.mod_cog import _build_help_pages
+
+    pages = _build_help_pages(MagicMock(), MagicMock())
+    general = next(p for p in pages if p.title and "General" in p.title)
+    assert "/info" in (general.description or "")
+
+
+def test_a_thread_with_no_cached_parent_does_not_kill_the_card():
+    """`Thread.permissions_for` raises when its parent isn't cached. One such
+    thread must cost its own row, not every /info in the guild."""
+    import discord
+
+    from bot_modules.cogs.member_info_cog import _viewable_channel_ids
+
+    def _chan(cid, visible=True):
+        c = MagicMock()
+        c.id = cid
+        c.permissions_for.return_value.view_channel = visible
+        return c
+
+    orphan = MagicMock()
+    orphan.id = 99
+    orphan.permissions_for.side_effect = discord.ClientException(
+        "Parent channel not found"
+    )
+
+    guild = MagicMock()
+    guild.channels = [_chan(1)]
+    guild.threads = [orphan, _chan(10)]
+    assert _viewable_channel_ids(guild, _member()) == {1, 10}
+
+
+# ── The streak shown must be one that still stands ───────────────────────
+
+
+def _seed_streak(conn, *, current, last_login_day, longest=99, shields=0):
+    conn.execute(
+        "INSERT INTO econ_streaks (guild_id, user_id, current_streak, "
+        "longest_streak, last_login_day, last_grace_day, shields) "
+        "VALUES (?, ?, ?, ?, ?, NULL, ?)",
+        (1, 42, current, longest, last_login_day, shields),
+    )
+    conn.commit()
+
+
+def test_streak_is_reported_when_still_alive(sync_db_path):
+    from bot_modules.services.economy_service import get_streak_summary
+
+    with open_db(sync_db_path) as conn:
+        _seed_streak(conn, current=12, last_login_day="2026-08-21")
+        assert get_streak_summary(conn, 1, 42, today="2026-08-22") == (12, 99)
+
+
+def test_a_streak_the_next_login_would_reset_reads_as_zero(sync_db_path):
+    """`current_streak` is only rewritten on a message or voice award, so a
+    member who stopped posting a week ago still has the old number sitting in
+    the column — /info would have announced a run that is already over."""
+    from bot_modules.services.economy_service import get_streak_summary
+
+    with open_db(sync_db_path) as conn:
+        _seed_streak(conn, current=12, last_login_day="2026-08-15")
+        current, longest = get_streak_summary(conn, 1, 42, today="2026-08-22")
+    assert current == 0
+    # The personal best is history, not a live claim, so it survives.
+    assert longest == 99
+
+
+def test_streak_summary_without_today_returns_the_stored_value(sync_db_path):
+    from bot_modules.services.economy_service import get_streak_summary
+
+    with open_db(sync_db_path) as conn:
+        _seed_streak(conn, current=12, last_login_day="2026-08-15")
+        assert get_streak_summary(conn, 1, 42) == (12, 99)

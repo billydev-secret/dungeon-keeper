@@ -41,6 +41,8 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
+
+from bot_modules.services.pyplot_lock import serialized_render  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 from matplotlib.ticker import FuncFormatter  # noqa: E402
 
@@ -249,6 +251,7 @@ def _title(ax, headline: str, subject: str) -> None:
     )
 
 
+@serialized_render
 def render_live_chart(
     days: list[DayMetric],
     line: float | None,
@@ -297,6 +300,7 @@ def render_live_chart(
     return _save(fig)
 
 
+@serialized_render
 def render_instrument_chart(
     days: list[DayMetric],
     line: float | None,

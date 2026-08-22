@@ -22,7 +22,7 @@ card you can only point at yourself, so the command takes no target.
 | Level | `member_xp`, plus `xp_events` grouped by source, plus XP-to-next-level from `xp_required_for_level` against the guild's own curve factor |
 | Roles | live Discord roles, highest first, `@everyone` dropped, capped at 12 with a `+N more` |
 | Activity | `processed_messages` — 30-day count, last-seen, top 3 channels **and threads** |
-| Wallet | `load_econ_settings` / `get_balance` / `list_member_rentals` / `get_streak_shields` / `get_streak_summary` |
+| Wallet | `load_econ_settings` / `get_balance` / `list_member_rentals` / `get_streak_shields` / `get_streak_summary` (passed today's local day, so a lapsed streak reads as zero rather than as the stale stored number) |
 | More | `/ask` (only when `AdvisorCog` is loaded, named via `resolve_assistant_name_conn` — the assistant's name is per-guild branding) and `/delete_me` (only when `PrivacyCog` is loaded) |
 | Your opt-ins | one row per configured feature — see below |
 
@@ -92,7 +92,14 @@ as a negative.
 
 The wallet line printed "🛡️ streak shield held" beside no streak, because the
 shield helpers read `econ_streaks` for its `shields` column only and nothing
-read the streak itself. `get_streak_summary` fills that gap.
+read the streak itself. `get_streak_summary` fills that gap — and takes
+today's local day, because `current_streak` is **stored, not live**: only
+`process_login` rewrites it, on a message or a voice award. A member who
+stopped posting a week ago still has the old number in the column, so reading
+it verbatim would announce a run their next message resets to 1. The helper
+replays the stored state through `evaluate_login` — the same pure rules a real
+login applies — and reports zero when the run cannot survive. The personal
+best is left alone: that is history, not a live claim.
 
 ### Resilience
 
@@ -160,6 +167,15 @@ commands now call the same impls, so there is one implementation per flow.
 
 If a feature's cog is not loaded, `FeatureState.actionable=False` — the status
 row still renders, the button is never built.
+
+### Where /info is listed
+
+`/help`'s **General** page is a hand-maintained literal in
+`mod_cog._build_help_pages`, not generated — so a new member command has to be
+added there by hand or it is reachable only through the secondary
+"Browse by Module" pager. CLAUDE.md names `/help` and `manual.html` as the
+command reference, so both carry `/info`, and a test fails if the help list
+loses it.
 
 ## Data
 

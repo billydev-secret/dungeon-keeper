@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -228,11 +229,19 @@ def _viewable_channel_ids(guild: discord.Guild, member: discord.Member) -> set[i
     verify is not visibility. ``_activity_value`` says so plainly instead of
     claiming the member posted nothing.
     """
-    return {
-        channel.id
-        for channel in (*guild.channels, *guild.threads)
-        if channel.permissions_for(member).view_channel
-    }
+    viewable: set[int] = set()
+    for channel in (*guild.channels, *guild.threads):
+        try:
+            if channel.permissions_for(member).view_channel:
+                viewable.add(channel.id)
+        except discord.ClientException:
+            # `Thread.permissions_for` raises when the thread's parent is not
+            # in the cache — reachable if a THREAD_CREATE/THREAD_LIST_SYNC
+            # lands for a channel the cache doesn't hold. One such thread must
+            # not take the whole card down; it is simply not counted, which is
+            # the same conservative answer as "can't verify, don't show".
+            continue
+    return viewable
 
 
 class MemberInfoCog(commands.Cog):
@@ -280,6 +289,7 @@ class MemberInfoCog(commands.Cog):
         since = datetime.now(timezone.utc).timestamp() - _ACTIVITY_WINDOW_DAYS * _DAY_SECONDS
 
         def _fetch() -> dict[str, Any]:
+            from bot_modules.economy.logic import local_day_for  # noqa: PLC0415
             from bot_modules.core.xp_system import (  # noqa: PLC0415
                 load_xp_settings,
                 xp_required_for_level,
@@ -349,7 +359,10 @@ class MemberInfoCog(commands.Cog):
                     rentals = list_member_rentals(conn, guild_id, user_id)
                     shields = get_streak_shields(conn, guild_id, user_id)
                     streak, longest_streak = get_streak_summary(
-                        conn, guild_id, user_id
+                        conn,
+                        guild_id,
+                        user_id,
+                        today=local_day_for(time.time(), tz_off),
                     )
                 else:
                     balance, rentals, shields = 0, [], 0
