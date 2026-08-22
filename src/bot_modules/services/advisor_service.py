@@ -248,6 +248,33 @@ _SYSTEM_INSTRUCTIONS_TEMPLATE = (
 SYSTEM_INSTRUCTIONS = _SYSTEM_INSTRUCTIONS_TEMPLATE.format(name=DEFAULT_ASSISTANT_NAME)
 
 
+# Appended *after* the cached prefix (see :func:`build_system`) when the answer
+# is headed for a public channel post rather than a private reply. It only
+# changes register; the grounding rules above still bind. The "ordinary member"
+# line is belt-and-braces: the caller already builds the server context at
+# @everyone visibility and withholds the config tools for a public ask, so the
+# model has nothing staff-only to repeat — this stops it reaching for
+# moderator-shaped advice it half-remembers from the guide.
+PUBLIC_TUTORIAL_INSTRUCTIONS = (
+    "=== PUBLIC TUTORIAL MODE ===\n\n"
+    "This answer will be POSTED IN A PUBLIC CHANNEL for the whole community to "
+    "read. It is not a private reply. Write it accordingly:\n"
+    "- Address the room, not the person who asked. Never say \"you asked\", "
+    "never refer to the asker, and never mention anything about them.\n"
+    "- SIMPLE AND BRIEF is the whole point. At most one short line of setup, "
+    "then no more than five short numbered steps. Nothing else.\n"
+    "- No greeting, no preamble, no sign-off, no \"hope that helps\", no "
+    "offers to answer follow-ups.\n"
+    "- Plain everyday words. Name the exact slash command or dashboard panel "
+    "to use, and skip the background detail nobody needs to get it done.\n"
+    "- Write for an ordinary member with no special permissions: describe only "
+    "what anyone here can do. Do not mention server settings, configuration, "
+    "the dashboard's admin panels, or moderator-only tools.\n"
+    "- If the question can't be answered from your sources, say so in one "
+    "sentence and point to the Help panel or a moderator — do not pad it out."
+)
+
+
 # ---------------------------------------------------------------------------
 # Manual → grounding text
 # ---------------------------------------------------------------------------
@@ -365,12 +392,18 @@ def build_system(
     guild_context: str | None = None,
     *,
     assistant_name: str = DEFAULT_ASSISTANT_NAME,
+    public_tutorial: bool = False,
 ) -> list[dict]:
     """Assemble the system prompt.
 
     Stable prefix (instructions + manual) is prompt-cached; the per-asker server
     context, when present, is appended *after* the cache breakpoint so it stays
     uncached (it changes every request) without disturbing the shared cache.
+
+    ``public_tutorial`` appends the public-channel register
+    (:data:`PUBLIC_TUTORIAL_INSTRUCTIONS`) last — also after the breakpoint, so
+    a public ask reuses the same cached prefix as every other ask instead of
+    forking the cache into a second entry.
     """
     corpus = load_manual_text()
     guide = corpus if corpus else "(guide unavailable)"
@@ -396,6 +429,8 @@ def build_system(
                 "===\n\n"
             ) + guild_context,
         })
+    if public_tutorial:
+        blocks.append({"type": "text", "text": PUBLIC_TUTORIAL_INSTRUCTIONS})
     return blocks
 
 
@@ -632,6 +667,7 @@ async def answer_advisor(
     guild_context: str | None = None,
     tools: AdvisorTools | None = None,
     assistant_name: str = DEFAULT_ASSISTANT_NAME,
+    public_tutorial: bool = False,
 ) -> AdvisorResult:
     """Answer one grounded question. Never raises — errors become a friendly reply.
 
@@ -641,6 +677,11 @@ async def answer_advisor(
     name for it (``branding_service.resolve_assistant_name``). ``tools``, when given (admin askers), lets the model
     fetch settings on demand and propose config changes; the answer then comes
     from a short tool-use loop instead of a single call.
+
+    ``public_tutorial`` switches the register for an answer that will be posted
+    into a public channel (see :data:`PUBLIC_TUTORIAL_INSTRUCTIONS`). It does
+    not itself restrict what the model can see: the caller is responsible for
+    passing a context the whole channel may read and for withholding ``tools``.
     """
     q = (question or "").strip()
     if not q:
@@ -664,7 +705,11 @@ async def answer_advisor(
                 model=model,
                 system=cast(
                     "list[TextBlockParam]",
-                    build_system(guild_context, assistant_name=assistant_name),
+                    build_system(
+                        guild_context,
+                        assistant_name=assistant_name,
+                        public_tutorial=public_tutorial,
+                    ),
                 ),
                 messages=cast("list[MessageParam]", messages),
                 max_tokens=MAX_TOKENS,

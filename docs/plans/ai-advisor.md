@@ -7,7 +7,9 @@ dashboard config panel). Stage 2b shipped: the **name is per-guild branding**
 default `DEFAULT_ASSISTANT_NAME = "Billy-bot"`), edited on Config → Branding.
 Both surfaces resolve it and pass `assistant_name=` into `answer_advisor`,
 which threads it through the system prompt (`system_instructions(name)`) and
-the failure message (`error_msg(name)`). See INDEX.md → Design spec.
+the failure message (`error_msg(name)`). Stage 2c shipped: **public tutorial
+posts** — `/ask public: True` (mods only) answers in a room-facing register and
+publishes to the channel behind a preview. See INDEX.md → Design spec.
 
 ## Goal
 
@@ -87,8 +89,38 @@ it can't invent commands or promise unbuilt features.
     (`require_perms(set())`), rate-limited on the existing `ai` tier. It labels
     itself from `GET /api/help/advisor/name` (same auth), so a member sees the
     guild's own name for the assistant.
-  - Discord: `/ask <question>` — ephemeral, per-user cooldown
+  - Discord: `/ask <question> [public]` — ephemeral, per-user cooldown
     (`advisor_cog.py`).
+- **Public posts (stage 2c):** `public: True` is gated to staff
+  (`advisor_context.can_post_public`, = `is_staff`) because the bot speaking to
+  the whole room in a channel is a mod-shaped act. Three things follow from the
+  answer being read by people other than the asker, and all three are enforced
+  in the cog *before* the model call, independent of the guild's context/tools
+  toggles:
+  - `tools=None` — no settings reads, and therefore no `ConfigProposal` and no
+    Apply buttons on a message the room can see.
+  - `build_asker_context(guild, viewer=None, include_config=False)` — the
+    context is built at @everyone visibility however senior the asker is, so a
+    staff-only channel name or topic never enters the prompt.
+  - `public_tutorial=True` → `PUBLIC_TUTORIAL_INSTRUCTIONS` appended *after* the
+    cache breakpoint, so the register switch doesn't fork the prompt cache.
+
+  Being staff is not on its own permission to speak in the channel the command
+  was run in, so the gate also requires `permissions_for(member).send_messages`
+  — read-only #rules and #announcements are precisely the channels a mod can
+  see but shouldn't post in, and the bot must not be the way round that.
+
+  The answer still lands ephemerally, carrying a `_PublicPostView` (Post /
+  Discard, author-locked, 10-min timeout); the channel only sees it on the click,
+  posted with `channel.send` rather than a followup so it isn't bound to the
+  interaction token, and the embed posted is the object that was previewed. A
+  failed answer is never offered a Post button. Post claims the click with an
+  in-flight flag before awaiting the send (the buttons stay live client-side
+  until the edit lands, so a double-click would otherwise post twice),
+  acknowledges the component interaction before the send (a rate-limited
+  `send` can outlast the 3s window), and re-checks `can_post_public` on the
+  clicker as the Apply buttons do — Discard stays open to a demoted mod, since
+  tidying the preview away is never the harmful direction.
 
 ## Architecture
 
