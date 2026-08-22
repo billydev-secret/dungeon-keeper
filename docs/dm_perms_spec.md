@@ -59,7 +59,7 @@ The panel is also **posted automatically on boot** into each guild's configured 
 Either party can remove the connection from the settings panel (pick the member, then **Remove connection**). The consent pair is removed; if the original request DM is still on file, it gets edited in place with a revoke embed (buttons cleared). Both sides receive a revoke DM; the panel is ephemeral, so nothing about the revoke is visible in the channel. The audit log records `relationship_revoked` with the actor's name.
 
 ### Status check
-The settings panel's status line is a one-line "connected" or "no connection yet" lookup against the in-memory consent map — it does not surface the original reason, who initiated, or when.
+The settings panel's status line is a one-line "connected" or "no connection yet" lookup against the in-memory consent map — it does not surface the original reason, who initiated, or when. Every button on the panel redraws it, so the member being looked at is re-sent as the select's default value and stays selected — the status line and the **Remove connection** button both name that person, and an emptied select next to them read as a bug.
 
 ### Mod audit
 The dashboard's audit log lists every state transition: requested, accepted, denied, expired, revoked, and a member setting their own DM mode. Optional filters: action name and request type (DM vs friend-request label). The audit channel — if configured — also receives a one-line embed for each event in real time.
