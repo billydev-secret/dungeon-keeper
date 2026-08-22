@@ -144,7 +144,7 @@ button calls the flow that already owns its feature:
 | Whispers | `WhisperCog._optin_impl` / `_optout_impl` |
 | Guess | `GuessCog._optin_impl` / `_optout_impl` |
 | DMs | `dm_perms_cog.open_dm_settings` |
-| Wellness | `WellnessCog.open_setup` — labelled "Redo wellness setup" even for an opted-in member, because that is what it is: finishing the wizard re-runs `opt_in_user`, whose upsert overwrites `notifications_pref` and `enforcement_level`. There is no member-facing read-only settings view to point at. **Known pre-existing bug** (`/wellness setup` does the same), not introduced here |
+| Wellness | `WellnessCog.open_setup` — labelled "Redo wellness setup" even for an opted-in member, because that is what it is: finishing the wizard re-runs `opt_in_user`, whose upsert overwrites `notifications_pref` and `enforcement_level`. There is no member-facing read-only settings view to point at. The `notifications_pref` reset that once made that label a warning was fixed in `opt_in_user` on 2026-08-22 |
 | Birthday | `_BirthdayModal`, or `BirthdayCog.remove_impl` |
 | No-contact | `NoContactCog.list_impl` |
 

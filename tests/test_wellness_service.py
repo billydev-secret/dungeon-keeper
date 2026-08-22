@@ -375,6 +375,43 @@ def test_reopt_in_preserves_public_commitment_choice(db_conn):
     assert user.public_commitment is True
 
 
+def test_reopt_in_preserves_notifications_pref(db_conn):
+    """The twin of the public_commitment case above, and it used to fail.
+
+    A member sets "ephemeral only" on the dashboard's Wellness panel, then runs
+    /wellness setup again to change their timezone. The wizard never asks about
+    notifications and never passes one, so the parameter default silently
+    reinstated DMs for someone who had turned them off.
+    """
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    ws.update_user_settings(db_conn, 1, 100, notifications_pref="ephemeral")
+    user = ws.opt_in_user(db_conn, 1, 100, timezone="America/New_York")
+    assert user.notifications_pref == "ephemeral"
+    assert user.timezone == "America/New_York"
+
+
+def test_reopt_in_preserves_enforcement_when_not_given(db_conn):
+    """Same contract for the other member-chosen field: set what you are told,
+    preserve what you are not."""
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC", enforcement_level="gentle")
+    user = ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    assert user.enforcement_level == "gentle"
+
+
+def test_opt_in_user_still_applies_an_explicit_notifications_pref(db_conn):
+    """Preserving on omission must not stop an explicit value from landing."""
+    ws.opt_in_user(db_conn, 1, 100, timezone="UTC", notifications_pref="ephemeral")
+    user = ws.opt_in_user(db_conn, 1, 100, timezone="UTC", notifications_pref="dm")
+    assert user.notifications_pref == "dm"
+
+
+def test_first_opt_in_uses_the_defaults(db_conn):
+    """A brand-new row still starts on the documented defaults."""
+    user = ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
+    assert user.notifications_pref == ws.DEFAULT_NOTIFICATIONS
+    assert user.enforcement_level == ws.DEFAULT_ENFORCEMENT
+
+
 def test_opt_in_user_reactivates_existing_row(db_conn):
     ws.opt_in_user(db_conn, 1, 100, timezone="UTC")
     ws.opt_out_user(db_conn, 1, 100)

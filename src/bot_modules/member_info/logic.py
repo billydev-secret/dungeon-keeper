@@ -149,11 +149,17 @@ _FEATURE_SPECS: tuple[_FeatureSpec, ...] = (
         in_text="Opted in.",
         out_text="Opted out.",
         unset_text="Not set up.",
-        # NOT "Wellness settings": the only member-facing entry point is the
-        # opt-in wizard, and finishing it re-runs `opt_in_user`, whose upsert
-        # overwrites `notifications_pref` and `enforcement_level`. A button
-        # labelled "settings" invites someone to look at their preferences and
-        # silently costs them one; this label says what actually happens.
+        # NOT "Wellness settings": the only member-facing entry point in
+        # Discord is the opt-in wizard (`_SettingsView` in wellness_cog is
+        # defined but never instantiated — dormant, and the spec says so), and
+        # it re-asks timezone and enforcement rather than showing what you
+        # have. Member settings live on the dashboard's Wellness panel. The
+        # label says what the button actually does.
+        #
+        # It used to matter more: re-running the wizard also reset
+        # `notifications_pref`, silently switching DMs back on for anyone who
+        # had turned them off. That is fixed in `opt_in_user` (2026-08-22), so
+        # this is now a naming-accuracy choice rather than a warning.
         in_action=(ACTION_OPEN, "Redo wellness setup"),
         out_action=(ACTION_OPEN, "Wellness setup"),
         unset_action=(ACTION_OPEN, "Wellness setup"),

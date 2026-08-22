@@ -490,41 +490,63 @@ def opt_in_user(
     user_id: int,
     *,
     timezone: str,
-    enforcement_level: str = DEFAULT_ENFORCEMENT,
-    notifications_pref: str = DEFAULT_NOTIFICATIONS,
+    enforcement_level: str | None = None,
+    notifications_pref: str | None = None,
 ) -> WellnessUser:
     """Insert or re-activate a wellness user. Resets opt_out timestamp.
 
     ``public_commitment`` starts OFF — appearing on the public streak list is
     an explicit choice made later (dashboard toggle), never part of opting in.
     A re-opt-in preserves whatever the member previously chose.
+
+    That last sentence is the contract, and ``enforcement_level`` /
+    ``notifications_pref`` did not honour it. They defaulted to the module
+    constants and were unconditionally written into the ``DO UPDATE`` list, so
+    **omitting** one reset it. `/wellness setup` never passes a notifications
+    preference — it doesn't ask about notifications at all — so a member who
+    had chosen "ephemeral only" on the dashboard's Wellness panel and later
+    re-ran the wizard to change their timezone had DMs silently switched back
+    on. Every other member-chosen column (``public_commitment``,
+    ``away_enabled``, ``away_message``, ``daily_reset_hour``) was already
+    preserved by being left out of that list.
+
+    ``None`` now means "leave whatever is there"; a value means "set it". A
+    brand-new row still starts on the documented defaults.
     """
-    if enforcement_level not in ENFORCEMENT_LEVELS:
+    if enforcement_level is not None and enforcement_level not in ENFORCEMENT_LEVELS:
         enforcement_level = DEFAULT_ENFORCEMENT
-    if notifications_pref not in NOTIFICATION_PREFS:
+    if notifications_pref is not None and notifications_pref not in NOTIFICATION_PREFS:
         notifications_pref = DEFAULT_NOTIFICATIONS
+
+    # Only columns the caller actually supplied join the update list; the
+    # insert still needs a concrete value for these NOT NULL columns.
+    updates = [
+        "timezone           = excluded.timezone",
+        "opted_in_at        = excluded.opted_in_at",
+        "opted_out_at       = NULL",
+    ]
+    if enforcement_level is not None:
+        updates.append("enforcement_level  = excluded.enforcement_level")
+    if notifications_pref is not None:
+        updates.append("notifications_pref = excluded.notifications_pref")
 
     now = time.time()
     conn.execute(
-        """
+        f"""
         INSERT INTO wellness_users (
             guild_id, user_id, timezone, enforcement_level, notifications_pref,
             slow_mode_rate_seconds, public_commitment, away_enabled, away_message,
             daily_reset_hour, opted_in_at, opted_out_at
         ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, '', 0, ?, NULL)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
-            timezone           = excluded.timezone,
-            enforcement_level  = excluded.enforcement_level,
-            notifications_pref = excluded.notifications_pref,
-            opted_in_at        = excluded.opted_in_at,
-            opted_out_at       = NULL
+            {", ".join(updates)}
         """,
         (
             guild_id,
             user_id,
             timezone,
-            enforcement_level,
-            notifications_pref,
+            enforcement_level or DEFAULT_ENFORCEMENT,
+            notifications_pref or DEFAULT_NOTIFICATIONS,
             DEFAULT_SLOW_MODE_RATE_SECONDS,
             now,
         ),
