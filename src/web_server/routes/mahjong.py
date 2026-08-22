@@ -48,6 +48,8 @@ class ConfigBody(BaseModel):
     second_charleston: bool
     stakes_allowed: list[int] = Field(min_length=1, max_length=8)
     assist_default: str = Field(pattern=f"^({'|'.join(ASSIST_MODES)})$")
+    practice_bots: bool
+    fill_bots: bool
 
 
 class CardUploadBody(BaseModel):
@@ -71,6 +73,8 @@ def _settings_payload(conn, guild_id: int) -> dict:
         "second_charleston": s.second_charleston,
         "stakes_allowed": list(s.stakes_allowed),
         "assist_default": s.assist_default,
+        "practice_bots": s.practice_bots,
+        "fill_bots": s.fill_bots,
     }
 
 
@@ -145,6 +149,12 @@ async def put_config(request: Request, body: ConfigBody, user=_ADMIN):
             set_config_value(
                 conn, "mahjong_stakes_allowed", ",".join(map(str, stakes)), guild_id)
             set_config_value(conn, "mahjong_assist_default", body.assist_default, guild_id)
+            set_config_value(
+                conn, "mahjong_practice_bots",
+                "1" if body.practice_bots else "0", guild_id)
+            set_config_value(
+                conn, "mahjong_fill_bots",
+                "1" if body.fill_bots else "0", guild_id)
             return _settings_payload(conn, guild_id)
 
     return await run_query(_q)
