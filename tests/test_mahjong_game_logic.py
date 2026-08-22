@@ -1633,3 +1633,28 @@ def test_seen_elsewhere_matches_the_fallow_settle_view():
     assert seen[Tile("2b")] == 2      # naturals of the exposure
     assert seen[Tile.JOKER] == 1      # its joker counts as a joker
     assert Tile("2d") not in seen     # own tiles are never "elsewhere"
+
+
+def test_claim_window_live_discard_counts_as_obtainable_for_claimants():
+    # Review finding (stage 4): the live discard is the one tile the claim
+    # window exists to acquire. Both seats sit one 8c short of Golden Hour;
+    # two 8c lie dead in the pit; seat 1 discards the third... fourth copy.
+    state = play_state(
+        2, {0: "flower*4 2d*4 6b*4 8c", 1: "flower*4 2d*4 6b*4 8c"}, turn=1,
+    )
+    state.discards = [(0, Tile("8c")), (1, Tile("8c"))]
+    state, _ = G.discard(state, 1, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    assert state.live_discard is Tile("8c")
+    # The claimant is told the truth: one tile away, and it's the live one.
+    r0 = G.assist_readout(state, 0, CARD, "gap")
+    assert r0 is not None
+    gh1 = next(p for p in r0.prospects if p.hand.id == "gh-1")
+    assert gh1.distance == 1
+    assert dict(gh1.needed) == {Tile("8c"): 1}
+    # The discarder can never reclaim their own tile — for them it IS gone,
+    # and gh-1 only survives via a sister-suit binding at a real distance.
+    r1 = G.assist_readout(state, 1, CARD, "gap")
+    assert r1 is not None
+    gh1_d = next((p for p in r1.prospects if p.hand.id == "gh-1"), None)
+    assert gh1_d is None or gh1_d.distance > 1

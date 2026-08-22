@@ -1,9 +1,10 @@
 # Meadow Mahjong — assistance modes (addon plan)
 
-**Status: built 2026-08-22** — stages 1–3 landed (engine 43e7040b, prefs
-d431fe2b, surface with this commit); stage 4 is the gate + QA card. Addon to
-the shipped v1 ([meadow-mahjong.md](meadow-mahjong.md), complete 2026-08-21).
-Still merge-gated on the base game passing live QA.
+**Status: complete 2026-08-22** — stages 1–4 landed (engine 43e7040b, prefs
+d431fe2b, surface 260b0b25, review fixes with the stage-4 commit; the review
+round's three confirmed findings are R1–R3 below). Addon to the shipped v1
+([meadow-mahjong.md](meadow-mahjong.md), complete 2026-08-21). Still
+merge-gated on the base game passing live QA.
 
 **Spec:** [../meadow_mahjong_spec.md](../meadow_mahjong_spec.md) — v1 is silent
 on hints of any kind, so this breaks no existing decision. Stage 3 adds a §
@@ -100,6 +101,19 @@ exposure; cog wiring for the new button.
 
 Full suite, eslint/stylelint if dashboard assets moved, scoped browser checks
 for the dial. QA card written for a volunteer tester.
+
+### Review round (2026-08-22)
+
+An adversarial multi-agent review over the three addon commits (4 lenses,
+2 isolated skeptics per finding, every verdict backed by an executed
+reproduction) confirmed three defects — all four lenses independently
+converged on the first:
+
+| # | Finding | Fix |
+|---|---|---|
+| R1 | **The claim-window readout counted the live claimable discard as gone.** `_place_discard` appends to `state.discards` before the window opens, so the one tile the phase exists to acquire read as extinct — a member one 8c short of Golden Hour, with the winning 8c live, was shown a sister-binding lie ("distance 6, need 8b×2") or even "play for the wall" while the winning claim sat in front of them. | `assist_readout` discounts the live discard from `seen` for every seat that may claim it; the discarder keeps the unadjusted view (their tile can never come back). Named test: `test_claim_window_live_discard_counts_as_obtainable_for_claimants`. |
+| R2 | **"Dead weight" printed the top hand's list unqualified** while the copy promises "tiles none of your closest hands can use" — the same tile could print as *needed* by hand #2 and *dead* in one field. | The embed renders the intersection across the hands actually shown (order preserved from the top hand); the suggestion machinery is untouched — it already scored across all live lines. |
+| R3 | **The 1024 bound was a blind slice.** With the prod emoji map registered (~28 chars/tile), ~10% of fresh-deal coach readouts overflow; the slice cut mid-`<:mm_…:id>` token and silently dropped the "Consider discarding" line. Invisible in dev because the map ships empty. | `_assist_field` guarantees the bound itself: emoji at full width, then text chips, then fewer hands — content over glitter, never a cut token. The test renders under a fake 19-digit-id map. |
 
 ---
 

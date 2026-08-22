@@ -1141,9 +1141,23 @@ def assist_readout(
     ):
         return None
     exposures = [e.as_match() for e in seat_state.exposures]
+    seen = seen_elsewhere(state, seat)
+    if (
+        state.phase is Phase.CLAIM_WINDOW
+        and state.live_discard is not None
+        and state.live_discarder != seat
+    ):
+        # The live discard is the one tile this window exists to acquire —
+        # for a seat that may claim it, it is obtainable, not gone. Without
+        # this, a member one tile from Mahjong is told a sister-binding lie
+        # (or "play for the wall") at the exact moment the winning claim is
+        # in front of them (stage-4 review finding). The discarder keeps the
+        # unadjusted view: their own tile can never come back to them.
+        seen[state.live_discard] -= 1
+        if seen[state.live_discard] <= 0:
+            del seen[state.live_discard]
     prospects = closest_lines(
-        list(seat_state.rack), exposures, card,
-        seen_elsewhere(state, seat), limit=None,
+        list(seat_state.rack), exposures, card, seen, limit=None,
     )
     suggestion: Tile | None = None
     if mode == "coach" and prospects:

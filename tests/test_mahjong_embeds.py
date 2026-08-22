@@ -255,3 +255,61 @@ def test_assist_block_fits_a_discord_field():
         embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
         block = _rack_field(embed, "Closest Hands")
         assert block is not None and len(block) <= 1024
+
+
+# ── Stage-4 review findings: honest dead weight + overflow-proof field ───────
+
+
+def _fake_prospect(hand, distance, needed, dead_weight):
+    from bot_modules.games.mahjong.match_logic import Prospect
+    return Prospect(hand=hand, distance=distance, needed=tuple(needed),
+                    dead_weight=tuple(dead_weight))
+
+
+def test_dead_weight_is_the_intersection_of_shown_hands():
+    # A tile hand #2 still NEEDS must never print as dead weight: the copy
+    # promises "tiles none of your closest hands can use".
+    h1, h2 = CARD.hands[0], CARD.hands[1]
+    p1 = _fake_prospect(h1, 4, [(Tile("8c"), 2)],
+                        [(Tile("9d"), 1), (Tile("wn"), 1)])
+    p2 = _fake_prospect(h2, 5, [(Tile("wn"), 1)], [(Tile("9d"), 1)])
+    r = G.AssistReadout(mode="coach", prospects=(p1, p2), live_count=2,
+                        suggestion=None)
+    state = _assist_state()
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    dead_line = next(ln for ln in block.split("\n") if ln.startswith("Dead weight"))
+    assert "9D" in dead_line
+    assert "N" not in dead_line  # hand #2 needs the wind — not dead
+
+
+def test_assist_field_survives_the_registered_emoji_map(monkeypatch):
+    # Once prod emoji registration runs, every chip becomes ~28 chars of
+    # <:mm_xx:snowflake> markup. The field must still fit 1024 WITHOUT a
+    # blind slice: degrade to text chips rather than cut mid-token and
+    # silently drop the coach suggestion (review finding, stage 4).
+    from bot_modules.games.mahjong import tile_render
+
+    fake_map = {t.code: 1400000000000000001 for t in Tile}
+    fake_map["back"] = 1400000000000000001
+    monkeypatch.setattr(tile_render, "_map_cache", fake_map)
+
+    # Adversarial worst case: three far lines with maximal need lists.
+    hands = CARD.hands[:3]
+    wide = [(t, 2) for t in list(Tile)[:10]]
+    prospects = tuple(
+        _fake_prospect(h, 14, wide, [(Tile("9d"), 2), (Tile("wn"), 1)])
+        for h in hands
+    )
+    r = G.AssistReadout(mode="coach", prospects=prospects, live_count=22,
+                        suggestion=Tile("9d"))
+    state = _assist_state()
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    assert len(block) <= 1024
+    # the advice coach exists to deliver is never the part that gets cut
+    assert "Consider discarding" in block
+    # and no half-sliced emoji token renders as garbage
+    assert block.count("<:") == block.count(">") or "<:" not in block
