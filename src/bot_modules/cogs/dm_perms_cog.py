@@ -781,6 +781,21 @@ class DmSettingsView(discord.ui.View):
         await self._rerender(interaction, note)
 
 
+async def open_dm_settings(
+    cog: "DmPermsCog", interaction: discord.Interaction, member: discord.Member
+) -> None:
+    """Send the member their own DM-settings panel.
+
+    Shared by the DM request panel's Settings button and the ``/info`` panel,
+    so both land on the identical view — the DM mode dial has three states and
+    exactly one place that renders them (CLAUDE.md: collapse controls).
+    """
+    view = DmSettingsView(cog, member)
+    await interaction.response.send_message(
+        embed=await view._embed(), view=view, ephemeral=True
+    )
+
+
 class DmRequestPanelView(discord.ui.View):
     """Persistent panel button registered on startup."""
 
@@ -812,10 +827,7 @@ class DmRequestPanelView(discord.ui.View):
                 "❌ Use this in the server.", ephemeral=True
             )
             return
-        view = DmSettingsView(self.cog, member)
-        await interaction.response.send_message(
-            embed=await view._embed(), view=view, ephemeral=True
-        )
+        await open_dm_settings(self.cog, interaction, member)
 
 
 # ---------------------------------------------------------------------------

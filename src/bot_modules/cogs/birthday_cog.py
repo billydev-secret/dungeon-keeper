@@ -376,6 +376,10 @@ class BirthdayCog(commands.Cog):
         description="Remove your birthday so the bot stops announcing it.",
     )
     async def birthday_remove(self, interaction: discord.Interaction) -> None:
+        await self.remove_impl(interaction)
+
+    async def remove_impl(self, interaction: discord.Interaction) -> None:
+        """Shared by ``/birthday remove`` and the ``/info`` panel's button."""
         guild_id = interaction.guild_id
         if guild_id is None:
             await interaction.response.send_message(

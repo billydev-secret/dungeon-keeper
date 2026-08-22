@@ -144,6 +144,52 @@ def rel_ts(ts: float) -> str:
     return f"<t:{int(ts)}:R>"
 
 
+# Compact per-source XP labels, shared by every surface that prints an XP
+# breakdown (``/modinfo`` and ``/info``). Order and source keys mirror the
+# stacked-bar chart palette in ``bot_modules.services.activity_graphs`` so the
+# text breakdown and the chart always tell the same story.
+XP_SOURCE_DISPLAY: tuple[tuple[str, str], ...] = (
+    ("text", "\U0001F4AC Text"),
+    ("voice", "\U0001F50A Voice"),
+    ("reply", "\u21A9\uFE0F Reply"),
+    ("image_react", "\U0001F5BC React"),
+    ("grant", "\U0001F381 Grant"),
+)
+
+
+def fmt_xp(amount: float) -> str:
+    """Human-compact XP number: 950 -> ``950``, 31234 -> ``31.2k``, 1.2M."""
+    n = float(amount)
+    if abs(n) >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if abs(n) >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return f"{n:.0f}"
+
+
+def xp_breakdown_parts(xp_by_source: "dict[str, float] | None") -> list[str]:
+    """``["\U0001F4AC Text 12.3k", ...]`` for the known sources, then any others.
+
+    Unknown sources are not dropped: a new XP source added to the ledger shows
+    up under its raw name rather than silently vanishing from the breakdown,
+    which is how a mis-keyed source would otherwise go unnoticed.
+    """
+    if not xp_by_source:
+        return []
+    known = {src for src, _ in XP_SOURCE_DISPLAY}
+    parts = [
+        f"{label} {fmt_xp(xp_by_source[src])}"
+        for src, label in XP_SOURCE_DISPLAY
+        if xp_by_source.get(src)
+    ]
+    parts += [
+        f"{src} {fmt_xp(amt)}"
+        for src, amt in xp_by_source.items()
+        if src not in known and amt
+    ]
+    return parts
+
+
 def build_admin_mirror_embed(
     *, domain: str, action: str, summary: str, actor_name: str, actor_id: int
 ) -> discord.Embed:
