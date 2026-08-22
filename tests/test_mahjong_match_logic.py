@@ -22,7 +22,7 @@ from bot_modules.games.mahjong.match_logic import (
     match_hand,
     reachable_lines,
 )
-from bot_modules.games.mahjong.tiles import Tile
+from bot_modules.games.mahjong.tiles import TILE_ORDER, Tile
 
 
 def tiles(spec: str) -> list[Tile]:
@@ -592,8 +592,7 @@ def test_suggests_the_tile_fewest_lines_can_use(card):
         t: sum(1 for p in prospects if have[t] - dict(p.dead_weight).get(t, 0) > 0)
         for t in dead
     }
-    order = {tile: i for i, tile in enumerate(Tile)}
-    expected = min(use, key=lambda t: (use[t], order[t]))
+    expected = min(use, key=lambda t: (use[t], TILE_ORDER[t]))
     assert suggest_discard(rack, prospects) is expected
 
 
@@ -650,7 +649,6 @@ def test_assist_invariants_hold_on_random_racks(card, seed):
         h.id for h in reachable_lines(rack, exposures, card, seen)
     }
 
-    order = {tile: i for i, tile in enumerate(Tile)}
     previous = None
     for rank, p in enumerate(prospects):
         assert sum(n for _, n in p.needed) == p.distance
@@ -659,7 +657,7 @@ def test_assist_invariants_hold_on_random_racks(card, seed):
         assert Tile.JOKER not in dict(p.needed)
         assert Tile.JOKER not in dict(p.dead_weight)
         assert [t for t, _ in p.needed] == sorted(
-            (t for t, _ in p.needed), key=order.__getitem__
+            (t for t, _ in p.needed), key=TILE_ORDER.__getitem__
         )
         if previous is not None:
             assert previous.distance <= p.distance

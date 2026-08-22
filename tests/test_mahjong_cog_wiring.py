@@ -109,3 +109,21 @@ def test_my_settings_select_offers_every_mode_and_marks_current():
     select = next(c for c in view.children if isinstance(c, discord.ui.Select))
     assert [o.value for o in select.options] == list(ASSIST_MODES)
     assert [o.value for o in select.options if o.default] == ["coach"]
+
+
+def test_assist_for_skips_the_service_outside_decision_phases():
+    # F6: the pure gates run before the DB round-trip — a rack press on a
+    # settled table must not touch the service at all.
+    import asyncio
+
+    from tests.test_mahjong_game_logic import play_state
+
+    class _Exploding:
+        async def assist_context(self, *a, **k):
+            raise AssertionError("service round-trip paid for a None readout")
+
+    cog = _cog()
+    cog.service = _Exploding()  # type: ignore[assignment]
+    state = play_state(2, {0: "9c*13", 1: "9c*13"})
+    state.phase = Phase.SETTLE
+    assert asyncio.run(cog._assist_for(1, state, 0)) is None

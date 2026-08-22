@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from itertools import permutations
 
 from bot_modules.games.mahjong.card_logic import Card, Group, Hand, RankKind
-from bot_modules.games.mahjong.tiles import SUITS, Tile, copies
+from bot_modules.games.mahjong.tiles import SUITS, TILE_ORDER, Tile, copies
 
 _WIND_TILES = {"N": Tile.NORTH, "E": Tile.EAST, "W": Tile.WEST, "S": Tile.SOUTH}
 _DRAGON_TILES = {"R": Tile.RED, "G": Tile.GREEN, "soap": Tile.SOAP}
@@ -336,9 +336,6 @@ def fallow_base_value(
 
 # ── Assistance (plans/mahjong-assist.md A2–A6) ───────────────────────────────
 
-_TILE_ORDER = {tile: i for i, tile in enumerate(Tile)}
-
-
 @dataclass(frozen=True)
 class Prospect:
     """One still-live card line, measured against the tiles actually held.
@@ -451,7 +448,7 @@ def _line_prospect(
 
             # Discount held jokers from the scarcest 3+ gaps (docstring).
             for tile in sorted(
-                large_deficit, key=lambda t: (unseen(t), _TILE_ORDER[t])
+                large_deficit, key=lambda t: (unseen(t), TILE_ORDER[t])
             ):
                 if jokers_used == 0:
                     break
@@ -472,10 +469,10 @@ def _line_prospect(
                 hand=hand,
                 distance=distance,
                 needed=tuple(
-                    sorted(needed.items(), key=lambda p: _TILE_ORDER[p[0]])
+                    sorted(needed.items(), key=lambda p: TILE_ORDER[p[0]])
                 ),
                 dead_weight=tuple(
-                    sorted(dead.items(), key=lambda p: _TILE_ORDER[p[0]])
+                    sorted(dead.items(), key=lambda p: TILE_ORDER[p[0]])
                 ),
             )
             if distance == 0:
@@ -495,17 +492,21 @@ def dangerous_tiles(
     design — their concealed tiles might rule a line out, but we can't see
     that, and a rail errs toward silence.
     """
+    exposed = [e for e in opponent_exposures if e]
+    if not exposed:
+        return frozenset()
     danger: set[Tile] = set()
-    for exposures in opponent_exposures:
-        if not exposures:
-            continue
-        for hand in card.hands:
-            if hand.concealed:
-                continue  # an exposed seat can't be on a concealed line
-            for x, suit_map, dragon in _bindings(hand):
-                resolved = [
-                    (g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups
-                ]
+    # One enumeration of hands × bindings; only the exposure assignment
+    # depends on the opponent (F9 — the per-opponent rescan tripled the
+    # cost at a 4-seat table for identical resolved lists).
+    for hand in card.hands:
+        if hand.concealed:
+            continue  # an exposed seat can't be on a concealed line
+        for x, suit_map, dragon in _bindings(hand):
+            resolved = [
+                (g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups
+            ]
+            for exposures in exposed:
                 for used in _exposure_assignments(exposures, resolved):
                     danger.update(
                         natural
@@ -552,4 +553,4 @@ def suggest_discard(
             if have[tile] - dict(p.dead_weight).get(tile, 0) > 0
         )
 
-    return min(candidates, key=lambda t: (usefulness(t), _TILE_ORDER[t]))
+    return min(candidates, key=lambda t: (usefulness(t), TILE_ORDER[t]))

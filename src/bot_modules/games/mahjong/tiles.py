@@ -120,7 +120,9 @@ _LABELS = {
 }
 
 #: Definition order = display order; sort_rack and the renderers key off it.
-_ORDER = {tile: i for i, tile in enumerate(Tile)}
+#: Definition order = display order; sort_rack, the renderers, and the
+#: assist engine's needed/dead-weight ordering all key off this one dict.
+TILE_ORDER = {tile: i for i, tile in enumerate(Tile)}
 
 #: Physical copies of each kind in the wall (§2.1): 152 total.
 def copies(tile: Tile) -> int:
@@ -145,4 +147,4 @@ def shuffled_wall(rng: random.Random | None = None) -> list[Tile]:
 
 def sort_rack(tiles: list[Tile]) -> list[Tile]:
     """Sort a rack into display order (suits 1–9, winds, dragons, F, J)."""
-    return sorted(tiles, key=lambda t: _ORDER[t])
+    return sorted(tiles, key=lambda t: TILE_ORDER[t])

@@ -40,6 +40,7 @@ from bot_modules.games.mahjong.game_logic import (
     GameState,
     Phase,
     assist_readout,
+    assist_relevant,
 )
 from bot_modules.games.mahjong.mahjong_service import (
     STALE_TABLE,
@@ -596,6 +597,8 @@ class MahjongCog(commands.Cog):
         """The seat's readout for a rack render, or None (mode off, table
         gone, or no decision pending) — never an exception: assistance may
         not break the panel it decorates."""
+        if not assist_relevant(state, seat):
+            return None  # free gates first — no DB trip for a None (F6)
         try:
             got = await self.service.assist_context(
                 table_id, state.seats[seat].member_id

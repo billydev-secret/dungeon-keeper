@@ -1155,6 +1155,20 @@ _ASSIST_PHASES = frozenset({
 })
 
 
+def assist_relevant(state: GameState, seat: int) -> bool:
+    """The pure gates: a readout can only exist in a decision phase, for a
+    live seat, holding tiles. The cog checks this before paying the service
+    round-trip (F6 — a stale sticky's rack press in SETTLE used to fetch
+    settings and parse the card just to render nothing); assist_readout
+    applies it again for its own correctness."""
+    seat_state = state.seats[seat]
+    return (
+        state.phase in _ASSIST_PHASES
+        and not seat_state.fallow
+        and bool(seat_state.rack)
+    )
+
+
 def assist_readout(
     state: GameState, seat: int, card: Card, mode: str
 ) -> AssistReadout | None:
@@ -1165,9 +1179,7 @@ def assist_readout(
     if (
         mode == "off"
         or mode not in ASSIST_MODES
-        or state.phase not in _ASSIST_PHASES
-        or seat_state.fallow
-        or not seat_state.rack
+        or not assist_relevant(state, seat)
     ):
         return None
     exposures = [e.as_match() for e in seat_state.exposures]

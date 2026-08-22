@@ -115,6 +115,28 @@ converged on the first:
 | R2 | **"Dead weight" printed the top hand's list unqualified** while the copy promises "tiles none of your closest hands can use" — the same tile could print as *needed* by hand #2 and *dead* in one field. | The embed renders the intersection across the hands actually shown (order preserved from the top hand); the suggestion machinery is untouched — it already scored across all live lines. |
 | R3 | **The 1024 bound was a blind slice.** With the prod emoji map registered (~28 chars/tile), ~10% of fresh-deal coach readouts overflow; the slice cut mid-`<:mm_…:id>` token and silently dropped the "Consider discarding" line. Invisible in dev because the map ships empty. | `_assist_field` guarantees the bound itself: emoji at full width, then text chips, then fewer hands — content over glitter, never a cut token. The test renders under a fake 19-digit-id map. |
 
+### Review round 2 (/code-review, 2026-08-22)
+
+A second, independent review over the finished addon confirmed 11 findings
+(3 more candidates refuted). The three commits working the queue:
+
+| # | Finding | Fix |
+|---|---|---|
+| F1 | **The fallow-settle payout had R1's bug in the money path**: `_settle_fallow_end` valued the survivor's hand with unadjusted seen, so a leaver folding mid-claim-window could change real coin payouts when the live discard was the survivor's last needed copy. | `obtainable_seen()` — one shared view for the readout AND the settlement; they can never again disagree. Regression test pays 25, not 50. |
+| F2 | **Coach contradicted its own readout** (~16% of coach racks): the suggestion came from the closest hand's dead weight alone and could name a tile a shown sister hand still needed. | Candidates now come from the dead-weight *intersection* of the shown hands — provably disjoint from every shown need list (excess ⇒ zero deficit). Sweep-pinned. |
+| F3 | A **fallow seat's exposures** gated the coach although a folded seat threatens nothing. | The danger set skips fallow seats. |
+| F4 | The claim-window discount applied to a seat that had already **passed** on the tile. | `obtainable_seen` checks the recorded claim response; a pending call/mahjong keeps the discount (that tile is incoming). |
+| F7 | The mode vocabulary was enumerated in five places, three unpinned. | `ASSIST_MODES` lives in game_logic; service re-exports, route derives its pattern; gate + route pins added. |
+| F8 | The equivalence sweep never exercised **exposures** — the liveness duplication's hardest branch. | Odd seeds now carry a locked exposure (some with a joker) through both functions. |
+| F5/F6 | Three DB round-trips per rack render; pure gates ran after the paid work. | `assist_relevant()` gates before any I/O; `get_assist_mode` reads one dial key instead of nine; parsed cards cache by row id + json hash. |
+| F9–F12 | `dangerous_tiles` rescanned the card per opponent; `_TILE_ORDER` duplicated `tiles._ORDER`; the mode clamp existed twice; a redundant `conn.commit()`. | Enumeration hoisted; `TILE_ORDER` public in tiles.py and shared; `_assist(raw, fallback)`; commit removed (open_db commits on exit). |
+
+One process note stood: the stage-2 dial commit broke the same-commit
+manual/Testing letter (mitigated — stage 3 closed both 11 minutes later,
+and the QA card assembles per branch). Refuted and dropped: pydantic
+trailing-newline, CHARLESTON_VOTE-in-_ASSIST_PHASES-as-bug, TableError log
+spam (the triggering state is unreachable without hand-written SQL).
+
 ---
 
 ## What this addon does **not** do

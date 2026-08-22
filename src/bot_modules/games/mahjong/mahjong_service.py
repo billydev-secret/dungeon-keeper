@@ -115,22 +115,30 @@ def load_settings(conn, guild_id: int) -> MahjongSettings:
     )
 
 
-def _assist(raw: str) -> str:
-    """Clamp to a known mode — a corrupt store degrades, never raises."""
-    return raw if raw in ASSIST_MODES else "gap"
+def _assist(raw: str, fallback: str = "gap") -> str:
+    """THE clamp to a known mode — a corrupt store degrades, never raises.
+    One clamp, two fallbacks: the dial degrades to the shipped default, a
+    member row to the (already-clamped) guild default (F11)."""
+    return raw if raw in ASSIST_MODES else fallback
 
 
-def get_assist_mode(conn, guild_id: int, user_id: int, settings: MahjongSettings) -> str:
+def get_assist_mode(
+    conn, guild_id: int, user_id: int, settings: MahjongSettings | None = None
+) -> str:
     """The member's chosen level, or the guild default when they never chose
-    (or the stored value is no longer a mode we know)."""
+    (or the stored value is no longer a mode we know). Pass ``settings`` when
+    you already hold them; without them only the one dial key is read — the
+    rack-render path pays for a single config value, not all nine (F5)."""
     row = conn.execute(
         "SELECT mode FROM mahjong_prefs WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),
     ).fetchone()
-    if row is None:
-        return settings.assist_default
-    raw = str(row[0])
-    return raw if raw in ASSIST_MODES else settings.assist_default
+    fallback = (
+        settings.assist_default
+        if settings is not None
+        else _assist(get_config_value(conn, "mahjong_assist_default", "gap", guild_id))
+    )
+    return _assist(str(row[0]), fallback) if row is not None else fallback
 
 
 def set_assist_mode(conn, guild_id: int, user_id: int, mode: str) -> None:
@@ -142,8 +150,7 @@ def set_assist_mode(conn, guild_id: int, user_id: int, mode: str) -> None:
         "ON CONFLICT (guild_id, user_id) DO UPDATE SET mode = excluded.mode, "
         "updated_at = excluded.updated_at",
         (guild_id, user_id, mode, time.time()),
-    )
-    conn.commit()
+    )  # open_db commits on scope exit — no explicit commit (F12)
 
 
 #: The surface's ordinary failure — used for genuine stale-table races AND
@@ -275,6 +282,9 @@ class MahjongService:
         self._listener: Listener | None = None
         self._rng = secrets.SystemRandom()
         self._pending_events: dict[int, tuple[GameState, list[engine.Event]]] = {}
+        # parsed-Card cache keyed by row id; the hash guards against the
+        # upsert path rewriting card_json under a stable row id (F5)
+        self._card_cache: dict[int, tuple[int, Card]] = {}
 
     def set_listener(self, listener: Listener) -> None:
         self._listener = listener
@@ -676,13 +686,20 @@ class MahjongService:
         return row
 
     def _card_for(self, conn, row) -> Card:
+        row_id = int(row["card_row_id"])
         card_row = conn.execute(
             "SELECT card_json FROM mahjong_cards WHERE id = ?",
-            (int(row["card_row_id"]),),
+            (row_id,),
         ).fetchone()
         if card_row is None:
             raise TableError("This table's card has been deleted.")
-        return load_card(json.loads(card_row["card_json"]))
+        raw = card_row["card_json"]
+        cached = self._card_cache.get(row_id)
+        if cached is not None and cached[0] == hash(raw):
+            return cached[1]
+        card = load_card(json.loads(raw))
+        self._card_cache[row_id] = (hash(raw), card)
+        return card
 
     def _persist(
         self, conn, table_id: int, state: GameState, deadline: float | None
@@ -756,8 +773,7 @@ class MahjongService:
                 if row is None:
                     return None
                 guild_id = int(row["guild_id"])
-                settings = load_settings(conn, guild_id)
-                mode = get_assist_mode(conn, guild_id, member_id, settings)
+                mode = get_assist_mode(conn, guild_id, member_id)
                 if mode == "off":
                     return None  # don't parse a card nobody will read
                 return self._card_for(conn, row), mode
@@ -766,8 +782,7 @@ class MahjongService:
     async def member_assist_mode(self, guild_id: int, member_id: int) -> str:
         def _q():
             with open_db(self.db_path) as conn:
-                settings = load_settings(conn, guild_id)
-                return get_assist_mode(conn, guild_id, member_id, settings)
+                return get_assist_mode(conn, guild_id, member_id)
         return await asyncio.to_thread(_q)
 
     async def choose_assist_mode(
