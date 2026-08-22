@@ -5,7 +5,7 @@
 // /mahjong panel's button (backed by the same member-tier API this panel
 // reads for its own card preview).
 
-import { apiGet, apiPost, apiPut } from "../api.js";
+import { api, apiPost, apiPut } from "../api.js";
 import {
   guardForm,
   loadMembers,
@@ -24,8 +24,8 @@ export function mount(container) {
 
   return mountAsync(container, async () => {
     const [config, report, members] = await Promise.all([
-      apiGet("/api/mahjong/config"),
-      apiGet("/api/mahjong/report"),
+      api("/api/mahjong/config"),
+      api("/api/mahjong/report"),
       loadMembers().catch(() => []),
     ]);
     const nameOf = memberNameLookup(members);

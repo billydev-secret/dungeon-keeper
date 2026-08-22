@@ -38,6 +38,17 @@ external endpoints excluded so an in-process handler can't hang the suite); and
 round-trips through the two hand-serialized features most likely to regress
 (announcements, role menus).
 
+### Import bindings — `test_js_import_bindings.py`
+One unresolvable name in an `import { … }` list kills the *whole* ES module, so
+the panel never mounts and the user gets `Failed to load <Panel>: Importing
+binding name 'apiGet' is not found.` — which is how the Meadow Mahjong panel
+shipped in 2026-08 (`apiGet` from `api.js`, which exports `api`). Nothing
+always-on saw it: `.eslintrc.json` extends `eslint:recommended`, which has no
+import-resolution rule, and the browser tier was blind to it as well (below).
+A plain source parse now checks every named import in every module against the
+target's real exports, following `export … from` re-exports. No browser, no
+marker, ~0.6s.
+
 ### Broken manual links — `test_help_links.py`
 The in-dashboard manual (`static/manual.html`) rewrites `href="#x"` links to
 help routes or in-page anchors; a target that's neither is a silent dead link
@@ -61,7 +72,14 @@ it. Full detail: [mobile_layout_testing.md](mobile_layout_testing.md).
 Every panel must mount with no uncaught JS exception, no `console.error` (beyond
 resource-load failures, which the network check owns), and no failed/4xx-5xx
 same-origin request. Nothing else exercises the vanilla-JS panels past a syntax
-check, so a panel that throws on mount would otherwise ship green. The bot-less
+check, so a panel that throws on mount would otherwise ship green. It also
+asserts the module **loaded at all**: `app.js` `await import()`s a panel inside
+a `try` and paints `Failed to load <label>: …` on rejection, and because that
+rejection is *caught* it raises no `pageerror`, no `console.error` and no failed
+request — the total failure of a panel was the one mount problem this sweep
+could not see, and Meadow Mahjong swept green while broken. The banner prefix is
+app.js's alone (`mountAsync` says "Couldn't load this page."), so the DOM check
+can't collide with a panel whose first fetch merely failed. The bot-less
 test env makes bot-dependent endpoints return 503 (tolerated — can't happen in
 prod); the SSE log stream and favicon are tolerated; `greeter-response`'s
 no-data report 404 is allowlisted.
