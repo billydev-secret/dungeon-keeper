@@ -102,6 +102,7 @@ from web_server.routes.panel_posting import (
     ChannelIdBody,
     guild_or_503,
     require_post_permissions,
+    sticky_conflict,
     text_channel_or_400,
 )
 from web_server.auth import AuthenticatedUser
@@ -3831,6 +3832,9 @@ async def post_dms_panel(
     require_post_permissions(
         guild, channel, "view_channel", "send_messages", "embed_links"
     )
+    # One bottom slot per channel — refuse the resident that would bury this
+    # panel outright, warn about the one it would merely trade places with.
+    warning = await sticky_conflict(ctx, guild_id, channel_id, excluding="dm-perms")
 
     message_id = await cog.post_panel(guild, channel_id)
     if message_id is None:
@@ -3839,7 +3843,7 @@ async def post_dms_panel(
         )
     set_panel_settings(ctx.db_path, guild_id, channel_id, message_id)
     cog.panel_settings[guild_id] = {"panel_channel_id": channel_id, "panel_message_id": message_id}
-    return {"ok": True}
+    return {"ok": True, "warning": warning}
 
 
 # ── Starboard config ─────────────────────────────────────────────────

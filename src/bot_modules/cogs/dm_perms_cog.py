@@ -386,6 +386,17 @@ class DmRequestLookupView(discord.ui.View):
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Select a user", min_values=1, max_values=1)
     async def user_select(self, interaction: discord.Interaction, select: discord.ui.UserSelect) -> None:
         self._selected_user = select.values[0]
+        # Pin the pick as the select's default value. A UserSelect carries its
+        # chosen user only in the client until the message is edited: the type
+        # buttons below re-send this same view with ``edit_message``, and a
+        # payload with no ``default_values`` redraws the select empty. The
+        # Python-side ``_selected_user`` survived that, so Continue still
+        # worked -- but the member watched their pick vanish every time they
+        # switched between Direct Message and Friend Request, and picked it
+        # again.
+        select.default_values = [
+            discord.SelectDefaultValue.from_user(self._selected_user)
+        ]
         await interaction.response.defer()
 
     def _set_type_styles(self, selected: str) -> None:
@@ -630,11 +641,27 @@ class DmSettingsView(discord.ui.View):
         self._revoke_button = button
         self.add_item(button)
 
+    def _sync_select_default(self) -> None:
+        """Keep the member being looked at showing in the select on a redraw.
+
+        Every path in this view redraws the whole thing with ``edit_message``,
+        and a UserSelect re-sent without ``default_values`` comes back empty —
+        so the pick vanished on every mode-button press while the status line
+        and the revoke button underneath still named that person. Same defect
+        the request picker carried; pinned here rather than in the select's own
+        callback because the mode buttons redraw without going through it.
+        """
+        if self._selected is not None:
+            self.user_select.default_values = [
+                discord.SelectDefaultValue.from_user(self._selected)
+            ]
+
     async def _rerender(self, interaction: discord.Interaction, note: str = "") -> None:
         """Redraw the panel. Falls back to editing the original response when
         the interaction has already been deferred or answered — ``_on_revoke``
         defers first, and ``edit_message`` is only valid on a fresh one."""
         self._sync_mode_styles()
+        self._sync_select_default()
         embed = await self._embed()
         if interaction.response.is_done():
             await interaction.edit_original_response(

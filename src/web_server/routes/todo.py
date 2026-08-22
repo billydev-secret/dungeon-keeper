@@ -35,6 +35,7 @@ from bot_modules.services.todo_service import (
 from web_server.helpers import resolve_names as _resolve_names
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from web_server.routes.panel_posting import sticky_conflict
 
 router = APIRouter()
 
@@ -315,6 +316,15 @@ async def set_board(
     resident = await run_query(_conflict)
     if resident:
         raise HTTPException(status_code=409, detail=board_conflict_detail(resident))
+    # The sibling board is handled above, with wording that names the cost of
+    # clearing it. This catches every *other* sticky panel — the casino hub and
+    # the Survivor panel would bury a board on every repaint of their own.
+    warning = await sticky_conflict(
+        ctx,
+        guild_id,
+        channel_id,
+        excluding="todo-board" if kind == BOARD_ALL else "todo-chores",
+    )
 
     message = await place(guild, channel)
     if message is None:
@@ -322,7 +332,13 @@ async def set_board(
             status_code=400,
             detail="I can't post in that channel — check my Send Messages and Embed Links permissions.",
         )
-    return {"ok": True, "posted": True, "kind": kind, "message_id": str(message.id)}
+    return {
+        "ok": True,
+        "posted": True,
+        "kind": kind,
+        "message_id": str(message.id),
+        "warning": warning,
+    }
 
 
 # ── Recurring tasks ─────────────────────────────────────────────────────────

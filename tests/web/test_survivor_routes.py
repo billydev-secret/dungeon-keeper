@@ -252,6 +252,75 @@ def test_announcement_bot_offline_is_503(authed_client, fake_ctx):
     )
 
 
+def _occupy_casino(fake_ctx, channel_id: int) -> None:
+    """Put the casino hub — a bot-chasing panel — in a channel."""
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (fake_ctx.guild_id, "casino_panel_channel_id", str(channel_id)),
+        )
+
+
+def _occupy_pen_pals(fake_ctx, channel_id: int) -> None:
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO pen_pals_config (guild_id, panel_channel_id) VALUES (?, ?)",
+            (fake_ctx.guild_id, channel_id),
+        )
+
+
+def test_announcement_refuses_a_channel_the_casino_hub_holds(
+    authed_client, fake_ctx
+):
+    """Two panels that both chase the bot's own posts is the configuration
+    that stormed in prod; one of them is always the buried one."""
+    guild = _attach_bot(fake_ctx)
+    _create_season(authed_client)
+    authed_client.put("/api/survivor/config", json={"channel_id": "555"})
+    _occupy_casino(fake_ctx, 555)
+
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 555
+    channel.send = AsyncMock()
+    guild.get_channel = MagicMock(return_value=channel)
+
+    resp = authed_client.post("/api/survivor/announcement", json={})
+    assert resp.status_code == 400
+    assert "casino hub panel" in resp.json()["detail"]
+    channel.send.assert_not_awaited()
+
+
+def test_announcement_warns_beside_a_human_only_panel(
+    authed_client, fake_ctx, monkeypatch
+):
+    monkeypatch.setattr(
+        "bot_modules.core.branding.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+    guild = _attach_bot(fake_ctx)
+    _create_season(authed_client)
+    authed_client.put("/api/survivor/config", json={"channel_id": "555"})
+    _occupy_pen_pals(fake_ctx, 555)
+
+    message = MagicMock(id=BIG_ID)
+    message.pin = AsyncMock()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 555
+    channel.send = AsyncMock(return_value=message)
+    guild.get_channel = MagicMock(
+        side_effect=lambda cid: channel if int(cid) == 555 else None
+    )
+
+    resp = authed_client.post("/api/survivor/announcement", json={})
+    assert resp.status_code == 200
+    assert "pen pals panel" in resp.json()["warning"]
+    channel.send.assert_awaited_once()
+
+
 def test_announcement_posts_pins_and_stores_message_id(
     authed_client, fake_ctx, monkeypatch
 ):

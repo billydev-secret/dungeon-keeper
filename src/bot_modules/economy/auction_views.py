@@ -31,7 +31,6 @@ from bot_modules.economy.view_helpers import coins as _coins
 from bot_modules.economy.view_helpers import safe_ephemeral as _safe_ephemeral
 from bot_modules.services.economy_auction_service import (
     SettledAuction,
-    StickyResident,
     attach_card,
     bid_count,
     cancel_auction,
@@ -43,6 +42,9 @@ from bot_modules.services.economy_auction_service import (
     open_auction,
     place_bid_now,
     settle_due_auctions,
+)
+from bot_modules.services.sticky_registry import (
+    StickyResident,
     sticky_panel_channels,
 )
 from bot_modules.services.economy_service import (
@@ -460,11 +462,12 @@ async def _sticky_check(
       moves. (Auctions in threads predate stickiness, so this warns rather
       than blocks — the capability isn't ours to take away.)
     * **a resident sticky panel that only moves under human messages** (the
-      economy and shop panels) — one bottom slot, two claimants, so
-      the two trade places as people chat. Intermittent and visible; the mod
-      can judge it.
+      economy and shop panels, pen pals, DM perms, Voice Control, the Guess Who
+      prompt, the todo boards) — one bottom slot, two claimants, so the two
+      trade places as people chat. Intermittent and visible; the mod can judge
+      it.
     * **a resident sticky panel that re-sticks under bot messages** (the casino
-      hub, the bounty board hub) — this one blocks. Those panels re-take the
+      hub, the bounty board hub, the Survivor panel) — this one blocks. Those panels re-take the
       bottom after every card render, so the card loses the slot every single
       time and there is nothing the mod can do in the channel to keep it in
       view. Warning about a card that is guaranteed to vanish just documents a

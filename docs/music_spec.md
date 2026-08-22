@@ -18,6 +18,8 @@ A music playback cog for shared listening in voice channels. Supports YouTube tr
 
 The now-playing card is a persistent message with five buttons: **Pause/Resume**, **Skip**, **Stop**, **Shuffle**, and **Loop** (cycles off → track → queue). Buttons require the clicker to be in the same voice channel as the bot.
 
+**One card per session, edited in place.** Every track change edits the existing card rather than posting another; a new one is posted only when there is none, or when the card has been deleted. Refreshes are coalesced to at most one every 2 seconds per guild, so a run of skips costs one edit showing the track that actually won. The card stays in the channel it was posted in even if `/play` is later run somewhere else — `/nowplaying` is how it moves: it posts the replacement first and deletes the old one after, so a track change landing mid-command edits the card still on record rather than adding a third. Ending the session (`/stop`, `/disconnect`, the Stop button, the idle disconnect, the bot being dragged or disconnected out of voice, or the cog unloading) deletes the card, so the next session starts clean rather than beside a card naming a track that stopped playing. Refreshes for one guild never overlap — a slow edit finishes before the next one starts, so the card can't end up showing the track before last.
+
 ## Behavior
 
 ### `/play`
@@ -151,4 +153,4 @@ full bot restart — respawning the JVM alone only picks up `application.yml`.
 
 ## Stored data
 
-No persistent tables. The per-channel 24/7 settings table (`music_channel_settings`) is no longer read or written; it survives as an empty orphan. All queue state, playback position, and now-playing message ids are in-memory only and don't survive a restart.
+No persistent tables. The per-channel 24/7 settings table (`music_channel_settings`) is no longer read or written; it survives as an empty orphan. All queue state, playback position, and the now-playing card's channel and message ids are in-memory only and don't survive a restart — after a restart the first track change posts a fresh card, and the old one keeps working buttons because the view is persistent.

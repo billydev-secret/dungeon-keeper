@@ -1,4 +1,5 @@
 import { apiPost } from "../api.js";
+import { toast } from "../ui.js";
 import {
   loadConfig, loadChannels, loadRoles, apiPut, showStatus, field, sectionCard as card,
   mountRolePicker, mountChannelPicker, guardForm, renderMetaWarning,
@@ -190,8 +191,13 @@ export function mount(container) {
       }
       pbBtn.disabled = true;
       try {
-        await apiPost("/api/config/dms/post-panel", { channel_id: channelId });
+        const res = await apiPost("/api/config/dms/post-panel", { channel_id: channelId });
         showStatus(pbStatus, true, "Panel posted");
+        // A survivable sticky collision: it posted, but another panel is now
+        // fighting it for the one bottom slot. Not a status line — the remount
+        // below tears that down in 1.5s, well before anyone finishes reading
+        // it, and green "saved" styling is the wrong voice for a warning.
+        if (res.warning) toast(res.warning, "info");
         setTimeout(() => mount(container), 1500);
       } catch (err) {
         showStatus(pbStatus, false, err.message);

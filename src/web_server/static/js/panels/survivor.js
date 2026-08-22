@@ -4,7 +4,7 @@
 // eliminate/revive all live here. (The flavor corpus was removed 2026-08-18
 // — the Reckoning is just-the-facts now.)
 import { api } from "../api.js";
-import { confirmDialog } from "../ui.js";
+import { confirmDialog, toast } from "../ui.js";
 import {
   apiPost,
   apiPut,
@@ -379,6 +379,8 @@ function renderSeasonCard(zone, overview, refresh) {
     try {
       const res = await apiPost("/api/survivor/announcement", {});
       showStatus(status, true, res.pinned ? "posted and pinned" : "posted (pin failed — check Manage Messages)");
+      // Posted, but another sticky panel already holds that channel's bottom.
+      if (res.warning) toast(res.warning, "info");
     } catch (err) {
       showStatus(status, false, err.message);
     }

@@ -81,10 +81,10 @@ from bot_modules.economy.auction_views import (
 )
 from bot_modules.services.economy_auction_service import (
     attach_card_to_latest,
-    bot_chasing_resident,
     card_ids,
     open_auction_guild_ids,
 )
+from bot_modules.services.sticky_registry import bot_chasing_resident
 from bot_modules.economy.pin_views import (
     PinApproveButton,
     PinDenyButton,
@@ -4215,7 +4215,7 @@ class EconomyCog(commands.Cog):
     def _bot_chasing_rival(self, guild_id: int, channel_id: int) -> str | None:
         with self.bot.ctx.open_db() as conn:
             return bot_chasing_resident(
-                conn, guild_id, channel_id, excluding="bounty"
+                conn, guild_id, channel_id, excluding="economy-bounty"
             )
 
     async def refresh_bounty_hub_panel(self, guild: discord.Guild) -> None:

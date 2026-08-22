@@ -10,8 +10,17 @@ second thing to keep in step with the first.
 
 from __future__ import annotations
 
+import asyncio
+from typing import Collection
+
 from fastapi import HTTPException
 from pydantic import BaseModel
+
+from bot_modules.services.sticky_registry import (
+    StickyResident,
+    occupies,
+    resident_in,
+)
 
 
 class ChannelIdBody(BaseModel):
@@ -84,3 +93,112 @@ def require_post_permissions(guild, channel, *required: str) -> None:
             f"The bot can't post in #{channel.name} — missing permissions: "
             f"{', '.join(missing)}",
         )
+
+
+async def sticky_conflict(
+    ctx, guild_id: int, channel_id: int, *, excluding: str | Collection[str]
+) -> str | None:
+    """Refuse — or warn about — posting a panel where one already sits.
+
+    Discord has one bottom slot per channel. Two sticky panels sharing it take
+    turns being second, and when the resident re-sticks under *bot* messages
+    the newcomer is buried after every render with nothing the admin can do in
+    the channel about it. ``/bank auction start`` has refused that since
+    2026-07-28; the dashboard's panel buttons posted straight into it, which is
+    the configuration-time half of the 2026-08-06 review's F1 fix.
+
+    Returns a warning for the survivable collision — a resident that only
+    moves under human messages, which is intermittent, visible and the admin's
+    call — and raises 400 for the one that cannot be lived with. ``excluding``
+    is the posting panel's own registry key (or keys — one feature can hold
+    several), so re-posting a panel into the channel it already occupies is not
+    refused on account of itself.
+
+    A panel that is **already in** the target channel is never blocked, only
+    warned, whoever else is there. The block exists to stop an admin *creating*
+    a collision; once one exists, refusing does not undo it, it just locks them
+    out of maintaining a panel that is sitting in the channel right now with no
+    remedy available in Discord.
+    """
+
+    def _read() -> tuple[StickyResident | None, bool]:
+        with ctx.open_db() as conn:
+            return (
+                resident_in(conn, guild_id, channel_id, excluding=excluding),
+                occupies(conn, guild_id, channel_id, excluding),
+            )
+
+    resident, already_here = await asyncio.to_thread(_read)
+    if resident is None:
+        return None
+    if resident.restick_on_bot and not already_here:
+        raise HTTPException(
+            400,
+            f"This channel is {resident.name}'s, and that panel follows the "
+            "bot's own posts to stay at the bottom — whatever you post here "
+            "would be pushed out of view and stay there. Pick another channel.",
+        )
+    return (
+        f"Posted, but this channel already has {resident.name} stuck to the "
+        "bottom. Both can't be last, so the two will keep pushing each other "
+        "up as people chat."
+        + (
+            " Move one of them to a channel of its own to settle it."
+            if resident.restick_on_bot
+            else ""
+        )
+    )
+
+
+def _voice_control_destination(conn, guild_id: int) -> int:
+    from bot_modules.services.voice_master_service import (  # noqa: PLC0415
+        load_voice_master_config,
+    )
+
+    return int(load_voice_master_config(conn, guild_id).control_channel_id or 0)
+
+
+def _guess_prompt_destination(conn, guild_id: int) -> int:
+    from bot_modules.services.guess_repo import get_guess_config  # noqa: PLC0415
+
+    config = get_guess_config(conn, guild_id)
+    # ``place_or_refresh`` repaints the prompt where it already is rather than
+    # hopping it to the bottom, so a posted prompt's own channel is the real
+    # destination; the Guess channel is where a first one lands.
+    return int(config.prompt_channel_id or config.guess_channel_id or 0)
+
+
+#: Where each panel that owns its destination actually posts.
+#:
+#: **Not** the sticky registry's channel for that panel. The registry answers
+#: "where is this panel *now*", and for these two that is a different key:
+#: Voice Control records its panel's live location under
+#: ``voice_master_panel_channel_id`` while posting into
+#: ``voice_master_control_channel_id``, and the Guess prompt has no recorded
+#: channel at all until it has been posted once. Reading the registry here
+#: checked the wrong channel after a Control Channel move — refusing a post
+#: into a free channel because of who lived in the *old* one — and skipped the
+#: check entirely on the first-ever post, which is the one that needs it.
+_OWN_CHANNEL_DESTINATIONS = {
+    "voice-control": _voice_control_destination,
+    "guess-prompt": _guess_prompt_destination,
+}
+
+
+async def own_channel_id(ctx, guild_id: int, key: str) -> int:
+    """Where a panel that owns its destination is configured to post.
+
+    Voice Control and the Guess Who prompt take no channel from the caller, so
+    the collision check has to work out where they are going. Returns 0 for a
+    panel that takes its channel from the caller, or one with nothing
+    configured — the caller then has nothing to check.
+    """
+    resolve = _OWN_CHANNEL_DESTINATIONS.get(key)
+    if resolve is None:
+        return 0
+
+    def _read() -> int:
+        with ctx.open_db() as conn:
+            return resolve(conn, guild_id)
+
+    return await asyncio.to_thread(_read)

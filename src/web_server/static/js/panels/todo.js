@@ -487,8 +487,11 @@ export function mount(container, initialParams = {}) {
       state.busy = true;
       btn.disabled = true;
       try {
-        await apiPut("/api/todos/board", { channel_id: channelId, kind: card.kind });
+        const res = await apiPut(
+          "/api/todos/board", { channel_id: channelId, kind: card.kind });
         toast(remove ? card.removedToast : card.postedToast, "success");
+        // Posted, but another sticky panel already holds that channel's bottom.
+        if (res && res.warning) toast(res.warning, "info");
         await refresh();
       } catch (err) {
         // A 409 here is the same-channel refusal, and its message explains

@@ -210,6 +210,65 @@ removed and the `on_message` check left in.
 applied to the casino's own channel setting, which belongs to its feature.
 `sticky_panel_channels` merges residents instead of overwriting.
 
+**The hoist landed 2026-08-22.** The registry moved to
+`services/sticky_registry.py` and grew the six panels it never knew about —
+pen pals, DM perms, Voice Control, both todo boards, the Guess Who prompt —
+plus the Survivor panel, which is `restick_on_bot` and so was an invisible
+*blocking* collision. `routes/panels.py` now runs the block/warn split for
+every panel in `panel_registry`, which is what this section recommended;
+panels that own their destination (Voice Control, Guess Who) have it looked up
+from the registry, and each panel excludes itself so a refresh in place is
+never refused. The three panels that post through their own routes — the DM
+request panel's `/config/dms/post-panel`, the todo boards, and the Survivor
+panel's repost — adopted `panel_posting.sticky_conflict` the same day, so
+**every** path that places a sticky panel now runs the split. The todo boards
+keep `conflicting_board` ahead of it: that refusal names what clearing the
+sibling board would cost, which the generic warning does not.
+
+Three corrections from the review of that work, same day:
+
+* **The check is for sticky panels only.** It ran for every key in
+  `panel_registry`, so the support ticket panel and the grant-audit card — both
+  posted once and then left to scroll — were being refused a channel outright.
+  Neither has a bottom slot to contest; `is_sticky_panel` gates it now.
+* **Own-channel panels resolve their real destination.** `own_channel_id` read
+  the registry's channel for the panel, i.e. where it *is*. Voice Control posts
+  to `voice_master_control_channel_id` but records its location under
+  `voice_master_panel_channel_id`, so after a Control Channel move the guard
+  judged the old channel's residents — and on a first post, with nothing
+  recorded, it skipped the check entirely.
+* **Survivor keys off the season's configured channel**, not
+  `announcement_channel_id`. The panel is absent from that key until it has
+  been posted once, which is exactly the window where something else gets
+  placed in the channel unopposed and the Wednesday repost then buries it.
+
+A second review pass then found that correction had shipped as
+`channel_id or announcement_channel_id`, which short-circuits: in the one
+window the fallback was written for — an admin repoints the channel and the
+live panel is still sitting in the old one — the configured id is truthy and
+the recorded one is never read, so an auction started in the old channel was
+waved through and buried by the next repost. A registry entry now resolves to
+*every* channel its panel occupies rather than one.
+
+A third pass then split Survivor in two rather than giving one entry two
+channels, because the two channels do not deserve the same verdict.
+`survivor` is where the panel actually is and blocks; `survivor-pending` is
+where it is configured to go and only warns — `get_active_season` matches any
+season that is not `complete`, so an `enrolling` season pointed at a channel
+and then abandoned would otherwise hard-refuse every panel and every auction
+there forever, naming a message nobody can find to delete. `excluding` takes a
+collection so a feature holding several keys can ignore all of them, and
+`occupies` skips claim-only entries so an unposted panel can't count as
+"already here".
+
+**A panel already in the channel is warned, never blocked** (`occupies`). The
+block is there to stop an admin *creating* a collision; once one exists,
+refusing the re-post does not undo it, it only locks them out of maintaining a
+panel that is in the channel right now — the trap the plan doc named as
+"refusing there could lock an admin out of a valid setup", which the first cut
+of this walked straight into for the economy panel, the todo boards and the DM
+request panel.
+
 ### Test to land with it
 
 `tests/test_core_sticky.py` has 37 tests and no multi-panel scenario — every one

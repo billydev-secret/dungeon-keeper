@@ -1303,6 +1303,13 @@
       </tbody>
     </table>
 
+    <h3 id="music-card">The now-playing card</h3>
+    <p>One card per listening session. It updates itself in place as tracks
+      change instead of posting a new one each time, so the buttons you're
+      using always describe the track you're hearing. If chat has pushed it out
+      of view, <code>/nowplaying</code> brings it back — that removes the old
+      card and posts a fresh one in the channel you ran the command in.</p>
+
     <h3 id="music-errors">When a track can't play</h3>
     <p>Some YouTube uploads can't be streamed — most often because the rights
       holder (a music label) blocks third-party playback, or the video is
@@ -2218,6 +2225,36 @@
         bot knows, including people who have left, who are marked as such. So if
         somebody isn't in the list you see at first, they aren't missing: keep
         typing.</li>
+    </ul>
+
+    <h3 id="one-panel-per-channel">One sticky panel per channel</h3>
+    <p>Several panels keep themselves at the bottom of their channel by
+      re-posting whenever somebody chats under them — the economy panel, the
+      perk shop, the bounty board, the casino hub, the pen pals signup, the DM
+      request panel, the Voice Control owner panel, the Guess Who prompt, the
+      todo and chore boards, and the Survivor panel. Discord only has one
+      bottom, so two of them in one channel push each other up all day.</p>
+    <ul>
+      <li><strong>Some pairings are refused outright.</strong> The casino hub,
+        the bounty board and the Survivor panel follow the bot's <em>own</em>
+        posts down, so anything sharing their channel is buried again every
+        time they repaint and never comes back. Post a panel — or start an
+        auction — into one of those channels and the bot turns you down and
+        names what is already there. A Survivor panel that hasn't been posted
+        yet only warns, since there is nothing in the channel to find.</li>
+      <li><strong>The rest just warn.</strong> Two panels that only move under
+        member messages take turns being last. It looks untidy but nothing is
+        lost, so the bot posts it and tells you what you're sharing with.</li>
+      <li><strong>Re-posting a panel into its own channel is always fine</strong>
+        — that's how you refresh one that has drifted out of view. If it is
+        sharing with something that would normally be refused, you get the
+        warning rather than the refusal: the panel is already there, and being
+        unable to refresh it wouldn't help.</li>
+      <li><strong>It applies to every one of these buttons</strong>, wherever
+        it lives — the Post to Discord controls, the DM request panel, both
+        todo boards, and the Survivor panel. Two todo boards in one channel get
+        their own message, because clearing the one already there is the way
+        through and it says what that costs.</li>
     </ul>
 
     <h3 id="permissions">Permission Levels</h3>
