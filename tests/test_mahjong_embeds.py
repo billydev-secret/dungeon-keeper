@@ -172,3 +172,144 @@ def test_member_panel_variants():
     assert "First Light" in (e.description or "") and "250" in (e.description or "")
     e = mj_embeds.build_member_panel(None, (1,), 0, ACCENT)
     assert "No Meadow Card" in (e.description or "")
+
+
+# ── Assist block on the rack panel (plans/mahjong-assist.md stage 3) ─────────
+
+
+def _assist_state():
+    from tests.test_mahjong_game_logic import play_state
+    return play_state(2, {0: "flower*4 2d*4 6b*2 9d wn", 1: "9c*13"})
+
+
+def _readout(mode: str):
+    state = _assist_state()
+    return state, G.assist_readout(state, 0, CARD, mode)
+
+
+def _rack_field(embed, name):
+    return next((f.value for f in embed.fields if f.name == name), None)
+
+
+def test_rack_panel_without_assist_has_no_block():
+    state = _assist_state()
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=None)
+    assert _rack_field(embed, "Closest Hands") is None
+
+
+def test_assist_target_names_lines_and_distance_only():
+    state, r = _readout("target")
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    top = r.prospects[0]
+    assert top.hand.name in block
+    assert "away" in block
+    assert "need" not in block
+    assert "discard" not in block.lower()
+
+
+def test_assist_gap_adds_the_needed_tiles():
+    state, r = _readout("gap")
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None and "need" in block
+    assert "discard" not in block.lower()
+
+
+def test_assist_coach_adds_dead_weight_and_suggestion():
+    state, r = _readout("coach")
+    assert r is not None and r.suggestion is not None
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    assert "Dead weight" in block
+    assert "Consider discarding" in block
+
+
+def test_assist_coach_silence_is_explicit():
+    # Rail-silenced suggestion still shows dead weight, with the your-call note.
+    state, r = _readout("coach")
+    silenced = G.AssistReadout(
+        mode="coach", prospects=r.prospects, live_count=r.live_count,
+        suggestion=None,
+    )
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=silenced)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    assert "No clearly safe discard" in block
+    assert "Consider discarding" not in block
+
+
+def test_assist_all_dead_says_play_for_the_wall():
+    state = _assist_state()
+    empty = G.AssistReadout(mode="gap", prospects=(), live_count=0, suggestion=None)
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=empty)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None and "play for the wall" in block
+
+
+def test_assist_block_fits_a_discord_field():
+    for mode in ("target", "gap", "coach"):
+        state, r = _readout(mode)
+        embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+        block = _rack_field(embed, "Closest Hands")
+        assert block is not None and len(block) <= 1024
+
+
+# ── Stage-4 review findings: honest dead weight + overflow-proof field ───────
+
+
+def _fake_prospect(hand, distance, needed, dead_weight):
+    from bot_modules.games.mahjong.match_logic import Prospect
+    return Prospect(hand=hand, distance=distance, needed=tuple(needed),
+                    dead_weight=tuple(dead_weight))
+
+
+def test_dead_weight_is_the_intersection_of_shown_hands():
+    # A tile hand #2 still NEEDS must never print as dead weight: the copy
+    # promises "tiles none of your closest hands can use".
+    h1, h2 = CARD.hands[0], CARD.hands[1]
+    p1 = _fake_prospect(h1, 4, [(Tile("8c"), 2)],
+                        [(Tile("9d"), 1), (Tile("wn"), 1)])
+    p2 = _fake_prospect(h2, 5, [(Tile("wn"), 1)], [(Tile("9d"), 1)])
+    r = G.AssistReadout(mode="coach", prospects=(p1, p2), live_count=2,
+                        suggestion=None)
+    state = _assist_state()
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    dead_line = next(ln for ln in block.split("\n") if ln.startswith("Dead weight"))
+    assert "9D" in dead_line
+    assert "N" not in dead_line  # hand #2 needs the wind — not dead
+
+
+def test_assist_field_survives_the_registered_emoji_map(monkeypatch):
+    # Once prod emoji registration runs, every chip becomes ~28 chars of
+    # <:mm_xx:snowflake> markup. The field must still fit 1024 WITHOUT a
+    # blind slice: degrade to text chips rather than cut mid-token and
+    # silently drop the coach suggestion (review finding, stage 4).
+    from bot_modules.games.mahjong import tile_render
+
+    fake_map = {t.code: 1400000000000000001 for t in Tile}
+    fake_map["back"] = 1400000000000000001
+    monkeypatch.setattr(tile_render, "_map_cache", fake_map)
+
+    # Adversarial worst case: three far lines with maximal need lists.
+    hands = CARD.hands[:3]
+    wide = [(t, 2) for t in list(Tile)[:10]]
+    prospects = tuple(
+        _fake_prospect(h, 14, wide, [(Tile("9d"), 2), (Tile("wn"), 1)])
+        for h in hands
+    )
+    r = G.AssistReadout(mode="coach", prospects=prospects, live_count=22,
+                        suggestion=Tile("9d"))
+    state = _assist_state()
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    assert len(block) <= 1024
+    # the advice coach exists to deliver is never the part that gets cut
+    assert "Consider discarding" in block
+    # and no half-sliced emoji token renders as garbage
+    assert block.count("<:") == block.count(">") or "<:" not in block

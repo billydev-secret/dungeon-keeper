@@ -31,10 +31,10 @@ class TableView(discord.ui.View):
     """The persistent view on the sticky table message, built per phase."""
 
     ACTIONS = ("join", "cancel", "rack", "vote_y", "vote_n", "claim_mj",
-               "claim_call", "claim_pass", "rematch", "close")
+               "claim_call", "claim_pass", "rematch", "close", "add_bot")
 
     def __init__(self, cog: "MahjongCog", table_id: int, phase: Phase | None = None,
-                 *, register_all: bool = False):
+                 *, register_all: bool = False, add_bot: bool = False):
         super().__init__(timeout=None)
         self.cog = cog
         self.table_id = table_id
@@ -57,6 +57,8 @@ class TableView(discord.ui.View):
             return
         if phase is Phase.LOBBY:
             button("Join", "join", discord.ButtonStyle.primary)
+            if add_bot:  # host seats a house bot (bots plan B6; fill dial)
+                button("Add Bot", "add_bot", emoji="🌱")
             button("Cancel", "cancel", discord.ButtonStyle.danger)
         elif phase is Phase.CHARLESTON_VOTE:
             button("Run It Again", "vote_y", discord.ButtonStyle.success)
@@ -288,6 +290,7 @@ class MemberPanelView(discord.ui.View):
             ("Create Table", discord.ButtonStyle.primary, cog.handle_create_start),
             ("Card Viewer", discord.ButtonStyle.secondary, cog.handle_card_viewer),
             ("My Stats", discord.ButtonStyle.secondary, cog.handle_my_stats),
+            ("My Settings", discord.ButtonStyle.secondary, cog.handle_my_settings),
         ):
             b = discord.ui.Button(label=label, style=style)
 
@@ -297,11 +300,46 @@ class MemberPanelView(discord.ui.View):
             self.add_item(b)
 
 
+ASSIST_CHOICES = (
+    ("off", "Off", "Pure card-reading — no readout."),
+    ("target", "Target", "Closest hands and how far away each is."),
+    ("gap", "Target + gap", "…plus the tiles you still need."),
+    ("coach", "Coach", "…plus dead weight and a suggested discard."),
+)
+
+
+class MySettingsView(discord.ui.View):
+    """The /mahjong My Settings menu (plans/mahjong-assist.md A10) — an
+    ephemeral container for per-player preferences; assistance is its first
+    tenant. One select today; future settings join this view, not the panel."""
+
+    def __init__(self, cog: "MahjongCog", current: str):
+        super().__init__(timeout=600)
+        select = discord.ui.Select(
+            placeholder="Assistance level",
+            min_values=1, max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=label, value=value, description=desc,
+                    default=value == current,
+                )
+                for value, label, desc in ASSIST_CHOICES
+            ],
+        )
+
+        async def on_pick(interaction: discord.Interaction):
+            await cog.handle_assist_pick(interaction, select.values[0])
+        select.callback = on_pick
+        self.add_item(select)
+
+
 class CreateTableView(discord.ui.View):
-    """Size picker → stake select with escrow labels → open."""
+    """Size picker → stake select with escrow labels → open. Practice rows
+    (bots plan B5) skip the stake select entirely — there is none."""
 
     def __init__(self, cog: "MahjongCog", stakes: tuple[int, ...],
-                 escrow_for, seat_count: int | None = None):
+                 escrow_for, seat_count: int | None = None,
+                 *, practice_open: bool = False):
         super().__init__(timeout=300)
         self.cog = cog
         if seat_count is None:
@@ -316,6 +354,17 @@ class CreateTableView(discord.ui.View):
                     )
                 b.callback = cb
                 self.add_item(b)
+            if practice_open:
+                for label, count in (("Practice Duel", 2), ("Practice Table", 4)):
+                    b = discord.ui.Button(
+                        label=label, style=discord.ButtonStyle.secondary,
+                        emoji="🌱",
+                    )
+
+                    async def cb(interaction: discord.Interaction, count=count):
+                        await cog.handle_create_practice(interaction, count)
+                    b.callback = cb
+                    self.add_item(b)
             return
         options = [
             discord.SelectOption(

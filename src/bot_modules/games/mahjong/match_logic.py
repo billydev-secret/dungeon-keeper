@@ -9,6 +9,10 @@ binding enumerator:
 * :func:`reachable_lines` — amendment 2's *live line* test for the Duel fallow
   payout: which lines could this seat still complete, given the tiles they
   hold, their locked exposures, and the copies not yet seen elsewhere?
+* :func:`closest_lines` — the assistance readout (plans/mahjong-assist.md):
+  how far each still-live line sits from the tiles actually held, with the
+  gap and the dead weight, ranked. :func:`dangerous_tiles` and
+  :func:`suggest_discard` are coach mode's safety rail on top of it.
 
 A binding is (x, suit-letter map, dragon): one ``x`` per hand with every
 offset landing in 1–9, suit letters mapping injectively onto physical suits
@@ -31,7 +35,7 @@ from dataclasses import dataclass
 from itertools import permutations
 
 from bot_modules.games.mahjong.card_logic import Card, Group, Hand, RankKind
-from bot_modules.games.mahjong.tiles import SUITS, Tile, copies
+from bot_modules.games.mahjong.tiles import SUITS, TILE_ORDER, Tile, copies
 
 _WIND_TILES = {"N": Tile.NORTH, "E": Tile.EAST, "W": Tile.WEST, "S": Tile.SOUTH}
 _DRAGON_TILES = {"R": Tile.RED, "G": Tile.GREEN, "soap": Tile.SOAP}
@@ -151,6 +155,19 @@ def _exposure_assignments(
         for used in _exposure_assignments(rest, resolved):
             if i not in used:
                 yield used | {i}
+
+
+def _demand_of(remaining: list[tuple[Group, Tile]]) -> tuple[Counter, Counter]:
+    """Aggregate remaining groups per *tile*: total demand, and the pair/
+    single portion jokers can never fill (§2.6). By tile, not by group —
+    two groups of one line can resolve to the same natural."""
+    demand: Counter[Tile] = Counter()
+    small: Counter[Tile] = Counter()
+    for group, natural in remaining:
+        demand[natural] += group.count
+        if not group.takes_jokers:
+            small[natural] += group.count
+    return demand, small
 
 
 # ── The exact fit (§3.3) ─────────────────────────────────────────────────────
@@ -288,12 +305,7 @@ def _line_reachable(hand, concealed_counts, jokers_held, exposures, unseen) -> b
         resolved = [(g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups]
         for used in _exposure_assignments(exposures, resolved):
             remaining = [rg for i, rg in enumerate(resolved) if i not in used]
-            demand: Counter[Tile] = Counter()
-            small: Counter[Tile] = Counter()
-            for group, natural in remaining:
-                demand[natural] += group.count
-                if not group.takes_jokers:
-                    small[natural] += group.count
+            demand, small = _demand_of(remaining)
 
             obtainable = {
                 tile: concealed_counts.get(tile, 0) + unseen(tile) for tile in demand
@@ -320,3 +332,225 @@ def fallow_base_value(
     if live:
         return min(h.value for h in live)
     return min(h.value for h in card.hands)
+
+
+# ── Assistance (plans/mahjong-assist.md A2–A6) ───────────────────────────────
+
+@dataclass(frozen=True)
+class Prospect:
+    """One still-live card line, measured against the tiles actually held.
+
+    ``distance`` is how many more tiles the seat must acquire (draw, claim,
+    or redeem) to complete the line — held jokers already discounted against
+    the 3+ groups they may stand in. ``needed`` lists exactly those missing
+    tiles, summing to ``distance``; where a held joker covers part of a 3+
+    gap it is discounted from the *scarcest* tile first (fewest unseen
+    copies), since a wild tile is best spent where drawing is hardest.
+    ``dead_weight`` is what the line cannot consume — never jokers (A5): a
+    joker is always redeemable or tradeable, so it is never dead.
+    """
+
+    hand: Hand
+    distance: int
+    needed: tuple[tuple[Tile, int], ...]
+    dead_weight: tuple[tuple[Tile, int], ...]
+
+
+def closest_lines(
+    concealed: list[Tile],
+    exposures: list[Exposure],
+    card: Card,
+    seen_elsewhere: Counter[Tile],
+    limit: int | None = 3,
+) -> list[Prospect]:
+    """Every still-live line, closest first (A3/A4). Pure.
+
+    Liveness is judged per binding exactly as :func:`reachable_lines` does,
+    and a line's distance is minimised over its *live* bindings only — a
+    dead binding may sit nearer, but pointing at tiles that can no longer
+    be drawn would be a lie. Ties: distance, then value descending, then
+    card order (distances cluster hard, so ties are the common case).
+    """
+    counts = Counter(concealed)
+    jokers_held = counts.pop(Tile.JOKER, 0)
+
+    own: Counter[Tile] = Counter(concealed)
+    for e in exposures:
+        own[e.natural] += e.naturals
+        own[Tile.JOKER] += e.jokers
+
+    def unseen(tile: Tile) -> int:
+        return max(0, copies(tile) - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
+
+    exposure_total = sum(e.count for e in exposures)
+
+    prospects: list[tuple[int, int, int, Prospect]] = []
+    for index, hand in enumerate(card.hands):
+        if hand.concealed and exposures:
+            continue
+        best = _line_prospect(
+            hand, counts, jokers_held, exposures, exposure_total, unseen
+        )
+        if best is not None:
+            prospects.append((best.distance, -hand.value, index, best))
+    prospects.sort(key=lambda p: p[:3])
+    ranked = [p[3] for p in prospects]
+    return ranked if limit is None else ranked[:limit]
+
+
+def _line_prospect(
+    hand: Hand,
+    concealed_counts: Counter[Tile],
+    jokers_held: int,
+    exposures: list[Exposure],
+    exposure_total: int,
+    unseen,
+) -> Prospect | None:
+    """Minimum distance over the line's live bindings, or None if none is
+    live. First-found wins a distance tie, so the report is deterministic."""
+    best: Prospect | None = None
+    for x, suit_map, dragon in _bindings(hand):
+        resolved = [(g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups]
+        for used in _exposure_assignments(exposures, resolved):
+            remaining = [rg for i, rg in enumerate(resolved) if i not in used]
+            demand, small = _demand_of(remaining)
+
+            # Liveness first (the reachable_lines test, verbatim): a binding
+            # whose tiles are extinct must not set the distance.
+            obtainable = {
+                tile: concealed_counts.get(tile, 0) + unseen(tile) for tile in demand
+            }
+            if any(obtainable[tile] < n for tile, n in small.items()):
+                continue
+            joker_deficit = sum(
+                max(0, n - obtainable[tile]) for tile, n in demand.items()
+            )
+            if joker_deficit > jokers_held + unseen(Tile.JOKER):
+                continue
+
+            # Distance: held naturals serve pairs/singles first — that frees
+            # the joker-eligible remainder for held jokers, and no other
+            # allocation matches more held tiles.
+            needed: Counter[Tile] = Counter()
+            large_deficit: Counter[Tile] = Counter()
+            matched = exposure_total
+            for tile, n in demand.items():
+                have = concealed_counts.get(tile, 0)
+                to_small = min(have, small.get(tile, 0))
+                to_large = min(have - to_small, n - small.get(tile, 0))
+                matched += to_small + to_large
+                if (short_small := small.get(tile, 0) - to_small) > 0:
+                    needed[tile] += short_small
+                if (short_large := (n - small.get(tile, 0)) - to_large) > 0:
+                    large_deficit[tile] += short_large
+            jokers_used = min(jokers_held, sum(large_deficit.values()))
+            matched += jokers_used
+
+            # Discount held jokers from the scarcest 3+ gaps (docstring).
+            for tile in sorted(
+                large_deficit, key=lambda t: (unseen(t), TILE_ORDER[t])
+            ):
+                if jokers_used == 0:
+                    break
+                spent = min(jokers_used, large_deficit[tile])
+                large_deficit[tile] -= spent
+                jokers_used -= spent
+            needed.update(+large_deficit)  # unary + drops zeroed gaps
+
+            distance = HAND_TILES - matched
+            if best is not None and distance >= best.distance:
+                continue
+            dead = {
+                tile: have - min(have, demand.get(tile, 0))
+                for tile, have in concealed_counts.items()
+                if have > demand.get(tile, 0)
+            }
+            best = Prospect(
+                hand=hand,
+                distance=distance,
+                needed=tuple(
+                    sorted(needed.items(), key=lambda p: TILE_ORDER[p[0]])
+                ),
+                dead_weight=tuple(
+                    sorted(dead.items(), key=lambda p: TILE_ORDER[p[0]])
+                ),
+            )
+            if distance == 0:
+                return best
+    return best
+
+
+def dangerous_tiles(
+    card: Card, opponent_exposures: list[list[Exposure]]
+) -> frozenset[Tile]:
+    """Tiles a visible opponent could plausibly want — coach's rail (A6).
+
+    A seat's exposures lock groups of whatever line they are chasing, so the
+    lines compatible with those exposures are public knowledge. The union of
+    naturals those lines still demand is the danger set; a seat with no
+    exposures reveals nothing and constrains nothing. Overcautious by
+    design — their concealed tiles might rule a line out, but we can't see
+    that, and a rail errs toward silence.
+    """
+    exposed = [e for e in opponent_exposures if e]
+    if not exposed:
+        return frozenset()
+    danger: set[Tile] = set()
+    # One enumeration of hands × bindings; only the exposure assignment
+    # depends on the opponent (F9 — the per-opponent rescan tripled the
+    # cost at a 4-seat table for identical resolved lists).
+    for hand in card.hands:
+        if hand.concealed:
+            continue  # an exposed seat can't be on a concealed line
+        for x, suit_map, dragon in _bindings(hand):
+            resolved = [
+                (g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups
+            ]
+            for exposures in exposed:
+                for used in _exposure_assignments(exposures, resolved):
+                    danger.update(
+                        natural
+                        for i, (_, natural) in enumerate(resolved)
+                        if i not in used
+                    )
+    return frozenset(danger)
+
+
+def suggest_discard(
+    concealed: list[Tile],
+    prospects: list[Prospect],
+    dangerous: frozenset[Tile] = frozenset(),
+    *,
+    shown: int = 3,
+) -> Tile | None:
+    """Coach's pick: a tile in the dead-weight *intersection* of the hands
+    actually shown (the same set the embed prints), useful to the fewest
+    live lines — never a joker (A5), never a tile in ``dangerous`` (A6).
+    None when there is no safe suggestion: silence beats advice that hands
+    another seat the pot.
+
+    The intersection is what makes the advice self-consistent (review
+    round 2, F2): excess beyond a hand's demand implies zero deficit, so a
+    tile dead for every shown hand provably appears in none of their need
+    lists — drawing candidates from the closest hand alone suggested tiles
+    a shown sister hand was still waiting on (~16% of coach racks)."""
+    if not prospects:
+        return None
+    have = Counter(t for t in concealed if t is not Tile.JOKER)
+    display = prospects[:shown]
+    common = dict(display[0].dead_weight)
+    for p in display[1:]:
+        dw = dict(p.dead_weight)
+        common = {t: min(n, dw[t]) for t, n in common.items() if t in dw}
+    candidates = [tile for tile in common if tile not in dangerous]
+    if not candidates:
+        return None
+
+    def usefulness(tile: Tile) -> int:
+        return sum(
+            1
+            for p in prospects
+            if have[tile] - dict(p.dead_weight).get(tile, 0) > 0
+        )
+
+    return min(candidates, key=lambda t: (usefulness(t), TILE_ORDER[t]))

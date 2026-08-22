@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -528,3 +529,376 @@ async def test_member_left_unseated_is_a_noop(service, db):
     await make_duel(service, db)
     await service.member_left(GUILD, THIRD)  # not seated anywhere
     assert balances(db, HOST, GUEST) == [1000 - DUEL_ESCROW] * 2
+
+
+# ── Assistance preference (plans/mahjong-assist.md stage 2) ──────────────────
+
+
+def test_assist_mode_round_trip(db):
+    from bot_modules.games.mahjong.mahjong_service import (
+        get_assist_mode, load_settings, set_assist_mode,
+    )
+
+    with open_db(db) as conn:
+        settings = load_settings(conn, GUILD)
+        # never chose → the guild default, and the shipped default is 'gap'
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "gap"
+        set_assist_mode(conn, GUILD, HOST, "coach")
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "coach"
+        set_assist_mode(conn, GUILD, HOST, "off")
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "off"
+        # another member is untouched
+        assert get_assist_mode(conn, GUILD, GUEST, settings) == "gap"
+
+
+def test_assist_guild_default_dial_respected_and_overridden(db):
+    from bot_modules.core.db_utils import set_config_value
+    from bot_modules.games.mahjong.mahjong_service import (
+        get_assist_mode, load_settings, set_assist_mode,
+    )
+
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_assist_default", "off", GUILD)
+        settings = load_settings(conn, GUILD)
+        assert settings.assist_default == "off"
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "off"
+        # a member's own pick beats the dial
+        set_assist_mode(conn, GUILD, HOST, "target")
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "target"
+
+
+def test_assist_corrupt_values_degrade_never_raise(db):
+    from bot_modules.core.db_utils import set_config_value
+    from bot_modules.games.mahjong.mahjong_service import (
+        get_assist_mode, load_settings, set_assist_mode,
+    )
+
+    with open_db(db) as conn:
+        # corrupt dial → shipped default
+        set_config_value(conn, "mahjong_assist_default", "banana", GUILD)
+        assert load_settings(conn, GUILD).assist_default == "gap"
+        # corrupt stored row → guild default, not an exception
+        conn.execute(
+            "INSERT INTO mahjong_prefs (guild_id, user_id, mode, updated_at) "
+            "VALUES (?, ?, 'banana', 0)",
+            (GUILD, HOST),
+        )
+        settings = load_settings(conn, GUILD)
+        assert get_assist_mode(conn, GUILD, HOST, settings) == "gap"
+        # and the writer refuses garbage outright
+        with pytest.raises(ValueError):
+            set_assist_mode(conn, GUILD, HOST, "banana")
+
+
+def test_purge_clears_the_assist_preference(db):
+    from bot_modules.games.mahjong.mahjong_service import set_assist_mode
+    from bot_modules.services.privacy_service import purge_user_data
+
+    with open_db(db) as conn:
+        set_assist_mode(conn, GUILD, HOST, "coach")
+        set_assist_mode(conn, GUILD, GUEST, "target")
+        purge_user_data(conn, GUILD, HOST)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM mahjong_prefs WHERE user_id = ?", (HOST,)
+        ).fetchone()[0] == 0
+        # the other member's preference survives
+        assert conn.execute(
+            "SELECT mode FROM mahjong_prefs WHERE user_id = ?", (GUEST,)
+        ).fetchone()[0] == "target"
+
+
+# ── AI seats (plans/mahjong-bots.md stage 2) ─────────────────────────────────
+
+
+def _ledger_kinds(db, user_id):
+    with open_db(db) as conn:
+        return [
+            str(r[0]) for r in conn.execute(
+                "SELECT kind FROM econ_ledger WHERE guild_id = ? AND user_id = ? "
+                "ORDER BY id", (GUILD, user_id),
+            )
+        ]
+
+
+async def make_practice_duel(service):
+    return await service.create_table(GUILD, CHANNEL, HOST, 2, 0, practice=True)
+
+
+async def test_practice_table_is_born_full_and_stake_free(service, db):
+    from bot_modules.games.mahjong.bot_logic import bot_member_id
+
+    table_id = await make_practice_duel(service)
+    row = table_row(db, table_id)
+    assert row["practice"] == 1 and row["stake"] == 0
+    with open_db(db) as conn:
+        seats = conn.execute(
+            "SELECT user_id, seat_index FROM mahjong_seats WHERE table_id = ? "
+            "ORDER BY seat_index", (table_id,),
+        ).fetchall()
+        assert [int(r["user_id"]) for r in seats] == [
+            HOST, bot_member_id(table_id, 1)]
+        wagers = conn.execute(
+            "SELECT COUNT(*) FROM econ_game_wagers WHERE game_type = 'mahjong'"
+        ).fetchone()[0]
+    assert wagers == 0                       # nothing held, nobody's coins moved
+    assert balances(db, HOST) == [1000]
+
+
+async def test_practice_needs_its_dial(service, db):
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_practice_bots", "0", GUILD)
+    with pytest.raises(TableError):
+        await make_practice_duel(service)
+
+
+async def test_practice_hand_settles_without_money_or_records(service, db):
+    from bot_modules.games.mahjong.bot_logic import bot_member_id
+
+    table_id = await make_practice_duel(service)
+    bot_id = bot_member_id(table_id, 1)
+    await service.timeout(table_id)          # deal
+    # surgery: bot feeds the human their winning tile
+    winner_rack = ([Tile.FLOWER] * 4 + [Tile("2d")] * 4 + [Tile("6b")] * 4
+                   + [Tile("8c")])
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT * FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+        state = engine.state_from_dict(json.loads(row["state"]))
+        state.phase = engine.Phase.AWAIT_DISCARD
+        state.turn = 1
+        state.pending_picks = {}
+        state.seats[1].rack = [Tile("8c")] + [Tile("1c")] * 13
+        state.seats[0].rack = winner_rack
+        conn.execute(
+            "UPDATE mahjong_tables SET state = ? WHERE id = ?",
+            (json.dumps(engine.state_to_dict(state)), table_id),
+        )
+    await service.act(table_id, "discard", member_id=bot_id, tile=Tile("8c"))
+    await service.act(table_id, "claim", member_id=HOST, kind="mahjong")
+    row = table_row(db, table_id)
+    state = engine.state_from_dict(json.loads(row["state"]))
+    assert state.phase is engine.Phase.SETTLE
+    assert state.outcome is not None and state.outcome.kind == "mahjong"
+    with open_db(db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM mahjong_results WHERE table_id = ?", (table_id,)
+        ).fetchone()[0] == 0                 # B5: nothing recorded
+        assert conn.execute(
+            "SELECT COUNT(*) FROM mahjong_stats WHERE guild_id = ?", (GUILD,)
+        ).fetchone()[0] == 0
+    assert balances(db, HOST) == [1000]      # and no coins moved
+
+
+async def make_fill_duel(service, db):
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_fill_bots", "1", GUILD)
+    table_id = await service.create_table(GUILD, CHANNEL, HOST, 2, 1)
+    await service.add_bot(table_id, HOST)
+    return table_id
+
+
+async def test_add_bot_stakes_house_money_visibly(service, db):
+    from bot_modules.games.mahjong.bot_logic import bot_member_id
+
+    table_id = await make_fill_duel(service, db)
+    bot_id = bot_member_id(table_id, 1)
+    with open_db(db) as conn:
+        held = conn.execute(
+            "SELECT user_id, amount FROM econ_game_wagers WHERE game_type = "
+            "'mahjong' AND state = 'held' ORDER BY user_id",
+        ).fetchall()
+    assert [(int(r["user_id"]), int(r["amount"])) for r in held] == [
+        (bot_id, DUEL_ESCROW), (HOST, DUEL_ESCROW)]
+    assert _ledger_kinds(db, bot_id) == ["mahjong_house_stake", "wager_stake"]
+    assert balances(db, bot_id) == [0]       # topped up exactly, then held
+
+
+async def test_add_bot_gates(service, db):
+    table_id = await service.create_table(GUILD, CHANNEL, HOST, 2, 1)
+    with pytest.raises(TableError):          # dial defaults off
+        await service.add_bot(table_id, HOST)
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_fill_bots", "1", GUILD)
+    with pytest.raises(TableError):          # host only
+        await service.add_bot(table_id, GUEST)
+    await service.add_bot(table_id, HOST)    # and now it seats
+
+
+async def test_fill_hand_pays_the_human_and_sweeps_the_bot(service, db):
+    from bot_modules.games.mahjong.bot_logic import bot_member_id
+
+    table_id = await make_fill_duel(service, db)
+    bot_id = bot_member_id(table_id, 1)
+    winner_rack = ([Tile.FLOWER] * 4 + [Tile("2d")] * 4 + [Tile("6b")] * 4
+                   + [Tile("8c")])
+    await service.timeout(table_id)          # deal
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT * FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+        state = engine.state_from_dict(json.loads(row["state"]))
+        state.phase = engine.Phase.AWAIT_DISCARD
+        state.turn = 1
+        state.pending_picks = {}
+        state.seats[1].rack = [Tile("8c")] + [Tile("1c")] * 13
+        state.seats[0].rack = winner_rack
+        conn.execute(
+            "UPDATE mahjong_tables SET state = ? WHERE id = ?",
+            (json.dumps(engine.state_to_dict(state)), table_id),
+        )
+    await service.act(table_id, "discard", member_id=bot_id, tile=Tile("8c"))
+    await service.act(table_id, "claim", member_id=HOST, kind="mahjong")
+    # jokerless discard win: 25 × 2 × 2 = 100 — real coins from the house
+    assert balances(db, HOST) == [1100]
+    assert balances(db, bot_id) == [0]       # escrow − loss, swept to zero
+    kinds = _ledger_kinds(db, bot_id)
+    assert kinds[0] == "mahjong_house_stake" and kinds[-1] == "mahjong_house_settle"
+    with open_db(db) as conn:
+        stats = conn.execute(
+            "SELECT user_id FROM mahjong_stats WHERE guild_id = ?", (GUILD,)
+        ).fetchall()
+        assert [int(r[0]) for r in stats] == [HOST]   # bots keep no aggregates
+        seats = conn.execute(
+            "SELECT user_id, coins_delta FROM mahjong_result_seats "
+            "WHERE guild_id = ? ORDER BY seat_index", (GUILD,),
+        ).fetchall()
+    assert [(int(r[0]), int(r[1])) for r in seats] == [
+        (HOST, 100), (bot_id, -100)]         # history complete, bot included
+
+
+async def test_bot_pump_plays_the_bot_seat(service, db, monkeypatch):
+    import bot_modules.games.mahjong.mahjong_service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "BOT_DELAY", (0.0, 0.0))
+    table_id = await make_practice_duel(service)
+    await service.timeout(table_id)          # deal → Charleston
+    await service._pump_bots(table_id)       # the bot submits its pass
+    state = await service.load_state(table_id)
+    assert state is not None
+    assert 1 in state.pending_picks          # seat 1 (the bot) has picked
+
+
+async def test_resume_kicks_bot_pumps(service, db):
+    table_id = await make_practice_duel(service)
+    svc2 = MahjongService(db)
+    try:
+        resumed = await svc2.resume_tables()
+        assert table_id in resumed
+        assert table_id in svc2._bot_pumps   # bots pick play back up
+    finally:
+        await svc2.shutdown()
+
+
+async def test_purge_dissolving_a_fill_table_burns_the_bot_wallet(service, db):
+    from bot_modules.games.mahjong.bot_logic import bot_member_id
+    from bot_modules.services.privacy_service import purge_user_data
+
+    table_id = await make_fill_duel(service, db)
+    bot_id = bot_member_id(table_id, 1)
+    await service.timeout(table_id)          # deal — escrow is live mid-hand
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, HOST)
+    row = table_row(db, table_id)
+    assert row["status"] == "closed" and row["closed_reason"] == "purged"
+    assert balances(db, bot_id) == [0]       # refund landed, then burned
+    kinds = _ledger_kinds(db, bot_id)
+    assert kinds[-1] == "mahjong_house_settle"
+
+
+# ── Bots review round (2026-08-22): P1/P2 service fixes ──────────────────────
+
+
+async def test_bot_pump_chains_through_the_bots_own_actions(service, db, monkeypatch):
+    # P1 (three lenses converged): the pump's own act() used to try to
+    # schedule its successor while the pump itself was the live registry
+    # entry — the guard swallowed it and every bot-after-bot chain stalled
+    # to the phase timer. Drive the REAL funnel: after the human discards,
+    # the bot must pass the claim window AND then play its own turn with no
+    # timer ever firing.
+    import bot_modules.games.mahjong.mahjong_service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "BOT_DELAY", (0.0, 0.0))
+    table_id = await make_practice_duel(service)
+    await service.timeout(table_id)              # deal
+    # surgery into a clean AWAIT_DISCARD, human's turn, nothing claimable
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT * FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+        state = engine.state_from_dict(json.loads(row["state"]))
+        state.phase = engine.Phase.AWAIT_DISCARD
+        state.turn = 0
+        state.pending_picks = {}
+        state.seats[0].rack = [Tile("9c")] + [Tile("1d"), Tile("2d"), Tile("3d"),
+                                             Tile("4d"), Tile("5d"), Tile("6d"),
+                                             Tile("7d"), Tile("8d"), Tile("9d"),
+                                             Tile("1b"), Tile("2b"), Tile("3b"),
+                                             Tile("4b")]
+        state.seats[1].rack = [Tile("5b"), Tile("6b"), Tile("7b"), Tile("8b"),
+                               Tile("9b"), Tile("1c"), Tile("2c"), Tile("3c"),
+                               Tile("4c"), Tile("5c"), Tile("6c"), Tile("7c"),
+                               Tile("wn")]
+        conn.execute(
+            "UPDATE mahjong_tables SET state = ? WHERE id = ?",
+            (json.dumps(engine.state_to_dict(state)), table_id),
+        )
+    await service.act(table_id, "discard", member_id=HOST, tile=Tile("9c"))
+    # bot must: pass the window (resolving it), draw, and discard — three
+    # bot-driven transitions, zero timers. Poll briefly.
+    for _ in range(80):
+        await asyncio.sleep(0.05)
+        state = await service.load_state(table_id)
+        assert state is not None
+        if len(state.discards) >= 2:
+            # the bot passed the window, drew, and discarded — three
+            # bot-driven transitions with no timer; the open claim window
+            # now correctly waits on the HUMAN's response
+            assert state.phase is engine.Phase.CLAIM_WINDOW
+            break
+    else:
+        pytest.fail(
+            f"bot chain stalled: phase={state.phase} turn={state.turn} "
+            f"discards={len(state.discards)}"
+        )
+
+
+async def test_unloadable_fill_table_still_sweeps_the_bot_wallet(service, db):
+    # P2: the orphaned-escrow net refunds every hold — including the house
+    # bot's — and used to close the table with the refund stranded on the
+    # synthetic wallet forever.
+    from bot_modules.games.mahjong.bot_logic import bot_member_id
+
+    table_id = await make_fill_duel(service, db)
+    bot_id = bot_member_id(table_id, 1)
+    with open_db(db) as conn:
+        conn.execute(
+            "UPDATE mahjong_tables SET state = 'not json' WHERE id = ?",
+            (table_id,),
+        )
+    svc2 = MahjongService(db)
+    try:
+        await svc2.resume_tables()
+    finally:
+        await svc2.shutdown()
+    row = table_row(db, table_id)
+    assert row["status"] == "closed" and row["closed_reason"] == "unloadable"
+    assert balances(db, HOST) == [1000]          # human refunded
+    assert balances(db, bot_id) == [0]           # and the house got its coins back
+    assert _ledger_kinds(db, bot_id)[-1] == "mahjong_house_settle"
+
+
+async def test_house_bot_never_ranks_as_an_earner(service, db):
+    # P3: the house top-up and settle credits land in econ_ledger under the
+    # negative bot id, and the public Top Earners board used to rank the
+    # phantom. Negative ids are not members and never rank.
+    from bot_modules.economy.leaderboard import collect_leaderboard_data
+    from bot_modules.games.mahjong.bot_logic import bot_member_id
+
+    table_id = await make_fill_duel(service, db)
+    bot_id = bot_member_id(table_id, 1)
+    assert _ledger_kinds(db, bot_id)             # the credits are real...
+    with open_db(db) as conn:
+        data = collect_leaderboard_data(conn, GUILD, time.time())
+    ranked = [uid for uid, _ in data.top_earners]
+    assert all(uid > 0 for uid in ranked)        # ...but never ranked

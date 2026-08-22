@@ -7,6 +7,10 @@ import json
 import sqlite3
 from itertools import islice
 
+from bot_modules.services.economy_service import (
+    apply_debit as econ_apply_debit,
+    get_balance as econ_get_balance,
+)
 from bot_modules.services.economy_wager_service import (
     refund_game as wager_refund_game,
 )
@@ -310,13 +314,32 @@ def purge_user_data(
                 "UPDATE mahjong_seats SET live = 0 WHERE table_id = ?",
                 (table_id,),
             )
+            # a fill table's house bots just got their escrow refunded —
+            # burn the synthetic wallets back so a purge can't strand
+            # house coins (bots plan B6; negative user_id = house bot)
+            for r in conn.execute(
+                "SELECT DISTINCT user_id FROM mahjong_seats "
+                "WHERE table_id = ? AND user_id < 0", (table_id,),
+            ).fetchall():
+                bot_id = int(r[0])
+                balance = econ_get_balance(conn, guild_id, bot_id)
+                if balance > 0:
+                    econ_apply_debit(
+                        conn, guild_id, bot_id, balance,
+                        "mahjong_house_settle", meta={"table_id": table_id},
+                    )
     except sqlite3.Error as exc:
         log.warning("Purge: failed dissolving mahjong tables (%s)", exc)
 
     # The member's own rows go; results they WON are anonymised instead of
     # deleted (winner_id → NULL) because the row also carries the other
     # seats' hand history via mahjong_result_seats.
-    for table in ("mahjong_seats", "mahjong_result_seats", "mahjong_stats"):
+    for table in (
+        "mahjong_seats",
+        "mahjong_result_seats",
+        "mahjong_stats",
+        "mahjong_prefs",
+    ):
         _delete(
             conn,
             f"DELETE FROM {table} WHERE guild_id = ? AND user_id = ?",

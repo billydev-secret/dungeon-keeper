@@ -18,7 +18,8 @@ from collections import Counter
 import pytest
 
 from bot_modules.games.mahjong import game_logic as G
-from bot_modules.games.mahjong.card_logic import load_first_light
+from bot_modules.games.mahjong.card_logic import load_card, load_first_light
+from bot_modules.games.mahjong.mahjong_service import ASSIST_MODES
 from bot_modules.games.mahjong.game_logic import (
     ActionRejected,
     GameState,
@@ -1544,3 +1545,292 @@ def test_force_fallow_duel_settles_immediately():
     state, ev = G.force_fallow(state, 1, CARD, rng())
     out = state.outcome
     assert out is not None and out.kind == "fallow_end" and out.winner == 0
+
+
+# ── Assistance readout (plans/mahjong-assist.md stage 3) ─────────────────────
+
+
+def test_assist_readout_gates():
+    state = play_state(2, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*13"})
+    # a live mode in a decision phase renders
+    r = G.assist_readout(state, 0, CARD, "target")
+    assert r is not None and r.mode == "target"
+    # off renders nothing, as does an unknown mode
+    assert G.assist_readout(state, 0, CARD, "off") is None
+    assert G.assist_readout(state, 0, CARD, "banana") is None
+    # a fallow seat has no decisions left
+    state.seats[0].fallow = True
+    assert G.assist_readout(state, 0, CARD, "target") is None
+    state.seats[0].fallow = False
+    # settle/lobby phases have no tile choice in them
+    state.phase = Phase.SETTLE
+    assert G.assist_readout(state, 0, CARD, "target") is None
+    state.phase = Phase.LOBBY
+    state.seats[0].rack = []
+    assert G.assist_readout(state, 0, CARD, "target") is None
+
+
+def test_assist_readout_caps_at_three_but_counts_all():
+    state = play_state(2, {0: "flower*2 1d*2 9d 2b*3 wn*2 dr 5c*2", 1: "9c*13"})
+    r = G.assist_readout(state, 0, CARD, "gap")
+    assert r is not None
+    assert len(r.prospects) <= 3
+    assert r.live_count >= len(r.prospects)
+    # ranked: distances never decrease across the shown prospects
+    ds = [p.distance for p in r.prospects]
+    assert ds == sorted(ds)
+
+
+def test_assist_suggestion_only_in_coach():
+    racks = {0: "flower*4 2d*4 6b*2 9d wn", 1: "9c*13"}
+    r_gap = G.assist_readout(play_state(2, racks), 0, CARD, "gap")
+    r_coach = G.assist_readout(play_state(2, racks), 0, CARD, "coach")
+    assert r_gap is not None and r_gap.suggestion is None
+    assert r_coach is not None and r_coach.suggestion is not None
+
+
+def test_assist_coach_respects_the_visible_threat_rail():
+    # Seat 1's exposed 9d kong makes the nines hot (gh-3 wants the sisters);
+    # seat 0's only dead weight is 9b — coach must go silent, not feed it.
+    exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("9d"),
+                                     count=4, jokers=0)]}
+    state = play_state(
+        2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*9"}, exposures=exposures
+    )
+    r = G.assist_readout(state, 0, CARD, "coach")
+    assert r is not None
+    assert dict(r.prospects[0].dead_weight) == {Tile("9b"): 3}
+    assert r.suggestion is None
+    # take the exposure away and the same rack gets its suggestion back
+    state2 = play_state(2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*13"})
+    r2 = G.assist_readout(state2, 0, CARD, "coach")
+    assert r2 is not None and r2.suggestion == Tile("9b")
+
+
+def test_assist_uses_discards_and_exposures_as_seen():
+    # The same rack loses a line's cheapest binding when the discard pile
+    # holds the last copies — seen_elsewhere is really wired through.
+    state = play_state(2, {0: "flower*2 1d*3 3d*3 5d*3 7d", 1: "9c*13"})
+    base = G.assist_readout(state, 0, CARD, "gap")
+    state.discards = [(1, Tile("7d"))] * 3 + [(1, Tile.JOKER)] * 8
+    after = G.assist_readout(state, 0, CARD, "gap")
+    assert base is not None and after is not None
+    sb1_base = next(p for p in base.prospects if p.hand.id == "sb-1")
+    sb1_after = next((p for p in after.prospects if p.hand.id == "sb-1"), None)
+    assert sb1_base.distance == 2
+    assert sb1_after is None or sb1_after.distance > 2
+
+
+def test_seen_elsewhere_matches_the_fallow_settle_view():
+    # The extraction refactor: the helper and the fallow settle must agree.
+    exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("2b"),
+                                     count=3, jokers=1)]}
+    state = play_state(2, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*10"},
+                       exposures=exposures)
+    state.discards = [(0, Tile("5c")), (1, Tile("5c")), (0, Tile("wn"))]
+    seen = G.seen_elsewhere(state, 0)
+    assert seen[Tile("5c")] == 2
+    assert seen[Tile("wn")] == 1
+    assert seen[Tile("2b")] == 2      # naturals of the exposure
+    assert seen[Tile.JOKER] == 1      # its joker counts as a joker
+    assert Tile("2d") not in seen     # own tiles are never "elsewhere"
+
+
+def test_claim_window_live_discard_counts_as_obtainable_for_claimants():
+    # Review finding (stage 4): the live discard is the one tile the claim
+    # window exists to acquire. Both seats sit one 8c short of Golden Hour;
+    # two 8c lie dead in the pit; seat 1 discards the third... fourth copy.
+    state = play_state(
+        2, {0: "flower*4 2d*4 6b*4 8c", 1: "flower*4 2d*4 6b*4 8c"}, turn=1,
+    )
+    state.discards = [(0, Tile("8c")), (1, Tile("8c"))]
+    state, _ = G.discard(state, 1, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    assert state.live_discard is Tile("8c")
+    # The claimant is told the truth: one tile away, and it's the live one.
+    r0 = G.assist_readout(state, 0, CARD, "gap")
+    assert r0 is not None
+    gh1 = next(p for p in r0.prospects if p.hand.id == "gh-1")
+    assert gh1.distance == 1
+    assert dict(gh1.needed) == {Tile("8c"): 1}
+    # The discarder can never reclaim their own tile — for them it IS gone,
+    # and gh-1 only survives via a sister-suit binding at a real distance.
+    r1 = G.assist_readout(state, 1, CARD, "gap")
+    assert r1 is not None
+    gh1_d = next((p for p in r1.prospects if p.hand.id == "gh-1"), None)
+    assert gh1_d is None or gh1_d.distance > 1
+
+
+# ── Review round 2 (code-review 2026-08-22): fallow settle vs live discard ───
+
+FALLOW_VALUE_CARD = load_card({
+    "card_id": "t-fallow-value", "display_name": "Fallow Value", "season": "t",
+    "hands": [
+        {"id": "cheap", "section": "T", "name": "Cheap", "concealed": False,
+         "value": 25,
+         "groups": [{"count": 4, "rank": "F"}, {"count": 4, "rank": "1", "suit": "a"},
+                    {"count": 4, "rank": "6", "suit": "b"}, {"count": 2, "rank": "8", "suit": "c"}]},
+        {"id": "rich", "section": "T", "name": "Rich", "concealed": False,
+         "value": 50,
+         "groups": [{"count": 4, "rank": "F"}, {"count": 4, "rank": "N"},
+                    {"count": 4, "rank": "S"}, {"count": 2, "rank": "R"}]},
+    ],
+})
+
+
+def test_fallow_settle_counts_the_live_discard_as_takeable():
+    # A leaver folds during the claim window. The survivor sits one 8c from
+    # the cheap 25-pointer, every sister-suit 8 is dead in the pit, and the
+    # live discard IS the missing 8c — a tile the survivor could have
+    # claimed. Valuing their hand as if that tile were extinct calls the
+    # cheap line dead and pays the survivor the rich line's 50 per seat:
+    # a real-coin overpayment. Amendment 2's "still reachable" must see the
+    # claimable tile (the same view the readout was fixed to in R1).
+    state = play_state(
+        2, {0: "flower*4 1d*4 6b*4 8c", 1: "9c*12 8c"}, turn=1,
+    )
+    state.discards = (
+        [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4 + [(1, Tile("8c"))] * 2
+    )
+    state, _ = G.discard(state, 1, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    state, ev = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
+    assert state.outcome is not None and state.outcome.kind == "fallow_end"
+    assert state.outcome.value == 25  # cheap line live via the claimable 8c
+
+
+def test_fallow_settle_discarders_own_tile_stays_gone():
+    # Same shape, but the SURVIVOR is the one who discarded the 8c — their
+    # own tile can never come back to them, so the cheap line is truly dead
+    # and the valuation correctly lands on the rich line.
+    state = play_state(
+        2, {0: "flower*4 1d*4 6b*4 8c*2", 1: "9c*13"}, turn=0,
+    )
+    state.discards = (
+        [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4 + [(1, Tile("8c"))] * 2
+    )
+    state, _ = G.discard(state, 0, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    state, ev = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
+    assert state.outcome is not None and state.outcome.kind == "fallow_end"
+    assert state.outcome.value == 50
+
+
+def test_claim_window_discount_stops_after_a_pass():
+    # F4: a seat that already passed has renounced the tile — its readout
+    # must not keep calling the live discard takeable. 4-seat, so two other
+    # claimants keep the window open after seat 0's pass.
+    state = play_state(
+        4, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*12 8c"}, turn=1,
+    )
+    state.discards = [(2, Tile("8c")), (3, Tile("8c"))]
+    state, _ = G.discard(state, 1, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    before = G.assist_readout(state, 0, CARD, "gap")
+    gh1 = next(p for p in before.prospects if p.hand.id == "gh-1")
+    assert gh1.distance == 1  # takeable while unresponded
+    state, _ = G.claim(state, 0, "pass", [], CARD, rng())
+    assert state.phase is Phase.CLAIM_WINDOW  # seats 2 and 3 still out
+    after = G.assist_readout(state, 0, CARD, "gap")
+    gh1_after = next((p for p in after.prospects if p.hand.id == "gh-1"), None)
+    assert gh1_after is None or gh1_after.distance > 1
+
+
+def test_fallow_seats_exposures_never_gate_the_coach():
+    # F3: a folded seat can never claim or win — its exposed kong reveals
+    # nothing a live seat threatens, so it must not silence a suggestion.
+    exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("9d"),
+                                     count=4, jokers=0)]}
+    state = play_state(
+        2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*9"}, exposures=exposures
+    )
+    silenced = G.assist_readout(state, 0, CARD, "coach")
+    assert silenced is not None and silenced.suggestion is None  # live: rail
+    state.seats[1].fallow = True
+    freed = G.assist_readout(state, 0, CARD, "coach")
+    assert freed is not None and freed.suggestion == Tile("9b")
+
+
+@pytest.mark.parametrize("mode", ASSIST_MODES)
+def test_every_assist_mode_is_understood_by_the_gate(mode):
+    # F7: the vocabulary must have ONE authority. Every mode the service
+    # accepts either renders a readout or is 'off' — a fifth mode silently
+    # rendering nothing (indistinguishable from off) is the failure pinned.
+    state = play_state(2, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*13"})
+    r = G.assist_readout(state, 0, CARD, mode)
+    assert (r is None) == (mode == "off")
+
+
+# ── Verify round on the round-2 fixes (V1): a legal route, or no discount ────
+
+
+def test_fallow_settle_pair_mate_two_away_is_not_takeable():
+    # V1a: a pair tile can only arrive as an instant Mahjong (pairs can't be
+    # called). Two tiles out, the claim wouldn't complete the hand and the
+    # seat holds only one matching tile — no legal route, so the cheap line
+    # is truly dead and the discount must not resurrect it (which would
+    # UNDERPAY the survivor: fallow pays the minimum live line).
+    state = play_state(
+        2, {0: "flower*4 1d*4 6b*3 8c 9b", 1: "9c*12 8c"}, turn=1,
+    )
+    state.discards = (
+        [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4 + [(1, Tile("8c"))] * 2
+    )
+    state, _ = G.discard(state, 1, Tile("8c"))
+    assert state.phase is Phase.CLAIM_WINDOW
+    state, _ = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
+    assert state.outcome is not None
+    assert state.outcome.value == 50  # cheap stays dead: no route to the 8c
+
+
+def test_fallow_settle_discarded_joker_is_unclaimable():
+    # V1b: a discarded joker can never be claimed by anyone (§2.5). It must
+    # never be discounted — doing so loosens the joker-deficit liveness test
+    # for every line at once.
+    state = play_state(
+        2, {0: "flower*4 1d*4 6b*3 8c*2", 1: "9c*12 joker"}, turn=1,
+    )
+    # every sister-suit binding must die too, or reachability just re-binds
+    # the line to an open suit and the joker question never arises
+    state.discards = (
+        [(0, Tile("6b"))] + [(0, Tile.JOKER)] * 7
+        + [(0, Tile("6d"))] * 4 + [(0, Tile("6c"))] * 4
+        + [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4
+    )
+    state, _ = G.discard(state, 1, Tile.JOKER)
+    assert state.phase is Phase.CLAIM_WINDOW
+    state, _ = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
+    assert state.outcome is not None
+    assert state.outcome.value == 50  # the joker route does not exist
+
+
+@pytest.mark.parametrize(
+    "rack0, discard, discounted",
+    [
+        # two matching rack tiles: the CALL route is legal → takeable
+        ("flower*4 1d*4 6b*2 8c*2 9b", "6b", True),
+        # one matching + one joker also stands the call up
+        ("flower*4 1d*4 6b joker 8c*2 9b", "6b", True),
+        # one matching, no joker, not hand-completing: no route → not takeable
+        ("flower*4 1d*4 6b*3 8c 9b", "8c", False),
+        # a discarded joker is unclaimable by anyone, ever
+        ("flower*4 1d*4 6b*3 8c*2", "joker", False),
+        # hand-completing tile: the MAHJONG route applies even with pool < 2
+        ("flower*4 1d*4 6b*4 8c", "8c", True),
+    ],
+    ids=["call-pool-2", "call-with-joker", "no-route", "joker", "mahjong-route"],
+)
+def test_obtainable_seen_discounts_only_legal_routes(rack0, discard, discounted):
+    # V1: "takeable" means a LEGAL route — instant mahjong, or a call stood
+    # up by two matching rack tiles (naturals or jokers, §2.5). Anything
+    # else, the live discard stays counted as gone.
+    state = play_state(2, {0: rack0, 1: f"9c*12 {discard}"}, turn=1)
+    state, _ = G.discard(state, 1, Tile(discard))
+    assert state.phase is Phase.CLAIM_WINDOW
+    raw = G.seen_elsewhere(state, 0)
+    adjusted = G.obtainable_seen(state, 0, FALLOW_VALUE_CARD)
+    tile = Tile(discard)
+    if discounted:
+        assert adjusted.get(tile, 0) == raw[tile] - 1
+    else:
+        assert adjusted.get(tile, 0) == raw[tile]

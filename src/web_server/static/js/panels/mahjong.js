@@ -91,6 +91,38 @@ export function mount(container) {
                 <option value="0" ${s.second_charleston ? "" : "selected"}>Off — straight to courtesy</option>
               </select>
             </div>
+            <div class="field">
+              <label for="mj-assist">Default Assistance</label>
+              <select name="assist_default" id="mj-assist">
+                ${[["off", "Off — pure card-reading"],
+                   ["target", "Target — closest hands + distance"],
+                   ["gap", "Target + gap — ...and the tiles still needed"],
+                   ["coach", "Coach — ...and a suggested discard"]].map(([v, label]) =>
+                  `<option value="${v}" ${s.assist_default === v ? "selected" : ""}>${label}</option>`).join("")}
+              </select>
+              <div class="field-hint">What a member sees before they pick their own
+                level in the /mahjong panel's My Settings. A member's own choice
+                always wins.</div>
+            </div>
+            <div class="field">
+              <label for="mj-practice">Practice Tables</label>
+              <select name="practice_bots" id="mj-practice">
+                <option value="1" ${s.practice_bots ? "selected" : ""}>Open — solo play against house bots, no stakes</option>
+                <option value="0" ${s.practice_bots ? "" : "selected"}>Closed</option>
+              </select>
+              <div class="field-hint">Stake-free — nothing a practice game does
+                touches coins, stats, or quests; only the table itself is kept.</div>
+            </div>
+            <div class="field">
+              <label for="mj-fill">House Bots in Real Games</label>
+              <select name="fill_bots" id="mj-fill">
+                <option value="0" ${s.fill_bots ? "" : "selected"}>Off — humans only at staked tables</option>
+                <option value="1" ${s.fill_bots ? "selected" : ""}>On — the host can seat a house-staked bot</option>
+              </select>
+              <div class="field-hint">The bot's escrow is house money and every coin
+                of it shows in the ledger. Leave off until practice games have
+                proven the bot plays well enough not to be farmed.</div>
+            </div>
           </div>
 
           <div class="card">
@@ -174,6 +206,9 @@ export function mount(container) {
           duel_wall_trim: parseInt(fd.get("duel_wall_trim"), 10),
           second_charleston: fd.get("second_charleston") === "1",
           stakes_allowed: stakes,
+          assist_default: fd.get("assist_default"),
+          practice_bots: fd.get("practice_bots") === "1",
+          fill_bots: fd.get("fill_bots") === "1",
         });
         form.querySelector("[name=stakes_allowed]").value = saved.stakes_allowed.join(", ");
         showStatus(status, true);

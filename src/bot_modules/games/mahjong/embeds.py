@@ -14,9 +14,9 @@ import time
 import discord
 
 from bot_modules.games.mahjong.card_logic import Card
-from bot_modules.games.mahjong.game_logic import GameState, Outcome, Phase
+from bot_modules.games.mahjong.game_logic import AssistReadout, GameState, Outcome, Phase
 from bot_modules.games.mahjong.tiles import Tile, sort_rack
-from bot_modules.games.mahjong.tile_render import back_str, rack_str, tile_str
+from bot_modules.games.mahjong.tile_render import back_str, chip, rack_str, tile_str
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR
 from bot_modules.services.embeds import COLOR_GREEN
 
@@ -93,18 +93,22 @@ def build_table_panel(
     escrow: int,
     accent: discord.Color | None = None,
     deadline_at: float | None = None,
+    *,
+    practice: bool = False,
 ) -> discord.Embed:
     accent = accent or DEFAULT_ACCENT_COLOR
     mode = MODE_NAMES.get(state.seat_count, str(state.seat_count))
     e = discord.Embed(
-        title=f"Mahjong Table — {mode}",
+        title=(f"Practice Table — {mode}" if practice
+               else f"Mahjong Table — {mode}"),
         color=accent,
     )
     clock = _clock(deadline_at)
 
     if state.phase is Phase.LOBBY:
         rows = [
-            f"✅ **{names.get(s.member_id, s.member_id)}** — escrow locked"
+            f"✅ **{names.get(s.member_id, s.member_id)}**"
+            + ("" if practice else " — escrow locked")
             for s in state.seats
         ]
         open_seats = state.seat_count - len(state.seats)
@@ -112,7 +116,8 @@ def build_table_panel(
         e.description = "\n".join(rows)
         e.add_field(
             name="Stake",
-            value=f"{stake} coins per point ({escrow} escrow per seat)",
+            value=("Practice — no stakes, no stats" if practice
+                   else f"{stake} coins per point ({escrow} escrow per seat)"),
             inline=False,
         )
         e.add_field(
@@ -241,9 +246,73 @@ def build_table_panel(
     return _footer(e, "Closed")
 
 
+def _assist_field(assist: AssistReadout) -> str:
+    """The Closest Hands block (plans/mahjong-assist.md stage 3). One
+    renderer for every panel that shows a rack, so the modes can't drift.
+
+    Two rules from the stage-4 review round: "Dead weight" is the
+    intersection across the hands actually shown — the copy promises
+    "tiles none of your closest hands can use", so a tile another shown
+    hand still needs must never print as dead. And the block guarantees
+    Discord's 1024-char field bound itself, degrading emoji to text chips
+    (then trimming hands) rather than blind-slicing — a cut used to land
+    mid-<:mm_…:id> token and silently drop the coach suggestion, the one
+    line coach mode exists to deliver.
+    """
+    if not assist.prospects:
+        return ("No line on the card is still reachable from your tiles — "
+                "play for the wall.")
+
+    def tiles_str(pairs, render) -> str:
+        return " ".join(
+            render(tile) if n == 1 else f"{render(tile)}×{n}"
+            for tile, n in pairs
+        )
+
+    def render_block(shown_n: int, render) -> str:
+        shown = assist.prospects[:shown_n]
+        lines: list[str] = []
+        for rank, p in enumerate(shown, start=1):
+            away = "ready!" if p.distance == 0 else (
+                "1 tile away" if p.distance == 1 else f"{p.distance} tiles away")
+            lines.append(
+                f"**{rank}. {p.hand.name}** — {away} · {p.hand.value} pts"
+            )
+            if assist.mode in ("gap", "coach") and p.needed:
+                lines.append(f"    need {tiles_str(p.needed, render)}")
+        if assist.live_count > len(shown):
+            lines.append(f"*…of {assist.live_count} lines still live*")
+        if assist.mode == "coach":
+            # dead for EVERY shown hand; prospects[0]'s order is kept
+            common = list(shown[0].dead_weight)
+            for p in shown[1:]:
+                dw = dict(p.dead_weight)
+                common = [
+                    (tile, min(n, dw[tile])) for tile, n in common if tile in dw
+                ]
+            if common:
+                lines.append(f"Dead weight: {tiles_str(common, render)}")
+            if assist.suggestion is not None:
+                lines.append(f"Consider discarding {render(assist.suggestion)}")
+            elif assist.prospects[0].dead_weight:
+                lines.append("*No clearly safe discard — your call.*")
+        return "\n".join(lines)
+
+    attempts = [(len(assist.prospects), tile_str), (len(assist.prospects), chip),
+                (2, chip), (1, chip)]
+    for shown_n, render in attempts:
+        text = render_block(shown_n, render)
+        if len(text) <= 1024:
+            return text
+    # unreachable — one chip-rendered hand is far under 1024 — but if a
+    # future card breaks the assumption, a clean tail beats a cut token.
+    return render_block(1, chip)[:1024]
+
+
 def build_rack_panel(
     state: GameState, seat: int, accent: discord.Color | None = None,
     deadline_at: float | None = None, *, context: str | None = None,
+    assist: AssistReadout | None = None,
 ) -> discord.Embed:
     accent = accent or DEFAULT_ACCENT_COLOR
     s = state.seats[seat]
@@ -273,6 +342,10 @@ def build_rack_panel(
     )
     if turn_note:
         e.add_field(name="Now", value=turn_note + _clock(deadline_at),
+                    inline=False)
+    if assist is not None:
+        # _assist_field guarantees the 1024 bound itself — no slicing here.
+        e.add_field(name="Closest Hands", value=_assist_field(assist),
                     inline=False)
     return _footer(e, f"Hand {state.hand_no}")
 

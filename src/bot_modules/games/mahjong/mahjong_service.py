@@ -34,6 +34,8 @@ from pathlib import Path
 
 from bot_modules.core.db_utils import get_config_value, open_db
 from bot_modules.games.mahjong import game_logic as engine
+from bot_modules.games.mahjong.bot_logic import bot_member_id, decide, is_bot_id
+from bot_modules.games.mahjong.game_logic import ASSIST_MODES
 from bot_modules.games.mahjong.card_logic import Card, CardError, load_card
 from bot_modules.games.mahjong.game_logic import (
     ActionRejected,
@@ -43,6 +45,11 @@ from bot_modules.games.mahjong.game_logic import (
 )
 from bot_modules.games.mahjong.tiles import shuffled_wall
 from bot_modules.services import economy_wager_service as wager_svc
+from bot_modules.services.economy_service import (
+    apply_credit,
+    apply_debit,
+    get_balance,
+)
 from bot_modules.services.no_contact_service import is_no_contact_conn
 
 log = logging.getLogger(__name__)
@@ -52,6 +59,9 @@ GAME_TYPE = "mahjong"
 PAYOUT_CAP = {2: 6, 4: 4}
 #: Seconds from table-full to the deal (§6.3's countdown footer).
 DEAL_COUNTDOWN = 10.0
+#: Bot reaction delay bounds, seconds (bots plan B4): instant responses feel
+#: robotic and leak information; tests pin these to ~0.
+BOT_DELAY = (1.5, 4.0)
 #: Lobby that never fills / settle screen nobody rematches: dissolve (§6.2).
 LOBBY_LIFETIME = 600.0
 
@@ -74,6 +84,9 @@ class MahjongSettings:
     duel_wall_trim: int = 0
     second_charleston: bool = True
     stakes_allowed: tuple[int, ...] = (1, 2, 5)
+    assist_default: str = "gap"  # house default for members with no pick (A8)
+    practice_bots: bool = True   # solo practice tables (bots plan B7)
+    fill_bots: bool = False      # house-staked fill seats — off until proven
 
     def claim_window(self, seat_count: int) -> float:
         return self.claim_window_2 if seat_count == 2 else self.claim_window_4
@@ -107,7 +120,52 @@ def load_settings(conn, guild_id: int) -> MahjongSettings:
         second_charleston=get_config_value(
             conn, "mahjong_second_charleston", "1", guild_id) == "1",
         stakes_allowed=stakes or (1, 2, 5),
+        assist_default=_assist(
+            get_config_value(conn, "mahjong_assist_default", "gap", guild_id)
+        ),
+        practice_bots=get_config_value(
+            conn, "mahjong_practice_bots", "1", guild_id) == "1",
+        fill_bots=get_config_value(
+            conn, "mahjong_fill_bots", "0", guild_id) == "1",
     )
+
+
+def _assist(raw: str, fallback: str = "gap") -> str:
+    """THE clamp to a known mode — a corrupt store degrades, never raises.
+    One clamp, two fallbacks: the dial degrades to the shipped default, a
+    member row to the (already-clamped) guild default (F11)."""
+    return raw if raw in ASSIST_MODES else fallback
+
+
+def get_assist_mode(
+    conn, guild_id: int, user_id: int, settings: MahjongSettings | None = None
+) -> str:
+    """The member's chosen level, or the guild default when they never chose
+    (or the stored value is no longer a mode we know). Pass ``settings`` when
+    you already hold them; without them only the one dial key is read — the
+    rack-render path pays for a single config value, not all nine (F5)."""
+    row = conn.execute(
+        "SELECT mode FROM mahjong_prefs WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    fallback = (
+        settings.assist_default
+        if settings is not None
+        else _assist(get_config_value(conn, "mahjong_assist_default", "gap", guild_id))
+    )
+    return _assist(str(row[0]), fallback) if row is not None else fallback
+
+
+def set_assist_mode(conn, guild_id: int, user_id: int, mode: str) -> None:
+    if mode not in ASSIST_MODES:
+        raise ValueError(f"unknown assist mode: {mode!r}")
+    conn.execute(
+        "INSERT INTO mahjong_prefs (guild_id, user_id, mode, updated_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (guild_id, user_id) DO UPDATE SET mode = excluded.mode, "
+        "updated_at = excluded.updated_at",
+        (guild_id, user_id, mode, time.time()),
+    )  # open_db commits on scope exit — no explicit commit (F12)
 
 
 #: The surface's ordinary failure — used for genuine stale-table races AND
@@ -239,6 +297,10 @@ class MahjongService:
         self._listener: Listener | None = None
         self._rng = secrets.SystemRandom()
         self._pending_events: dict[int, tuple[GameState, list[engine.Event]]] = {}
+        # parsed-Card cache keyed by row id; the hash guards against the
+        # upsert path rewriting card_json under a stable row id (F5)
+        self._card_cache: dict[int, tuple[int, Card]] = {}
+        self._bot_pumps: dict[int, asyncio.Task] = {}
 
     def set_listener(self, listener: Listener) -> None:
         self._listener = listener
@@ -250,17 +312,25 @@ class MahjongService:
 
     async def create_table(
         self, guild_id: int, channel_id: int, host_id: int,
-        seat_count: int, stake: int,
+        seat_count: int, stake: int, *, practice: bool = False,
     ) -> int:
         """Open a lobby: validate the stake, hold the host's escrow, insert
-        the table + seat rows. Raises TableError with the house ❌ copy."""
+        the table + seat rows. Raises TableError with the house ❌ copy.
+
+        ``practice`` (bots plan B5): one human + bots at every other seat,
+        stake-free — no escrow anywhere, stake stored as 0, the flag on the
+        row is what the settle path branches on. The bots are seated inside
+        this same transaction, so the table is born full and the ordinary
+        deal countdown takes it from there."""
 
         def _tx() -> int:
             with open_db(self.db_path) as conn:
                 settings = load_settings(conn, guild_id)
                 if not settings.enabled:
                     raise TableError("Meadow Mahjong isn't open on this server yet.")
-                if stake not in settings.stakes_allowed:
+                if practice and not settings.practice_bots:
+                    raise TableError("Practice tables aren't open on this server.")
+                if not practice and stake not in settings.stakes_allowed:
                     raise TableError(
                         "Pick a stake from "
                         + ", ".join(map(str, settings.stakes_allowed)) + "."
@@ -280,11 +350,12 @@ class MahjongService:
                     cur = conn.execute(
                         "INSERT INTO mahjong_tables (guild_id, channel_id, mode, "
                         "stake, card_row_id, host_id, status, state, deadline_at, "
-                        "created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)",
-                        (guild_id, channel_id, seat_count, stake, card_row_id,
+                        "practice, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?, ?)",
+                        (guild_id, channel_id, seat_count,
+                         0 if practice else stake, card_row_id,
                          host_id, json.dumps(engine.state_to_dict(state)),
-                         now + LOBBY_LIFETIME, now, now),
+                         now + LOBBY_LIFETIME, 1 if practice else 0, now, now),
                     )
                 except Exception as e:  # the one-live-table-per-channel index
                     if "mahjong_tables.guild_id, mahjong_tables.channel_id" in str(e):
@@ -295,17 +366,28 @@ class MahjongService:
                     raise
                 table_id = int(cur.lastrowid or 0)
                 self._seat_member(conn, table_id, guild_id, host_id, 0)
-                try:
-                    wager_svc.hold_stake(
-                        conn, guild_id, GAME_TYPE, _hand_gid(table_id, 1),
-                        host_id, escrow_amount(card, seat_count, stake),
-                    )
-                except ValueError as e:
-                    raise TableError(str(e)) from e
+                if practice:
+                    for index in range(1, seat_count):
+                        bot_id = bot_member_id(table_id, index)
+                        state, _ = engine.join_table(state, bot_id)
+                        self._seat_member(conn, table_id, guild_id, bot_id, index)
+                    self._persist(
+                        conn, table_id, state, time.time() + DEAL_COUNTDOWN)
+                else:
+                    try:
+                        wager_svc.hold_stake(
+                            conn, guild_id, GAME_TYPE, _hand_gid(table_id, 1),
+                            host_id, escrow_amount(card, seat_count, stake),
+                        )
+                    except ValueError as e:
+                        raise TableError(str(e)) from e
                 return table_id
 
         table_id = await asyncio.to_thread(_tx)
-        await self._arm_timer(table_id, time.time() + LOBBY_LIFETIME)
+        await self._arm_timer(
+            table_id,
+            time.time() + (DEAL_COUNTDOWN if practice else LOBBY_LIFETIME),
+        )
         return table_id
 
     def _seat_member(
@@ -361,6 +443,57 @@ class MahjongService:
                 )
             except ValueError as e:
                 raise TableError(str(e)) from e
+            full = any(k == "table_full" for k, _ in events)
+            deadline = (
+                time.time() + DEAL_COUNTDOWN if full
+                else float(row["deadline_at"] or 0) or None
+            )
+            self._persist(conn, table_id, state, deadline)
+            self._stash_events(table_id, state, events)
+            return deadline
+
+    async def add_bot(self, table_id: int, requester_id: int) -> list[engine.Event]:
+        """Host seats a house bot on a short table (bots plan B6): the bot's
+        wallet is topped up to exactly its escrow (ledger reason
+        mahjong_house_stake), the ordinary hold runs, and the settle sweep
+        burns whatever the synthetic wallet holds afterwards — settle_split's
+        zero-sum world never learns the difference. Gated on the fill dial,
+        default off."""
+        async with self._lock(table_id):
+            deadline = await asyncio.to_thread(self._tx_add_bot, table_id, requester_id)
+            events = self._last_events(table_id)
+            await self._notify_and_arm(table_id, deadline)
+            return events
+
+    def _tx_add_bot(self, table_id: int, requester_id: int) -> float | None:
+        with open_db(self.db_path) as conn:
+            row = self._table_row(conn, table_id)
+            guild_id = int(row["guild_id"])
+            settings = load_settings(conn, guild_id)
+            if not settings.fill_bots:
+                raise TableError("House bots aren't open on this server.")
+            if bool(row["practice"]):
+                raise TableError(STALE_TABLE)  # practice tables are born full
+            state = engine.state_from_dict(json.loads(row["state"]))
+            if requester_id != state.host:
+                raise TableError("Only the host can seat a bot.")
+            card = self._card_for(conn, row)
+            seat_index = len(state.seats)
+            bot_id = bot_member_id(table_id, seat_index)
+            try:
+                state, events = engine.join_table(state, bot_id)
+            except ActionRejected as e:
+                raise TableError(str(e)) from e
+            self._seat_member(conn, table_id, guild_id, bot_id, seat_index)
+            amount = escrow_amount(card, int(row["mode"]), int(row["stake"]))
+            apply_credit(
+                conn, guild_id, bot_id, amount, "mahjong_house_stake",
+                meta={"table_id": table_id},
+            )
+            wager_svc.hold_stake(
+                conn, guild_id, GAME_TYPE,
+                _hand_gid(table_id, state.hand_no + 1), bot_id, amount,
+            )
             full = any(k == "table_full" for k, _ in events)
             deadline = (
                 time.time() + DEAL_COUNTDOWN if full
@@ -516,6 +649,7 @@ class MahjongService:
                 _hand_gid(table_id, state.hand_no + 1),
             ):
                 wager_svc.refund_game(conn, GAME_TYPE, gid)
+            self._sweep_bot_wallets(conn, int(row["guild_id"]), state, table_id)
             conn.execute(
                 "UPDATE mahjong_seats SET live = 0 WHERE table_id = ?", (table_id,)
             )
@@ -544,6 +678,8 @@ class MahjongService:
         wall game; results, per-seat rows, and stats in the same commit."""
         out = state.outcome
         assert out is not None
+        if bool(row["practice"]):
+            return  # practice hands move no coins and record nothing (B5)
         table_id = int(row["id"])
         guild_id = int(row["guild_id"])
         stake = int(row["stake"])
@@ -583,6 +719,8 @@ class MahjongService:
                  out.point_deltas.get(seat, 0), delta,
                  1 if state.seats[seat].fallow else 0),
             )
+            if is_bot_id(member_id):
+                continue  # house bots keep no aggregates — leaderboards stay members-only
             won = out.winner == seat and out.kind not in ("wall_game", "all_fallow")
             conn.execute(
                 "INSERT INTO mahjong_stats (guild_id, user_id, mode, hands_played, "
@@ -602,6 +740,24 @@ class MahjongService:
                  -delta if delta < 0 else 0,
                  delta if delta > 0 else 0),
             )
+        self._sweep_bot_wallets(conn, guild_id, state, table_id)
+
+    def _sweep_bot_wallets(
+        self, conn, guild_id: int, state: GameState, table_id: int
+    ) -> None:
+        """Burn whatever a house bot's synthetic wallet holds (B6): after a
+        settle it is escrow ± delta, after a refund the returned escrow —
+        either way it goes back to the house, and both legs are in the
+        ledger. No-op for practice tables (nothing was ever held)."""
+        for seat_state in state.seats:
+            if not is_bot_id(seat_state.member_id):
+                continue
+            balance = get_balance(conn, guild_id, seat_state.member_id)
+            if balance > 0:
+                apply_debit(
+                    conn, guild_id, seat_state.member_id, balance,
+                    "mahjong_house_settle", meta={"table_id": table_id},
+                )
 
     def _deal_rematch(self, conn, row, state: GameState, card: Card):
         """Unanimous rematch: re-escrow every seat for the next hand, then
@@ -609,10 +765,17 @@ class MahjongService:
         holds refund inside this same transaction."""
         table_id = int(row["id"])
         guild_id = int(row["guild_id"])
+        if bool(row["practice"]):
+            return engine.deal(state, shuffled_wall(self._rng))  # no escrow (B5)
         next_gid = _hand_gid(table_id, state.hand_no + 1)
         amount = escrow_amount(card, int(row["mode"]), int(row["stake"]))
         for seat_state in state.seats:
             try:
+                if is_bot_id(seat_state.member_id):
+                    apply_credit(
+                        conn, guild_id, seat_state.member_id, amount,
+                        "mahjong_house_stake", meta={"table_id": table_id},
+                    )
                 wager_svc.hold_stake(
                     conn, guild_id, GAME_TYPE, next_gid,
                     seat_state.member_id, amount,
@@ -640,13 +803,20 @@ class MahjongService:
         return row
 
     def _card_for(self, conn, row) -> Card:
+        row_id = int(row["card_row_id"])
         card_row = conn.execute(
             "SELECT card_json FROM mahjong_cards WHERE id = ?",
-            (int(row["card_row_id"]),),
+            (row_id,),
         ).fetchone()
         if card_row is None:
             raise TableError("This table's card has been deleted.")
-        return load_card(json.loads(card_row["card_json"]))
+        raw = card_row["card_json"]
+        cached = self._card_cache.get(row_id)
+        if cached is not None and cached[0] == hash(raw):
+            return cached[1]
+        card = load_card(json.loads(raw))
+        self._card_cache[row_id] = (hash(raw), card)
+        return card
 
     def _persist(
         self, conn, table_id: int, state: GameState, deadline: float | None
@@ -676,6 +846,82 @@ class MahjongService:
                 await self._listener(table_id, state, events)
             except Exception:
                 log.exception("mahjong listener failed for table %d", table_id)
+        self._schedule_bot_pump(table_id)
+
+    # ── The bot driver (bots plan B4) ────────────────────────────────────
+
+    def _schedule_bot_pump(self, table_id: int) -> None:
+        """After a transition, make sure a pump is driving this table's bot
+        seats. The pump is a LOOP — it keeps playing bot actions, humanly
+        paced, until no bot has a move — because a schedule attempt from
+        inside the pump's own act() necessarily sees the pump alive and is
+        swallowed (the bots review round's P1: the one-action pump stalled
+        every bot-after-bot chain onto the phase timers, striking bots
+        toward fallow). If a pump dies, the ordinary phase timers still
+        fold the bot AFK: degraded, never wedged."""
+        existing = self._bot_pumps.get(table_id)
+        if existing is not None and not existing.done():
+            return
+        task = asyncio.get_event_loop().create_task(self._pump_bots(table_id))
+        self._bot_pumps[table_id] = task
+
+        def _clear(_t, task=task):
+            # identity-checked: a stale done-callback must never evict a
+            # newer pump it doesn't own (review P9)
+            if self._bot_pumps.get(table_id) is task:
+                del self._bot_pumps[table_id]
+
+        task.add_done_callback(_clear)
+
+    async def _pump_bots(self, table_id: int) -> None:
+        def _q():
+            with open_db(self.db_path) as conn:
+                row = self._table_row_opt(conn, table_id)
+                if row is None or row["status"] != "live":
+                    return None
+                state = engine.state_from_dict(json.loads(row["state"]))
+                if not any(is_bot_id(s.member_id) for s in state.seats):
+                    return None
+                return (state, self._card_for(conn, row),
+                        bool(row["practice"]), row["deadline_at"])
+
+        try:
+            # generous cap: a full 4-seat practice hand is ~400 bot actions
+            for _ in range(1000):
+                delay = self._rng.uniform(*BOT_DELAY)
+                got = await asyncio.to_thread(_q)
+                if got is None:
+                    return
+                state, card, practice, deadline_at = got
+                if deadline_at:
+                    # never sleep past the armed window (a 3s claim window
+                    # is dial-legal; a late claim is silently a forfeit)
+                    delay = max(0.1, min(delay, float(deadline_at) - time.time() - 0.75))
+                await asyncio.sleep(delay)
+                got = await asyncio.to_thread(_q)
+                if got is None:
+                    return
+                state, card, practice, _ = got
+                acted = False
+                for seat, seat_state in enumerate(state.seats):
+                    if not is_bot_id(seat_state.member_id):
+                        continue
+                    action = decide(state, seat, card, self._rng, practice=practice)
+                    if action is None:
+                        continue
+                    try:
+                        await self.act(
+                            table_id, action.action,
+                            member_id=seat_state.member_id, **action.kwargs,
+                        )
+                    except (TableError, ActionRejected):
+                        pass  # the table moved under us; loop re-reads
+                    acted = True
+                    break
+                if not acted:
+                    return  # no bot has a move; the next transition re-pumps
+        except Exception:
+            log.exception("bot pump failed for table %d", table_id)
 
     # ── Boot / shutdown ──────────────────────────────────────────────────
 
@@ -705,7 +951,40 @@ class MahjongService:
                     "sticky_message_id": row["sticky_message_id"],
                     "deadline_at": row["deadline_at"],
                     "card_row_id": int(row["card_row_id"]),
+                    "practice": bool(row["practice"]),
                 }
+        return await asyncio.to_thread(_q)
+
+    async def assist_context(
+        self, table_id: int, member_id: int
+    ) -> tuple[Card, str] | None:
+        """The table's pinned card and this member's assistance level, in one
+        round-trip — what a rack render needs to build its readout. None when
+        the table is gone (the render simply carries no readout)."""
+        def _q():
+            with open_db(self.db_path) as conn:
+                row = self._table_row_opt(conn, table_id)
+                if row is None:
+                    return None
+                guild_id = int(row["guild_id"])
+                mode = get_assist_mode(conn, guild_id, member_id)
+                if mode == "off":
+                    return None  # don't parse a card nobody will read
+                return self._card_for(conn, row), mode
+        return await asyncio.to_thread(_q)
+
+    async def member_assist_mode(self, guild_id: int, member_id: int) -> str:
+        def _q():
+            with open_db(self.db_path) as conn:
+                return get_assist_mode(conn, guild_id, member_id)
+        return await asyncio.to_thread(_q)
+
+    async def choose_assist_mode(
+        self, guild_id: int, member_id: int, mode: str
+    ) -> None:
+        def _q():
+            with open_db(self.db_path) as conn:
+                set_assist_mode(conn, guild_id, member_id, mode)
         return await asyncio.to_thread(_q)
 
     async def set_sticky_message(self, table_id: int, message_id: int | None) -> None:
@@ -816,6 +1095,23 @@ class MahjongService:
                         ).fetchall()
                         for r in held:
                             wager_svc.refund_game(conn, GAME_TYPE, int(r["game_id"]))
+                        # the refunds may have landed on house-bot wallets;
+                        # the state is unloadable, so sweep by the seat
+                        # table instead (review P2 — same pattern as the
+                        # privacy purge's dissolve)
+                        for r in conn.execute(
+                            "SELECT DISTINCT user_id FROM mahjong_seats "
+                            "WHERE table_id = ? AND user_id < 0", (table_id,),
+                        ).fetchall():
+                            bot_id = int(r[0])
+                            balance = get_balance(
+                                conn, int(row["guild_id"]), bot_id)
+                            if balance > 0:
+                                apply_debit(
+                                    conn, int(row["guild_id"]), bot_id,
+                                    balance, "mahjong_house_settle",
+                                    meta={"table_id": table_id},
+                                )
                         conn.execute(
                             "UPDATE mahjong_tables SET status = 'closed', "
                             "closed_reason = 'unloadable', deadline_at = NULL "
@@ -834,9 +1130,13 @@ class MahjongService:
         for table_id, deadline in resumed:
             # a deadline already past fires immediately (still via the loop)
             await self._arm_timer(table_id, deadline or time.time())
+            self._schedule_bot_pump(table_id)  # bots pick play back up (B4)
         return [t for t, _ in resumed]
 
     async def shutdown(self) -> None:
         for task in self._timers.values():
             task.cancel()
         self._timers.clear()
+        for task in self._bot_pumps.values():
+            task.cancel()
+        self._bot_pumps.clear()
