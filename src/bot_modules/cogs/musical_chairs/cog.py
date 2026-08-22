@@ -32,6 +32,16 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
     GAME_KEY = "musical_chairs"
     GAME_DISPLAY_NAME = "Musical Chairs"
 
+    HOW_TO_PLAY = (
+        "🎵 While the music plays, **do nothing** — pressing 🪑 Sit early puts "
+        "you out.\n"
+        "🪑 The moment the music stops the panel flips to **Sit!** — press it "
+        "as fast as you can.\n"
+        "❌ There's always one chair fewer than there are players, so whoever "
+        "misses out is eliminated each round.\n"
+        "🏆 Last player seated wins."
+    )
+
     def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
@@ -133,18 +143,54 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                 phase_duration=float(cfg["scramble_window"]),
                 last_action_at=now,
             )
-            game2 = await mcdb.get_game(self.db, game_id)
             guild = self.bot.get_guild(game.guild_id)
-            if guild and game2 and game2.message_id:
-                await self._edit_message_silent(
-                    game2.channel_id, game2.message_id,
-                    self.render_game_state(game2, guild),
-                    self.build_game_view(game_id),
-                )
+            if guild and not await self._repost_panel(game_id, guild):
+                game2 = await mcdb.get_game(self.db, game_id)
+                if game2 and game2.message_id:
+                    await self._edit_message_silent(
+                        game2.channel_id, game2.message_id,
+                        self.render_game_state(game2, guild),
+                        self.build_game_view(game_id),
+                    )
             task = asyncio.create_task(
                 self._run_scramble_timer(game_id, float(cfg["scramble_window"]))
             )
             self._timers[game_id] = task
+
+    async def _repost_panel(self, game_id: int, guild: discord.Guild) -> bool:
+        """Move the game panel back to the bottom of the channel.
+
+        The panel is edited in place for the whole game, so in a busy channel
+        it scrolls away and players cannot find the button at the one moment it
+        matters — three people spent the 2026-08-21 game night asking "where do
+        I click???". Discord has no reorder API, so the panel moves the only way
+        a panel can: post the new one, record its id, then delete the old.
+
+        Post-before-delete, and the delete is best-effort: if the bot has lost
+        Send Messages the old panel keeps working instead of being destroyed,
+        and a failed delete costs a duplicate rather than a dead game. Returns
+        False when the panel could not be moved (caller falls back to editing).
+        """
+        game = await mcdb.get_game(self.db, game_id)
+        if not game:
+            return False
+        channel = self.bot.get_channel(game.channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            return False
+        embed = self.render_game_state(game, guild)
+        view = self.build_game_view(game_id)
+        try:
+            new_msg = await channel.send(embed=embed, view=view)
+        except (discord.Forbidden, discord.HTTPException):
+            return False
+        old_message_id = game.message_id
+        await self._db_set_state(game_id, "ACTIVE", message_id=new_msg.id)
+        if old_message_id and old_message_id != new_msg.id:
+            try:
+                await channel.get_partial_message(old_message_id).delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+        return True
 
     async def _close_round_locked(self, game: MusicalChairsGame) -> bool:
         """Resolve a SCRAMBLE: seat the fastest, eliminate the rest. Returns True if the
@@ -169,6 +215,11 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                 seated="[]",
                 last_action_at=now,
             )
+            if guild and channel and eliminated:
+                out = ", ".join(self._name(guild, u) for u in eliminated)
+                await self._announce_to_channel(
+                    game.id, f"❌ **{out}** didn't find a chair."
+                )
             if winner is not None and loser is not None:
                 await self._post_group_result(game, winner, loser)
             return True
@@ -195,13 +246,11 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
 
         if guild and channel and eliminated:
             out = ", ".join(self._name(guild, u) for u in eliminated)
-            try:
-                await channel.send(  # type: ignore[union-attr]
-                    f"❌ **{out}** didn't find a chair. {len(survivors)} left. "
-                    f"🎵 the music starts again…"
-                )
-            except (discord.Forbidden, discord.HTTPException):
-                pass
+            await self._announce_to_channel(
+                game.id,
+                f"❌ **{out}** didn't find a chair. {len(survivors)} left. "
+                f"🎵 the music starts again…",
+            )
         game2 = await mcdb.get_game(self.db, game.id)
         if guild and game2 and game2.message_id:
             await self._resolve_accent(game.id, guild)
@@ -237,9 +286,14 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                 cfg = await mcdb.get_config(self.db, game.guild_id)
                 if cfg["false_start_elim"]:
                     await interaction.followup.send(
-                        "❌ You sat too early — you're out this round!", ephemeral=True
+                        "❌ You sat too early — the music was still playing, so "
+                        "you're out. Wait for **Sit!** next game.",
+                        ephemeral=True,
                     )
-                    await self._group_eliminate(game, uid, interaction=interaction)
+                    await self._group_eliminate(
+                        game, uid, interaction=interaction,
+                        reason="sat before the music stopped",
+                    )
                 else:
                     await interaction.followup.send(
                         "❌ Not yet — wait for **Sit!**", ephemeral=True
@@ -335,7 +389,10 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         if game.phase == "SCRAMBLE":
             embed = discord.Embed(
                 title="🪑 Sit!!! — Grab a Chair!",
-                description="The music stopped — **press SIT now!**",
+                description=(
+                    "The music stopped — **press 🪑 Sit now!**\n"
+                    f"Only **{chairs}** will get a seat; everyone slower is out."
+                ),
                 color=COLOR_RED,
             )
             embed.add_field(name="Chairs left", value=str(chairs), inline=True)
@@ -345,7 +402,11 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
             # into ``_accents``); fall back to the old COLOR_YELLOW if unresolved.
             embed = discord.Embed(
                 title=f"🎵 Musical Chairs — Round {game.round}",
-                description="🎶 …the music is playing… **don't sit yet** (sit early and you're out).",
+                description=(
+                    "🎶 …the music is playing… **don't sit yet** — press 🪑 Sit "
+                    "while the music is on and you're out.\n"
+                    "Wait for this panel to turn red and say **Sit!**"
+                ),
                 color=self._accents.get(game.id, COLOR_YELLOW),
             )
             embed.add_field(name="🪑 Chairs", value=str(chairs), inline=True)

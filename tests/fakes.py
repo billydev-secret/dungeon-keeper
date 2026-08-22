@@ -123,6 +123,47 @@ class FakeSendChannel:
         raise discord.NotFound(MagicMock(status=404), "no message")
 
 
+class FakeMessageableChannel(discord.abc.Messageable):
+    """Channel that actually passes ``isinstance(x, discord.abc.Messageable)``.
+
+    The duel base narrows on that before posting elimination call-outs and pot
+    results, so a duck-typed fake makes those posts vanish and the assertion
+    pass for the wrong reason. Records what was sent and what was deleted, and
+    hands out partial messages so a delete-and-repost can be checked.
+    """
+
+    def __init__(self, channel_id: int = 100) -> None:
+        self.id = channel_id
+        self.sent: list[dict] = []
+        self.deleted: list[int] = []
+        self._next_id = 7000
+
+    async def _get_channel(self):  # type: ignore[override]
+        return self
+
+    async def send(self, content=None, **kwargs) -> SimpleNamespace:
+        self._next_id += 1
+        self.sent.append({"content": content, **kwargs})
+        return SimpleNamespace(id=self._next_id)
+
+    async def fetch_message(self, message_id: int):  # type: ignore[override]
+        raise discord.NotFound(MagicMock(status=404), "no message")
+
+    def get_partial_message(self, message_id: int):
+        recorder = self
+
+        class _Partial:
+            async def delete(self) -> None:
+                recorder.deleted.append(message_id)
+
+        return _Partial()
+
+    @property
+    def texts(self) -> list[str]:
+        """Just the message bodies, for substring assertions."""
+        return [str(s.get("content") or "") for s in self.sent]
+
+
 class FakeEconGamesBot:
     """Bot fake for duel/economy payout tests: a real ``games_db``, a
     ``ctx.db_path`` the economy layer can open, and a guild whose members

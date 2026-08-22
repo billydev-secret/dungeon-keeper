@@ -85,6 +85,14 @@ class BaseGame(commands.Cog):
     GAME_KEY: str = ""
     GAME_DISPLAY_NAME: str = ""
 
+    #: One-paragraph rules blurb, rendered as a "How to play" field on the
+    #: lobby embed. Optional — a game that leaves it None renders the lobby
+    #: exactly as before. Exists because Musical Chairs players had no way to
+    #: learn the rules before the first round started (game night 2026-08-21):
+    #: three separate people sat during the music and were eliminated without
+    #: ever having been told not to.
+    HOW_TO_PLAY: str | None = None
+
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self._game_locks: dict[int, asyncio.Lock] = {}
@@ -612,6 +620,8 @@ class BaseGame(commands.Cog):
             description="Press **✋ Join** to get in. Host presses **▶️ Start** when ready.",
             color=color or discord.Color(COLOR_GOLD),
         )
+        if self.HOW_TO_PLAY:
+            embed.add_field(name="📖 How to play", value=self.HOW_TO_PLAY, inline=False)
         embed.add_field(
             name=f"👥 Players ({len(game.roster)}/{max_players})",
             value="\n".join(f"• {n}" for n in names) or "—",
@@ -1069,16 +1079,43 @@ class BaseGame(commands.Cog):
                 loser = game.elimination_order[-1] if game.elimination_order else pid
                 await self._post_group_result(game, pid, loser)
 
+    def _member_label(self, guild: discord.Guild | None, user_id: int) -> str:
+        """Bold display name when the member is cached, a mention otherwise."""
+        member = guild.get_member(user_id) if guild is not None else None
+        return f"**{member.display_name}**" if member else f"<@{user_id}>"
+
+    async def _announce_elimination(
+        self, game: Any, player_id: int, reason: str, remaining: int
+    ) -> None:
+        """Say publicly that a player is out, and why.
+
+        A player knocked out by their own press only ever saw an ephemeral, so
+        the room watched the survivor count jump with a single announcement
+        covering several exits and nobody knew who had gone or what they had
+        done wrong (game night, 2026-08-21). ``reason`` completes the sentence
+        "X <reason>" — e.g. "sat before the music stopped".
+        """
+        guild = self.bot.get_guild(game.guild_id)
+        who = self._member_label(guild, player_id)
+        left = "1 left!" if remaining == 1 else f"{remaining} left."
+        await self._announce_to_channel(game.id, f"❌ {who} {reason} — {left}")
+
     async def _group_eliminate(
         self,
         game: Any,
         player_id: int,
         *,
         interaction: discord.Interaction | None = None,
+        reason: str | None = None,
     ) -> None:
         """Remove player_id from `alive`, append to `elimination_order`, and resolve
         the game if only one player remains (loser = last eliminated). Caller holds
-        the per-game lock."""
+        the per-game lock.
+
+        ``reason`` opts the caller into a public call-out (see
+        :meth:`_announce_elimination`); it posts before any terminal resolution
+        so the last exit is explained too, not swallowed by the result embed.
+        """
         now = time.time()
         new_alive = [u for u in game.alive if u != player_id]
         new_elim = list(game.elimination_order) + [player_id]
@@ -1090,6 +1127,8 @@ class BaseGame(commands.Cog):
             elimination_order=json.dumps(new_elim),
             last_action_at=now,
         )
+        if reason:
+            await self._announce_elimination(game, player_id, reason, len(new_alive))
         if len(new_alive) <= 1:
             winner = new_alive[0] if new_alive else player_id
             await self._post_group_result(game, winner, player_id)
@@ -1338,8 +1377,13 @@ class BaseGame(commands.Cog):
 
         return await asyncio.to_thread(_work)
 
-    async def _announce_wager_result(self, game_id: int, text: str) -> None:
-        """Post the pot outcome to the game's channel (best-effort)."""
+    async def _announce_to_channel(self, game_id: int, text: str) -> None:
+        """Post a line to the game's own channel (best-effort, never raises).
+
+        Shared by the pot outcome and the per-elimination call-outs: both are
+        commentary the whole room needs to see, and neither is worth failing a
+        game over if the bot has lost Send Messages in the meantime.
+        """
         try:
             game = await self._db_get_game(game_id)
             if game is None or not getattr(game, "channel_id", None):
@@ -1350,6 +1394,10 @@ class BaseGame(commands.Cog):
             await channel.send(text)
         except (discord.Forbidden, discord.HTTPException, AttributeError):
             pass
+
+    async def _announce_wager_result(self, game_id: int, text: str) -> None:
+        """Post the pot outcome to the game's channel (best-effort)."""
+        await self._announce_to_channel(game_id, text)
 
     def _game_participants(self, game: Any) -> list[int]:
         """Everyone who played: the roster for group games (bailed/eliminated

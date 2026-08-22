@@ -536,6 +536,20 @@ The unseated player(s) are out. Remove a chair, repeat, until one remains.
 **Server-authoritative:** SIT is always clickable (the false-start trap); the first `chairs`
 valid scramble presses seat; one press per player per round; a lock guards the last-chair race.
 
+**Panel placement:** the game panel is edited in place during `MUSIC`, but every
+`MUSIC → SCRAMBLE` flip **re-posts it** (`_repost_panel`: send the new one, record its
+id, delete the old) so the SIT button is at the bottom of the channel at the moment
+it goes hot. Post-before-delete — a send failure keeps the existing panel and falls
+back to an in-place edit.
+
+**Elimination call-outs:** every exit is announced publicly with its reason — timeout
+("didn't find a chair", including the final round) and false start ("sat before the
+music stopped", via `BaseGame._group_eliminate(reason=…)`). Nothing is ephemeral-only.
+
+**Rules discoverability:** `HOW_TO_PLAY` renders as a "📖 How to play" field on the
+lobby embed (a `BaseGame` hook any group game can set), and both round embeds spell
+out the wait-then-press rule.
+
 **Config knobs:** `min_music` (5.0), `max_music` (15.0), `scramble_window` (8.0),
 `false_start_elim` (1), `min_players` (3), `max_players` (10) + shared.
 
