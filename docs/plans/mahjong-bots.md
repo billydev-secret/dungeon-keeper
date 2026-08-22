@@ -1,8 +1,11 @@
 # Meadow Mahjong — AI seats (addon plan)
 
-**Status: planned 2026-08-22** — not started. Second addon to the shipped v1
-([meadow-mahjong.md](meadow-mahjong.md)); builds directly on the assistance
-engine ([mahjong-assist.md](mahjong-assist.md)), which is the playing brain.
+**Status: stages 1–3 built 2026-08-22** (brain 646fc2f5, driver + money
+d98f0390, surface with this commit); stage 4 is the gate + review + QA.
+Second addon to the shipped v1 ([meadow-mahjong.md](meadow-mahjong.md));
+builds directly on the assistance engine
+([mahjong-assist.md](mahjong-assist.md)), which is the playing brain.
+Shares the assist addon's merge gate: base-game live QA first.
 
 Bot-controlled seats fill a table so one member can play solo (testing, or
 just practice) and so a short-handed group can still seat a 4-player game.

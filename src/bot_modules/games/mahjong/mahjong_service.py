@@ -929,6 +929,7 @@ class MahjongService:
                     "sticky_message_id": row["sticky_message_id"],
                     "deadline_at": row["deadline_at"],
                     "card_row_id": int(row["card_row_id"]),
+                    "practice": bool(row["practice"]),
                 }
         return await asyncio.to_thread(_q)
 

@@ -135,3 +135,44 @@ def test_assist_for_skips_the_service_outside_decision_phases():
     state.phase = Phase.SETTLE
     assert asyncio.run(cog._assist_for(1, state, 0)) is None
     assert svc.calls == 0  # the gate fired before any service work
+
+
+def test_create_flow_offers_practice_when_the_dial_is_on():
+    cog = _cog()
+    view = mj_views.CreateTableView(cog, (1, 2), lambda c, s: 0, practice_open=True)
+    labels = [b.label for b in view.children if isinstance(b, discord.ui.Button)]
+    assert "Practice Duel" in labels and "Practice Table" in labels
+    plain = mj_views.CreateTableView(cog, (1, 2), lambda c, s: 0)
+    labels = [b.label for b in plain.children if isinstance(b, discord.ui.Button)]
+    assert "Practice Duel" not in labels
+
+
+def test_lobby_offers_add_bot_only_when_asked():
+    cog = _cog()
+    with_bot = mj_views.TableView(cog, 42, Phase.LOBBY, add_bot=True)
+    ids = [b.custom_id for b in with_bot.children if isinstance(b, discord.ui.Button)]
+    assert "mmj:42:add_bot" in ids
+    without = mj_views.TableView(cog, 42, Phase.LOBBY)
+    ids = [b.custom_id for b in without.children if isinstance(b, discord.ui.Button)]
+    assert "mmj:42:add_bot" not in ids
+    assert "add_bot" in mj_views.TableView.ACTIONS  # resume registration
+
+
+def test_names_render_bots_as_flora():
+    from bot_modules.games.mahjong.bot_logic import bot_member_id
+    from bot_modules.games.mahjong.game_logic import GameState, SeatState, TableConfig
+
+    cog = _cog()
+
+    class _Guild:
+        def get_member(self, member_id):  # a bot id must never reach here
+            assert member_id > 0
+            return None
+
+    state = GameState(
+        config=TableConfig(seat_count=2), host=100,
+        seats=[SeatState(member_id=100),
+               SeatState(member_id=bot_member_id(7, 1))],
+    )
+    names = cog._names(_Guild(), state)
+    assert names[bot_member_id(7, 1)].startswith("🌱 ")

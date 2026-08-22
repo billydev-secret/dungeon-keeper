@@ -39,6 +39,17 @@ body below. 1–2 predate any code (2026-08-21); 3 records the assist addon.
    compatible with another seat's visible exposures still demands — silence
    over harm. Decisions, metric, and rails: `plans/mahjong-assist.md`.
 
+4. **AI seats (added 2026-08-22, built as an addon).** House bots — per-table
+   negative synthetic ids, flora names with a 🌱 prefix — fill tables in two
+   modes: **practice** (one human + bots, stake-free, nothing recorded but the
+   table row; `create_table(practice=True)`, dial `mahjong_practice_bots`,
+   default on) and **fill** (host seats a house-staked bot on a short real
+   table; the bot's escrow is ledgered house money swept back at settle; dial
+   `mahjong_fill_bots`, default off until the brain proves itself). The brain
+   is the assistance engine; decisions per phase live in `bot_logic.py`.
+   Leavers still fold fallow — they never become bots. Decisions and stages:
+   `plans/mahjong-bots.md`.
+
 ---
 
 **Handoff target:** Claude Code, working in the Dungeon Keeper repo.

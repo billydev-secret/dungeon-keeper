@@ -93,18 +93,22 @@ def build_table_panel(
     escrow: int,
     accent: discord.Color | None = None,
     deadline_at: float | None = None,
+    *,
+    practice: bool = False,
 ) -> discord.Embed:
     accent = accent or DEFAULT_ACCENT_COLOR
     mode = MODE_NAMES.get(state.seat_count, str(state.seat_count))
     e = discord.Embed(
-        title=f"Mahjong Table — {mode}",
+        title=(f"Practice Table — {mode}" if practice
+               else f"Mahjong Table — {mode}"),
         color=accent,
     )
     clock = _clock(deadline_at)
 
     if state.phase is Phase.LOBBY:
         rows = [
-            f"✅ **{names.get(s.member_id, s.member_id)}** — escrow locked"
+            f"✅ **{names.get(s.member_id, s.member_id)}**"
+            + ("" if practice else " — escrow locked")
             for s in state.seats
         ]
         open_seats = state.seat_count - len(state.seats)
@@ -112,7 +116,8 @@ def build_table_panel(
         e.description = "\n".join(rows)
         e.add_field(
             name="Stake",
-            value=f"{stake} coins per point ({escrow} escrow per seat)",
+            value=("Practice — no stakes, nothing recorded" if practice
+                   else f"{stake} coins per point ({escrow} escrow per seat)"),
             inline=False,
         )
         e.add_field(

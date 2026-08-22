@@ -31,10 +31,10 @@ class TableView(discord.ui.View):
     """The persistent view on the sticky table message, built per phase."""
 
     ACTIONS = ("join", "cancel", "rack", "vote_y", "vote_n", "claim_mj",
-               "claim_call", "claim_pass", "rematch", "close")
+               "claim_call", "claim_pass", "rematch", "close", "add_bot")
 
     def __init__(self, cog: "MahjongCog", table_id: int, phase: Phase | None = None,
-                 *, register_all: bool = False):
+                 *, register_all: bool = False, add_bot: bool = False):
         super().__init__(timeout=None)
         self.cog = cog
         self.table_id = table_id
@@ -57,6 +57,8 @@ class TableView(discord.ui.View):
             return
         if phase is Phase.LOBBY:
             button("Join", "join", discord.ButtonStyle.primary)
+            if add_bot:  # host seats a house bot (bots plan B6; fill dial)
+                button("Add Bot", "add_bot", emoji="🌱")
             button("Cancel", "cancel", discord.ButtonStyle.danger)
         elif phase is Phase.CHARLESTON_VOTE:
             button("Run It Again", "vote_y", discord.ButtonStyle.success)
@@ -332,10 +334,12 @@ class MySettingsView(discord.ui.View):
 
 
 class CreateTableView(discord.ui.View):
-    """Size picker → stake select with escrow labels → open."""
+    """Size picker → stake select with escrow labels → open. Practice rows
+    (bots plan B5) skip the stake select entirely — there is none."""
 
     def __init__(self, cog: "MahjongCog", stakes: tuple[int, ...],
-                 escrow_for, seat_count: int | None = None):
+                 escrow_for, seat_count: int | None = None,
+                 *, practice_open: bool = False):
         super().__init__(timeout=300)
         self.cog = cog
         if seat_count is None:
@@ -350,6 +354,17 @@ class CreateTableView(discord.ui.View):
                     )
                 b.callback = cb
                 self.add_item(b)
+            if practice_open:
+                for label, count in (("Practice Duel", 2), ("Practice Table", 4)):
+                    b = discord.ui.Button(
+                        label=label, style=discord.ButtonStyle.secondary,
+                        emoji="🌱",
+                    )
+
+                    async def cb(interaction: discord.Interaction, count=count):
+                        await cog.handle_create_practice(interaction, count)
+                    b.callback = cb
+                    self.add_item(b)
             return
         options = [
             discord.SelectOption(

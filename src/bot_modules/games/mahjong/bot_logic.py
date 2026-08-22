@@ -53,6 +53,15 @@ def bot_member_id(table_id: int, seat_index: int) -> int:
     return -(table_id * 10 + seat_index)
 
 
+_BOT_NAMES = ("Fern", "Bramble", "Wisteria", "Clover")
+
+
+def bot_name(member_id: int) -> str:
+    """Deterministic flora display name for a bot seat (plan B11) — the 🌱
+    prefix is what makes a bot unmistakable in every embed."""
+    return f"🌱 {_BOT_NAMES[(-member_id) % 10 % len(_BOT_NAMES)]}"
+
+
 @dataclass(frozen=True)
 class BotAction:
     """One action for ``MahjongService.act`` — name plus payload, the
