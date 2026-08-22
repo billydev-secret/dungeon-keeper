@@ -14,7 +14,7 @@ import time
 import discord
 
 from bot_modules.games.mahjong.card_logic import Card
-from bot_modules.games.mahjong.game_logic import GameState, Outcome, Phase
+from bot_modules.games.mahjong.game_logic import AssistReadout, GameState, Outcome, Phase
 from bot_modules.games.mahjong.tiles import Tile, sort_rack
 from bot_modules.games.mahjong.tile_render import back_str, rack_str, tile_str
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR
@@ -241,9 +241,46 @@ def build_table_panel(
     return _footer(e, "Closed")
 
 
+def _assist_field(assist: AssistReadout) -> str:
+    """The Closest Hands block (plans/mahjong-assist.md stage 3). One
+    renderer for every panel that shows a rack, so the modes can't drift."""
+    if not assist.prospects:
+        return ("No line on the card is still reachable from your tiles — "
+                "play for the wall.")
+    lines: list[str] = []
+    for rank, p in enumerate(assist.prospects, start=1):
+        away = "ready!" if p.distance == 0 else (
+            "1 tile away" if p.distance == 1 else f"{p.distance} tiles away")
+        lines.append(
+            f"**{rank}. {p.hand.name}** — {away} · {p.hand.value} pts"
+        )
+        if assist.mode in ("gap", "coach") and p.needed:
+            need = " ".join(
+                tile_str(tile) if n == 1 else f"{tile_str(tile)}×{n}"
+                for tile, n in p.needed
+            )
+            lines.append(f"    need {need}")
+    if assist.live_count > len(assist.prospects):
+        lines.append(f"*…of {assist.live_count} lines still live*")
+    if assist.mode == "coach":
+        top = assist.prospects[0]
+        if top.dead_weight:
+            dead = " ".join(
+                tile_str(tile) if n == 1 else f"{tile_str(tile)}×{n}"
+                for tile, n in top.dead_weight
+            )
+            lines.append(f"Dead weight: {dead}")
+        if assist.suggestion is not None:
+            lines.append(f"Consider discarding {tile_str(assist.suggestion)}")
+        elif top.dead_weight:
+            lines.append("*No clearly safe discard — your call.*")
+    return "\n".join(lines)
+
+
 def build_rack_panel(
     state: GameState, seat: int, accent: discord.Color | None = None,
     deadline_at: float | None = None, *, context: str | None = None,
+    assist: AssistReadout | None = None,
 ) -> discord.Embed:
     accent = accent or DEFAULT_ACCENT_COLOR
     s = state.seats[seat]
@@ -273,6 +310,9 @@ def build_rack_panel(
     )
     if turn_note:
         e.add_field(name="Now", value=turn_note + _clock(deadline_at),
+                    inline=False)
+    if assist is not None:
+        e.add_field(name="Closest Hands", value=_assist_field(assist)[:1024],
                     inline=False)
     return _footer(e, f"Hand {state.hand_no}")
 

@@ -1,7 +1,9 @@
 # Meadow Mahjong — assistance modes (addon plan)
 
-**Status: planned 2026-08-22** — not started. Addon to the shipped v1
-([meadow-mahjong.md](meadow-mahjong.md), complete 2026-08-21).
+**Status: built 2026-08-22** — stages 1–3 landed (engine 43e7040b, prefs
+d431fe2b, surface with this commit); stage 4 is the gate + QA card. Addon to
+the shipped v1 ([meadow-mahjong.md](meadow-mahjong.md), complete 2026-08-21).
+Still merge-gated on the base game passing live QA.
 
 **Spec:** [../meadow_mahjong_spec.md](../meadow_mahjong_spec.md) — v1 is silent
 on hints of any kind, so this breaks no existing decision. Stage 3 adds a §
@@ -35,6 +37,7 @@ each line on the active card. Four levels, each player picks their own.
 | A7 | No caching | Measured 4.3 ms for a full 22-hand scan of a 13-tile rack (0.45 ms for the existing reachability pass). Far inside any interaction budget, including the 6–8 s claim window. A cache keyed on rack state would be more code and more staleness risk than it saves. |
 | A8 | Default for a member who has never chosen: `gap`, overridable by a guild dial | Assistance-by-default matches the user's stated instinct ("everyone, always on"); the dial exists so a house can make pure play the norm without a code change. One select on the existing dashboard panel, enforced — not a dead toggle. |
 | A9 | New table `mahjong_prefs`, PK `(guild_id, user_id)` | The house pattern is a small per-feature prefs table (`econ_notify_prefs` is three columns, same key shape); DK has no member-settings hub to hook into. Purged on erasure — a preference tied to a member id is personal data with no Art 17(3) ground to keep. |
+| A11 | `needed` may honestly name a tile with zero unseen copies | Found by stage-1 testing: a 3+ gap stays fillable by *drawn jokers* after the last natural is seen, so the line is live and the distance real — hiding the tile would misstate the gap, and pinning this beat guessing. Named test: `test_a_drawn_joker_keeps_a_binding_alive_at_zero_copies`. |
 | A10 | The member surface is a **My Settings** button on the existing `/mahjong` panel, opening an ephemeral menu; assistance is its first tenant | `MemberPanelView` already carries Create Table / Card Viewer / My Stats. A single-purpose Assistance button works for one setting and sprawls at the second — a container costs nothing now and means no future per-player preference has to touch the play panel again (CLAUDE.md: collapse controls; one ephemeral panel over a sprawl). Scoped to mahjong, not a bot-wide member hub — DK has none, and inventing one is not this addon's job. A personal play setting is member self-service and so belongs in Discord, while the *house default* of A8 is admin config and belongs on the dashboard. |
 
 ---
@@ -44,6 +47,9 @@ each line on the active card. Four levels, each player picks their own.
 `closest_lines(concealed, exposures, card, seen_elsewhere, limit=3)` in
 `match_logic.py`, returning per line: the `Hand`, the distance, the still-needed
 tiles, and the held tiles the line does not consume. Pure; no Discord, no db.
+`suggest_discard` and `dangerous_tiles` land here too (pure engine — stage 3
+stays glue), plus a 20-seed invariant sweep pinning closest_lines' line set to
+exactly reachable_lines' and distance 0 to exactly match_hand's verdict.
 
 Per binding and exposure assignment, demand is aggregated **by tile** rather
 than by group — two groups in one line can resolve to the same natural, and a

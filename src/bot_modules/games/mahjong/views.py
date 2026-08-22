@@ -288,6 +288,7 @@ class MemberPanelView(discord.ui.View):
             ("Create Table", discord.ButtonStyle.primary, cog.handle_create_start),
             ("Card Viewer", discord.ButtonStyle.secondary, cog.handle_card_viewer),
             ("My Stats", discord.ButtonStyle.secondary, cog.handle_my_stats),
+            ("My Settings", discord.ButtonStyle.secondary, cog.handle_my_settings),
         ):
             b = discord.ui.Button(label=label, style=style)
 
@@ -295,6 +296,39 @@ class MemberPanelView(discord.ui.View):
                 await handler(interaction)
             b.callback = cb
             self.add_item(b)
+
+
+ASSIST_CHOICES = (
+    ("off", "Off", "Pure card-reading — no readout."),
+    ("target", "Target", "Closest hands and how far away each is."),
+    ("gap", "Target + gap", "…plus the tiles you still need."),
+    ("coach", "Coach", "…plus dead weight and a suggested discard."),
+)
+
+
+class MySettingsView(discord.ui.View):
+    """The /mahjong My Settings menu (plans/mahjong-assist.md A10) — an
+    ephemeral container for per-player preferences; assistance is its first
+    tenant. One select today; future settings join this view, not the panel."""
+
+    def __init__(self, cog: "MahjongCog", current: str):
+        super().__init__(timeout=600)
+        select = discord.ui.Select(
+            placeholder="Assistance level",
+            min_values=1, max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=label, value=value, description=desc,
+                    default=value == current,
+                )
+                for value, label, desc in ASSIST_CHOICES
+            ],
+        )
+
+        async def on_pick(interaction: discord.Interaction):
+            await cog.handle_assist_pick(interaction, select.values[0])
+        select.callback = on_pick
+        self.add_item(select)
 
 
 class CreateTableView(discord.ui.View):

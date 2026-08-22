@@ -172,3 +172,86 @@ def test_member_panel_variants():
     assert "First Light" in (e.description or "") and "250" in (e.description or "")
     e = mj_embeds.build_member_panel(None, (1,), 0, ACCENT)
     assert "No Meadow Card" in (e.description or "")
+
+
+# ── Assist block on the rack panel (plans/mahjong-assist.md stage 3) ─────────
+
+
+def _assist_state():
+    from tests.test_mahjong_game_logic import play_state
+    return play_state(2, {0: "flower*4 2d*4 6b*2 9d wn", 1: "9c*13"})
+
+
+def _readout(mode: str):
+    state = _assist_state()
+    return state, G.assist_readout(state, 0, CARD, mode)
+
+
+def _rack_field(embed, name):
+    return next((f.value for f in embed.fields if f.name == name), None)
+
+
+def test_rack_panel_without_assist_has_no_block():
+    state = _assist_state()
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=None)
+    assert _rack_field(embed, "Closest Hands") is None
+
+
+def test_assist_target_names_lines_and_distance_only():
+    state, r = _readout("target")
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    top = r.prospects[0]
+    assert top.hand.name in block
+    assert "away" in block
+    assert "need" not in block
+    assert "discard" not in block.lower()
+
+
+def test_assist_gap_adds_the_needed_tiles():
+    state, r = _readout("gap")
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None and "need" in block
+    assert "discard" not in block.lower()
+
+
+def test_assist_coach_adds_dead_weight_and_suggestion():
+    state, r = _readout("coach")
+    assert r is not None and r.suggestion is not None
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    assert "Dead weight" in block
+    assert "Consider discarding" in block
+
+
+def test_assist_coach_silence_is_explicit():
+    # Rail-silenced suggestion still shows dead weight, with the your-call note.
+    state, r = _readout("coach")
+    silenced = G.AssistReadout(
+        mode="coach", prospects=r.prospects, live_count=r.live_count,
+        suggestion=None,
+    )
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=silenced)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    assert "No clearly safe discard" in block
+    assert "Consider discarding" not in block
+
+
+def test_assist_all_dead_says_play_for_the_wall():
+    state = _assist_state()
+    empty = G.AssistReadout(mode="gap", prospects=(), live_count=0, suggestion=None)
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=empty)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None and "play for the wall" in block
+
+
+def test_assist_block_fits_a_discord_field():
+    for mode in ("target", "gap", "coach"):
+        state, r = _readout(mode)
+        embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+        block = _rack_field(embed, "Closest Hands")
+        assert block is not None and len(block) <= 1024

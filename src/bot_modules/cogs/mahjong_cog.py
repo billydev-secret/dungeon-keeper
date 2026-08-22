@@ -36,8 +36,10 @@ from bot_modules.games.mahjong import match_logic as mj_match
 from bot_modules.games.mahjong import views as mj_views
 from bot_modules.games.mahjong.game_logic import (
     ActionRejected,
+    AssistReadout,
     GameState,
     Phase,
+    assist_readout,
 )
 from bot_modules.games.mahjong.mahjong_service import (
     STALE_TABLE,
@@ -410,6 +412,30 @@ class MahjongCog(commands.Cog):
             embed=mj_embeds.build_my_stats(rows, accent), ephemeral=True
         )
 
+    async def handle_my_settings(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        assert guild is not None
+        current = await self.service.member_assist_mode(guild.id, interaction.user.id)
+        await interaction.response.send_message(
+            "**My Settings** — how much help the table gives you. Your pick "
+            "applies to every game you play here.",
+            view=mj_views.MySettingsView(self, current), ephemeral=True,
+        )
+
+    async def handle_assist_pick(
+        self, interaction: discord.Interaction, mode: str
+    ) -> None:
+        guild = interaction.guild
+        assert guild is not None
+        await self.service.choose_assist_mode(guild.id, interaction.user.id, mode)
+        label = next(
+            (lbl for v, lbl, _ in mj_views.ASSIST_CHOICES if v == mode), mode
+        )
+        await interaction.response.edit_message(
+            content=f"**My Settings** — assistance set to **{label}**.",
+            view=mj_views.MySettingsView(self, mode),
+        )
+
     # ── Table-button dispatch ───────────────────────────────────────────
 
     async def handle_table_button(
@@ -558,10 +584,29 @@ class MahjongCog(commands.Cog):
         embed = mj_embeds.build_rack_panel(
             state, seat, accent, meta["deadline_at"] if meta else None,
             context=self._rack_context(state, seat, names),
+            assist=await self._assist_for(table_id, state, seat),
         )
         await self._reply_embed(
             interaction, embed, self._rack_view(state, seat, table_id, names)
         )
+
+    async def _assist_for(
+        self, table_id: int, state: GameState, seat: int
+    ) -> AssistReadout | None:
+        """The seat's readout for a rack render, or None (mode off, table
+        gone, or no decision pending) — never an exception: assistance may
+        not break the panel it decorates."""
+        try:
+            got = await self.service.assist_context(
+                table_id, state.seats[seat].member_id
+            )
+            if got is None:
+                return None
+            card, mode = got
+            return assist_readout(state, seat, card, mode)
+        except Exception:
+            log.exception("assist readout failed for table %d", table_id)
+            return None
 
     def _rack_context(self, state: GameState, seat: int, names: dict[int, str]) -> str | None:
         if state.phase is Phase.CHARLESTON:
@@ -672,6 +717,7 @@ class MahjongCog(commands.Cog):
         embed = mj_embeds.build_rack_panel(
             state, seat, accent, meta["deadline_at"] if meta else None,
             context="Joker's yours — now discard.",
+            assist=await self._assist_for(table_id, state, seat),
         )
         await self._reply_embed(
             interaction, embed, self._rack_view(state, seat, table_id)

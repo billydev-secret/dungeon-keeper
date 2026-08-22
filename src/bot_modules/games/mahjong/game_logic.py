@@ -42,9 +42,13 @@ from bot_modules.games.mahjong.card_logic import Card, Hand
 from bot_modules.games.mahjong.match_logic import (
     Exposure,
     Match,
+    Prospect,
     best_match,
+    closest_lines,
+    dangerous_tiles,
     fallow_base_value,
     match_hand,
+    suggest_discard,
 )
 from bot_modules.games.mahjong.tiles import Tile
 
@@ -1079,6 +1083,87 @@ def _settle_wall_game(state: GameState) -> list[Event]:
     return [("wall_game", {}), ("hand_settled", {"kind": "wall_game"})]
 
 
+def seen_elsewhere(state: GameState, seat: int) -> Counter[Tile]:
+    """Every tile visible outside ``seat``'s own hand: the discard pile plus
+    other seats' exposures (an exposure's joker counts as a joker there, not
+    as its impersonated natural). Feeds the reachability pass and the
+    assistance readout with one definition of "seen"."""
+    seen: Counter[Tile] = Counter()
+    for _, tile in state.discards:
+        seen[tile] += 1
+    for i, s in enumerate(state.seats):
+        if i == seat:
+            continue
+        for e in s.exposures:
+            seen[e.natural] += e.count - e.jokers
+            seen[Tile.JOKER] += e.jokers
+    return seen
+
+
+@dataclass(frozen=True)
+class AssistReadout:
+    """What one seat's assistance level shows right now
+    (plans/mahjong-assist.md stage 3; modes per ASSIST_MODES).
+
+    ``prospects`` is display-capped at three; ``live_count`` is how many
+    lines survived in total, so the embed can say "of N". ``suggestion`` is
+    set only in coach mode — None there means either nothing is dead weight
+    or every candidate would feed a visible threat (A6), and the embed says
+    so rather than guessing.
+    """
+
+    mode: str
+    prospects: tuple[Prospect, ...]
+    live_count: int
+    suggestion: Tile | None
+
+
+#: Phases where a seat is (or is about to be) choosing tiles — the readout
+#: renders only here. LOBBY has no racks; SETTLE/CLOSED have no decisions.
+_ASSIST_PHASES = frozenset({
+    Phase.CHARLESTON, Phase.CHARLESTON_VOTE, Phase.COURTESY_PROPOSE,
+    Phase.COURTESY_PICK, Phase.AWAIT_DISCARD, Phase.CLAIM_WINDOW,
+})
+
+
+def assist_readout(
+    state: GameState, seat: int, card: Card, mode: str
+) -> AssistReadout | None:
+    """The seat's readout, or None when there is nothing honest to show:
+    mode off, no rack yet, a fallow seat (no decisions left), or a phase
+    with no tile choice in it. Pure — the cog passes it to the embed."""
+    seat_state = state.seats[seat]
+    if (
+        mode not in ("target", "gap", "coach")
+        or state.phase not in _ASSIST_PHASES
+        or seat_state.fallow
+        or not seat_state.rack
+    ):
+        return None
+    exposures = [e.as_match() for e in seat_state.exposures]
+    prospects = closest_lines(
+        list(seat_state.rack), exposures, card,
+        seen_elsewhere(state, seat), limit=None,
+    )
+    suggestion: Tile | None = None
+    if mode == "coach" and prospects:
+        danger = dangerous_tiles(
+            card,
+            [
+                [e.as_match() for e in s.exposures]
+                for i, s in enumerate(state.seats)
+                if i != seat
+            ],
+        )
+        suggestion = suggest_discard(list(seat_state.rack), prospects, danger)
+    return AssistReadout(
+        mode=mode,
+        prospects=tuple(prospects[:3]),
+        live_count=len(prospects),
+        suggestion=suggestion,
+    )
+
+
 def _settle_fallow_end(state: GameState, card: Card) -> list[Event]:
     """One live seat remains (always in Duel; D10 generalizes to 4-seat):
     the survivor collects their lowest-value live line's base payout from
@@ -1088,15 +1173,7 @@ def _settle_fallow_end(state: GameState, card: Card) -> list[Event]:
     survivor = live[0]
     seat_state = state.seats[survivor]
 
-    seen: Counter[Tile] = Counter()
-    for _, tile in state.discards:
-        seen[tile] += 1
-    for i, s in enumerate(state.seats):
-        if i == survivor:
-            continue
-        for e in s.exposures:
-            seen[e.natural] += e.count - e.jokers
-            seen[Tile.JOKER] += e.jokers
+    seen = seen_elsewhere(state, survivor)
 
     base = fallow_base_value(
         list(seat_state.rack),

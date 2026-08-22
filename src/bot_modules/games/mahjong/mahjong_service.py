@@ -749,6 +749,40 @@ class MahjongService:
                 }
         return await asyncio.to_thread(_q)
 
+    async def assist_context(
+        self, table_id: int, member_id: int
+    ) -> tuple[Card, str] | None:
+        """The table's pinned card and this member's assistance level, in one
+        round-trip — what a rack render needs to build its readout. None when
+        the table is gone (the render simply carries no readout)."""
+        def _q():
+            with open_db(self.db_path) as conn:
+                row = self._table_row_opt(conn, table_id)
+                if row is None:
+                    return None
+                guild_id = int(row["guild_id"])
+                settings = load_settings(conn, guild_id)
+                mode = get_assist_mode(conn, guild_id, member_id, settings)
+                if mode == "off":
+                    return None  # don't parse a card nobody will read
+                return self._card_for(conn, row), mode
+        return await asyncio.to_thread(_q)
+
+    async def member_assist_mode(self, guild_id: int, member_id: int) -> str:
+        def _q():
+            with open_db(self.db_path) as conn:
+                settings = load_settings(conn, guild_id)
+                return get_assist_mode(conn, guild_id, member_id, settings)
+        return await asyncio.to_thread(_q)
+
+    async def choose_assist_mode(
+        self, guild_id: int, member_id: int, mode: str
+    ) -> None:
+        def _q():
+            with open_db(self.db_path) as conn:
+                set_assist_mode(conn, guild_id, member_id, mode)
+        return await asyncio.to_thread(_q)
+
     async def set_sticky_message(self, table_id: int, message_id: int | None) -> None:
         def _q():
             with open_db(self.db_path) as conn:

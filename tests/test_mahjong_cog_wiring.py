@@ -91,3 +91,21 @@ def test_private_events_map_to_member_facing_copy():
     assert note is not None and "Pass" in note
     assert cog._private_note(1, [("claim_recorded", {"seat": 0})]) is None
     assert cog._private_note(1, []) is None
+
+
+def test_member_panel_carries_my_settings():
+    # A10: the settings container rides the play panel; assistance is its
+    # first tenant. One wiring assertion — behavior is service/logic-tested.
+    cog = _cog()
+    view = mj_views.MemberPanelView(cog)
+    labels = [c.label for c in view.children if isinstance(c, discord.ui.Button)]
+    assert "My Settings" in labels
+
+
+def test_my_settings_select_offers_every_mode_and_marks_current():
+    from bot_modules.games.mahjong.mahjong_service import ASSIST_MODES
+
+    view = mj_views.MySettingsView(_cog(), current="coach")
+    select = next(c for c in view.children if isinstance(c, discord.ui.Select))
+    assert [o.value for o in select.options] == list(ASSIST_MODES)
+    assert [o.value for o in select.options if o.default] == ["coach"]

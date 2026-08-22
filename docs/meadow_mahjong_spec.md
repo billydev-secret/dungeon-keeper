@@ -6,8 +6,8 @@
 
 ## Amendments since v1.0
 
-Two points were resolved with the spec author on 2026-08-21, before any code was
-written. They override the body below.
+Points resolved with the spec author after v1.0 was frozen; they override the
+body below. 1–2 predate any code (2026-08-21); 3 records the assist addon.
 
 1. **`hot_wall` is dropped from v1.** §1 and §8 list it as a dashboard lever but
    the spec never defines what it does, and "Duel wall trim" already owns the
@@ -26,6 +26,18 @@ written. They override the body below.
    reachable, so the fallow payout usually lands on the card's cheapest line; it
    rises as the discard pile kills off cheap lines and as exposures lock a player
    in.
+
+3. **Assistance modes (added 2026-08-22, built as an addon).** Four per-player
+   levels — `off`, `target` (closest lines + distance), `gap` (…+ the tiles
+   still needed), `coach` (…+ dead weight and a suggested discard) — shown on
+   every rack render while the seat has a tile decision. Each member picks
+   their own from the `/mahjong` **My Settings** menu, stored per guild
+   (`mahjong_prefs`, migration 176); a member who never chose gets the guild
+   default (dashboard dial `mahjong_assist_default`, shipped default `gap`).
+   Distance ranks; reachability only excludes (dead lines never show).
+   Coach never suggests a joker and never suggests a tile that a line
+   compatible with another seat's visible exposures still demands — silence
+   over harm. Decisions, metric, and rails: `plans/mahjong-assist.md`.
 
 ---
 

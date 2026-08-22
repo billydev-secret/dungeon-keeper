@@ -1544,3 +1544,92 @@ def test_force_fallow_duel_settles_immediately():
     state, ev = G.force_fallow(state, 1, CARD, rng())
     out = state.outcome
     assert out is not None and out.kind == "fallow_end" and out.winner == 0
+
+
+# ── Assistance readout (plans/mahjong-assist.md stage 3) ─────────────────────
+
+
+def test_assist_readout_gates():
+    state = play_state(2, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*13"})
+    # a live mode in a decision phase renders
+    r = G.assist_readout(state, 0, CARD, "target")
+    assert r is not None and r.mode == "target"
+    # off renders nothing, as does an unknown mode
+    assert G.assist_readout(state, 0, CARD, "off") is None
+    assert G.assist_readout(state, 0, CARD, "banana") is None
+    # a fallow seat has no decisions left
+    state.seats[0].fallow = True
+    assert G.assist_readout(state, 0, CARD, "target") is None
+    state.seats[0].fallow = False
+    # settle/lobby phases have no tile choice in them
+    state.phase = Phase.SETTLE
+    assert G.assist_readout(state, 0, CARD, "target") is None
+    state.phase = Phase.LOBBY
+    state.seats[0].rack = []
+    assert G.assist_readout(state, 0, CARD, "target") is None
+
+
+def test_assist_readout_caps_at_three_but_counts_all():
+    state = play_state(2, {0: "flower*2 1d*2 9d 2b*3 wn*2 dr 5c*2", 1: "9c*13"})
+    r = G.assist_readout(state, 0, CARD, "gap")
+    assert r is not None
+    assert len(r.prospects) <= 3
+    assert r.live_count >= len(r.prospects)
+    # ranked: distances never decrease across the shown prospects
+    ds = [p.distance for p in r.prospects]
+    assert ds == sorted(ds)
+
+
+def test_assist_suggestion_only_in_coach():
+    racks = {0: "flower*4 2d*4 6b*2 9d wn", 1: "9c*13"}
+    r_gap = G.assist_readout(play_state(2, racks), 0, CARD, "gap")
+    r_coach = G.assist_readout(play_state(2, racks), 0, CARD, "coach")
+    assert r_gap is not None and r_gap.suggestion is None
+    assert r_coach is not None and r_coach.suggestion is not None
+
+
+def test_assist_coach_respects_the_visible_threat_rail():
+    # Seat 1's exposed 9d kong makes the nines hot (gh-3 wants the sisters);
+    # seat 0's only dead weight is 9b — coach must go silent, not feed it.
+    exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("9d"),
+                                     count=4, jokers=0)]}
+    state = play_state(
+        2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*9"}, exposures=exposures
+    )
+    r = G.assist_readout(state, 0, CARD, "coach")
+    assert r is not None
+    assert dict(r.prospects[0].dead_weight) == {Tile("9b"): 3}
+    assert r.suggestion is None
+    # take the exposure away and the same rack gets its suggestion back
+    state2 = play_state(2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*13"})
+    r2 = G.assist_readout(state2, 0, CARD, "coach")
+    assert r2 is not None and r2.suggestion == Tile("9b")
+
+
+def test_assist_uses_discards_and_exposures_as_seen():
+    # The same rack loses a line's cheapest binding when the discard pile
+    # holds the last copies — seen_elsewhere is really wired through.
+    state = play_state(2, {0: "flower*2 1d*3 3d*3 5d*3 7d", 1: "9c*13"})
+    base = G.assist_readout(state, 0, CARD, "gap")
+    state.discards = [(1, Tile("7d"))] * 3 + [(1, Tile.JOKER)] * 8
+    after = G.assist_readout(state, 0, CARD, "gap")
+    assert base is not None and after is not None
+    sb1_base = next(p for p in base.prospects if p.hand.id == "sb-1")
+    sb1_after = next((p for p in after.prospects if p.hand.id == "sb-1"), None)
+    assert sb1_base.distance == 2
+    assert sb1_after is None or sb1_after.distance > 2
+
+
+def test_seen_elsewhere_matches_the_fallow_settle_view():
+    # The extraction refactor: the helper and the fallow settle must agree.
+    exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("2b"),
+                                     count=3, jokers=1)]}
+    state = play_state(2, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*10"},
+                       exposures=exposures)
+    state.discards = [(0, Tile("5c")), (1, Tile("5c")), (0, Tile("wn"))]
+    seen = G.seen_elsewhere(state, 0)
+    assert seen[Tile("5c")] == 2
+    assert seen[Tile("wn")] == 1
+    assert seen[Tile("2b")] == 2      # naturals of the exposure
+    assert seen[Tile.JOKER] == 1      # its joker counts as a joker
+    assert Tile("2d") not in seen     # own tiles are never "elsewhere"
