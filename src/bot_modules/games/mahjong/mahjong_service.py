@@ -631,9 +631,12 @@ class MahjongService:
         ).fetchone()
 
     def _table_row(self, conn, table_id: int):
+        """The row for a MEMBER action — closed tables answer with the
+        stale copy, so a lingering card (purge-closed, dissolved) can never
+        seat anyone or debit into dead escrow (stage-6 review)."""
         row = self._table_row_opt(conn, table_id)
-        if row is None:
-            raise TableError("That table no longer exists.")
+        if row is None or row["status"] != "live":
+            raise TableError(STALE_TABLE)
         return row
 
     def _card_for(self, conn, row) -> Card:
@@ -722,6 +725,51 @@ class MahjongService:
                     return None
                 return self._card_for(conn, row)
         return await asyncio.to_thread(_q)
+
+    async def member_left(self, guild_id: int, member_id: int) -> None:
+        """A seated member left the guild: fold them fallow mid-hand (their
+        escrow stays held and pays per §1); a lobby seat just refunds and
+        dissolves the lobby (it can no longer fill fairly)."""
+        def _find() -> int | None:
+            with open_db(self.db_path) as conn:
+                row = conn.execute(
+                    "SELECT t.id FROM mahjong_tables t "
+                    "JOIN mahjong_seats s ON s.table_id = t.id "
+                    "WHERE t.status = 'live' AND s.guild_id = ? "
+                    "AND s.user_id = ? AND s.live = 1",
+                    (guild_id, member_id),
+                ).fetchone()
+                return int(row["id"]) if row else None
+
+        table_id = await asyncio.to_thread(_find)
+        if table_id is None:
+            return
+        async with self._lock(table_id):
+            def _tx() -> float | None:
+                with open_db(self.db_path) as conn:
+                    row = self._table_row_opt(conn, table_id)
+                    if row is None or row["status"] != "live":
+                        return None
+                    state = engine.state_from_dict(json.loads(row["state"]))
+                    card = self._card_for(conn, row)
+                    settings = load_settings(conn, int(row["guild_id"]))
+                    seat = state.seat_of(member_id)
+                    if seat is None:
+                        return None
+                    if state.phase is engine.Phase.LOBBY:
+                        state, events = engine.close_table(state, "dissolved")
+                    elif state.phase in (engine.Phase.SETTLE,):
+                        # settled: they just can't rematch — close it out
+                        state, events = engine.close_table(state, "closed")
+                    else:
+                        state, events = engine.force_fallow(
+                            state, seat, card, self._rng)
+                    deadline = self._after_transition(
+                        conn, row, state, events, card, settings)
+                    self._stash_events(table_id, state, events)
+                    return deadline
+            deadline = await asyncio.to_thread(_tx)
+            await self._notify_and_arm(table_id, deadline)
 
     async def dissolve_table(self, table_id: int, reason: str = "dissolved") -> None:
         """Force-close from outside the engine's own flow (mod tool, purge

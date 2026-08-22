@@ -1517,3 +1517,30 @@ def test_full_turn_loop_hand_call_redemption_discard_win():
     assert out.jokerless_double  # the redemption took the joker out of the 14
     assert out.point_deltas == {1: 100, 0: -100}  # 25 × 2 × 2
     assert total_tiles(state) == 152
+
+
+def test_force_fallow_on_turn_advances_the_hand():
+    """A guild leaver on turn: the hand moves straight on (stage-6 review)."""
+    state = play_state(4, {0: "1c*14"}, wall="9d*5")
+    state, ev = G.force_fallow(state, 0, CARD, rng())
+    assert ("seat_fallow", {"seat": 0, "left_guild": True}) in ev
+    assert state.phase is Phase.AWAIT_DISCARD and state.turn == 1
+    assert len(state.seats[1].rack) == 14  # drew without waiting for a timer
+
+
+def test_force_fallow_last_responder_resolves_the_window():
+    state = play_state(4, {0: "1c*14"}, wall="9d*5")
+    state = open_window(state, 0, Tile("1c"))
+    r = rng()
+    state, _ = G.claim(state, 1, "pass", [], CARD, r)
+    state, _ = G.claim(state, 2, "pass", [], CARD, r)
+    # seat 3 leaves the guild — the window stops waiting for them
+    state, ev = G.force_fallow(state, 3, CARD, r)
+    assert state.phase is Phase.AWAIT_DISCARD and state.turn == 1
+
+
+def test_force_fallow_duel_settles_immediately():
+    state = play_state(2, {0: "1c*14", 1: "9d*13"})
+    state, ev = G.force_fallow(state, 1, CARD, rng())
+    out = state.outcome
+    assert out is not None and out.kind == "fallow_end" and out.winner == 0

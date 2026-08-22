@@ -64,6 +64,20 @@ def test_table_view_custom_ids_are_stable_per_phase():
         assert "mmj:42:rack" in seen[phase]
 
 
+def test_register_all_view_answers_every_action():
+    """Resume registers a superset view: whatever phase the on-disk sticky
+    message carries, its buttons route instead of dying unregistered."""
+    cog = _cog()
+    view = mj_views.TableView(cog, 7, register_all=True)
+    ids = {b.custom_id for b in view.children if isinstance(b, discord.ui.Button)}
+    assert ids == {f"mmj:7:{a}" for a in mj_views.TableView.ACTIONS}
+    # and every phase-built button is inside that superset
+    for phase in Phase:
+        for b in mj_views.TableView(cog, 7, phase).children:
+            if isinstance(b, discord.ui.Button):
+                assert b.custom_id in ids
+
+
 def test_private_events_map_to_member_facing_copy():
     cog = _cog()
     note = cog._private_note(1, [

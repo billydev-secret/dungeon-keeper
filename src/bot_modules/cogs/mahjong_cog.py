@@ -32,6 +32,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.core.utils import has_mod_or_admin_permissions
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.games.mahjong import embeds as mj_embeds
+from bot_modules.games.mahjong import match_logic as mj_match
 from bot_modules.games.mahjong import views as mj_views
 from bot_modules.games.mahjong.game_logic import (
     ActionRejected,
@@ -80,11 +81,11 @@ class MahjongCog(commands.Cog):
         for table_id in table_ids:
             meta = await self.service.table_meta(table_id)
             state = await self.service.load_state(table_id)
-            if meta is None or state is None:
-                continue
+            if meta is None or state is None or meta["status"] != "live":
+                continue  # a past-due timer already closed it (resume race)
             self._track_table(table_id, meta["channel_id"])
             self.bot.add_view(
-                mj_views.TableView(self, table_id, state.phase)
+                mj_views.TableView(self, table_id, register_all=True)
             )
         if table_ids:
             log.info("Mahjong: resumed %d live table(s).", len(table_ids))
@@ -129,8 +130,18 @@ class MahjongCog(commands.Cog):
         panel = self.panels.pop(table_id, None)
         if panel is not None:
             panel.cancel_all()
-        if channel_id is not None:
+        if channel_id is not None and self.channel_tables.get(channel_id) == table_id:
             self.channel_tables.pop(channel_id, None)
+
+    @commands.Cog.listener("on_member_remove")
+    async def _fold_leaver(self, member: discord.Member) -> None:
+        """A seated member left the guild: their seat folds fallow (escrow
+        stays held and pays per the fallow rules). The economy cog's generic
+        leaver-refund sweep excludes mahjong for exactly this reason."""
+        try:
+            await self.service.member_left(member.guild.id, member.id)
+        except Exception:
+            log.exception("Mahjong: leaver fold failed for %d", member.id)
 
     @commands.Cog.listener("on_message")
     async def _sticky_on_message(self, message: discord.Message) -> None:
@@ -155,7 +166,7 @@ class MahjongCog(commands.Cog):
             escrow_amount(card, meta["mode"], meta["stake"]) if card else 0
         )
         accent = await safe_resolve_accent(self.bot, guild, default=DEFAULT_ACCENT_COLOR)
-        embed = mj_embeds.table_panel(
+        embed = mj_embeds.build_table_panel(
             state, self._names(guild, state), meta["stake"], escrow,
             accent, meta["deadline_at"],
         )
@@ -195,27 +206,22 @@ class MahjongCog(commands.Cog):
             if data.get("private"):
                 continue  # delivered on the tap's own response, never here
             if kind == "joker_redeemed":
-                await self._safe_send(channel, embed=mj_embeds.joker_redeemed(
+                await self._safe_send(channel, embed=mj_embeds.build_joker_redeemed(
                     names.get(data["seat"], "?"), names.get(data["owner"], "?"),
                     Tile(data["tile"]),
                 ))
             elif kind == "mahjong":
                 out = state.outcome
                 if out is not None and out.winner is not None:
-                    winner = state.seats[out.winner]
-                    shown = rack_str(sort_rack(winner.rack))
-                    for e in winner.exposures:
-                        shown += "   " + " ".join(
-                            [mj_embeds.tile_str(e.natural)] * (e.count - e.jokers)
-                            + [mj_embeds.tile_str(Tile.JOKER)] * e.jokers
-                        )
-                    await self._safe_send(channel, embed=mj_embeds.mahjong_reveal(
+                    card = await self.service.card_for_table(table_id)
+                    shown = self._winning_groups(state, out.winner, card)
+                    await self._safe_send(channel, embed=mj_embeds.build_mahjong_reveal(
                         out, names.get(out.winner, "?"), shown,
                     ))
             elif kind == "hand_settled":
                 out = state.outcome
                 if out is not None:
-                    await self._safe_send(channel, embed=mj_embeds.settlement(
+                    await self._safe_send(channel, embed=mj_embeds.build_settlement(
                         out, names, meta["stake"],
                     ))
             elif kind == "table_closed":
@@ -233,6 +239,35 @@ class MahjongCog(commands.Cog):
                 await msg.edit(view=None)
             except discord.HTTPException:
                 pass
+
+    def _winning_groups(self, state: GameState, seat: int, card) -> str:
+        """The winning 14 rendered group by group (§6.12) — re-matched from
+        the final state; falls back to the sorted rack if the card moved."""
+        winner = state.seats[seat]
+        try:
+            if card is None:
+                raise LookupError("card gone")
+            matches = mj_match.match_hand(
+                list(winner.rack), [e.as_match() for e in winner.exposures],
+                card,
+            )
+            best = mj_match.best_match([
+                m for m in matches if m.hand.id == (state.outcome.line_id if state.outcome else None)
+            ] or matches)
+            if best is not None:
+                return "  ·  ".join(
+                    " ".join([mj_embeds.tile_str(nat)] * count)
+                    for nat, count in mj_match.resolved_groups(best)
+                )
+        except Exception:
+            log.debug("reveal group render fell back", exc_info=True)
+        shown = rack_str(sort_rack(winner.rack))
+        for e in winner.exposures:
+            shown += "   " + " ".join(
+                [mj_embeds.tile_str(e.natural)] * (e.count - e.jokers)
+                + [mj_embeds.tile_str(Tile.JOKER)] * e.jokers
+            )
+        return shown
 
     async def _safe_send(self, channel: discord.TextChannel, **kwargs) -> None:
         try:
@@ -267,7 +302,7 @@ class MahjongCog(commands.Cog):
             )
             return
         accent = await safe_resolve_accent(self.bot, guild, default=DEFAULT_ACCENT_COLOR)
-        embed = mj_embeds.member_panel(
+        embed = mj_embeds.build_member_panel(
             active[1] if active else None, settings.stakes_allowed, balance, accent
         )
         await interaction.response.send_message(
@@ -309,6 +344,14 @@ class MahjongCog(commands.Cog):
     ) -> None:
         guild = interaction.guild
         assert guild is not None and interaction.channel_id is not None
+        if not isinstance(interaction.channel, discord.TextChannel):
+            # a thread/voice-text table could hold escrow behind a card the
+            # sticky machinery can never post (stage-6 review)
+            await interaction.response.send_message(
+                "❌ Tables live in regular text channels — open one there.",
+                ephemeral=True,
+            )
+            return
         await interaction.response.defer(ephemeral=True)
         try:
             table_id = await self.service.create_table(
@@ -316,7 +359,7 @@ class MahjongCog(commands.Cog):
                 seat_count, stake,
             )
         except (TableError, ActionRejected) as e:
-            await interaction.followup.send(f"❌ {e}", ephemeral=True)
+            await interaction.followup.send(self._dress(str(e)), ephemeral=True)
             return
         self._track_table(table_id, interaction.channel_id)
         panel = self.panels.get(table_id)
@@ -344,7 +387,7 @@ class MahjongCog(commands.Cog):
             return
         accent = await safe_resolve_accent(self.bot, guild, default=DEFAULT_ACCENT_COLOR)
         await interaction.response.send_message(
-            embeds=mj_embeds.card_viewer(active[1], accent)[:10], ephemeral=True
+            embeds=mj_embeds.build_card_viewer(active[1], accent)[:10], ephemeral=True
         )
 
     async def handle_my_stats(self, interaction: discord.Interaction) -> None:
@@ -364,7 +407,7 @@ class MahjongCog(commands.Cog):
         rows = await asyncio.to_thread(_q)
         accent = await safe_resolve_accent(self.bot, guild, default=DEFAULT_ACCENT_COLOR)
         await interaction.response.send_message(
-            embed=mj_embeds.my_stats(rows, accent), ephemeral=True
+            embed=mj_embeds.build_my_stats(rows, accent), ephemeral=True
         )
 
     # ── Table-button dispatch ───────────────────────────────────────────
@@ -394,6 +437,22 @@ class MahjongCog(commands.Cog):
                     "Table cancelled; every escrow returned.",
                 )
             elif action == "close":
+                state = await self.service.load_state(table_id)
+                member = interaction.user
+                is_mod = (
+                    isinstance(member, discord.Member)
+                    and has_mod_or_admin_permissions(member.guild_permissions)
+                )
+                if state is None or (
+                    state.phase is not Phase.SETTLE and not is_mod
+                ):
+                    await self._reply(interaction, STALE_TABLE)
+                    return
+                if state.seat_of(member.id) is None and not is_mod:
+                    await self._reply(
+                        interaction, "Only the players (or a mod) can close a table."
+                    )
+                    return
                 await self._act_simple(
                     interaction,
                     self.service.dissolve_table(table_id, "closed"),
@@ -433,13 +492,19 @@ class MahjongCog(commands.Cog):
                     STALE_TABLE, ephemeral=True
                 )
         except (TableError, ActionRejected) as e:
-            await self._reply(interaction, f"❌ {e}")
+            await self._reply(interaction, self._dress(str(e)))
 
     async def _act_simple(self, interaction, coro, done: str) -> None:
         await interaction.response.defer(ephemeral=True)
         events = await coro
         note = self._private_note(interaction.user.id, events)
         await interaction.followup.send(note or done, ephemeral=True)
+
+    @staticmethod
+    def _dress(message: str) -> str:
+        # STALE_TABLE stays bare everywhere it appears: dressing it only on
+        # some paths would make the no-contact refusal distinguishable
+        return message if message == STALE_TABLE else f"❌ {message}"
 
     def _private_note(self, member_id: int, events) -> str | None:
         """Turn a private engine event into the ❌ this member alone sees."""
@@ -489,23 +554,51 @@ class MahjongCog(commands.Cog):
         assert guild is not None
         meta = await self.service.table_meta(table_id)
         accent = await safe_resolve_accent(self.bot, guild, default=DEFAULT_ACCENT_COLOR)
-        embed = mj_embeds.rack_panel(
-            state, seat, accent, meta["deadline_at"] if meta else None
+        names = self._names(guild, state)
+        embed = mj_embeds.build_rack_panel(
+            state, seat, accent, meta["deadline_at"] if meta else None,
+            context=self._rack_context(state, seat, names),
         )
-        view = self._rack_view(state, seat, table_id)
-        if view is not None:
-            await self._reply_embed(interaction, embed, view)
-        else:
-            await self._reply_embed(interaction, embed, None)
+        await self._reply_embed(
+            interaction, embed, self._rack_view(state, seat, table_id, names)
+        )
+
+    def _rack_context(self, state: GameState, seat: int, names: dict[int, str]) -> str | None:
+        if state.phase is Phase.CHARLESTON:
+            rnd = "First" if state.charleston_round == 1 else "Second"
+            return (f"{rnd} Charleston, pass {state.pass_index + 1} of 3 — "
+                    "pick your tiles below."
+                    if seat not in state.pending_picks
+                    else "Your pass is in — waiting on the table.")
+        if state.phase is Phase.CHARLESTON_VOTE:
+            return "Vote on the table card: run the second Charleston?"
+        if state.phase is Phase.COURTESY_PROPOSE:
+            return "Offer 0–3 courtesy tiles below."
+        if state.phase is Phase.COURTESY_PICK:
+            if seat in state.courtesy_owed and seat not in state.courtesy_gives:
+                return f"Give {state.courtesy_owed[seat]} tile(s) below."
+            return "Courtesy trades are wrapping up."
+        if state.phase is Phase.CLAIM_WINDOW:
+            return "A discard is live — claim from the table card."
+        if state.phase is Phase.AWAIT_DISCARD and state.turn != seat:
+            turn_name = names.get(state.seats[state.turn].member_id,
+                                  f"seat {state.turn + 1}")
+            return f"Waiting on {turn_name}."
+        return None
 
     def _rack_view(
-        self, state: GameState, seat: int, table_id: int
+        self, state: GameState, seat: int, table_id: int,
+        names: dict[int, str] | None = None,
     ) -> discord.ui.View | None:
         rack = state.seats[seat].rack
         if state.phase is Phase.CHARLESTON and seat not in state.pending_picks:
+            to_label = None
+            if state.seat_count == 2 and names:
+                to_label = names.get(state.seats[1 - seat].member_id)
             return mj_views.CharlestonPickView(
                 self, table_id, rack,
                 final_pass=state.pass_index == 2,
+                to_label=to_label,
             )
         if state.phase is Phase.COURTESY_PROPOSE and seat not in state.proposals:
             return mj_views.CourtesyProposeView(self, table_id)
@@ -558,9 +651,31 @@ class MahjongCog(commands.Cog):
     async def handle_redeem(
         self, interaction, table_id: int, exposure_id: int, tile: Tile
     ) -> None:
-        await self._do(interaction, table_id, "redeem_joker",
-                       exposure_id=exposure_id, tile=tile,
-                       done="Joker's yours — don't forget to discard.")
+        try:
+            await interaction.response.defer(ephemeral=True)
+            await self.service.act(
+                table_id, "redeem_joker", member_id=interaction.user.id,
+                exposure_id=exposure_id, tile=tile,
+            )
+        except (TableError, ActionRejected) as e:
+            await self._reply(interaction, self._dress(str(e)))
+            return
+        # §6.11: the redeemer's refreshed panel — joker in rack, discard next
+        got = await self._seat_of(interaction, table_id)
+        if got is None:
+            return
+        state, seat = got
+        meta = await self.service.table_meta(table_id)
+        accent = await safe_resolve_accent(
+            self.bot, interaction.guild, default=DEFAULT_ACCENT_COLOR
+        )
+        embed = mj_embeds.build_rack_panel(
+            state, seat, accent, meta["deadline_at"] if meta else None,
+            context="Joker's yours — now discard.",
+        )
+        await self._reply_embed(
+            interaction, embed, self._rack_view(state, seat, table_id)
+        )
 
     async def handle_self_mahjong(self, interaction, table_id: int) -> None:
         await self._do(interaction, table_id, "mahjong", done="🀄 Mahjong!")
@@ -577,6 +692,15 @@ class MahjongCog(commands.Cog):
         if state.phase is not Phase.CLAIM_WINDOW or state.live_discard is None:
             await self._reply(interaction, STALE_TABLE)
             return
+        pool = [
+            t for t in state.seats[seat].rack
+            if t is state.live_discard or t is Tile.JOKER
+        ]
+        if len(pool) < 2:
+            # nothing pickable — submit the bare call and let the engine
+            # downgrade it privately (§2.5: the tap never leaks)
+            await self.handle_call_submit(interaction, table_id, pool)
+            return
         await interaction.response.send_message(
             "Complete the exposure:",
             view=mj_views.CallTilesView(
@@ -586,10 +710,18 @@ class MahjongCog(commands.Cog):
         )
 
     async def handle_call_submit(
-        self, interaction, table_id: int, tiles: list[Tile]
+        self, interaction, table_id: int, tiles: list[Tile],
+        for_discard: Tile | None = None,
     ) -> None:
+        if for_discard is not None:
+            state = await self.service.load_state(table_id)
+            if state is None or state.live_discard is not for_discard:
+                # the picker outlived its window — never consume the new one
+                await self._reply(interaction, STALE_TABLE)
+                return
         await self._do(interaction, table_id, "claim", kind="call",
-                       tiles=tiles, done="Called — reveal it and discard.")
+                       tiles=tiles,
+                       done="Call's in — it stands unless a Mahjong outranks it.")
 
     async def _do(
         self, interaction, table_id: int, action: str, *, done: str, **kwargs
@@ -600,7 +732,7 @@ class MahjongCog(commands.Cog):
                 table_id, action, member_id=interaction.user.id, **kwargs
             )
         except (TableError, ActionRejected) as e:
-            await self._reply(interaction, f"❌ {e}")
+            await self._reply(interaction, self._dress(str(e)))
             return
         note = self._private_note(interaction.user.id, events)
         await interaction.followup.send(note or done, ephemeral=True)

@@ -228,6 +228,17 @@ def _match_line(
     return None
 
 
+def resolved_groups(match: Match) -> list[tuple[Tile, int]]:
+    """(natural, count) per group of the matched line, under its binding —
+    the reveal embed's §6.12 "groups" rendering. Joker placement within a
+    group isn't part of the match, so groups render as their naturals."""
+    suit_map = dict(match.suit_map)
+    return [
+        (_group_natural(g, match.x, suit_map, match.dragon), g.count)
+        for g in match.hand.groups
+    ]
+
+
 def best_match(matches: list[Match]) -> Match | None:
     """Settlement's pick: the highest-value line (§3.3)."""
     return max(matches, key=lambda m: m.hand.value, default=None)

@@ -1160,6 +1160,38 @@ def _judge_survivors(state: GameState, card: Card) -> list[Event]:
     return []
 
 
+def force_fallow(
+    state: GameState, seat: int, card: Card, rng: random.Random
+) -> tuple[GameState, list[Event]]:
+    """Fold a seat out immediately — a member who left the guild mid-hand.
+    Their escrow stays held and pays per the fallow rules (§1); in Duel, or
+    once only one live seat remains (D10), the hand settles. If it was their
+    turn the hand moves straight on; a half-collected claim window resolves
+    once they stop being counted; the simultaneous phases self-heal on
+    their own timers."""
+    state = copy.deepcopy(state)
+    if not 0 <= seat < len(state.seats) or state.seats[seat].fallow:
+        return state, []
+    if state.phase in (Phase.LOBBY, Phase.SETTLE, Phase.CLOSED):
+        raise ActionRejected(
+            RejectCode.WRONG_PHASE, "No live hand to fold out of."
+        )
+    s = state.seats[seat]
+    s.strikes = STRIKES_TO_FALLOW
+    s.fallow = True
+    events: list[Event] = [("seat_fallow", {"seat": seat, "left_guild": True})]
+    events += _judge_survivors(state, card)
+    if state.phase is Phase.AWAIT_DISCARD and state.turn == seat:
+        events += _draw_for_next(state, state.next_live_seat(seat), rng)
+    elif state.phase is Phase.CLAIM_WINDOW and seat != state.live_discarder:
+        responders = [
+            r for r in state.live_seats() if r != state.live_discarder
+        ]
+        if set(state.claims) >= set(responders):
+            events += _resolve_claim_window(state, card, rng)
+    return state, events
+
+
 def timeout(
     state: GameState, card: Card, rng: random.Random
 ) -> tuple[GameState, list[Event]]:

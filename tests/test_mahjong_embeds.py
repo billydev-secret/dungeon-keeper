@@ -67,21 +67,21 @@ STATES = state_seq()
 @pytest.mark.parametrize("phase_name", sorted(STATES))
 def test_table_panel_renders_every_phase(phase_name):
     state = STATES[phase_name]
-    embed = mj_embeds.table_panel(state, NAMES, stake=1, escrow=450,
+    embed = mj_embeds.build_table_panel(state, NAMES, stake=1, escrow=450,
                                   accent=ACCENT, deadline_at=None)
     assert embed.title and "Duel" in embed.title
     assert embed.footer.text and "Meadow Mahjong" in embed.footer.text
 
 
 def test_lobby_panel_shows_open_seats_and_escrow():
-    embed = mj_embeds.table_panel(STATES["lobby_open"], NAMES, stake=2,
+    embed = mj_embeds.build_table_panel(STATES["lobby_open"], NAMES, stake=2,
                                   escrow=900, accent=ACCENT, deadline_at=None)
     assert "open seat" in (embed.description or "")
     assert any("900" in (f.value or "") for f in embed.fields)
 
 
 def test_claim_window_panel_names_the_discarder():
-    embed = mj_embeds.table_panel(STATES["claim_window"], NAMES, stake=1,
+    embed = mj_embeds.build_table_panel(STATES["claim_window"], NAMES, stake=1,
                                   escrow=450, accent=ACCENT, deadline_at=None)
     joined = " ".join(f"{f.name} {f.value}" for f in embed.fields)
     assert "Claim Window" in joined and "Wren" in joined
@@ -98,11 +98,11 @@ def test_settled_and_closed_panels_render():
                           jokerless_double=True, discarder=0,
                           point_deltas={0: -100, 1: 100}),
     )
-    embed = mj_embeds.table_panel(settled, NAMES, 1, 450, ACCENT, None)
+    embed = mj_embeds.build_table_panel(settled, NAMES, 1, 450, ACCENT, None)
     joined = " ".join(f"{f.name} {f.value}" for f in embed.fields)
     assert "Golden Hour" in joined and "Rematch" in joined
     closed, _ = G.close_table(settled, "finished")
-    embed = mj_embeds.table_panel(closed, NAMES, 1, 450, ACCENT, None)
+    embed = mj_embeds.build_table_panel(closed, NAMES, 1, 450, ACCENT, None)
     assert embed.footer.text and "Closed" in embed.footer.text
 
 
@@ -110,10 +110,10 @@ def test_rack_panel_highlights_the_drawn_tile():
     state = STATES["mid_play"]
     seat = state.turn
     assert state.drawn is not None
-    embed = mj_embeds.rack_panel(state, seat, ACCENT, None)
+    embed = mj_embeds.build_rack_panel(state, seat, ACCENT, None)
     assert "➜" in (embed.description or "")
     other = (seat + 1) % 2
-    embed = mj_embeds.rack_panel(state, other, ACCENT, None)
+    embed = mj_embeds.build_rack_panel(state, other, ACCENT, None)
     assert "➜" not in (embed.description or "")
 
 
@@ -122,22 +122,23 @@ def test_settlement_embed_monospace_table_and_notes():
                     line_name="Golden Hour", value=25, won_by="discard",
                     jokerless_double=True, discarder=0,
                     point_deltas={0: -100, 1: 100})
-    embed = mj_embeds.settlement(out, {0: "Wren", 1: "Moss"}, stake=2)
+    embed = mj_embeds.build_settlement(out, {0: "Wren", 1: "Moss"}, stake=2)
     desc = embed.description or ""
     assert "```" in desc and "+200" in desc and "-200" in desc
-    assert "jokerless double" in desc
+    assert "jokerless: doubled" in desc
+    assert "discard win 2×" in desc  # §6.1: the exact line used, Duel form
     assert embed.color and embed.color.value == mj_embeds.COLOR_GREEN  # int constant
 
     wall = G.Outcome(kind="wall_game", winner=None, line_id=None,
                      line_name=None, value=0, won_by=None,
                      jokerless_double=False, discarder=None,
                      point_deltas={0: 0, 1: 0})
-    assert "escrow" in (mj_embeds.settlement(wall, NAMES, 1).description or "")
+    assert "escrow" in (mj_embeds.build_settlement(wall, NAMES, 1).description or "")
     void = G.Outcome(kind="all_fallow", winner=None, line_id=None,
                      line_name=None, value=0, won_by=None,
                      jokerless_double=False, discarder=None,
                      point_deltas={0: 0, 1: 0})
-    assert "voids" in (mj_embeds.settlement(void, NAMES, 1).description or "")
+    assert "voids" in (mj_embeds.build_settlement(void, NAMES, 1).description or "")
 
 
 def test_reveal_and_redeem_and_stats_and_viewer():
@@ -145,19 +146,19 @@ def test_reveal_and_redeem_and_stats_and_viewer():
                     line_name="Quiet Pairs", value=50, won_by="self_pick",
                     jokerless_double=False, discarder=None,
                     point_deltas={0: 150, 1: -150})
-    reveal = mj_embeds.mahjong_reveal(out, "Wren", "1D 1D 3D 3D")
+    reveal = mj_embeds.build_mahjong_reveal(out, "Wren", "1D 1D 3D 3D")
     assert "Quiet Pairs" in (reveal.title or "") and "self-picked" in (reveal.description or "")
 
-    redeem = mj_embeds.joker_redeemed("Wren", "Moss", Tile("5b"))
+    redeem = mj_embeds.build_joker_redeemed("Wren", "Moss", Tile("5b"))
     assert "5B" in (redeem.description or "")
 
-    stats = mj_embeds.my_stats(
+    stats = mj_embeds.build_my_stats(
         [{"mode": 2, "hands_played": 4, "wins": 2, "jokerless_wins": 1,
           "coins_won": 300, "coins_lost": 100, "biggest_win": 150}], ACCENT)
     assert "2/4" in stats.fields[0].value
-    assert "chair" in (mj_embeds.my_stats([], ACCENT).description or "")
+    assert "chair" in (mj_embeds.build_my_stats([], ACCENT).description or "")
 
-    pages = mj_embeds.card_viewer(CARD, ACCENT)
+    pages = mj_embeds.build_card_viewer(CARD, ACCENT)
     text = " ".join(f.value for e in pages for f in e.fields)
     for section in CARD.sections():
         assert any(section in (f.name or "") for e in pages for f in e.fields)
@@ -167,7 +168,7 @@ def test_reveal_and_redeem_and_stats_and_viewer():
 
 
 def test_member_panel_variants():
-    e = mj_embeds.member_panel(CARD, (1, 2, 5), 250, ACCENT)
+    e = mj_embeds.build_member_panel(CARD, (1, 2, 5), 250, ACCENT)
     assert "First Light" in (e.description or "") and "250" in (e.description or "")
-    e = mj_embeds.member_panel(None, (1,), 0, ACCENT)
+    e = mj_embeds.build_member_panel(None, (1,), 0, ACCENT)
     assert "No Meadow Card" in (e.description or "")

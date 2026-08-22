@@ -17,9 +17,11 @@ from bot_modules.games.mahjong.card_logic import Card
 from bot_modules.games.mahjong.game_logic import GameState, Outcome, Phase
 from bot_modules.games.mahjong.tiles import Tile, sort_rack
 from bot_modules.games.mahjong.tile_render import back_str, rack_str, tile_str
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR
 from bot_modules.services.embeds import COLOR_GREEN
 
 FOOTER = "🀄 Meadow Mahjong"
+COLOR_VOID = discord.Color(0x546E7A)  # a voided hand is not a win — no green
 MODE_NAMES = {2: "Duel", 4: "Full Table"}
 
 _PASS_NAMES = {
@@ -34,6 +36,8 @@ def _footer(embed: discord.Embed, extra: str = "") -> discord.Embed:
 
 
 def _clock(deadline_at: float | None) -> str:
+    """Markdown countdown for a field/description — NEVER a footer:
+    Discord renders <t:…:R> only in message/embed body text."""
     if not deadline_at or deadline_at <= time.time():
         return ""
     return f" — ⏱ <t:{int(deadline_at)}:R>"
@@ -64,10 +68,11 @@ def _seat_line(
     return line
 
 
-def member_panel(
+def build_member_panel(
     card: Card | None, stakes: tuple[int, ...], balance: int,
-    accent: discord.Color,
+    accent: discord.Color | None = None,
 ) -> discord.Embed:
+    accent = accent or DEFAULT_ACCENT_COLOR
     e = discord.Embed(title="Meadow Mahjong", color=accent)
     if card is None:
         e.description = "No Meadow Card is active right now — check back soon."
@@ -81,14 +86,15 @@ def member_panel(
     return _footer(e, "American-style, card-driven")
 
 
-def table_panel(
+def build_table_panel(
     state: GameState,
     names: dict[int, str],
     stake: int,
     escrow: int,
-    accent: discord.Color,
-    deadline_at: float | None,
+    accent: discord.Color | None = None,
+    deadline_at: float | None = None,
 ) -> discord.Embed:
+    accent = accent or DEFAULT_ACCENT_COLOR
     mode = MODE_NAMES.get(state.seat_count, str(state.seat_count))
     e = discord.Embed(
         title=f"Mahjong Table — {mode}",
@@ -109,9 +115,13 @@ def table_panel(
             value=f"{stake} coins per point ({escrow} escrow per seat)",
             inline=False,
         )
-        if open_seats:
-            return _footer(e, f"Waiting for {open_seats} more{clock}")
-        return _footer(e, f"Everyone's in — dealing{clock}")
+        e.add_field(
+            name="Status",
+            value=(f"Waiting for {open_seats} more{clock}" if open_seats
+                   else f"Everyone's in — dealing{clock}"),
+            inline=False,
+        )
+        return _footer(e, "Lobby")
 
     seat_names = {i: names.get(s.member_id, str(s.member_id))
                   for i, s in enumerate(state.seats)}
@@ -132,9 +142,9 @@ def table_panel(
         )
         e.add_field(
             name=f"{rnd} Charleston — Pass {state.pass_index + 1} ({direction})",
-            value=f"Tiles in: {ticks}", inline=False,
+            value=f"Tiles in: {ticks}{clock}", inline=False,
         )
-        return _footer(e, f"Charleston{clock}")
+        return _footer(e, "Charleston")
 
     if state.phase is Phase.CHARLESTON_VOTE:
         ticks = " ".join(
@@ -142,10 +152,10 @@ def table_panel(
         )
         e.add_field(
             name="Second Charleston?",
-            value=f"Unanimous yes runs it again. Votes: {ticks}",
+            value=f"Unanimous yes runs it again. Votes: {ticks}{clock}",
             inline=False,
         )
-        return _footer(e, f"Vote{clock}")
+        return _footer(e, "Vote")
 
     if state.phase in (Phase.COURTESY_PROPOSE, Phase.COURTESY_PICK):
         if state.phase is Phase.COURTESY_PROPOSE:
@@ -154,14 +164,14 @@ def table_panel(
                 for i in range(len(state.seats))
             )
             e.add_field(name="Courtesy Pass",
-                        value=f"Offers in: {ticks}", inline=False)
+                        value=f"Offers in: {ticks}{clock}", inline=False)
         else:
             owe = ", ".join(
                 f"{seat_names[i]}: {n}" for i, n in state.courtesy_owed.items()
             )
             e.add_field(name="Courtesy Exchange",
-                        value=f"Trading tiles — {owe}", inline=False)
-        return _footer(e, f"Courtesy{clock}")
+                        value=f"Trading tiles — {owe}{clock}", inline=False)
+        return _footer(e, "Courtesy")
 
     # play phases share the pit/wall furniture
     pit = ""
@@ -187,17 +197,18 @@ def table_panel(
             value=(
                 f"{seat_names[state.live_discarder]} threw "
                 f"{tile_str(state.live_discard)} — 🀄 Mahjong · ✋ Call · Pass\n"
-                f"Responses: {ticks}"
+                f"Responses: {ticks}{clock}"
             ),
             inline=False,
         )
-        return _footer(e, f"Claim window{clock}")
+        return _footer(e, "Claim window")
 
     if state.phase is Phase.AWAIT_DISCARD:
         e.add_field(
-            name="Turn", value=f"{seat_names[state.turn]} to discard", inline=True
+            name="Turn",
+            value=f"{seat_names[state.turn]} to discard{clock}", inline=True,
         )
-        return _footer(e, f"Hand {state.hand_no}{clock}")
+        return _footer(e, f"Hand {state.hand_no}")
 
     if state.phase is Phase.SETTLE:
         out = state.outcome
@@ -209,10 +220,10 @@ def table_panel(
                 inline=False,
             )
         elif out is not None and out.kind == "fallow_end":
+            survivor = seat_names.get(out.winner, "—") if out.winner is not None else "—"
             e.add_field(
                 name="Hand Over",
-                value=f"{seat_names.get(out.winner or -1, '—')} stands alone; "
-                      "the folded seats pay out.",
+                value=f"{survivor} stands alone; the folded seats pay out.",
                 inline=False,
             )
         else:
@@ -222,17 +233,19 @@ def table_panel(
             "🔁" if i in state.rematch_votes else "…"
             for i in range(len(state.seats))
         )
-        e.add_field(name="Rematch?", value=f"Everyone must press it: {ready}",
+        e.add_field(name="Rematch?",
+                    value=f"Everyone must press it: {ready}{clock}",
                     inline=False)
-        return _footer(e, f"Settled{clock}")
+        return _footer(e, "Settled")
 
     return _footer(e, "Closed")
 
 
-def rack_panel(
-    state: GameState, seat: int, accent: discord.Color,
-    deadline_at: float | None,
+def build_rack_panel(
+    state: GameState, seat: int, accent: discord.Color | None = None,
+    deadline_at: float | None = None, *, context: str | None = None,
 ) -> discord.Embed:
+    accent = accent or DEFAULT_ACCENT_COLOR
     s = state.seats[seat]
     rack = list(s.rack)
     drawn = state.drawn if (state.turn == seat and state.drawn in rack) else None
@@ -253,11 +266,10 @@ def rack_panel(
             ),
             inline=False,
         )
-    turn_note = (
+    turn_note = context or (
         "**It's your turn.**" if state.turn == seat
         and state.phase is Phase.AWAIT_DISCARD
-        else f"Waiting on seat {state.turn + 1}."
-        if state.phase is Phase.AWAIT_DISCARD else ""
+        else ""
     )
     if turn_note:
         e.add_field(name="Now", value=turn_note + _clock(deadline_at),
@@ -265,7 +277,7 @@ def rack_panel(
     return _footer(e, f"Hand {state.hand_no}")
 
 
-def mahjong_reveal(
+def build_mahjong_reveal(
     out: Outcome, winner_name: str, winning_tiles: str,
 ) -> discord.Embed:
     how = {
@@ -284,7 +296,7 @@ def mahjong_reveal(
     return _footer(e, out.line_id or "")
 
 
-def settlement(
+def build_settlement(
     out: Outcome, names: dict[int, str], stake: int,
 ) -> discord.Embed:
     if out.kind == "wall_game":
@@ -300,7 +312,7 @@ def settlement(
             title="Table Timed Out",
             description="Every seat folded together — the hand voids and "
                         "escrow returns.",
-            color=COLOR_GREEN,
+            color=COLOR_VOID,
         )
         return _footer(e)
 
@@ -311,12 +323,17 @@ def settlement(
         delta = out.point_deltas[seat] * stake
         rows.append(f"{name:<{width}}  {delta:+7d} coins")
     note = []
+    duel = len(out.point_deltas) == 2
     if out.won_by == "discard" and out.discarder is not None:
-        note.append(f"{names.get(out.discarder, '?')} fed the winning tile (2×)")
+        note.append(
+            f"discard win 2× — {names.get(out.discarder, '?')} fed the tile"
+            if duel else
+            f"discard win — {names.get(out.discarder, '?')} pays 2×, others 1×"
+        )
     if out.won_by == "self_pick":
-        note.append("self-pick")
+        note.append("self-pick 3×" if duel else "self-pick — everyone pays 2×")
     if out.jokerless_double:
-        note.append("jokerless double")
+        note.append("jokerless: doubled")
     e = discord.Embed(
         title="Settlement",
         description="```\n" + "\n".join(rows) + "\n```"
@@ -326,19 +343,23 @@ def settlement(
     return _footer(e, f"{out.value} points × {stake}/point")
 
 
-def joker_redeemed(redeemer: str, owner: str, tile: Tile) -> discord.Embed:
+def build_joker_redeemed(
+    redeemer: str, owner: str, tile: Tile,
+    accent: discord.Color | None = None,
+) -> discord.Embed:
     e = discord.Embed(
         title="Joker Redeemed",
         description=(
             f"**{redeemer}** swapped a natural {tile_str(tile)} for the joker "
             f"in **{owner}**'s exposure — it stands natural now."
         ),
-        color=discord.Color.purple(),
+        color=accent or DEFAULT_ACCENT_COLOR,
     )
     return _footer(e)
 
 
-def card_viewer(card: Card, accent: discord.Color) -> list[discord.Embed]:
+def build_card_viewer(card: Card, accent: discord.Color | None = None) -> list[discord.Embed]:
+    accent = accent or DEFAULT_ACCENT_COLOR
     """The active card by section, for study — split to respect field caps."""
     embeds: list[discord.Embed] = []
     e = discord.Embed(
@@ -354,15 +375,16 @@ def card_viewer(card: Card, accent: discord.Color) -> list[discord.Embed]:
             + (" · C" if h.concealed else "")
             for h in hands
         )
-        if len(e.fields) >= 6:
+        if len(e.fields) >= 5:
             embeds.append(_footer(e))
             e = discord.Embed(color=accent)
         e.add_field(name=section, value=value[:1024], inline=False)
-    embeds.append(_footer(e, "First Light"))
+    embeds.append(_footer(e, card.season))
     return embeds
 
 
-def my_stats(rows: list[dict], accent: discord.Color) -> discord.Embed:
+def build_my_stats(rows: list[dict], accent: discord.Color | None = None) -> discord.Embed:
+    accent = accent or DEFAULT_ACCENT_COLOR
     e = discord.Embed(title="Your Mahjong Record", color=accent)
     if not rows:
         e.description = "No hands on record yet — pull up a chair."

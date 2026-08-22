@@ -30,7 +30,11 @@ def _cid(table_id: int, action: str) -> str:
 class TableView(discord.ui.View):
     """The persistent view on the sticky table message, built per phase."""
 
-    def __init__(self, cog: "MahjongCog", table_id: int, phase: Phase):
+    ACTIONS = ("join", "cancel", "rack", "vote_y", "vote_n", "claim_mj",
+               "claim_call", "claim_pass", "rematch", "close")
+
+    def __init__(self, cog: "MahjongCog", table_id: int, phase: Phase | None = None,
+                 *, register_all: bool = False):
         super().__init__(timeout=None)
         self.cog = cog
         self.table_id = table_id
@@ -43,6 +47,14 @@ class TableView(discord.ui.View):
             b.callback = self._make_callback(action)
             self.add_item(b)
 
+        if register_all:
+            # resume-time registration only (never posted): the sticky message
+            # on disk may carry any phase's buttons until its next repost, and
+            # an unregistered custom_id dies as "interaction failed" instead of
+            # routing to the stale-table copy.
+            for action in self.ACTIONS:
+                button(action, action)
+            return
         if phase is Phase.LOBBY:
             button("Join", "join", discord.ButtonStyle.primary)
             button("Cancel", "cancel", discord.ButtonStyle.danger)
@@ -92,7 +104,7 @@ class CharlestonPickView(discord.ui.View):
     slots on the final pass of each Charleston."""
 
     def __init__(self, cog: "MahjongCog", table_id: int, seat_rack: list[Tile],
-                 *, final_pass: bool, blind_n: int = 0):
+                 *, final_pass: bool, blind_n: int = 0, to_label: str | None = None):
         super().__init__(timeout=600)
         self.cog = cog
         self.table_id = table_id
@@ -100,7 +112,8 @@ class CharlestonPickView(discord.ui.View):
         picks = 3 - blind_n
         if picks > 0:
             select = discord.ui.Select(
-                placeholder=f"Pick {picks} tile{'s' if picks != 1 else ''} to pass"
+                placeholder=f"Pick {picks} tile{'s' if picks != 1 else ''}"
+                + (f" for {to_label}" if to_label else " to pass")
                 + (f" ({blind_n} blind)" if blind_n else ""),
                 min_values=picks, max_values=picks,
                 options=_tile_options(pool),
@@ -127,7 +140,7 @@ class CharlestonPickView(discord.ui.View):
                         await interaction.response.edit_message(
                             view=CharlestonPickView(
                                 cog, table_id, seat_rack,
-                                final_pass=True, blind_n=n,
+                                final_pass=True, blind_n=n, to_label=to_label,
                             )
                         )
                 b.callback = on_blind
@@ -250,15 +263,19 @@ class CallTilesView(discord.ui.View):
                  seat_rack: list[Tile], discard_tile: Tile):
         super().__init__(timeout=120)
         pool = [t for t in seat_rack if t is discard_tile or t is Tile.JOKER]
+        # the cog never builds this with fewer than 2 matching tiles (it
+        # routes such taps straight to the engine's private downgrade), so
+        # min<=max<=len(options) always holds
         select = discord.ui.Select(
             placeholder=f"Expose with your {chip(discard_tile)}s/jokers…",
-            min_values=2, max_values=min(5, max(2, len(pool))),
+            min_values=2, max_values=min(5, len(pool)),
             options=_tile_options(pool),
         )
 
         async def cb(interaction: discord.Interaction):
             await cog.handle_call_submit(
-                interaction, table_id, parse_tile_values(select.values)
+                interaction, table_id, parse_tile_values(select.values),
+                for_discard=discard_tile,
             )
         select.callback = cb
         self.add_item(select)
@@ -311,8 +328,26 @@ class CreateTableView(discord.ui.View):
         select = discord.ui.Select(placeholder="Stake…", options=options)
 
         async def on_stake(interaction: discord.Interaction):
-            await cog.handle_create_open(
-                interaction, seat_count, int(select.values[0])
+            stake = int(select.values[0])
+            await interaction.response.edit_message(
+                content=(
+                    f"{'Duel' if seat_count == 2 else 'Full Table'} at "
+                    f"{stake}/point — {escrow_for(seat_count, stake)} coins "
+                    "escrow locks when you open it."
+                ),
+                view=OpenTableView(cog, seat_count, stake),
             )
         select.callback = on_stake
         self.add_item(select)
+
+
+class OpenTableView(discord.ui.View):
+    def __init__(self, cog: "MahjongCog", seat_count: int, stake: int):
+        super().__init__(timeout=300)
+        b = discord.ui.Button(label="Open Table",
+                              style=discord.ButtonStyle.success)
+
+        async def cb(interaction: discord.Interaction):
+            await cog.handle_create_open(interaction, seat_count, stake)
+        b.callback = cb
+        self.add_item(b)

@@ -482,3 +482,49 @@ async def test_no_contact_blocks_the_join_indistinguishably(service, db):
         ).fetchall()
     assert [int(r["user_id"]) for r in seats] == [HOST]
     assert balances(db, GUEST) == [1000]
+
+
+# ── Guild leavers and zombie tables (stage-6 review) ─────────────────────────
+
+
+async def test_closed_table_refuses_joins_and_acts(service, db):
+    from bot_modules.games.mahjong.mahjong_service import STALE_TABLE
+
+    table_id = await service.create_table(GUILD, CHANNEL, HOST, 2, 1)
+    await service.dissolve_table(table_id, "closed")
+    with pytest.raises(TableError) as e:
+        await service.join_table(table_id, GUEST)
+    assert str(e.value) == STALE_TABLE  # a lingering card can't seat anyone
+    with pytest.raises(TableError) as e:
+        await service.act(table_id, "rematch", member_id=HOST)
+    assert str(e.value) == STALE_TABLE
+    assert balances(db, GUEST) == [1000]  # and debits nothing
+
+
+async def test_member_left_mid_hand_folds_fallow_and_settles_duel(service, db):
+    table_id = await make_duel(service, db)
+    await service.timeout(table_id)  # deal
+    await service.member_left(GUILD, GUEST)
+    row = table_row(db, table_id)
+    state = engine.state_from_dict(json.loads(row["state"]))
+    # Duel: the fold ends the hand; escrow settled per the fallow rules —
+    # survivor collects, the leaver's escrow paid out rather than refunded
+    assert state.phase is engine.Phase.SETTLE
+    assert state.outcome is not None and state.outcome.kind == "fallow_end"
+    with open_db(db) as conn:
+        host_balance = get_balance(conn, GUILD, HOST)
+    assert host_balance > 1000 - DUEL_ESCROW  # got escrow back plus the base
+
+
+async def test_member_left_in_lobby_dissolves_and_refunds(service, db):
+    table_id = await service.create_table(GUILD, CHANNEL, HOST, 2, 1)
+    await service.member_left(GUILD, HOST)
+    row = table_row(db, table_id)
+    assert row["status"] == "closed"
+    assert balances(db, HOST) == [1000]
+
+
+async def test_member_left_unseated_is_a_noop(service, db):
+    await make_duel(service, db)
+    await service.member_left(GUILD, THIRD)  # not seated anywhere
+    assert balances(db, HOST, GUEST) == [1000 - DUEL_ESCROW] * 2

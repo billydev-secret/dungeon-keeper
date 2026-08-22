@@ -3103,6 +3103,15 @@ class EconomyCog(commands.Cog):
                 for row in wager_svc.live_stakes_for_member(
                     conn, guild.id, member.id
                 ):
+                    # Mahjong escrow is NOT winner-takes-pot: a live hand
+                    # settles zero-sum against every seat's held row, so
+                    # yanking the leaver's row here would make the eventual
+                    # settle_split refuse (players != escrow holders) and
+                    # crash the winner's Mahjong. The mahjong cog folds the
+                    # leaver fallow instead — their escrow stays held and
+                    # pays out per the fallow rules (spec §1).
+                    if str(row["game_type"]) == "mahjong":
+                        continue
                     total += wager_svc.refund_player(
                         conn, str(row["game_type"]), int(row["game_id"]),
                         member.id,
