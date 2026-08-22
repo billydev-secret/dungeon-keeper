@@ -22,6 +22,11 @@ import discord
 
 from bot_modules.core.app_context import AppContext
 from bot_modules.core.db_utils import get_config_value
+from bot_modules.core.role_provision import (
+    RoleSpec,
+    ensure_feature_role,
+    mod_log_announcer,
+)
 from bot_modules.services.moderation import (
     compute_roles_to_snapshot,
     create_jail,
@@ -288,43 +293,48 @@ async def apply_jail(
     # ── Step 1: ensure @Jailed role ──────────────────────────────────
     guild_id = guild.id
 
-    def _get_jailed_role_id():
+    def _get_jailed_role_id() -> int:
         with ctx.open_db() as conn:
-            return get_config_value(conn, "jailed_role_id", "0", guild_id)
-
-    jailed_role_id_raw = await asyncio.to_thread(_get_jailed_role_id)
-    try:
-        jailed_role_id = int(jailed_role_id_raw or "0")
-    except ValueError:
-        jailed_role_id = 0
-
-    jailed_role = guild.get_role(jailed_role_id) if jailed_role_id else None
-    if jailed_role is None:
+            raw = get_config_value(conn, "jailed_role_id", "0", guild_id)
         try:
-            jailed_role = await guild.create_role(
-                name="Jailed",
-                reason="Dungeon Keeper jail system setup",
-                permissions=discord.Permissions.none(),
-            )
-        except discord.Forbidden:
-            return JailOutcome(
-                ok=False,
-                error_kind="no_role_perms",
-                error_message=(
-                    "Missing **Manage Roles** — can't create the Jailed role."
-                ),
-            )
-        ctx.set_config_value("jailed_role_id", str(jailed_role.id), guild.id)
-        # Deny view + send on all channels so jailed members can't see the
-        # server. Best-effort; channels that refuse the overwrite (because
-        # the bot lacks permission on them specifically) are skipped.
+            return int(raw or "0")
+        except ValueError:
+            return 0
+
+    jailed_role_id = await asyncio.to_thread(_get_jailed_role_id)
+
+    async def _lock_down(role: discord.Role) -> None:
+        """Deny view + send on every channel so jailed members see nothing.
+
+        Per channel and explicit, never a category sync — category grants do
+        not cascade. Best-effort: a channel the bot can't touch is skipped
+        rather than aborting the jail.
+        """
         for channel in guild.channels:
             try:
                 await channel.set_permissions(
-                    jailed_role, view_channel=False, send_messages=False
+                    role, view_channel=False, send_messages=False
                 )
             except discord.Forbidden:
                 pass
+
+    jailed_role = await ensure_feature_role(
+        guild,
+        RoleSpec(name="Jailed", reason="Dungeon Keeper jail system setup"),
+        load=lambda: jailed_role_id,
+        store=lambda rid: ctx.set_config_value("jailed_role_id", str(rid), guild.id),
+        on_create=_lock_down,
+        announce=mod_log_announcer(ctx, guild),
+        feature="the jail",
+    )
+    if jailed_role is None:
+        return JailOutcome(
+            ok=False,
+            error_kind="no_role_perms",
+            error_message=(
+                "Missing **Manage Roles** — can't create the Jailed role."
+            ),
+        )
 
     # ── Step 2: snapshot + strip roles ──────────────────────────────
     # Exclude managed roles from the snapshot — they're controlled by

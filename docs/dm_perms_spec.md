@@ -66,7 +66,7 @@ The dashboard's audit log lists every state transition: requested, accepted, den
 
 ## Permissions
 
-- The bot needs **Manage Roles** to create and assign the three DM-mode roles, with its top role above them; **Send Messages** + **Embed Links** in the panel channel and the audit channel; **Read Message History** in the panel channel for the bump-to-bottom guard.
+- The bot needs **Manage Roles** to create and assign the three DM-mode roles, with its top role above them. Since 2026-08-22 they are provisioned through `core/role_provision.py`: an existing role of the same name is adopted rather than twinned, the created roles carry no permissions, and a Discord failure (a rate limit, a 5xx) now degrades to leaving the member's current modes alone instead of escaping into their button click; **Send Messages** + **Embed Links** in the panel channel and the audit channel; **Read Message History** in the panel channel for the bump-to-bottom guard.
 - The settings panel is guild-only (it reads mode roles) and refuses to open from a DM; no other Discord-side gate.
 - The panel button is open to everyone; Accept / Deny hard-check that the clicker is the target.
 - Dashboard endpoints require the **admin** role.

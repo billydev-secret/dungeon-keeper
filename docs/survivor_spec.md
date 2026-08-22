@@ -189,7 +189,9 @@ resulting ids in config. Dashboard role pickers let you repoint any of the three
 at a role you made yourself, and a role deleted out from under the bot is
 recreated rather than crashing the week. Creation requires Manage Roles; if the
 bot lacks it, the panel says so and the game runs without role grants rather
-than failing.
+than failing. Since 2026-08-22 this runs on the shared provisioner
+(`core/role_provision.py`), so the created roles carry **no permissions** — they
+are name badges and ping targets, and previously inherited `@everyone`'s.
 
 ---
 

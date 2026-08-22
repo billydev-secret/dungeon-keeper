@@ -17,10 +17,10 @@ import logging
 from typing import Any
 
 import aiohttp
-import discord
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from bot_modules.core.role_provision import RoleSpec, ensure_feature_role
 from bot_modules.services import survivor_espn as espn
 from bot_modules.services import survivor_service as svc
 from bot_modules.services.moderation import write_audit
@@ -193,28 +193,35 @@ async def create_season(
     # reports it; the panel surfaces the warning.
     role_ids: dict[str, int] = {}
     role_report: list[str] = []
+    created: set[str] = set()
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     if guild is not None:
-        existing = {r.name: r for r in guild.roles}
         for key, role_name in MANAGED_ROLES:
-            role = existing.get(role_name)
+
+            async def _mark_created(_role, key=key) -> None:
+                created.add(key)
+
+            role = await ensure_feature_role(
+                guild,
+                RoleSpec(name=role_name, reason="Survivor season setup"),
+                # A brand-new season starts with no ids of its own; the helper's
+                # adopt-by-name step is what reuses the roles a previous season
+                # left behind instead of stacking up a second @Ghost each year.
+                load=lambda: 0,
+                store=lambda rid, key=key: role_ids.__setitem__(key, rid),
+                on_create=_mark_created,
+                feature="Survivor",
+            )
             if role is None:
-                try:
-                    role = await guild.create_role(
-                        name=role_name, reason="Survivor season setup"
-                    )
-                    role_report.append(f"created {role_name}")
-                except discord.Forbidden:
-                    role_report.append(
-                        f"couldn't create {role_name} — missing Manage Roles"
-                    )
-                    continue
-                except discord.HTTPException:
-                    log.exception("survivor: role create failed for %s", role_name)
-                    role_report.append(f"couldn't create {role_name}")
-                    continue
-            role_ids[key] = role.id
+                role_report.append(
+                    f"couldn't create {role_name} — check Manage Roles"
+                )
+                continue
+            role_report.append(
+                f"created {role_name}" if key in created
+                else f"using existing {role_name}"
+            )
     else:
         role_report.append("bot offline — roles not created; set them later")
 
