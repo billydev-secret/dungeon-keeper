@@ -7,10 +7,24 @@ so a panel that throws on mount (a renamed endpoint, a bad import, a null deref)
 would ship green. This catches it.
 
 Per panel, in a fresh browser context, it asserts:
+  * the panel module actually *loaded* — see below;
   * no uncaught JS exception (`pageerror`);
   * no `console.error` other than resource-load failures (those are the network
     layer's concern, checked below, and would double-count);
   * no same-origin request that failed or returned 4xx/5xx.
+
+The first of those is the newest and was, embarrassingly, the hole this suite
+fell through: ``app.js`` ``await import()``s a panel inside a ``try``, and on
+rejection paints ``Failed to load <label>: <message>`` into the panel root. That
+is a *caught* rejection — no `pageerror`, no `console.error`, no failed request —
+so the total failure of a panel to load at all was the one mount problem this
+gate could not see. The Meadow Mahjong panel shipped that way in 2026-08
+(importing ``apiGet`` from ``api.js``, which exports ``api``) and swept green.
+The banner text is app.js's alone; ``mountAsync``'s own failure state reads
+"Couldn't load this page.", so matching the prefix cannot collide with a panel
+that merely failed its first fetch. ``tests/web/test_js_import_bindings.py``
+catches the specific import-binding case without a browser; this catches any
+reason a module fails to load.
 
 The test env has no connected bot, so endpoints needing one legitimately return
 503 ("Bot is not connected") — tolerated, since it can't happen in prod where
@@ -176,15 +190,26 @@ def _audit_panel(browser, base: str, pid: str) -> dict:
     page.on("response", on_response)
     page.on("requestfailed", on_requestfailed)
 
+    load_errors: list[str] = []
     try:
         _goto_panel(page, f"{base}/#/{pid}")
         _settle(page)
+        # app.js caught the module's import rejection and painted a banner —
+        # invisible to every listener above, so read it out of the DOM.
+        for text in page.locator(".error").all_inner_texts():
+            if text.strip().startswith("Failed to load "):
+                load_errors.append(text.strip()[:160])
     except Exception as e:  # a navigation that outright fails is its own finding
         page_errors.append(f"navigation: {str(e)[:120]}")
     finally:
         context.close()
 
-    return {"console": console_errors, "pageerror": page_errors, "net": sorted(set(bad_net))}
+    return {
+        "console": console_errors,
+        "pageerror": page_errors,
+        "net": sorted(set(bad_net)),
+        "load": load_errors,
+    }
 
 
 # ── the sweep ───────────────────────────────────────────────────────────────
@@ -198,6 +223,9 @@ def test_no_panel_errors_on_load(dashboard, browser):
     failures: list[str] = []
     for pid in ids:
         res = _audit_panel(browser, dashboard.base, pid)
+        # The module never loaded — nothing else about the panel is meaningful.
+        if res["load"]:
+            failures.append(f"{pid}: module did not load — {'; '.join(res['load'][:2])}")
         # A JS exception is always a bug — even on an allowlisted panel.
         if res["pageerror"]:
             failures.append(f"{pid}: uncaught JS — {'; '.join(res['pageerror'][:3])}")
