@@ -352,9 +352,16 @@ collision nothing could see.
 recommended. Keys are the `PanelSpec` keys so a panel excludes itself — a
 refresh in place must never be refused — and a panel that owns its destination
 (Voice Control, Guess Who) has that destination looked up from the registry
-rather than taken from the caller. The DM request panel, the todo boards and
-the Survivor repost still post through their own routes and have not adopted
-the guard yet; each is a two-line change.
+rather than taken from the caller.
+
+The three panels that never went through that route adopted the same guard:
+`/config/dms/post-panel`, `PUT /todos/board` and `POST /survivor/announcement`.
+So every path that places a sticky panel now runs the split, and each returns
+the survivable collision as a `warning` in its response rather than swallowing
+it. The todo route keeps `conflicting_board` *ahead* of the registry check —
+that refusal names what clearing the sibling board costs, and removing it is
+the way through, so the price belongs in the sentence that sends the mod to
+do it.
 
 ### The last hand-rolled copy (`guess`)
 

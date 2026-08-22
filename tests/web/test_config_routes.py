@@ -2283,3 +2283,68 @@ def test_inactive_channel_setup_leaves_the_old_channel_alone_when_posting_fails(
     assert "info panel" in note
     # The old channel keeps its access; the admin's previous setup still works.
     old_channel.set_permissions.assert_not_awaited()
+
+
+# ── /config/dms/post-panel — the sticky-collision guard ───────────────
+
+
+def _occupy_casino(fake_ctx, channel_id: int) -> None:
+    """Put the casino hub — a bot-chasing panel — in a channel."""
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (fake_ctx.guild_id, "casino_panel_channel_id", str(channel_id)),
+        )
+
+
+def _occupy_pen_pals(fake_ctx, channel_id: int) -> None:
+    """Put the pen pals panel — human-message-only — in a channel."""
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO pen_pals_config (guild_id, panel_channel_id) VALUES (?, ?)",
+            (fake_ctx.guild_id, channel_id),
+        )
+
+
+def test_dms_post_panel_refuses_a_bot_chasing_channel(authed_client, fake_ctx):
+    """The DM panel is the only route to a member's own DM settings, so
+    burying it under a panel that re-takes the bottom on every repaint would
+    take that surface away with nothing visible to explain it."""
+    cog, _ = _dms_panel_guild(fake_ctx)
+    _occupy_casino(fake_ctx, 5000)
+
+    resp = authed_client.post(
+        "/api/config/dms/post-panel", json={"channel_id": "5000"}
+    )
+    assert resp.status_code == 400
+    assert "casino hub panel" in resp.json()["detail"]
+    cog.post_panel.assert_not_awaited()
+
+
+def test_dms_post_panel_warns_beside_a_human_only_panel(authed_client, fake_ctx):
+    cog, _ = _dms_panel_guild(fake_ctx)
+    _occupy_pen_pals(fake_ctx, 5000)
+
+    resp = authed_client.post(
+        "/api/config/dms/post-panel", json={"channel_id": "5000"}
+    )
+    assert resp.status_code == 200
+    assert "pen pals panel" in resp.json()["warning"]
+    cog.post_panel.assert_awaited_once()
+
+
+def test_dms_post_panel_is_not_refused_on_account_of_itself(authed_client, fake_ctx):
+    """Re-posting into the channel it already occupies is how an admin moves a
+    panel that has drifted out of view."""
+    cog, _ = _dms_panel_guild(fake_ctx)
+    authed_client.post("/api/config/dms/post-panel", json={"channel_id": "5000"})
+
+    resp = authed_client.post(
+        "/api/config/dms/post-panel", json={"channel_id": "5000"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["warning"] is None

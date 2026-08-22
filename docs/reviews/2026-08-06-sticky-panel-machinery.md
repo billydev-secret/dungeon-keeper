@@ -218,9 +218,12 @@ plus the Survivor panel, which is `restick_on_bot` and so was an invisible
 every panel in `panel_registry`, which is what this section recommended;
 panels that own their destination (Voice Control, Guess Who) have it looked up
 from the registry, and each panel excludes itself so a refresh in place is
-never refused. Still on their own routes and not covered: the DM request
-panel's `/config/dms/post-panel`, the todo boards, and the Survivor panel's
-repost — each is a two-line adoption of `panel_posting.sticky_conflict`.
+never refused. The three panels that post through their own routes — the DM
+request panel's `/config/dms/post-panel`, the todo boards, and the Survivor
+panel's repost — adopted `panel_posting.sticky_conflict` the same day, so
+**every** path that places a sticky panel now runs the split. The todo boards
+keep `conflicting_board` ahead of it: that refusal names what clearing the
+sibling board would cost, which the generic warning does not.
 
 ### Test to land with it
 

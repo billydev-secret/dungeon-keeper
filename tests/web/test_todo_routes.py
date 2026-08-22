@@ -210,6 +210,90 @@ def test_board_route_without_a_bot_is_503(authed_client, fake_ctx):
     assert resp.status_code == 503
 
 
+# ── board placement vs the other sticky panels ────────────────────────
+#
+# The same-channel refusal above only ever knew about the *other* todo board.
+# Every other sticky panel in the guild was invisible to it until the registry
+# landed (2026-08-22).
+
+
+def _occupy(fake_ctx, channel_id: int, *, key: str) -> None:
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(fake_ctx.db_path) as conn:
+        if key == "survivor":
+            from bot_modules.services.survivor_service import (
+                create_season,
+                set_panel_ids,
+            )
+
+            create_season(conn, GUILD, "S", 2035)
+            set_panel_ids(conn, GUILD, channel_id, 1)
+        elif key == "pen-pals":
+            conn.execute(
+                "INSERT INTO pen_pals_config (guild_id, panel_channel_id)"
+                " VALUES (?, ?)",
+                (GUILD, channel_id),
+            )
+        else:  # pragma: no cover - guards a typo in a test
+            raise AssertionError(key)
+
+
+def test_board_refuses_a_channel_the_survivor_panel_holds(authed_client, fake_ctx):
+    """The Survivor panel re-sticks under the bot's own posts, so a board
+    sharing its channel is buried after every Reckoning and never comes back."""
+    cog = _attach_bot(fake_ctx)
+    _occupy(fake_ctx, 555, key="survivor")
+    resp = authed_client.put("/api/todos/board", json={"channel_id": "555"})
+    assert resp.status_code == 400
+    assert "Survivor panel" in resp.json()["detail"]
+    cog.place_board.assert_not_awaited()
+
+
+def test_board_warns_beside_a_human_only_panel(authed_client, fake_ctx):
+    cog = _attach_bot(fake_ctx)
+    _occupy(fake_ctx, 555, key="pen-pals")
+    resp = authed_client.put("/api/todos/board", json={"channel_id": "555"})
+    assert resp.status_code == 200
+    assert "pen pals panel" in resp.json()["warning"]
+    cog.place_board.assert_awaited_once()
+
+
+def _seed_board(fake_ctx, channel_id: int, kind: str) -> None:
+    """Record a board as posted. ``place_board`` is mocked in these tests, so
+    the row it would normally write has to be put there directly."""
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.todo_service import save_board
+
+    with open_db(fake_ctx.db_path) as conn:
+        save_board(conn, GUILD, channel_id, 1, kind=kind)
+
+
+def test_reposting_a_board_where_it_already_is_is_not_a_conflict(
+    authed_client, fake_ctx
+):
+    """Re-posting is how a board that has drifted out of view is rescued, so
+    a board must never be refused on account of itself."""
+    cog = _attach_bot(fake_ctx)
+    _seed_board(fake_ctx, 555, "all")
+    resp = authed_client.put("/api/todos/board", json={"channel_id": "555"})
+    assert resp.status_code == 200
+    assert resp.json()["warning"] is None
+    cog.place_board.assert_awaited_once()
+
+
+def test_the_sibling_board_still_gets_its_own_wording(authed_client, fake_ctx):
+    """The 409 names what clearing the resident would cost; the registry's
+    generic warning must not replace it."""
+    _attach_bot(fake_ctx)
+    _seed_board(fake_ctx, 555, "all")
+    resp = authed_client.put(
+        "/api/todos/board", json={"channel_id": "555", "kind": "chores"}
+    )
+    assert resp.status_code == 409
+    assert "todo" in resp.json()["detail"].lower()
+
+
 # ── recurring tasks ───────────────────────────────────────────────────
 
 

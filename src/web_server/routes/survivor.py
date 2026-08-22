@@ -27,6 +27,7 @@ from bot_modules.services.moderation import write_audit
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from web_server.helpers import mirror_admin_action_to_mod_log
+from web_server.routes.panel_posting import sticky_conflict
 
 log = logging.getLogger("web.survivor")
 
@@ -689,6 +690,16 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
             status.HTTP_503_SERVICE_UNAVAILABLE, "Bot offline."
         )
 
+    # The panel goes to the configured Survivor channel, and it re-sticks under
+    # the bot's own posts — so anything else already holding that channel's
+    # bottom is a collision worth naming before the panel lands on top of it.
+    warning = await sticky_conflict(
+        ctx,
+        guild_id,
+        int(season["config"]["channel_id"] or 0),
+        excluding="survivor",
+    )
+
     from bot_modules.survivor.views import PanelError, repost_panel
 
     try:
@@ -724,6 +735,7 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
         "message_id": str(message.id),
         "pinned": pinned,
         "retired_previous": retired,
+        "warning": warning,
     }
 
 

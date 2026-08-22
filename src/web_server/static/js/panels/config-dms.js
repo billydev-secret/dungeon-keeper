@@ -190,8 +190,10 @@ export function mount(container) {
       }
       pbBtn.disabled = true;
       try {
-        await apiPost("/api/config/dms/post-panel", { channel_id: channelId });
-        showStatus(pbStatus, true, "Panel posted");
+        const res = await apiPost("/api/config/dms/post-panel", { channel_id: channelId });
+        // A survivable sticky collision: it posted, but another panel is now
+        // fighting it for the one bottom slot in that channel.
+        showStatus(pbStatus, true, res.warning || "Panel posted");
         setTimeout(() => mount(container), 1500);
       } catch (err) {
         showStatus(pbStatus, false, err.message);
