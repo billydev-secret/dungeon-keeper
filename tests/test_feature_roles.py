@@ -75,3 +75,29 @@ def test_every_entry_reads_as_a_sentence_in_the_mod_log():
         assert entry.feature.strip(), f"{entry.key} has no feature label"
         line = recreate_notice(entry.spec.name, entry.feature)
         assert entry.spec.name in line and entry.feature in line
+
+
+def test_econ_prefixed_keys_do_not_use_the_legacy_fallback():
+    """``load_econ_settings`` is guild-scoped with no ``guild_id=0`` fallback.
+
+    Reading an econ key *with* the fallback would hand a guild the home guild's
+    role id — a role that doesn't exist there — and provision over a guild that
+    is actually configured.
+    """
+    for entry in fr.CONFIG_ROLES:
+        if entry.key.startswith("econ_"):
+            assert entry.legacy_fallback is False, entry.key
+
+
+def test_onboarding_blurbs_fit_discord_limits():
+    """These become option titles/descriptions in Discord's onboarding, where
+    over-length is a 400 with an opaque message."""
+    from bot_modules.services.onboarding_service import (
+        MAX_OPTION_DESCRIPTION,
+        MAX_OPTION_TITLE,
+    )
+
+    for entry in fr.CONFIG_ROLES:
+        assert entry.blurb, f"{entry.key} has no onboarding blurb"
+        assert len(entry.blurb) <= MAX_OPTION_DESCRIPTION, entry.key
+        assert len(entry.spec.name) <= MAX_OPTION_TITLE, entry.key

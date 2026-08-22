@@ -50,6 +50,11 @@ class FeatureRole:
     feature: str
     #: What the role should look like when it has to be made.
     spec: RoleSpec
+    #: One line describing the role to a member choosing it in Discord's
+    #: onboarding. Kept to Discord's 100-character option-description cap.
+    blurb: str = ""
+    #: Suggested emoji for the onboarding option.
+    emoji: str = ""
     #: Whether a missing row falls back to the legacy ``guild_id=0`` row, which
     #: has to match how the feature itself reads the key or we'd provision a
     #: role for a guild that is really inheriting an answer. Economy settings
@@ -58,7 +63,13 @@ class FeatureRole:
 
 
 def _ping(
-    key: str, feature: str, name: str, *, legacy_fallback: bool = True
+    key: str,
+    feature: str,
+    name: str,
+    *,
+    blurb: str = "",
+    emoji: str = "",
+    legacy_fallback: bool = True,
 ) -> FeatureRole:
     """A ping-only role: no permissions, and not mentionable.
 
@@ -69,6 +80,8 @@ def _ping(
     return FeatureRole(
         key=key,
         feature=feature,
+        blurb=blurb,
+        emoji=emoji,
         legacy_fallback=legacy_fallback,
         spec=RoleSpec(
             name=name,
@@ -78,19 +91,31 @@ def _ping(
     )
 
 
-WELCOME_PING = _ping("welcome_ping_role_id", "welcome messages", "Welcome Ping")
+WELCOME_PING = _ping(
+    "welcome_ping_role_id", "welcome messages", "Welcome Ping",
+    blurb="Get a nudge when somebody new arrives, so you can say hello.",
+    emoji="👋",
+)
 QOTD_PING = _ping(
     "econ_qotd_ping_role_id", "the question of the day", "QOTD",
+    blurb="Be told when the question of the day goes up.",
+    emoji="💬",
     legacy_fallback=False,
 )
 RISKY_PING = _ping(
-    "risky_ping_role_id", "the Risky Rolls round ping", "Risky Rolls"
+    "risky_ping_role_id", "the Risky Rolls round ping", "Risky Rolls",
+    blurb="Get pinged when a Risky Rolls round opens.",
+    emoji="🎲",
 )
 PROMOTION_REVIEW_PING = _ping(
-    "promotion_review_ping_role_id", "promotion reviews", "Promotion Reviewers"
+    "promotion_review_ping_role_id", "promotion reviews", "Promotion Reviewers",
+    blurb="For role managers: be told when someone needs reviewing.",
+    emoji="📋",
 )
 ECONOMY_NOTIFY = _ping(
     "econ_game_role_id", "economy notifications", "Economy Notifications",
+    blurb="Get your streak digest and event alerts in your DMs.",
+    emoji="🔔",
     legacy_fallback=False,
 )
 

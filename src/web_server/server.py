@@ -322,6 +322,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(role_menus_routes.router, prefix="/api", tags=["role-menus"])
 
+    from web_server.routes import onboarding as onboarding_routes
+
+    app.include_router(onboarding_routes.router, prefix="/api", tags=["onboarding"])
+
     from web_server.routes import chat_revive as chat_revive_routes
 
     app.include_router(chat_revive_routes.router, prefix="/api", tags=["chat-revive"])

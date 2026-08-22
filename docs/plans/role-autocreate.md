@@ -1,6 +1,7 @@
 # Implementation plan — features auto-create the roles they need
 
-**Status:** Stages 1–2 built 2026-08-22. Stages 3–4 not started.
+**Status:** Stages 1–2 and the onboarding panel built 2026-08-22. Stages 3–4
+not started.
 **Source:** todo #105 (Billy, 2026-08-18, during the Survivor first-look review).
 **Reference implementation:** Survivor (`web_server/routes/survivor.py` create_season
 + `survivor/tasks.py::reconcile_roles`).
@@ -319,6 +320,49 @@ Fixed along the way: the QOTD ping's allow-list was widened to
 question containing `@everyone` would have pinged the server. `everyone`,
 `users` and `replied_user` are now pinned False, with a regression test.
 
+## Onboarding — where the opt-in roles actually get taken *(built)*
+
+Added at Billy's ask, out of the original stage order: *"can the new opt-in
+roles be added to the community role selector?"* — meaning Discord's built-in
+onboarding ("Channels & Roles"), not DK's role-menus feature. Worth knowing that
+DK's own role menus are effectively unused in prod: two menus exist ("test",
+"Colours"), both with zero options, neither posted.
+
+This is the answer to the open question below. Four of the five Stage 2 roles
+have no way for a member to take them; onboarding is where members reliably pick
+roles up, and DK already **reads** it hourly
+(`economy_loop._sync_setup_marks` derives the `role_pick` quest from exactly
+this config). Only the write half was new.
+
+**The API shapes the whole design.** `Guild.edit_onboarding(prompts=...)`
+*replaces the entire prompt list* — there is no append call — and a human edits
+the same config by hand in Server Settings. So:
+
+* **Nothing writes it on a loop.** A background sync racing a hand edit would
+  clobber it wholesale, which is the two-writers failure that cost 78 members
+  their DM-mode picks when MEE6 wrote the same roles.
+* **Plan, show, confirm, write.** `plan_add_options` is pure and returns the
+  exact prompt list a save would produce, so the panel confirms a diff. The plan
+  is recomputed server-side against a **freshly read** config, so a concurrent
+  hand edit is refused ("that question no longer exists") rather than
+  overwritten.
+* **Everything must survive the round-trip.** Titles, descriptions, emoji, roles
+  and channels do. Prompt ids do **not** — discord.py's `to_dict(id=i)`
+  renumbers by list index and options carry no id at all, so Discord treats any
+  write as replace-these-prompts. Nothing here may depend on an id surviving.
+  Verified the payload builder rather than the docs: unset fields are genuinely
+  omitted, so a prompts-only write leaves `enabled`, `mode` and the default
+  channels alone.
+
+The panel (`onboarding`, Config → Roles, admin-only) shows each managed role in
+one of four states — **offered** / **ready** / **uncreated** / **off** — and
+adding an `uncreated` one provisions it first via `ensure_config_role`, so a
+role can go into onboarding before the feature that owns it has ever run. A dial
+set to "(none)" stays `off` and is never provisioned, the Stage 2 rule holding.
+
+Roles carry a `blurb` and `emoji` in the registry now, so the onboarding option
+describes itself to a member rather than showing a bare role name.
+
 ## Stage 3 — the dashboard side *(not started)*
 
 The dial stops being the *only* way a role gets set, so the panel has to say so.
@@ -339,10 +383,9 @@ storage that already exists.
 
 ## Open questions
 
-1. **Class B ping roles will sit empty** — accepted per decision 2. Worth a
-   follow-up todo for opt-in surfaces, or leave it? Stage 2 sharpened this:
-   only @Economy Notifications has a way for members to take it, so the other
-   four will stay empty until something hands them out. *(Non-blocking.)*
+1. ~~**Class B ping roles will sit empty**~~ — **answered 2026-08-22** by the
+   onboarding panel above: an admin can put any of the five into Discord's
+   "Channels & Roles" screen, which is where members actually pick roles up.
 2. **`econ_game_role_id` is stored as 0 in two prod guilds**, so the 🔔 dead end
    persists there by the opt-out rule. Setting the dial (or clearing the row)
    is a one-line dashboard fix if that 0 was never a deliberate "no".
