@@ -1100,6 +1100,14 @@ def seen_elsewhere(state: GameState, seat: int) -> Counter[Tile]:
     return seen
 
 
+ASSIST_MODES = ("off", "target", "gap", "coach")
+"""Assistance levels (plans/mahjong-assist.md): nothing; the closest lines
+and their distances; plus the tiles still needed; plus dead weight and a
+suggested discard. THE one authority on the vocabulary — the service
+re-exports it, the route derives its validation pattern from it, and the
+views' choices are test-pinned to it (review round 2, F7)."""
+
+
 def obtainable_seen(state: GameState, seat: int) -> Counter[Tile]:
     """:func:`seen_elsewhere`, minus the live discard for a seat that can
     still take it — not the discarder, and not a seat whose recorded claim
@@ -1155,7 +1163,8 @@ def assist_readout(
     with no tile choice in it. Pure — the cog passes it to the embed."""
     seat_state = state.seats[seat]
     if (
-        mode not in ("target", "gap", "coach")
+        mode == "off"
+        or mode not in ASSIST_MODES
         or state.phase not in _ASSIST_PHASES
         or seat_state.fallow
         or not seat_state.rack
@@ -1173,7 +1182,9 @@ def assist_readout(
             [
                 [e.as_match() for e in s.exposures]
                 for i, s in enumerate(state.seats)
-                if i != seat
+                # a fallow seat can never claim or win — its exposures
+                # threaten nothing and must not mute the coach (F3)
+                if i != seat and not s.fallow
             ],
         )
         suggestion = suggest_discard(list(seat_state.rack), prospects, danger)

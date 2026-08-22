@@ -34,6 +34,7 @@ from pathlib import Path
 
 from bot_modules.core.db_utils import get_config_value, open_db
 from bot_modules.games.mahjong import game_logic as engine
+from bot_modules.games.mahjong.game_logic import ASSIST_MODES
 from bot_modules.games.mahjong.card_logic import Card, CardError, load_card
 from bot_modules.games.mahjong.game_logic import (
     ActionRejected,
@@ -112,12 +113,6 @@ def load_settings(conn, guild_id: int) -> MahjongSettings:
             get_config_value(conn, "mahjong_assist_default", "gap", guild_id)
         ),
     )
-
-
-ASSIST_MODES = ("off", "target", "gap", "coach")
-"""Assistance levels (plans/mahjong-assist.md): nothing; the closest lines
-and their distances; plus the tiles still needed; plus dead weight and a
-suggested discard."""
 
 
 def _assist(raw: str) -> str:

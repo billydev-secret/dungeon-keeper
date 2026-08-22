@@ -19,6 +19,7 @@ import pytest
 
 from bot_modules.games.mahjong import game_logic as G
 from bot_modules.games.mahjong.card_logic import load_card, load_first_light
+from bot_modules.games.mahjong.mahjong_service import ASSIST_MODES
 from bot_modules.games.mahjong.game_logic import (
     ActionRejected,
     GameState,
@@ -1733,3 +1734,28 @@ def test_claim_window_discount_stops_after_a_pass():
     after = G.assist_readout(state, 0, CARD, "gap")
     gh1_after = next((p for p in after.prospects if p.hand.id == "gh-1"), None)
     assert gh1_after is None or gh1_after.distance > 1
+
+
+def test_fallow_seats_exposures_never_gate_the_coach():
+    # F3: a folded seat can never claim or win — its exposed kong reveals
+    # nothing a live seat threatens, so it must not silence a suggestion.
+    exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("9d"),
+                                     count=4, jokers=0)]}
+    state = play_state(
+        2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*9"}, exposures=exposures
+    )
+    silenced = G.assist_readout(state, 0, CARD, "coach")
+    assert silenced is not None and silenced.suggestion is None  # live: rail
+    state.seats[1].fallow = True
+    freed = G.assist_readout(state, 0, CARD, "coach")
+    assert freed is not None and freed.suggestion == Tile("9b")
+
+
+@pytest.mark.parametrize("mode", ASSIST_MODES)
+def test_every_assist_mode_is_understood_by_the_gate(mode):
+    # F7: the vocabulary must have ONE authority. Every mode the service
+    # accepts either renders a readout or is 'off' — a fifth mode silently
+    # rendering nothing (indistinguishable from off) is the failure pinned.
+    state = play_state(2, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*13"})
+    r = G.assist_readout(state, 0, CARD, mode)
+    assert (r is None) == (mode == "off")

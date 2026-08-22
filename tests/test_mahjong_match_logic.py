@@ -631,12 +631,23 @@ def test_assist_invariants_hold_on_random_racks(card, seed):
     hold = rng.choice((13, 14))
     rack, seen = wall[:hold], Counter(wall[hold : hold + rng.randrange(0, 60)])
 
-    prospects = closest_lines(rack, [], card, seen, limit=None)
+    # Odd seeds play with a locked exposure — the liveness logic's hardest
+    # branch (exposure→group assignment) must stay pinned to reachable_lines
+    # too, not just the bare-rack case (review round 2, F8).
+    exposures = []
+    if seed % 2:
+        natural = next(
+            t for t in rack if t is not Tile.JOKER and t is not Tile.FLOWER
+        )
+        exposures = [Exposure(natural=natural, count=3, jokers=seed % 4 == 1)]
+        rack = rack[3:]
+
+    prospects = closest_lines(rack, exposures, card, seen, limit=None)
 
     # Same liveness, same exclusions: closest_lines sees exactly the lines
     # reachable_lines does — one enumerator, one truth.
     assert {p.hand.id for p in prospects} == {
-        h.id for h in reachable_lines(rack, [], card, seen)
+        h.id for h in reachable_lines(rack, exposures, card, seen)
     }
 
     order = {tile: i for i, tile in enumerate(Tile)}
@@ -656,7 +667,7 @@ def test_assist_invariants_hold_on_random_racks(card, seed):
                 assert previous.hand.value >= p.hand.value
         previous = p
         # Distance zero and only distance zero is an exact match (needs 14).
-        if hold == 14:
+        if hold == 14 and not exposures:
             matched_ids = {m.hand.id for m in match_hand(rack, [], card)}
             assert (p.distance == 0) == (p.hand.id in matched_ids)
 

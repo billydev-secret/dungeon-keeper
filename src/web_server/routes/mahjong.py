@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from bot_modules.core.db_utils import set_config_value
 from bot_modules.games.mahjong.card_logic import lint_card_data, load_card
 from bot_modules.games.mahjong.mahjong_service import (
+    ASSIST_MODES,
     PAYOUT_CAP,
     TableError,
     load_settings,
@@ -46,7 +47,7 @@ class ConfigBody(BaseModel):
     duel_wall_trim: int = Field(ge=0, le=100)
     second_charleston: bool
     stakes_allowed: list[int] = Field(min_length=1, max_length=8)
-    assist_default: str = Field(pattern="^(off|target|gap|coach)$")
+    assist_default: str = Field(pattern=f"^({'|'.join(ASSIST_MODES)})$")
 
 
 class CardUploadBody(BaseModel):

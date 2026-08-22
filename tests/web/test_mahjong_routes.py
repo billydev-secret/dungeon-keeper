@@ -171,3 +171,20 @@ def test_report_shape_and_snowflake_strings(fake_ctx, authed_client):
     assert data["tables"][0]["host_id"] == str(big)
     assert data["results"][0]["winner_id"] == str(big)
     assert data["aggregates"][0]["user_id"] == str(big)
+
+
+def test_every_assist_mode_saves(authed_client):
+    # F7 pin, route side: the validation pattern is derived from
+    # ASSIST_MODES, so every mode the service knows must save.
+    from bot_modules.games.mahjong.mahjong_service import ASSIST_MODES
+
+    body = {
+        "enabled": True, "claim_window_4": 8, "claim_window_2": 5,
+        "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 0,
+        "second_charleston": True, "stakes_allowed": [1],
+    }
+    for mode in ASSIST_MODES:
+        r = authed_client.put(
+            "/api/mahjong/config", json={**body, "assist_default": mode})
+        assert r.status_code == 200, (mode, r.text)
+        assert r.json()["assist_default"] == mode
