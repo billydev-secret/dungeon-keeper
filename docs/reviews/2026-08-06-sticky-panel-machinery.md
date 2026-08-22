@@ -225,6 +225,23 @@ panel's repost — adopted `panel_posting.sticky_conflict` the same day, so
 keep `conflicting_board` ahead of it: that refusal names what clearing the
 sibling board would cost, which the generic warning does not.
 
+Three corrections from the review of that work, same day:
+
+* **The check is for sticky panels only.** It ran for every key in
+  `panel_registry`, so the support ticket panel and the grant-audit card — both
+  posted once and then left to scroll — were being refused a channel outright.
+  Neither has a bottom slot to contest; `is_sticky_panel` gates it now.
+* **Own-channel panels resolve their real destination.** `own_channel_id` read
+  the registry's channel for the panel, i.e. where it *is*. Voice Control posts
+  to `voice_master_control_channel_id` but records its location under
+  `voice_master_panel_channel_id`, so after a Control Channel move the guard
+  judged the old channel's residents — and on a first post, with nothing
+  recorded, it skipped the check entirely.
+* **Survivor keys off the season's configured channel**, not
+  `announcement_channel_id`. The panel is absent from that key until it has
+  been posted once, which is exactly the window where something else gets
+  placed in the channel unopposed and the Wednesday repost then buries it.
+
 ### Test to land with it
 
 `tests/test_core_sticky.py` has 37 tests and no multi-panel scenario — every one

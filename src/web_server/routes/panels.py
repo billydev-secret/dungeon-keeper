@@ -30,6 +30,7 @@ from bot_modules.services.panel_registry import (
 )
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms
+from bot_modules.services.sticky_registry import is_sticky_panel
 from web_server.routes.panel_posting import own_channel_id, sticky_conflict
 
 router = APIRouter()
@@ -198,14 +199,20 @@ async def post_panel(
     # One bottom slot per channel. Refuse the collision that cannot be lived
     # with, warn about the one that can — for every panel in the registry
     # rather than only the two features that grew their own check.
-    target_id = (
-        channel.id if channel else await own_channel_id(ctx, guild_id, spec.key)
-    )
-    warning = (
-        await sticky_conflict(ctx, guild_id, target_id, excluding=spec.key)
-        if target_id
-        else None
-    )
+    #
+    # Only for panels that re-stick, though. The support ticket panel and the
+    # grant-audit card are posted once and then scroll like any other message,
+    # so they have no bottom-slot contest to lose and refusing them would block
+    # a placement that has always worked.
+    warning = None
+    if is_sticky_panel(spec.key):
+        target_id = (
+            channel.id if channel else await own_channel_id(ctx, guild_id, spec.key)
+        )
+        if target_id:
+            warning = await sticky_conflict(
+                ctx, guild_id, target_id, excluding=spec.key
+            )
 
     try:
         message = await post(guild, channel, **_coerce_options(spec, body.options))

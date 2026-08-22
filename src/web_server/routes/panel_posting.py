@@ -15,11 +15,7 @@ import asyncio
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from bot_modules.services.sticky_registry import (
-    StickyResident,
-    panel_channels,
-    resident_in,
-)
+from bot_modules.services.sticky_registry import StickyResident, resident_in
 
 
 class ChannelIdBody(BaseModel):
@@ -134,16 +130,55 @@ async def sticky_conflict(
     )
 
 
+def _voice_control_destination(conn, guild_id: int) -> int:
+    from bot_modules.services.voice_master_service import (  # noqa: PLC0415
+        load_voice_master_config,
+    )
+
+    return int(load_voice_master_config(conn, guild_id).control_channel_id or 0)
+
+
+def _guess_prompt_destination(conn, guild_id: int) -> int:
+    from bot_modules.services.guess_repo import get_guess_config  # noqa: PLC0415
+
+    config = get_guess_config(conn, guild_id)
+    # ``place_or_refresh`` repaints the prompt where it already is rather than
+    # hopping it to the bottom, so a posted prompt's own channel is the real
+    # destination; the Guess channel is where a first one lands.
+    return int(config.prompt_channel_id or config.guess_channel_id or 0)
+
+
+#: Where each panel that owns its destination actually posts.
+#:
+#: **Not** the sticky registry's channel for that panel. The registry answers
+#: "where is this panel *now*", and for these two that is a different key:
+#: Voice Control records its panel's live location under
+#: ``voice_master_panel_channel_id`` while posting into
+#: ``voice_master_control_channel_id``, and the Guess prompt has no recorded
+#: channel at all until it has been posted once. Reading the registry here
+#: checked the wrong channel after a Control Channel move — refusing a post
+#: into a free channel because of who lived in the *old* one — and skipped the
+#: check entirely on the first-ever post, which is the one that needs it.
+_OWN_CHANNEL_DESTINATIONS = {
+    "voice-control": _voice_control_destination,
+    "guess-prompt": _guess_prompt_destination,
+}
+
+
 async def own_channel_id(ctx, guild_id: int, key: str) -> int:
     """Where a panel that owns its destination is configured to post.
 
     Voice Control and the Guess Who prompt take no channel from the caller, so
-    the collision check has to ask the registry where they are going.
+    the collision check has to work out where they are going. Returns 0 for a
+    panel that takes its channel from the caller, or one with nothing
+    configured — the caller then has nothing to check.
     """
+    resolve = _OWN_CHANNEL_DESTINATIONS.get(key)
+    if resolve is None:
+        return 0
 
     def _read() -> int:
         with ctx.open_db() as conn:
-            entry = panel_channels(conn, guild_id).get(key)
-        return entry[0] if entry else 0
+            return resolve(conn, guild_id)
 
     return await asyncio.to_thread(_read)

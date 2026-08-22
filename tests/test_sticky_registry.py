@@ -19,6 +19,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_service import save_econ_settings
 from bot_modules.services.sticky_registry import (
     bot_chasing_resident,
+    is_sticky_panel,
     panel_channels,
     resident_in,
     sticky_panel_channels,
@@ -215,6 +216,14 @@ def _seed_survivor(conn, channel_id: int) -> None:
     set_panel_ids(conn, GUILD, channel_id, 1)
 
 
+def _seed_survivor_unposted(conn, channel_id: int) -> None:
+    """A live season with a channel set and no panel in it yet."""
+    from bot_modules.services.survivor_service import create_season, update_config
+
+    season_id = create_season(conn, GUILD, "S", 2035)
+    update_config(conn, season_id, {"channel_id": channel_id})
+
+
 @pytest.mark.parametrize(
     ("seed", "key", "name", "blocks"),
     [
@@ -325,3 +334,52 @@ def test_resident_in_is_none_for_an_empty_channel(db):
     with open_db(db) as conn:
         _seed_pen_pals(conn, 6008)
         assert resident_in(conn, GUILD, 6009) is None
+
+
+def test_survivor_is_a_resident_before_its_panel_has_been_posted(db):
+    """Keying off the last posted location made Survivor invisible in exactly
+    the window that matters: nothing else is warned off the channel, and the
+    Wednesday repost then lands on top of whatever was placed there."""
+    with open_db(db) as conn:
+        _seed_survivor_unposted(conn, 6010)
+        found = sticky_panel_channels(conn, GUILD)
+    assert found[6010].name == "the Survivor panel"
+    assert found[6010].restick_on_bot is True
+
+
+def test_survivor_with_no_live_season_is_not_a_resident(db):
+    """An archived season's channel belongs to nobody."""
+    with open_db(db) as conn:
+        assert sticky_panel_channels(conn, GUILD) == {}
+
+
+def test_survivor_falls_back_to_where_the_panel_actually_is(db):
+    """Between an admin repointing the channel and the next repost, the panel
+    is still sitting in the old one."""
+    from bot_modules.services.survivor_service import create_season, set_panel_ids
+
+    with open_db(db) as conn:
+        create_season(conn, GUILD, "S", 2035)
+        set_panel_ids(conn, GUILD, 6011, 1)
+        found = sticky_panel_channels(conn, GUILD)
+    assert found[6011].name == "the Survivor panel"
+
+
+# ── which panels the collision rules apply to at all ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("key", "sticky"),
+    [
+        pytest.param("economy-panel", True, id="economy-panel"),
+        pytest.param("survivor", True, id="survivor"),
+        pytest.param("voice-control", True, id="voice-control"),
+        # Posted once and then scrolls like any other message — no bottom-slot
+        # contest to lose, so it must never be refused a channel.
+        pytest.param("ticket-panel", False, id="ticket-panel"),
+        pytest.param("grant-audit", False, id="grant-audit"),
+        pytest.param("no-such-panel", False, id="unknown"),
+    ],
+)
+def test_is_sticky_panel(key, sticky):
+    assert is_sticky_panel(key) is sticky

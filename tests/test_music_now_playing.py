@@ -146,51 +146,50 @@ async def test_a_failed_first_post_records_no_card():
 
 
 @pytest.mark.asyncio
-async def test_retire_deletes_the_card_and_forgets_it():
-    channel, queue = FakeChannel(), _queue()
-    await render_card(channel, queue, embed=_EMBED, view=MagicMock())
+async def test_retire_deletes_the_card_it_is_given():
+    channel = FakeChannel()
     guild = MagicMock()
     guild.get_channel.return_value = channel
 
-    await retire_card(guild, queue)
+    await retire_card(guild, CHANNEL, CARD)
     channel.get_partial_message(CARD).delete.assert_awaited_once()
-    assert queue.now_playing_message_id is None
-    assert queue.now_playing_channel_id is None
 
 
 @pytest.mark.asyncio
-async def test_retire_forgets_the_card_even_when_the_delete_fails():
-    """An already-deleted card must not stay on record and get edited later."""
-    channel, queue = FakeChannel(), _queue()
-    await render_card(channel, queue, embed=_EMBED, view=MagicMock())
+async def test_retire_swallows_an_already_deleted_card():
+    """The common case — somebody cleared it by hand — is not an error."""
+    channel = FakeChannel()
     channel.get_partial_message(CARD).delete.side_effect = _http_error(
         404, discord.NotFound
     )
     guild = MagicMock()
     guild.get_channel.return_value = channel
 
-    await retire_card(guild, queue)
-    assert queue.now_playing_message_id is None
+    await retire_card(guild, CHANNEL, CARD)  # must not raise
 
 
 @pytest.mark.asyncio
-async def test_retire_with_no_card_on_record_does_nothing():
+@pytest.mark.parametrize(
+    ("channel_id", "message_id"),
+    [
+        pytest.param(None, None, id="never-posted"),
+        pytest.param(CHANNEL, None, id="channel-only"),
+        pytest.param(None, CARD, id="message-only"),
+    ],
+)
+async def test_retire_with_no_card_on_record_does_nothing(channel_id, message_id):
     guild = MagicMock()
-    await retire_card(guild, _queue())
+    await retire_card(guild, channel_id, message_id)
     guild.get_channel.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_retire_survives_a_channel_that_no_longer_exists():
-    queue = _queue()
-    queue.now_playing_message_id = CARD
-    queue.now_playing_channel_id = CHANNEL
     guild = MagicMock()
     guild.get_channel.return_value = None
     guild.get_thread.return_value = None
 
-    await retire_card(guild, queue)
-    assert queue.now_playing_message_id is None
+    await retire_card(guild, CHANNEL, CARD)  # must not raise
 
 
 # ── CardRefresher ──────────────────────────────────────────────────────
@@ -289,3 +288,43 @@ async def test_cancel_all_drops_every_guild_s_queued_refresh():
 
     await asyncio.sleep(INTERVAL * 3)
     assert calls == [f"{GUILD}-first", f"{GUILD + 1}-first"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_flush_does_not_evict_its_replacement():
+    """A cancel that lands *mid-render* unwinds after the next task is armed.
+
+    The doomed task's cleanup then popped a slot that no longer belonged to
+    it, evicting the live replacement: that task keeps running, the slot reads
+    empty, and the next ``_arm`` starts a second coalescer — two of them
+    editing one card. Reaching it needs the cancel to arrive while a render is
+    in flight, which is why the render here blocks on a gate.
+    """
+    calls, render = _counter()
+    refresher = CardRefresher(interval=INTERVAL)
+    gate = asyncio.Event()
+
+    async def _blocked() -> None:
+        await gate.wait()
+        calls.append("blocked")
+
+    await refresher.submit(GUILD, render("first"))
+    await refresher.submit(GUILD, _blocked)
+    doomed = refresher._tasks[GUILD]
+    await asyncio.sleep(INTERVAL * 2)  # doomed is now inside _blocked
+
+    refresher.forget(GUILD)
+    await refresher.submit(GUILD, render("second"))
+    await refresher.submit(GUILD, render("queued-again"))
+    replacement = refresher._tasks[GUILD]
+    assert replacement is not doomed
+
+    gate.set()  # let the cancellation finish unwinding
+    await asyncio.sleep(0)
+    assert doomed.done()
+    assert not replacement.done()
+    assert refresher._tasks.get(GUILD) is replacement, "the live task was evicted"
+
+    await asyncio.sleep(INTERVAL * 3)
+    assert calls == ["first", "second", "queued-again"]
+    refresher.cancel_all()

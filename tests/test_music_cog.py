@@ -125,8 +125,100 @@ async def test_the_card_stays_in_its_own_channel_when_play_moves_elsewhere(cog):
 
 
 @pytest.mark.asyncio
-async def test_ending_the_session_drops_the_card_state(cog):
+async def test_ending_the_session_takes_the_card_with_it(cog):
+    """Left behind, the card names a stopped track and its buttons still work
+    — and the next /play posts a second one beside it, which is how the
+    channel filled up with cards in the first place."""
+    channel = _text_channel()
+    guild = MagicMock()
+    guild.id = GUILD
+    guild.get_channel.return_value = channel
     queue = cog._queue(GUILD)
     queue.now_playing_message_id = CARD
-    cog._end_session(GUILD)
+    queue.now_playing_channel_id = CHANNEL
+
+    await cog._end_session(guild)
+
+    channel.get_partial_message(CARD).delete.assert_awaited_once()
     assert cog._queue(GUILD).now_playing_message_id is None
+
+
+@pytest.mark.asyncio
+async def test_ending_a_session_that_never_had_a_card_is_a_no_op(cog):
+    guild = MagicMock()
+    guild.id = GUILD
+    await cog._end_session(guild)  # no queue at all — must not raise
+    guild.get_channel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_nowplaying_posts_the_new_card_before_deleting_the_old(cog):
+    """Retiring first left a window across two awaits where the queue held no
+    card — a track change landing in it would post a third one."""
+    old_channel = _text_channel(CHANNEL)
+    guild = MagicMock()
+    guild.id = GUILD
+    guild.get_channel.return_value = old_channel
+    guild.get_member.return_value = None
+    player = _player(guild)
+    cog._player = MagicMock(return_value=player)
+    queue = cog._queue(GUILD)
+    queue.current = _track("first")
+    queue.now_playing_message_id = CARD
+    queue.now_playing_channel_id = CHANNEL
+
+    order: list[str] = []
+    new_message = MagicMock(id=CARD + 5)
+    new_message.channel = MagicMock(id=8123)
+
+    async def _send(**_kw):
+        order.append("send")
+        # Mid-flight the old card is still the one on record, so a refresh
+        # arriving here edits it rather than posting a rival.
+        assert queue.now_playing_message_id == CARD
+
+    interaction = MagicMock()
+    interaction.guild = guild
+    interaction.response.send_message = _send
+    interaction.original_response = AsyncMock(return_value=new_message)
+    old_channel.get_partial_message(CARD).delete = AsyncMock(
+        side_effect=lambda: order.append("delete")
+    )
+
+    await cog.now_playing_cmd.callback(cog, interaction)
+
+    assert order == ["send", "delete"]
+    assert queue.now_playing_message_id == CARD + 5
+    assert queue.now_playing_channel_id == 8123
+
+
+@pytest.mark.asyncio
+async def test_nowplaying_cancels_a_queued_refresh_for_the_old_channel(cog):
+    """That refresh closed over the old channel. Once the ids move it stops
+    matching, so it would decide there is no card there and post one."""
+    cog._card = CardRefresher(interval=60.0)
+    channel = _text_channel(CHANNEL)
+    guild = MagicMock()
+    guild.id = GUILD
+    guild.get_channel.return_value = channel
+    guild.get_member.return_value = None
+    player = _player(guild)
+    cog._player = MagicMock(return_value=player)
+    queue = cog._queue(GUILD)
+    queue.current = _track("first")
+    queue.text_channel_id = CHANNEL
+
+    # A track change, then a second one that has to queue behind it.
+    await cog._refresh_now_playing(player, _track("first"))
+    await cog._refresh_now_playing(player, _track("second"))
+    assert cog._card._pending.get(GUILD) is not None
+
+    new_message = MagicMock(id=CARD + 5)
+    new_message.channel = MagicMock(id=CHANNEL)
+    interaction = MagicMock()
+    interaction.guild = guild
+    interaction.response.send_message = AsyncMock()
+    interaction.original_response = AsyncMock(return_value=new_message)
+
+    await cog.now_playing_cmd.callback(cog, interaction)
+    assert cog._card._pending.get(GUILD) is None

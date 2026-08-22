@@ -134,9 +134,28 @@ def _todo_board_channel(chores: bool) -> Callable[[sqlite3.Connection, int], int
 
 
 def _survivor_channel(conn: sqlite3.Connection, guild_id: int) -> int:
-    from bot_modules.services.survivor_service import panel_ids  # noqa: PLC0415
+    """The season's configured channel, not where the panel was last posted.
 
-    return int(panel_ids(conn, guild_id)[0] or 0)
+    ``panel_ids`` answers "where is it now", which is empty until the first
+    post — and a Survivor panel that hasn't landed yet is exactly when this
+    matters: something else gets placed in that channel unopposed, and the
+    Wednesday repost then buries it. The configured channel is where the panel
+    is going to live, which is the same rule the bounty hub already follows
+    (it keys off the board channel, not its last placement). Falls back to the
+    recorded location for the window after an admin repoints the channel and
+    before the next repost moves the panel off the old one.
+    """
+    from bot_modules.services.survivor_service import (  # noqa: PLC0415
+        get_active_season,
+    )
+
+    season = get_active_season(conn, guild_id)
+    if season is None:
+        return 0
+    config = season["config"]
+    return int(
+        config.get("channel_id") or config.get("announcement_channel_id") or 0
+    )
 
 
 #: Every sticky panel a plain config read can find, as
@@ -168,6 +187,20 @@ _STICKY_PANELS: tuple[tuple[str, str, bool, Callable[..., int]], ...] = (
     # main buriers, so it follows them down — and blocks anything else here.
     ("survivor", "the Survivor panel", True, _survivor_channel),
 )
+
+
+_STICKY_KEYS = frozenset(key for key, _name, _on_bot, _resolve in _STICKY_PANELS)
+
+
+def is_sticky_panel(key: str) -> bool:
+    """Whether this panel keeps itself at the bottom of its channel.
+
+    The collision rules are about two panels contesting one bottom slot, so a
+    caller placing something that does *not* re-stick — the support ticket
+    panel, the grant-audit card — has no contest to lose and must not be
+    refused. Being scrolled up is ordinary Discord, not a fight.
+    """
+    return key in _STICKY_KEYS
 
 
 def panel_channels(

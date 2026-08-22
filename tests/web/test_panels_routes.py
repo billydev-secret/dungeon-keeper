@@ -284,6 +284,7 @@ def _occupy(fake_ctx, channel_id: int, *, key: str) -> None:
                 (fake_ctx.guild_id, channel_id),
             )
         elif key == "voice-control":
+            # Where the panel currently *is* — the registry's key for it.
             conn.execute(
                 "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
                 (
@@ -294,6 +295,17 @@ def _occupy(fake_ctx, channel_id: int, *, key: str) -> None:
             )
         else:  # pragma: no cover - guards a typo in a test, not a code path
             raise AssertionError(f"no seeder for {key}")
+
+
+def _set_control_channel(fake_ctx, channel_id: int) -> None:
+    """Where Voice Control *posts* — a different key from where it is now."""
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (fake_ctx.guild_id, "voice_master_control_channel_id", str(channel_id)),
+        )
 
 
 def test_posting_into_a_bot_chasing_panels_channel_is_refused(
@@ -343,6 +355,7 @@ def test_a_panel_is_not_refused_on_account_of_itself(fake_ctx, client_with_bot):
     client, bot, guild, channel = client_with_bot()
     channel.id = 456
     guild.get_channel.return_value = channel
+    _set_control_channel(fake_ctx, 456)
     _occupy(fake_ctx, 456, key="voice-control")
 
     r = client.post("/api/panels/voice-control/post", json={})
@@ -357,6 +370,7 @@ def test_an_own_channel_panel_still_sees_the_other_residents(
     up rather than take one from the caller."""
     client, bot, guild, channel = client_with_bot()
     channel.id = 456
+    _set_control_channel(fake_ctx, 456)
     _occupy(fake_ctx, 456, key="voice-control")
     _occupy(fake_ctx, 456, key="casino")
 
@@ -364,3 +378,59 @@ def test_an_own_channel_panel_still_sees_the_other_residents(
     assert r.status_code == 400
     assert "casino hub panel" in r.json()["detail"]
     bot.get_cog.return_value.post_control_panel.assert_not_awaited()
+
+
+def test_an_own_channel_panels_first_post_is_still_checked(
+    fake_ctx, client_with_bot
+):
+    """Nothing recorded yet is exactly when the check matters most.
+
+    Reading the registry's key for this panel — where it *is* — answered 0 on a
+    first post and skipped the guard entirely.
+    """
+    client, bot, *_ = client_with_bot()
+    _set_control_channel(fake_ctx, 456)
+    _occupy(fake_ctx, 456, key="casino")
+
+    r = client.post("/api/panels/voice-control/post", json={})
+    assert r.status_code == 400
+    assert "casino hub panel" in r.json()["detail"]
+    bot.get_cog.return_value.post_control_panel.assert_not_awaited()
+
+
+def test_an_own_channel_panel_checks_where_it_is_going_not_where_it_was(
+    fake_ctx, client_with_bot
+):
+    """After the Control Channel moves, the old channel's residents are no
+    longer this panel's problem — and the new channel's are."""
+    client, bot, *_ = client_with_bot()
+    _occupy(fake_ctx, 456, key="voice-control")  # panel still sits in the old one
+    _occupy(fake_ctx, 456, key="casino")         # which the casino hub holds
+    _set_control_channel(fake_ctx, 789)          # admin repointed it here
+
+    r = client.post("/api/panels/voice-control/post", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["warning"] is None
+    bot.get_cog.return_value.post_control_panel.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "key", [pytest.param("ticket-panel", id="ticket"),
+            pytest.param("grant-audit", id="grant-audit")]
+)
+def test_a_panel_that_does_not_re_stick_is_never_refused(
+    fake_ctx, client_with_bot, key
+):
+    """The ticket panel and the audit card are posted once and then scroll
+    like any other message. They have no bottom-slot contest to lose, and
+    refusing them would block a placement that always worked."""
+    client, bot, guild, channel = client_with_bot()
+    channel.id = 123
+    _occupy(fake_ctx, 123, key="casino")
+    cog = bot.get_cog.return_value
+    cog.post_ticket_panel = AsyncMock(return_value=MagicMock(jump_url="u"))
+    cog.post_audit_card = AsyncMock(return_value=MagicMock(jump_url="u"))
+
+    r = client.post(f"/api/panels/{key}/post", json={"channel_id": "123"})
+    assert r.status_code == 200, r.text
+    assert r.json()["warning"] is None

@@ -308,17 +308,17 @@ async def render_card(
     queue.now_playing_channel_id = channel.id
 
 
-async def retire_card(guild: Any, queue: GuildQueue) -> None:
-    """Delete the card on record and forget it, best-effort.
+async def retire_card(
+    guild: Any, channel_id: int | None, message_id: int | None
+) -> None:
+    """Delete one card, best-effort.
 
-    ``/nowplaying`` reposts, and a repost that left the old card behind would
-    re-create the pile this module exists to avoid — the old one keeps working
-    buttons whether or not it is still accurate.
+    Takes ids rather than the queue because both callers have to *capture* the
+    old card before the new one is recorded. ``/nowplaying`` posts its
+    replacement first and deletes second — the same post-before-delete ordering
+    ``core.sticky`` uses — so clearing the queue's ids up front would leave a
+    window where a track change, finding no card on record, posts a third one.
     """
-    channel_id = queue.now_playing_channel_id
-    message_id = queue.now_playing_message_id
-    queue.now_playing_channel_id = None
-    queue.now_playing_message_id = None
     if not channel_id or not message_id:
         return
     channel = guild.get_channel(channel_id) or guild.get_thread(channel_id)
@@ -392,7 +392,14 @@ class CardRefresher:
         except asyncio.CancelledError:
             raise
         finally:
-            self._tasks.pop(guild_id, None)
+            # Only clear the slot if it is still *this* task's. A cancel from
+            # ``forget``/``cancel_all`` unwinds asynchronously, so a new flush
+            # can be armed for the same guild before this one finishes — and an
+            # unconditional pop would evict the newcomer, leaving it running
+            # while the next ``_arm`` sees an empty slot and starts a second
+            # coalescer editing the same card.
+            if self._tasks.get(guild_id) is asyncio.current_task():
+                self._tasks.pop(guild_id, None)
 
 
 def cycle_loop_mode(current: LoopMode) -> LoopMode:

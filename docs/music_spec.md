@@ -18,7 +18,7 @@ A music playback cog for shared listening in voice channels. Supports YouTube tr
 
 The now-playing card is a persistent message with five buttons: **Pause/Resume**, **Skip**, **Stop**, **Shuffle**, and **Loop** (cycles off → track → queue). Buttons require the clicker to be in the same voice channel as the bot.
 
-**One card per session, edited in place.** Every track change edits the existing card rather than posting another; a new one is posted only when there is none, or when the card has been deleted. Refreshes are coalesced to at most one every 2 seconds per guild, so a run of skips costs one edit showing the track that actually won. The card stays in the channel it was posted in even if `/play` is later run somewhere else — `/nowplaying` is how it moves, and it deletes the previous card before reposting.
+**One card per session, edited in place.** Every track change edits the existing card rather than posting another; a new one is posted only when there is none, or when the card has been deleted. Refreshes are coalesced to at most one every 2 seconds per guild, so a run of skips costs one edit showing the track that actually won. The card stays in the channel it was posted in even if `/play` is later run somewhere else — `/nowplaying` is how it moves: it posts the replacement first and deletes the old one after, so a track change landing mid-command edits the card still on record rather than adding a third. Ending the session (`/stop`, `/disconnect`, the Stop button, the idle disconnect) deletes the card, so the next session starts clean rather than beside a card naming a track that stopped playing.
 
 ## Behavior
 
