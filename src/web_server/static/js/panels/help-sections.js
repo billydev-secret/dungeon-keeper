@@ -52,6 +52,8 @@ export const HELP_GROUPS = [
     { page: "help-photo",       anchor: "photo-challenge", label: "Photo Challenge" },
     { page: "help-survivor",    anchor: "survivor",        label: "Survivor",
       keywords: "nfl football pickem survival pool gauntlet ghost reckoning" },
+    { page: "help-mahjong",     anchor: "mahjong",         label: "Meadow Mahjong",
+      keywords: "mahjong tiles charleston joker duel stakes card meadow" },
     { page: "help-whisper",     anchor: "whisper",         label: "Whisper" },
     { page: "help-confessions", anchor: "confessions",     label: "Confessions" },
     { page: "help-pen-pals",    anchor: "pen-pals",        label: "Pen Pals" },

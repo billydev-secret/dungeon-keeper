@@ -240,6 +240,7 @@ const SECTIONS = [
         // keeping a heading to itself.
         { id: "photo-challenge",    label: "Photo Challenge",   module: "./panels/photo-challenge.js", help: "help-photo", keywords: "setup schedule photo theme" },
         { id: "survivor",           label: "Survivor",          module: "./panels/survivor.js", adminOnly: true, help: "help-survivor", keywords: "nfl football pickem survival pool season reckoning" },
+        { id: "mahjong",            label: "Meadow Mahjong",    module: "./panels/mahjong.js", adminOnly: true, help: "help-mahjong", keywords: "mahjong tiles card charleston duel stakes escrow" },
       ]},
       // Question-bank games: one page of prompts each, no live channel state.
       { heading: "Question Banks", items: [

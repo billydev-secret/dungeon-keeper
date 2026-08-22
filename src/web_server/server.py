@@ -330,6 +330,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(survivor_routes.router, prefix="/api", tags=["survivor"])
 
+    from web_server.routes import mahjong as mahjong_routes
+
+    app.include_router(mahjong_routes.router, prefix="/api", tags=["mahjong"])
+
     from web_server.routes import no_contact as no_contact_routes
 
     app.include_router(no_contact_routes.router, prefix="/api", tags=["no-contact"])

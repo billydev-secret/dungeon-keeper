@@ -316,6 +316,8 @@ _HTML_COLUMNS = {
     ("music-playlist.js", "removal_reason"),
     # action buttons keyed by a server-issued row id, Number()-coerced into data-* attrs
     ("music-playlist.js", "id"),
+    # Set Active button keyed by the card's DB row id, Number()-coerced into data-activate
+    ("mahjong.js", "row_id"),
 }
 
 
