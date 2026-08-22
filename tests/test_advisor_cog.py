@@ -106,7 +106,7 @@ def _interaction(user):
 def _cog():
     ctx = MagicMock()
     ctx.db_path = ":memory:"
-    return SimpleNamespace(ctx=ctx)
+    return SimpleNamespace(bot=SimpleNamespace(ctx=ctx))
 
 
 @contextlib.contextmanager
@@ -122,7 +122,7 @@ def _patched(monkeypatch, *, answer="1. Run /daily.\n2. Spend it.", ok=True):
     monkeypatch.setattr(mod, "resolve_assistant_name_conn", lambda *a, **k: "Billy-bot")
     monkeypatch.setattr(mod, "get_advisor_context_enabled", lambda *a, **k: True)
     monkeypatch.setattr(mod, "get_advisor_tools_enabled", lambda *a, **k: True)
-    monkeypatch.setattr(mod, "resolve_accent_color", AsyncMock(return_value=None))
+    monkeypatch.setattr(mod, "safe_resolve_accent", AsyncMock(return_value=None))
     monkeypatch.setattr(mod, "build_asker_context", MagicMock(return_value="CTX"))
     monkeypatch.setattr(mod, "_make_tools", MagicMock(name="_make_tools"))
     monkeypatch.setattr(
