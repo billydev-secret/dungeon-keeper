@@ -59,6 +59,14 @@ def _feature_states(conn, guild_id: int, member: discord.Member, bot) -> dict[st
     helpers are reused rather than re-querying its tables here — a second copy
     of "is this member opted out?" is exactly the drift that
     ``no_contact_service`` was created to end.
+
+    Each block is independently fallible. Reusing seven features' internals
+    means seven chances for a helper signature to drift or a table to be
+    absent (wellness's are created by the web server's startup, not by a
+    migration), and one of those must cost its own row, not the whole card.
+    The alternative is worse than it sounds: this runs after ``defer()``, and
+    the tree's error handler only speaks when the interaction is unanswered,
+    so an escaping exception leaves the member on "thinking…" forever.
     """
     # Imported lazily: this cog must load even if a feature's cog does not.
     from bot_modules.cogs.pen_pals_cog import (  # noqa: PLC0415
@@ -82,82 +90,135 @@ def _feature_states(conn, guild_id: int, member: discord.Member, bot) -> dict[st
     role_ids = {r.id for r in member.roles}
     states: dict[str, FeatureState] = {}
 
-    # ── Pen Pals ─────────────────────────────────────────────────────────
-    cfg = _pen_pals_config(conn, guild_id)
-    if cfg is not None and cfg["enabled"]:
-        if _is_opted_out(conn, guild_id, member.id):
-            state = STATE_OUT
-        elif _in_pool(conn, guild_id, member.id) or _get_active_session(
-            conn, guild_id, member.id
-        ):
-            state = STATE_IN
-        else:
-            state = STATE_UNSET
-        # An opt-in role the member lacks means Join would be refused — show
-        # the status, offer no button that cannot work.
-        gate = int(cfg["opt_in_role_id"] or 0)
-        states["pen_pals"] = FeatureState(
-            configured=True,
-            state=state,
-            actionable=(gate == 0 or gate in role_ids)
-            and bot.get_cog("PenPalsCog") is not None,
-        )
+    try:
+        # ── Pen Pals ─────────────────────────────────────────────────────────
+        cfg = _pen_pals_config(conn, guild_id)
+        if cfg is not None and cfg["enabled"]:
+            if _is_opted_out(conn, guild_id, member.id):
+                state = STATE_OUT
+            elif _in_pool(conn, guild_id, member.id) or _get_active_session(
+                conn, guild_id, member.id
+            ):
+                state = STATE_IN
+            else:
+                state = STATE_UNSET
+            # An opt-in role the member lacks means Join would be refused — show
+            # the status, offer no button that cannot work. Mirror `_handle_join`
+            # exactly, including its deleted-role case: it only refuses when the
+            # role still resolves, so a config pointing at a deleted role lets
+            # everyone join and must not hide the button from everyone.
+            gate = int(cfg["opt_in_role_id"] or 0)
+            gate_blocks = (
+                gate != 0
+                and gate not in role_ids
+                and member.guild.get_role(gate) is not None
+            )
+            states["pen_pals"] = FeatureState(
+                configured=True,
+                state=state,
+                actionable=not gate_blocks and bot.get_cog("PenPalsCog") is not None,
+            )
 
-    # ── Whispers ─────────────────────────────────────────────────────────
-    whisper_cfg = get_whisper_config(conn, guild_id)
-    if whisper_cfg.role_id:
-        states["whispers"] = FeatureState(
-            configured=True,
-            state=STATE_IN if whisper_cfg.role_id in role_ids else STATE_UNSET,
-            actionable=bot.get_cog("WhisperCog") is not None,
-        )
+    except Exception:
+        log.exception("info panel: reading %s state failed", "pen_pals")
+    try:
+        # ── Whispers ─────────────────────────────────────────────────────────
+        whisper_cfg = get_whisper_config(conn, guild_id)
+        if whisper_cfg.role_id:
+            states["whispers"] = FeatureState(
+                configured=True,
+                state=STATE_IN if whisper_cfg.role_id in role_ids else STATE_UNSET,
+                actionable=bot.get_cog("WhisperCog") is not None,
+            )
 
-    # ── Guess pool ───────────────────────────────────────────────────────
-    guess_cfg = get_guess_config(conn, guild_id)
-    if guess_cfg.guess_role_id:
-        states["guess"] = FeatureState(
-            configured=True,
-            state=STATE_IN if guess_cfg.guess_role_id in role_ids else STATE_UNSET,
-            actionable=bot.get_cog("GuessCog") is not None,
-        )
+    except Exception:
+        log.exception("info panel: reading %s state failed", "whispers")
+    try:
+        # ── Guess pool ───────────────────────────────────────────────────────
+        guess_cfg = get_guess_config(conn, guild_id)
+        if guess_cfg.guess_role_id:
+            states["guess"] = FeatureState(
+                configured=True,
+                state=STATE_IN if guess_cfg.guess_role_id in role_ids else STATE_UNSET,
+                actionable=bot.get_cog("GuessCog") is not None,
+            )
 
-    # ── DM mode ──────────────────────────────────────────────────────────
-    dm_roles = get_dm_mode_role_ids_with_conn(conn, guild_id)
-    if any(dm_roles.values()):
-        mode = resolve_mode(member, dm_roles)
-        states["dm_mode"] = FeatureState(
-            configured=True,
-            state=STATE_IN,
-            detail=f"Currently **{mode}**",
-            actionable=bot.get_cog("DmPermsCog") is not None,
-        )
+    except Exception:
+        log.exception("info panel: reading %s state failed", "guess")
+    try:
+        # ── DM mode ──────────────────────────────────────────────────────────
+        # Gate on the cog, not on configured role ids: with no `dm_mode_roles` row
+        # the ids are all 0, but the feature still works — `resolve_mode` falls back
+        # to the default role *names* and `ensure_dm_roles` creates them on demand.
+        # Gating on the ids hid the row (and a button that would have worked) on
+        # every guild that never set explicit ones.
+        if bot.get_cog("DmPermsCog") is not None:
+            dm_roles = get_dm_mode_role_ids_with_conn(conn, guild_id)
+            mode = resolve_mode(member, dm_roles)
+            states["dm_mode"] = FeatureState(
+                configured=True,
+                state=STATE_IN,
+                detail=f"Currently **{mode}**",
+            )
 
-    # ── Wellness ─────────────────────────────────────────────────────────
-    wellness_cfg = get_wellness_config(conn, guild_id)
-    if wellness_cfg is not None and wellness_cfg.role_id:
-        row = get_wellness_user(conn, guild_id, member.id)
-        if row is None:
-            state = STATE_UNSET
-        else:
-            state = STATE_IN if row.is_active else STATE_OUT
-        states["wellness"] = FeatureState(
-            configured=True,
-            state=state,
-            actionable=bot.get_cog("WellnessCog") is not None,
-        )
+    except Exception:
+        log.exception("info panel: reading %s state failed", "dm_mode")
+    try:
+        # ── Wellness ─────────────────────────────────────────────────────────
+        wellness_cfg = get_wellness_config(conn, guild_id)
+        if wellness_cfg is not None and wellness_cfg.role_id:
+            row = get_wellness_user(conn, guild_id, member.id)
+            if row is None:
+                state = STATE_UNSET
+            else:
+                state = STATE_IN if row.is_active else STATE_OUT
+            states["wellness"] = FeatureState(
+                configured=True,
+                state=state,
+                actionable=bot.get_cog("WellnessCog") is not None,
+            )
 
-    # ── Birthday ─────────────────────────────────────────────────────────
-    if bot.get_cog("BirthdayCog") is not None:
-        states["birthday"] = FeatureState(
-            configured=True,
-            state=STATE_IN if has_birthday(conn, guild_id, member.id) else STATE_UNSET,
-        )
+    except Exception:
+        log.exception("info panel: reading %s state failed", "wellness")
+    try:
+        # ── Birthday ─────────────────────────────────────────────────────────
+        if bot.get_cog("BirthdayCog") is not None:
+            states["birthday"] = FeatureState(
+                configured=True,
+                state=STATE_IN if has_birthday(conn, guild_id, member.id) else STATE_UNSET,
+            )
 
-    # ── No-contact ───────────────────────────────────────────────────────
-    if bot.get_cog("NoContactCog") is not None:
-        states["no_contact"] = FeatureState(configured=True, state=STATE_UNSET)
+    except Exception:
+        log.exception("info panel: reading %s state failed", "birthday")
+    try:
+        # ── No-contact ───────────────────────────────────────────────────────
+        if bot.get_cog("NoContactCog") is not None:
+            states["no_contact"] = FeatureState(configured=True, state=STATE_UNSET)
 
+    except Exception:
+        log.exception("info panel: reading %s state failed", "no_contact")
     return states
+
+
+def _viewable_channel_ids(guild: discord.Guild, member: discord.Member) -> set[int]:
+    """Every channel *and thread* the member can currently open.
+
+    Threads are not optional here. ``award_message_xp`` accepts a
+    ``discord.Thread`` and stores ``message.channel.id``, so
+    ``processed_messages`` holds rows keyed by *thread* id — while
+    ``guild.channels`` excludes threads entirely. Filtering against channels
+    alone silently drops every thread row, and a member who talks mostly in
+    threads reads "No messages recorded in the last 30 days" directly beneath
+    a header counting those very messages.
+
+    ``Thread.permissions_for`` delegates to the parent channel, so one check
+    covers both kinds.
+    """
+    return {
+        channel.id
+        for channel in (*guild.channels, *guild.threads)
+        if channel.permissions_for(member).view_channel
+    }
 
 
 class MemberInfoCog(commands.Cog):
@@ -179,6 +240,26 @@ class MemberInfoCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
+        try:
+            await self._render(interaction, guild, member)
+        except Exception:
+            # Past the defer, the tree's error handler is mute: it only speaks
+            # when the interaction is unanswered (events_cog._on_tree_error).
+            # Without this the member is left on "thinking…" with no error and
+            # no card, which reads as the bot being broken rather than one
+            # section failing.
+            log.exception("info panel failed for %s in %s", member.id, guild.id)
+            await interaction.followup.send(
+                "❌ Couldn't build your info card just now. Try again in a moment.",
+                ephemeral=True,
+            )
+
+    async def _render(
+        self,
+        interaction: discord.Interaction,
+        guild: discord.Guild,
+        member: discord.Member,
+    ) -> None:
         ctx = self.bot.ctx
         guild_id = guild.id
         user_id = member.id
@@ -261,11 +342,7 @@ class MemberInfoCog(commands.Cog):
 
         data = await asyncio.to_thread(_fetch)
 
-        viewable = {
-            channel.id
-            for channel in guild.channels
-            if channel.permissions_for(member).view_channel
-        }
+        viewable = _viewable_channel_ids(guild, member)
         xp_row = data["xp_row"]
         joined_at = member.joined_at
         facts = AccountFacts(

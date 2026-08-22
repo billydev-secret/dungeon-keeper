@@ -149,7 +149,12 @@ _FEATURE_SPECS: tuple[_FeatureSpec, ...] = (
         in_text="Opted in.",
         out_text="Opted out.",
         unset_text="Not set up.",
-        in_action=(ACTION_OPEN, "Wellness settings"),
+        # NOT "Wellness settings": the only member-facing entry point is the
+        # opt-in wizard, and finishing it re-runs `opt_in_user`, whose upsert
+        # overwrites `notifications_pref` and `enforcement_level`. A button
+        # labelled "settings" invites someone to look at their preferences and
+        # silently costs them one; this label says what actually happens.
+        in_action=(ACTION_OPEN, "Redo wellness setup"),
         out_action=(ACTION_OPEN, "Wellness setup"),
         unset_action=(ACTION_OPEN, "Wellness setup"),
     ),

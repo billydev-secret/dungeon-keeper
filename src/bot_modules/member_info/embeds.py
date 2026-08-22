@@ -19,7 +19,12 @@ from collections.abc import Sequence
 import discord
 
 from bot_modules.member_info.logic import AccountFacts, OptInRow, displayable_roles
-from bot_modules.services.embeds import MOD_INFO, fit_lines, xp_breakdown_parts
+from bot_modules.services.embeds import (
+    EMBED_FIELD_LIMIT,
+    MOD_INFO,
+    fit_lines,
+    xp_breakdown_parts,
+)
 
 
 def _account_value(facts: AccountFacts) -> str:
@@ -39,13 +44,26 @@ def _level_value(facts: AccountFacts) -> str:
 
 
 def _roles_value(facts: AccountFacts) -> str:
+    """Roles as one separated line, capped by *length* as well as by count.
+
+    Discord allows a 100-character role name, so twelve of them overrun the
+    1024-byte field limit and Discord rejects the whole embed — which, past
+    the command's defer(), surfaces as a card that never arrives. The count
+    cap alone is not enough; names are dropped until the line fits, and the
+    overflow counter absorbs whatever went.
+    """
     names, overflow = displayable_roles(facts.role_names)
     if not names:
         return "None yet."
-    text = " · ".join(names)
-    if overflow:
-        text += f" · *+{overflow} more*"
-    return text
+
+    def render(kept: list[str], dropped: int) -> str:
+        text = " · ".join(kept)
+        return f"{text} · *+{dropped} more*" if dropped else text
+
+    while names and len(render(names, overflow)) > EMBED_FIELD_LIMIT:
+        names.pop()
+        overflow += 1
+    return render(names, overflow) if names else f"*{overflow} roles*"
 
 
 def _activity_value(facts: AccountFacts) -> str:

@@ -21,7 +21,7 @@ card you can only point at yourself, so the command takes no target.
 | Account | `member.created_at`, `member.joined_at` |
 | Level | `member_xp`, plus `xp_events` grouped by source |
 | Roles | live Discord roles, highest first, `@everyone` dropped, capped at 12 with a `+N more` |
-| Activity | `processed_messages` — 30-day count, last-seen, top 3 channels |
+| Activity | `processed_messages` — 30-day count, last-seen, top 3 channels **and threads** |
 | Wallet | `load_econ_settings` / `get_balance` / `list_member_rentals` / `get_streak_shields` |
 | Your opt-ins | one row per configured feature — see below |
 
@@ -52,7 +52,7 @@ copy and buttons.
 | Pen Pals | `pen_pals_config.enabled` | `pen_pals_optouts` → out; `pen_pals_pool` or a live session → in |
 | Whispers | whisper `role_id` set | holds the role |
 | Guess pool | `guess_role_id` set | holds the role |
-| DMs | any DM-mode role configured | `resolve_mode` → open / ask / closed |
+| DMs | the cog is loaded | `resolve_mode` → open / ask / closed |
 | Wellness | wellness `role_id` set | `wellness_users.is_active` |
 | Birthday | the cog is loaded | `has_birthday` |
 | No-contact | the cog is loaded | *nothing* — see below |
@@ -80,6 +80,30 @@ is identical in every state and contains no digits — enforced by
 `test_no_contact_row_states_are_indistinguishable` — and the button opens the
 existing filtered view.
 
+### Resilience
+
+Every feature block in `_feature_states` is independently guarded, and the
+whole render is wrapped. Both matter for the same reason: the command
+`defer()`s first, and `events_cog._on_tree_error` only speaks when the
+interaction is still unanswered. An exception escaping after the defer is not
+an error message — it is a member left on "thinking…" forever. Reusing seven
+features' internals is seven chances for a helper to drift or a table to be
+missing (wellness's are created by the web server's startup, not by a
+migration), so one failure costs its own row and nothing else.
+
+The same reasoning caps the Roles field by length, not just by count: Discord
+allows 100-character role names, twelve of them overrun the 1024-byte field
+limit, and a rejected embed past the defer is a card that never arrives.
+
+### Threads count as channels
+
+`award_message_xp` accepts a `discord.Thread` and stores `message.channel.id`,
+so `processed_messages` holds rows keyed by *thread* id — while
+`guild.channels` excludes threads. `_viewable_channel_ids` unions
+`guild.threads` in for exactly this reason; filtering against channels alone
+drops every thread row, and a member who talks mostly in threads is told "No
+messages recorded" under a header counting those messages.
+
 ## The buttons re-enter existing flows
 
 `member_info/views.py` grants no role, writes no opt-in and clears none. Every
@@ -91,7 +115,7 @@ button calls the flow that already owns its feature:
 | Whispers | `WhisperCog._optin_impl` / `_optout_impl` |
 | Guess | `GuessCog._optin_impl` / `_optout_impl` |
 | DMs | `dm_perms_cog.open_dm_settings` |
-| Wellness | `WellnessCog.open_setup` |
+| Wellness | `WellnessCog.open_setup` — labelled "Redo wellness setup" even for an opted-in member, because that is what it is: finishing the wizard re-runs `opt_in_user`, whose upsert overwrites `notifications_pref` and `enforcement_level`. There is no member-facing read-only settings view to point at. **Known pre-existing bug** (`/wellness setup` does the same), not introduced here |
 | Birthday | `_BirthdayModal`, or `BirthdayCog.remove_impl` |
 | No-contact | `NoContactCog.list_impl` |
 

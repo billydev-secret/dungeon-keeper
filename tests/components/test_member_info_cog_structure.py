@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import sqlite3
 from unittest.mock import MagicMock
 
 import pytest
@@ -136,3 +137,76 @@ def test_pen_pals_button_withheld_when_the_member_lacks_the_gate_role(sync_db_pa
         holding = _feature_states(conn, 1, _member(role_ids=(999,)), _bot())
     assert without["pen_pals"].configured and not without["pen_pals"].actionable
     assert holding["pen_pals"].actionable
+
+
+# ── Regressions found in review of 94076e54 ──────────────────────────────
+
+
+def test_dm_row_appears_without_explicit_role_ids(sync_db_path):
+    """The DM dial works off default role *names* when no ids are configured.
+
+    Gating the row on configured ids hid it — and a button that would have
+    worked — on every guild that never set explicit ones.
+    """
+    with open_db(sync_db_path) as conn:
+        states = _feature_states(conn, 1, _member(), _bot())
+    assert states["dm_mode"].configured
+    assert states["dm_mode"].actionable
+
+
+def test_pen_pals_button_survives_a_deleted_gate_role(sync_db_path):
+    """`_handle_join` only refuses when the gate role still resolves.
+
+    A config pointing at a deleted role lets everyone join, so hiding the
+    button from everyone would be stricter than the gate it mirrors.
+    """
+    member = _member()
+    member.guild.get_role.return_value = None
+    with open_db(sync_db_path) as conn:
+        conn.execute(
+            "INSERT INTO pen_pals_config (guild_id, enabled, opt_in_role_id) "
+            "VALUES (?, 1, 999)",
+            (1,),
+        )
+        conn.commit()
+        states = _feature_states(conn, 1, member, _bot())
+    assert states["pen_pals"].actionable
+
+
+def test_one_failing_feature_does_not_cost_the_whole_card(sync_db_path, monkeypatch):
+    """Seven features' internals means seven chances to raise.
+
+    This runs after defer(), where the tree's error handler stays silent — so
+    an escaping exception is a permanent "thinking…", not an error message.
+    """
+    import bot_modules.cogs.member_info_cog as mod
+
+    def _boom(*args, **kwargs):
+        raise sqlite3.OperationalError("no such table: wellness_config")
+
+    monkeypatch.setattr(
+        "bot_modules.services.wellness_service.get_wellness_config", _boom
+    )
+    with open_db(sync_db_path) as conn:
+        states = mod._feature_states(conn, 1, _member(), _bot())
+    assert "wellness" not in states
+    # The features that didn't fail still made it onto the card.
+    assert states["birthday"].configured
+    assert states["no_contact"].configured
+
+
+def test_viewable_ids_include_threads():
+    """Thread messages are stored under the thread's own id, so the filter
+    must know about threads or it drops every one of them."""
+    from bot_modules.cogs.member_info_cog import _viewable_channel_ids
+
+    def _chan(cid, visible=True):
+        c = MagicMock()
+        c.id = cid
+        c.permissions_for.return_value.view_channel = visible
+        return c
+
+    guild = MagicMock()
+    guild.channels = [_chan(1), _chan(2, visible=False)]
+    guild.threads = [_chan(10), _chan(11, visible=False)]
+    assert _viewable_channel_ids(guild, _member()) == {1, 10}

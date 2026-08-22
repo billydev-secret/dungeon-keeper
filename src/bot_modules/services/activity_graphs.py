@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import bisect
+import functools
 import io
 import os
 import sqlite3
 import statistics
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,6 +32,32 @@ import matplotlib.pyplot as plt  # noqa: E402
 import matplotlib.ticker as ticker  # noqa: E402
 
 matplotlib.use("Agg")
+
+# pyplot keeps a global figure registry (``Gcf``) that is not thread-safe,
+# and every renderer below goes through ``plt.subplots`` / ``plt.close``.
+# These run on worker threads via ``asyncio.to_thread``. That was low-risk
+# while the only Discord caller was mod-only ``/modinfo``; member-facing
+# ``/info`` makes two concurrent renders an ordinary Tuesday, so the
+# renders are serialized. Rendering is ~100ms, so the queue is not a
+# bottleneck — and interleaved access to that registry is not a slow
+# chart, it is the wrong chart or a crash.
+_RENDER_LOCK = threading.Lock()
+
+
+def _serialized_render(fn):
+    """Serialize a pyplot-based renderer against every other one.
+
+    A decorator rather than a ``with`` inside each body: the bodies are long
+    and each has several early returns, and a lock released on one path but
+    not another is worse than no lock at all.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _RENDER_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 Resolution = Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"]
 
@@ -1227,6 +1255,7 @@ def query_dropoff_profiles(
 # ---------------------------------------------------------------------------
 
 
+@_serialized_render
 def render_level_histogram(
     durations_seconds: list[float],
     target_level: int,
@@ -1302,6 +1331,7 @@ def render_level_histogram(
     return buf.read()
 
 
+@_serialized_render
 def render_activity_chart(
     labels: list[str],
     msg_counts: list[int] | list[float],
@@ -1474,6 +1504,7 @@ class CadenceBucket:
 # ---------------------------------------------------------------------------
 
 
+@_serialized_render
 def render_join_histogram(
     labels: list[str],
     counts: list[int],

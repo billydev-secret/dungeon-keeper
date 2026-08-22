@@ -267,3 +267,66 @@ def test_optin_section_lists_every_row():
     section = next(f for f in embed.fields if "Opt-ins" in f.name)
     for row in rows:
         assert row.label in (section.value or "")
+
+
+# ── Regression: the roles field must never overrun the embed limit ───────
+# Discord allows 100-character role names, so the count cap alone let twelve
+# of them build a 1233-character field. Discord rejects the whole embed for
+# that — and past the command's defer() a rejected embed is a card that never
+# arrives, with no error shown.
+
+
+def test_roles_field_stays_within_the_embed_limit():
+    from bot_modules.services.embeds import EMBED_FIELD_LIMIT
+
+    embed = build_member_info_embed(
+        display_name="Ada",
+        avatar_url=None,
+        facts=_facts(role_names=["R" * 100 for _ in range(40)]),
+        optin_rows=[],
+    )
+    roles = next(f for f in embed.fields if "Roles" in f.name)
+    assert len(roles.value or "") <= EMBED_FIELD_LIMIT
+
+
+def test_roles_field_reports_everything_it_dropped():
+    """Names cut for length still get counted, not quietly lost."""
+    embed = build_member_info_embed(
+        display_name="Ada",
+        avatar_url=None,
+        facts=_facts(role_names=["R" * 100 for _ in range(40)]),
+        optin_rows=[],
+    )
+    roles = next(f for f in embed.fields if "Roles" in f.name)
+    shown = (roles.value or "").count("R" * 100)
+    assert f"+{40 - shown} more" in (roles.value or "")
+
+
+def test_every_variable_length_field_stays_within_the_limit():
+    """The whole card, built from worst-case inputs."""
+    from bot_modules.services.embeds import EMBED_FIELD_LIMIT
+
+    rows = build_optin_rows({key: FeatureState(configured=True) for key in ALL_KEYS})
+    embed = build_member_info_embed(
+        display_name="Ada",
+        avatar_url=None,
+        facts=_facts(
+            role_names=["R" * 100 for _ in range(40)],
+            xp_by_source={f"source_{i}": 1234 for i in range(30)},
+            top_channels=[(10**18 + i, 999) for i in range(25)],
+        ),
+        optin_rows=rows,
+        wallet_line="🪙 **999,999** coins",
+        wallet_extra=[f"**Perk {i}** — 🪙 500/wk" for i in range(30)],
+    )
+    for field in embed.fields:
+        assert len(field.value or "") <= EMBED_FIELD_LIMIT, field.name
+
+
+# ── Regression: the wellness button must not promise a read-only view ────
+
+
+def test_wellness_opted_in_label_does_not_say_settings():
+    """The only entry point re-runs opt-in, which resets notification prefs."""
+    rows = _rows({"wellness": FeatureState(configured=True, state=STATE_IN)})
+    assert "settings" not in rows["wellness"].action_label.lower()
