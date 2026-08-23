@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.games.mahjong.game_logic import GameState, Phase
-from bot_modules.games.mahjong.tile_render import chip
+from bot_modules.games.mahjong.tile_render import chip, load_emoji_map
 from bot_modules.games.mahjong.tiles import Tile, sort_rack
 
 if TYPE_CHECKING:
@@ -83,6 +83,24 @@ class TableView(discord.ui.View):
         return cb
 
 
+def tile_emoji(tile: Tile) -> discord.PartialEmoji | None:
+    """The registered tile face for a menu option, or None before the
+    one-command emoji registration has run (§7.2's launch state) — callers
+    fall back to the text chip, so a menu can never render blank."""
+    emoji_id = load_emoji_map().get(tile.code)
+    if not emoji_id:
+        return None
+    return discord.PartialEmoji(name=f"mm_{tile.code}", id=emoji_id)
+
+
+def _tile_label(tile: Tile) -> tuple[str, discord.PartialEmoji | None]:
+    """(label, emoji) for one tile: the face carries the picture and the
+    name stays readable ("5 Bam"); without registered art the chip goes
+    back in the label so the option is still identifiable."""
+    face = tile_emoji(tile)
+    return (tile.label if face else f"{chip(tile)} — {tile.label}"), face
+
+
 def _tile_options(tiles: list[Tile]) -> list[discord.SelectOption]:
     """One option per rack slot; duplicate kinds get indexed values so a
     member can pick two of the same tile."""
@@ -91,8 +109,9 @@ def _tile_options(tiles: list[Tile]) -> list[discord.SelectOption]:
     for t in sort_rack(tiles):
         n = counts.get(t.code, 0)
         counts[t.code] = n + 1
+        label, face = _tile_label(t)
         options.append(discord.SelectOption(
-            label=f"{chip(t)} — {t.label}", value=f"{t.code}#{n}",
+            label=label, value=f"{t.code}#{n}", emoji=face,
         ))
     return options[:25]
 
@@ -240,8 +259,10 @@ class RedeemView(discord.ui.View):
         super().__init__(timeout=600)
         options = [
             discord.SelectOption(
-                label=f"Swap your {chip(natural)} into exposure #{exposure_id}",
+                label=(f"Swap your {_tile_label(natural)[0]} "
+                       f"into exposure #{exposure_id}"),
                 value=f"{exposure_id}:{natural.code}",
+                emoji=tile_emoji(natural),
             )
             for exposure_id, natural in _redeemable(state, seat)[:25]
         ]
@@ -269,7 +290,8 @@ class CallTilesView(discord.ui.View):
         # routes such taps straight to the engine's private downgrade), so
         # min<=max<=len(options) always holds
         select = discord.ui.Select(
-            placeholder=f"Expose with your {chip(discard_tile)}s/jokers…",
+            placeholder=(
+                f"Expose with your {_tile_label(discard_tile)[0]}s/jokers…"),
             min_values=2, max_values=min(5, len(pool)),
             options=_tile_options(pool),
         )
