@@ -102,6 +102,8 @@ def _remote_argv(args, card_arg: str | None) -> list[str]:
     ]
     if args.no_second_charleston:
         argv.append("--no-second-charleston")
+    if args.rank_by_effort:
+        argv.append("--rank-by-effort")
     if args.top is not None:
         argv += ["--top", str(args.top)]
     if args.json:
@@ -143,6 +145,10 @@ def main(argv: list[str] | None = None) -> int:
         help="show only the N worst lines instead of every line")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument(
+        "--rank-by-effort", action="store_true",
+        help="rank lines by acquisition effort rather than raw tile "
+             "distance (experiment; production ranks by distance)")
+    parser.add_argument(
         "--remote", action="store_true",
         help="run on the configured pytest test-runner box instead "
              "(falls back to local if it is unreachable)")
@@ -179,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         wall_trim=args.wall_trim,
         second_charleston=not args.no_second_charleston,
         workers=args.workers,
+        rank_by_effort=args.rank_by_effort,
     )
 
     if args.json:

@@ -21,6 +21,7 @@ import pytest
 
 from bot_modules.games.mahjong.card_logic import load_card, load_first_light
 from bot_modules.games.mahjong.game_logic import TableConfig
+from bot_modules.games.mahjong.tiles import Tile
 from bot_modules.games.mahjong.sim_logic import (
     HandStat,
     SimReport,
@@ -117,6 +118,22 @@ def test_opening_targets_never_exceed_one_per_seat_per_game():
     assert sum(h.targeted for h in report.hands.values()) <= 2 * 4
 
 
+def test_the_closing_target_is_recorded_too():
+    """Without it, families nobody is closest to at the deal — quints above
+    all — are invisible to the report by construction."""
+    report = simulate(TINY, games=2, seat_count=4, seed=5)
+    assert sum(h.held for h in report.hands.values()) <= 2 * 4
+    assert sum(h.held for h in report.hands.values()) > 0
+
+
+def test_pull_is_the_difference_between_closing_and_opening():
+    stat = HandStat(hand_id="x", section="s", name="n", value=25, concealed=False)
+    stat.targeted, stat.held = 3, 8
+    assert stat.pull == 5
+    stat.targeted, stat.held = 9, 2
+    assert stat.pull == -7
+
+
 # ── Determinism (G4) ─────────────────────────────────────────────────────────
 
 
@@ -137,6 +154,69 @@ def test_rng_streams_are_per_game_and_distinct():
     assert _rng_for(3, 7).random() == _rng_for(3, 7).random()
 
 
+def test_the_effort_flag_is_off_by_default_and_restored_per_run():
+    """It mutates a module global inside worker processes, so the one thing
+    that must never happen is a run leaving it set for whatever comes next
+    in the same interpreter."""
+    from bot_modules.games.mahjong import match_logic
+
+    simulate(TINY, games=1, seed=0)
+    assert match_logic.RANK_BY_EFFORT is False
+    simulate(TINY, games=1, seed=0, rank_by_effort=True)
+    assert match_logic.RANK_BY_EFFORT is True
+    simulate(TINY, games=1, seed=0)
+    assert match_logic.RANK_BY_EFFORT is False
+
+
+def test_effort_ranking_changes_which_line_leads_for_a_pair_heavy_rack():
+    """The whole point of the experiment: a hand of pairs looks closest by
+    raw tile count and is the hardest thing on the card to finish."""
+    from collections import Counter as _Counter
+
+    from bot_modules.games.mahjong import match_logic
+    from bot_modules.games.mahjong.match_logic import closest_lines
+
+    card = _card(
+        {"id": "pairs", "section": "P", "name": "Pairs", "concealed": True,
+         "value": 75,
+         "groups": [{"count": 2, "rank": str(n), "suit": "a"}
+                    for n in (1, 2, 3, 4, 5)]
+                   + [{"count": 2, "rank": "R"}, {"count": 2, "rank": "G"}]},
+        {"id": "kongs", "section": "K", "name": "Kongs", "concealed": False,
+         "value": 25,
+         "groups": [{"count": 4, "rank": "1", "suit": "a"},
+                    {"count": 4, "rank": "2", "suit": "a"},
+                    {"count": 4, "rank": "3", "suit": "a"},
+                    {"count": 2, "rank": "F"}]},
+    )
+    # Three pairs made, four draw-only tiles still wanted (5 by distance),
+    # against a kong line eight tiles out. Distance says the pairs line is
+    # nearer; effort says the kong line is cheaper, because six of those
+    # eight can be claimed or jokered and none of the pairs can.
+    #
+    # Note while building this: at equal effort the sort tie-breaks on value
+    # *descending*, so a tie goes to the dearer line — which is reliably the
+    # harder one. That compounds the very bias being tested and is worth
+    # revisiting separately; it is not what this case measures.
+    rack = [Tile(f"{n}d") for n in (1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 8, 9)] \
+        + [Tile("dr")]
+    try:
+        match_logic.RANK_BY_EFFORT = False
+        by_distance = closest_lines(rack, [], card, _Counter(), limit=None)
+        match_logic.RANK_BY_EFFORT = True
+        by_effort = closest_lines(rack, [], card, _Counter(), limit=None)
+    finally:
+        match_logic.RANK_BY_EFFORT = False
+
+    assert by_distance[0].hand.id == "pairs", "the bias this experiment tests"
+    assert by_effort[0].hand.id == "kongs", "effort should prefer the reachable line"
+    # distance keeps its plain meaning under either ranking — it is what a
+    # member is shown, and it must not silently become a weighted number
+    assert {p.hand.id: p.distance for p in by_distance} == {
+        p.hand.id: p.distance for p in by_effort
+    }
+
+
 def test_sharding_and_merging_reproduce_the_serial_run():
     """The worker-count guarantee, without a process pool: games 0–1 and 2–3
     computed separately then merged must equal games 0–3 run in one go."""
@@ -145,7 +225,7 @@ def test_sharding_and_merging_reproduce_the_serial_run():
     config = TableConfig(seat_count=4, wall_trim=0, second_charleston=True)
     merged = _empty_report(TINY, 4, 4, 9)
     for start, stop in ((0, 2), (2, 4)):
-        merge_into(merged, _run_shard((TINY, config, 9, start, stop)))
+        merge_into(merged, _run_shard((TINY, config, 9, start, stop, False)))
 
     assert _fingerprint(merged) == _fingerprint(serial)
 
@@ -156,8 +236,11 @@ def test_merge_into_sums_every_measured_field():
     a.mahjongs, a.wall_games, a.total_turns, a.stuck_games = 1, 2, 30, 1
     b.mahjongs, b.wall_games, b.total_turns, b.rejected_actions = 3, 4, 70, 2
     a.hands["evens"].targeted, a.hands["evens"].wins = 5, 1
+    a.hands["evens"].held = 2
     b.hands["evens"].targeted, b.hands["evens"].jokerless_wins = 6, 1
+    b.hands["evens"].held = 3
     merge_into(a, b)
+    assert a.hands["evens"].held == 5
     assert (a.mahjongs, a.wall_games, a.total_turns) == (4, 6, 100)
     assert (a.stuck_games, a.rejected_actions) == (1, 2)
     assert (a.hands["evens"].targeted, a.hands["evens"].wins) == (11, 1)
@@ -257,6 +340,7 @@ def test_a_parallel_run_reports_the_games_it_was_asked_for():
 def test_format_report_lists_lines_worst_first_and_names_the_dead():
     report = _empty_report(TINY, 2, 4, 0)
     report.hands["winds"].targeted, report.hands["winds"].wins = 3, 2
+    report.hands["winds"].held = 3
     report.hands["evens"].targeted = 9
     text = format_report(report)
     assert text.index("evens") < text.index("winds"), "dead line must sort first"

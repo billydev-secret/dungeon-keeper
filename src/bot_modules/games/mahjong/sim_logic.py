@@ -40,6 +40,7 @@ from bot_modules.games.mahjong.game_logic import (
     TableConfig,
     obtainable_seen,
 )
+from bot_modules.games.mahjong import match_logic
 from bot_modules.games.mahjong.match_logic import closest_lines
 from bot_modules.games.mahjong.tiles import shuffled_wall
 
@@ -65,6 +66,11 @@ class HandStat:
     concealed: bool
     #: seat-hands that entered play with this as their closest line
     targeted: int = 0
+    #: seat-hands still closest to this line when the hand ended. The
+    #: difference between the two is what pivoting looks like from outside:
+    #: a line whose `held` far exceeds its `targeted` collects players
+    #: mid-hand, and one where the reverse holds sheds them.
+    held: int = 0
     wins: int = 0
     #: summed discards-on-the-table at each win, for the mean
     win_turns: int = 0
@@ -73,6 +79,17 @@ class HandStat:
     @property
     def mean_turns_to_win(self) -> float | None:
         return self.win_turns / self.wins if self.wins else None
+
+    @property
+    def pull(self) -> int:
+        """Seats gained (or lost) between the deal and the settle.
+
+        The generator's whole selection objective is pivot paths, and this
+        is the only direct evidence of them: a line nobody opens toward but
+        several finish on is a pivot destination. Positive is a magnet,
+        negative a hand people abandon.
+        """
+        return self.held - self.targeted
 
     @property
     def jokerless_rate(self) -> float | None:
@@ -190,15 +207,21 @@ def merge_into(target: SimReport, other: SimReport) -> None:
     for hand_id, stat in other.hands.items():
         into = target.hands[hand_id]
         into.targeted += stat.targeted
+        into.held += stat.held
         into.wins += stat.wins
         into.win_turns += stat.win_turns
         into.jokerless_wins += stat.jokerless_wins
 
 
-def _run_shard(job: tuple[Card, TableConfig, int, int, int]) -> SimReport:
+def _run_shard(job: tuple[Card, TableConfig, int, int, int, bool]) -> SimReport:
     """One worker's slice: games [start, stop). Module-level and
     argument-closed so it pickles into a process pool."""
-    card, config, seed, start, stop = job
+    card, config, seed, start, stop, rank_by_effort = job
+    # Set inside the worker, where this process runs nothing else. The flag
+    # has to reach the matcher somehow and it is read deep inside a call
+    # chain the bot brain owns; threading a parameter through six signatures
+    # for an experiment would be worse than one assignment made here.
+    match_logic.RANK_BY_EFFORT = rank_by_effort
     report = _empty_report(card, stop - start, config.seat_count, seed)
     for i in range(start, stop):
         _play_one(card, config, _rng_for(seed, i), report)
@@ -214,11 +237,16 @@ def simulate(
     wall_trim: int = 0,
     second_charleston: bool = True,
     workers: int = 1,
+    rank_by_effort: bool = False,
 ) -> SimReport:
     """Play ``card`` ``games`` times with every seat botted, and measure it.
 
+    ``rank_by_effort`` switches the assist engine's line ranking for the
+    whole run (`match_logic.RANK_BY_EFFORT`) so the two can be A/B'd at
+    identical seeds. It is off by default, matching production.
+
     Deterministic in (card, games, seat_count, seed, wall_trim,
-    second_charleston) — and *not* in ``workers``: game *i* always runs on
+    second_charleston, rank_by_effort) — and *not* in ``workers``: game *i* always runs on
     the stream derived from (seed, i), so 1 worker and 12 return identical
     reports. A real game costs seconds of bot thinking, so anything past a
     few hundred games wants ``workers`` above 1.
@@ -227,6 +255,7 @@ def simulate(
         raise ValueError("games must be >= 1")
     if workers < 1:
         raise ValueError("workers must be >= 1")
+    match_logic.RANK_BY_EFFORT = rank_by_effort
     config = TableConfig(
         seat_count=seat_count,
         wall_trim=wall_trim,
@@ -245,7 +274,7 @@ def simulate(
     shards = min(workers, games)
     edges = [games * k // shards for k in range(shards + 1)]
     jobs = [
-        (card, config, seed, edges[k], edges[k + 1])
+        (card, config, seed, edges[k], edges[k + 1], rank_by_effort)
         for k in range(shards)
         if edges[k] < edges[k + 1]
     ]
@@ -277,6 +306,11 @@ def _play_one(
     else:
         report.stuck_games += 1
 
+    # The closing target, read at the same lens as the opening one. Quints
+    # and other late-blooming families are invisible to `targeted` by
+    # construction — nobody is closest to a line needing five of a tile at
+    # the deal — so without this the report cannot see them at all.
+    _record_targets(state, card, report, field="held")
     report.total_turns += len(state.discards)
     _record_outcome(state, report)
 
@@ -338,12 +372,19 @@ def _apply(
     raise ValueError(f"sim cannot apply bot action {action.action!r}")
 
 
-def _record_targets(state: GameState, card: Card, report: SimReport) -> None:
-    """Each seat's closest line as play opens — the denominator for a line's
-    conversion rate. Read through the same lens the bot uses to choose, so
-    "targeted" means what the bot was actually playing toward."""
+def _record_targets(
+    state: GameState, card: Card, report: SimReport, *, field: str = "targeted"
+) -> None:
+    """Each seat's closest line, into ``field``.
+
+    Read through the same lens the bot uses to choose, so a "target" means
+    what the seat was actually playing toward. Called twice per game: as
+    play opens, and again at the end.
+    """
     for seat in range(state.seat_count):
         seat_state = state.seats[seat]
+        if seat_state.fallow:
+            continue  # a fallow seat is not playing toward anything
         prospects = closest_lines(
             list(seat_state.rack),
             [e.as_match() for e in seat_state.exposures],
@@ -352,7 +393,8 @@ def _record_targets(state: GameState, card: Card, report: SimReport) -> None:
             limit=1,
         )
         if prospects:
-            report.hands[prospects[0].hand.id].targeted += 1
+            stat = report.hands[prospects[0].hand.id]
+            setattr(stat, field, getattr(stat, field) + 1)
 
 
 def _record_outcome(state: GameState, report: SimReport) -> None:
@@ -426,16 +468,15 @@ def format_report(report: SimReport, *, limit: int | None = None) -> str:
             f"the numbers below are not trustworthy"
         )
     out.append(
-        f"  {'line':<16}{'value':>6}{'opened':>8}{'wins':>6}"
-        f"{'w/open':>8}{'turns':>8}{'jkrless':>9}"
+        f"  {'line':<16}{'value':>6}{'opened':>8}{'held':>6}{'pull':>6}"
+        f"{'wins':>6}{'turns':>8}{'jkrless':>9}"
     )
     for h in rows:
-        conv = "—" if h.wins_per_target is None else f"{h.wins_per_target:.2f}"
         turns = "—" if h.mean_turns_to_win is None else f"{h.mean_turns_to_win:.0f}"
         jkrless = "—" if h.jokerless_rate is None else f"{h.jokerless_rate:.0%}"
         out.append(
-            f"  {h.hand_id:<16}{h.value:>6}{h.targeted:>8}{h.wins:>6}"
-            f"{conv:>8}{turns:>8}{jkrless:>9}"
+            f"  {h.hand_id:<16}{h.value:>6}{h.targeted:>8}{h.held:>6}"
+            f"{h.pull:>+6}{h.wins:>6}{turns:>8}{jkrless:>9}"
         )
     dead = report.dead_lines
     if dead:

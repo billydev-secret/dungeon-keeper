@@ -44,6 +44,26 @@ from bot_modules.games.mahjong.tiles import (
     copies,
 )
 
+#: **Experiment flag, default off — production behaviour is unchanged.**
+#: Simulation found that ranking lines by raw tile distance sends players at
+#: pair-heavy hands that never finish: across two cards, lines whose tiles
+#: mostly cannot take a joker took 295 opening picks for zero wins. The
+#: cause is that `distance` treats every missing tile as equally costly,
+#: when a tile missing from a kong can arrive three ways (draw, claim, or a
+#: joker standing in) and one missing from a pair can only be drawn — pairs
+#: are uncallable (§2.5) and jokers never fill a group of two (§2.6).
+#:
+#: With this on, ranking uses `Prospect.effort` instead. `distance` keeps its
+#: plain meaning either way, because it is what a member is shown.
+#: `sim_logic.simulate(rank_by_effort=True)` sets it inside its own worker
+#: processes to A/B the two; nothing else writes it.
+RANK_BY_EFFORT = False
+
+#: How much dearer a draw-only tile is than one with three routes. Three
+#: opponents discard for every draw you take, so claims are the common way a
+#: tile arrives; 3.0 is that ratio, not a fitted constant.
+DRAW_ONLY_EFFORT = 3.0
+
 _WIND_TILES = {"N": Tile.NORTH, "E": Tile.EAST, "W": Tile.WEST, "S": Tile.SOUTH}
 _DRAGON_TILES = {"R": Tile.RED, "G": Tile.GREEN, "soap": Tile.SOAP}
 HAND_TILES = 14
@@ -401,6 +421,11 @@ class Prospect:
     distance: int
     needed: tuple[tuple[Tile, int], ...]
     dead_weight: tuple[tuple[Tile, int], ...]
+    #: ``distance`` reweighted by how a tile can actually arrive: one point
+    #: per tile that a draw, a claim or a joker could supply, and
+    #: ``DRAW_ONLY_EFFORT`` per tile that only your own draw can. Always
+    #: computed; only used for ranking when ``RANK_BY_EFFORT`` is on.
+    effort: float = 0.0
 
 
 def closest_lines(
@@ -434,7 +459,7 @@ def closest_lines(
 
     exposure_total = sum(e.count for e in exposures)
 
-    prospects: list[tuple[int, int, int, Prospect]] = []
+    prospects: list[tuple[float, int, int, Prospect]] = []
     for index, hand in enumerate(card.hands):
         if hand.concealed and exposures:
             continue
@@ -442,7 +467,8 @@ def closest_lines(
             hand, counts, jokers_held, exposures, exposure_total, unseen
         )
         if best is not None:
-            prospects.append((best.distance, -hand.value, index, best))
+            key = best.effort if RANK_BY_EFFORT else float(best.distance)
+            prospects.append((key, -hand.value, index, best))
     prospects.sort(key=lambda p: p[:3])
     ranked = [p[3] for p in prospects]
     return ranked if limit is None else ranked[:limit]
@@ -493,6 +519,7 @@ def _line_prospect(
                     needed[tile] += short_small
                 if (short_large := (n - small.get(tile, 0)) - to_large) > 0:
                     large_deficit[tile] += short_large
+            small_short = sum(needed.values())
             jokers_used = min(jokers_held, sum(large_deficit.values()))
             matched += jokers_used
 
@@ -508,8 +535,17 @@ def _line_prospect(
             needed.update(+large_deficit)  # unary + drops zeroed gaps
 
             distance = HAND_TILES - matched
-            if best is not None and distance >= best.distance:
-                continue
+            # Draw-only tiles counted at their real cost; everything still
+            # missing from a 3+ group can also be claimed or jokered.
+            effort = (
+                small_short * DRAW_ONLY_EFFORT
+                + (distance - small_short) * 1.0
+            )
+            if best is not None:
+                rank = effort if RANK_BY_EFFORT else float(distance)
+                incumbent = best.effort if RANK_BY_EFFORT else float(best.distance)
+                if rank >= incumbent:
+                    continue
             dead = {
                 tile: have - min(have, demand.get(tile, 0))
                 for tile, have in concealed_counts.items()
@@ -518,6 +554,7 @@ def _line_prospect(
             best = Prospect(
                 hand=hand,
                 distance=distance,
+                effort=effort,
                 needed=tuple(
                     sorted(needed.items(), key=lambda p: TILE_ORDER[p[0]])
                 ),
