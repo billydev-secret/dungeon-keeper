@@ -416,12 +416,17 @@ def _shape_payload(g: Group) -> tuple[str, str]:
     return (g.kind.value, g.wind or g.dragon or "")
 
 
-def _canonical_shape(hand: Hand):
+def canonical_shape(hand: Hand) -> tuple[tuple[int, str, str, str], ...]:
     """Shape signature for the near-duplicate warning: groups sorted, suit
     letters canonicalized by taking the minimum over all 3! relabelings — so
     a line recolored *and* reordered still reads as the same shape. The
     parity lock is part of the identity: an odd/even twin pair is two
-    genuinely disjoint lines, not a near-duplicate (grammar-verify G3)."""
+    genuinely disjoint lines, not a near-duplicate (grammar-verify G3).
+
+    Public because the generator (`card_gen`) dedupes its candidate pool by
+    exactly the identity the linter warns about — two spellings of one shape
+    must not be able to enter the pool as separate hands.
+    """
     signatures = []
     for perm in permutations(_SUIT_LETTERS):
         mapping: dict[str, str] = dict(zip(_SUIT_LETTERS, perm))
@@ -590,7 +595,7 @@ def lint_card(card: Card) -> LintReport:
 
     shapes: dict[tuple[tuple[int, str, str, str], ...], str] = {}
     for hand in card.hands:
-        shape = _canonical_shape(hand)
+        shape = canonical_shape(hand)
         if shape in shapes:
             report.warnings.append(
                 f"hands {shapes[shape]!r} and {hand.id!r} are near-duplicates "

@@ -1,9 +1,9 @@
 # Meadow Card generator — build plan
 
-**Status: stage 2 built 2026-08-22.** Stage 1 (matched dragons) shipped
+**Status: stages 2–3 built 2026-08-22.** Stage 1 (matched dragons) shipped
 first from the `meadow-mahjong` branch as `RankKind.SUIT_DRAGON`, plus a
 `D2` second-dragon token and `x_parity` — a superset of what this plan
-proposed — so this branch's version was dropped at the rebase. Stages 3–5
+proposed — so this branch's version was dropped at the rebase. Stages 4–5
 unbuilt.
 
 **Spec:** [../meadow_mahjong_spec.md](../meadow_mahjong_spec.md) §3 (card model),
@@ -163,7 +163,7 @@ extreme: 2 seats, no trim, 100% mahjong rate. Both numbers want a bigger
 run before anything is concluded, but the tooling is clearly reading
 something real.
 
-## Stage 3 — the generator
+## Stage 3 — the generator ✅
 
 `card_gen.py` (logic-layer name, so it needs its own mapped test) —
 
@@ -180,10 +180,46 @@ something real.
 
 `scripts/generate_card.py` — CLI: emit a candidate card JSON + its sim report.
 
-**Tests** (`tests/test_mahjong_card_gen.py`): every generated candidate passes
-`lint_card` (the generator can never emit an invalid card); the selector
-honours section quotas; the pivot-neighbour floor holds; seeded output is
-stable.
+`scripts/generate_card.py` — CLI: emit a candidate card JSON + a pool
+breakdown, and report any stranded line rather than hiding it.
+
+**Tests** (`tests/test_mahjong_card_gen.py`, 23 cases, ~8s): every candidate
+lints clean, is exactly 14 tiles, and is shape-deduped; the pool and the
+selection are both deterministic; section caps hold; no two chosen lines are
+clones; no section prints one line with two tails; Singles & Pairs really is
+all pairs and concealed; values stay in range; and the metrics
+(`overlap`, `stutter_key`, `provisional_value`, `pivot_report`) have their
+own cases.
+
+### Three defects the first generated card exposed
+
+Worth recording, because each is a rule the selector now enforces and none
+was in the plan as written:
+
+1. **Stutter.** The first card opened with six Year lines identical but for
+   their two-tile tail. The linter's shape signature cannot catch it —
+   swapping a flower pair for a wind pair genuinely changes the shape. A
+   uniform "too much overlap" bar was the wrong fix: *Like Numbers* is
+   self-similar by definition and a flat bar starved it to one hand. The
+   rule that works is `stutter_key` — a line's identity is its **numeric**
+   groups, so two same-section lines with the same numbers and different
+   tails are one line; a pure honours line, having no numeric part, is
+   keyed by its whole shape instead.
+2. **A section that lied.** Padding ran a generic filler onto every core,
+   so *Singles & Pairs* was emitting hands containing kongs — and, having a
+   callable group, they were not even concealed. That section now pads only
+   from pairs.
+3. **Stranded lines.** The greedy fills sections in order, so the first
+   section chooses against an empty card and can only be judged once the
+   rest exists. `_repair_stranded` runs afterwards and swaps a stranded line
+   for the best-connected alternative in its own section; what it cannot fix
+   it reports. Current output: 56 hands, 1 stranded, lint-clean with no
+   warnings, and it passes `scripts/validate_card.py` independently.
+
+Selection also caches each candidate's token counter and stutter key — the
+selector compares every remaining candidate against every chosen hand at
+every pick, and recomputing them made it the slowest thing in the module by
+an order of magnitude (23s → 8s across the tests).
 
 ## Stage 4 — generate, tune, author the card
 
