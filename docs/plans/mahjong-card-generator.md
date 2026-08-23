@@ -221,6 +221,31 @@ selector compares every remaining candidate against every chosen hand at
 every pick, and recomputing them made it the slowest thing in the module by
 an order of magnitude (23s → 8s across the tests).
 
+## Review round R1 (2026-08-22, after stage 3)
+
+`/code-review` over stages 0–3 plus the `--remote` work. Eleven findings,
+all real, all fixed in the same round. The four worth carrying:
+
+| # | Finding | Fix |
+|---|---|---|
+| R1 | A suited `D` on a letter **no other group uses** is identical to a suitless `D` — the suit map is free, so both range over all three dragons. Both spellings sat in the pool with different shapes and different tokens, so nothing caught them, and at seeds 19 and 20 the *same hand was printed twice on one card*. | `_normalise` rewrites such a group to a bare `D` before it enters the pool. It also stops the card misleading a reader, who takes a suit letter to mean a constraint. |
+| R2 | The year cores paired a repeated digit with an all-`a` suit pattern, so `3(2)a 3(0) 3(2)a 3(6)a` demanded **six copies of a four-copy tile** and burned two jokers by construction. Lint-clean, but it reads as a printing error. | `_is_degenerate` rejects two groups of one physical tile — *unless both are singles*, because writing the year out twice is how a year hand is spelled and four singles of one tile is exactly its natural supply. |
+| R3 | Section slugs took the first character of every word including the ampersand, so "Winds & Dragons" became `w&d-1`. These ids are stored on `mahjong_results.line_id` and shown to members in the reveal embed. | Alphanumeric initials only. |
+| R4 | Two silent generator dead-ends: the year-written-**once** family produced a 4-tile core with no 10-tile filler to complete it, so every one was discarded; and both `_pairs_cores` loops clamped to the same length, so the longer runs were generated twice and the intended ones never at all. | A `_FILLERS[10]`, and loops that range over what actually exists. |
+
+The rest: `merge_into` now folds `games` too (it is public API, and a caller
+merging two independent reports was getting rates over the first one's game
+count); `format_report` reports `other_ends`, which was previously visible
+only through `--json`, so a run could read as "0% everything" with no clue
+where the games went; the INDEX row was still saying stages 1–5 unbuilt; and
+the `--remote` findings are recorded in that commit.
+
+Two things the review checked and cleared, worth not re-litigating:
+`MATCHED_DRAGON` is handled everywhere `RankKind` is branched on, and
+`Tile.__hash__ = object.__hash__` is safe — `Tile` is a plain `Enum`, not a
+`str` mixin, so equality is identity, and the engine's only `set[Tile]` is
+used for membership and never iterated.
+
 ## Stage 4 — generate, tune, author the card
 
 Run stage 3 at volume. Set each hand's value from its measured completion-rate

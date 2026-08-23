@@ -172,7 +172,14 @@ def _empty_report(
 
 def merge_into(target: SimReport, other: SimReport) -> None:
     """Fold one report's counts into another. Every measured field is a
-    plain count, which is exactly why shards can be merged at all."""
+    plain count, which is exactly why shards can be merged at all.
+
+    ``games`` accumulates like the rest, so two independently produced
+    reports merge into one whose rates are right. Callers building an
+    aggregate must therefore start it at zero games and let the merges add
+    up — which is what :func:`simulate` does on its parallel path.
+    """
+    target.games += other.games
     target.mahjongs += other.mahjongs
     target.wall_games += other.wall_games
     target.fallow_ends += other.fallow_ends
@@ -232,6 +239,9 @@ def simulate(
             _play_one(card, config, _rng_for(seed, i), report)
         return report
 
+    # Zero games: merge_into accumulates the shards' counts, and a
+    # pre-sized total would then double.
+    report.games = 0
     shards = min(workers, games)
     edges = [games * k // shards for k in range(shards + 1)]
     jobs = [
@@ -403,6 +413,12 @@ def format_report(report: SimReport, *, limit: int | None = None) -> str:
         f"  mahjong {report.win_rate:.1%}   wall {report.wall_game_rate:.1%}   "
         f"fallow {report.fallow_ends}   mean turns {report.mean_turns:.1f}",
     ]
+    if report.other_ends:
+        # Games that ended as none of the above. Without this the run reads
+        # as "0% everything" with no clue where the games went.
+        out.append(
+            f"  {report.other_ends} game(s) ended in no scored outcome"
+        )
     if not report.healthy:
         out.append(
             f"  ⚠ UNHEALTHY: {report.stuck_games} stuck games, "

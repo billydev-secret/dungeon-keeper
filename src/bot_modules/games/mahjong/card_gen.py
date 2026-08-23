@@ -104,6 +104,15 @@ _FILLERS: dict[int, tuple[tuple[dict, ...], ...]] = {
         ({"count": 4, "rank": "N"}, {"count": 4, "rank": "S"}),
         ({"count": 4, "rank": "F"}, {"count": 4, "rank": "D", "suit": "a"}),
     ),
+    # The year written once is a 4-tile core, so without a 10 the whole
+    # "2026 plus honours" family was generated and silently discarded.
+    10: (
+        ({"count": 4, "rank": "F"}, {"count": 3, "rank": "R"},
+         {"count": 3, "rank": "G"}),
+        ({"count": 6, "rank": "F"}, {"count": 4, "rank": "D", "suit": "a"}),
+        ({"count": 4, "rank": "N"}, {"count": 3, "rank": "E"},
+         {"count": 3, "rank": "W"}),
+    ),
 }
 
 #: Fillers for a hand that must stay all-pairs-and-singles. A group of 3+
@@ -153,6 +162,48 @@ def _suit_patterns(k: int) -> list[tuple[str, ...]]:
 
     walk((), 0)
     return out
+
+
+def _normalise(groups: list[dict]) -> list[dict]:
+    """Rewrite a matched dragon whose suit letter nothing else uses.
+
+    ``4(D)a`` beside no other ``a`` group is *exactly* ``4(D)``: the suit map
+    is free, so the letter constrains nothing and the line ranges over all
+    three dragons either way. Leaving both spellings in the pool let the same
+    hand be selected twice — the near-duplicate check cannot see it, because
+    the two shapes genuinely differ. It also misleads a reader, who takes a
+    suit letter to mean a constraint.
+    """
+    used: Counter[str] = Counter(
+        g["suit"] for g in groups if g.get("suit") is not None
+    )
+    out: list[dict] = []
+    for g in groups:
+        suit = g.get("suit")
+        if g["rank"] == "D" and suit is not None and used[suit] == 1:
+            out.append({k: v for k, v in g.items() if k != "suit"})
+        else:
+            out.append(g)
+    return out
+
+
+def _is_degenerate(groups: list[dict]) -> bool:
+    """Two groups of one physical tile, where a single bigger group was meant.
+
+    A card would never print ``3(2)a … 3(2)a``; it would print one group.
+    Generated, it demands six copies of a four-copy tile and burns two jokers
+    by construction — legal, but it reads as a printing error and is far
+    harder than its neighbours. Repeated *singles* are the exception and
+    stay: writing the year out twice is how a year hand is spelled, and four
+    singles of one tile is exactly its natural supply.
+    """
+    counts: Counter[tuple[str, str]] = Counter()
+    biggest: dict[tuple[str, str], int] = {}
+    for g in groups:
+        key = (g["rank"], g.get("suit") or "")
+        counts[key] += 1
+        biggest[key] = max(biggest.get(key, 0), g["count"])
+    return any(n > 1 and biggest[key] > 1 for key, n in counts.items())
 
 
 def _pad(core: list[dict], *, pairs_only: bool = False) -> list[list[dict]]:
@@ -265,23 +316,21 @@ def _pairs_cores():
     """All pairs and singles: concealed by construction, since a group of
     two can never be called (§2.5) — the linter enforces exactly that."""
     for numbers in (EVENS, ODDS, THREES):
-        for size in (5, 6, 7):
-            if size > len(numbers) + 2:
-                continue
-            chosen = numbers[:min(size, len(numbers))]
-            core = [
-                {"count": 2, "rank": str(n), "suit": "a"} for n in chosen
-            ]
-            yield core
+        # Sizes past the set's length used to clamp onto the same core, so
+        # each of these was generated two or three times and nothing new.
+        for size in range(3, len(numbers) + 1):
+            chosen = numbers[:size]
+            yield [{"count": 2, "rank": str(n), "suit": "a"} for n in chosen]
             yield [
                 {"count": 2, "rank": str(n), "suit": s}
                 for n, s in zip(chosen, ("a", "a", "b", "b", "c", "c", "a"))
             ]
-    # a consecutive run of pairs
-    for size in (5, 6):
+    # A consecutive run of pairs. The grammar caps a run at x..x+4, so five
+    # is the longest there is — asking for six silently yielded five again.
+    for length in (3, 4, 5):
         yield [
             {"count": 2, "rank": "x" if i == 0 else f"x+{i}", "suit": "a"}
-            for i in range(min(size, 5))
+            for i in range(length)
         ]
 
 
@@ -368,7 +417,10 @@ def candidates(*, year: str = "2026") -> list[Candidate]:
     pool: list[Candidate] = []
     counter = 0
     for section, core in _section_cores(year):
-        for groups in _pad(list(core), pairs_only=section == S_PAIRS):
+        for padded in _pad(list(core), pairs_only=section == S_PAIRS):
+            groups = _normalise(padded)
+            if _is_degenerate(groups):
+                continue
             counter += 1
             hand_id = f"g{counter:04d}"
             concealed = all(g["count"] <= 2 for g in groups)
@@ -568,7 +620,12 @@ def build_card(
     out_hands = []
     for hand in hands:
         per_section[hand.section] += 1
-        slug = "".join(w[0] for w in hand.section.split()).lower()
+        # Section initials, alphanumeric only: "Winds & Dragons" must not
+        # become "w&d-1". These ids are stored on results and shown to
+        # members in the reveal embed.
+        slug = "".join(
+            w[0] for w in hand.section.split() if w[0].isalnum()
+        ).lower()
         out_hands.append({
             "id": f"{slug}-{per_section[hand.section]}",
             "section": hand.section,

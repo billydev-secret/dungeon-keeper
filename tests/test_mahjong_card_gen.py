@@ -13,6 +13,8 @@ The pool is built once per module (a fresh enumeration is ~0.4s).
 
 from __future__ import annotations
 
+from collections import Counter
+
 import pytest
 
 from bot_modules.games.mahjong.card_gen import (
@@ -178,6 +180,77 @@ def test_values_stay_inside_the_card_range(generated):
     _, card = generated
     assert all(VALUE_MIN <= h.value <= VALUE_MAX for h in card.hands)
     assert all(h.value % 5 == 0 for h in card.hands)
+
+
+# ── Regressions from the stage-3 review ──────────────────────────────────────
+
+
+def test_a_matched_dragon_on_an_unused_letter_is_normalised_away(pool):
+    """`4(D)a` beside no other `a` group constrains nothing — it is `4(D)`.
+
+    Both spellings in the pool meant the same hand could be selected twice,
+    which neither the shape signature nor the near-duplicate warning can see.
+    """
+    for c in pool:
+        letters = Counter(
+            g.suit for g in c.hand.groups if g.suit is not None
+        )
+        for g in c.hand.groups:
+            if g.rank == "D" and g.suit is not None:
+                assert letters[g.suit] > 1, (
+                    f"{c.hand.display} carries a suit letter that binds nothing"
+                )
+
+
+def test_no_candidate_prints_one_tile_as_two_multi_groups(pool):
+    """`3(2)a … 3(2)a` demands six copies of a four-copy tile and reads as a
+    printing error; a card would print one bigger group instead."""
+    for c in pool:
+        seen: dict[tuple[str, str], int] = {}
+        for g in c.hand.groups:
+            key = (g.rank, g.suit or "")
+            if key in seen and (seen[key] > 1 or g.count > 1):
+                pytest.fail(f"{c.hand.display} splits one tile across groups")
+            seen[key] = max(seen.get(key, 0), g.count)
+
+
+def test_repeated_singles_are_still_allowed(pool):
+    """The exception to the rule above: writing the year out twice is how a
+    year hand is spelled, and four singles of one tile is its whole supply."""
+    doubled = [
+        c for c in pool
+        if sum(1 for g in c.hand.groups if g.count == 1 and g.rank == "2") > 1
+    ]
+    assert doubled, "the year-as-singles family should survive"
+
+
+def test_the_year_written_once_survives_padding(pool):
+    """A four-tile core needs a ten-tile tail; without one the whole family
+    was generated and silently discarded."""
+    singles = [
+        c for c in pool
+        if c.section == "Year"
+        and sum(1 for g in c.hand.groups if g.count == 1) == 4
+    ]
+    assert singles
+
+
+def test_section_slugs_stay_alphanumeric(generated):
+    """Ids reach members through the reveal embed, so 'Winds & Dragons'
+    must not become 'w&d-1'."""
+    data, _ = generated
+    for hand in data["hands"]:
+        slug = hand["id"].rsplit("-", 1)[0]
+        assert slug.isalnum(), hand["id"]
+
+
+def test_pairs_runs_come_in_more_than_one_length(pool):
+    """Both loop arms used to clamp to five, so only one run length existed."""
+    lengths = {
+        sum(1 for g in c.hand.groups if g.rank.startswith("x"))
+        for c in pool if c.section == S_PAIRS
+    }
+    assert len(lengths - {0}) > 1, lengths
 
 
 # ── The metrics themselves ───────────────────────────────────────────────────

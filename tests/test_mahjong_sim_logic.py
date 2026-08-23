@@ -231,6 +231,26 @@ def test_health_is_false_when_the_engine_refused_a_bot():
     assert not report.healthy
 
 
+def test_merge_into_accumulates_games_so_rates_stay_right():
+    """merge_into is public: two independently produced reports must merge
+    into one whose rates are computed over both runs, not the first."""
+    a = _empty_report(TINY, 2, 4, 0)
+    a.mahjongs, a.total_turns = 1, 100
+    b = _empty_report(TINY, 2, 4, 0)
+    b.mahjongs, b.total_turns = 1, 100
+    merge_into(a, b)
+    assert a.games == 4
+    assert a.win_rate == 0.5
+    assert a.mean_turns == 50
+
+
+def test_a_parallel_run_reports_the_games_it_was_asked_for():
+    """The aggregate starts at zero games precisely so merging adds up; a
+    pre-sized total would double once the shards land."""
+    report = simulate(TINY, games=2, seed=6, workers=1)
+    assert report.games == 2
+
+
 # ── Presentation ─────────────────────────────────────────────────────────────
 
 
@@ -241,6 +261,15 @@ def test_format_report_lists_lines_worst_first_and_names_the_dead():
     text = format_report(report)
     assert text.index("evens") < text.index("winds"), "dead line must sort first"
     assert "1 line(s) never won: evens" in text
+
+
+def test_format_report_accounts_for_games_with_no_scored_outcome():
+    """Otherwise the run reads as '0% everything' with no clue where the
+    games went — the counter was only visible via --json."""
+    report = _empty_report(TINY, 2, 4, 0)
+    report.other_ends = 2
+    assert "2 game(s) ended in no scored outcome" in format_report(report)
+    assert "no scored outcome" not in format_report(_empty_report(TINY, 1, 4, 0))
 
 
 def test_format_report_shouts_when_the_run_is_untrustworthy():
