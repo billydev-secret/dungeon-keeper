@@ -54,6 +54,7 @@ from bot_modules.games.mahjong.mahjong_service import (
     load_settings,
 )
 from bot_modules.games.mahjong.tile_render import rack_str
+from bot_modules.services.advisor_service import dashboard_url
 from bot_modules.games.mahjong.tiles import Tile, sort_rack
 from bot_modules.services.economy_service import get_balance
 
@@ -533,6 +534,26 @@ class MahjongCog(commands.Cog):
         accent = await safe_resolve_accent(self.bot, guild, default=DEFAULT_ACCENT_COLOR)
         await interaction.response.send_message(
             embed=mj_embeds.build_my_stats(rows, accent), ephemeral=True
+        )
+
+    async def handle_how_to_play(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        assert guild is not None
+
+        def _q():
+            with open_db(self.bot.ctx.db_path) as conn:
+                active = get_active_card(conn, guild.id)
+                return load_settings(conn, guild.id), active
+
+        settings, active = await asyncio.to_thread(_q)
+        accent = await safe_resolve_accent(
+            self.bot, guild, default=DEFAULT_ACCENT_COLOR)
+        await interaction.response.send_message(
+            embed=mj_embeds.build_how_to_play(
+                active[1] if active else None, settings, accent,
+                dashboard_url(),
+            ),
+            ephemeral=True,
         )
 
     async def handle_my_settings(self, interaction: discord.Interaction) -> None:

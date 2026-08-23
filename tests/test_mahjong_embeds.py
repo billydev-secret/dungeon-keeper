@@ -344,3 +344,34 @@ def test_card_viewer_shows_notes_and_parity():
     for e in embeds:
         for f in e.fields:
             assert len(f.value) <= 1024
+
+
+def test_how_to_play_covers_the_basics_and_the_live_clocks():
+    from bot_modules.games.mahjong.mahjong_service import MahjongSettings
+
+    settings = MahjongSettings(turn_timer=120.0, phase_timer=60.0,
+                               claim_window_2=6.0, claim_window_4=8.0)
+    e = mj_embeds.build_how_to_play(CARD, settings, ACCENT,
+                                    "https://dash.example")
+    names = [f.name for f in e.fields]
+    assert names == ["A hand, start to finish", "Claiming a discard",
+                     "Jokers", "Clocks", "Where to look"]
+    text = "\n".join(f.value for f in e.fields)
+    # the clocks are the guild's real dials, not prose constants
+    assert "120s" in text and "60s" in text and "6–8s" in text
+    # the season's actual card, and a link that matches the served path
+    assert CARD.display_name in text and "22 hands" in text
+    assert "https://dash.example/static/manual.html#mahjong" in text
+    # every field inside Discord's per-field bound
+    for f in e.fields:
+        assert len(f.value) <= 1024
+
+
+def test_how_to_play_survives_no_card_and_no_public_dashboard():
+    from bot_modules.games.mahjong.mahjong_service import MahjongSettings
+
+    e = mj_embeds.build_how_to_play(None, MahjongSettings(), ACCENT, "")
+    text = "\n".join(f.value for f in e.fields)
+    assert "hands" not in text.split("Where to look")[-1].split("\n")[0]
+    assert "Full guide" not in text          # localhost-only dev: no link
+    assert "Card Viewer" in text             # the in-Discord pointers remain

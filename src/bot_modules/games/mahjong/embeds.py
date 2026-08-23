@@ -431,6 +431,90 @@ def build_joker_redeemed(
     return _footer(e)
 
 
+def build_how_to_play(
+    card: Card | None, settings, accent: discord.Color | None = None,
+    manual_url: str = "",
+) -> discord.Embed:
+    """The /mahjong How to Play panel — enough to sit down and play one
+    hand, in the order a newcomer meets it. Deliberately not the rules
+    reference: the Card Viewer holds the season's hands and the manual
+    holds the detail, both linked from the last field."""
+    accent = accent or DEFAULT_ACCENT_COLOR
+    e = discord.Embed(
+        title="🀄 How to Play Meadow Mahjong",
+        description=(
+            "Build **fourteen tiles** into one of the patterns on the season's "
+            "card. You never invent a hand — you pick a line off the card and "
+            "chase it."
+        ),
+        color=accent,
+    )
+    e.add_field(
+        name="A hand, start to finish",
+        value=(
+            "**1. Sit down.** Create a table or press Join on someone's; the "
+            "stake is escrowed when you sit.\n"
+            "**2. Charleston.** Three rounds of passing three unwanted tiles "
+            "around the table, then an optional second Charleston if everyone "
+            "agrees, then a courtesy swap of up to three with the player "
+            "opposite.\n"
+            "**3. Play.** On your turn you draw, then discard. Everyone else "
+            "gets a moment to claim what you throw.\n"
+            "**4. Win.** Complete your line and press 🀄 Mahjong."
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="Claiming a discard",
+        value=(
+            "Any discard is fair game for a moment. **✋ Call** takes it to "
+            "complete a set of three or more, which you then expose face-up "
+            "for everyone to see. **🀄 Mahjong** takes it to win. A pair can "
+            "never be called — only the winning tile breaks that rule. "
+            "Mahjong beats a call, and a call beats waiting your turn."
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="Jokers",
+        value=(
+            "A joker stands in for any tile inside a group of **three or "
+            "more** — never in a pair or a single. If someone's exposed set "
+            "contains a joker and you hold the real tile, you can swap for it "
+            "on your turn. Winning with no jokers at all pays double."
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="Clocks",
+        value=(
+            f"Your turn: **{int(settings.turn_timer)}s**. Passing and other "
+            f"shared phases: **{int(settings.phase_timer)}s**. Claiming a "
+            f"discard: **{int(settings.claim_window(2))}–"
+            f"{int(settings.claim_window(4))}s**, so tap quickly. "
+            "Miss three of your own turns and your seat folds for the hand."
+        ),
+        inline=False,
+    )
+    helpers = [
+        "**Card Viewer** — every hand in season, with its point value.",
+        "**My Settings** — how much help you want: from nothing, up to a "
+        "coach naming your closest hand and a tile to throw.",
+        "**Open Rack** on the table card — your tiles, your options, and "
+        "whose turn it is. It keeps itself up to date.",
+    ]
+    if card is not None:
+        helpers.insert(
+            0, f"This season: **{card.display_name}**, {len(card.hands)} hands.")
+    if manual_url:
+        # served at /static/manual.html (server.py gates exactly this
+        # path behind login); the §10 heading anchors as #mahjong
+        helpers.append(
+            f"Full guide: {manual_url}/static/manual.html#mahjong")
+    e.add_field(name="Where to look", value="\n".join(helpers), inline=False)
+    return _footer(e, "New here? Try 🌱 Practice — free, against house bots")
+
+
 def build_card_viewer(card: Card, accent: discord.Color | None = None) -> list[discord.Embed]:
     """The active card by section, for study — split to respect field caps.
 
