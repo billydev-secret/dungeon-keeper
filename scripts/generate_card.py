@@ -36,9 +36,12 @@ from bot_modules.games.mahjong.card_logic import (  # noqa: E402
     load_card,
 )
 
+#: argparse wants a one-line summary; __doc__ is None under `python -OO`.
+SUMMARY = (__doc__ or "Generate a candidate Meadow Card.").splitlines()[0]
+
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=SUMMARY)
     parser.add_argument("--year", default="2026", help="digits for the year section")
     parser.add_argument("--season", default="2026-winter")
     parser.add_argument("--card-id", default="meadow-generated")

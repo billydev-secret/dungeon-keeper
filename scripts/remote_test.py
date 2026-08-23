@@ -727,6 +727,94 @@ def sync(cfg: RemoteConfig) -> bool:
     return pushed.returncode == 0 and tar.returncode == 0
 
 
+def exec_remote(
+    command: str,
+    env: Mapping[str, str] | None = None,
+    *,
+    timeout: int | None = None,
+) -> int | None:
+    """Run one arbitrary command in the synced workspace on the test host.
+
+    The same contract as :func:`run`, and for the same reason: **None means
+    "do it locally"**. Not configured, host down, sync failed, transport
+    broken — every one of those is a reason to fall back, never to fail.
+
+    This exists because the transport was never really about pytest. It
+    ships the tree and runs a string in it; `scripts/mahjong_sim.py --remote`
+    is the first caller that wants the fast machine without being a test
+    suite. Deliberately *not* routed through ``--bootstrap``: a caller that
+    only needs the standard library should not trigger a multi-gigabyte
+    dependency install to check whether the venv is stale.
+
+    The command runs in the workspace, so it sees exactly the tree that was
+    just synced — which means any file it reads must be one of SYNC_PATHS.
+    """
+    try:
+        cfg = load_config(env)
+    except ValueError as exc:
+        print(f"remote-exec: {exc}", file=sys.stderr)
+        return None
+
+    if cfg is None:
+        return None
+
+    if not is_available(cfg):
+        print(
+            f"remote-exec: {cfg.host} unreachable — running locally.",
+            file=sys.stderr, flush=True,
+        )
+        return None
+
+    # Every line this function prints goes to stderr, unlike run()'s: a
+    # dispatched command's stdout is its *result*, and callers pipe it
+    # (`--json > report.json`). Chatter on stdout corrupted that.
+    print(f"remote-exec: dispatching to {cfg.host}", file=sys.stderr, flush=True)
+    if not sync(cfg):
+        print("remote-exec: sync failed — retrying once.", file=sys.stderr)
+        if not sync(cfg):
+            print("remote-exec: sync failed — running locally.", file=sys.stderr)
+            return None
+
+    try:
+        code = subprocess.run(
+            remote_command(cfg, command), timeout=timeout
+        ).returncode
+    except subprocess.TimeoutExpired:
+        print(
+            f"remote-exec: no result after {timeout}s — running locally.",
+            file=sys.stderr,
+        )
+        return None
+
+    if code in (255, -1) or code < 0:
+        # 255 is ssh losing the connection; a negative code is ssh killed by
+        # a signal. Neither is the command's verdict.
+        print(
+            f"remote-exec: transport failed (exit {code}) — running locally.",
+            file=sys.stderr,
+        )
+        return None
+    return code
+
+
+def remote_python(env: Mapping[str, str] | None = None) -> str | None:
+    """The interpreter path on the test host, for building a command."""
+    try:
+        cfg = load_config(env)
+    except ValueError:
+        return None
+    return cfg.python if cfg else None
+
+
+def remote_jobs(env: Mapping[str, str] | None = None) -> int | None:
+    """The worker count configured for the test host."""
+    try:
+        cfg = load_config(env)
+    except ValueError:
+        return None
+    return cfg.jobs if cfg else None
+
+
 def run(args: Sequence[str], env: Mapping[str, str] | None = None) -> int | None:
     """Run pytest remotely.
 
