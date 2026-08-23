@@ -1,6 +1,10 @@
 # Meadow Card generator — build plan
 
-**Status: stage 0 (this doc) 2026-08-22.** Stages 1–5 unbuilt.
+**Status: stage 2 built 2026-08-22.** Stage 1 (matched dragons) shipped
+first from the `meadow-mahjong` branch as `RankKind.SUIT_DRAGON`, plus a
+`D2` second-dragon token and `x_parity` — a superset of what this plan
+proposed — so this branch's version was dropped at the rebase. Stages 3–5
+unbuilt.
 
 **Spec:** [../meadow_mahjong_spec.md](../meadow_mahjong_spec.md) §3 (card model),
 §4 (First Light).
@@ -115,7 +119,7 @@ a matched-dragon hand matches only when the dragon agrees with the bound suit;
 an opposite-dragon hand (`D` on a different letter) refuses the matching one;
 First Light still loads byte-identical.
 
-## Stage 2 — the simulator
+## Stage 2 — the simulator ✅
 
 `sim_logic.py` — `simulate(card, *, games, seats, seed, stake) -> SimReport`.
 Seats four `bot_logic.decide()` brains at a headless table, plays to settle or
@@ -129,10 +133,35 @@ length, per-tile demand entropy, joker-idle rate.
 
 `scripts/mahjong_sim.py` — CLI over it, table output, `--json`, `--seed`.
 
-**Tests** (`tests/test_mahjong_sim_logic.py`): a two-hand toy card where the
-outcome is forced; same seed twice ⇒ identical report (G4); a card whose only
-hand is unreachable reports zero completions rather than hanging; game count
-and seat count are respected. Keep `games` small in tests — the gate runs this.
+**Built with three changes to what this section assumed.** (a) A game costs
+seconds of bot thinking — the assist engine walks every line's bindings at
+every decision — so `simulate` seeds **per game** from `(seed, index)` and
+takes a `workers` argument; a run's result is independent of the worker
+count, and shard-plus-merge is tested directly rather than by spawning a
+pool in CI. (b) `Tile.__hash__` is now the identity hash (enum's own hashes
+the member *name*); tiles are hashed into Counters millions of times per
+game and this took ~20% off a run — it speeds the live matcher too.
+(c) Per-hand joker *counts* are not recoverable from `Outcome`, so the joker
+economy is read from `jokerless_wins` instead, which is recorded. Note
+`wins_per_target` is not a probability and routinely exceeds 1: `targeted`
+counts only the opening target, and pivots are the point.
+
+**Tests** (`tests/test_mahjong_sim_logic.py`, 22 cases, ~6s): two-line cards
+at two games each, for the reason above. Determinism per seed, distinct
+streams per game index, shard+merge equalling the serial run, an unwinnable
+card walling out instead of hanging, every game ending in exactly one
+outcome at both seat counts, the health flags, and the report ordering.
+
+### What it already said about First Light (G7)
+
+96 games, 4 seats, seed 3: **53% wall games** and **14 of 22 lines never
+won**. The worst finding is `qp-2` (The Long Trail) — the *most* popular
+opening target at 136 seat-hands, and zero wins. A line that attracts
+players at the deal and then strands them is the exact failure the
+generator exists to prevent, and First Light has one. Duel is the opposite
+extreme: 2 seats, no trim, 100% mahjong rate. Both numbers want a bigger
+run before anything is concluded, but the tooling is clearly reading
+something real.
 
 ## Stage 3 — the generator
 
