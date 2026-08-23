@@ -93,6 +93,15 @@ def test_private_events_map_to_member_facing_copy():
     assert cog._private_note(1, []) is None
 
 
+def test_member_panel_carries_how_to_play():
+    view = mj_views.MemberPanelView(_cog())
+    labels = [c.label for c in view.children if isinstance(c, discord.ui.Button)]
+    assert "How to Play" in labels
+    # Discord allows five buttons per action row — the panel is now full,
+    # so a sixth entry must start a row rather than silently fail to render
+    assert len(labels) <= 5
+
+
 def test_member_panel_carries_my_settings():
     # A10: the settings container rides the play panel; assistance is its
     # first tenant. One wiring assertion — behavior is service/logic-tested.

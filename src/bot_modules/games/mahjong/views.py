@@ -313,6 +313,7 @@ class MemberPanelView(discord.ui.View):
             ("Card Viewer", discord.ButtonStyle.secondary, cog.handle_card_viewer),
             ("My Stats", discord.ButtonStyle.secondary, cog.handle_my_stats),
             ("My Settings", discord.ButtonStyle.secondary, cog.handle_my_settings),
+            ("How to Play", discord.ButtonStyle.secondary, cog.handle_how_to_play),
         ):
             b = discord.ui.Button(label=label, style=style)
 
