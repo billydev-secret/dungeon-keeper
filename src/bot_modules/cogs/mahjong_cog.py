@@ -570,12 +570,14 @@ class MahjongCog(commands.Cog):
                     interaction,
                     self.service.join_table(table_id, interaction.user.id),
                     "You're seated — escrow locked. 🀄",
+                    table_id,
                 )
             elif action == "add_bot":
                 await self._act_simple(
                     interaction,
                     self.service.add_bot(table_id, interaction.user.id),
                     "🌱 Bot seated — house escrow locked.",
+                    table_id,
                 )
             elif action == "cancel":
                 member = interaction.user
@@ -590,6 +592,7 @@ class MahjongCog(commands.Cog):
                         member_id=None if is_mod else member.id,
                     ),
                     "Table cancelled; every escrow returned.",
+                    table_id,
                 )
             elif action == "close":
                 state = await self.service.load_state(table_id)
@@ -612,6 +615,7 @@ class MahjongCog(commands.Cog):
                     interaction,
                     self.service.dissolve_table(table_id, "closed"),
                     "Table closed.",
+                    table_id,
                 )
             elif action == "rack":
                 await self._send_rack(interaction, table_id)
@@ -622,6 +626,7 @@ class MahjongCog(commands.Cog):
                                      member_id=interaction.user.id,
                                      yes=action == "vote_y"),
                     "Vote's in.",
+                    table_id,
                 )
             elif action == "claim_pass":
                 await self._act_simple(
@@ -630,6 +635,7 @@ class MahjongCog(commands.Cog):
                                      member_id=interaction.user.id,
                                      kind="pass"),
                     "Passed.",
+                    table_id,
                 )
             elif action == "claim_mj":
                 await self._claim_mahjong(interaction, table_id)
@@ -641,6 +647,7 @@ class MahjongCog(commands.Cog):
                     self.service.act(table_id, "rematch",
                                      member_id=interaction.user.id),
                     "Rematch vote in — everyone must press it.",
+                    table_id,
                 )
             else:
                 await interaction.response.send_message(
@@ -649,11 +656,33 @@ class MahjongCog(commands.Cog):
         except (TableError, ActionRejected) as e:
             await self._reply(interaction, self._dress(str(e)))
 
-    async def _act_simple(self, interaction, coro, done: str) -> None:
+    def _rack_is_live(self, table_id: int, member_id: int) -> bool:
+        """Is this member watching a rack panel that just refreshed itself?
+
+        The refresh runs inside ``act()`` — before any confirmation would be
+        sent — and drops its entry the moment an edit fails, so a True here
+        means the member is provably looking at up-to-date state and a
+        "Pass is in." ephemeral would just repeat what the panel's own Now
+        line already says.
+        """
+        entry = self.rack_watch.get((table_id, member_id))
+        return entry is not None and time.time() - entry[1] <= self.RACK_WATCH_TTL
+
+    async def _confirm(
+        self, interaction, table_id: int, events, done: str
+    ) -> None:
+        """Say only what the live panel can't: private notes always, the
+        routine confirmation only when no live rack panel is showing it."""
+        note = self._private_note(interaction.user.id, events)
+        if note:
+            await interaction.followup.send(note, ephemeral=True)
+        elif not self._rack_is_live(table_id, interaction.user.id):
+            await interaction.followup.send(done, ephemeral=True)
+
+    async def _act_simple(self, interaction, coro, done: str, table_id=None) -> None:
         await interaction.response.defer(ephemeral=True)
         events = await coro
-        note = self._private_note(interaction.user.id, events)
-        await interaction.followup.send(note or done, ephemeral=True)
+        await self._confirm(interaction, table_id or 0, events, done)
 
     @staticmethod
     def _dress(message: str) -> str:
@@ -742,6 +771,10 @@ class MahjongCog(commands.Cog):
             return None
 
     def _rack_context(self, state: GameState, seat: int, names: dict[int, str]) -> str | None:
+        """The panel's Now line — what this seat must do, or what it has
+        already done. Every phase reports the seat's own status, because
+        the live panel is the confirmation: a member who has acted sees it
+        here instead of collecting a separate ephemeral per tap."""
         if state.phase is Phase.CHARLESTON:
             rnd = "First" if state.charleston_round == 1 else "Second"
             return (f"{rnd} Charleston, pass {state.pass_index + 1} of 3 — "
@@ -749,19 +782,36 @@ class MahjongCog(commands.Cog):
                     if seat not in state.pending_picks
                     else "Your pass is in — waiting on the table.")
         if state.phase is Phase.CHARLESTON_VOTE:
+            if seat in state.votes:
+                said = "yes" if state.votes[seat] else "no"
+                return f"Your vote ({said}) is in — waiting on the table."
             return "Vote on the table card: run the second Charleston?"
         if state.phase is Phase.COURTESY_PROPOSE:
+            if seat in state.proposals:
+                return (f"You offered {state.proposals[seat]} — "
+                        "waiting on the table.")
             return "Offer 0–3 courtesy tiles below."
         if state.phase is Phase.COURTESY_PICK:
             if seat in state.courtesy_owed and seat not in state.courtesy_gives:
                 return f"Give {state.courtesy_owed[seat]} tile(s) below."
             return "Courtesy trades are wrapping up."
         if state.phase is Phase.CLAIM_WINDOW:
+            if seat in state.claims:
+                kind = state.claims[seat][0]
+                shown = {"pass": "passed", "call": "called",
+                         "mahjong": "declared Mahjong"}.get(kind, kind)
+                return f"You {shown} — waiting on the window."
+            if seat == state.live_discarder:
+                return "Your discard is live — waiting on the table."
             return "A discard is live — claim from the table card."
         if state.phase is Phase.AWAIT_DISCARD and state.turn != seat:
             turn_name = names.get(state.seats[state.turn].member_id,
                                   f"seat {state.turn + 1}")
             return f"Waiting on {turn_name}."
+        if state.phase is Phase.SETTLE:
+            if seat in state.rematch_votes:
+                return "Rematch vote in — every seat must press it."
+            return "Hand over — Rematch or Close on the table card."
         return None
 
     def _rack_view(
@@ -920,8 +970,7 @@ class MahjongCog(commands.Cog):
         except (TableError, ActionRejected) as e:
             await self._reply(interaction, self._dress(str(e)))
             return
-        note = self._private_note(interaction.user.id, events)
-        await interaction.followup.send(note or done, ephemeral=True)
+        await self._confirm(interaction, table_id, events, done)
 
     # ── Scheduled card activation ───────────────────────────────────────
 

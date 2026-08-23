@@ -246,3 +246,88 @@ def test_rack_watch_dead_panel_dropped_on_edit_failure():
     meta = {"status": "live", "deadline_at": None}
     asyncio.run(cog._refresh_rack_watches(7, state, meta, {human: "You"}))
     assert cog.rack_watch == {}
+
+
+def test_rack_context_reports_the_seats_own_status_every_phase():
+    # The live panel IS the confirmation, so every phase must say what this
+    # seat has already done — otherwise suppressing the per-tap ephemeral
+    # would lose information.
+    from bot_modules.games.mahjong.game_logic import Phase as P
+    from bot_modules.games.mahjong.tiles import Tile
+    from tests.test_mahjong_game_logic import play_state
+
+    cog = _cog()
+    names = {100: "You", 101: "Them"}
+    state = play_state(2, {0: "9c*13", 1: "8b*13"})
+
+    state.phase = P.CHARLESTON_VOTE
+    assert "Vote on the table card" in cog._rack_context(state, 0, names)
+    state.votes = {0: True}
+    assert "Your vote (yes) is in" in cog._rack_context(state, 0, names)
+
+    state.phase = P.COURTESY_PROPOSE
+    assert "Offer 0–3" in cog._rack_context(state, 0, names)
+    state.proposals = {0: 2}
+    assert "You offered 2" in cog._rack_context(state, 0, names)
+
+    state.phase = P.CLAIM_WINDOW
+    state.live_discarder = 1
+    assert "claim from the table card" in cog._rack_context(state, 0, names)
+    state.claims = {0: ("pass", [])}
+    assert "You passed" in cog._rack_context(state, 0, names)
+    state.claims = {0: ("call", [Tile("9c")])}
+    assert "You called" in cog._rack_context(state, 0, names)
+    state.live_discarder = 0
+    state.claims = {}
+    assert "Your discard is live" in cog._rack_context(state, 0, names)
+
+    state.phase = P.SETTLE
+    assert "Hand over" in cog._rack_context(state, 0, names)
+    state.rematch_votes = {0}
+    assert "Rematch vote in" in cog._rack_context(state, 0, names)
+
+
+def test_confirm_suppresses_routine_notes_only_behind_a_live_panel():
+    import asyncio
+    import time as _time
+
+    sent: list[str] = []
+
+    class _Followup:
+        async def send(self, text, **kw):
+            sent.append(text)
+
+    class _User:
+        id = 100
+
+    class _Interaction:
+        user = _User()
+        followup = _Followup()
+
+    cog = _cog()
+    cog.rack_watch = {}
+    inter = _Interaction()
+
+    # no live panel → the routine confirmation is the only feedback
+    asyncio.run(cog._confirm(inter, 7, [], "Pass is in."))
+    assert sent == ["Pass is in."]
+
+    # live panel → suppressed; the panel's Now line says it
+    sent.clear()
+    cog.rack_watch[(7, 100)] = (object(), _time.time())
+    asyncio.run(cog._confirm(inter, 7, [], "Pass is in."))
+    assert sent == []
+
+    # an EXPIRED panel is not live → confirmation returns
+    sent.clear()
+    cog.rack_watch[(7, 100)] = (object(), _time.time() - 20 * 60)
+    asyncio.run(cog._confirm(inter, 7, [], "Pass is in."))
+    assert sent == ["Pass is in."]
+
+    # a private note always lands, live panel or not
+    sent.clear()
+    cog.rack_watch[(7, 100)] = (object(), _time.time())
+    events = [("claim_downgraded",
+               {"seat": 0, "why": "invalid_mahjong", "private": True})]
+    asyncio.run(cog._confirm(inter, 7, events, "Pass is in."))
+    assert len(sent) == 1 and "Pass is in." not in sent[0]
