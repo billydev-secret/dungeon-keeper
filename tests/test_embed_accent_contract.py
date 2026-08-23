@@ -41,6 +41,7 @@ from bot_modules.games_wyr import embeds as wyr_embeds
 from bot_modules.games.mahjong import embeds as mahjong_embeds
 from bot_modules.games.mahjong import game_logic as mahjong_game
 from bot_modules.games.mahjong.card_logic import load_first_light
+from bot_modules.games.mahjong.mahjong_service import MahjongSettings
 from bot_modules.games.mahjong.tiles import Tile as MahjongTile
 from bot_modules.member_info import embeds as member_info_embeds
 from bot_modules.member_info import logic as member_info_logic
@@ -788,6 +789,12 @@ CASES = [
     case(
         "mahjong.my_stats",
         lambda **kw: mahjong_embeds.build_my_stats([], accent=kw.get("color")),
+        branding.DEFAULT_ACCENT_COLOR,
+    ),
+    case(
+        "mahjong.how_to_play",
+        lambda **kw: mahjong_embeds.build_how_to_play(
+            _mahjong_card(), MahjongSettings(), accent=kw.get("color")),
         branding.DEFAULT_ACCENT_COLOR,
     ),
 ]
