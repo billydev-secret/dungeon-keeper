@@ -209,12 +209,20 @@ class MahjongCog(commands.Cog):
     ) -> None:
         meta = await self.service.table_meta(table_id)
         if meta is None:
+            log.warning("mahjong: table %d transition: no meta — skip", table_id)
             return
         guild = self.bot.get_guild(meta["guild_id"])
         if guild is None:
+            log.warning(
+                "mahjong: table %d transition: guild %s not in cache — "
+                "sticky NOT updated", table_id, meta["guild_id"])
             return
         channel = guild.get_channel(meta["channel_id"])
         if not isinstance(channel, discord.TextChannel):
+            log.warning(
+                "mahjong: table %d transition: channel %s is %s — "
+                "sticky NOT updated", table_id, meta["channel_id"],
+                type(channel).__name__)
             return
         names = self._seat_names(guild, state)
 
@@ -249,6 +257,12 @@ class MahjongCog(commands.Cog):
             panel = self.panels.get(table_id)
             if panel is not None:
                 await panel.place_or_refresh(guild, channel)
+                log.info(
+                    "mahjong: table %d sticky refreshed in #%s",
+                    table_id, channel.name)
+            else:
+                log.warning(
+                    "mahjong: table %d transition: no panel tracked", table_id)
         elif meta["sticky_message_id"]:
             # closed: leave the final card in place, buttons gone
             try:
@@ -418,6 +432,14 @@ class MahjongCog(commands.Cog):
         channel = guild.get_channel(interaction.channel_id)
         if panel is not None and isinstance(channel, discord.TextChannel):
             await panel.place_or_refresh(guild, channel)
+            log.info(
+                "mahjong: table %d practice card placed in #%s",
+                table_id, channel.name)
+        else:
+            log.warning(
+                "mahjong: table %d practice card NOT placed (panel=%s, "
+                "channel=%s)", table_id, panel is not None,
+                type(channel).__name__)
         await interaction.followup.send(
             "🌱 Practice table's open — the bots are seated and the deal is "
             "coming. No stakes, no stats — just practice.", ephemeral=True,
