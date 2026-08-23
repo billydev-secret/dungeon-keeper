@@ -21,6 +21,17 @@ from bot_modules.games.mahjong.tiles import Tile, shuffled_wall
 
 CARD = load_first_light()
 ACCENT = discord.Color(0xDAA520)
+
+
+@pytest.fixture(autouse=True)
+def _text_chips(monkeypatch):
+    # Chip-text assertions are written against the empty-map launch state.
+    # Once prod registration populates tile_emoji.json (committed, so the
+    # runner sees it too), the ambient map would render <:mm_5b:…> markup
+    # instead of "5B" — every test pins the map it means to test. The
+    # overflow test overrides this with its own full fake map.
+    from bot_modules.games.mahjong import tile_render
+    monkeypatch.setattr(tile_render, "_map_cache", {})
 NAMES = {100: "Wren", 101: "Moss", 102: "Fern", 103: "Sage"}
 
 
