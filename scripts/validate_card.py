@@ -20,7 +20,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from bot_modules.games.mahjong.card_logic import lint_card_data  # noqa: E402
+from bot_modules.games.mahjong.card_logic import (  # noqa: E402
+    CardError,
+    difficulty_profile,
+    lint_card_data,
+    load_card,
+)
 
 
 def lint_file(path: Path) -> bool:
@@ -43,6 +48,22 @@ def lint_file(path: Path) -> bool:
         print(f"{path}: OK")
     elif report.ok:
         print(f"{path}: OK ({len(report.warnings)} warning(s))")
+
+    if report.ok:
+        # A card author's most useful read after "is it legal": how many of
+        # these lines can anyone actually finish. Structural, so it costs
+        # nothing and needs no simulation.
+        try:
+            card = load_card(data)
+        except CardError:  # pragma: no cover — report.ok implies it loads
+            return report.ok
+        profile = difficulty_profile(card)
+        long_shots = sorted(k for k, d in profile.items() if d.long_shot)
+        if long_shots:
+            print(
+                f"{path}: {len(long_shots)} of {len(card.hands)} lines are "
+                f"long shots — {', '.join(long_shots)}"
+            )
     return report.ok
 
 

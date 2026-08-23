@@ -1,10 +1,11 @@
 # Meadow Card generator — build plan
 
-**Status: stages 2–3 built 2026-08-22.** Stage 1 (matched dragons) shipped
-first from the `meadow-mahjong` branch as `RankKind.SUIT_DRAGON`, plus a
-`D2` second-dragon token and `x_parity` — a superset of what this plan
-proposed — so this branch's version was dropped at the rebase. Stages 4–5
-unbuilt.
+**Status: stages 2–3 and difficulty scoring (4a) built 2026-08-22/23.**
+Stage 1 (matched dragons) shipped first from the `meadow-mahjong` branch as
+`RankKind.SUIT_DRAGON`, plus a `D2` second-dragon token and `x_parity` — a
+superset of what this plan proposed — so this branch's version was dropped
+at the rebase. The rest of stage 4 (the measured run, the human naming pass)
+and stage 5 unbuilt.
 
 **Spec:** [../meadow_mahjong_spec.md](../meadow_mahjong_spec.md) §3 (card model),
 §4 (First Light).
@@ -245,6 +246,57 @@ Two things the review checked and cleared, worth not re-litigating:
 `Tile.__hash__ = object.__hash__` is safe — `Tile` is a plain `Enum`, not a
 `str` mixin, so equality is identity, and the engine's only `set[Tile]` is
 used for membership and never iterated.
+
+## Stage 4a — difficulty scoring ✅ (2026-08-23)
+
+Stage 4 assumed each line's price would come from a measured completion
+rate. That does not survive contact with the dashboard: an admin uploads a
+card and wants to see it *now*, and a 56-hand card needs thousands of games
+to measure. So the simulator was used to **calibrate a cheap formula**
+instead of to price cards directly — the expensive measurement happened
+once, offline, and `card_logic.difficulty()` is what ships.
+
+Six terms, all facts about the hand, all individually explainable to a
+member (`reasons` names the ones that moved the score):
+
+| term | weight | why |
+|---|---|---|
+| tiles in groups no joker may fill | ×1.0 | dominant — must arrive as specific naturals |
+| tiles in groups too small to call | ×0.8 | strictly worse: cannot even be claimed (§2.5) |
+| concealed | +3 | forfeits calling entirely |
+| distinct suits | ×1.5 | more separate tiles to chase |
+| tiles past the natural supply | ×2.0 | must be jokers, of which 8 exist for the table |
+| rank variables | −2.0 | binds where your tiles already sit |
+| flowers | −0.5 | eight copies, the cheapest tiles there are |
+
+**`LONG_SHOT_SCORE = 12` is calibrated, not chosen.** Across First Light and
+a generated card — ~150 measured games — lines scoring ≥12 took **295
+opening picks and won nothing**, while all 63 wins came from below. The
+threshold was fitted on First Light and held on the generated card as a
+held-out test. The separation is stable anywhere in [12, 14]; at 10 winners
+start leaking through. `tests/test_mahjong_card_logic.py` pins the exact set
+of First Light lines it flags, so changing a weight fails the suite and
+forces a re-run of `scripts/mahjong_sim.py`.
+
+**Two bands, not five.** Only the long-shot boundary is validated; a
+finer scale would imply resolution the data does not support.
+
+**Values now derive from the score** (`card_gen.line_value`), replacing an
+ad-hoc structural formula that could drift from whatever the card viewer
+showed. Note the correction this pass forced: First Light's values are *not*
+inverted against difficulty — they correlate at r = 0.64, which is pricing
+working roughly as intended. The problem was never the prices.
+
+`select(max_long_shots=N)` budgets the jackpot lines. Unset, the count is
+whatever the flat section quotas produce, which is how a pool that is 0.6%
+zero-jokerable produced a card that was 12% — the Singles & Pairs quota
+dragged every one of them on. A card *wants* some, so this is a budget, not
+a ban. The repair pass honours it too (found by its own test).
+
+Surfaced in `scripts/generate_card.py` (per-line score, band and reason) and
+`scripts/validate_card.py` (long-shot count for a card author). **Not yet
+member-facing** — the card viewer and the assist embed are the next step,
+and being member-visible they owe `manual.html` and a QA card.
 
 ## Stage 4 — generate, tune, author the card
 

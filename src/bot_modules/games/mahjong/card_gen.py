@@ -35,13 +35,14 @@ from itertools import combinations
 
 from bot_modules.games.mahjong.card_logic import (
     HAND_TILES,
-    VALUE_MAX,
     VALUE_MIN,
     Card,
     Hand,
     canonical_shape,
+    difficulty,
     lint_card_data,
     load_card,
+    value_for_difficulty,
 )
 
 #: Card suit letters, in the order the canonicaliser prefers them.
@@ -349,18 +350,15 @@ def _section_cores(year: str):
 # ── Scoring a candidate ──────────────────────────────────────────────────────
 
 
-def provisional_value(hand: Hand) -> int:
-    """A placeholder price so the pool can be *played*; stage 4 replaces it
-    with one derived from the measured completion rate. Structural only:
-    concealed lines, uncallable small groups, extra suits and quints all
-    make a line harder, so all four cost more."""
-    value = VALUE_MIN
-    if hand.concealed:
-        value += 10
-    value += 5 * sum(1 for g in hand.groups if not g.takes_jokers)
-    value += 5 * (len({g.suit for g in hand.groups if g.suit} or {None}) - 1)
-    value += 5 * sum(1 for g in hand.groups if g.count >= 5)
-    return max(VALUE_MIN, min(VALUE_MAX, value - value % 5))
+def line_value(hand: Hand) -> int:
+    """Price a line from `card_logic.difficulty`.
+
+    This replaced an ad-hoc structural formula of its own. One scale, used
+    by the generator and available to the card viewer, beats two that drift
+    — and this one is calibrated against measurement at the boundary that
+    matters, rather than invented here.
+    """
+    return value_for_difficulty(difficulty(hand).score)
 
 
 def _tokens(hand: Hand) -> Counter[str]:
@@ -401,6 +399,7 @@ class Candidate:
     shape: tuple
     tokens: Counter[str]
     key: tuple
+    long_shot: bool
 
     @property
     def section(self) -> str:
@@ -443,6 +442,7 @@ def candidates(*, year: str = "2026") -> list[Candidate]:
             pool.append(Candidate(
                 hand=hand, shape=shape,
                 tokens=_tokens(hand), key=stutter_key(hand),
+                long_shot=difficulty(hand).long_shot,
             ))
     return pool
 
@@ -474,6 +474,7 @@ def select(
     *,
     per_section: int = 7,
     seed: int = 0,
+    max_long_shots: int | None = None,
 ) -> list[Hand]:
     """Choose a card: up to ``per_section`` lines from each section, taking
     the one that most improves the card each time.
@@ -483,6 +484,13 @@ def select(
     candidate whose marginal score is best: it should want tokens the card
     is not already saturated with, and it should sit close enough to lines
     already chosen that a blocked player can pivot onto it.
+
+    ``max_long_shots`` caps how many `LONG_SHOT_SCORE`-and-above lines reach
+    the card. Left unset the count is whatever the section quotas happen to
+    produce, which is how the first cards ended up carrying every
+    zero-jokerable candidate in the Singles & Pairs section: the pool is
+    0.6% of them, the card was 12%. A card *wants* some — they are its
+    jackpot lines — so this is a budget to set deliberately, not a ban.
     """
     rng = random.Random(seed)
     by_section: dict[str, list[Candidate]] = {s: [] for s in SECTIONS}
@@ -496,13 +504,17 @@ def select(
         rng.shuffle(available)  # break ties without a positional bias
         for _ in range(min(per_section, len(available))):
             fresh = [c for c in available if not _is_reprint(c, chosen)]
+            if max_long_shots is not None:
+                spent = sum(1 for c in chosen if c.long_shot)
+                if spent >= max_long_shots:
+                    fresh = [c for c in fresh if not c.long_shot]
             if not fresh:
                 break
             best = max(fresh, key=lambda c: _marginal_score(c, chosen, demand))
             available.remove(best)
             chosen.append(best)
             demand.update(best.tokens)
-    _repair_stranded(chosen, by_section, rng)
+    _repair_stranded(chosen, by_section, rng, max_long_shots)
     return [c.hand for c in chosen]
 
 
@@ -554,6 +566,7 @@ def _repair_stranded(
     chosen: list[Candidate],
     by_section: dict[str, list[Candidate]],
     rng: random.Random,
+    max_long_shots: int | None = None,
 ) -> None:
     """Swap out lines left with too few pivot neighbours.
 
@@ -574,6 +587,13 @@ def _repair_stranded(
             c for c in by_section.get(current.section, ())
             if c.hand.id not in taken and not _is_reprint(c, rest)
         ]
+        if max_long_shots is not None:
+            # The repair runs after the greedy, so it has to honour the
+            # budget too — otherwise a swap can quietly push the card one
+            # long shot over the cap the caller asked for.
+            spent = sum(1 for c in rest if c.long_shot)
+            if spent >= max_long_shots:
+                options = [c for c in options if not c.long_shot]
         if not options:
             continue
         rng.shuffle(options)
@@ -631,7 +651,7 @@ def build_card(
             "section": hand.section,
             "name": hand.name,
             "concealed": hand.concealed,
-            "value": provisional_value(hand),
+            "value": line_value(hand),
             "groups": [
                 {"count": g.count, "rank": g.rank}
                 | ({"suit": g.suit} if g.suit else {})

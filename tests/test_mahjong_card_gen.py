@@ -25,7 +25,7 @@ from bot_modules.games.mahjong.card_gen import (
     candidates,
     overlap,
     pivot_report,
-    provisional_value,
+    line_value,
     select,
     stutter_key,
 )
@@ -33,8 +33,10 @@ from bot_modules.games.mahjong.card_logic import (
     HAND_TILES,
     VALUE_MAX,
     VALUE_MIN,
+    difficulty,
     lint_card_data,
     load_card,
+    value_for_difficulty,
 )
 
 
@@ -319,6 +321,32 @@ def test_stutter_key_treats_rank_variables_as_identity():
     assert any("x" in str(part) for part in stutter_key(run))
 
 
+def test_line_value_is_derived_from_the_difficulty_score():
+    """One scale for the whole feature: the generator must not price lines
+    with a formula of its own that can drift from the card viewer's."""
+    hand = _hand([{"count": 4, "rank": "F"}, {"count": 4, "rank": "1", "suit": "a"},
+                  {"count": 4, "rank": "2", "suit": "a"},
+                  {"count": 2, "rank": "3", "suit": "a"}])
+    assert line_value(hand) == value_for_difficulty(difficulty(hand).score)
+
+
+def test_the_long_shot_budget_is_respected(pool):
+    hands = select(pool, per_section=7, seed=1, max_long_shots=4)
+    assert sum(1 for h in hands if difficulty(h).long_shot) <= 4
+
+
+def test_without_a_budget_the_section_quotas_decide(pool):
+    """Not a ban — a card wants some jackpot lines. Unset means 'however
+    many the quotas produce', which is what it was before the budget."""
+    hands = select(pool, per_section=7, seed=1)
+    assert sum(1 for h in hands if difficulty(h).long_shot) > 4
+
+
+def test_candidates_carry_their_long_shot_flag(pool):
+    for c in pool[:200]:
+        assert c.long_shot == difficulty(c.hand).long_shot
+
+
 @pytest.mark.parametrize(
     "groups, concealed, expect_at_least",
     [
@@ -337,10 +365,10 @@ def test_stutter_key_treats_rank_variables_as_identity():
             True, 50, id="concealed-all-pairs-three-suits"),
     ],
 )
-def test_provisional_value_prices_difficulty_upward(
+def test_line_value_prices_difficulty_upward(
     groups, concealed, expect_at_least
 ):
-    value = provisional_value(_hand(groups, concealed=concealed))
+    value = line_value(_hand(groups, concealed=concealed))
     assert expect_at_least <= value <= VALUE_MAX
     assert value % 5 == 0
 

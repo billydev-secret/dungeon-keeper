@@ -18,13 +18,18 @@ import pytest
 
 from bot_modules.games.mahjong.card_logic import (
     FIRST_LIGHT_PATH,
+    VALUE_MAX,
+    VALUE_MIN,
     CardError,
     RankKind,
+    difficulty,
+    difficulty_profile,
     lint_card,
     lint_card_data,
     load_card,
     load_card_file,
     load_first_light,
+    value_for_difficulty,
 )
 from bot_modules.games.mahjong.tiles import (
     DECK_SIZE,

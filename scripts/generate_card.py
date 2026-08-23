@@ -32,6 +32,7 @@ from bot_modules.games.mahjong.card_gen import (  # noqa: E402
     select,
 )
 from bot_modules.games.mahjong.card_logic import (  # noqa: E402
+    difficulty_profile,
     lint_card_data,
     load_card,
 )
@@ -47,6 +48,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--card-id", default="meadow-generated")
     parser.add_argument("--display-name", default="Meadow Card — Generated")
     parser.add_argument("--per-section", type=int, default=7)
+    parser.add_argument(
+        "--max-long-shots", type=int, default=None,
+        help="cap the lines scoring at or above the long-shot threshold "
+             "(default: however many the section quotas produce)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("-o", "--out", type=Path, help="write the card JSON here")
     parser.add_argument(
@@ -62,7 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.pool_only:
         return 0
 
-    hands = select(pool, per_section=args.per_section, seed=args.seed)
+    hands = select(
+        pool, per_section=args.per_section, seed=args.seed,
+        max_long_shots=args.max_long_shots,
+    )
     data = build_card(
         hands,
         card_id=args.card_id,
@@ -94,6 +102,23 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"! {len(stranded)} line(s) with fewer than 2 pivot neighbours: "
             + ", ".join(stranded),
+            file=sys.stderr,
+        )
+
+    profile = difficulty_profile(card)
+    long_shots = sorted(k for k, d in profile.items() if d.long_shot)
+    print(
+        f"difficulty: {len(long_shots)} of {len(card.hands)} lines are long "
+        f"shots ({len(long_shots) / len(card.hands):.0%})",
+        file=sys.stderr,
+    )
+    print(f"  {'line':<10}{'value':>6}{'score':>8}  band / why", file=sys.stderr)
+    for hand in sorted(card.hands, key=lambda h: -profile[h.id].score):
+        d = profile[hand.id]
+        why = d.reasons[0] if d.reasons else ""
+        print(
+            f"  {hand.id:<10}{hand.value:>6}{d.score:>8.1f}  "
+            f"{d.band:<10} {why}",
             file=sys.stderr,
         )
 
