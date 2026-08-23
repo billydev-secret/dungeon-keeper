@@ -609,7 +609,15 @@ class MahjongService:
 
     async def _arm_timer(self, table_id: int, deadline: float | None) -> None:
         old = self._timers.pop(table_id, None)
-        if old is not None:
+        if old is not None and old is not asyncio.current_task():
+            # A FIRING timer re-arms from inside its own fire task — and
+            # cancelling the running task schedules CancelledError at its
+            # next await, which was the listener: the sticky died mid-
+            # refresh, the pump was never scheduled, and fire()'s own
+            # except swallowed the evidence (live QA 2026-08-23; the bug
+            # every review round missed because only a real elapsed-time
+            # firing with a listener wired can reproduce it). The running
+            # task needs no cancel — it is already finishing.
             old.cancel()
         if deadline is None:
             return
