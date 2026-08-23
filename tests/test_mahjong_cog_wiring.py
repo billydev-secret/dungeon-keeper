@@ -331,3 +331,52 @@ def test_confirm_suppresses_routine_notes_only_behind_a_live_panel():
                {"seat": 0, "why": "invalid_mahjong", "private": True})]
     asyncio.run(cog._confirm(inter, 7, events, "Pass is in."))
     assert len(sent) == 1 and "Pass is in." not in sent[0]
+
+
+def test_tile_menus_use_the_registered_faces_and_fall_back_to_chips():
+    # The pass/discard/courtesy menus carry the tile art once registration
+    # has run; before it, the chip stays in the label so an option is never
+    # unidentifiable (§7.2's launch state).
+    from bot_modules.games.mahjong import tile_render, views as v
+    from bot_modules.games.mahjong.tiles import Tile
+
+    rack = [Tile("5b"), Tile("5b"), Tile.JOKER, Tile.FLOWER]
+
+    tile_render._map_cache = {}                    # unregistered
+    try:
+        plain = v._tile_options(rack)
+        assert all(o.emoji is None for o in plain)
+        assert plain[0].label.startswith("5B — ")
+        # duplicate kinds stay separately selectable
+        assert len({o.value for o in plain}) == len(rack)
+
+        tile_render._map_cache = {t.code: 1400000000000000001 for t in Tile}
+        rich = v._tile_options(rack)
+        assert all(o.emoji is not None for o in rich)
+        assert rich[0].emoji.name == "mm_5b"       # type: ignore[union-attr]
+        assert rich[0].label == "5 Bam"            # face carries the picture
+        assert [o.value for o in rich] == [o.value for o in plain]
+    finally:
+        tile_render._map_cache = None              # back to the real map
+
+
+def test_redeem_menu_carries_the_face_too():
+    from bot_modules.games.mahjong import tile_render, views as v
+    from bot_modules.games.mahjong.game_logic import ExposureState
+    from bot_modules.games.mahjong.tiles import Tile
+    from tests.test_mahjong_game_logic import play_state
+
+    state = play_state(
+        2, {0: "9d 9c*12", 1: "8b*13"},
+        exposures={1: [ExposureState(exposure_id=3, natural=Tile("9d"),
+                                     count=4, jokers=1)]},
+    )
+    tile_render._map_cache = {t.code: 1400000000000000001 for t in Tile}
+    try:
+        view = v.RedeemView(_cog(), 7, state, 0)
+        select = next(c for c in view.children
+                      if isinstance(c, discord.ui.Select))
+        assert select.options[0].emoji is not None
+        assert "exposure #3" in select.options[0].label
+    finally:
+        tile_render._map_cache = None
