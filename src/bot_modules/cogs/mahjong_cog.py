@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import discord
 from discord import app_commands
@@ -66,6 +67,14 @@ class MahjongCog(commands.Cog):
         self.service.set_listener(self._on_transition)
         #: table_id → its sticky panel; rebuilt on resume.
         self.panels: dict[int, StickyPanel] = {}
+        #: (table_id, member_id) → (ephemeral rack message, stored_at).
+        #: Discord lets us edit an ephemeral for ~15 min after the click, so
+        #: an open rack panel live-updates with the game instead of the
+        #: member re-pressing Open Rack each turn. Latest press wins.
+        self.rack_watch: dict[
+            tuple[int, int],
+            tuple[discord.InteractionMessage | discord.WebhookMessage, float],
+        ] = {}
         #: channel_id → table_id for the on_message sticky routing.
         self.channel_tables: dict[int, int] = {}
 
@@ -270,6 +279,48 @@ class MahjongCog(commands.Cog):
                 await msg.edit(view=None)
             except discord.HTTPException:
                 pass
+        await self._refresh_rack_watches(table_id, state, meta, names)
+
+    #: An interaction token outlives its click by 15 minutes; refresh only
+    #: comfortably inside that.
+    RACK_WATCH_TTL = 13 * 60
+
+    async def _refresh_rack_watches(
+        self, table_id: int, state: GameState, meta: dict,
+        names: dict[int, str],
+    ) -> None:
+        """Live-update every open ephemeral rack panel for this table — a
+        member's panel follows the game instead of them re-pressing Open
+        Rack each turn. Expired or dismissed panels drop out silently; the
+        button is always there to open a fresh one."""
+        now = time.time()
+        closing = meta["status"] != "live"
+        for key in [k for k in self.rack_watch if k[0] == table_id]:
+            msg, stored_at = self.rack_watch[key]
+            seat = state.seat_of(key[1])
+            if now - stored_at > self.RACK_WATCH_TTL or seat is None:
+                del self.rack_watch[key]
+                continue
+            try:
+                if closing:
+                    embed = mj_embeds.build_rack_panel(
+                        state, seat, None, None,
+                        context="Hand over — see the table card.",
+                    )
+                    await msg.edit(embed=embed, view=None)
+                    del self.rack_watch[key]
+                    continue
+                embed = mj_embeds.build_rack_panel(
+                    state, seat, None, meta.get("deadline_at"),
+                    context=self._rack_context(state, seat, names),
+                    assist=await self._assist_for(table_id, state, seat),
+                )
+                await msg.edit(
+                    embed=embed,
+                    view=self._rack_view(state, seat, table_id, names),
+                )
+            except discord.HTTPException:
+                del self.rack_watch[key]  # token expired or panel dismissed
 
     def _winning_groups(self, state: GameState, seat: int, card) -> str:
         """The winning 14 rendered group by group (§6.12) — re-matched from
@@ -664,9 +715,11 @@ class MahjongCog(commands.Cog):
             context=self._rack_context(state, seat, names),
             assist=await self._assist_for(table_id, state, seat),
         )
-        await self._reply_embed(
+        msg = await self._reply_embed(
             interaction, embed, self._rack_view(state, seat, table_id, names)
         )
+        if msg is not None:
+            self.rack_watch[(table_id, interaction.user.id)] = (msg, time.time())
 
     async def _assist_for(
         self, table_id: int, state: GameState, seat: int
@@ -737,14 +790,19 @@ class MahjongCog(commands.Cog):
             return mj_views.TurnView(self, table_id, state, seat)
         return None
 
-    async def _reply_embed(self, interaction, embed, view) -> None:
+    async def _reply_embed(self, interaction, embed, view):
+        """Send the ephemeral panel and return an editable message handle
+        (valid ~15 min on the interaction's token) for the live refresh."""
         kwargs = {"embed": embed, "ephemeral": True}
         if view is not None:
             kwargs["view"] = view
         if interaction.response.is_done():
-            await interaction.followup.send(**kwargs)
-        else:
-            await interaction.response.send_message(**kwargs)
+            return await interaction.followup.send(**kwargs, wait=True)
+        await interaction.response.send_message(**kwargs)
+        try:
+            return await interaction.original_response()
+        except discord.HTTPException:
+            return None
 
     # ── Phase handlers (called from views) ──────────────────────────────
 
@@ -799,9 +857,11 @@ class MahjongCog(commands.Cog):
             context="Joker's yours — now discard.",
             assist=await self._assist_for(table_id, state, seat),
         )
-        await self._reply_embed(
+        msg = await self._reply_embed(
             interaction, embed, self._rack_view(state, seat, table_id)
         )
+        if msg is not None:
+            self.rack_watch[(table_id, interaction.user.id)] = (msg, time.time())
 
     async def handle_self_mahjong(self, interaction, table_id: int) -> None:
         await self._do(interaction, table_id, "mahjong", done="🀄 Mahjong!")

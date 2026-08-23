@@ -176,3 +176,73 @@ def test_names_render_bots_as_flora():
     )
     names = cog._names(_Guild(), state)
     assert names[bot_member_id(7, 1)].startswith("🌱 ")
+
+
+def test_rack_watch_edits_fresh_and_drops_dead_and_expired():
+    # Live rack refresh (glue): a stored ephemeral panel is edited on a
+    # transition; an expired token and a dead (dismissed) panel drop out.
+    import asyncio
+    import time as _time
+
+    from tests.test_mahjong_game_logic import play_state
+
+    class _Msg:
+        def __init__(self, dead=False):
+            self.edits = 0
+            self.dead = dead
+
+        async def edit(self, **kw):
+            if self.dead:
+                raise discord.HTTPException(
+                    type("R", (), {"status": 404, "reason": "gone"})(), "gone")
+            self.edits += 1
+
+    class _Svc:
+        async def assist_context(self, *a, **k):
+            return None
+
+    cog = _cog()
+    cog.rack_watch = {}
+    cog.service = _Svc()  # type: ignore[assignment]
+    state = play_state(2, {0: "9c*13", 1: "8b*13"})
+    human = state.seats[0].member_id
+    fresh, dead = _Msg(), _Msg(dead=True)
+    cog.rack_watch[(7, human)] = (fresh, _time.time())
+    cog.rack_watch[(7, 424242)] = (dead, _time.time())        # not seated → drop
+    cog.rack_watch[(7, state.seats[1].member_id)] = (
+        _Msg(), _time.time() - 20 * 60)                        # expired → drop
+    cog.rack_watch[(8, human)] = (_Msg(), _time.time())        # other table → kept
+    meta = {"status": "live", "deadline_at": None}
+    names = {human: "You", state.seats[1].member_id: "Them"}
+    asyncio.run(cog._refresh_rack_watches(7, state, meta, names))
+    assert fresh.edits == 1
+    assert (7, human) in cog.rack_watch
+    assert (7, 424242) not in cog.rack_watch
+    assert (7, state.seats[1].member_id) not in cog.rack_watch
+    assert (8, human) in cog.rack_watch
+
+
+def test_rack_watch_dead_panel_dropped_on_edit_failure():
+    import asyncio
+    import time as _time
+
+    from tests.test_mahjong_game_logic import play_state
+
+    class _DeadMsg:
+        async def edit(self, **kw):
+            raise discord.HTTPException(
+                type("R", (), {"status": 401, "reason": "expired"})(), "expired")
+
+    class _Svc:
+        async def assist_context(self, *a, **k):
+            return None
+
+    cog = _cog()
+    cog.rack_watch = {}
+    cog.service = _Svc()  # type: ignore[assignment]
+    state = play_state(2, {0: "9c*13", 1: "8b*13"})
+    human = state.seats[0].member_id
+    cog.rack_watch[(7, human)] = (_DeadMsg(), _time.time())
+    meta = {"status": "live", "deadline_at": None}
+    asyncio.run(cog._refresh_rack_watches(7, state, meta, {human: "You"}))
+    assert cog.rack_watch == {}
