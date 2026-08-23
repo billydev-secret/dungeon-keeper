@@ -26,6 +26,32 @@ typeface, and every alternative card on the market (Marvelous Mah Jongg, The
 Mahjong Line, Oh My Mahjong, The Mahjong Press, Wright-Patterson) is likewise a
 priced, unlicensed-to-us compilation. There is no open-licensed American card.
 
+### The public-domain 1920s material is the wrong era, not the wrong licence
+
+Asked and settled 2026-08-22, recorded so it is not re-litigated. Babcock's 1920
+rules are public domain and on Wikisource, and the 1924 American standardization
+attempt is PD text — but neither contains a card, because the card did not exist
+yet. Both score Chinese-classical: any four sets and a pair, basic points for
+melds/pairs/flowers, doubles for rarer patterns, against a limit. **The annual
+card begins with the League's first one in 1937**, which is outside the PD window
+(pre-1931) and would turn on a renewal search nobody here can run.
+
+Two independent reasons the door stays shut even so:
+
+- The engine cannot score that way. We match a rack against a card line and pay
+  flat from escrow (spec §2.9); Babcock is points-and-doubles with a limit.
+  Adopting it rewrites the win path, the escrow maths and the assist engine,
+  which reasons entirely in "distance to a card line".
+- The era's named limit hands (Heavenly Twins, Wriggling Snake, Three Great
+  Scholars, Thirteen Unique Wonders) are free to use, but there are ~20 of them
+  and they are all jackpot-exotic — a card of them is four seats staring at
+  unreachable lines.
+
+**Where it is useful:** as flavour at stage 4. A small concealed high-value
+section echoing the classic named patterns fits the 75-point top bucket exactly
+and needs nobody's permission. Sim decides whether each such line completes
+often enough to earn its slot, same as every other hand.
+
 What we *do* have is an engine that can play a candidate card ten thousand times
 before a member sees it. Simulation is the substitute for playtest volume, and
 it is strictly better than authoring by taste at the things that matter:
