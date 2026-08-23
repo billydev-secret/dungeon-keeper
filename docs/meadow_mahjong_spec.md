@@ -128,7 +128,7 @@ Escrow debits at seating (insufficient balance blocks the seat with the house �
 ### 3.1 Hand model
 A hand is an ordered list of **groups**; each group = `{count, rank, suit}`.
 - `count`: 1–6. Groups with `count >= 3` accept jokers; `count <= 2` never do.
-- `rank`: `"1"`–`"9"` (concrete), `"x"`, `"x+1"`…`"x+4"` (rank variable; one `x` binding per hand, all offsets must land in 1–9), `"N" "E" "W" "S"`, `"R" "G" "soap"` (soap satisfies rank `"0"` where used), `"D"` (any single dragon, one binding per hand), `"F"` (flower; suitless).
+- `rank` (grammar v1.1, extended 2026-08-22 for the Harvest card): `"1"`–`"9"` (concrete), `"x"`, `"x+1"`…`"x+5"` (rank variable; one `x` binding per hand, all offsets must land in 1–9; a hand may lock `"x_parity": "odd"/"even"`), `"N" "E" "W" "S"`, `"R" "G" "soap"` (soap satisfies rank `"0"` where used), `"D"` suitless (any single dragon, one binding per hand), `"D"` **with a suit letter** (that suit's own dragon — dots↔soap, bams↔green, craks↔red, following the letter's binding), `"D2"` (a second any-dragon bound to a *different* dragon than `"D"`; bare `"D"` MAY coincide with a suit-matched dragon — only `"D2"` is constrained), `"F"` (flower; suitless).
 - `suit`: `"a" | "b" | "c"` for suited ranks (same letter = same suit; distinct letters = pairwise distinct suits; binding chosen by the player's tiles), omitted for honors/flowers.
 - Hand-level: `id`, `section`, `name`, `concealed: bool`, `value: int`, `display: str` (generated), `notes`.
 
@@ -149,7 +149,7 @@ A hand is an ordered list of **groups**; each group = `{count, rank, suit}`.
 
 ### 3.3 Matcher contract
 `match_hand(concealed: list[Tile], exposures: list[Exposure], card: Card) -> list[Match]`
-Pure function. For each card line: enumerate `x` bindings (bounded 1–9 minus offsets), `D` bindings, and suit-letter → physical-suit assignments (≤ 3! = 6); greedily assign exposures to groups first (an exposure must map to exactly one group, exact count, joker placement legal), then multiset-match remaining concealed tiles with joker substitution only into groups of 3+. Reject: concealed-line with any exposure; joker in a count ≤ 2 group; leftover tiles. Return every matching line (a 14-tile set can match multiple; settle uses the highest value, jokerless computed per the actual tiles). Brute force is fine: ≤ ~30 lines × ≤ 9 x-bindings × 6 suit maps × 3 dragon bindings is trivial.
+Pure function. For each card line: enumerate `x` bindings (bounded 1–9 minus offsets), `D` bindings, and suit-letter → physical-suit assignments (≤ 3! = 6); greedily assign exposures to groups first (an exposure must map to exactly one group, exact count, joker placement legal), then multiset-match remaining concealed tiles with joker substitution only into groups of 3+. Reject: concealed-line with any exposure; joker in a count ≤ 2 group; leftover tiles. Return every matching line (a 14-tile set can match multiple; settle uses the highest value, jokerless computed per the actual tiles). Brute force is fine: ≤ ~30 lines × ≤ 9 x-bindings × 6 suit maps × ≤6 dragon bindings (ordered distinct pairs with D2) is trivial.
 
 ### 3.4 Card linter (`scripts/validate_card.py`)
 Fails on: group counts not summing to 14; rank offsets out of 1–9 for any x; more than 4 naturals demanded of one tile in `count <= 2` groups (jokerless-impossible pairs); flowers > 8; duplicate hand ids; value outside 25–75; unreachable concealed+exposure combinations. Warns on: near-duplicate lines; sections with < 2 hands.

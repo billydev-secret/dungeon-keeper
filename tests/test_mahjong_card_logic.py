@@ -231,8 +231,8 @@ def clean_hand(hand_id="t-ok", section="Test Section"):
 @pytest.mark.parametrize(
     "bad_group, fragment",
     [
-        pytest.param(group(3, "x+5", "a"), "beyond the x..x+4 grammar", id="offset-5"),
-        pytest.param(group(3, "x+9", "a"), "beyond the x..x+4 grammar", id="offset-9"),
+        pytest.param(group(3, "x+6", "a"), "beyond the x..x+5 grammar", id="offset-6"),
+        pytest.param(group(3, "x+9", "a"), "beyond the x..x+5 grammar", id="offset-9"),
         pytest.param(group(3, "x-1", "a"), "unknown rank token", id="negative-offset"),
         pytest.param(group(3, "x+0", "a"), "unknown rank token", id="offset-zero-not-grammar"),
         pytest.param(group(3, "x+01", "a"), "unknown rank token", id="offset-leading-zero"),
@@ -245,7 +245,7 @@ def clean_hand(hand_id="t-ok", section="Test Section"):
         pytest.param(group(3, "x"), "needs a suit letter", id="var-no-suit"),
         pytest.param(group(3, "N", "a"), "suitless — drop the suit", id="wind-with-suit"),
         pytest.param(group(3, "F", "a"), "suitless — drop the suit", id="flower-with-suit"),
-        pytest.param(group(3, "D", "a"), "suitless — drop the suit", id="dragon-any-with-suit"),
+        pytest.param(group(3, "D2", "a"), "suitless — drop the suit", id="dragon2-with-suit"),
         pytest.param(group(3, "0", "a"), "suitless — drop the suit", id="zero-with-suit"),
         pytest.param(group(3, "5", "q"), "suit must be one of a/b/c", id="suit-q"),
         pytest.param(group(0, "5", "a"), "count 0 outside 1–6", id="count-0"),
@@ -510,3 +510,156 @@ def test_tile_labels_and_repr():
     assert Tile.SOAP.label == "Soap"
     assert Tile.JOKER.label == "Joker"
     assert repr(Tile.DOT2) == "Tile<2d>"
+
+
+# ── Harvest card (grammar v1.1) + the every-hand-winnable invariant ──────────
+
+
+def _materialize_winning_14(hand):
+    """A concrete winning rack for ``hand``: resolve its first binding, take
+    naturals up to the supply, jokers for any 3+ shortfall. The linter
+    guarantees pairs/singles never outrun their naturals."""
+    from collections import Counter
+
+    from bot_modules.games.mahjong.match_logic import (
+        _bindings, _group_natural,
+    )
+    from bot_modules.games.mahjong.tiles import Tile, copies
+
+    # first FEASIBLE binding, not first binding: a legitimate hand's opening
+    # suit map can be supply-infeasible while a later one is fine
+    # (grammar-verify G4)
+    for x, suit_map, dragons in _bindings(hand):
+        rack: list[Tile] = []
+        supply: Counter = Counter()
+        jokers = 0
+        ok = True
+        for group in hand.groups:
+            natural = _group_natural(group, x, suit_map, dragons)
+            available = copies(natural) - supply[natural]
+            take = min(group.count, available)
+            if take < min(group.count, 2):
+                ok = False
+                break
+            supply[natural] += take
+            jokers += group.count - take
+            rack += [natural] * take + [Tile.JOKER] * (group.count - take)
+        if ok and jokers <= 8:
+            assert len(rack) == 14
+            return rack
+    raise AssertionError(f"{hand.id}: no feasible binding — linter should refuse this hand")
+
+
+@pytest.mark.parametrize("card_name", ["first_light", "harvest"])
+def test_every_hand_of_every_card_is_winnable(card_name):
+    from bot_modules.games.mahjong.card_logic import load_card_file
+    from bot_modules.games.mahjong.match_logic import match_hand
+
+    path = FIRST_LIGHT_PATH.parent / f"meadow_{card_name}.json"
+    card = load_card_file(path)
+    for hand in card.hands:
+        rack = _materialize_winning_14(hand)
+        matched = {m.hand.id for m in match_hand(rack, [], card)}
+        assert hand.id in matched, f"{hand.id} rejects its own winning 14"
+
+
+def test_harvest_lints_clean_and_loads():
+    from bot_modules.games.mahjong.card_logic import (
+        lint_card, load_card_file,
+    )
+
+    card = load_card_file(FIRST_LIGHT_PATH.parent / "meadow_harvest.json")
+    assert len(card.hands) == 71
+    report = lint_card(card)
+    assert report.errors == []
+    # the grammar v1.1 features are all really on the card
+    kinds = {g.kind.value for h in card.hands for g in h.groups}
+    assert "suit_dragon" in kinds and "any_dragon2" in kinds
+    assert any(h.x_parity for h in card.hands)
+    assert any(g.offset == 5 for h in card.hands for g in h.groups if g.offset)
+
+
+# ── Grammar-verify round: exhaustive winnability + parity identity ───────────
+
+
+def _v11_hand(hid, groups, **kw):
+    base = {"id": hid, "section": "T", "name": hid, "concealed": True,
+            "value": 30, "groups": groups}
+    base.update(kw)
+    return base
+
+
+def _tiny_card(*hands):
+    return {"card_id": "t-g2", "display_name": "G2", "season": "t",
+            "hands": list(hands)}
+
+
+def g11(count, rank, suit=None):
+    d = {"count": count, "rank": rank}
+    if suit:
+        d["suit"] = suit
+    return d
+
+
+def test_lint_refuses_every_binding_unwinnable_hands():
+    from bot_modules.games.mahjong.card_logic import lint_card_data
+
+    # suit-dragons on all three letters: one IS soap under every map, so the
+    # small-group soap demand is 6 > 4 everywhere — yet the per-key check
+    # cannot see it (grammar-verify G2 repro)
+    soap_pinned = _v11_hand("bad-soap", [
+        g11(2, "0"), g11(2, "soap"), g11(2, "D", "a"), g11(2, "D", "b"),
+        g11(2, "D", "c"), g11(2, "F"), g11(2, "1", "a")])
+    report = lint_card_data(_tiny_card(soap_pinned))
+    assert any("no binding leaves this hand winnable" in e for e in report.errors)
+
+    # D+D2 must cover two of three dragons; beside pairs of two named ones,
+    # two dragons are over-demanded in every assignment
+    dragon_pinned = _v11_hand("bad-d2", [
+        g11(2, "R"), g11(1, "R"), g11(2, "G"), g11(1, "G"), g11(2, "0"),
+        g11(1, "soap"), g11(2, "D"), g11(2, "D2"), g11(1, "F")])
+    report = lint_card_data(_tiny_card(dragon_pinned))
+    assert any("no binding leaves this hand winnable" in e for e in report.errors)
+
+    # the dodge case stays legal: one suit-dragon beside soap smalls can
+    # re-bind away from dots
+    dodges = _v11_hand("ok-dodge", [
+        g11(2, "0"), g11(2, "soap"), g11(1, "D", "a"), g11(4, "1", "b"),
+        g11(4, "2", "b"), g11(1, "F")])
+    report = lint_card_data(_tiny_card(dodges))
+    assert not report.errors
+
+
+def test_parity_twins_are_not_near_duplicates():
+    from bot_modules.games.mahjong.card_logic import lint_card_data
+
+    odd = _v11_hand("tw-odd", [
+        g11(2, "x", "a"), g11(4, "x+2", "a"), g11(4, "x+4", "a"), g11(4, "F")],
+        x_parity="odd")
+    even = _v11_hand("tw-even", [
+        g11(2, "x", "a"), g11(4, "x+2", "a"), g11(4, "x+4", "a"), g11(4, "F")],
+        x_parity="even")
+    report = lint_card_data(_tiny_card(odd, even))
+    assert not any("near-duplicates" in w for w in report.warnings)
+
+
+def test_d2_without_d_gets_an_advisory():
+    from bot_modules.games.mahjong.card_logic import lint_card_data
+
+    lonely = _v11_hand("d2-solo", [
+        g11(4, "D2"), g11(4, "F"), g11(4, "1", "a"), g11(2, "2", "a")])
+    report = lint_card_data(_tiny_card(lonely))
+    assert any("D2 without D" in w for w in report.warnings)
+
+
+def test_materializer_survives_an_infeasible_first_binding():
+    from bot_modules.games.mahjong.card_logic import load_card
+
+    # winnable only when 'a' dodges away from dots — the first suit map
+    # pins it there and used to break the helper (grammar-verify G4)
+    card = load_card(_tiny_card(_v11_hand("dodge-14", [
+        g11(2, "0"), g11(2, "soap"), g11(1, "D", "a"), g11(4, "1", "b"),
+        g11(4, "2", "b"), g11(1, "F")])))
+    rack = _materialize_winning_14(card.hands[0])
+    from bot_modules.games.mahjong.match_logic import match_hand
+    assert "dodge-14" in {m.hand.id for m in match_hand(rack, [], card)}

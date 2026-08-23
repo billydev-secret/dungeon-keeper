@@ -1,0 +1,2373 @@
+{
+  "card_id": "meadow-harvest",
+  "display_name": "Meadow Card — Harvest",
+  "season": "2026-harvest",
+  "hands": [
+    {
+      "id": "e468-1",
+      "section": "2468",
+      "name": "Even Ladder",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 1,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "8",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "e468-2",
+      "section": "2468",
+      "name": "Split Sixes",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "8",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "e468-3",
+      "section": "2468",
+      "name": "Even Thirds",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "2",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "6",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "8",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "e468-4",
+      "section": "2468",
+      "name": "Rising Evens",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "2",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "4",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "4",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "8",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "e468-5",
+      "section": "2468",
+      "name": "Even Court",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "8",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "e468-6",
+      "section": "2468",
+      "name": "Even Court Abroad",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "4",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "8",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "e468-7",
+      "section": "2468",
+      "name": "Even Keel",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "2",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "8",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "e468-8",
+      "section": "2468",
+      "name": "Even Dragons",
+      "concealed": true,
+      "value": 30,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "8",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "like-1",
+      "section": "ANY LIKE NUMBERS",
+      "name": "Triple Alike",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "like-2",
+      "section": "ANY LIKE NUMBERS",
+      "name": "Alike With Dragons",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "like-3",
+      "section": "ANY LIKE NUMBERS",
+      "name": "Alike Attended",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "like-4",
+      "section": "ANY LIKE NUMBERS",
+      "name": "Alike Ascending",
+      "concealed": true,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "x",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "math-1",
+      "section": "MATH",
+      "name": "Four Eights Are…",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "4",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "8",
+          "suit": "c"
+        },
+        {
+          "count": 1,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "2",
+          "suit": "a"
+        }
+      ],
+      "notes": "4 × 8 = 32"
+    },
+    {
+      "id": "math-2",
+      "section": "MATH",
+      "name": "Three Sevens Are…",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "D",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "7",
+          "suit": "c"
+        },
+        {
+          "count": 1,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "1",
+          "suit": "a"
+        }
+      ],
+      "notes": "3 × 7 = 21"
+    },
+    {
+      "id": "math-3",
+      "section": "MATH",
+      "name": "Three And Four",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "7",
+          "suit": "a"
+        }
+      ],
+      "notes": "3 + 4 = 7, one suit"
+    },
+    {
+      "id": "math-4",
+      "section": "MATH",
+      "name": "Three And Four Abroad",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "4",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "7",
+          "suit": "a"
+        }
+      ],
+      "notes": "3 + 4 = 7, three suits"
+    },
+    {
+      "id": "math-5",
+      "section": "MATH",
+      "name": "Five And Six",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "a"
+        }
+      ],
+      "notes": "5 + 6 = 11, one suit"
+    },
+    {
+      "id": "math-6",
+      "section": "MATH",
+      "name": "Five And Six Abroad",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "6",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "a"
+        }
+      ],
+      "notes": "5 + 6 = 11, three suits"
+    },
+    {
+      "id": "math-7",
+      "section": "MATH",
+      "name": "Eight Less Three",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "8",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "a"
+        }
+      ],
+      "notes": "8 − 3 = 5, one suit"
+    },
+    {
+      "id": "math-8",
+      "section": "MATH",
+      "name": "Eight Less Three Abroad",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "8",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "a"
+        }
+      ],
+      "notes": "8 − 3 = 5, three suits"
+    },
+    {
+      "id": "math-9",
+      "section": "MATH",
+      "name": "Nothing Left",
+      "concealed": true,
+      "value": 30,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "0"
+        }
+      ],
+      "notes": "3 + 4 − 5 − 2 = 0"
+    },
+    {
+      "id": "qt-1",
+      "section": "QUINTS",
+      "name": "Stair Of Five",
+      "concealed": false,
+      "value": 40,
+      "groups": [
+        {
+          "count": 5,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "x+2",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+3",
+          "suit": "a"
+        }
+      ],
+      "notes": "any 4 consecutive numbers"
+    },
+    {
+      "id": "qt-2",
+      "section": "QUINTS",
+      "name": "Flowers And Dragons",
+      "concealed": false,
+      "value": 45,
+      "groups": [
+        {
+          "count": 5,
+          "rank": "F"
+        },
+        {
+          "count": 5,
+          "rank": "D"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        }
+      ],
+      "notes": "any number"
+    },
+    {
+      "id": "qt-3",
+      "section": "QUINTS",
+      "name": "Low Quint",
+      "concealed": false,
+      "value": 40,
+      "groups": [
+        {
+          "count": 5,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "a"
+        }
+      ],
+      "notes": "these numbers only"
+    },
+    {
+      "id": "qt-4",
+      "section": "QUINTS",
+      "name": "High Quint",
+      "concealed": false,
+      "value": 40,
+      "groups": [
+        {
+          "count": 5,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "7",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "9",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "a"
+        }
+      ],
+      "notes": "these numbers only"
+    },
+    {
+      "id": "qt-5",
+      "section": "QUINTS",
+      "name": "Flower Quint 369",
+      "concealed": false,
+      "value": 35,
+      "groups": [
+        {
+          "count": 5,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "9",
+          "suit": "a"
+        }
+      ],
+      "notes": "these numbers only"
+    },
+    {
+      "id": "qt-6",
+      "section": "QUINTS",
+      "name": "Flower Quint Abroad",
+      "concealed": false,
+      "value": 35,
+      "groups": [
+        {
+          "count": 5,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "9",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "run-1",
+      "section": "CONSECUTIVE RUNS",
+      "name": "One To Five",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "4",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "a"
+        }
+      ],
+      "notes": "these numbers only"
+    },
+    {
+      "id": "run-2",
+      "section": "CONSECUTIVE RUNS",
+      "name": "Five To Nine",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "7",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "8",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "9",
+          "suit": "a"
+        }
+      ],
+      "notes": "these numbers only"
+    },
+    {
+      "id": "run-3",
+      "section": "CONSECUTIVE RUNS",
+      "name": "Kong Steps",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x+2",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x+3",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "run-4",
+      "section": "CONSECUTIVE RUNS",
+      "name": "Run To Dragons",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "x+1",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "x+2",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "run-5",
+      "section": "CONSECUTIVE RUNS",
+      "name": "Flowered Run",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "run-6",
+      "section": "CONSECUTIVE RUNS",
+      "name": "Middle Spread",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "x+1",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+1",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "x+2",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "run-7",
+      "section": "CONSECUTIVE RUNS",
+      "name": "Twin Steps",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "x+1",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "x+2",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "x+3",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "run-8",
+      "section": "CONSECUTIVE RUNS",
+      "name": "Run Home",
+      "concealed": true,
+      "value": 30,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "x+1",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "x+2",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "odd-1",
+      "section": "13579",
+      "name": "Odd Ladder",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "7",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "odd-2",
+      "section": "13579",
+      "name": "Odd Ladder Abroad",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "7",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "odd-3",
+      "section": "13579",
+      "name": "Low Odds",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "1",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "5",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "odd-4",
+      "section": "13579",
+      "name": "High Odds",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "7",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "7",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "9",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "odd-5",
+      "section": "13579",
+      "name": "Low Odds To Dragons",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "1",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "odd-6",
+      "section": "13579",
+      "name": "High Odds To Dragons",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "5",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "7",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "9",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "odd-7",
+      "section": "13579",
+      "name": "Low Odds Crowned",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "D",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "5",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "odd-8",
+      "section": "13579",
+      "name": "High Odds Crowned",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "5",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "7",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "D",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "7",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "odd-9",
+      "section": "13579",
+      "name": "Odd Pairs Up",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "5",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "7",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "9",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "odd-10",
+      "section": "13579",
+      "name": "Low Odds Windward",
+      "concealed": true,
+      "value": 30,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "1",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "N"
+        },
+        {
+          "count": 1,
+          "rank": "E"
+        },
+        {
+          "count": 1,
+          "rank": "W"
+        },
+        {
+          "count": 1,
+          "rank": "S"
+        }
+      ]
+    },
+    {
+      "id": "odd-11",
+      "section": "13579",
+      "name": "High Odds Windward",
+      "concealed": true,
+      "value": 30,
+      "groups": [
+        {
+          "count": 3,
+          "rank": "5",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "7",
+          "suit": "c"
+        },
+        {
+          "count": 3,
+          "rank": "9",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "N"
+        },
+        {
+          "count": 1,
+          "rank": "E"
+        },
+        {
+          "count": 1,
+          "rank": "W"
+        },
+        {
+          "count": 1,
+          "rank": "S"
+        }
+      ]
+    },
+    {
+      "id": "wd-1",
+      "section": "WINDS-DRAGONS",
+      "name": "Four Winds",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "N"
+        },
+        {
+          "count": 3,
+          "rank": "E"
+        },
+        {
+          "count": 3,
+          "rank": "W"
+        },
+        {
+          "count": 4,
+          "rank": "S"
+        }
+      ]
+    },
+    {
+      "id": "wd-2",
+      "section": "WINDS-DRAGONS",
+      "name": "Two Dragons",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "D"
+        },
+        {
+          "count": 1,
+          "rank": "N"
+        },
+        {
+          "count": 1,
+          "rank": "E"
+        },
+        {
+          "count": 1,
+          "rank": "W"
+        },
+        {
+          "count": 1,
+          "rank": "S"
+        },
+        {
+          "count": 4,
+          "rank": "D2"
+        }
+      ],
+      "notes": "any 2 dragons"
+    },
+    {
+      "id": "wd-3",
+      "section": "WINDS-DRAGONS",
+      "name": "Red Watch",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "N"
+        },
+        {
+          "count": 2,
+          "rank": "R"
+        },
+        {
+          "count": 4,
+          "rank": "S"
+        }
+      ],
+      "notes": "red dragons only"
+    },
+    {
+      "id": "wd-4",
+      "section": "WINDS-DRAGONS",
+      "name": "Green Watch",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "E"
+        },
+        {
+          "count": 2,
+          "rank": "G"
+        },
+        {
+          "count": 4,
+          "rank": "W"
+        }
+      ],
+      "notes": "green dragons only"
+    },
+    {
+      "id": "wd-5",
+      "section": "WINDS-DRAGONS",
+      "name": "Wind Stair",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 1,
+          "rank": "N"
+        },
+        {
+          "count": 2,
+          "rank": "E"
+        },
+        {
+          "count": 3,
+          "rank": "W"
+        },
+        {
+          "count": 4,
+          "rank": "S"
+        }
+      ]
+    },
+    {
+      "id": "wd-6",
+      "section": "WINDS-DRAGONS",
+      "name": "North-South Run",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "N"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "x+1",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "S"
+        }
+      ],
+      "notes": "any consecutive numbers"
+    },
+    {
+      "id": "wd-7",
+      "section": "WINDS-DRAGONS",
+      "name": "East-West Run",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "E"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "x+1",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "W"
+        }
+      ],
+      "notes": "any consecutive numbers"
+    },
+    {
+      "id": "wd-8",
+      "section": "WINDS-DRAGONS",
+      "name": "North-South Dragons",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "N"
+        },
+        {
+          "count": 2,
+          "rank": "R"
+        },
+        {
+          "count": 2,
+          "rank": "soap"
+        },
+        {
+          "count": 2,
+          "rank": "G"
+        },
+        {
+          "count": 4,
+          "rank": "S"
+        }
+      ]
+    },
+    {
+      "id": "wd-9",
+      "section": "WINDS-DRAGONS",
+      "name": "East-West Dragons",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "E"
+        },
+        {
+          "count": 2,
+          "rank": "R"
+        },
+        {
+          "count": 2,
+          "rank": "soap"
+        },
+        {
+          "count": 2,
+          "rank": "G"
+        },
+        {
+          "count": 4,
+          "rank": "W"
+        }
+      ]
+    },
+    {
+      "id": "wd-10",
+      "section": "WINDS-DRAGONS",
+      "name": "Odd Alike Winds",
+      "concealed": true,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "N"
+        },
+        {
+          "count": 3,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "x",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "S"
+        }
+      ],
+      "notes": "odd like numbers",
+      "x_parity": "odd"
+    },
+    {
+      "id": "wd-11",
+      "section": "WINDS-DRAGONS",
+      "name": "Even Alike Winds",
+      "concealed": true,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "E"
+        },
+        {
+          "count": 3,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "x",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "W"
+        }
+      ],
+      "notes": "even like numbers",
+      "x_parity": "even"
+    },
+    {
+      "id": "t369-1",
+      "section": "369",
+      "name": "Three Six Nine Split",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "3",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "9",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "t369-2",
+      "section": "369",
+      "name": "Flowered 369",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "t369-3",
+      "section": "369",
+      "name": "369 To Dragons",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "9",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "t369-4",
+      "section": "369",
+      "name": "369 Kongs",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 4,
+          "rank": "9",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "t369-5",
+      "section": "369",
+      "name": "369 Kongs Abroad",
+      "concealed": false,
+      "value": 25,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 4,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 4,
+          "rank": "6",
+          "suit": "c"
+        },
+        {
+          "count": 4,
+          "rank": "9",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "t369-6",
+      "section": "369",
+      "name": "369 Paired Dragons",
+      "concealed": false,
+      "value": 30,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "t369-7",
+      "section": "369",
+      "name": "369 Echo",
+      "concealed": true,
+      "value": 35,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 1,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "b"
+        },
+        {
+          "count": 3,
+          "rank": "9",
+          "suit": "b"
+        },
+        {
+          "count": 1,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 3,
+          "rank": "9",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "sp-1",
+      "section": "SINGLES AND PAIRS",
+      "name": "Winds Alike",
+      "concealed": true,
+      "value": 50,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "N"
+        },
+        {
+          "count": 2,
+          "rank": "E"
+        },
+        {
+          "count": 2,
+          "rank": "W"
+        },
+        {
+          "count": 2,
+          "rank": "S"
+        },
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "a"
+        }
+      ],
+      "notes": "like numbers"
+    },
+    {
+      "id": "sp-2",
+      "section": "SINGLES AND PAIRS",
+      "name": "Odd Parade",
+      "concealed": true,
+      "value": 50,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "5",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "7",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "a"
+        }
+      ]
+    },
+    {
+      "id": "sp-3",
+      "section": "SINGLES AND PAIRS",
+      "name": "Six Steps",
+      "concealed": true,
+      "value": 50,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+2",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+3",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+4",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+5",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "a"
+        }
+      ],
+      "notes": "consecutive numbers"
+    },
+    {
+      "id": "sp-4",
+      "section": "SINGLES AND PAIRS",
+      "name": "Even Scatter",
+      "concealed": true,
+      "value": 50,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 1,
+          "rank": "2",
+          "suit": "b"
+        },
+        {
+          "count": 1,
+          "rank": "4",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "8",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "2",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "4",
+          "suit": "c"
+        },
+        {
+          "count": 1,
+          "rank": "6",
+          "suit": "c"
+        },
+        {
+          "count": 1,
+          "rank": "8",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "sp-5",
+      "section": "SINGLES AND PAIRS",
+      "name": "369 Scatter",
+      "concealed": true,
+      "value": 50,
+      "groups": [
+        {
+          "count": 1,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "b"
+        },
+        {
+          "count": 1,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "3",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "6",
+          "suit": "c"
+        },
+        {
+          "count": 2,
+          "rank": "9",
+          "suit": "c"
+        }
+      ]
+    },
+    {
+      "id": "sp-6",
+      "section": "SINGLES AND PAIRS",
+      "name": "Three Dragon Steps",
+      "concealed": true,
+      "value": 60,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 2,
+          "rank": "x",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+1",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "x+2",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "a"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "b"
+        },
+        {
+          "count": 2,
+          "rank": "D",
+          "suit": "c"
+        }
+      ],
+      "notes": "consecutive numbers"
+    },
+    {
+      "id": "sp-7",
+      "section": "SINGLES AND PAIRS",
+      "name": "Zero To Three",
+      "concealed": true,
+      "value": 75,
+      "groups": [
+        {
+          "count": 2,
+          "rank": "F"
+        },
+        {
+          "count": 1,
+          "rank": "0"
+        },
+        {
+          "count": 1,
+          "rank": "1",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "2",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "3",
+          "suit": "a"
+        },
+        {
+          "count": 1,
+          "rank": "0"
+        },
+        {
+          "count": 1,
+          "rank": "1",
+          "suit": "b"
+        },
+        {
+          "count": 1,
+          "rank": "2",
+          "suit": "b"
+        },
+        {
+          "count": 1,
+          "rank": "3",
+          "suit": "b"
+        },
+        {
+          "count": 1,
+          "rank": "0"
+        },
+        {
+          "count": 1,
+          "rank": "1",
+          "suit": "c"
+        },
+        {
+          "count": 1,
+          "rank": "2",
+          "suit": "c"
+        },
+        {
+          "count": 1,
+          "rank": "3",
+          "suit": "c"
+        }
+      ],
+      "notes": "these numbers only"
+    }
+  ]
+}

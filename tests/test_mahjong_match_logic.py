@@ -698,3 +698,102 @@ def test_suggestion_never_contradicts_a_shown_hands_need(card):
         # and it is dead weight for every shown hand, not just the closest
         for p in shown:
             assert pick in dict(p.dead_weight)
+
+
+# ── Grammar v1.1 (Harvest card): suit dragons, D2, parity, x+5 ───────────────
+
+V11_CARD = load_card({
+    "card_id": "t-v11", "display_name": "V11 Fixture", "season": "t",
+    "hands": [
+        {"id": "sd-1", "section": "T", "name": "Suit Dragons", "concealed": False,
+         "value": 25,
+         # FF 1111 DD 1111 DD shape: each DD is its suit's own dragon
+         "groups": [{"count": 2, "rank": "F"},
+                    {"count": 4, "rank": "1", "suit": "a"},
+                    {"count": 2, "rank": "D", "suit": "a"},
+                    {"count": 4, "rank": "1", "suit": "b"},
+                    {"count": 2, "rank": "D", "suit": "b"}]},
+        {"id": "d2-1", "section": "T", "name": "Two Dragons", "concealed": False,
+         "value": 25,
+         # FF DDDD N E W S DDDD — any 2 DIFFERENT dragons
+         "groups": [{"count": 2, "rank": "F"},
+                    {"count": 4, "rank": "D"},
+                    {"count": 1, "rank": "N"}, {"count": 1, "rank": "E"},
+                    {"count": 1, "rank": "W"}, {"count": 1, "rank": "S"},
+                    {"count": 4, "rank": "D2"}]},
+        {"id": "par-1", "section": "T", "name": "Odd Alike", "concealed": True,
+         "value": 30, "x_parity": "odd",
+         # NN 111 1111 111 SS — odd like numbers across three suits
+         "groups": [{"count": 2, "rank": "N"},
+                    {"count": 3, "rank": "x", "suit": "a"},
+                    {"count": 4, "rank": "x", "suit": "b"},
+                    {"count": 3, "rank": "x", "suit": "c"},
+                    {"count": 2, "rank": "S"}]},
+        {"id": "run6-1", "section": "T", "name": "Six Pairs", "concealed": True,
+         "value": 50,
+         # 11 22 33 44 55 66 DD — offsets to x+5, suit-matched dragon pair
+         "groups": [{"count": 2, "rank": "x", "suit": "a"},
+                    {"count": 2, "rank": "x+1", "suit": "a"},
+                    {"count": 2, "rank": "x+2", "suit": "a"},
+                    {"count": 2, "rank": "x+3", "suit": "a"},
+                    {"count": 2, "rank": "x+4", "suit": "a"},
+                    {"count": 2, "rank": "x+5", "suit": "a"},
+                    {"count": 2, "rank": "D", "suit": "a"}]},
+    ],
+})
+
+
+def test_v11_fixture_lints_clean():
+    assert lint_card(V11_CARD).errors == []
+
+
+def test_suit_dragon_follows_the_suit_map():
+    # dots hand → soap; bams hand → green dragon, in the same line
+    matches = match_hand(
+        tiles("flower*2 1d*4 soap*2 1b*4 dg*2"), [], V11_CARD)
+    assert "sd-1" in ids_of(matches)
+    # a dragon no held suit owns can never satisfy the pairing: red rides
+    # craks, and this rack holds dots and bams
+    assert match_hand(
+        tiles("flower*2 1d*4 dr*2 1b*4 dg*2"), [], V11_CARD) == []
+
+
+def test_d2_binds_a_different_dragon():
+    m = match_hand(
+        tiles("flower*2 dr*4 wn we ww ws dg*4"), [], V11_CARD)
+    won = next(x for x in m if x.hand.id == "d2-1")
+    assert {won.dragon, won.dragon2} == {"dr", "dg"}
+    # two kongs of the SAME dragon can never satisfy D + D2 (8 copies
+    # don't even exist — but the binding, not the supply, is what refuses)
+    assert match_hand(
+        tiles("flower*2 dr*4 wn we ww ws dr*2 joker*2"), [], V11_CARD) == []
+
+
+def test_x_parity_locks_the_binding():
+    # odd x (3s) matches...
+    matches = match_hand(
+        tiles("wn*2 3d*3 3b*4 3c*3 ws*2"), [], V11_CARD)
+    assert "par-1" in ids_of(matches)
+    # ...even x (4s) never does, despite the identical shape
+    assert match_hand(
+        tiles("wn*2 4d*3 4b*4 4c*3 ws*2"), [], V11_CARD) == []
+
+
+def test_x_plus_5_lands_only_low():
+    # x..x+5 fits at x=4 (4..9) with the dots dragon pair
+    matches = match_hand(
+        tiles("4d*2 5d*2 6d*2 7d*2 8d*2 9d*2 soap*2"), [], V11_CARD)
+    assert "run6-1" in ids_of(matches)
+    # x=5 would need a 10 — no binding exists
+    assert match_hand(
+        tiles("5d*2 6d*2 7d*2 8d*2 9d*2 soap*2 1d*2"), [], V11_CARD) == []
+
+
+def test_v11_lines_reach_and_measure():
+    # the assist engine rides the same enumerator: a near-miss reports
+    # honestly under the new kinds
+    rack = tiles("flower*2 1d*4 soap*2 1b*4 dg")
+    p = prospect_for(
+        closest_lines(rack, [], V11_CARD, Counter(), limit=None), "sd-1")
+    assert p.distance == 1
+    assert dict(p.needed) == {Tile("dg"): 1}
