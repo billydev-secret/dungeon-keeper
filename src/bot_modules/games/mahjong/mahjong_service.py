@@ -384,6 +384,11 @@ class MahjongService:
                 return table_id
 
         table_id = await asyncio.to_thread(_tx)
+        log.info(
+            "mahjong: table %d created (guild %d, channel %d, %d seats, "
+            "stake %d, practice=%s)",
+            table_id, guild_id, channel_id, seat_count, stake, practice,
+        )
         await self._arm_timer(
             table_id,
             time.time() + (DEAL_COUNTDOWN if practice else LOBBY_LIFETIME),
@@ -840,6 +845,13 @@ class MahjongService:
     async def _notify_and_arm(self, table_id: int, deadline: float | None) -> None:
         await self._arm_timer(table_id, deadline)
         stash = self._pending_events.pop(table_id, None)
+        if stash:
+            log.info(
+                "mahjong: table %d -> %s (events: %s; listener=%s)",
+                table_id, stash[0].phase.value,
+                ",".join(k for k, _ in stash[1]) or "-",
+                self._listener is not None,
+            )
         if stash and self._listener is not None:
             state, events = stash
             try:
@@ -861,7 +873,9 @@ class MahjongService:
         fold the bot AFK: degraded, never wedged."""
         existing = self._bot_pumps.get(table_id)
         if existing is not None and not existing.done():
+            log.info("mahjong: table %d pump already live", table_id)
             return
+        log.info("mahjong: table %d pump scheduled", table_id)
         task = asyncio.get_event_loop().create_task(self._pump_bots(table_id))
         self._bot_pumps[table_id] = task
 
@@ -891,6 +905,7 @@ class MahjongService:
                 delay = self._rng.uniform(*BOT_DELAY)
                 got = await asyncio.to_thread(_q)
                 if got is None:
+                    log.info("mahjong: table %d pump: nothing to do", table_id)
                     return
                 state, card, practice, deadline_at = got
                 if deadline_at:
@@ -909,16 +924,25 @@ class MahjongService:
                     action = decide(state, seat, card, self._rng, practice=practice)
                     if action is None:
                         continue
+                    log.info(
+                        "mahjong: table %d bot seat %d acts %s",
+                        table_id, seat, action.action,
+                    )
                     try:
                         await self.act(
                             table_id, action.action,
                             member_id=seat_state.member_id, **action.kwargs,
                         )
-                    except (TableError, ActionRejected):
-                        pass  # the table moved under us; loop re-reads
+                    except (TableError, ActionRejected) as e:
+                        log.info(
+                            "mahjong: table %d bot act raced: %s", table_id, e)
                     acted = True
                     break
                 if not acted:
+                    log.info(
+                        "mahjong: table %d pump idle (phase %s)",
+                        table_id, state.phase.value,
+                    )
                     return  # no bot has a move; the next transition re-pumps
         except Exception:
             log.exception("bot pump failed for table %d", table_id)
