@@ -1101,6 +1101,14 @@ def seen_elsewhere(state: GameState, seat: int) -> Counter[Tile]:
 
 
 ASSIST_MODES = ("off", "target", "gap", "coach")
+#: How many lines each mode shows. Coach shows ONE (live QA 2026-08-23:
+#: three targets plus their gaps plus dead weight plus a suggestion is a
+#: wall of text mid-turn); the lighter modes are one or two lines a hand,
+#: so three still reads at a glance. THE single source of truth — the
+#: embed renders exactly these and suggest_discard's dead-weight
+#: intersection is taken over exactly these, or coach could suggest a tile
+#: the one shown hand still needs.
+ASSIST_SHOWN = {"target": 3, "gap": 3, "coach": 1}
 """Assistance levels (plans/mahjong-assist.md): nothing; the closest lines
 and their distances; plus the tiles still needed; plus dead weight and a
 suggested discard. THE one authority on the vocabulary — the service
@@ -1206,6 +1214,7 @@ def assist_readout(
     prospects = closest_lines(
         list(seat_state.rack), exposures, card, seen, limit=None,
     )
+    shown = ASSIST_SHOWN[mode]
     suggestion: Tile | None = None
     if mode == "coach" and prospects:
         danger = dangerous_tiles(
@@ -1218,10 +1227,12 @@ def assist_readout(
                 if i != seat and not s.fallow
             ],
         )
-        suggestion = suggest_discard(list(seat_state.rack), prospects, danger)
+        suggestion = suggest_discard(
+            list(seat_state.rack), prospects, danger, shown=shown,
+        )
     return AssistReadout(
         mode=mode,
-        prospects=tuple(prospects[:3]),
+        prospects=tuple(prospects[:shown]),
         live_count=len(prospects),
         suggestion=suggestion,
     )
