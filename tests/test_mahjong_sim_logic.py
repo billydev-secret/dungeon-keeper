@@ -23,6 +23,7 @@ from bot_modules.games.mahjong.card_logic import load_card, load_first_light
 from bot_modules.games.mahjong.game_logic import TableConfig
 from bot_modules.games.mahjong.tiles import Tile
 from bot_modules.games.mahjong.sim_logic import (
+    MIN_HELD_FOR_COMPLETION,
     HandStat,
     SimReport,
     _empty_report,
@@ -124,6 +125,58 @@ def test_the_closing_target_is_recorded_too():
     report = simulate(TINY, games=2, seat_count=4, seed=5)
     assert sum(h.held for h in report.hands.values()) <= 2 * 4
     assert sum(h.held for h in report.hands.values()) > 0
+
+
+def test_completion_is_wins_over_seats_still_holding_the_line():
+    """The ease-of-play number: if I commit to this hand, does it pay?"""
+    stat = HandStat(hand_id="x", section="s", name="n", value=25, concealed=False)
+    stat.held, stat.wins = 20, 5
+    assert stat.completion == 0.25
+
+
+def test_completion_withholds_a_verdict_on_a_thin_denominator():
+    """A rate over three holds is noise wearing a percentage sign."""
+    stat = HandStat(hand_id="x", section="s", name="n", value=25, concealed=False)
+    stat.held, stat.wins = MIN_HELD_FOR_COMPLETION - 1, 1
+    assert stat.completion is None
+    stat.held = MIN_HELD_FOR_COMPLETION
+    assert stat.completion is not None
+
+
+def test_retention_separates_a_hard_line_from_a_trap():
+    """Both complete rarely; only one is a trap. qp-2 kept 41 of 670."""
+    trap = HandStat(hand_id="t", section="s", name="n", value=50, concealed=True)
+    trap.targeted, trap.held, trap.kept, trap.wins = 670, 41, 41, 0
+    hard = HandStat(hand_id="h", section="s", name="n", value=50, concealed=True)
+    hard.targeted, hard.held, hard.kept, hard.wins = 50, 45, 45, 2
+    assert trap.retention is not None and trap.retention < 0.10
+    assert hard.retention is not None and hard.retention > 0.80
+    assert trap.completion == 0.0 and hard.completion is not None
+
+
+def test_retention_is_a_real_fraction_even_when_seats_pivot_in():
+    """`held / targeted` ran past 100% — a line one seat opened on and
+    fifteen finished on reported 1500% 'retention'. Measured per seat it
+    cannot exceed 1, and the arrivals show up separately."""
+    stat = HandStat(hand_id="x", section="s", name="n", value=25, concealed=False)
+    stat.targeted, stat.held, stat.kept = 1, 15, 1
+    assert stat.retention == 1.0
+    assert stat.arrived == 14
+
+
+def test_a_pure_pivot_destination_has_no_retention_to_report():
+    stat = HandStat(hand_id="x", section="s", name="n", value=25, concealed=False)
+    stat.targeted, stat.held, stat.kept = 0, 7, 0
+    assert stat.retention is None
+    assert stat.arrived == 7
+
+
+def test_playable_and_unjudged_lines_partition_the_card():
+    report = _empty_report(TINY, 10, 4, 0)
+    report.hands["evens"].held, report.hands["evens"].wins = 40, 8
+    report.hands["winds"].held, report.hands["winds"].wins = 2, 1
+    assert [h.hand_id for h in report.playable_lines()] == ["evens"]
+    assert [h.hand_id for h in report.unjudged_lines()] == ["winds"]
 
 
 def test_pull_is_the_difference_between_closing_and_opening():
@@ -236,11 +289,12 @@ def test_merge_into_sums_every_measured_field():
     a.mahjongs, a.wall_games, a.total_turns, a.stuck_games = 1, 2, 30, 1
     b.mahjongs, b.wall_games, b.total_turns, b.rejected_actions = 3, 4, 70, 2
     a.hands["evens"].targeted, a.hands["evens"].wins = 5, 1
-    a.hands["evens"].held = 2
+    a.hands["evens"].held, a.hands["evens"].kept = 2, 1
     b.hands["evens"].targeted, b.hands["evens"].jokerless_wins = 6, 1
-    b.hands["evens"].held = 3
+    b.hands["evens"].held, b.hands["evens"].kept = 3, 2
     merge_into(a, b)
     assert a.hands["evens"].held == 5
+    assert a.hands["evens"].kept == 3
     assert (a.mahjongs, a.wall_games, a.total_turns) == (4, 6, 100)
     assert (a.stuck_games, a.rejected_actions) == (1, 2)
     assert (a.hands["evens"].targeted, a.hands["evens"].wins) == (11, 1)
@@ -341,6 +395,7 @@ def test_format_report_lists_lines_worst_first_and_names_the_dead():
     report = _empty_report(TINY, 2, 4, 0)
     report.hands["winds"].targeted, report.hands["winds"].wins = 3, 2
     report.hands["winds"].held = 3
+    report.hands["winds"].kept = 3
     report.hands["evens"].targeted = 9
     text = format_report(report)
     assert text.index("evens") < text.index("winds"), "dead line must sort first"

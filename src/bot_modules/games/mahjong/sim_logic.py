@@ -49,6 +49,11 @@ from bot_modules.games.mahjong.tiles import shuffled_wall
 #: hitting it means a stuck table, which the report surfaces rather than hides.
 MAX_STEPS_PER_GAME = 2000
 
+#: Below this many holds, a completion rate is noise dressed as a number.
+#: At 500 games / 4 seats a healthy line holds dozens; ten is the floor at
+#: which one more win moves the figure by less than ten points.
+MIN_HELD_FOR_COMPLETION = 10
+
 #: Synthetic seat ids. Negative, like real bot seats (bot_logic.is_bot_id), so
 #: anything that branches on "is this a bot" behaves as it would in practice.
 def _seat_id(index: int) -> int:
@@ -66,11 +71,13 @@ class HandStat:
     concealed: bool
     #: seat-hands that entered play with this as their closest line
     targeted: int = 0
-    #: seat-hands still closest to this line when the hand ended. The
-    #: difference between the two is what pivoting looks like from outside:
-    #: a line whose `held` far exceeds its `targeted` collects players
-    #: mid-hand, and one where the reverse holds sheds them.
+    #: seat-hands still closest to this line when the hand ended, however
+    #: they arrived at it
     held: int = 0
+    #: of those, the ones that also *opened* on it — so `kept` <= `targeted`
+    #: and `kept` <= `held`, and the two derived rates below are real
+    #: fractions rather than the unbounded ratio an aggregate would give
+    kept: int = 0
     wins: int = 0
     #: summed discards-on-the-table at each win, for the mean
     win_turns: int = 0
@@ -79,6 +86,49 @@ class HandStat:
     @property
     def mean_turns_to_win(self) -> float | None:
         return self.win_turns / self.wins if self.wins else None
+
+    @property
+    def completion(self) -> float | None:
+        """**The ease-of-play number.** Of the seats still playing toward
+        this line when the hand ended, the share that finished it.
+
+        ``held`` is the right denominator: a winner is by definition still
+        on their line at the settle, and a seat that walled out chasing it
+        is counted too. So this reads as "if I commit to this hand, how
+        often does it pay" — which is the question a member is really
+        asking, and the one `wins_per_target` cannot answer because seats
+        pivot away before the end.
+
+        None below :data:`MIN_HELD_FOR_COMPLETION`, rather than a
+        meaningless fraction of three.
+        """
+        if self.held < MIN_HELD_FOR_COMPLETION:
+            return None
+        return self.wins / self.held
+
+    @property
+    def retention(self) -> float | None:
+        """Of the seats that *opened* on this line, the share still on it at
+        the end — the diagnostic that separates *hard* from *trap*.
+
+        A hard line players stay with shows high retention and low
+        completion. A trap shows the reverse: `qp-2` drew 670 openings and
+        held on to a handful, because it looks nearest at the deal and then
+        cannot be finished.
+
+        Measured per seat, not as ``held / targeted``: seats pivot *onto* a
+        line too, so the aggregate ratio runs past 100% and conflates a hand
+        people keep with one they arrive at late.
+        """
+        if not self.targeted:
+            return None
+        return self.kept / self.targeted
+
+    @property
+    def arrived(self) -> int:
+        """Seats that finished on this line without starting on it — a
+        pivot destination, and the direct evidence pivot paths work."""
+        return self.held - self.kept
 
     @property
     def pull(self) -> int:
@@ -153,6 +203,18 @@ class SimReport:
         """Worse than dead: lines no seat ever even aimed at."""
         return [h for h in self.hands.values() if h.targeted == 0]
 
+    def playable_lines(self, floor: float = 0.05) -> list[HandStat]:
+        """Lines that pay often enough to be worth printing, once enough
+        seats have held them to judge."""
+        return [
+            h for h in self.hands.values()
+            if h.completion is not None and h.completion >= floor
+        ]
+
+    def unjudged_lines(self) -> list[HandStat]:
+        """Lines too rarely held to rate — more games needed, not a verdict."""
+        return [h for h in self.hands.values() if h.completion is None]
+
     @property
     def healthy(self) -> bool:
         """No stuck tables and no refused bot actions. A card can be *bad*
@@ -208,6 +270,7 @@ def merge_into(target: SimReport, other: SimReport) -> None:
         into = target.hands[hand_id]
         into.targeted += stat.targeted
         into.held += stat.held
+        into.kept += stat.kept
         into.wins += stat.wins
         into.win_turns += stat.win_turns
         into.jokerless_wins += stat.jokerless_wins
@@ -293,6 +356,7 @@ def _play_one(
     state, _ = engine.deal(state, shuffled_wall(rng))
 
     targets_taken = False
+    opening: dict[int, str] = {}
     for _ in range(MAX_STEPS_PER_GAME):
         if state.phase in (Phase.SETTLE, Phase.CLOSED):
             break
@@ -300,17 +364,23 @@ def _play_one(
         # proper — after the Charleston has finished moving tiles, before
         # any discard has changed the picture.
         if not targets_taken and state.phase is Phase.AWAIT_DISCARD:
-            _record_targets(state, card, report)
+            opening = _closest_lines_by_seat(state, card)
             targets_taken = True
         state = _step(state, card, rng, report)
     else:
         report.stuck_games += 1
 
-    # The closing target, read at the same lens as the opening one. Quints
-    # and other late-blooming families are invisible to `targeted` by
+    # The closing target, read through the same lens as the opening one.
+    # Quints and other late-blooming families are invisible to `targeted` by
     # construction — nobody is closest to a line needing five of a tile at
     # the deal — so without this the report cannot see them at all.
-    _record_targets(state, card, report, field="held")
+    closing = _closest_lines_by_seat(state, card)
+    for seat, hand_id in opening.items():
+        report.hands[hand_id].targeted += 1
+    for seat, hand_id in closing.items():
+        report.hands[hand_id].held += 1
+        if opening.get(seat) == hand_id:
+            report.hands[hand_id].kept += 1
     report.total_turns += len(state.discards)
     _record_outcome(state, report)
 
@@ -372,15 +442,15 @@ def _apply(
     raise ValueError(f"sim cannot apply bot action {action.action!r}")
 
 
-def _record_targets(
-    state: GameState, card: Card, report: SimReport, *, field: str = "targeted"
-) -> None:
-    """Each seat's closest line, into ``field``.
+def _closest_lines_by_seat(state: GameState, card: Card) -> dict[int, str]:
+    """Each seat's closest line right now, by seat.
 
     Read through the same lens the bot uses to choose, so a "target" means
-    what the seat was actually playing toward. Called twice per game: as
-    play opens, and again at the end.
+    what the seat was actually playing toward. Called twice per game — as
+    play opens and again at the end — and the two are compared per seat, so
+    a line people keep can be told apart from one they arrive at late.
     """
+    out: dict[int, str] = {}
     for seat in range(state.seat_count):
         seat_state = state.seats[seat]
         if seat_state.fallow:
@@ -393,8 +463,8 @@ def _record_targets(
             limit=1,
         )
         if prospects:
-            stat = report.hands[prospects[0].hand.id]
-            setattr(stat, field, getattr(stat, field) + 1)
+            out[seat] = prospects[0].hand.id
+    return out
 
 
 def _record_outcome(state: GameState, report: SimReport) -> None:
@@ -468,15 +538,25 @@ def format_report(report: SimReport, *, limit: int | None = None) -> str:
             f"the numbers below are not trustworthy"
         )
     out.append(
-        f"  {'line':<16}{'value':>6}{'opened':>8}{'held':>6}{'pull':>6}"
-        f"{'wins':>6}{'turns':>8}{'jkrless':>9}"
+        f"  {'line':<16}{'value':>6}{'opened':>8}{'held':>6}{'keep':>7}"
+        f"{'came':>6}{'wins':>6}{'done':>7}{'turns':>8}"
     )
     for h in rows:
         turns = "—" if h.mean_turns_to_win is None else f"{h.mean_turns_to_win:.0f}"
-        jkrless = "—" if h.jokerless_rate is None else f"{h.jokerless_rate:.0%}"
+        keep = "—" if h.retention is None else f"{h.retention:.0%}"
+        arrived = f"+{h.arrived}" if h.arrived > 0 else "—"
+        done = "—" if h.completion is None else f"{h.completion:.0%}"
         out.append(
             f"  {h.hand_id:<16}{h.value:>6}{h.targeted:>8}{h.held:>6}"
-            f"{h.pull:>+6}{h.wins:>6}{turns:>8}{jkrless:>9}"
+            f"{keep:>7}{arrived:>6}{h.wins:>6}{done:>7}{turns:>8}"
+        )
+    judged = [h for h in report.hands.values() if h.completion is not None]
+    if judged:
+        playable = report.playable_lines()
+        out.append(
+            f"  {len(playable)}/{len(judged)} judged lines complete at least "
+            f"5% of the time; {len(report.unjudged_lines())} too rarely held "
+            f"to rate"
         )
     dead = report.dead_lines
     if dead:
