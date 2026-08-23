@@ -1834,3 +1834,32 @@ def test_obtainable_seen_discounts_only_legal_routes(rack0, discard, discounted)
         assert adjusted.get(tile, 0) == raw[tile] - 1
     else:
         assert adjusted.get(tile, 0) == raw[tile]
+
+
+@pytest.mark.parametrize("mode, shown", [("target", 3), ("gap", 3), ("coach", 1)])
+def test_assist_shows_the_mode_s_line_count(mode, shown):
+    # Coach shows ONE line (live QA: three was a wall of text mid-turn).
+    state = play_state(2, {0: "flower*2 1d*2 9d 2b*3 wn*2 dr 5c*2", 1: "9c*13"})
+    r = G.assist_readout(state, 0, CARD, mode)
+    assert r is not None
+    assert len(r.prospects) == min(shown, r.live_count)
+
+
+def test_coach_suggestion_never_contradicts_the_ONE_shown_hand():
+    # The count is shared with suggest_discard's intersection: reasoning
+    # over three hands while showing one could suggest a tile the shown
+    # hand still needs.
+    import random as _r
+
+    for seed in range(40):
+        rng = _r.Random(seed)
+        wall = build_deck()
+        rng.shuffle(wall)
+        state = play_state(2, {1: "9c*13"})
+        state.seats[0].rack = wall[:13]
+        r = G.assist_readout(state, 0, CARD, "coach")
+        if r is None or r.suggestion is None:
+            continue
+        assert len(r.prospects) == 1
+        assert r.suggestion not in dict(r.prospects[0].needed)
+        assert r.suggestion in dict(r.prospects[0].dead_weight)
