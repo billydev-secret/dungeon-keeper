@@ -15,11 +15,15 @@ Two layers, one entry point:
   the CLI (``scripts/validate_card.py``) and the dashboard upload route, so a
   card that passes here is exactly a card the engine can play.
 
-Rank grammar (§3.1): ``"1"``–``"9"`` (suited; suit letter required), ``"0"``
-(satisfied only by soap — §2.1's "soap doubles as zero"; suitless, like the
-dragon it rides on), ``"x"``…``"x+4"`` (rank variable, one x binding per
-hand; suit letter required), ``"N"/"E"/"W"/"S"``, ``"R"/"G"/"soap"``,
-``"D"`` (any one dragon, one binding per hand), ``"F"`` (flower). Suit
+Rank grammar (§3.1, v1.1): ``"1"``–``"9"`` (suited; suit letter required),
+``"0"`` (satisfied only by soap — §2.1's "soap doubles as zero"; suitless,
+like the dragon it rides on), ``"x"``…``"x+5"`` (rank variable, one x
+binding per hand; suit letter required; a hand may lock parity with
+``"x_parity": "odd"/"even"``), ``"N"/"E"/"W"/"S"``, ``"R"/"G"/"soap"``,
+``"D"`` **suitless** (any one dragon, one binding per hand), ``"D"``
+**with a suit letter** (the dragon OF that suit — dots↔soap, bams↔green,
+craks↔red — following the letter's binding), ``"D2"`` (a second any-dragon
+that must bind a *different* dragon than ``D``), ``"F"`` (flower). Suit
 letters ``"a"/"b"/"c"``: same letter = same physical suit, distinct letters
 = pairwise distinct suits. Binding *enumeration* belongs to match_logic;
 this module only guarantees the shapes are well-formed.
@@ -53,7 +57,7 @@ _WINDS = ("N", "E", "W", "S")
 _DRAGONS = ("R", "G", "soap")
 _SUIT_LETTERS = ("a", "b", "c")
 _VAR_RE = re.compile(r"^x(?:\+([1-9]))?$")  # "x+0"/"x+01" are not grammar
-MAX_VAR_OFFSET = 4  # grammar caps runs at x..x+4 (§3.1)
+MAX_VAR_OFFSET = 5  # grammar caps runs at x..x+5 (§3.1 v1.1; was 4 in v1)
 
 
 class RankKind(Enum):
@@ -63,6 +67,8 @@ class RankKind(Enum):
     WIND = "wind"              # N/E/W/S
     DRAGON = "dragon"          # a specific dragon: R, G, or soap
     ANY_DRAGON = "any_dragon"  # D — any single dragon, one binding per hand
+    ANY_DRAGON2 = "any_dragon2"  # D2 — a second, DIFFERENT dragon binding
+    SUIT_DRAGON = "suit_dragon"  # D with a suit letter — that suit's dragon
     FLOWER = "flower"          # F — suitless, all 8 interchangeable
 
 
@@ -113,6 +119,7 @@ class Hand:
     value: int
     groups: tuple[Group, ...]
     notes: str = ""
+    x_parity: str | None = None  # "odd"/"even" locks the x binding's parity
 
     @property
     def tile_total(self) -> int:
@@ -201,7 +208,11 @@ def _parse_group(raw: object, where: str, problems: list[str]) -> Group | None:
         kind = RankKind.DRAGON
         dragon = rank
     elif rank == "D":
-        kind = RankKind.ANY_DRAGON
+        # with a suit letter it is that suit's own dragon; bare it is the
+        # one-per-hand any-dragon binding (grammar v1.1)
+        kind = RankKind.SUIT_DRAGON if suit is not None else RankKind.ANY_DRAGON
+    elif rank == "D2":
+        kind = RankKind.ANY_DRAGON2
     elif rank == "F":
         kind = RankKind.FLOWER
     elif rank == "0":
@@ -227,10 +238,11 @@ def _parse_group(raw: object, where: str, problems: list[str]) -> Group | None:
             return None
 
     needs_suit = kind in (RankKind.CONCRETE, RankKind.VAR)
+    takes_suit = needs_suit or kind is RankKind.SUIT_DRAGON
     if needs_suit and suit is None:
         problems.append(f"{where}: suited rank {rank!r} needs a suit letter")
         return None
-    if not needs_suit and suit is not None:
+    if not takes_suit and suit is not None:
         problems.append(f"{where}: rank {rank!r} is suitless — drop the suit")
         return None
 
@@ -273,6 +285,10 @@ def _parse_hand(raw: object, index: int, problems: list[str]) -> Hand | None:
     if not isinstance(notes, str):
         problems.append(f"{where}: notes must be a string")
         ok = False
+    x_parity = raw.get("x_parity")
+    if x_parity is not None and x_parity not in ("odd", "even"):
+        problems.append(f"{where}: x_parity must be \"odd\" or \"even\"")
+        ok = False
 
     raw_groups = raw.get("groups")
     if not isinstance(raw_groups, list) or not raw_groups:
@@ -294,6 +310,7 @@ def _parse_hand(raw: object, index: int, problems: list[str]) -> Hand | None:
     return Hand(
         id=hand_id, section=section, name=name, concealed=concealed,
         value=value, groups=tuple(groups), notes=notes,
+        x_parity=x_parity,
     )
 
 
@@ -378,6 +395,10 @@ def _demand_key(group: Group) -> tuple[object, ...] | None:
         return ("wind", group.wind)
     if group.kind is RankKind.ANY_DRAGON:
         return ("any_dragon",)
+    if group.kind is RankKind.ANY_DRAGON2:
+        return ("any_dragon2",)
+    if group.kind is RankKind.SUIT_DRAGON:
+        return ("suit_dragon", group.suit)
     if group.kind is RankKind.DRAGON and group.dragon != "soap":
         return ("dragon", group.dragon)
     if group.kind is RankKind.ZERO or group.kind is RankKind.DRAGON:
@@ -440,6 +461,20 @@ def lint_card(card: Card) -> LintReport:
             report.errors.append(
                 f"{where}: no x in 1–9 can carry offset +{max(offsets)}"
             )
+        if hand.x_parity is not None:
+            if not offsets:
+                report.errors.append(
+                    f"{where}: x_parity set but no rank-variable group uses x"
+                )
+            else:
+                start = 1 if hand.x_parity == "odd" else 2
+                if not any(
+                    x + max(offsets) <= 9 for x in range(start, 10, 2)
+                ):
+                    report.errors.append(
+                        f"{where}: no {hand.x_parity} x can carry offset "
+                        f"+{max(offsets)}"
+                    )
 
         # Jokerless-impossible small groups: jokers never stand in a pair or
         # single (§2.6), so demand for one specific tile across count<=2

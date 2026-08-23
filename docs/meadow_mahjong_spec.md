@@ -128,7 +128,7 @@ Escrow debits at seating (insufficient balance blocks the seat with the house �
 ### 3.1 Hand model
 A hand is an ordered list of **groups**; each group = `{count, rank, suit}`.
 - `count`: 1–6. Groups with `count >= 3` accept jokers; `count <= 2` never do.
-- `rank`: `"1"`–`"9"` (concrete), `"x"`, `"x+1"`…`"x+4"` (rank variable; one `x` binding per hand, all offsets must land in 1–9), `"N" "E" "W" "S"`, `"R" "G" "soap"` (soap satisfies rank `"0"` where used), `"D"` (any single dragon, one binding per hand), `"F"` (flower; suitless).
+- `rank` (grammar v1.1, extended 2026-08-22 for the Harvest card): `"1"`–`"9"` (concrete), `"x"`, `"x+1"`…`"x+5"` (rank variable; one `x` binding per hand, all offsets must land in 1–9; a hand may lock `"x_parity": "odd"/"even"`), `"N" "E" "W" "S"`, `"R" "G" "soap"` (soap satisfies rank `"0"` where used), `"D"` suitless (any single dragon, one binding per hand), `"D"` **with a suit letter** (that suit's own dragon — dots↔soap, bams↔green, craks↔red, following the letter's binding), `"D2"` (a second any-dragon bound to a *different* dragon than `"D"`), `"F"` (flower; suitless).
 - `suit`: `"a" | "b" | "c"` for suited ranks (same letter = same suit; distinct letters = pairwise distinct suits; binding chosen by the player's tiles), omitted for honors/flowers.
 - Hand-level: `id`, `section`, `name`, `concealed: bool`, `value: int`, `display: str` (generated), `notes`.
 

@@ -231,8 +231,8 @@ def clean_hand(hand_id="t-ok", section="Test Section"):
 @pytest.mark.parametrize(
     "bad_group, fragment",
     [
-        pytest.param(group(3, "x+5", "a"), "beyond the x..x+4 grammar", id="offset-5"),
-        pytest.param(group(3, "x+9", "a"), "beyond the x..x+4 grammar", id="offset-9"),
+        pytest.param(group(3, "x+6", "a"), "beyond the x..x+5 grammar", id="offset-6"),
+        pytest.param(group(3, "x+9", "a"), "beyond the x..x+5 grammar", id="offset-9"),
         pytest.param(group(3, "x-1", "a"), "unknown rank token", id="negative-offset"),
         pytest.param(group(3, "x+0", "a"), "unknown rank token", id="offset-zero-not-grammar"),
         pytest.param(group(3, "x+01", "a"), "unknown rank token", id="offset-leading-zero"),
@@ -245,7 +245,7 @@ def clean_hand(hand_id="t-ok", section="Test Section"):
         pytest.param(group(3, "x"), "needs a suit letter", id="var-no-suit"),
         pytest.param(group(3, "N", "a"), "suitless — drop the suit", id="wind-with-suit"),
         pytest.param(group(3, "F", "a"), "suitless — drop the suit", id="flower-with-suit"),
-        pytest.param(group(3, "D", "a"), "suitless — drop the suit", id="dragon-any-with-suit"),
+        pytest.param(group(3, "D2", "a"), "suitless — drop the suit", id="dragon2-with-suit"),
         pytest.param(group(3, "0", "a"), "suitless — drop the suit", id="zero-with-suit"),
         pytest.param(group(3, "5", "q"), "suit must be one of a/b/c", id="suit-q"),
         pytest.param(group(0, "5", "a"), "count 0 outside 1–6", id="count-0"),
@@ -510,3 +510,61 @@ def test_tile_labels_and_repr():
     assert Tile.SOAP.label == "Soap"
     assert Tile.JOKER.label == "Joker"
     assert repr(Tile.DOT2) == "Tile<2d>"
+
+
+# ── Harvest card (grammar v1.1) + the every-hand-winnable invariant ──────────
+
+
+def _materialize_winning_14(hand):
+    """A concrete winning rack for ``hand``: resolve its first binding, take
+    naturals up to the supply, jokers for any 3+ shortfall. The linter
+    guarantees pairs/singles never outrun their naturals."""
+    from collections import Counter
+
+    from bot_modules.games.mahjong.match_logic import (
+        _bindings, _group_natural,
+    )
+    from bot_modules.games.mahjong.tiles import Tile, copies
+
+    x, suit_map, dragons = next(_bindings(hand))
+    rack: list[Tile] = []
+    supply: Counter = Counter()
+    for group in hand.groups:
+        natural = _group_natural(group, x, suit_map, dragons)
+        available = copies(natural) - supply[natural]
+        take = min(group.count, available)
+        assert take >= min(group.count, 2), (
+            f"{hand.id}: pair/single of {natural} beyond supply")
+        supply[natural] += take
+        rack += [natural] * take + [Tile.JOKER] * (group.count - take)
+    assert len(rack) == 14
+    return rack
+
+
+@pytest.mark.parametrize("card_name", ["first_light", "harvest"])
+def test_every_hand_of_every_card_is_winnable(card_name):
+    from bot_modules.games.mahjong.card_logic import load_card_file
+    from bot_modules.games.mahjong.match_logic import match_hand
+
+    path = FIRST_LIGHT_PATH.parent / f"meadow_{card_name}.json"
+    card = load_card_file(path)
+    for hand in card.hands:
+        rack = _materialize_winning_14(hand)
+        matched = {m.hand.id for m in match_hand(rack, [], card)}
+        assert hand.id in matched, f"{hand.id} rejects its own winning 14"
+
+
+def test_harvest_lints_clean_and_loads():
+    from bot_modules.games.mahjong.card_logic import (
+        lint_card, load_card_file,
+    )
+
+    card = load_card_file(FIRST_LIGHT_PATH.parent / "meadow_harvest.json")
+    assert len(card.hands) == 71
+    report = lint_card(card)
+    assert report.errors == []
+    # the grammar v1.1 features are all really on the card
+    kinds = {g.kind.value for h in card.hands for g in h.groups}
+    assert "suit_dragon" in kinds and "any_dragon2" in kinds
+    assert any(h.x_parity for h in card.hands)
+    assert any(g.offset == 5 for h in card.hands for g in h.groups if g.offset)

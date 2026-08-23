@@ -72,8 +72,9 @@ class Match:
     hand: Hand
     x: int | None
     suit_map: tuple[tuple[str, str], ...]  # (letter, physical suit), sorted
-    dragon: str | None                     # tile code "dr"/"dg"/"soap"
+    dragon: str | None                     # the D binding: "dr"/"dg"/"soap"
     jokers_used: int
+    dragon2: str | None = None             # the D2 binding (grammar v1.1)
 
     @property
     def jokerless(self) -> bool:
@@ -87,11 +88,22 @@ class Match:
 
 
 def _bindings(hand: Hand):
-    """Yield every (x, suit_map, dragon_code) binding the hand's shape allows."""
+    """Yield every (x, suit_map, dragons) binding the hand's shape allows.
+
+    ``dragons`` is a pair: the D binding and the D2 binding (grammar v1.1 —
+    D2 groups must bind a *different* dragon than D). A hand's ``x_parity``
+    filters the x candidates; suit-matched dragons need no slot here, they
+    follow the suit map.
+    """
     offsets = [g.offset for g in hand.groups if g.offset is not None]
-    xs: list[int | None] = (
-        list(range(1, 10 - max(offsets))) if offsets else [None]
-    )
+    if offsets:
+        xs: list[int | None] = list(range(1, 10 - max(offsets)))
+        if hand.x_parity == "odd":
+            xs = [x for x in xs if x is not None and x % 2 == 1]
+        elif hand.x_parity == "even":
+            xs = [x for x in xs if x is not None and x % 2 == 0]
+    else:
+        xs = [None]
 
     letters = sorted({g.suit for g in hand.groups if g.suit is not None})
     if letters:
@@ -99,20 +111,34 @@ def _bindings(hand: Hand):
     else:
         suit_maps = [{}]
 
-    dragons: list[str | None] = (
-        ["dr", "dg", "soap"]
-        if any(g.kind is RankKind.ANY_DRAGON for g in hand.groups)
-        else [None]
-    )
+    has_d = any(g.kind is RankKind.ANY_DRAGON for g in hand.groups)
+    has_d2 = any(g.kind is RankKind.ANY_DRAGON2 for g in hand.groups)
+    codes = ("dr", "dg", "soap")
+    if has_d and has_d2:
+        dragon_pairs: list[tuple[str | None, str | None]] = [
+            (d1, d2) for d1 in codes for d2 in codes if d1 != d2
+        ]
+    elif has_d:
+        dragon_pairs = [(d, None) for d in codes]
+    elif has_d2:
+        dragon_pairs = [(None, d) for d in codes]
+    else:
+        dragon_pairs = [(None, None)]
 
     for x in xs:
         for suit_map in suit_maps:
-            for dragon in dragons:
-                yield x, suit_map, dragon
+            for dragons in dragon_pairs:
+                yield x, suit_map, dragons
+
+
+#: American convention: each suit owns a dragon — dots↔soap, bams↔green,
+#: craks↔red. A suit-matched D follows its letter through the suit map.
+_SUIT_DRAGON_TILES = {"d": Tile.SOAP, "b": Tile.GREEN, "c": Tile.RED}
 
 
 def _group_natural(
-    g: Group, x: int | None, suit_map: Mapping[str, str], dragon: str | None
+    g: Group, x: int | None, suit_map: Mapping[str, str],
+    dragons: tuple[str | None, str | None],
 ) -> Tile:
     """The one natural tile this group demands under the binding."""
     if g.kind is RankKind.CONCRETE:
@@ -129,9 +155,15 @@ def _group_natural(
     if g.kind is RankKind.DRAGON:
         assert g.dragon is not None
         return _DRAGON_TILES[g.dragon]
+    if g.kind is RankKind.SUIT_DRAGON:
+        assert g.suit is not None
+        return _SUIT_DRAGON_TILES[suit_map[g.suit]]
     if g.kind is RankKind.ANY_DRAGON:
-        assert dragon is not None
-        return Tile(dragon)
+        assert dragons[0] is not None
+        return Tile(dragons[0])
+    if g.kind is RankKind.ANY_DRAGON2:
+        assert dragons[1] is not None
+        return Tile(dragons[1])
     return Tile.FLOWER
 
 
@@ -229,8 +261,8 @@ def _match_line(
     exposures: list[Exposure],
     exposure_jokers: int,
 ) -> Match | None:
-    for x, suit_map, dragon in _bindings(hand):
-        resolved = [(g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups]
+    for x, suit_map, dragons in _bindings(hand):
+        resolved = [(g, _group_natural(g, x, suit_map, dragons)) for g in hand.groups]
         for used in _exposure_assignments(exposures, resolved):
             remaining = [rg for i, rg in enumerate(resolved) if i not in used]
             fit = _concealed_fit(concealed_counts, jokers_held, remaining)
@@ -239,7 +271,8 @@ def _match_line(
                     hand=hand,
                     x=x,
                     suit_map=tuple(sorted(suit_map.items())),
-                    dragon=dragon,
+                    dragon=dragons[0],
+                    dragon2=dragons[1],
                     jokers_used=fit + exposure_jokers,
                 )
     return None
@@ -251,7 +284,8 @@ def resolved_groups(match: Match) -> list[tuple[Tile, int]]:
     group isn't part of the match, so groups render as their naturals."""
     suit_map = dict(match.suit_map)
     return [
-        (_group_natural(g, match.x, suit_map, match.dragon), g.count)
+        (_group_natural(g, match.x, suit_map, (match.dragon, match.dragon2)),
+         g.count)
         for g in match.hand.groups
     ]
 
@@ -301,8 +335,8 @@ def reachable_lines(
 
 
 def _line_reachable(hand, concealed_counts, jokers_held, exposures, unseen) -> bool:
-    for x, suit_map, dragon in _bindings(hand):
-        resolved = [(g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups]
+    for x, suit_map, dragons in _bindings(hand):
+        resolved = [(g, _group_natural(g, x, suit_map, dragons)) for g in hand.groups]
         for used in _exposure_assignments(exposures, resolved):
             remaining = [rg for i, rg in enumerate(resolved) if i not in used]
             demand, small = _demand_of(remaining)
@@ -409,8 +443,8 @@ def _line_prospect(
     """Minimum distance over the line's live bindings, or None if none is
     live. First-found wins a distance tie, so the report is deterministic."""
     best: Prospect | None = None
-    for x, suit_map, dragon in _bindings(hand):
-        resolved = [(g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups]
+    for x, suit_map, dragons in _bindings(hand):
+        resolved = [(g, _group_natural(g, x, suit_map, dragons)) for g in hand.groups]
         for used in _exposure_assignments(exposures, resolved):
             remaining = [rg for i, rg in enumerate(resolved) if i not in used]
             demand, small = _demand_of(remaining)
@@ -502,9 +536,9 @@ def dangerous_tiles(
     for hand in card.hands:
         if hand.concealed:
             continue  # an exposed seat can't be on a concealed line
-        for x, suit_map, dragon in _bindings(hand):
+        for x, suit_map, dragons in _bindings(hand):
             resolved = [
-                (g, _group_natural(g, x, suit_map, dragon)) for g in hand.groups
+                (g, _group_natural(g, x, suit_map, dragons)) for g in hand.groups
             ]
             for exposures in exposed:
                 for used in _exposure_assignments(exposures, resolved):
