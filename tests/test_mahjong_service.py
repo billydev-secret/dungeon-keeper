@@ -902,3 +902,41 @@ async def test_house_bot_never_ranks_as_an_earner(service, db):
         data = collect_leaderboard_data(conn, GUILD, time.time())
     ranked = [uid for uid, _ in data.top_earners]
     assert all(uid > 0 for uid in ranked)        # ...but never ranked
+
+
+async def test_a_real_timer_firing_still_notifies_and_pumps(service, db, monkeypatch):
+    # THE prod-only bug (live QA 2026-08-23): a firing phase timer runs
+    # _arm_timer from INSIDE its own fire task, and old.cancel() there
+    # cancels the running task itself — CancelledError lands on the next
+    # await (the listener), the sticky never updates, the pump is never
+    # scheduled, and fire()'s own except swallows it all silently. act()-
+    # driven transitions and direct timeout() calls cancel a DIFFERENT
+    # task, which is why no test and no out-of-band repro ever caught it:
+    # only a real elapsed-time firing with a listener wired reproduces.
+    import bot_modules.games.mahjong.mahjong_service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "BOT_DELAY", (0.0, 0.0))
+    heard: list[str] = []
+
+    async def listener(table_id, state, events):
+        # a real listener suspends (its first DB read); the self-cancel
+        # lands exactly at a suspension point, so the stub must have one
+        await asyncio.sleep(0)
+        heard.append(state.phase.value)
+
+    service.set_listener(listener)
+    table_id = await make_practice_duel(service)
+    # re-arm the deal countdown to NOW so the real fire task drives it
+    await service._arm_timer(table_id, time.time() + 0.05)
+    for _ in range(80):
+        await asyncio.sleep(0.05)
+        state = await service.load_state(table_id)
+        assert state is not None
+        if 1 in state.pending_picks:
+            break
+    else:
+        pytest.fail(
+            f"after a real timer firing: listener heard {heard}, "
+            f"bot never picked"
+        )
+    assert "charleston" in heard      # the listener survived the firing
