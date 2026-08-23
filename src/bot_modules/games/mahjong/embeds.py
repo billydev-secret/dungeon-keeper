@@ -432,8 +432,28 @@ def build_joker_redeemed(
 
 
 def build_card_viewer(card: Card, accent: discord.Color | None = None) -> list[discord.Embed]:
+    """The active card by section, for study — split to respect field caps.
+
+    A hand's notes and parity lock ride every line (grammar-verify G1: the
+    web viewer showed notes but Discord silently didn't, so a member could
+    build an odd-locked hand at an even x and be refused with no visible
+    reason). Long sections split across continuation fields rather than
+    being sliced mid-hand.
+    """
     accent = accent or DEFAULT_ACCENT_COLOR
-    """The active card by section, for study — split to respect field caps."""
+
+    def line(h) -> str:
+        out = f"`{h.display}` — **{h.name}** · {h.value}"
+        if h.concealed:
+            out += " · C"
+        extra = h.notes
+        if h.x_parity and h.x_parity not in extra:
+            lock = f"{h.x_parity} x only"
+            extra = f"{extra}; {lock}" if extra else lock
+        if extra:
+            out += f" — *{extra}*"
+        return out
+
     embeds: list[discord.Embed] = []
     e = discord.Embed(
         title=card.display_name,
@@ -443,15 +463,23 @@ def build_card_viewer(card: Card, accent: discord.Color | None = None) -> list[d
     )
     for section in card.sections():
         hands = [h for h in card.hands if h.section == section]
-        value = "\n".join(
-            f"`{h.display}` — **{h.name}** · {h.value}"
-            + (" · C" if h.concealed else "")
-            for h in hands
-        )
-        if len(e.fields) >= 5:
-            embeds.append(_footer(e))
-            e = discord.Embed(color=accent)
-        e.add_field(name=section, value=value[:1024], inline=False)
+        chunks: list[str] = []
+        current = ""
+        for h in hands:
+            piece = line(h)
+            if current and len(current) + 1 + len(piece) > 1024:
+                chunks.append(current)
+                current = piece
+            else:
+                current = f"{current}\n{piece}" if current else piece
+        if current:
+            chunks.append(current)
+        for i, chunk in enumerate(chunks):
+            if len(e.fields) >= 5:
+                embeds.append(_footer(e))
+                e = discord.Embed(color=accent)
+            name = section if i == 0 else f"{section} (cont.)"
+            e.add_field(name=name, value=chunk, inline=False)
     embeds.append(_footer(e, card.season))
     return embeds
 

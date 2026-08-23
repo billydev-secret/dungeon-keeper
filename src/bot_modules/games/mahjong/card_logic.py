@@ -93,7 +93,7 @@ class Group:
     suit: str | None
     kind: RankKind
     concrete: int | None = None   # CONCRETE: rank 1–9
-    offset: int | None = None     # VAR: 0–4 above x
+    offset: int | None = None     # VAR: 0–5 above x
     wind: str | None = None       # WIND: "N"/"E"/"W"/"S"
     dragon: str | None = None     # DRAGON: "R"/"G"/"soap"
 
@@ -226,7 +226,7 @@ def _parse_group(raw: object, where: str, problems: list[str]) -> Group | None:
             offset = int(m.group(1) or 0)
             if offset > MAX_VAR_OFFSET:
                 # §3.4's offset rule, enforced at the grammar: runs are capped
-                # at x..x+4 so every offset can land in 1–9 together.
+                # at x..x+5 so every offset can land in 1–9 together.
                 problems.append(
                     f"{where}: rank offset +{offset} beyond the "
                     f"x..x+{MAX_VAR_OFFSET} grammar"
@@ -416,17 +416,19 @@ def _shape_payload(g: Group) -> tuple[str, str]:
     return (g.kind.value, g.wind or g.dragon or "")
 
 
-def _canonical_shape(hand: Hand) -> tuple[tuple[int, str, str, str], ...]:
+def _canonical_shape(hand: Hand):
     """Shape signature for the near-duplicate warning: groups sorted, suit
     letters canonicalized by taking the minimum over all 3! relabelings — so
-    a line recolored *and* reordered still reads as the same shape."""
+    a line recolored *and* reordered still reads as the same shape. The
+    parity lock is part of the identity: an odd/even twin pair is two
+    genuinely disjoint lines, not a near-duplicate (grammar-verify G3)."""
     signatures = []
     for perm in permutations(_SUIT_LETTERS):
         mapping: dict[str, str] = dict(zip(_SUIT_LETTERS, perm))
-        signatures.append(tuple(sorted(
+        signatures.append((hand.x_parity or "", tuple(sorted(
             (g.count, *_shape_payload(g), mapping[g.suit] if g.suit else "")
             for g in hand.groups
-        )))
+        ))))
     return min(signatures)
 
 
@@ -532,6 +534,43 @@ def lint_card(card: Card) -> LintReport:
                 f"call — mark it concealed"
             )
 
+    # Exhaustive winnability (grammar-verify G2): the per-key checks above
+    # assume distinct demand keys can always dodge each other, which v1.1
+    # broke — suit-dragons on all three letters make one of them soap under
+    # EVERY binding, and D+D2 beside named dragons can pin two of three.
+    # Lint runs at upload time, so brute force over the bindings is cheap.
+    from bot_modules.games.mahjong.match_logic import (
+        _bindings, _group_natural,
+    )
+    from bot_modules.games.mahjong.tiles import Tile, copies
+
+    for hand in card.hands:
+        if any(e.startswith(f"hand {hand.id!r}") for e in report.errors):
+            continue  # already condemned with a more specific message
+        feasible = False
+        for x, suit_map, dragons in _bindings(hand):
+            small: dict[Tile, int] = {}
+            total: dict[Tile, int] = {}
+            for g in hand.groups:
+                natural = _group_natural(g, x, suit_map, dragons)
+                total[natural] = total.get(natural, 0) + g.count
+                if g.count <= 2:
+                    small[natural] = small.get(natural, 0) + g.count
+            if any(n > copies(tile) for tile, n in small.items()):
+                continue
+            deficit = sum(
+                max(0, n - copies(tile)) for tile, n in total.items()
+            )
+            if deficit <= JOKER_COPIES:
+                feasible = True
+                break
+        if not feasible:
+            report.errors.append(
+                f"hand {hand.id!r} ({hand.name}): no binding leaves this "
+                f"hand winnable — some tile is over-demanded under every "
+                f"suit/dragon assignment"
+            )
+
     # Warnings — advisories, not failures.
     by_section: dict[str, int] = {}
     for hand in card.hands:
@@ -540,6 +579,13 @@ def lint_card(card: Card) -> LintReport:
         if n < 2:
             report.warnings.append(
                 f"section {section!r} has only {n} hand{'s' if n != 1 else ''}"
+            )
+    for hand in card.hands:
+        kinds = {g.kind for g in hand.groups}
+        if RankKind.ANY_DRAGON2 in kinds and RankKind.ANY_DRAGON not in kinds:
+            report.warnings.append(
+                f"hand {hand.id!r}: D2 without D is just an any-dragon — "
+                f"write it as D"
             )
 
     shapes: dict[tuple[tuple[int, str, str, str], ...], str] = {}

@@ -313,3 +313,23 @@ def test_assist_field_survives_the_registered_emoji_map(monkeypatch):
     assert "Consider discarding" in block
     # and no half-sliced emoji token renders as garbage
     assert block.count("<:") == block.count(">") or "<:" not in block
+
+
+def test_card_viewer_shows_notes_and_parity():
+    # Grammar-verify G1: the odd/even locks and "these #s only" annotations
+    # must be visible in Discord, not just on the web viewer — and long
+    # sections split across fields instead of slicing mid-hand.
+    from bot_modules.games.mahjong.card_logic import load_card_file
+    from bot_modules.games.mahjong.card_logic import FIRST_LIGHT_PATH
+
+    card = load_card_file(FIRST_LIGHT_PATH.parent / "meadow_harvest.json")
+    embeds = mj_embeds.build_card_viewer(card, ACCENT)
+    text = "\n".join(f.value for e in embeds for f in e.fields)
+    assert "odd like numbers" in text
+    assert "any 2 dragons" in text
+    total_lines = sum(
+        f.value.count("`") // 2 for e in embeds for f in e.fields)
+    assert total_lines == len(card.hands)   # nothing sliced away
+    for e in embeds:
+        for f in e.fields:
+            assert len(f.value) <= 1024

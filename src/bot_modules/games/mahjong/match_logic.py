@@ -17,7 +17,8 @@ binding enumerator:
 A binding is (x, suit-letter map, dragon): one ``x`` per hand with every
 offset landing in 1–9, suit letters mapping injectively onto physical suits
 (≤ 3! = 6), one dragon for ``D``. Brute force is fine (spec §3.3): ≤ ~30
-lines × ≤ 9 x-bindings × 6 suit maps × 3 dragon bindings.
+lines × ≤ 9 x-bindings × 6 suit maps × ≤ 6 dragon bindings (ordered
+distinct pairs when a hand carries both D and D2).
 
 In American mahjong every group is same-tile (a pung/kong/quint of one tile,
 flowers interchangeable), so a group under a binding resolves to exactly one
