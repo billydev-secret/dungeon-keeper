@@ -83,6 +83,7 @@ class MahjongSettings:
     phase_timer: float = 60.0
     duel_wall_trim: int = 0
     second_charleston: bool = True
+    wall_jokers: int = 8       # jokers dealt into the wall (bots-feedback dial)
     stakes_allowed: tuple[int, ...] = (1, 2, 5)
     assist_default: str = "gap"  # house default for members with no pick (A8)
     practice_bots: bool = True   # solo practice tables (bots plan B7)
@@ -117,6 +118,7 @@ def load_settings(conn, guild_id: int) -> MahjongSettings:
         turn_timer=_f("turn_timer", 45.0),
         phase_timer=_f("phase_timer", 60.0),
         duel_wall_trim=_i("duel_wall_trim", 0),
+        wall_jokers=max(0, min(40, _i("wall_jokers", 8))),
         second_charleston=get_config_value(
             conn, "mahjong_second_charleston", "1", guild_id) == "1",
         stakes_allowed=stakes or (1, 2, 5),
@@ -344,6 +346,7 @@ class MahjongService:
                     seat_count=seat_count,
                     wall_trim=settings.duel_wall_trim if seat_count == 2 else 0,
                     second_charleston=settings.second_charleston,
+                    wall_jokers=settings.wall_jokers,
                 )
                 state = engine.create_table(config, host_id)
                 try:
@@ -592,7 +595,7 @@ class MahjongService:
 
             if state.phase is Phase.LOBBY:
                 if len(state.seats) == state.seat_count:
-                    state, events = engine.deal(state, shuffled_wall(self._rng))
+                    state, events = engine.deal(state, shuffled_wall(self._rng, jokers=state.config.wall_jokers))
                 else:  # never filled — dissolve + refund (§6.2)
                     state, events = engine.close_table(state, "dissolved")
             elif state.phase is Phase.SETTLE:
@@ -779,7 +782,7 @@ class MahjongService:
         table_id = int(row["id"])
         guild_id = int(row["guild_id"])
         if bool(row["practice"]):
-            return engine.deal(state, shuffled_wall(self._rng))  # no escrow (B5)
+            return engine.deal(state, shuffled_wall(self._rng, jokers=state.config.wall_jokers))  # no escrow (B5)
         next_gid = _hand_gid(table_id, state.hand_no + 1)
         amount = escrow_amount(card, int(row["mode"]), int(row["stake"]))
         for seat_state in state.seats:
@@ -797,7 +800,7 @@ class MahjongService:
                 wager_svc.refund_game(conn, GAME_TYPE, next_gid)
                 closed, ev = engine.close_table(state, "rematch_unfunded")
                 return closed, ev
-        return engine.deal(state, shuffled_wall(self._rng))
+        return engine.deal(state, shuffled_wall(self._rng, jokers=state.config.wall_jokers))
 
     # ── Persistence plumbing ─────────────────────────────────────────────
 

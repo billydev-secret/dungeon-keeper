@@ -50,6 +50,17 @@ body below. 1–2 predate any code (2026-08-21); 3 records the assist addon.
    Leavers still fold fallow — they never become bots. Decisions and stages:
    `plans/mahjong-bots.md`.
 
+5. **Wall joker count is a house dial (added 2026-08-23 from live feedback).**
+   `mahjong_wall_jokers`, default 8 (the standard wall), 8–24 on the
+   dashboard. Extra jokers **add** to the wall rather than displacing
+   naturals, so the deck grows past 152. Fixed per table at creation like
+   every other config, and threaded into the matcher's unseen-tile count
+   (`joker_copies`) — a wall the matcher doesn't know about would call live
+   lines dead and misprice the fallow payout. Measured on 4-seat bot games:
+   8 jokers ends decisively 52% of the time at a median 104 discards, 14 at
+   80% / 85, 20 at 92% / 70. Wall *trim* is the wrong lever for this — it
+   shortens by guaranteeing wall games (97% at trim 60).
+
 ---
 
 **Handoff target:** Claude Code, working in the Dungeon Keeper repo.

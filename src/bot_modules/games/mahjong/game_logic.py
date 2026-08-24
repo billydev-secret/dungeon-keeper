@@ -52,7 +52,7 @@ from bot_modules.games.mahjong.match_logic import (
     match_hand,
     suggest_discard,
 )
-from bot_modules.games.mahjong.tiles import Tile
+from bot_modules.games.mahjong.tiles import STANDARD_JOKERS, Tile
 
 DEALER_TILES = 14
 SEAT_TILES = 13
@@ -119,12 +119,18 @@ class TableConfig:
     seat_count: int            # 2 (Duel) or 4
     wall_trim: int = 0         # Duel pacing lever: dead tiles removed at deal
     second_charleston: bool = True
+    #: Jokers dealt into this table's wall, fixed at creation like every
+    #: other config: a mid-hand dial change must never alter a live wall,
+    #: and the matcher counts unseen jokers against exactly this number.
+    wall_jokers: int = STANDARD_JOKERS
 
     def __post_init__(self) -> None:
         if self.seat_count not in (2, 4):
             raise ValueError("seat_count must be 2 or 4")
         if self.wall_trim < 0:
             raise ValueError("wall_trim must be >= 0")
+        if self.wall_jokers < 0:
+            raise ValueError("wall_jokers must be >= 0")
 
 
 @dataclass
@@ -228,6 +234,7 @@ def state_to_dict(state: GameState) -> dict:
             "seat_count": state.config.seat_count,
             "wall_trim": state.config.wall_trim,
             "second_charleston": state.config.second_charleston,
+            "wall_jokers": state.config.wall_jokers,
         },
         "host": state.host,
         "seats": [
@@ -295,6 +302,8 @@ def state_from_dict(data: dict) -> GameState:
             seat_count=cfg["seat_count"],
             wall_trim=cfg["wall_trim"],
             second_charleston=cfg["second_charleston"],
+            # tables dealt before the dial existed carry the standard wall
+            wall_jokers=cfg.get("wall_jokers", STANDARD_JOKERS),
         ),
         host=data["host"],
         seats=[
@@ -1220,6 +1229,7 @@ def assist_readout(
     seen = obtainable_seen(state, seat, card)
     prospects = closest_lines(
         list(seat_state.rack), exposures, card, seen, limit=None,
+        joker_copies=state.config.wall_jokers,
     )
     shown = ASSIST_SHOWN[mode]
     suggestion: Tile | None = None
@@ -1240,7 +1250,8 @@ def assist_readout(
             claim_win = best.hand
         else:
             claim_call = call_advice(
-                list(seat_state.rack), exposures, card, seen, tile)
+                list(seat_state.rack), exposures, card, seen, tile,
+                joker_copies=state.config.wall_jokers)
     if mode == "coach" and prospects:
         danger = dangerous_tiles(
             card,
@@ -1281,6 +1292,7 @@ def _settle_fallow_end(state: GameState, card: Card) -> list[Event]:
         [e.as_match() for e in seat_state.exposures],
         card,
         seen,
+        joker_copies=state.config.wall_jokers,
     )
     deltas = {s: (-base) for s in range(state.seat_count) if s != survivor}
     deltas[survivor] = base * (state.seat_count - 1)
