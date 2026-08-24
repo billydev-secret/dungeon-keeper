@@ -375,3 +375,52 @@ def test_how_to_play_survives_no_card_and_no_public_dashboard():
     assert "hands" not in text.split("Where to look")[-1].split("\n")[0]
     assert "Full guide" not in text          # localhost-only dev: no link
     assert "Card Viewer" in text             # the in-Discord pointers remain
+
+
+def test_claim_advice_leads_the_block_and_survives_the_fit_loop():
+    from tests.test_mahjong_game_logic import _claim_state
+
+    # winning tile: the Mahjong call leads
+    state = _claim_state("flower*4 2d*4 6b*4 8c", "8c")
+    r = G.assist_readout(state, 0, CARD, "coach")
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    assert block.splitlines()[0].startswith("🀄")
+    assert "Press Mahjong" in block
+
+    # calling tile: the call advice leads, naming the group and the gain
+    state = _claim_state("flower*4 2d*3 6b*4 8c 9b", "2d")
+    r = G.assist_readout(state, 0, CARD, "coach")
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None
+    first = block.splitlines()[0]
+    assert first.startswith("✋") and "kong" in first and "away" in first
+
+    # a rack with nothing live still shows the advice rather than only
+    # "play for the wall"
+    empty = G.AssistReadout(
+        mode="coach", prospects=(), live_count=0, suggestion=None,
+        claim_win=CARD.hands[0],
+    )
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=empty)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None and block.splitlines()[0].startswith("🀄")
+    assert "play for the wall" in block
+
+
+def test_claim_advice_is_never_trimmed_by_the_1024_fit_loop(monkeypatch):
+    from bot_modules.games.mahjong import tile_render
+    from tests.test_mahjong_game_logic import _claim_state
+
+    monkeypatch.setattr(
+        tile_render, "_map_cache",
+        {t.code: 1400000000000000001 for t in Tile} | {"back": 1},
+    )
+    state = _claim_state("flower*4 2d*3 6b*4 8c 9b", "2d")
+    r = G.assist_readout(state, 0, CARD, "coach")
+    embed = mj_embeds.build_rack_panel(state, 0, ACCENT, None, assist=r)
+    block = _rack_field(embed, "Closest Hands")
+    assert block is not None and len(block) <= 1024
+    assert block.splitlines()[0].startswith("✋")   # the decision survives

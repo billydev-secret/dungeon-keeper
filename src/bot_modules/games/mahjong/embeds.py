@@ -259,9 +259,11 @@ def _assist_field(assist: AssistReadout) -> str:
     mid-<:mm_…:id> token and silently drop the coach suggestion, the one
     line coach mode exists to deliver.
     """
+    claim = _claim_advice_lines(assist)
     if not assist.prospects:
-        return ("No line on the card is still reachable from your tiles — "
+        base = ("No line on the card is still reachable from your tiles — "
                 "play for the wall.")
+        return "\n".join(claim + [base]) if claim else base
 
     def tiles_str(pairs, render) -> str:
         return " ".join(
@@ -271,7 +273,9 @@ def _assist_field(assist: AssistReadout) -> str:
 
     def render_block(shown_n: int, render) -> str:
         shown = assist.prospects[:shown_n]
-        lines: list[str] = []
+        # the live discard is the decision in front of the member RIGHT
+        # now — it leads, and the fit loop never trims it
+        lines: list[str] = list(claim)
         for rank, p in enumerate(shown, start=1):
             away = "ready!" if p.distance == 0 else (
                 "1 tile away" if p.distance == 1 else f"{p.distance} tiles away")
@@ -307,6 +311,24 @@ def _assist_field(assist: AssistReadout) -> str:
     # unreachable — one chip-rendered hand is far under 1024 — but if a
     # future card breaks the assumption, a clean tail beats a cut token.
     return render_block(1, chip)[:1024]
+
+
+def _claim_advice_lines(assist: AssistReadout) -> list[str]:
+    """Coach's verdict on the live discard (plans/mahjong-bots.md shares the
+    judgement with the bot brain): take it to win, call it for a named
+    gain, or let it go. Silent in every other mode and phase."""
+    if assist.claim_win is not None:
+        return [f"🀄 **That tile wins it — {assist.claim_win.name}. "
+                f"Press Mahjong.**"]
+    advice = assist.claim_call
+    if advice is None:
+        return []
+    group = {3: "pung", 4: "kong", 5: "quint"}.get(advice.count, "set")
+    return [
+        f"✋ **Call it** — exposes a {group}, "
+        f"{advice.distance_before}→{advice.distance} away "
+        f"for {advice.hand.name}."
+    ]
 
 
 def build_rack_panel(
