@@ -33,8 +33,8 @@ from bot_modules.games.mahjong.game_logic import (
     obtainable_seen,
 )
 from bot_modules.games.mahjong.match_logic import (
-    Exposure,
     Prospect,
+    call_advice,
     closest_lines,
     dangerous_tiles,
     match_hand,
@@ -134,43 +134,20 @@ def _choose_discard(state: GameState, seat: int, card: Card) -> Tile:
 
 
 def _call_tiles(state: GameState, seat: int, card: Card) -> list[Tile] | None:
-    """Rack tiles to expose with the live discard, or None to not call.
-
-    Simulate each legal exposure size and call only when the best line gets
-    strictly closer than staying concealed — an exposure that doesn't help
-    locks the hand (and kills every concealed line) for nothing.
-    """
+    """Rack tiles to expose with the live discard, or None to not call —
+    the shared judgement in :func:`match_logic.call_advice`, which the
+    coach readout also renders, so bot and advice can never diverge."""
     tile = state.live_discard
     assert tile is not None
     seat_state = state.seats[seat]
-    rack = list(seat_state.rack)
-    naturals = [t for t in rack if t is tile]
-    jokers = [t for t in rack if t is Tile.JOKER]
-    before = _prospects(state, seat, card)
-    if not before:
-        return None
-    seen = obtainable_seen(state, seat, card)
-    best: tuple[int, list[Tile]] | None = None
-    for count in (3, 4, 5):
-        needed = count - 1
-        if len(naturals) + len(jokers) < needed:
-            continue
-        given = naturals[:needed] + jokers[: max(0, needed - len(naturals))]
-        remaining = list(rack)
-        for t in given:
-            remaining.remove(t)
-        exposures = [e.as_match() for e in seat_state.exposures] + [
-            Exposure(
-                natural=tile,
-                count=count,
-                jokers=sum(1 for t in given if t is Tile.JOKER),
-            )
-        ]
-        after = closest_lines(remaining, exposures, card, seen, limit=None)
-        if after and after[0].distance < before[0].distance:
-            if best is None or after[0].distance < best[0]:
-                best = (after[0].distance, given)
-    return best[1] if best is not None else None
+    advice = call_advice(
+        list(seat_state.rack),
+        [e.as_match() for e in seat_state.exposures],
+        card,
+        obtainable_seen(state, seat, card),
+        tile,
+    )
+    return list(advice.tiles) if advice is not None else None
 
 
 # ── The per-phase deciders ───────────────────────────────────────────────────

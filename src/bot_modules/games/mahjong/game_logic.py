@@ -40,10 +40,12 @@ from enum import Enum
 
 from bot_modules.games.mahjong.card_logic import Card, Hand
 from bot_modules.games.mahjong.match_logic import (
+    CallAdvice,
     Exposure,
     Match,
     Prospect,
     best_match,
+    call_advice,
     closest_lines,
     dangerous_tiles,
     fallow_base_value,
@@ -1172,6 +1174,11 @@ class AssistReadout:
     prospects: tuple[Prospect, ...]
     live_count: int
     suggestion: Tile | None
+    #: Coach only, and only while a claimable discard is live: the winning
+    #: line if the tile completes the hand, else what calling would buy,
+    #: else None for "let it go".
+    claim_win: Hand | None = None
+    claim_call: CallAdvice | None = None
 
 
 #: Phases where a seat is (or is about to be) choosing tiles — the readout
@@ -1216,6 +1223,24 @@ def assist_readout(
     )
     shown = ASSIST_SHOWN[mode]
     suggestion: Tile | None = None
+    claim_win: Hand | None = None
+    claim_call: CallAdvice | None = None
+    if (
+        mode == "coach"
+        and state.phase is Phase.CLAIM_WINDOW
+        and state.live_discard is not None
+        and state.live_discarder != seat
+        and seat not in state.claims
+    ):
+        # the same judgement the bot brain makes, shown instead of played
+        tile = state.live_discard
+        won = match_hand(list(seat_state.rack) + [tile], exposures, card)
+        if tile is not Tile.JOKER and won:
+            best = max(won, key=lambda m: m.hand.value)
+            claim_win = best.hand
+        else:
+            claim_call = call_advice(
+                list(seat_state.rack), exposures, card, seen, tile)
     if mode == "coach" and prospects:
         danger = dangerous_tiles(
             card,
@@ -1235,6 +1260,8 @@ def assist_readout(
         prospects=tuple(prospects[:shown]),
         live_count=len(prospects),
         suggestion=suggestion,
+        claim_win=claim_win,
+        claim_call=claim_call,
     )
 
 

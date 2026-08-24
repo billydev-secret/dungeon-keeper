@@ -515,6 +515,71 @@ def _line_prospect(
     return best
 
 
+@dataclass(frozen=True)
+class CallAdvice:
+    """What calling the live discard would buy: which rack tiles go
+    face-up with it, the group it forms, the line it advances, and the
+    distance before/after. Only ever built when calling strictly helps —
+    an exposure that doesn't advance the best line locks the hand (and
+    kills every concealed line) for nothing."""
+
+    tiles: tuple[Tile, ...]
+    count: int
+    hand: Hand
+    distance: int
+    distance_before: int
+
+
+def call_advice(
+    concealed: list[Tile],
+    exposures: list[Exposure],
+    card: Card,
+    seen: Counter[Tile],
+    tile: Tile,
+) -> CallAdvice | None:
+    """Should this seat call ``tile``? Simulates every legal exposure size
+    and returns the best one that strictly shortens the closest line, or
+    None. Pure — shared by the bot brain and the coach readout so the
+    advice a member gets is exactly the judgement a bot makes.
+
+    Jokers can never be claimed (§2.5), and a pair can't be called: the
+    smallest callable group is three, which needs two rack tiles.
+    """
+    if tile is Tile.JOKER:
+        return None
+    before = closest_lines(concealed, exposures, card, seen, limit=1)
+    if not before:
+        return None
+    naturals = [t for t in concealed if t is tile]
+    jokers = [t for t in concealed if t is Tile.JOKER]
+    best: CallAdvice | None = None
+    for count in (3, 4, 5):
+        needed = count - 1
+        if len(naturals) + len(jokers) < needed:
+            continue
+        given = naturals[:needed] + jokers[: max(0, needed - len(naturals))]
+        remaining = list(concealed)
+        for t in given:
+            remaining.remove(t)
+        after = closest_lines(
+            remaining,
+            exposures + [Exposure(
+                natural=tile, count=count,
+                jokers=sum(1 for t in given if t is Tile.JOKER),
+            )],
+            card, seen, limit=1,
+        )
+        if not after or after[0].distance >= before[0].distance:
+            continue
+        if best is None or after[0].distance < best.distance:
+            best = CallAdvice(
+                tiles=tuple(given), count=count, hand=after[0].hand,
+                distance=after[0].distance,
+                distance_before=before[0].distance,
+            )
+    return best
+
+
 def dangerous_tiles(
     card: Card, opponent_exposures: list[list[Exposure]]
 ) -> frozenset[Tile]:

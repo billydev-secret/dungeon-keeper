@@ -1863,3 +1863,65 @@ def test_coach_suggestion_never_contradicts_the_ONE_shown_hand():
         assert len(r.prospects) == 1
         assert r.suggestion not in dict(r.prospects[0].needed)
         assert r.suggestion in dict(r.prospects[0].dead_weight)
+
+
+# ── Coach's claim-window verdict (live QA request 2026-08-23) ────────────────
+
+
+def _claim_state(rack0: str, discard: str, rack1: str = "9c*12"):
+    state = play_state(2, {0: rack0, 1: f"{rack1} {discard}"}, turn=1)
+    state, _ = G.discard(state, 1, Tile(discard))
+    assert state.phase is Phase.CLAIM_WINDOW
+    return state
+
+
+def test_coach_flags_a_winning_discard():
+    # gh-1 one 8c short, and the 8c is live: take it.
+    state = _claim_state("flower*4 2d*4 6b*4 8c", "8c")
+    r = G.assist_readout(state, 0, CARD, "coach")
+    assert r is not None
+    assert r.claim_win is not None and r.claim_win.id == "gh-1"
+    assert r.claim_call is None          # winning beats calling
+
+
+def test_coach_advises_calling_when_it_shortens_the_line():
+    # holds three 2d for gh-1's kong; the fourth is live — calling exposes
+    # the kong and strictly shortens the hand
+    state = _claim_state("flower*4 2d*3 6b*4 8c 9b", "2d")
+    r = G.assist_readout(state, 0, CARD, "coach")
+    assert r is not None
+    assert r.claim_win is None
+    assert r.claim_call is not None
+    assert r.claim_call.count == 4                       # a kong
+    assert list(r.claim_call.tiles) == [Tile("2d")] * 3
+    assert r.claim_call.distance < r.claim_call.distance_before
+    # and the engine accepts exactly the tiles coach named
+    state2, _ = G.claim(state, 0, "call", list(r.claim_call.tiles),
+                        CARD, rng())
+    assert state2.seats[0].exposures
+
+
+def test_coach_stays_quiet_on_a_useless_discard_or_a_joker():
+    for discard in ("5c", "joker"):
+        state = _claim_state("flower*4 2d*4 6b*2 9d wn 1b", discard)
+        r = G.assist_readout(state, 0, CARD, "coach")
+        assert r is not None
+        assert r.claim_win is None and r.claim_call is None
+
+
+def test_claim_advice_is_coach_only_and_never_for_the_discarder():
+    state = _claim_state("flower*4 2d*4 6b*4 8c", "8c")
+    for mode in ("target", "gap"):
+        r = G.assist_readout(state, 0, CARD, mode)
+        assert r is not None and r.claim_win is None and r.claim_call is None
+    # the discarder can't claim their own tile
+    r = G.assist_readout(state, 1, CARD, "coach")
+    assert r is None or (r.claim_win is None and r.claim_call is None)
+
+
+def test_claim_advice_stops_once_the_seat_has_responded():
+    state = _claim_state("flower*4 2d*4 6b*4 8c", "8c")
+    assert G.assist_readout(state, 0, CARD, "coach").claim_win is not None
+    state.claims = {0: ("pass", [])}
+    r = G.assist_readout(state, 0, CARD, "coach")
+    assert r is not None and r.claim_win is None and r.claim_call is None
