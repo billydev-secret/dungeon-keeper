@@ -219,6 +219,29 @@ def median_band(
     return med, sig
 
 
+# Longest a live panel may go without a repaint. The chart's top panel is
+# today's in-progress candle, which tracks the economy all day whether or
+# not anyone bets, so a quiet market must still advance the picture.
+REFRESH_EVERY = 3600.0
+
+
+def refresh_due(last_paint: float, now: float, every: float = REFRESH_EVERY) -> bool:
+    """True when a live panel is stale enough to repaint on its own.
+
+    Stake-driven repaints stamp the same clock, so this fires only in a
+    quiet hour — a busy market never repaints twice for one reason.
+
+    A never-painted panel (``0.0``, the in-memory state after a restart) is
+    due at once, which is what re-hydrates the picture on boot. That is
+    stated rather than left to arithmetic: with a real unix ``now`` the
+    subtraction happens to say the same thing, but the rule should not rest
+    on how far we are from the epoch.
+    """
+    if last_paint <= 0.0:
+        return True
+    return (now - last_paint) >= every
+
+
 def probability_series(
     bets: list[dict], opened_at: float, closes_at: float
 ) -> list[tuple[float, float]]:

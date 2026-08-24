@@ -442,6 +442,15 @@ per ~20s, always render a final frame at close, and swap the image with
 `message.edit(attachments=[...])`. At 13–18 bets/day the cost is negligible, but
 the throttle keeps a busy day from turning into a render queue.
 
+**And a floor, added 2026-08-23.** A throttle alone leaves the panel stale in the
+other direction: the chart's top row is today's *in-progress* candle, which tracks
+the economy all day whether or not anyone bets, so a quiet hour was leaving members
+reading an old picture of the very thing they are betting on. A live panel now
+repaints at least hourly (`pools_logic.refresh_due`), riding the same minute
+maintenance tick the day roll uses rather than owning a timer. A stake-driven
+repaint stamps the same clock, so a busy market never repaints twice for one
+reason, and a restart (no in-memory stamp) re-hydrates the panel on the first tick.
+
 Charts are **never a source of truth**. The settlement number comes from the
 metric function; the chart calls that same function. A chart that disagrees with
 the result embed is a bug in one caller, not two implementations to reconcile.

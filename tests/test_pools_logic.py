@@ -213,3 +213,18 @@ def test_describe_and_format():
     assert L.describe_side(L.UNDER) == "Under"
     # The .5 always shows — hiding it invites "what if it lands exactly".
     assert L.format_line(3904.5) == "3,904.5"
+
+
+@pytest.mark.parametrize(
+    "last_paint, now, expected",
+    [
+        pytest.param(0.0, 1000.0, True, id="never-painted-is-due-at-once"),
+        pytest.param(1000.0, 1000.0 + 3599, False, id="within-the-hour-waits"),
+        pytest.param(1000.0, 1000.0 + 3600, True, id="on-the-hour-is-due"),
+        pytest.param(1000.0, 1000.0 + 7200, True, id="long-quiet-is-due"),
+    ],
+)
+def test_a_quiet_panel_repaints_hourly(last_paint, now, expected):
+    """A stake-driven repaint stamps the same clock, so this only fires in a
+    quiet hour — the in-progress candle still has to advance."""
+    assert L.refresh_due(last_paint, now) is expected

@@ -294,6 +294,16 @@ class PoolsMixin:
             )
             if opened:
                 await self.render_pools_panel(guild)
+                return
+        # A quiet market still moves: the chart's top panel is today's
+        # in-progress candle, so an hour with no stakes would otherwise leave
+        # members reading a stale picture of the thing they are betting on.
+        # The light round read comes first so a guild between rounds does not
+        # pay for the series query every minute.
+        if pools_logic.refresh_due(
+            self._pools_last_paint.get(guild.id, 0.0), time.time()
+        ) and await asyncio.to_thread(self._read_pools_round, guild.id):
+            await self.render_pools_panel(guild)
 
     def _plan_pools(self, guild_id: int):
         with self.bot.ctx.open_db() as conn:
