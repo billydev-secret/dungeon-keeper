@@ -298,6 +298,131 @@ Surfaced in `scripts/generate_card.py` (per-line score, band and reason) and
 member-facing** — the card viewer and the assist embed are the next step,
 and being member-visible they owe `manual.html` and a QA card.
 
+## Stage 4b — what actually makes a card easy, and how long a hand takes
+
+Measured 2026-08-23/24. This section exists because almost every intuition
+in the earlier sections turned out to be wrong in a specific, useful way.
+
+### The external anchor
+
+I Love Mahj publish statistics from millions of games on real NMJL cards:
+**7% wall games on the 2024 card, 10.7% on 2022**, and a card's *playable
+hands* (concrete instantiations, not printed lines) rose 756 → 1,683 between
+those years. They also report that **"2 kongs + 2 pungs" is 57.96% of all
+wins**, and that wins concentrate in three sections (Consecutive Runs 28.6%,
+Winds/Dragons 21.1%, Any Like Numbers 19.2%).
+
+Against that, our cards were producing dead hands four to six times too
+often: First Light 40–45% wall, generated cards 49–64%.
+
+### An easy card closes the whole gap
+
+A deliberately extreme card — 20 lines, **every group 3+** so all fourteen
+tiles are joker-eligible, rank variables and any-dragons throughout, nothing
+concealed, no pairs — measured **6.4% wall at 500 games**, matching real
+play. So the card is the whole story: the bots are not the bottleneck, and
+my hypothesis that `_call_tiles` was under-calling is dead.
+
+Ingredients, by measured effect on playable hands per line (pool median 6):
+**rank variables ×5** (median 30), **any-dragon ×3** (median 18), suit
+letters barely matter at all. But flexibility is not the only route: the
+*Winds & Dragons* family has a median of **one** instantiation and still
+produces a fifth of real wins, because it needs few distinct tiles and every
+group takes a joker. A card wants both kinds.
+
+Two failure modes the easy card exposed: with everything easy every line
+prices at 25–30, so there is no jackpot; and **flexibility is competitive** —
+put 30-instantiation runs beside 1-instantiation honours and nobody ever
+ends up closest to an honours line, so that whole section went dead.
+
+### Hand length is entirely a function of wall rate
+
+| card | wall % | turns (all) | turns \| win | turns \| wall |
+|---|---|---|---|---|
+| easy-mode | 3.5% | 71.6 | 70.5 | **100.0** |
+| First Light | 45.2% | 86.8 | 76.0 | **100.0** |
+| generated (57 lines) | 48.5% | 86.9 | 74.6 | **100.0** |
+
+**A wall game is exactly 100 discards.** Not approximately — identically, on
+every card. The deal takes 53 of 152, leaving 99, and a dead hand consumes
+all of them plus the opening discard. Confirmed on the first real game
+played on prod (table 10, 100 discards exactly).
+
+A *winning* hand takes 70–76 turns whatever the card. So:
+
+    mean turns = wall% x 100 + (1 - wall%) x 73
+
+which reproduces every measurement to a tenth. Every 10 points of wall rate
+adds ~2.7 discards. There is no speed-versus-difficulty trade-off to
+manage: easier **is** shorter, and nothing else about the card moves length.
+
+### The real clock, from prod
+
+Table 10, 2026-08-23: four humans, one hand, **wall game**, 100 discards,
+78 minutes from lobby open to settle (68–78 minutes of play). That is
+**~45 seconds per discard**, against the 18s I had been assuming — every
+wall-clock estimate before this was wrong by 2.5x. Nobody took a strike, so
+players were deliberating, not idle; think time is ~37s and the claim window
+~8s. Only **two exposures** were made in the entire four-player hand.
+
+At 45s/discard: a wall game is ~75 minutes, a winning hand ~55, First Light
+averages ~65. **A four-seat hand is an hour-long activity as built.**
+
+Claim windows are 100 per hand at up to 8s — a sixth of the hand — and
+measured over 964 windows, **only 31.5% of responder-slots can legally act
+and 28.7% of windows have nobody who can**. Auto-passing seats with no legal
+route is the largest single engine-side saving available.
+
+### Shortening the wall: two mechanisms, only one works
+
+| easy card, 4 seats | mahjong | wall | mean turns |
+|---|---|---|---|
+| 3 suits, no trim | 93.0% | 7.0% | 71.3 |
+| 3 suits, trim 15 | 78.0% | 22.0% | 69.4 |
+| 3 suits, trim 25 | 58.7% | 41.3% | 66.5 |
+| 3 suits, trim 35 | 32.0% | **68.0%** | 61.1 |
+| **2 suits (Bams dropped, 116 tiles)** | **90.7%** | **9.3%** | **45.1** |
+
+**`wall_trim` truncates; dropping a suit accelerates.** Trim does not help
+anyone finish sooner — winning hands still take ~67 turns — it just removes
+the tiles they would have finished with, converting wins into walls. 35
+tiles of trim costs 61 points of win rate to buy 10 discards.
+
+Dropping a suit makes winning hands genuinely faster: **66.8 → 43.2 turns to
+win**, because a needed tile is 31% denser in every draw. The win rate
+barely moves because nobody was using the tail of the wall anyway. It costs
+59% of the card's playable hands (571 → 235) and the card may then use at
+most two suit letters.
+
+Note this refutes the earlier claim that winning-hand length is invariant:
+it is invariant *across cards on one deck*, and moves a great deal when the
+deck changes.
+
+**Recommendation:** `wall_trim` should be 0 and the prod checklist's value
+of 60 must not be applied — it would make three Duels in four end dead. A
+two-suit deck belongs in `TableConfig` as a table mode beside `seat_count`,
+not as a global rule change; `SUITS` is currently a module constant read
+inside `match_logic._bindings`, so making it per-table is the same plumbing
+problem as `RANK_BY_EFFORT`, and a two-suit table needs its card checked for
+three-letter lines at activation.
+
+### The 20-minute budget
+
+    2-suit easy card              45.1 discards x 45s = 34 min
+    + auto-pass ineligible seats                x 39s = 29 min
+    + claim_window 8 -> 4                       x 37s = 28 min
+    + think time 37s -> 20s (UI)                x 24s = 18 min
+
+Card and engine work together reach ~28 minutes. The remaining gap is
+entirely **think time**, which is a user-interface number and the one thing
+nobody has measured. D18 has ephemeral panels summoned rather than pushed,
+so every turn costs an Open Rack click, an ephemeral round trip, a read, a
+pick and a confirm. Whether 37s is mechanics or deliberation decides whether
+20 minutes is a UI job or a game-design one — and **nothing records per-turn
+timestamps**, so that must be instrumented first (`started_at` and
+`discards` on `mahjong_results`, and practice tables recording results at
+all: nine practice games on 08-23 stored nothing).
+
 ## Stage 4 — generate, tune, author the card
 
 Run stage 3 at volume. Set each hand's value from its measured completion-rate
