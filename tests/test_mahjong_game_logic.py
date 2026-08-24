@@ -1925,3 +1925,62 @@ def test_claim_advice_stops_once_the_seat_has_responded():
     state.claims = {0: ("pass", [])}
     r = G.assist_readout(state, 0, CARD, "coach")
     assert r is not None and r.claim_win is None and r.claim_call is None
+
+
+# ── Wall joker dial (live-feedback 2026-08-23) ───────────────────────────────
+
+
+def test_deck_grows_with_extra_jokers_and_naturals_are_untouched():
+    from collections import Counter as _C
+
+    from bot_modules.games.mahjong.tiles import build_deck as bd
+
+    standard, rich = _C(bd()), _C(bd(jokers=14))
+    assert sum(standard.values()) == 152
+    assert sum(rich.values()) == 158          # extra jokers ADD to the wall
+    assert rich[Tile.JOKER] == 14
+    for tile in Tile:
+        if tile is not Tile.JOKER:
+            assert rich[tile] == standard[tile]   # naturals never displaced
+
+
+def test_the_matcher_counts_the_walls_real_joker_supply():
+    # A line needing 10 jokers is dead under a standard wall and live under
+    # a 14-joker one. Without threading the count, the coach would call a
+    # perfectly live line dead (and the fallow payout would misprice it).
+    from collections import Counter as _C
+
+    from bot_modules.games.mahjong.match_logic import reachable_lines
+
+    # flowers and the standard eight jokers are all gone, so gh-1's flower
+    # kong can only be filled by jokers a bigger wall would still hold
+    rack = tiles("2d*4 6b*4 8c*2 9c*4")
+    seen = _C({Tile.JOKER: 8, Tile.FLOWER: 8})
+    standard = {h.id for h in reachable_lines(rack, [], CARD, seen)}
+    richer = {h.id for h in reachable_lines(
+        rack, [], CARD, seen, joker_copies=20)}
+    assert "gh-1" not in standard and "gh-1" in richer
+    assert richer > standard                    # the extra jokers revive lines
+
+
+def test_wall_jokers_ride_the_table_config_and_survive_a_restart():
+    state = G.create_table(
+        G.TableConfig(seat_count=2, wall_jokers=14), 100)
+    state, _ = G.join_table(state, 101)
+    reloaded = G.state_from_dict(G.state_to_dict(state))
+    assert reloaded.config.wall_jokers == 14
+    # a table dealt before the dial existed reads as a standard wall
+    raw = G.state_to_dict(state)
+    del raw["config"]["wall_jokers"]
+    assert G.state_from_dict(raw).config.wall_jokers == 8
+
+
+def test_a_dealt_wall_actually_carries_the_extra_jokers():
+    from bot_modules.games.mahjong.tiles import shuffled_wall
+
+    state = G.create_table(G.TableConfig(seat_count=2, wall_jokers=16), 100)
+    state, _ = G.join_table(state, 101)
+    state, _ = G.deal(state, shuffled_wall(rng(), jokers=16))
+    dealt = sum(1 for s in state.seats for t in s.rack if t is Tile.JOKER)
+    assert dealt + state.wall.count(Tile.JOKER) == 16
+    assert total_tiles(state) == 152 + 8        # eight extra jokers in play

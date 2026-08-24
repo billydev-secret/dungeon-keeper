@@ -49,7 +49,7 @@ def upload_and_activate(client) -> int:
 def test_config_round_trip_and_staged_key_sweep(authed_client):
     body = {
         "enabled": True, "claim_window_4": 10, "claim_window_2": 5,
-        "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 60,
+        "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 60, "wall_jokers": 14,
         "second_charleston": False, "stakes_allowed": [1, 5],
         "assist_default": "coach", "practice_bots": False, "fill_bots": True,
     }
@@ -59,6 +59,7 @@ def test_config_round_trip_and_staged_key_sweep(authed_client):
     assert got["enabled"] is True
     assert got["turn_timer"] == 30.0
     assert got["duel_wall_trim"] == 60
+    assert got["wall_jokers"] == 14
     assert got["second_charleston"] is False
     assert got["stakes_allowed"] == [1, 5]
     assert got["assist_default"] == "coach"
@@ -72,7 +73,7 @@ def test_config_round_trip_and_staged_key_sweep(authed_client):
 def test_config_rejects_out_of_bounds(authed_client):
     bad = {
         "enabled": True, "claim_window_4": 1, "claim_window_2": 5,
-        "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 0,
+        "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 0, "wall_jokers": 8,
         "second_charleston": True, "stakes_allowed": [1],
         "assist_default": "gap", "practice_bots": True, "fill_bots": False,
     }
@@ -182,7 +183,7 @@ def test_every_assist_mode_saves(authed_client):
 
     body = {
         "enabled": True, "claim_window_4": 8, "claim_window_2": 5,
-        "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 0,
+        "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 0, "wall_jokers": 8,
         "second_charleston": True, "stakes_allowed": [1],
         "practice_bots": True, "fill_bots": False,
     }

@@ -45,6 +45,7 @@ class ConfigBody(BaseModel):
     turn_timer: float = Field(ge=10, le=300)
     phase_timer: float = Field(ge=15, le=600)
     duel_wall_trim: int = Field(ge=0, le=100)
+    wall_jokers: int = Field(ge=8, le=24)
     second_charleston: bool
     stakes_allowed: list[int] = Field(min_length=1, max_length=8)
     assist_default: str = Field(pattern=f"^({'|'.join(ASSIST_MODES)})$")
@@ -70,6 +71,7 @@ def _settings_payload(conn, guild_id: int) -> dict:
         "turn_timer": s.turn_timer,
         "phase_timer": s.phase_timer,
         "duel_wall_trim": s.duel_wall_trim,
+        "wall_jokers": s.wall_jokers,
         "second_charleston": s.second_charleston,
         "stakes_allowed": list(s.stakes_allowed),
         "assist_default": s.assist_default,
@@ -143,6 +145,7 @@ async def put_config(request: Request, body: ConfigBody, user=_ADMIN):
             set_config_value(conn, "mahjong_turn_timer", str(body.turn_timer), guild_id)
             set_config_value(conn, "mahjong_phase_timer", str(body.phase_timer), guild_id)
             set_config_value(conn, "mahjong_duel_wall_trim", str(body.duel_wall_trim), guild_id)
+            set_config_value(conn, "mahjong_wall_jokers", str(body.wall_jokers), guild_id)
             set_config_value(
                 conn, "mahjong_second_charleston",
                 "1" if body.second_charleston else "0", guild_id)

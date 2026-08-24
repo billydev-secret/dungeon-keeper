@@ -36,7 +36,13 @@ from dataclasses import dataclass
 from itertools import permutations
 
 from bot_modules.games.mahjong.card_logic import Card, Group, Hand, RankKind
-from bot_modules.games.mahjong.tiles import SUITS, TILE_ORDER, Tile, copies
+from bot_modules.games.mahjong.tiles import (
+    SUITS,
+    STANDARD_JOKERS,
+    TILE_ORDER,
+    Tile,
+    copies,
+)
 
 _WIND_TILES = {"N": Tile.NORTH, "E": Tile.EAST, "W": Tile.WEST, "S": Tile.SOUTH}
 _DRAGON_TILES = {"R": Tile.RED, "G": Tile.GREEN, "soap": Tile.SOAP}
@@ -304,6 +310,8 @@ def reachable_lines(
     exposures: list[Exposure],
     card: Card,
     seen_elsewhere: Counter[Tile],
+    *,
+    joker_copies: int = STANDARD_JOKERS,
 ) -> list[Hand]:
     """Lines this seat could still complete, in card order.
 
@@ -324,7 +332,8 @@ def reachable_lines(
         own[Tile.JOKER] += e.jokers
 
     def unseen(tile: Tile) -> int:
-        return max(0, copies(tile) - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
+        supply = joker_copies if tile is Tile.JOKER else copies(tile)
+        return max(0, supply - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
 
     live: list[Hand] = []
     for hand in card.hands:
@@ -360,10 +369,13 @@ def fallow_base_value(
     exposures: list[Exposure],
     card: Card,
     seen_elsewhere: Counter[Tile],
+    *,
+    joker_copies: int = STANDARD_JOKERS,
 ) -> int:
     """The Duel fallow payout's base: the survivor's lowest-value live line,
     or the card minimum when nothing is live (amendment 2)."""
-    live = reachable_lines(concealed, exposures, card, seen_elsewhere)
+    live = reachable_lines(
+        concealed, exposures, card, seen_elsewhere, joker_copies=joker_copies)
     if live:
         return min(h.value for h in live)
     return min(h.value for h in card.hands)
@@ -397,6 +409,8 @@ def closest_lines(
     card: Card,
     seen_elsewhere: Counter[Tile],
     limit: int | None = 3,
+    *,
+    joker_copies: int = STANDARD_JOKERS,
 ) -> list[Prospect]:
     """Every still-live line, closest first (A3/A4). Pure.
 
@@ -415,7 +429,8 @@ def closest_lines(
         own[Tile.JOKER] += e.jokers
 
     def unseen(tile: Tile) -> int:
-        return max(0, copies(tile) - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
+        supply = joker_copies if tile is Tile.JOKER else copies(tile)
+        return max(0, supply - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
 
     exposure_total = sum(e.count for e in exposures)
 
@@ -536,6 +551,8 @@ def call_advice(
     card: Card,
     seen: Counter[Tile],
     tile: Tile,
+    *,
+    joker_copies: int = STANDARD_JOKERS,
 ) -> CallAdvice | None:
     """Should this seat call ``tile``? Simulates every legal exposure size
     and returns the best one that strictly shortens the closest line, or
@@ -547,7 +564,8 @@ def call_advice(
     """
     if tile is Tile.JOKER:
         return None
-    before = closest_lines(concealed, exposures, card, seen, limit=1)
+    before = closest_lines(
+        concealed, exposures, card, seen, limit=1, joker_copies=joker_copies)
     if not before:
         return None
     naturals = [t for t in concealed if t is tile]
@@ -567,7 +585,7 @@ def call_advice(
                 natural=tile, count=count,
                 jokers=sum(1 for t in given if t is Tile.JOKER),
             )],
-            card, seen, limit=1,
+            card, seen, limit=1, joker_copies=joker_copies,
         )
         if not after or after[0].distance >= before[0].distance:
             continue
