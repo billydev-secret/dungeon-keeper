@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from web_server.helpers import parse_time_of_day
+from types import SimpleNamespace
+
+from web_server.helpers import (
+    channel_in_guild,
+    parse_time_of_day,
+    require_channel_in_guild,
+)
 
 
 @pytest.mark.parametrize(
@@ -84,3 +90,54 @@ def test_the_field_name_travels_into_the_message():
     with pytest.raises(HTTPException) as exc:
         parse_time_of_day("99:99", field="post_time")
     assert exc.value.detail == "post_time out of range"
+
+
+# ── channel_in_guild ──────────────────────────────────────────────────
+#
+# The guard on the write routes that store a channel to post into later.
+# Its interesting property is what it does when it *can't* tell: it allows,
+# rather than blocking a save the admin did nothing wrong to make.
+
+
+def _ctx(bot=None):
+    return SimpleNamespace(bot=bot) if bot is not None else SimpleNamespace()
+
+
+def _bot_with(guild_id=None, channel_id=None):
+    guild = None
+    if guild_id is not None:
+        guild = SimpleNamespace(
+            get_channel=lambda cid: object() if cid == channel_id else None
+        )
+    return SimpleNamespace(get_guild=lambda gid: guild if gid == guild_id else None)
+
+
+def test_a_channel_the_bot_can_see_passes():
+    assert channel_in_guild(_ctx(_bot_with(7, 55)), 7, 55) is True
+
+
+def test_a_channel_in_another_server_is_refused():
+    """The mistake this exists to catch: pasting an id from elsewhere."""
+    assert channel_in_guild(_ctx(_bot_with(7, 55)), 7, 999) is False
+
+
+def test_an_uncached_guild_allows():
+    """Unanswerable, not wrong — the post path re-checks when it actually sends."""
+    assert channel_in_guild(_ctx(_bot_with(7, 55)), 12345, 55) is True
+
+
+def test_no_bot_attached_allows():
+    """The dashboard can run without the bot; a save must not depend on it."""
+    assert channel_in_guild(_ctx(), 7, 55) is True
+    assert channel_in_guild(SimpleNamespace(bot=None), 7, 55) is True
+
+
+def test_require_raises_a_400_with_the_message_both_routes_used():
+    with pytest.raises(HTTPException) as exc:
+        require_channel_in_guild(_ctx(_bot_with(7, 55)), 7, 999)
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Channel is not in this server"
+
+
+def test_require_is_silent_when_the_channel_is_fine():
+    require_channel_in_guild(_ctx(_bot_with(7, 55)), 7, 55)
