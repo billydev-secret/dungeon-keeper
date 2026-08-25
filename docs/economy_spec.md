@@ -194,7 +194,7 @@ to currency.
   `qotd_sponsor` out, `qotd_sponsor_refund` back). A mod reviews it on a
   persistent Approve/Decline card in the bank channel (DynamicItems
   `econ_qotd_sub:{approve,deny}:<id>`, so clicks survive a restart) or on the
-  dashboard queue (Economy → Sponsored QOTD, `require_economy_manager`, which
+  dashboard queue (Economy → QOTD, `require_economy_manager`, which
   also **withdraws** an already-approved question back out of the post queue —
   the service only *resolves* pending rows, so withdrawal is its own path);
   declining opens a reason modal and the reason reaches the member by DM.
@@ -486,7 +486,7 @@ to currency.
   one person (§ live review), and the quest makes it a rewarded, visible task.
 - **Event host 30 (mod grant):** `/bank grant @member amount reason` + Operations
   page button; manager-role or admin gated; audit-tagged in the ledger. The
-  Operations page carries the inverse too — **Remove Currency** (§ manager
+  Bank page carries the inverse too — **Remove Currency** (§ manager
   surface), ledger kind `admin_remove`.
 
 ### 3.5 Coin Drops (built — migration 105)
@@ -614,7 +614,7 @@ since stage 3 of the quest-variety plan
 (`docs/plans/quest-variety-and-community-weeklies.md`):
 
 **Manual (no trigger kind — the original).** A manager drives `current`
-toward the target from the Operations page and `completed_at` stamps once on
+toward the target from the Bank page and `completed_at` stamps once on
 the crossing. **Payout: flat, to every member active in the last 30 days**
 (`member_activity` via `active_member_ids`). Settlement is exactly-once: a
 per-(quest, user) row in `econ_community_payouts` is reserved before
@@ -1365,11 +1365,11 @@ re-read price differs from the previous cycle's **DMs the owner** the old and ne
 | Private voice room | 200 | §8 (Stage 6) |
 | Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
 | Streak shield | 30 once | One-shot consumable, not a rental — §3.1; shop "One-shot" row + panel button, wallet shows "held" |
-| Sponsored emoji | 60/wk (animated 90) | **Sinks round 3, stage 4.** `/bank emoji image: name:` escrows week one (`emoji_sponsor` kind); mod approves on the Sinks page queue → two-phase claim-then-upload opens a real `econ_rentals` row (perk `emoji`, meta carries `animated` so renewals bill the right rate); deny/cancel/expiry refund exactly-once (`emoji_sponsor_refund`, `refunded_at` predicate); lapse deletes the emoji and frees the slot + name. Caps: `emoji_sponsor_slots` (default 5) + never the guild's last free emoji slot of that kind. One in flight per member and one claim per name via partial unique indexes (migration 092). Names: 2–32 `[A-Za-z0-9_]` + the shared blocklist. `price_emoji` 0 disables new sponsorships; pending reviews auto-refund after `emoji_sponsor_expire_days` (default 14, QOTD-sponsor sweep pattern) |
-| Voice room lease | **0 (dark)**, suggested 30 | Leases Voice Control **rename + user limit** (sinks round 3, stage 3). Shown on the Sinks page as "Voice room lease" (the `price_voice_style` field); this is the price the shop charges for a voice room — distinct from the dormant stage-6 `price_voice_room` (private rooms), which is not wired to anything and is not shown on the dashboard. Price 0 = paywall off (the shipped default AND the per-guild opt-out); pricing it on the Sinks page is the launch switch — announce first. Armed only while the economy is enabled. Entitlement is beneficiary-based (giftable); saved VM profiles stay stored but only re-apply while leased; lapse best-effort walks a live temp channel back to the template name + default limit (no role involved). Access dial / invite / kick / transfer / reset stay free. Verdict is pure (`voice_master/logic.style_lease_blocks`), enforced in `_apply_rename`/`_apply_limit` (one choke point for slash + panel) and the spawn profile loader |
+| Sponsored emoji | 60/wk (animated 90) | **Sinks round 3, stage 4.** `/bank emoji image: name:` escrows week one (`emoji_sponsor` kind); mod approves on the Shop & Perks page queue → two-phase claim-then-upload opens a real `econ_rentals` row (perk `emoji`, meta carries `animated` so renewals bill the right rate); deny/cancel/expiry refund exactly-once (`emoji_sponsor_refund`, `refunded_at` predicate); lapse deletes the emoji and frees the slot + name. Caps: `emoji_sponsor_slots` (default 5) + never the guild's last free emoji slot of that kind. One in flight per member and one claim per name via partial unique indexes (migration 092). Names: 2–32 `[A-Za-z0-9_]` + the shared blocklist. `price_emoji` 0 disables new sponsorships; pending reviews auto-refund after `emoji_sponsor_expire_days` (default 14, QOTD-sponsor sweep pattern) |
+| Voice room lease | **0 (dark)**, suggested 30 | Leases Voice Control **rename + user limit** (sinks round 3, stage 3). Shown on the Shop & Perks page as "Voice room lease" (the `price_voice_style` field); this is the price the shop charges for a voice room — distinct from the dormant stage-6 `price_voice_room` (private rooms), which is not wired to anything and is not shown on the dashboard. Price 0 = paywall off (the shipped default AND the per-guild opt-out); pricing it on the Shop & Perks page is the launch switch — announce first. Armed only while the economy is enabled. Entitlement is beneficiary-based (giftable); saved VM profiles stay stored but only re-apply while leased; lapse best-effort walks a live temp channel back to the template name + default limit (no role involved). Access dial / invite / kick / transfer / reset stay free. Verdict is pure (`voice_master/logic.style_lease_blocks`), enforced in `_apply_rename`/`_apply_limit` (one choke point for slash + panel) and the spawn profile loader |
 | PvP game wager | player-chosen, uncapped | **Sinks round 2, stage 4b** (built 2026-07-20). Optional `wager:` on all six duel/group games: equal ante, winner takes the pot minus the optional house rake — `wager_rake_pct`, default **0 (dark)**, capped 50, added 2026-07-20 revising the round's original no-rake stance (at 0 a wager is still the pure transfer that made the games matter; a priced rake evaporates its cut of every settled pot, read at settlement time like rental renewals, never snapshotted). Refunds are never raked, nor is a single-stake pot (a winner reclaiming their own ante isn't a contest); the payout announcement and register memo both name the cut (`meta.rake`) so the arithmetic visibly adds up. Escrow in `econ_game_wagers` (migration 094) keyed to (game_type, game_id, user_id); duels declare at challenge and debit both sides at accept (decline/timeout costs nothing), lobbies debit on join and refund on leave. Settlement/refund rides the stage-4a terminal seam, exactly-once via `settled_at`. Every non-settling terminal state (ABANDONED / VOID / EXPIRED_LOBBY / DECLINED) and a `winner_id` of None refunds; a guild-leaver's stake is refunded by the economy cog's member-remove listener. Ledger kinds `wager_stake` / `wager_payout` / `wager_refund`, payout and refund unboosted so a wager can never mint |
 | Raffle ticket | 10 each, ≤10/member/week | **Sinks round 3, stage 5.** Week-scoped tickets (`raffle_ticket` burn, no refunds); weighted draw at the ISO-week roll, exactly-once via the `econ_raffle_draws` PK (claim-before-side-effect). Prize is NEVER coins: a `free_week` voucher (28-day expiry) auto-covers the winner's next rental debit — renewal or first week of a new rent — as a 0-amount `rental` ledger row (`meta.voucher_id`). Winner DMed (opt-in-role gated) and **named** on the economy panel's raffle section (the deliberate anonymous-ticker carve-out — buying in is opting in). `raffle_enabled` default **off**; enabling is a comms decision, announce first. Shop: ticket row + quantity modal (ephemeral + persistent panel). Migration 093 |
-| Hoard tax (demurrage) | **0% (dark)**, suggested 2%/wk over a 500 floor | **Built 2026-07-20 (migration 100).** The only sink that needs no buyer: at the ISO-week roll, every wallet above `demurrage_threshold` loses `demurrage_rate_pct`% of the **excess** only — the floor is protected, so nobody is taxed below it and 100% is a hard wealth cap, not a wipe. Floor-division grace: a tax that rounds to 0 goes uncollected. Exactly-once via the `econ_demurrage_sweeps` (guild, week) PK — claim-before-debit, the raffle-draw pattern — with per-sweep totals recorded for metrics. Ledger kind `demurrage` (meta: closed week + pre-tax balance) narrated by the register feed (🐉 "Hoard tax") — no separate announcement. Rate 0 default = off; both knobs on the Sinks page; enabling is a comms decision, announce first (`economy_demurrage_service.py`, swept from the week roll beside the raffle draw) |
+| Hoard tax (demurrage) | **0% (dark)**, suggested 2%/wk over a 500 floor | **Built 2026-07-20 (migration 100).** The only sink that needs no buyer: at the ISO-week roll, every wallet above `demurrage_threshold` loses `demurrage_rate_pct`% of the **excess** only — the floor is protected, so nobody is taxed below it and 100% is a hard wealth cap, not a wipe. Floor-division grace: a tax that rounds to 0 goes uncollected. Exactly-once via the `econ_demurrage_sweeps` (guild, week) PK — claim-before-debit, the raffle-draw pattern — with per-sweep totals recorded for metrics. Ledger kind `demurrage` (meta: closed week + pre-tax balance) narrated by the register feed (🐉 "Hoard tax") — no separate announcement. Rate 0 default = off; both knobs on the Shop & Perks page; enabling is a comms decision, announce first (`economy_demurrage_service.py`, swept from the week roll beside the raffle draw) |
 | Casino | fixed paytables, not priced | **Built 2026-07-22** — house gambling (coinflip, slots, blackjack, roulette) in one configured channel; net sink via tested house edges, bounded by a per-member daily wager cap. Kinds `casino_stake`/`casino_payout`/`casino_refund`, payouts never boosted. Own spec: [casino_spec.md](casino_spec.md) (dashboard: Economy → Casino) |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
 
@@ -1722,7 +1722,7 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   count (+ latest claimant/quest) via the `/api/home` moderation group, so
   waiting sign-offs are visible without opening the Economy section.
 - **Remove Currency (`POST /api/economy/remove`)** is grant's mirror on the
-  Operations page: same manager gate, same string `member_id` + member-cache
+  Bank page: same manager gate, same string `member_id` + member-cache
   404, same "economy disabled" 409, and a confirm dialog before it fires.
   Two deliberate asymmetries: it applies **no booster multiplier** (a removal
   is a correction, not an earning — a booster must not be penalised 1.5x for
@@ -1902,7 +1902,7 @@ neutral colour — the currency moved sideways rather than entering or leaving t
 economy) with the sender's resulting balance. `admin_remove` (§ manager
 surface) is skipped on a privacy call rather than a noise one: broadcasting "we
 took N coins off <member>" to the whole server is a different act from
-celebrating a grant, and the Operations page's Ledger Audit already records it
+celebrating a grant, and the Bank page's Ledger Audit already records it
 for staff. It keeps its `_KIND_DISPLAY` entry, so the member still sees
 "🧾 Removed by staff" in their own wallet history.
 

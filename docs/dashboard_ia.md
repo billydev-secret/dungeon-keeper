@@ -45,7 +45,7 @@ subsection of `manual.html` §27 Configuration Reference (help page
 | Reports | moderator | Moderation / General / Engagement / Social Graph / Greeter / Bot Usage / Member Lists |
 | Moderation | moderator | Queues (todo, jails, tickets, warnings, policy tickets, rules watch, message search, no-contact) + Audit Logs |
 | Config | moderator (most pages admin-only, shown locked) | Themed config headings |
-| Economy | admin **or** the economy-manager role | Bank ops through Settings |
+| Economy | admin **or** the economy-manager role | Operations / Earning / Spending / Wagering |
 | Wellness | opted-in members, plus manage-server/admin | Member-facing wellness surface |
 | Games | admin **or** the game-host role | Operations / Live Games / Question Banks |
 | Social | moderator | Guess Who, Whisper, Pen Pals, Confessions (admin-only) |
@@ -61,6 +61,39 @@ subsection of `manual.html` §27 Configuration Reference (help page
   top-level section with a single item under the same gate).
 * **Question Banks** — the nine prompt banks (WYR, NHIE, Most Likely To,
   Rushmore, Price, Clapback, AMA, FFA, Traditional ToD).
+
+**Economy** was the last flat list, twelve items deep; it gained four subgroups
+in 2026-08 (IA2):
+
+* **Operations** — Bank (relabelled from "Operations"), Statistics, Settings.
+* **Earning** — Income Sources, Quests, Claims, Mention Awards, QOTD.
+* **Spending** — Shop & Perks (relabelled from "Sinks"). Custom shop items and
+  private rooms land here.
+* **Wagering** — Casino, Pools.
+
+Two rules are at work and both are load-bearing. Headings are **the job** — run
+it, pay it out, spend it, wager it. Inside a heading a **feature that spans
+pages stays whole**: Claims is the quest sign-off queue, so it sits under
+Quests rather than in a queues-only group that reads tidy and then sends
+someone hunting in the wrong place.
+
+QOTD went further and **merged**. Its settings page (`economy-qotd`, adminOnly)
+owned a single role id in 88 lines and never earned a nav slot; it is now the
+top card of the page that already held the sponsored queue, which keeps the
+whole feature on one screen and takes Earning from six entries to five. The two
+audiences are preserved rather than merged: the settings card renders only when
+the admin-gated config GET succeeds, the Income Sources probe pattern, so a
+manager-role holder still sees exactly the queue they saw before. The retired id
+redirects through `MOVED_PAGES`. This worked because QOTD was genuinely a
+one-knob page — Quests + Claims was considered and rejected, since burying a
+daily sign-off queue behind a tab on an 800-line authoring page costs more than
+the sidebar line it saves.
+
+Two labels changed with the regroup, ids untouched and both old names kept as
+search keywords. "Operations" collided with the heading above it, and **Bank**
+is what the feature is called everywhere else (`/bank`, the bank channel).
+"Sinks" was economics jargon on the page holding everything a member can spend
+on, and it has to read as a sibling of the shop pages arriving next to it.
 
 **Social** is new in the same pass. Guess Who, Whisper, Pen Pals and Confessions
 are not games — they are ongoing social surfaces a moderator runs, and

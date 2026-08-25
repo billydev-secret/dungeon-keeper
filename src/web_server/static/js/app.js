@@ -180,21 +180,56 @@ const SECTIONS = [
     // so a manager-role holder who isn't an admin keeps them after
     // item-filtering; Settings is adminOnly (its endpoints require admin).
     id: "economy", label: "Economy", perms: ["admin"], econManagerRole: true, icon: "¤",
-    items: [
-      { id: "economy-bank-manager", label: "Operations", module: "./panels/economy-bank-manager.js", keywords: "bank manager balance grants refunds", help: "help-economy" },
-      { id: "economy-claims", label: "Claims", module: "./panels/economy-claims.js", help: "help-economy" },
-      { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js", help: "help-economy" },
-      { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", help: "help-economy" },
-      { id: "mention-awards", label: "Mention Awards", module: "./panels/config-mention-awards.js", adminOnly: true, keywords: "trigger phrase mention pay award hot seat member-run game host" },
-      { id: "economy-sinks", label: "Sinks", module: "./panels/economy-sinks.js", adminOnly: true, keywords: "shop perks icons", help: "help-economy" },
-      { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack", help: "help-casino", related: ["config-pools"] },
-      // Keywords lean market-specific: "pools" alone also matches confession
-      // pools and the pen-pals pool.
-      { id: "config-pools", label: "Pools", module: "./panels/config-pools.js", adminOnly: true, keywords: "prediction market daily over under parimutuel takeout burn", help: "help-pools", related: ["config-casino"] },
-      { id: "economy-qotd", label: "QOTD", module: "./panels/economy-qotd.js", adminOnly: true, keywords: "question of the day" },
-      { id: "economy-qotd-submissions", label: "Sponsored QOTD", module: "./panels/economy-qotd-submissions.js" },
-      { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js", help: "help-economy" },
-      { id: "economy-config", label: "Settings", module: "./panels/economy-config.js", adminOnly: true, keywords: "economy currency settings post panel channel panel how-to guide leaderboard perk shop", help: "help-economy" },
+    // Four subgroups (IA2, 2026-08), the same treatment Games got in IA1: the
+    // flat twelve-item list mixed the daily desk with per-feature dials, and
+    // a feature's two pages could sit eight entries apart.
+    //
+    // Headings are the job — run it, pay it out, take it back, wager it —
+    // and inside a heading a multi-page feature stays together. Both rules
+    // matter: grouping only by job splits Quests from its Claims queue and
+    // QOTD from its sponsored queue, which is where someone actually looks
+    // for them.
+    //
+    // Two labels changed with the regroup. "Operations" collided with the
+    // heading above it and "Bank" is what the feature is called everywhere
+    // else (`/bank`, the bank channel); "Sinks" was economics jargon for the
+    // page where everything a member can spend on lives, and it has to read
+    // as a sibling of the shop pages landing next to it. Ids are frozen, and
+    // both old names survive as search keywords.
+    groups: [
+      { heading: "Operations", items: [
+        { id: "economy-bank-manager", label: "Bank", module: "./panels/economy-bank-manager.js", keywords: "operations bank manager balance grants refunds rentals ledger audit community goals", help: "help-economy" },
+        { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js", help: "help-economy" },
+        { id: "economy-config", label: "Settings", module: "./panels/economy-config.js", adminOnly: true, keywords: "economy currency settings post panel channel panel how-to guide leaderboard perk shop", help: "help-economy" },
+      ]},
+      // Everything that pays coins out. A feature that spans two pages keeps
+      // them adjacent — Claims is the quest sign-off queue and Sponsored QOTD
+      // is QOTD's paid queue, so each sits under its own feature rather than
+      // being hoisted into a queues-only group.
+      { heading: "Earning", items: [
+        { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", keywords: "faucet rates triggers", help: "help-economy" },
+        { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js", help: "help-economy" },
+        { id: "economy-claims", label: "Claims", module: "./panels/economy-claims.js", keywords: "quest sign-off queue approve deny pending", help: "help-economy" },
+        { id: "mention-awards", label: "Mention Awards", module: "./panels/config-mention-awards.js", adminOnly: true, keywords: "trigger phrase mention pay award hot seat member-run game host" },
+        // One page for the feature: the ping role (admins) plus the paid
+        // queue (managers too). The separate adminOnly `economy-qotd` page
+        // owned a single role id and is retired into this one — see
+        // MOVED_PAGES for the deep link.
+        { id: "economy-qotd-submissions", label: "QOTD", module: "./panels/economy-qotd-submissions.js", keywords: "question of the day qotd ping role sponsored paid queue submissions approve decline" },
+      ]},
+      // Everything a member can spend on. Custom shop items and private rooms
+      // land here.
+      { heading: "Spending", items: [
+        { id: "economy-sinks", label: "Shop & Perks", module: "./panels/economy-sinks.js", adminOnly: true, keywords: "sinks shop perks icons prices palette rake", help: "help-economy" },
+      ]},
+      // Staking coins on an outcome — the house takes a cut, so these are
+      // sinks too, but they are run and tuned as games.
+      { heading: "Wagering", items: [
+        { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack", help: "help-casino", related: ["config-pools"] },
+        // Keywords lean market-specific: "pools" alone also matches confession
+        // pools and the pen-pals pool.
+        { id: "config-pools", label: "Pools", module: "./panels/config-pools.js", adminOnly: true, keywords: "prediction market daily over under parimutuel takeout burn", help: "help-pools", related: ["config-casino"] },
+      ]},
     ],
   },
   {
@@ -1150,7 +1185,13 @@ function recordPanelView(pageId) {
 //   channel-panels: retired 2026-07-28, its seven post controls moved onto the
 //   config page of the feature each panel belongs to. Economy took three of
 //   them, so it's the closest thing to a successor.
-const MOVED_PAGES = { "channel-panels": "economy-config" };
+//   economy-qotd: retired 2026-08-25, an 88-line page owning one role id. Its
+//   settings card is now the top of the QOTD page, which already held the
+//   sponsored queue — a true successor, not just the nearest one.
+const MOVED_PAGES = {
+  "channel-panels": "economy-config",
+  "economy-qotd": "economy-qotd-submissions",
+};
 
 /** Rewrite a retired page's hash to its successor. True if it redirected. */
 function redirectMovedPage() {
