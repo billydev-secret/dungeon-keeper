@@ -1019,6 +1019,39 @@ async def test_notify_member_fallback_embed_replaces_dm_embed_publicly(db):
     assert channel.send.await_args.kwargs["embed"] is public_embed
 
 
+async def test_notify_member_closed_dms_drop_when_public_fallback_off(db):
+    """Recurring opt-in notices (the login digest) never go public.
+
+    A member who has shut their DMs to the bot has already said how much bot
+    contact they want; publishing their streak and quest progress in the bank
+    channel with a ping answers that by being louder. Dropping counts as
+    handled, mirroring a mute and the opt-in role gate."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bank_channel_id": 777})
+    member = _fake_member()
+    member.send.side_effect = _forbidden()
+    channel = MagicMock(spec=discord.TextChannel)
+    bot = _fake_bot(guild=_fake_guild(member=member, channel=channel))
+    delivered = await notify_member(
+        bot, db, GUILD, USER, content="hi", public_fallback=False
+    )
+    assert delivered is True
+    channel.send.assert_not_called()
+
+
+async def test_notify_member_public_fallback_stays_on_by_default(db):
+    """Transactional notices keep the fallback — only callers that opt out
+    lose it, so twenty other call sites are unaffected."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bank_channel_id": 777})
+    member = _fake_member()
+    member.send.side_effect = _forbidden()
+    channel = MagicMock(spec=discord.TextChannel)
+    bot = _fake_bot(guild=_fake_guild(member=member, channel=channel))
+    assert await notify_member(bot, db, GUILD, USER, content="hi") is True
+    channel.send.assert_awaited_once()
+
+
 async def test_notify_member_no_fallback_configured_returns_false(db):
     member = _fake_member()
     member.send.side_effect = _forbidden()

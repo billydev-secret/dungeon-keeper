@@ -1376,6 +1376,24 @@ async def test_econ_reset_at_three_plus_dms(mock_notify, econ_db):
     "bot_modules.core.branding.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
+async def test_econ_login_digest_never_falls_back_to_the_bank_channel(
+    mock_notify, econ_db
+):
+    """The digest is DM-or-nothing: closed DMs must not put a member's streak
+    and quest progress in a public channel. Asserted at the wiring because the
+    drop itself is notify_member's, and tested there."""
+    _enable_econ(econ_db)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    assert mock_notify.await_args.kwargs["public_fallback"] is False
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.core.branding.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
 async def test_econ_login_dm_includes_quest_recap(mock_notify, econ_db):
     _enable_econ(econ_db)
     with open_db(econ_db) as conn:

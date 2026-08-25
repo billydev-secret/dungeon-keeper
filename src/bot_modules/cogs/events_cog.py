@@ -1368,20 +1368,19 @@ class EventsCog(commands.Cog):
         # part additionally requires the member's own notifications_pref to
         # include DMs (enforced inside login_digest_value). Wellness content
         # only ever rides this economy morning message — there is no
-        # standalone wellness daily DM, and the public bank-channel
-        # fallback carries the economy-only form, never the wellness
-        # section.
+        # standalone wellness daily DM.
+        #
+        # This one is DM-or-nothing (public_fallback=False). It is recurring
+        # opt-in engagement content, not a transactional notice, so a member
+        # who has closed their DMs to the bot has already answered the
+        # question — publishing their streak and quest progress in the bank
+        # channel with a ping would be the loud reply to a quiet request.
+        # That also retires the wellness-scrubbed second render: the only
+        # thing it existed for was the public fallback.
         accent = await safe_resolve_accent(self.bot.ctx, message.guild, log_label="events", default=DEFAULT_ACCENT_COLOR)
         embed = self._econ_login_embed(
             settings, outcome, prior_streak, quests_out, gains, accent,
             wellness_value=wellness_value,
-        )
-        fallback = (
-            self._econ_login_embed(
-                settings, outcome, prior_streak, quests_out, gains, accent
-            )
-            if wellness_value
-            else embed
         )
         await notify_member(
             self.bot,
@@ -1390,7 +1389,7 @@ class EventsCog(commands.Cog):
             user_id,
             embed=embed,
             require_game_role=True,
-            fallback_embed=fallback,
+            public_fallback=False,
         )
 
     @staticmethod

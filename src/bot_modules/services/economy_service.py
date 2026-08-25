@@ -1275,6 +1275,7 @@ async def notify_member(
     content: str | None = None,
     require_game_role: bool = False,
     fallback_embed: discord.Embed | None = None,
+    public_fallback: bool = True,
 ) -> bool:
     """DM an economy notification, falling back to the bank channel.
 
@@ -1286,6 +1287,14 @@ async def notify_member(
     bank-channel fallback — for embeds whose DM form carries fields that
     must never be posted publicly (e.g. the login digest's wellness
     section).
+
+    ``public_fallback=False`` turns the bank-channel fallback off, so a
+    failed DM is dropped and counts as handled (like a mute). Recurring
+    opt-in notices pass it: a member who has shut their DMs to the bot has
+    already said how much bot contact they want, and answering that by
+    publishing their streak and quest progress in a public channel with a
+    ping is louder, not quieter. Transactional notices keep the fallback —
+    the member needs those to arrive.
 
     ``require_game_role`` gates the notice on the opt-in economy role: a
     member without it is dropped silently (returns True, like a mute) so
@@ -1355,6 +1364,8 @@ async def notify_member(
         except (discord.Forbidden, discord.HTTPException):
             pass
 
+    if not public_fallback:
+        return True
     if guild is None or not settings.bank_channel_id:
         return False
     channel = guild.get_channel(settings.bank_channel_id)
