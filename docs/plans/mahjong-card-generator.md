@@ -406,12 +406,58 @@ inside `match_logic._bindings`, so making it per-table is the same plumbing
 problem as `RANK_BY_EFFORT`, and a two-suit table needs its card checked for
 three-letter lines at activation.
 
+### Deck size is the length dial, and it is free
+
+Confirmed 2026-08-25 at **1,000 games per arm** (2 seeds x 500), every arm
+playing the *same* 19-line card — built portable (at most two suit letters,
+no concrete rank above 5, offsets <= 2, every group 3+) so the deck is the
+only variable. The earlier 200-game sweep gave each arm its own card, which
+confounded deck against card.
+
+| deck | tiles | live wall | playable | mahjong | wall | turns | turns \| win | lines that won |
+|---|---|---|---|---|---|---|---|---|
+| 3 suits, ranks 1-9 (control) | 152 | 99 | 485 | 93.6% | 6.4% | 71.6 | 69.6 | 14/19 |
+| 3 suits, ranks 1-6 | 116 | 63 | 485 | 93.4% | 6.6% | 43.2 | 41.7 | 13-14/19 |
+| 3 suits, ranks 1-5 | 104 | 51 | 485 | 93.3% | 6.7% | 34.6 | 33.4 | 13/19 |
+| 2 suits, ranks 1-9 | 116 | 63 | 224 | 92.8% | 7.2% | 42.5 | 40.9 | 12-13/19 |
+
+**Shrinking the deck 152 -> 104 costs nothing measurable in win rate and
+halves the game.** Tile density is the mechanism: needed tiles arrive
+proportionally sooner, so hands finish before the shorter wall runs out.
+
+**Limit ranks, do not delete suits.** At a matched 116 tiles the two are
+tied on win rate (93.4% vs 92.8%, inside the band), but rank-limiting keeps
+**485 playable hands against 224** and one more line live — and every suit
+stays on the table, so it reads as a house variant rather than a different
+game. There is no remaining argument for dropping Bams.
+
+Note the correction this run forced: at 200 games ranks 1-5 read 89.5% and
+I flagged it as the weak option. At 1,000 it is 93.3%, identical to the
+control. That was noise, and it was the number the recommendation hung on —
+a reminder that the +/-3.4 rule exists for a reason.
+
+Also constant across every deck: only **13-14 of 19 lines ever won**. That
+is the flexibility-competition effect (rank-variable runs outdraw
+1-instantiation honours lines for attention), and it is a card-composition
+problem for stage 4's section weighting, not a deck one.
+
+**Implementation note.** A rank ceiling must reach *three* places, not one:
+`match_logic._bindings` still proposes runs into 7-9, and `copies()` still
+reports four of each, so reachability believes in tiles that are not in the
+deck and the bots chase them. Both were patched for this experiment. That is
+strictly more surgery than the suit case, where `SUITS` is a single
+constant — and it belongs in `TableConfig` beside `seat_count`, as a table
+mode rather than a global rule.
+
 ### The 20-minute budget
 
-    2-suit easy card              45.1 discards x 45s = 34 min
-    + auto-pass ineligible seats                x 39s = 29 min
-    + claim_window 8 -> 4                       x 37s = 28 min
-    + think time 37s -> 20s (UI)                x 24s = 18 min
+    3 suits, ranks 1-5   34.6 discards x 45s = 26 min
+    + auto-pass ineligible seats     x 40s = 23 min
+    + claim_window 8 -> 4            x 38s = 22 min   <- target, no UI work
+
+Ranks 1-6 gives ~27 minutes on the same terms. Think time (37s) is no longer
+on the critical path, which is the point of the deck result: the budget
+closes without touching the interface.
 
 Card and engine work together reach ~28 minutes. The remaining gap is
 entirely **think time**, which is a user-interface number and the one thing
