@@ -181,6 +181,15 @@ class GameState:
     hand_no: int = 0
     wall: list[Tile] = field(default_factory=list)
     discards: list[tuple[int, Tile]] = field(default_factory=list)
+    #: Tiles *thrown* this hand, which is not the same as ``len(discards)``:
+    #: a claimed tile is popped back off the pit (§2.5), so the pit
+    #: undercounts by one per call. Turns taken is what costs a table its
+    #: wall-clock, so that is what this counts.
+    #:
+    #: The two cancel exactly on a wall game — a call both adds a turn and
+    #: removes a pit tile — which is why the pit always ends at wall size
+    #: plus one however many calls were made.
+    discard_count: int = 0
     live_discard: Tile | None = None
     live_discarder: int | None = None
     drawn: Tile | None = None       # current player's just-drawn tile
@@ -257,6 +266,7 @@ def state_to_dict(state: GameState) -> dict:
         "hand_no": state.hand_no,
         "wall": [t.code for t in state.wall],
         "discards": [[seat, t.code] for seat, t in state.discards],
+        "discard_count": state.discard_count,
         "live_discard": state.live_discard.code if state.live_discard else None,
         "live_discarder": state.live_discarder,
         "drawn": state.drawn.code if state.drawn else None,
@@ -328,6 +338,7 @@ def state_from_dict(data: dict) -> GameState:
         hand_no=data["hand_no"],
         wall=[Tile(c) for c in data["wall"]],
         discards=[(seat, Tile(c)) for seat, c in data["discards"]],
+        discard_count=int(data.get("discard_count", 0)),
         live_discard=Tile(data["live_discard"]) if data["live_discard"] else None,
         live_discarder=data["live_discarder"],
         drawn=Tile(data["drawn"]) if data["drawn"] else None,
@@ -483,6 +494,7 @@ def deal(state: GameState, wall: list[Tile]) -> tuple[GameState, list[Event]]:
     state.turn = state.dealer
     state.outcome = None
     state.discards = []
+    state.discard_count = 0
     state.live_discard = None
     state.live_discarder = None
     state.drawn = None
@@ -773,6 +785,7 @@ def discard(state: GameState, seat: int, tile: Tile) -> tuple[GameState, list[Ev
 def _place_discard(state: GameState, seat: int, tile: Tile) -> tuple[GameState, list[Event]]:
     state.seats[seat].rack.remove(tile)
     state.discards.append((seat, tile))
+    state.discard_count += 1
     state.live_discard = tile
     state.live_discarder = seat
     state.drawn = None

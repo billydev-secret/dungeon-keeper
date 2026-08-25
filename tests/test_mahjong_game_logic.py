@@ -173,6 +173,39 @@ def test_cancel_only_in_lobby():
     assert e.value.code is RejectCode.WRONG_PHASE
 
 
+def test_discard_count_counts_turns_not_the_pit():
+    """A called tile is popped back off the pit, so `len(discards)` is not
+    the number of turns taken — and turns are what cost a table its clock.
+
+    This is also why a wall game's pit always ends at wall size plus one
+    however many calls happened: a call adds a turn and removes a pit tile,
+    and the two cancel exactly.
+    """
+    state = play_state(4, {0: "1d*13"})
+    assert state.discard_count == 0
+    state, _ = G.discard(state, 0, Tile("1d"))
+    assert state.discard_count == 1 and len(state.discards) == 1
+
+    # a claim consumes the discard; the turn still happened
+    state.discards.pop()
+    assert state.discard_count == 1 and len(state.discards) == 0
+
+    # and it survives persistence
+    assert G.state_from_dict(G.state_to_dict(state)).discard_count == 1
+
+
+def test_a_fresh_deal_resets_the_turn_counter():
+    """Rematches deal into a state that already played a hand, so the deal
+    has to zero this or every later hand inherits the last one's count."""
+    state = fresh(4)
+    assert state.discard_count == 0
+    state.discard_count = 37  # as if a hand had just been played
+    state.phase = Phase.SETTLE
+    state.rematch_votes = {0, 1, 2, 3}
+    state, _ = G.deal(state, shuffled_wall(rng()))
+    assert state.discard_count == 0
+
+
 def test_wall_trim_shortens_the_wall():
     plain = fresh(2)
     trimmed = fresh(2, wall_trim=60)

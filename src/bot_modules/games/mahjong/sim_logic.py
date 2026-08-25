@@ -381,7 +381,7 @@ def _play_one(
         report.hands[hand_id].held += 1
         if opening.get(seat) == hand_id:
             report.hands[hand_id].kept += 1
-    report.total_turns += len(state.discards)
+    report.total_turns += state.discard_count
     _record_outcome(state, report)
 
 
@@ -488,7 +488,7 @@ def _record_outcome(state: GameState, report: SimReport) -> None:
         report.other_ends += 1
         return
     stat.wins += 1
-    stat.win_turns += len(state.discards)
+    stat.win_turns += state.discard_count
     if outcome.jokerless_double:
         stat.jokerless_wins += 1
 

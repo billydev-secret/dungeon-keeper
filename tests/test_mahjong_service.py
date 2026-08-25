@@ -254,6 +254,71 @@ async def test_wall_game_refunds_and_records(service, db):
         assert result["kind"] == "wall_game" and result["winner_id"] is None
 
 
+# ── Hand timing (migration 179) ──────────────────────────────────────────────
+
+
+async def test_the_deal_is_stamped_on_the_table(service, db):
+    """The engine takes no clock (D14), so the service owns the timestamp —
+    stamped off the `hand_dealt` event rather than at each deal call site."""
+    table_id = await make_duel(service, db)
+    with open_db(db) as conn:
+        assert conn.execute(
+            "SELECT hand_started_at FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()["hand_started_at"] is None
+    before = time.time()
+    await service.timeout(table_id)  # deals
+    with open_db(db) as conn:
+        stamped = conn.execute(
+            "SELECT hand_started_at FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()["hand_started_at"]
+    assert stamped is not None and stamped >= before
+
+
+async def test_a_settled_hand_records_its_duration_and_length(service, db):
+    """Duration and discards together give seconds-per-discard, which is the
+    figure every projected hand length is scaled by and which currently
+    rests on a single observed game."""
+    table_id = await make_duel(service, db)
+    winner_rack = ([Tile.FLOWER] * 4 + [Tile("2d")] * 4 + [Tile("6b")] * 4
+                   + [Tile("8c")])
+    await play_to_settle(service, db, table_id,
+                         winner_rack=winner_rack, feed_tile="8c")
+    with open_db(db) as conn:
+        result = conn.execute(
+            "SELECT * FROM mahjong_results WHERE table_id = ?", (table_id,)
+        ).fetchone()
+    assert result["started_at"] is not None
+    assert result["created_at"] >= result["started_at"]
+    assert result["discards"] is not None and result["discards"] >= 1
+
+
+async def test_a_wall_game_records_its_length_too(service, db):
+    """The wall-game constant is the sim's most load-bearing claim; this is
+    what lets real play check it."""
+    table_id = await make_duel(service, db)
+    await service.timeout(table_id)
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT * FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+        state = engine.state_from_dict(json.loads(row["state"]))
+        state.phase = engine.Phase.AWAIT_DISCARD
+        state.turn = 0
+        state.pending_picks = {}
+        state.wall = []
+        conn.execute("UPDATE mahjong_tables SET state = ? WHERE id = ?",
+                     (json.dumps(engine.state_to_dict(state)), table_id))
+    await service.act(table_id, "discard", member_id=HOST,
+                      tile=state.seats[0].rack[0])
+    await service.act(table_id, "claim", member_id=GUEST, kind="pass")
+    with open_db(db) as conn:
+        result = conn.execute(
+            "SELECT * FROM mahjong_results WHERE table_id = ?", (table_id,)
+        ).fetchone()
+    assert result["kind"] == "wall_game"
+    assert result["discards"] is not None and result["started_at"] is not None
+
+
 # ── Rematch escrow ───────────────────────────────────────────────────────────
 
 

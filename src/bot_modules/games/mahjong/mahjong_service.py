@@ -646,12 +646,25 @@ class MahjongService:
         ended, close out rows if the table closed, persist, pick the next
         deadline. Runs inside the caller's transaction."""
         table_id = int(row["id"])
+        now = time.time()
+
+        # Stamp the deal here rather than at the three call sites: the engine
+        # is deliberately clock-free (parent plan D14), so the service owns
+        # every timestamp, and `hand_dealt` is emitted by exactly one
+        # transition however it was reached (lobby timer, or rematch).
+        # A deal and a settle never share a transition — a hand starts in one
+        # and ends in another — so the settle path below always reads this
+        # back from the row rather than needing it in hand here.
+        if any(k == "hand_dealt" for k, _ in events):
+            conn.execute(
+                "UPDATE mahjong_tables SET hand_started_at = ? WHERE id = ?",
+                (now, table_id),
+            )
 
         if any(k == "hand_settled" for k, _ in events):
             self._settle_money(conn, row, state)
 
         deadline: float | None
-        now = time.time()
         if state.phase is Phase.CLOSED:
             reason = next(
                 (d.get("reason") for k, d in events if k == "table_closed"),
@@ -713,16 +726,22 @@ class MahjongService:
             )
 
         now = time.time()
+        # Duration and length, so the seconds-per-discard figure every
+        # projected hand time rests on can be checked against real play.
+        # started_at is NULL for a hand dealt before migration 179 — readers
+        # must treat that as unknown, never as zero.
+        started_at = row["hand_started_at"]
         cur = conn.execute(
             "INSERT INTO mahjong_results (guild_id, table_id, hand_no, mode, "
             "stake, card_id, kind, winner_id, line_id, line_name, base_value, "
-            "won_by, jokerless, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "won_by, jokerless, created_at, started_at, discards) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (guild_id, table_id, state.hand_no, state.seat_count, stake,
              str(row["card_row_id"]), out.kind,
              member_of.get(out.winner) if out.winner is not None else None,
              out.line_id, out.line_name, out.value, out.won_by,
-             1 if out.jokerless_double else 0, now),
+             1 if out.jokerless_double else 0, now,
+             started_at, state.discard_count),
         )
         result_id = int(cur.lastrowid or 0)
         for seat, member_id in member_of.items():
