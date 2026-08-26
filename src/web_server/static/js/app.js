@@ -131,6 +131,7 @@ const SECTIONS = [
         { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true, help: "help-setup" },
         { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
         { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js", help: "help-role-menus" },
+        { id: "onboarding",        label: "Discord Onboarding", module: "./panels/onboarding.js", adminOnly: true, keywords: "channels and roles customize community server guide opt-in pings" },
       ]},
       { heading: "Members", items: [
         { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true, keywords: "greeting join leave messages" },

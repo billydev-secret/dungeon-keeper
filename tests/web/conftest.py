@@ -47,6 +47,21 @@ class FakeCtx:
     def invalidate_guild_config(self, guild_id: int) -> None:
         self._guild_config_cache.pop(guild_id, None)
 
+    def set_config_value(self, key: str, value: str, guild_id: int | None = None) -> str:
+        """Mirrors AppContext.set_config_value, cache invalidation included.
+
+        Anything reaching a route through core.role_provision persists an id
+        this way; without it those routes died on a missing attribute.
+        """
+        from bot_modules.core.db_utils import set_config_value
+
+        gid = self.guild_id if guild_id is None else guild_id
+        with self.open_db() as conn:
+            set_config_value(conn, key, value, gid)
+            conn.commit()
+        self.invalidate_guild_config(gid)
+        return value
+
 
 @pytest.fixture
 def web_db(tmp_path) -> Path:

@@ -9,6 +9,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.role_provision import ensure_config_role
+from bot_modules.services.feature_roles import RISKY_PING
 from bot_modules.services.risky_roll import state as rr_state
 from bot_modules.services.risky_roll.formatters import (
     build_embed,
@@ -222,10 +224,26 @@ class RiskyRollCog(commands.Cog):
             allowed_mentions = discord.AllowedMentions.none()
 
             if ping:
-                role_id = rr_state.ping_roles.get(interaction.guild.id)
-                if role_id:
-                    content = f"# <@&{role_id}> A new Risky Rolls round has begun!"
-                    allowed_mentions = discord.AllowedMentions(roles=True)
+                # Provisions @Risky Rolls on a guild that never set a ping
+                # role; a stored "(none)" returns None and the round posts
+                # silent. The in-memory cache is refreshed so the next round
+                # skips the lookup.
+                role = await ensure_config_role(
+                    self.bot.ctx, interaction.guild,
+                    RISKY_PING.key, RISKY_PING.spec, feature=RISKY_PING.feature,
+            allow_legacy_fallback=RISKY_PING.legacy_fallback,
+                )
+                if role is not None:
+                    rr_state.ping_roles[interaction.guild.id] = role.id
+                    content = (
+                        f"# {role.mention} A new Risky Rolls round has begun!"
+                    )
+                    # Allow-list exactly this role rather than a blanket
+                    # roles=True (docs/embed_style_guide.md).
+                    allowed_mentions = discord.AllowedMentions(
+                        everyone=False, users=False, roles=[role],
+                        replied_user=False,
+                    )
 
             accent = await resolve_embed_accent(interaction.guild)
             view = RiskyRollView(state.game_id)

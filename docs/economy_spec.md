@@ -183,7 +183,15 @@ to currency.
   Replies pay only while the question's `local_day` is still the current
   guild-local day — the row lives forever, so without that check a member could
   reply down a month of old questions for 10 each. No scheduler; mods ask when
-  they want. `qotd_ping_role_id` unset (the default) means silent posts and no
+  they want. Since 2026-08-22 a guild that has **never** set the dial gets a
+  `@QOTD` role made when the first question posts, and a `@Economy
+  Notifications` role the first time a member presses 🔔 (which used to
+  dead-end at "ask an admin"). The notifications role is provisioned **even when
+  `game_role_id` is stored as 0**, unlike every other ping dial: the Economy
+  Settings panel writes 0 for an untouched picker on any save, and the role is
+  itself the opt-in mechanism, so "(none)" can only mean a broken button. Both keys are guild-scoped `econ_`-prefixed
+  config with no legacy fallback. `qotd_ping_role_id` set to 0 — an admin
+  choosing "(none)" — means silent posts and no
   tag-to-ask. The mention only notifies if the role is mentionable or the bot holds
   "Mention @everyone, @here, and All Roles" — Discord renders it as inert text
   otherwise; that permission governs *notification*, not registration.

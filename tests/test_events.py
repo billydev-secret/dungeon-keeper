@@ -695,6 +695,15 @@ def _patch_join_deps():
             return_value=(None, None),
         ),
         patch("bot_modules.cogs.events_cog.build_welcome_embed", return_value="<embed>"),
+        # Provisioning @Welcome Ping is proven in test_role_provision_logic;
+        # here the cog is glue, so the provisioner stands in as "no role", the
+        # answer for a guild whose admin stored "(none)". A test that wants the
+        # provisioned case patches this with its own return value.
+        patch(
+            "bot_modules.cogs.events_cog.ensure_config_role",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
         patch(
             "bot_modules.core.branding.resolve_accent_color",
             new_callable=AsyncMock,
@@ -1775,3 +1784,69 @@ async def test_a_channel_message_records_no_parent(
     kwargs = [c.kwargs for c in mock_upsert.call_args_list if c.kwargs.get("channel_id") == 10]
     assert kwargs
     assert all(k["parent_id"] is None and k["is_thread"] is False for k in kwargs)
+
+
+async def test_on_member_join_pings_a_provisioned_welcome_role():
+    """A guild that never set a welcome ping role gets one made, and the
+    welcome pings it — the cog has to use what the provisioner hands back
+    rather than the (still empty) cached config value."""
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(welcome_channel_id=42, welcome_ping_role_id=0),
+    )
+    bot.ctx = ctx
+    cog = EventsCog(bot)
+
+    welcome_channel = MagicMock(spec=discord.TextChannel)
+    welcome_channel.send = AsyncMock()
+    member = _make_member()
+    member.guild.get_channel = MagicMock(return_value=welcome_channel)
+
+    made = MagicMock(spec=discord.Role)
+    made.id = 4321
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "bot_modules.cogs.events_cog.ensure_config_role",
+                new_callable=AsyncMock,
+                return_value=made,
+            )
+        )
+        await cog.on_member_join(member)
+
+    assert welcome_channel.send.call_args.kwargs["content"] == "<@&4321>"
+
+
+async def test_on_member_join_skips_provisioning_when_a_role_is_configured():
+    """The configured path must not hit the provisioner at all — it runs on
+    every join, and the cached snapshot already has the answer."""
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(welcome_channel_id=42, welcome_ping_role_id=88),
+    )
+    bot.ctx = ctx
+    cog = EventsCog(bot)
+
+    welcome_channel = MagicMock(spec=discord.TextChannel)
+    welcome_channel.send = AsyncMock()
+    member = _make_member()
+    member.guild.get_channel = MagicMock(return_value=welcome_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        provisioner = stack.enter_context(
+            patch(
+                "bot_modules.cogs.events_cog.ensure_config_role",
+                new_callable=AsyncMock,
+                return_value=None,
+            )
+        )
+        await cog.on_member_join(member)
+
+    provisioner.assert_not_awaited()
+    assert welcome_channel.send.call_args.kwargs["content"] == "<@&88>"

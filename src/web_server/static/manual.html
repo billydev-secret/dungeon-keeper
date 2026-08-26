@@ -1137,6 +1137,7 @@
       <div class="callout-body">
         <strong>Getting economy DMs</strong>
         <p>The economy panel carries a <strong>🔔 Notifications</strong> button. Click it to have your daily streak digest and raffle wins land in your DMs; click again to turn them off. Quest completions are only ever marked with a reaction on your message, never a reply — this toggle just decides whether the other recurring notices go to your DMs. Everyone earns, spends and sees the same channels either way.</p>
+        <p>Nobody has to set the opt-in role up first. The first member to press 🔔 gets the role created for them on the spot — it used to tell them to go find an admin. This is the one role the bot makes even if the setting reads "(none)", because without a role there is nothing to opt in to. Point the setting at a role of your own any time to use that one instead.</p>
         <p>The <strong>daily streak digest</strong> leads with your streak and payout, then — when the server has one — a quick <em>"biggest movers yesterday"</em> line naming the community goals that climbed the most. If you're in the wellness program and your wellness notifications allow DMs, a small <strong>🌿 Wellness</strong> line follows — your clean-day streak, the next badge, and a dashboard link (it stays out while your program is paused or your notifications are set to in-channel only). Below that is your <strong>full</strong> quest checklist for the day, grouped into Daily / Weekly / Monthly / 🌍 Community. Each quest shows a progress meter, a one-line explanation, and a channel link when it's tied to a specific channel (e.g. the Photo Challenge) — so you can see everything that's open at a glance without opening <code>/bank quests</code>.</p>
       </div>
     </div>
@@ -1738,6 +1739,15 @@
 
     <h3 id="jail">Jail &amp; Release</h3>
     <p>The jail system moves a member to a private channel, strips all their roles, and logs everything. Jail transcripts are saved automatically for later review.</p>
+
+    <p class="note">Dungeon Keeper makes a handful of other roles for itself the first time it needs them, all of them ping-only (holding one grants nothing): <code>@Welcome Ping</code>, <code>@QOTD</code>, <code>@Risky Rolls</code>, <code>@Promotion Reviewers</code> and <code>@Economy Notifications</code>. It only ever does this where the setting has never been touched — pick "(none)" on the dashboard and it stays off for good. (The one exception is <code>@Economy Notifications</code>, which is what the 🔔 button hands out: with no role there is nothing to opt in to, so it gets made either way.) Repoint any of them at a role of your own from the same dropdown.</p>
+
+    <p class="note"><strong>Getting those roles to members.</strong> A ping role nobody holds does nothing, so <strong>Config → Discord Onboarding</strong> puts them on Discord's own <strong>Channels &amp; Roles</strong> screen — the one new members walk through and anyone can reopen from the server menu. The page lists each role with its status (already offered, ready to add, will be created, or turned off), lets you pick which onboarding question to add them to (or start a new one), and asks you to confirm before it changes anything. It never edits onboarding on its own, and it leaves every other question exactly as it was.</p>
+
+    <p class="note">The <code>@Jailed</code> role is made for you the first time it's needed —
+      or adopted, if your server already has a role named exactly <code>Jailed</code>. Delete
+      it and the bot rebuilds it on the next jail and posts a note in your mod channel, since
+      the new role is empty and anyone currently jailed is no longer marked by it.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/jail user:@user duration:24h reason:Repeated rule 3 violations</span>
@@ -2401,6 +2411,13 @@
       button. It's required before <code>mark</code> or a sweep will run. Point it at a
       different channel any time to move the inactive area — the old channel's
       <code>@Inactive</code> access is removed for you.</p>
+
+    <p class="note">You never have to make the <code>@Inactive</code> role yourself. If your
+      server already has a role named exactly <code>Inactive</code>, the bot adopts that one
+      rather than making a second; otherwise it creates it. If you <em>delete</em> the role,
+      the bot makes a new one the next time it's needed and says so in your mod channel —
+      worth knowing, because the replacement is empty and anyone who was held inactive is no
+      longer marked.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/inactive mark user:@member [reason]</span>

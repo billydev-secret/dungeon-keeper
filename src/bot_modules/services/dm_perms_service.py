@@ -11,6 +11,7 @@ from typing import Any, Optional
 import discord
 
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.core.role_provision import RoleSpec, ensure_feature_role
 from bot_modules.core.db_utils import open_db
 
 ROLE_DM_OPEN = "DMs: Open"
@@ -581,14 +582,25 @@ async def ensure_dm_roles(
     role_ids = role_ids or {}
     roles: dict[str, discord.Role] = {}
     for mode, name in DM_MODE_ROLE_NAMES.items():
-        role: Optional[discord.Role] = None
-        configured_id = role_ids.get(mode) or 0
-        if configured_id:
-            role = guild.get_role(configured_id)
+        role = await ensure_feature_role(
+            guild,
+            RoleSpec(name=name, reason="DM permission system"),
+            load=lambda mode=mode: role_ids.get(mode) or 0,
+            # Nothing to store: this function is reached from
+            # ``set_member_dm_mode``, which holds neither an AppContext nor a
+            # db_path, so it cannot write config. Harmless — the adopt-by-name
+            # step finds the role again on the next pass, and the dashboard's
+            # ``set_dm_mode_role_ids`` remains the way an id is pinned. For the
+            # same reason a recreate here can't reach the mod log; see
+            # docs/plans/role-autocreate.md.
+            store=lambda _rid: None,
+            feature="DM permissions",
+        )
         if role is None:
-            role = discord.utils.get(guild.roles, name=name)
-        if role is None:
-            role = await guild.create_role(name=name, reason="DM permission system")
+            # No Manage Roles, or Discord refused. Previously a Forbidden here
+            # escaped into the member's button click; now the caller sees a
+            # short dict and degrades.
+            continue
         roles[mode] = role
     return roles
 
@@ -600,8 +612,13 @@ async def set_member_dm_mode(
     if mode not in DM_MODE_ROLE_NAMES:
         return
     roles = await ensure_dm_roles(member.guild, role_ids)
+    to_add = roles.get(mode)
+    if to_add is None:
+        # The role couldn't be provisioned (no Manage Roles, or Discord
+        # refused). Leave the member's existing modes alone rather than
+        # stripping them and having nothing to put back.
+        return
     to_remove = [r for m, r in roles.items() if m != mode and r in member.roles]
-    to_add = roles[mode]
     if to_remove:
         await member.remove_roles(*to_remove, reason="DM mode change")
     if to_add not in member.roles:

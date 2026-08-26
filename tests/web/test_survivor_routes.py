@@ -50,8 +50,10 @@ def _attach_bot(fake_ctx, *, roles=(), create_role=None):
     guild = MagicMock()
     guild.id = fake_ctx.guild_id
     guild.roles = list(roles)
+    # **kwargs: the shared provisioner also passes permissions/hoist/
+    # mentionable (bot_modules/core/role_provision.py).
     guild.create_role = create_role or AsyncMock(
-        side_effect=lambda name, reason: MagicMock(id=hash(name) % 10**9, name=name)
+        side_effect=lambda name, **kw: MagicMock(id=hash(name) % 10**9, name=name)
     )
     guild.get_channel = MagicMock(return_value=None)
     guild.get_member = MagicMock(

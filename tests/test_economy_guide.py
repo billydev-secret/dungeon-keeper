@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.economy.guide import (
     HOW_IT_WORKS_CUSTOM_ID,
     NOTIFY_CUSTOM_ID,
@@ -170,7 +170,16 @@ def db(tmp_path):
 
 @pytest.fixture
 def ctx(db):
-    return SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    def _set(key, value, guild_id=GUILD_ID):
+        # core.role_provision persists a provisioned role id through this.
+        with open_db(db) as conn:
+            set_config_value(conn, key, value, guild_id)
+            conn.commit()
+        return value
+
+    return SimpleNamespace(
+        db_path=db, open_db=lambda: open_db(db), set_config_value=_set
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -433,7 +442,16 @@ def _notify_interaction(db, *, member, guild):
     inter = fake_interaction(guild=guild)
     inter.user = member
     inter.client = MagicMock()
-    inter.client.ctx = SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    def _set(key, value, guild_id=GUILD_ID):
+        # core.role_provision persists a provisioned role id through this.
+        with open_db(db) as conn:
+            set_config_value(conn, key, value, guild_id)
+            conn.commit()
+        return value
+
+    inter.client.ctx = SimpleNamespace(
+        db_path=db, open_db=lambda: open_db(db), set_config_value=_set
+    )
     return inter
 
 
@@ -483,30 +501,69 @@ async def test_notify_button_removes_role_when_already_opted_in(db):
 
 
 @pytest.mark.asyncio
-async def test_notify_button_inert_when_no_role_configured(db):
-    _enable(db)  # game_role_id stays 0
-    guild, _ = _guild_with_role(NOTIFY_ROLE_ID)
+async def test_notify_button_provisions_the_role_when_never_configured(db):
+    """The dead end this stage exists to remove.
+
+    Pressing 🔔 on a guild that never set an opt-in role used to tell the
+    member to go find an admin. Now the role gets made and granted — this is
+    the one place in the feature where "first use" is a member asking for it.
+    """
+    _enable(db)  # no row at all — never configured
+    guild = FakeGuild(id=GUILD_ID)
     member = _notify_member_mock(role_ids=())
     inter = _notify_interaction(db, member=member, guild=guild)
 
     await GuideNotifyButton().callback(inter)
 
-    member.add_roles.assert_not_awaited()
-    assert inter.response.send_message.await_args.args[0] == NOTIFY_UNCONFIGURED_MSG
+    made = list(guild.roles)
+    assert [r.name for r in made] == ["Economy Notifications"]
+    member.add_roles.assert_awaited_once()
+    assert member.add_roles.await_args.args[0] is made[0]
+    assert inter.response.send_message.await_args.args[0] != NOTIFY_UNCONFIGURED_MSG
 
 
 @pytest.mark.asyncio
-async def test_notify_button_handles_deleted_role(db):
-    # Configured, but the role has since been deleted in Discord.
-    _enable(db, game_role_id=NOTIFY_ROLE_ID)
-    guild, _ = _guild_with_role(None)
+async def test_notify_button_provisions_even_over_a_stored_zero(db):
+    """A stored 0 on THIS dial is not a decision (Billy, 2026-08-22).
+
+    Economy Settings saves as one form and writes ``game_role_id: "0"`` for an
+    untouched picker on every save, so changing a payout leaves a 0 here — and
+    prod has exactly that in two guilds. There is also no coherent "off" for an
+    opt-in role: with no role, nobody can opt in at all. So unlike every other
+    ping dial, a 0 here still provisions.
+    """
+    _enable(db, game_role_id=0)
+    guild = FakeGuild(id=GUILD_ID)
     member = _notify_member_mock(role_ids=())
     inter = _notify_interaction(db, member=member, guild=guild)
 
     await GuideNotifyButton().callback(inter)
 
-    member.add_roles.assert_not_awaited()
-    assert inter.response.send_message.await_args.args[0] == NOTIFY_UNCONFIGURED_MSG
+    made = list(guild.roles)
+    assert [r.name for r in made] == ["Economy Notifications"]
+    member.add_roles.assert_awaited_once()
+    assert inter.response.send_message.await_args.args[0] != NOTIFY_UNCONFIGURED_MSG
+
+
+@pytest.mark.asyncio
+async def test_notify_button_remakes_a_deleted_role(db):
+    """Configured, but the role was deleted in Discord since.
+
+    Used to be the same dead end as unconfigured. Now it is remade and granted
+    — and because an id *was* stored, this counts as a recreate, so the mod
+    channel hears about it (the old role's holders are gone).
+    """
+    _enable(db, game_role_id=NOTIFY_ROLE_ID)
+    guild = FakeGuild(id=GUILD_ID)  # role 6060 is not in it
+    member = _notify_member_mock(role_ids=())
+    inter = _notify_interaction(db, member=member, guild=guild)
+
+    await GuideNotifyButton().callback(inter)
+
+    made = list(guild.roles)
+    assert [r.name for r in made] == ["Economy Notifications"]
+    assert made[0].id != NOTIFY_ROLE_ID
+    member.add_roles.assert_awaited_once()
 
 
 @pytest.mark.asyncio

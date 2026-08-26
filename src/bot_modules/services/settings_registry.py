@@ -189,7 +189,10 @@ FEATURES: tuple[Feature, ...] = (
                   help="Supports placeholders for the member's name."),
             _flag("welcome_ping_member", "Ping the new member"),
             # Ping-only: naming this role grants nothing.
-            _role("welcome_ping_role_id", "Role to ping on join"),
+            _role("welcome_ping_role_id", "Role to ping on join",
+                  help="Left untouched, the bot makes a @Welcome Ping role "
+                       "the first time it greets someone. Setting it to "
+                       "(none) turns the ping off for good."),
             _text("welcome_trigger", "What triggers the welcome"),
             _role("unverified_role_id", "Unverified role", admin_only=True,
                   help="Losing this role is what counts as passing the gate — "

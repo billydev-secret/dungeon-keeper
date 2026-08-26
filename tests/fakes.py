@@ -87,13 +87,43 @@ class FakeChannel:
         pass
 
 
+class _RoleMap(dict):
+    """Indexed by id like this fake always was, but **iterates like discord.py**.
+
+    Real ``guild.roles`` is a list of Role; this fake stored a dict, so
+    ``for r in guild.roles`` yielded bare ints and any code doing ``r.name``
+    blew up. Tests assign by id (``g.roles[5001] = FakeRole(...)``), so the
+    mapping has to stay — iterating values is what closes the gap.
+    """
+
+    def __iter__(self):
+        return iter(self.values())
+
+
 @dataclass
 class FakeGuild:
     id: int = 9001
     name: str = "Test Guild"
     members: dict = field(default_factory=dict)
     channels: dict = field(default_factory=dict)
-    roles: dict = field(default_factory=dict)
+    roles: _RoleMap = field(default_factory=_RoleMap)
+
+    def __post_init__(self) -> None:
+        # Accept a plain dict from callers that build one directly.
+        if not isinstance(self.roles, _RoleMap):
+            self.roles = _RoleMap(self.roles)
+
+    async def create_role(self, *, name, **kwargs):
+        """Enough of the real thing for core.role_provision to run.
+
+        Without this, any test whose code path now provisions a feature role
+        dies on a missing attribute rather than exercising the behaviour.
+        """
+        # .keys() explicitly: iterating this mapping yields roles, not ids.
+        rid = max(self.roles.keys(), default=90_000) + 1
+        role = FakeRole(id=rid, name=name)
+        self.roles[rid] = role
+        return role
 
     def get_member(self, uid: int):
         return self.members.get(uid)

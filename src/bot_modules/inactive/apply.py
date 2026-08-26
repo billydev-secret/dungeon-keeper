@@ -26,6 +26,11 @@ import discord
 
 from bot_modules.core.app_context import AppContext
 from bot_modules.core.db_utils import get_config_value
+from bot_modules.core.role_provision import (
+    RoleSpec,
+    ensure_feature_role,
+    mod_log_announcer,
+)
 from bot_modules.inactive.store import (
     create_inactive,
     get_active_inactive,
@@ -149,8 +154,10 @@ async def ensure_inactive_role(
 
     On first creation the role is denied view+send on every channel (so an
     inactive member can't see the server), then granted view on the configured
-    inactive channel if one is set. Returns ``None`` if the role has to be
-    created but the bot lacks **Manage Roles**.
+    inactive channel if one is set. A role *adopted* by name skips that sweep —
+    it is one the guild already set up, and re-denying every channel on it would
+    be a destructive surprise. Returns ``None`` if the role has to be created
+    but the bot lacks **Manage Roles**.
     """
     guild_id = guild.id
 
@@ -169,47 +176,42 @@ async def ensure_inactive_role(
         return role_id, chan_id
 
     role_id, chan_id = await asyncio.to_thread(_get_ids)
-    role = guild.get_role(role_id) if role_id else None
-    if role is not None:
-        return role
 
-    try:
-        role = await guild.create_role(
+    async def _lock_down(role: discord.Role) -> None:
+        """Deny view everywhere, then grant the inactive channel back.
+
+        Per channel and explicit, never a category sync — category grants do
+        not cascade to the channels inside them.
+        """
+        inactive_channel = guild.get_channel(chan_id) if chan_id else None
+        for channel in guild.channels:
+            try:
+                if inactive_channel is not None and channel.id == inactive_channel.id:
+                    await channel.set_permissions(
+                        role, view_channel=True, send_messages=True,
+                        read_message_history=True,
+                    )
+                else:
+                    await channel.set_permissions(
+                        role, view_channel=False, send_messages=False
+                    )
+            except discord.HTTPException:
+                # Best-effort per channel: a denied or transiently-failing
+                # overwrite skips that channel rather than aborting the setup.
+                pass
+
+    return await ensure_feature_role(
+        guild,
+        RoleSpec(
             name="Inactive",
             reason="Dungeon Keeper inactive-channel setup",
-            permissions=discord.Permissions.none(),
-        )
-    except discord.Forbidden:
-        log.warning("Missing Manage Roles creating @Inactive in guild %s", guild_id)
-        return None
-    except discord.HTTPException:
-        # Transient API failure (5xx / rate limit). Bail out cleanly so the
-        # caller reports a failure instead of the exception escaping mid-flow.
-        log.warning(
-            "Discord error creating @Inactive in guild %s", guild_id, exc_info=True
-        )
-        return None
-    ctx.set_config_value("inactive_role_id", str(role.id), guild.id)
-
-    # Deny view everywhere so inactive members can't see the server. Grant the
-    # configured inactive channel back afterward. Best-effort per channel.
-    inactive_channel = guild.get_channel(chan_id) if chan_id else None
-    for channel in guild.channels:
-        try:
-            if inactive_channel is not None and channel.id == inactive_channel.id:
-                await channel.set_permissions(
-                    role, view_channel=True, send_messages=True,
-                    read_message_history=True,
-                )
-            else:
-                await channel.set_permissions(
-                    role, view_channel=False, send_messages=False
-                )
-        except discord.HTTPException:
-            # Best-effort per channel: a denied or transiently-failing overwrite
-            # skips that channel rather than aborting the whole setup.
-            pass
-    return role
+        ),
+        load=lambda: role_id,
+        store=lambda rid: ctx.set_config_value("inactive_role_id", str(rid), guild.id),
+        on_create=_lock_down,
+        announce=mod_log_announcer(ctx, guild),
+        feature="the inactive sweep",
+    )
 
 
 # ── Main entrypoint ──────────────────────────────────────────────────
