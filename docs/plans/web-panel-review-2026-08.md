@@ -12,7 +12,7 @@ Status legend: ☐ not started · ◐ in progress · ☑ shipped.
 
 ---
 
-## Stage 1 — ☐ Participation Gini reports "no messages" when there are messages
+## Stage 1 — ☑ Participation Gini reports "no messages" when there are messages
 
 **Verified bug.** `static/js/panels/health-gini.js:18` guards on
 `if (!(d.tiers || []).length)`, but `compute_gini`

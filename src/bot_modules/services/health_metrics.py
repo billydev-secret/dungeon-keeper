@@ -568,16 +568,33 @@ def compute_gini(
     top10_abs = sum(msg_counts[top10_idx:])
     palma = round(top10_abs / bottom40_share, 2) if bottom40_share else 0
 
-    # Participation tiers
+    # Participation tiers. `rows` comes from a GROUP BY over messages, so every
+    # row has cnt >= 1 — a lurker, who posted nothing, is absent from it by
+    # construction and the old `wk == 0` branch could never be taken. Counting
+    # lurkers means reading membership and subtracting the people who posted.
+    # Members who have left (current_member=0) are not lurkers: they aren't
+    # here to be quiet.
+    poster_ids = {r["author_id"] for r in rows}
+    member_clause, member_params = bot_filter_clause(
+        guild_id, column="user_id", include_bots=include_bots
+    )
+    lurkers = sum(
+        1
+        for r in conn.execute(
+            f"SELECT user_id FROM known_users "
+            f"WHERE guild_id=? AND current_member=1{member_clause}",
+            (guild_id, *member_params),
+        )
+        if r["user_id"] not in poster_ids
+    )
+
     user_counts_weekly = {}
     for r in rows:
         user_counts_weekly[r["author_id"]] = r["cnt"] / 4.3  # approximate weekly
 
-    lurkers = power = active = moderate = light = 0
+    power = active = moderate = light = 0
     for wk in user_counts_weekly.values():
-        if wk == 0:
-            lurkers += 1
-        elif wk <= 5:
+        if wk <= 5:
             light += 1
         elif wk <= 20:
             moderate += 1
@@ -698,6 +715,11 @@ def compute_gini(
     return {
         "gini": gini_val,
         "badge": badge,
+        # Distinct authors in the window. `tiers` is a five-key dict that is
+        # never empty, so it can't answer "did anyone post?" — this can, and
+        # the panel's empty state hangs off it.
+        "posters": n,
+        "total_messages": total_msgs,
         "lorenz": lorenz,
         "top5_share": top5_share,
         "top10_share": top10_share,

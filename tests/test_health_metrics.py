@@ -478,6 +478,49 @@ def test_compute_gini_populated_distribution(db_conn):
     assert out["tiers"]["power"] >= 1
 
 
+def test_compute_gini_counts_silent_members_as_lurkers(db_conn):
+    """A lurker posts nothing, so they are absent from the message rows.
+
+    The tier loop reads ``SELECT … GROUP BY author_id``, where every row has
+    ``cnt >= 1`` — the old ``wk == 0`` branch could never be taken and the
+    Lurker slice was permanently zero. Counting lurkers means reading
+    membership and subtracting the people who posted.
+    """
+    now = 1_700_000_000.0
+    _seed_known_user(db_conn, 1)  # posts
+    _seed_known_user(db_conn, 2)  # silent → lurker
+    _seed_known_user(db_conn, 3)  # silent → lurker
+    _seed_known_user(db_conn, 4, current_member=0)  # left the guild → not a lurker
+    _seed_known_user(db_conn, 99, is_bot=1)  # bot → excluded by default
+    _seed_message(db_conn, mid=1, cid=1, aid=1, ts=int(now) - 60)
+    db_conn.commit()
+
+    out = hm.compute_gini(db_conn, GUILD, now=now)
+    assert out["tiers"]["lurker"] == 2
+    assert out["tiers"]["light"] == 1
+    assert out["posters"] == 1
+    # The bot toggle reaches the lurker count too: opted in, the silent bot is
+    # a silent member like any other.
+    opted_in = hm.compute_gini(db_conn, GUILD, now=now, include_bots=True)
+    assert opted_in["tiers"]["lurker"] == 3
+
+
+def test_compute_gini_reports_poster_count_for_the_empty_state(db_conn):
+    """``posters`` is the honest "nothing to measure" signal.
+
+    ``tiers`` is a five-key dict that is never empty, so the panel cannot ask
+    it whether anyone posted; it asks this instead.
+    """
+    _seed_known_user(db_conn, 2)
+    db_conn.commit()
+    out = hm.compute_gini(db_conn, GUILD, now=1_700_000_000.0)
+    assert out["posters"] == 0
+    assert out["total_messages"] == 0
+    # A silent server still has members — an empty distribution is not an
+    # empty guild.
+    assert out["tiers"]["lurker"] == 1
+
+
 # ── compute_sentiment ────────────────────────────────────────────────
 
 

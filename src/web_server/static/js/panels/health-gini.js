@@ -18,7 +18,14 @@ export function mount(container) {
     const panel = container.querySelector(".panel");
 
 
-    if (!(d.tiers || []).length) {
+    // `tiers` is a dict with five fixed keys, so it has no `.length` and is
+    // never empty — asking it whether anyone posted always answered "no", and
+    // this panel showed the empty state over a server with 41k messages.
+    // `posters` is the count of distinct authors in the window, which is what
+    // the empty state actually claims. Compared against 0 rather than falsy so
+    // a cached payload from before the field existed renders its numbers
+    // instead of a fresh false empty state.
+    if (d.posters === 0) {
       panel.innerHTML = `<header><h2>Participation Gini</h2><div class="subtitle">Message distribution inequality</div></header>` +
         renderEmpty("No messages in the last 30 days, so there's no distribution to measure. This needs about a week of messages from a handful of members.");
       return;
