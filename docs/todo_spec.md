@@ -86,6 +86,14 @@ A single message the bot keeps at the **bottom of a configured channel**.
   unchanged — ages tick client-side, so "2h → 3h" costs no API call.
 - **Self-healing.** If the board message is deleted by hand, the next refresh
   re-posts it rather than going quietly dead.
+- **One repaint on boot.** The 60s loop's first pass repaints *every* posted
+  board, not only the guilds where something spawned. A board posted by a
+  previous release can be carrying a view the running one no longer registers —
+  after the 180 merge the surviving message is the old chore board's, and its
+  ✅ Mark Done button answers "This interaction failed" until something
+  repaints it. An edit replaces the view along with the content, so one pass on
+  boot closes that window instead of waiting for the next message in the
+  channel. It also heals any board that drifted while the bot was down.
 - **Post before delete.** The replacement is sent *first*, then the old board
   removed. Deleting first would destroy a working board whenever the new
   channel turns out to be unpostable — and if the target is the old channel

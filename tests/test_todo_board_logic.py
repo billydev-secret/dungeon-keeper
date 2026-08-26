@@ -11,6 +11,7 @@ from bot_modules.todo.board_logic import (
     EMPTY_BODY,
     EMPTY_CHORES,
     MAX_BOARD_ROWS,
+    MAX_CHORE_ROWS,
     RECURRING_MARKER,
     STREAK_MARKER,
     CHORE_HEADING,
@@ -634,3 +635,14 @@ def test_a_ticked_chore_is_not_offered_again():
 def test_a_chore_with_no_instance_yet_is_not_offered():
     options = completable_options([_chore(1, "Not due", todo_id=None)], [])
     assert options == []
+
+
+def test_chores_cannot_fill_the_whole_complete_picker():
+    """Discord caps a select at 25 options. Uncapped chores would fill it in a
+    guild with many, leaving no way to tick an ordinary task off in Discord —
+    the capability the merge existed to restore."""
+    chores = [_chore(n, f"Chore {n}", todo_id=1000 + n) for n in range(30)]
+    tasks = [_row(n, f"Task {n}") for n in range(5)]
+    options = completable_options(chores, tasks)
+    assert len(options) - MAX_CHORE_ROWS == len(tasks)
+    assert any(o["task"].startswith("Task") for o in options[:25])

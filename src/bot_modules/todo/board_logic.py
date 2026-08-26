@@ -435,10 +435,15 @@ def completable_options(
     One board offers one button over both, so a chore row carries its
     ``todo_id`` forward as ``id``: the thing being completed is a todo either
     way, and the select only ever needed the id.
+
+    Chores take the same bounded slice here that they take on the board.
+    Without the cap, a guild with 25+ open chore instances would fill Discord's
+    25-option select with chores alone and no ordinary task could be ticked off
+    from Discord at all — the exact capability the merge existed to restore.
     """
     options: list[Mapping[str, Any]] = [
         {"id": row["todo_id"], "task": row["task"], "description": ""}
-        for row in tickable_chores(chore_rows)
+        for row in tickable_chores(chore_rows)[:MAX_CHORE_ROWS]
     ]
     options.extend(task_rows)
     return options

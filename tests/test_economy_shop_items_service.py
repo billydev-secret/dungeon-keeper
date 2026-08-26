@@ -528,3 +528,101 @@ def test_the_note_is_only_kept_when_the_item_asks_for_one(conn):
     )
     assert str(get_purchase(conn, quiet.purchase_id)["note"]) == ""
     assert str(get_purchase(conn, asked.purchase_id)["note"]) == "engrave BILLY"
+
+
+# ── nothing is left behind by a refusal (code review, 2026-08-25) ──
+
+
+def test_a_lost_funds_race_on_a_rental_leaves_no_rental_row(conn, monkeypatch):
+    """rent_perk inserts the rental and *then* debits, raising on failure so the
+    caller's transaction unwinds. purchase() reports that as a refusal instead
+    of propagating, so without a savepoint the 'active' row stays pending — and
+    open_db commits on normal exit, handing out a free, silently-billing rental.
+    """
+    _fund(conn, 500)
+    item_id = _item(conn, kind="role", role_id=ROLE, billing="weekly", price=100)
+    monkeypatch.setattr(
+        "bot_modules.services.economy_rentals_service.apply_debit",
+        lambda *a, **k: False,
+    )
+    out = purchase(conn, SETTINGS, GUILD, USER, item_id, now=NOW)
+    assert out.refusal is Refusal.INSUFFICIENT
+    assert _rentals(conn) == []
+    assert get_balance(conn, GUILD, USER) == 500
+
+
+def test_a_lost_funds_race_returns_the_stock(conn, monkeypatch):
+    """The guarded decrement runs before the money moves, so a refusal after it
+    must put the unit back or a stock-1 item becomes unbuyable forever."""
+    _fund(conn, 500)
+    item_id = _item(conn, price=100, stock=1)
+    monkeypatch.setattr(
+        "bot_modules.services.economy_shop_items_service.apply_debit",
+        lambda *a, **k: False,
+    )
+    assert purchase(
+        conn, SETTINGS, GUILD, USER, item_id, now=NOW
+    ).refusal is Refusal.INSUFFICIENT
+    sold = conn.execute(
+        "SELECT sold FROM econ_shop_items WHERE id = ?", (item_id,)
+    ).fetchone()["sold"]
+    assert sold == 0
+
+
+def test_a_lost_funds_race_writes_no_purchase_row(conn, monkeypatch):
+    _fund(conn, 500)
+    item_id = _item(conn, price=100)
+    monkeypatch.setattr(
+        "bot_modules.services.economy_shop_items_service.apply_debit",
+        lambda *a, **k: False,
+    )
+    purchase(conn, SETTINGS, GUILD, USER, item_id, now=NOW)
+    rows = conn.execute("SELECT COUNT(*) AS n FROM econ_shop_purchases").fetchone()
+    assert rows["n"] == 0
+
+
+def test_two_pending_orders_for_one_weekly_item_both_resolve(conn):
+    """A manual weekly item opens no rental until delivery, so the live-rental
+    gate can't see the first order. Both todos must still tick off — the bare
+    INSERT raised IntegrityError out of complete_todo, rolling back every other
+    completion in the mod's multi-select batch."""
+    _fund(conn, 500)
+    item_id = _item(conn, billing="weekly", price=100)
+    first = purchase(conn, SETTINGS, GUILD, USER, item_id, now=NOW)
+    second = purchase(conn, SETTINGS, GUILD, USER, item_id, now=NOW + 1)
+    assert first.ok and second.ok
+
+    assert complete_todo(conn, first.todo_id, GUILD, MOD, now_ts=NOW + 2) is True
+    assert complete_todo(conn, second.todo_id, GUILD, MOD, now_ts=NOW + 3) is True
+
+
+@pytest.mark.parametrize("field", ["kind", "billing"])
+def test_update_rejects_an_explicit_null(conn, field):
+    """A present-but-None value wrote NULL into a NOT NULL column — an
+    IntegrityError where every other bad input raises ValueError."""
+    item_id = _item(conn)
+    with pytest.raises(ValueError):
+        update_item(conn, GUILD, item_id, {field: None})
+
+
+def test_purging_a_buyer_closes_their_open_order(conn):
+    """Erasure deletes the purchase row, so an untouched pending order would
+    leave a todo pointing at nothing — a mod ticks it off and silently delivers
+    nothing — and would strand its unit of stock forever."""
+    from bot_modules.services.economy_service import econ_purge_user
+
+    _fund(conn, 500)
+    item_id = _item(conn, price=100, stock=1)
+    out = purchase(conn, SETTINGS, GUILD, USER, item_id, now=NOW)
+
+    econ_purge_user(conn, GUILD, USER)
+
+    sold = conn.execute(
+        "SELECT sold FROM econ_shop_items WHERE id = ?", (item_id,)
+    ).fetchone()["sold"]
+    assert sold == 0
+    todo = conn.execute(
+        "SELECT purchase_id, missed_at FROM todos WHERE id = ?", (out.todo_id,)
+    ).fetchone()
+    assert todo["purchase_id"] is None
+    assert todo["missed_at"] is not None

@@ -1477,6 +1477,23 @@ def econ_purge_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> No
     import logging
 
     log = logging.getLogger("dungeonkeeper.economy")
+    # Open shop orders are settled BEFORE the rows are deleted. A pending order
+    # holds two things outside its own table: a unit of the item's stock, and a
+    # todo on the mods' board pointing back at it. Deleting the row alone would
+    # strand the todo — a mod ticks it off and silently delivers nothing — and
+    # burn the stock unit forever. Erasure is not a reason to keep someone
+    # else's shelf short. See docs/data_register.md.
+    try:
+        from bot_modules.services.economy_shop_items_service import (  # noqa: PLC0415
+            release_open_orders,
+        )
+
+        release_open_orders(conn, guild_id, user_id)
+    except sqlite3.Error as exc:
+        log.warning(
+            "econ purge: failed releasing shop orders for user %d in guild %d: %s",
+            user_id, guild_id, exc,
+        )
     for table in _PURGE_USER_ID_TABLES:
         try:
             conn.execute(

@@ -517,3 +517,55 @@ async def test_complete_offers_chores_and_tasks_together(board_db):
     assert any("fix the quote bot" in label for label in labels)
     # Chores first: they are what the board lists first.
     assert "Do a QOTD" in labels[0]
+
+
+# ── the refresh loop's boot pass ──────────────────────────────────────
+
+
+def _loop_bot(cog):
+    bot = MagicMock()
+    bot.ctx = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+    bot.is_closed = MagicMock(side_effect=[False, False, True])
+    bot.get_cog = MagicMock(return_value=cog)
+    return bot
+
+
+def _loop_cog():
+    cog = MagicMock()
+    cog.board.take_retries = MagicMock(return_value=set())
+    cog.board.set_known_guilds = MagicMock()
+    cog.refresh_board = AsyncMock(return_value=True)
+    return cog
+
+
+@pytest.mark.asyncio
+async def test_the_first_tick_repaints_every_board_even_with_no_changes():
+    """A board posted by a previous release can carry a view this one no longer
+    registers — after the 180 merge the surviving message is the old chore
+    board's, whose button would answer "This interaction failed" until
+    something repainted it. An edit replaces the view with the content."""
+    from bot_modules.cogs import todo_cog as mod
+
+    cog = _loop_cog()
+    bot = _loop_bot(cog)
+    with patch.object(mod, "_tick", return_value=({7}, set())), \
+         patch.object(mod.asyncio, "sleep", new=AsyncMock()):
+        await mod.todo_board_loop(bot)
+
+    assert cog.refresh_board.await_args_list[0].args == (7,)
+
+
+@pytest.mark.asyncio
+async def test_later_ticks_only_repaint_what_changed():
+    """The boot pass must not become a per-minute repaint of every guild."""
+    from bot_modules.cogs import todo_cog as mod
+
+    cog = _loop_cog()
+    bot = _loop_bot(cog)
+    with patch.object(mod, "_tick", return_value=({7}, set())), \
+         patch.object(mod.asyncio, "sleep", new=AsyncMock()):
+        await mod.todo_board_loop(bot)
+
+    # Two iterations ran; only the first had work.
+    assert cog.refresh_board.await_count == 1

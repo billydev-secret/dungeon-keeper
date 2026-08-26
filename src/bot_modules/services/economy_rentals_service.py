@@ -192,14 +192,17 @@ def _price_for(
         # snapshotted price rather than 0 (which would silently make a live
         # rental free) — and the dashboard refuses to delete an item with live
         # rentals in the first place, so this is a belt-and-braces path.
-        price = (
-            _custom_item_price(conn, guild_id, int(catalog_item_id))
-            if catalog_item_id
-            else None
-        )
+        if not catalog_item_id:
+            # There is no flat price to fall back on, and pricing at 0 would
+            # open a permanently free, silently renewing rental. Callers always
+            # have the item id — this is a programming error, not a data one.
+            raise ValueError("a custom_item rental needs a catalog_item_id")
+        price = _custom_item_price(conn, guild_id, int(catalog_item_id))
         if price is not None:
             return price
-        return int(fallback_price or 0)
+        if fallback_price is None:
+            raise ValueError(f"custom item {catalog_item_id} has no price")
+        return int(fallback_price)
     if perk == "emoji":
         # Animated emojis bill their own rate; the flag rides the rental meta
         # written at upload time (economy_emoji_service.finalize_upload).

@@ -12,8 +12,9 @@ table-testable. The service layer holds the database and the money; it asks
 this module for the verdict first and never re-derives one of its own.
 
 The verdict deliberately reports the FIRST failing gate in a fixed order
-(existence → enabled → window → stock → per-member limit → funds) rather than
-a set. A member who is both out of budget and past the deadline is told about
+(existence → enabled → window → stock → already-renting → per-member limit →
+funds) rather than a set. Already-renting sits ahead of the limit because the
+member who simply has the thing wants to hear that, not a tally. A member who is both out of budget and past the deadline is told about
 the deadline: telling them to earn more coins for something they can no longer
 buy sends them off to waste a week.
 """

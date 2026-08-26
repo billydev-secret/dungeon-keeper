@@ -73,6 +73,9 @@ if TYPE_CHECKING:
 SPEND_KIND = "shop_item"
 REFUND_KIND = "shop_item_refund"
 
+#: Savepoint name for the mutating half of ``purchase`` — see its docstring.
+_SAVEPOINT = "shop_purchase"
+
 NAME_MAX_LEN = 60
 BLURB_MAX_LEN = 40
 DESCRIPTION_MAX_LEN = 500
@@ -305,9 +308,11 @@ def update_item(
         raise ValueError("An item needs a name.")
     if "price" in values and int(values["price"]) < 0:
         raise ValueError("Price can't be negative.")
-    if values.get("kind") not in (None, *KINDS):
+    # `in values`, not `.get(...) is None`: a *present* None would otherwise
+    # read as "not supplied" and write NULL into a NOT NULL column.
+    if "kind" in values and values["kind"] not in KINDS:
         raise ValueError(f"unknown kind: {values['kind']!r}")
-    if values.get("billing") not in (None, *BILLINGS):
+    if "billing" in values and values["billing"] not in BILLINGS:
         raise ValueError(f"unknown billing: {values['billing']!r}")
     kind = str(values.get("kind", current.kind))
     role_id = values.get("role_id", current.role_id)
@@ -410,10 +415,18 @@ def purchase(
     """Buy one custom item.
 
     Returns a ``PurchaseOutcome`` whose ``refusal`` says why not; on refusal
-    NOTHING is written, so a caller that refuses can simply not commit. The
-    stock decrement, the debit and the row insert all ride the caller's
-    transaction, so an unaffordable purchase can never leave a consumed unit
-    of stock behind.
+    NOTHING is written.
+
+    That guarantee needs a **savepoint**, not just the caller's transaction.
+    Two gates can only fail after the stock decrement has already run: the
+    debit, and ``rent_perk`` — which inserts the rental row and *then* charges,
+    raising on a failed debit precisely so the caller's transaction unwinds.
+    Reporting either as a returned refusal instead of propagating leaves those
+    writes pending, and ``open_db`` commits on normal exit — so a caller that
+    simply rendered the refusal would hand out a free, silently billing rental
+    and burn a unit of stock with no order behind it. The savepoint (the
+    ``intake_rewards`` idiom) undoes exactly this call's writes and leaves
+    anything the caller did before it alone.
     """
     now = time.time() if now is None else now
     item = get_item(conn, guild_id, item_id)
@@ -431,8 +444,32 @@ def purchase(
     if verdict is not Refusal.OK or item is None:
         return PurchaseOutcome(refusal=verdict)
 
-    # Stock first: it is the only gate that can fail on a race, and taking it
-    # before the money means a loser never has a debit to unwind.
+    conn.execute(f"SAVEPOINT {_SAVEPOINT}")
+    try:
+        outcome = _purchase_inner(conn, settings, guild_id, user_id, item, note, now)
+    except Exception:
+        conn.execute(f"ROLLBACK TO {_SAVEPOINT}")
+        conn.execute(f"RELEASE {_SAVEPOINT}")
+        raise
+    if not outcome.ok:
+        conn.execute(f"ROLLBACK TO {_SAVEPOINT}")
+    conn.execute(f"RELEASE {_SAVEPOINT}")
+    return outcome
+
+
+def _purchase_inner(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    item: ItemView,
+    note: str,
+    now: float,
+) -> PurchaseOutcome:
+    """The mutating half of ``purchase``, run inside its savepoint."""
+    item_id = item.item_id
+    # Stock first: taking it before the money means a loser never has a debit
+    # to unwind. The savepoint returns the unit if a later gate refuses.
     if not _take_stock(conn, guild_id, item_id):
         return PurchaseOutcome(refusal=Refusal.SOLD_OUT)
 
@@ -627,25 +664,37 @@ def _open_paid_rental(
     item: ItemView,
     price: int,
     now: float,
-) -> int:
+) -> int | None:
     """Open a rental whose first week is already paid.
 
     Inserted directly rather than through ``rent_perk`` because that function
     charges — and the money moved at purchase.
+
+    Returns None when a live rental for this item already exists. Two pending
+    orders for one manual weekly item are reachable — the purchase-time gate
+    sees only *live* rentals, and a manual order opens none until delivery — so
+    the second tick would otherwise raise IntegrityError straight out of
+    ``complete_todo``, rolling back every other completion in the mod's
+    multi-select batch. The order still settles; it just joins the rental
+    already running.
     """
     from bot_modules.economy.rentals import WEEK_SECONDS  # noqa: PLC0415
 
-    cur = conn.execute(
-        "INSERT INTO econ_rentals"
-        " (guild_id, user_id, perk, state, price, started_at, next_bill_at,"
-        "  cancel_at_period_end, suspended, beneficiary_id, catalog_item_id,"
-        "  created_at)"
-        " VALUES (?, ?, 'custom_item', 'active', ?, ?, ?, 0, 0, ?, ?, ?)",
-        (
-            guild_id, user_id, price, now, now + WEEK_SECONDS, user_id,
-            item.item_id, now,
-        ),
-    )
+    try:
+        cur = conn.execute(
+            "INSERT INTO econ_rentals"
+            " (guild_id, user_id, perk, state, price, started_at, next_bill_at,"
+            "  cancel_at_period_end, suspended, beneficiary_id, catalog_item_id,"
+            "  created_at)"
+            " VALUES (?, ?, 'custom_item', 'active', ?, ?, ?, 0, 0, ?, ?, ?)",
+            (
+                guild_id, user_id, price, now, now + WEEK_SECONDS, user_id,
+                item.item_id, now,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        # Only idx_econ_rentals_live can fire here.
+        return None
     return int(cur.lastrowid or 0)
 
 
@@ -759,6 +808,45 @@ def expire_orders(
         ) is not None:
             expired.append(purchase_id)
     return expired
+
+
+def release_open_orders(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> list[int]:
+    """Settle a member's open orders ahead of erasing them. Returns the ids.
+
+    Called by ``econ_purge_user`` before it deletes the rows. A pending order
+    holds a unit of the item's stock and a todo on the mods' board; both have
+    to be let go, or the erasure leaves work nobody can deliver and a shelf
+    permanently one short.
+
+    **No refund is written.** The wallet and the ledger rows are being erased
+    in the same sweep, so crediting coins into an account about to vanish would
+    only leave a dangling ledger entry. The todo closes as *missed*, which is
+    the truth: the order was never delivered.
+    """
+    now = time.time()
+    ids: list[int] = []
+    rows = conn.execute(
+        "SELECT id, item_id, todo_id FROM econ_shop_purchases"
+        " WHERE guild_id = ? AND user_id = ? AND state = ?",
+        (guild_id, user_id, STATE_PENDING),
+    ).fetchall()
+    for row in rows:
+        _release_stock(conn, guild_id, int(row["item_id"]))
+        if row["todo_id"]:
+            from bot_modules.services.todo_service import mark_missed  # noqa: PLC0415
+
+            # Detach first: the purchase row is about to be deleted, and a todo
+            # still pointing at a missing order would settle nothing when
+            # ticked. Nulling it turns the row back into an ordinary task.
+            conn.execute(
+                "UPDATE todos SET purchase_id = NULL WHERE id = ?",
+                (int(row["todo_id"]),),
+            )
+            mark_missed(conn, int(row["todo_id"]), now_ts=now)
+        ids.append(int(row["id"]))
+    return ids
 
 
 def end_rental_order(

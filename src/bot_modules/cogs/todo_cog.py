@@ -477,6 +477,15 @@ async def todo_board_loop(bot: Bot) -> None:
     """
     await bot.wait_until_ready()
     ctx = bot.ctx
+    # Repaint every board once on boot. Normally the loop only touches guilds
+    # where something spawned, but a board posted by a previous release can be
+    # carrying a view this one no longer registers — after the 180 merge the
+    # surviving message is the old chore board's, whose ✅ Mark Done button now
+    # answers "This interaction failed" until something repaints it. An edit
+    # replaces the view along with the content, so one pass on boot closes that
+    # window instead of waiting for the next chat in the channel. It also heals
+    # any board that drifted while the bot was down.
+    first_pass = True
     while not bot.is_closed():
         try:
             boards, changed = await asyncio.to_thread(_tick, ctx)
@@ -490,7 +499,11 @@ async def todo_board_loop(bot: Bot) -> None:
                 # take_retries() is drained exactly once — leaving it undrained
                 # is how pen pals lost its failed edits (F5 in
                 # docs/reviews/2026-08-06-sticky-panel-machinery.md).
-                for guild_id in sorted((changed | cog.board.take_retries()) & boards):
+                work = (changed | cog.board.take_retries()) & boards
+                if first_pass:
+                    work |= boards
+                    first_pass = False
+                for guild_id in sorted(work):
                     try:
                         await cog.refresh_board(guild_id)
                     except Exception:
