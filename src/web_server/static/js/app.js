@@ -200,7 +200,7 @@ const SECTIONS = [
     // both old names survive as search keywords.
     groups: [
       { heading: "Operations", items: [
-        { id: "economy-bank-manager", label: "Bank", module: "./panels/economy-bank-manager.js", keywords: "operations bank manager balance grants refunds rentals ledger audit community goals", help: "help-economy" },
+        { id: "economy-bank-manager", label: "Bank", module: "./panels/economy-bank-manager.js", keywords: "operations bank manager balance grants refunds rentals ledger audit", help: "help-economy" },
         { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js", help: "help-economy" },
         { id: "economy-config", label: "Settings", module: "./panels/economy-config.js", adminOnly: true, keywords: "economy currency settings post panel channel panel how-to guide leaderboard perk shop", help: "help-economy" },
       ]},
@@ -210,7 +210,7 @@ const SECTIONS = [
       // being hoisted into a queues-only group.
       { heading: "Earning", items: [
         { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", keywords: "faucet rates triggers", help: "help-economy" },
-        { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js", help: "help-economy" },
+        { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js", keywords: "community goals settle progress payout", help: "help-economy" },
         { id: "economy-claims", label: "Claims", module: "./panels/economy-claims.js", keywords: "quest sign-off queue approve deny pending", help: "help-economy" },
         { id: "mention-awards", label: "Mention Awards", module: "./panels/config-mention-awards.js", adminOnly: true, keywords: "trigger phrase mention pay award hot seat member-run game host" },
         // One page for the feature: the ping role (admins) plus the paid

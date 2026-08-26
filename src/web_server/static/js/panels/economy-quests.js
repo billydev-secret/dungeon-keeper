@@ -1,7 +1,9 @@
-// Economy — Quests. The quest library and the authoring form (plus the AI
-// idea generator). Operational work — claim sign-off, community-goal
-// settlement, grants, the ledger — lives on the Operations page. Gated by
-// the economy manager role (or admin).
+// Economy — Quests. The quest library, the authoring form (plus the AI idea
+// generator), and the progress/settle controls for community goals — which
+// are quests (`qtype = 'community'`) and belong with the rest of them rather
+// than on the bank page they used to sit on. The remaining operational work
+// — claim sign-off, grants, the ledger — lives on the Operations page. Gated
+// by the economy manager role (or admin).
 import { api, apiPost, apiPut, apiDelete, esc } from "../api.js";
 import { showStatus, guardForm, loadChannels, mountChannelPicker, mountAsync } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
@@ -15,7 +17,7 @@ const TYPE_HINTS = {
   daily: "Members can complete it once per day (guild-local midnight). Active dailies form a pool; each member is shown a few of them per day — set how many under Board size.",
   weekly: "A push across the ISO week. Active weeklies form a pool drawn from per member — see Board size. On a game trigger it must count progress (“How Many Times” above 1), not finish on the first action — only dailies are one-shot.",
   monthly: "A guild-wide goal for the calendar month — everyone contributes to one shared counter, like a community goal but monthly. Auto-tracked only (pick a game trigger); the scheduler runs one monthly goal at a time, auto-sizes it, and pays 40/70/100% tiers to everyone at month end. Not member-claimable, no personal board.",
-  community: "One shared goal for the whole server. Manual completion: you track progress and settle from Operations. Game trigger: every member's action counts automatically, the target auto-sizes from recent activity, and the biweekly scheduler runs it with tiered payouts (40/70/100%).",
+  community: "One shared goal for the whole server. Manual completion: you track progress and settle from the Community Goals card on this page. Game trigger: every member's action counts automatically, the target auto-sizes from recent activity, and the biweekly scheduler runs it with tiered payouts (40/70/100%).",
   event: "Pays by itself every time the trigger happens — no claims, no daily/weekly cap. One active event quest per trigger.",
 };
 
@@ -103,8 +105,8 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
     <div class="panel">
       <header>
         <h2>Quests</h2>
-        <div class="subtitle">Write and manage the quests members work through. Approving
-          finished quests and settling community goals happen on Operations.</div>
+        <div class="subtitle">Write and manage the quests members work through, community
+          goals included. Approving finished quests happens on Operations.</div>
       </header>
       ${economyOff ? `<div class="empty" role="status" style="margin-bottom:12px;">
         The economy is currently off, so nothing below takes effect until it is switched
@@ -116,7 +118,7 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
           Quests are the tunable rewards. Members also earn automatically from
           faucets (daily logins &amp; streaks, XP conversion, game wins, QOTD…) —
           those rates live on <a href="#/economy-income-sources">Income Sources</a>.
-          Sign-off claims and community-goal payouts are handled on
+          Sign-off claims are handled on
           <a href="#/economy-bank-manager">Operations</a>.
         </div>
         <div class="field-hint" style="margin-bottom:8px;">
@@ -127,6 +129,16 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
         </div>
         <div data-quest-slots class="field-hint" style="margin-bottom:6px;"></div>
         <div data-quests><div class="empty">Loading…</div></div>
+      </section>
+
+      <section class="card" data-sec="community" style="display:none;">
+        <div class="section-label">Community Goals</div>
+        <div class="field-hint" style="margin-bottom:8px;">
+          Progress and payout for the goals in the library above. Settling pays
+          every active member once; the resulting entries show up in the ledger
+          on <a href="#/economy-bank-manager">Operations</a>.
+        </div>
+        <div data-community></div>
       </section>
 
       <section class="card" data-sec="board">
@@ -308,6 +320,78 @@ function wireBoard(container) {
   });
 }
 
+// ── community goals ──────────────────────────────────────────────────
+
+// Progress + settlement for `qtype = 'community'` quests. This card used to
+// live on the bank page; it fetches nothing of its own, taking the quest list
+// the library already loaded.
+function renderCommunity(container, quests) {
+  const sec = container.querySelector("[data-sec='community']");
+  const host = sec.querySelector("[data-community]");
+  const community = quests.filter((q) => q.qtype === "community");
+  // The whole card hides when there are no community goals — an empty
+  // placeholder card was just noise.
+  sec.style.display = community.length ? "" : "none";
+  if (!community.length) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = community.map((q) => {
+    const stateBits = `${q.community_current || 0} / ${q.community_target ?? "—"} ${q.community_completed_at ? "· completed" : ""} ${q.community_settled_at ? "· settled" : ""}`;
+    // Auto-tracking weeklies (trigger_kind set) run themselves: member
+    // activity moves the counter and the scheduler pays the tiers — the
+    // manual controls would 422, so they aren't rendered.
+    const controls = q.trigger_kind
+      ? `<div class="field-hint">⚙️ auto-tracking (${esc(q.trigger_kind)}) — counter moves from member activity; the biweekly scheduler sizes the target and settles the 40/70/100% tiers${q.active ? "" : " · waiting in rotation"}</div>`
+      : `<div class="field-row" style="align-items:flex-end;">
+        <div class="field"><label>Set progress</label>
+          <input type="number" min="0" step="1" data-cprogress="${q.id}" value="${q.community_current || 0}" style="max-width:120px;" /></div>
+        <div class="field"><button class="btn" data-cprogress-save="${q.id}">Save</button></div>
+        <div class="field"><button class="btn btn-primary" data-csettle="${q.id}">Settle Payout</button></div>
+        <span class="save-status" data-cstatus="${q.id}"></span>
+      </div>`;
+    return `
+    <div class="community-goal" data-cgoal="${q.id}" style="margin:10px 0; padding:8px 0; border-top:1px solid var(--border);">
+      <strong>${esc(q.title)}</strong>
+      <div class="field-hint">${stateBits}</div>
+      ${controls}
+    </div>`;
+  }).join("");
+
+  host.querySelectorAll("[data-cprogress-save]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.cprogressSave;
+      const val = parseInt(host.querySelector(`[data-cprogress="${id}"]`).value, 10) || 0;
+      const status = host.querySelector(`[data-cstatus="${id}"]`);
+      try {
+        await apiPost(`/api/economy/quests/${id}/progress`, { current: val });
+        showStatus(status, true);
+        refreshQuests(container);
+      } catch (err) {
+        showStatus(status, false, err.message);
+      }
+    });
+  });
+  host.querySelectorAll("[data-csettle]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.csettle;
+      const status = host.querySelector(`[data-cstatus="${id}"]`);
+      if (!(await confirmDialog("Settle this community quest now? Every active member is paid once; re-settling only pays members missed earlier.", { confirmLabel: "Settle" }))) return;
+      try {
+        const res = await apiPost(`/api/economy/quests/${id}/settle`, {});
+        showStatus(status, true, `Paid ${res.paid_count}`);
+        toast(`Paid ${res.paid_count} member(s)`, "success");
+        // The ledger this writes to lives on Operations, so there is nothing
+        // else on this page to refresh beyond the goal's own state.
+        refreshQuests(container);
+      } catch (err) {
+        showStatus(status, false, err.message);
+      }
+    });
+  });
+}
+
+
 // ── quest library ────────────────────────────────────────────────────
 
 function questVerification(q) {
@@ -362,6 +446,11 @@ async function refreshQuests(container) {
 function renderQuestList(container, quests) {
   const host = container.querySelector("[data-quests]");
   renderSlotSummary(container, quests);
+  // Community goals are rows in this same list, so they render off this fetch
+  // rather than a second one — and any edit that refreshes the library moves
+  // the goal card with it. Called before the empty-list return below: an empty
+  // library still has to hide the card.
+  renderCommunity(container, quests);
   if (!quests.length) {
     host.innerHTML = `<div class="empty">No quests yet. Write your first one in the form below.</div>`;
     return;

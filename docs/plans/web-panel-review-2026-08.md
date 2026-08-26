@@ -47,7 +47,7 @@ contract where it can actually break — a route/shape assertion that `tiers` is
 mapping with the five known keys, plus a panel-level check of the empty-state
 guard. Write it first, watch it fail.
 
-## Stage 2 — ☐ Community goals belong under Quests, not Operations
+## Stage 2 — ☑ Community goals belong under Quests, not Operations
 
 `refreshCommunity()` in `panels/economy-bank-manager.js:199` (Economy ›
 Operations › Bank) is a quests feature living on the bank page: community goals
