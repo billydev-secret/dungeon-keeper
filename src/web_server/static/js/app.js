@@ -2,6 +2,7 @@
 import { api, apiPost, esc } from "./api.js";
 import { toast } from "./ui.js";
 import { HELP_GROUPS, HELP_EXTRA_PAGES, assistantHelpLabel } from "./panels/help-sections.js?v=25";
+import { sectionIconNode } from "./nav-icons.js?v=2";
 import { setPageIds } from "./nav-registry.js";
 import { _resetPanelSpecCache } from "./panel-post.js";
 import { resetMetaCaches } from "./config-helpers.js";
@@ -963,7 +964,7 @@ function byLabel(items) {
   });
 }
 
-function makeNavItem(item, activeId, { isSubitem = false, icon = "#" } = {}) {
+function makeNavItem(item, activeId, { isSubitem = false, icon = "#", sectionId = null } = {}) {
   const btn = document.createElement("button");
   btn.className = "nav-item" + (isSubitem ? " is-subitem" : "");
   btn.type = "button";
@@ -973,7 +974,18 @@ function makeNavItem(item, activeId, { isSubitem = false, icon = "#" } = {}) {
 
   const icn = document.createElement("span");
   icn.className = "icn";
-  icn.textContent = icon;
+  // A fresh clone per item. Resolving one node per section and appending it to
+  // every item would MOVE it, leaving the icon only on the last item in the
+  // section; sectionIconNode parses once and clones, so this stays cheap.
+  const iconNode = sectionId ? sectionIconNode(sectionId) : null;
+  if (iconNode) {
+    icn.appendChild(iconNode);
+  } else {
+    // Only reachable for a section with no drawn icon. test_nav_icons.py fails
+    // the build in that case, so this is belt-and-braces for a section added at
+    // runtime rather than a path the shipped nav takes.
+    icn.textContent = icon;
+  }
   icn.setAttribute("aria-hidden", "true");
   btn.appendChild(icn);
 
@@ -995,7 +1007,13 @@ function makeNavItem(item, activeId, { isSubitem = false, icon = "#" } = {}) {
     return btn;
   }
 
-  if (item.id === activeId) btn.classList.add("active");
+  if (item.id === activeId) {
+    btn.classList.add("active");
+    // The gold marker and the widened section heading are both purely visual.
+    // Without this a screen reader hears ~176 identical buttons with nothing
+    // saying which one is the page you are on.
+    btn.setAttribute("aria-current", "page");
+  }
 
   btn.addEventListener("click", () => {
     window.location.hash = `#/${item.id}`;
@@ -1016,9 +1034,34 @@ function renderNav(activeId) {
   for (const sec of visibleSections) {
     const group = document.createElement("div");
     group.className = "nav-group";
-    group.textContent = sec.label;
+    // The icon identifies the SECTION, so it lives on the section header. It
+    // used to be stamped on every item inside the section instead, which drew
+    // eight identical shields down Moderation and said nothing about any of
+    // them. Items keep an icon element for the collapsed rail, where it is the
+    // only identifier a page has — see .nav-item .icn svg in app.css.
+    const secSvg = sectionIconNode(sec.id);
+    if (secSvg) {
+      const si = document.createElement("span");
+      si.className = "sec-icn";
+      si.appendChild(secSvg);
+      si.setAttribute("aria-hidden", "true");
+      group.appendChild(si);
+    }
+    const secLbl = document.createElement("span");
+    secLbl.className = "sec-lbl";
+    secLbl.textContent = sec.label;
+    group.appendChild(secLbl);
     group.setAttribute("role", "button");
     group.tabIndex = 0;
+    // The rail marks where you are by setting this header wider (Archivo's
+    // wdth axis, see .nav-group.current in app.css). It is deliberately not
+    // keyed off aria-expanded: several sections can be open at once, so
+    // "expanded" and "the section I am in" are different questions.
+    if (activeSection && sec.id === activeSection.id) {
+      group.classList.add("current");
+      group.setAttribute("aria-current", "true");
+    }
+
     // Open the active page's section plus any the user opened previously
     // (persisted across navigations, W-N8).
     const startCollapsed =
@@ -1049,7 +1092,7 @@ function renderNav(activeId) {
 
     // Top-level items (rendered before any subgroup), alphabetized by label
     for (const item of byLabel(sec.items)) {
-      const el = makeNavItem(item, activeId, { icon });
+      const el = makeNavItem(item, activeId, { icon, sectionId: sec.id });
       el.dataset.search = `${sec.label} ${item.label} ${item.keywords || ""}`.trim().toLowerCase();
       sidebarItemsEl.appendChild(el);
       children.push(el);
@@ -1087,7 +1130,7 @@ function renderNav(activeId) {
         sidebarItemsEl.appendChild(subLabel);
         children.push(subLabel);
         for (const item of byLabel(g.items)) {
-          const el = makeNavItem(item, activeId, { isSubitem: true, icon });
+          const el = makeNavItem(item, activeId, { isSubitem: true, icon, sectionId: sec.id });
           el.dataset.search =
             `${sec.label} ${g.heading} ${item.label} ${item.keywords || ""}`.trim().toLowerCase();
           if (!subgroupActive) el.classList.add("subgroup-hidden");
