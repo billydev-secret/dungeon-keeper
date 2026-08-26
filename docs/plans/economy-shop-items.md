@@ -26,7 +26,7 @@ next session doesn't re-derive the decisions already made about them.
 | Money timing | **Escrow on purchase**, per the sponsored-emoji flow; exactly-once refund on deny/cancel/expiry |
 | Automatic effects | **Roles only for v1** — no coin payouts (a faucet inside a sink), no announcement posts |
 | Mod checklist | **The existing Todo List** — a manual purchase auto-spawns a todo; ticking it off delivers the order |
-| Refusing an order | **The Shop & Perks orders tab** — refund + reason; the todo closes as *missed*, never as done |
+| Refusing an order | **The orders queue** — refund + reason; the todo closes as *missed*, never as done |
 
 Defaults taken without a specific question, stated so they're contestable:
 members may cancel their own pending order for a refund; an item can prompt for
@@ -150,7 +150,10 @@ exit and a returned refusal is not a rollback. Stages 2–5 shipped 2026-08-26.
    role grant, the lapse branch.
 3. **Todo integration.** Spawn on purchase, the completion hook, the board and
    panel render join.
-4. **Dashboard.** The Shop & Perks tab: item editor + orders list with refund.
+4. **Dashboard.** Item editor + orders list with refund. Shipped as stacked
+   sections rather than a tab (the dashboard has no tab machinery); the perk-shop
+   page split of 2026-08-26 then moved the orders queue onto **Approvals**, beside
+   the sponsored-emoji queue, which is a better home than the one planned here.
 5. **Docs.** `economy_spec.md` §6, `data_register.md` (new row +
    `todos` amendment), `manual.html`, the help section.
 
