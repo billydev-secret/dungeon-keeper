@@ -52,7 +52,13 @@ from bot_modules.games.mahjong.match_logic import (
     match_hand,
     suggest_discard,
 )
-from bot_modules.games.mahjong.tiles import STANDARD_JOKERS, Tile
+from bot_modules.games.mahjong.tiles import (
+    FULL_RANK,
+    MIN_RANK,
+    STANDARD_JOKERS,
+    Tile,
+    in_play,
+)
 
 DEALER_TILES = 14
 SEAT_TILES = 13
@@ -123,6 +129,14 @@ class TableConfig:
     #: other config: a mid-hand dial change must never alter a live wall,
     #: and the matcher counts unseen jokers against exactly this number.
     wall_jokers: int = STANDARD_JOKERS
+    #: Highest suited rank in play. 9 is the full game; a lower ceiling is
+    #: the length dial — measured at 1,000 games per arm, 152 tiles runs
+    #: ~72 turns, 116 (ranks 1-6) ~43 and 104 (ranks 1-5) ~35, with the win
+    #: rate unmoved at ~93%. Trimming the *wall* was tried first and is
+    #: strictly worse: it truncates hands instead of speeding them up, so it
+    #: converts wins into wall games. Independent of `wall_jokers`, which
+    #: raises completion by closing gaps rather than by shortening the deck.
+    max_rank: int = FULL_RANK
 
     def __post_init__(self) -> None:
         if self.seat_count not in (2, 4):
@@ -131,6 +145,8 @@ class TableConfig:
             raise ValueError("wall_trim must be >= 0")
         if self.wall_jokers < 0:
             raise ValueError("wall_jokers must be >= 0")
+        if not MIN_RANK <= self.max_rank <= FULL_RANK:
+            raise ValueError(f"max_rank must be {MIN_RANK}–{FULL_RANK}")
 
 
 @dataclass
@@ -244,6 +260,7 @@ def state_to_dict(state: GameState) -> dict:
             "wall_trim": state.config.wall_trim,
             "second_charleston": state.config.second_charleston,
             "wall_jokers": state.config.wall_jokers,
+            "max_rank": state.config.max_rank,
         },
         "host": state.host,
         "seats": [
@@ -314,6 +331,8 @@ def state_from_dict(data: dict) -> GameState:
             second_charleston=cfg["second_charleston"],
             # tables dealt before the dial existed carry the standard wall
             wall_jokers=cfg.get("wall_jokers", STANDARD_JOKERS),
+            # ...and played the full game
+            max_rank=int(cfg.get("max_rank", FULL_RANK)),
         ),
         host=data["host"],
         seats=[
@@ -483,6 +502,15 @@ def deal(state: GameState, wall: list[Tile]) -> tuple[GameState, list[Event]]:
         )
     state = copy.deepcopy(state)
     wall = list(wall)
+    # The engine takes the wall from its caller (D14), which means nothing
+    # otherwise stops a table playing to rank 5 being dealt a full deck.
+    # That mismatch would not raise anywhere — it would just quietly hand
+    # players tiles their card's reachability says cannot exist.
+    if any(not in_play(t, state.config.max_rank) for t in wall):
+        raise ValueError(
+            f"wall contains tiles above this table's rank ceiling "
+            f"({state.config.max_rank})"
+        )
     if state.config.wall_trim:
         needed = DEALER_TILES + SEAT_TILES * (state.seat_count - 1)
         trim = min(state.config.wall_trim, max(0, len(wall) - needed))
@@ -1242,6 +1270,7 @@ def assist_readout(
     seen = obtainable_seen(state, seat, card)
     prospects = closest_lines(
         list(seat_state.rack), exposures, card, seen, limit=None,
+        max_rank=state.config.max_rank,
         joker_copies=state.config.wall_jokers,
     )
     shown = ASSIST_SHOWN[mode]
@@ -1305,6 +1334,7 @@ def _settle_fallow_end(state: GameState, card: Card) -> list[Event]:
         [e.as_match() for e in seat_state.exposures],
         card,
         seen,
+        state.config.max_rank,
         joker_copies=state.config.wall_jokers,
     )
     deltas = {s: (-base) for s in range(state.seat_count) if s != survivor}

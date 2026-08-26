@@ -68,7 +68,8 @@ def fresh(seat_count: int, racks: list[list[Tile]] | None = None,
     state = G.create_table(TableConfig(seat_count=seat_count, **cfg), 100)
     for m in range(101, 100 + seat_count):
         state, _ = G.join_table(state, m)
-    wall = stacked_wall(racks, tail) if racks else shuffled_wall(random.Random(9))
+    wall = (stacked_wall(racks, tail) if racks
+            else shuffled_wall(random.Random(9), cfg.get("max_rank", 9)))
     state, _ = G.deal(state, wall)
     return state
 
@@ -171,6 +172,105 @@ def test_cancel_only_in_lobby():
     with pytest.raises(ActionRejected) as e:
         G.cancel_table(state, 100)
     assert e.value.code is RejectCode.WRONG_PHASE
+
+
+# ── Short decks (TableConfig.max_rank) ───────────────────────────────────────
+
+
+@pytest.mark.parametrize("max_rank, size", [(9, 152), (6, 116), (5, 104)])
+def test_the_deck_shrinks_with_the_rank_ceiling(max_rank, size):
+    from bot_modules.games.mahjong.tiles import build_deck as bd, deck_size
+    assert deck_size(max_rank) == size
+    deck = bd(max_rank)
+    assert len(deck) == size
+    assert max((t.rank or 0) for t in deck if t.is_suited) == max_rank
+    # honours, flowers and jokers are never trimmed
+    assert sum(1 for t in deck if t is Tile.JOKER) == 8
+    assert sum(1 for t in deck if t.is_wind) == 16
+
+
+def test_a_trimmed_tile_reports_no_copies():
+    """The load-bearing one. Reachability counts *unseen copies* to judge
+    whether a line is still live, so a tile that is not in the deck must
+    report zero — otherwise the matcher, the assist engine and the bots all
+    keep believing in tiles nobody can draw."""
+    from bot_modules.games.mahjong.tiles import copies, copies_in_play
+    assert copies(Tile("9d")) == 4               # the tile exists as a kind
+    assert copies_in_play(Tile("9d"), 5) == 0    # but not on this table
+    assert copies_in_play(Tile("5d"), 5) == 4
+    assert copies_in_play(Tile.JOKER, 5) == 8
+
+
+@pytest.mark.parametrize("bad", [4, 10, 0, -1])
+def test_a_ceiling_outside_the_supported_range_is_refused(bad):
+    with pytest.raises(ValueError, match="max_rank"):
+        TableConfig(seat_count=4, max_rank=bad)
+
+
+def test_the_ceiling_survives_persistence_and_defaults_for_old_tables():
+    state = fresh(4, max_rank=6)
+    assert state.config.max_rank == 6
+    assert G.state_from_dict(G.state_to_dict(state)).config.max_rank == 6
+    # a table dealt before the option existed played the full game
+    data = G.state_to_dict(state)
+    del data["config"]["max_rank"]
+    assert G.state_from_dict(data).config.max_rank == 9
+
+
+def test_a_short_deck_deals_a_shorter_wall():
+    full = fresh(4)
+    short = fresh(4, max_rank=5)
+    assert len(short.wall) < len(full.wall)
+    assert len(short.wall) == 104 - (14 + 13 * 3)
+
+
+def test_no_line_stays_reachable_on_tiles_the_deck_lacks():
+    """The bug this plumbing exists to prevent: without a deck-aware copy
+    count, a line wanting 9s reads as live on a deck that stops at 5."""
+    from bot_modules.games.mahjong.match_logic import reachable_lines
+
+    card = load_card({
+        "card_id": "t", "display_name": "t", "season": "t",
+        "hands": [{"id": "highs", "section": "S", "name": "Highs",
+                   "concealed": False, "value": 25,
+                   "groups": [{"count": 4, "rank": "9", "suit": "a"},
+                              {"count": 4, "rank": "8", "suit": "a"},
+                              {"count": 3, "rank": "7", "suit": "a"},
+                              {"count": 3, "rank": "F"}]}],
+    })
+    # Nothing high is held: on the full deck the 3+ groups are joker- and
+    # draw-fillable, on the short deck neither route exists.
+    rack = tiles("1d*13")
+    assert [h.id for h in reachable_lines(rack, [], card, Counter(), 9)] == ["highs"]
+    assert reachable_lines(rack, [], card, Counter(), 5) == []
+
+
+def test_a_run_never_binds_past_the_ceiling():
+    from bot_modules.games.mahjong.match_logic import _bindings
+
+    hand = load_card({
+        "card_id": "t", "display_name": "t", "season": "t",
+        "hands": [{"id": "run", "section": "S", "name": "Run",
+                   "concealed": False, "value": 25,
+                   "groups": [{"count": 4, "rank": "x", "suit": "a"},
+                              {"count": 4, "rank": "x+1", "suit": "a"},
+                              {"count": 3, "rank": "x+2", "suit": "a"},
+                              {"count": 3, "rank": "F"}]}],
+    }).hands[0]
+    assert max(x for x, _, _ in _bindings(hand, 9)) == 7      # 7,8,9
+    assert max(x for x, _, _ in _bindings(hand, 5)) == 3      # 3,4,5
+
+
+def test_a_wall_that_does_not_match_the_table_is_refused():
+    """The engine trusts its caller for the wall, so this is the only place
+    a full deck dealt to a short table would ever be noticed."""
+    state = G.create_table(TableConfig(seat_count=4, max_rank=5), 100)
+    for m in (101, 102, 103):
+        state, _ = G.join_table(state, m)
+    with pytest.raises(ValueError, match="rank ceiling"):
+        G.deal(state, shuffled_wall(rng()))            # full 152-tile wall
+    state, _ = G.deal(state, shuffled_wall(rng(), 5))  # the right one
+    assert state.phase is Phase.CHARLESTON
 
 
 def test_discard_count_counts_turns_not_the_pit():

@@ -441,6 +441,18 @@ is the flexibility-competition effect (rank-variable runs outdraw
 1-instantiation honours lines for attention), and it is a card-composition
 problem for stage 4's section weighting, not a deck one.
 
+**Built 2026-08-25 (engine half).** `TableConfig.max_rank` (5–9, default 9),
+a deck that trims to it, `copies_in_play` returning **zero** for a tile the
+table does not contain, `_bindings` refusing to propose a run past the
+ceiling, and the ceiling threaded from `state.config` through
+`reachable_lines` / `closest_lines` / `fallow_base_value` to the assist
+engine and the bots. `deal()` now also refuses a wall that does not match
+the table — the engine takes its wall from the caller (D14), so nothing else
+would ever notice a full deck dealt to a short table.
+`card_logic.lines_needing_more_rank` reports which lines a short deck makes
+dead ink, for the activation warning. Still to build: the dashboard dial,
+the card-compatibility check at activation, `manual.html` and QA lines.
+
 **Implementation note.** A rank ceiling must reach *three* places, not one:
 `match_logic._bindings` still proposes runs into 7-9, and `copies()` still
 reports four of each, so reachability believes in tiles that are not in the

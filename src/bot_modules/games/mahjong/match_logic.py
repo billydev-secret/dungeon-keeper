@@ -37,11 +37,12 @@ from itertools import permutations
 
 from bot_modules.games.mahjong.card_logic import Card, Group, Hand, RankKind
 from bot_modules.games.mahjong.tiles import (
+    FULL_RANK,
     SUITS,
     STANDARD_JOKERS,
     TILE_ORDER,
     Tile,
-    copies,
+    copies_in_play,
 )
 
 #: **Experiment flag, default off — production behaviour is unchanged.**
@@ -114,23 +115,29 @@ class Match:
 # ── Binding enumeration ──────────────────────────────────────────────────────
 
 
-def _bindings(hand: Hand):
+def _bindings(hand: Hand, max_rank: int = FULL_RANK):
     """Yield every (x, suit_map, dragons) binding the hand's shape allows.
 
     ``dragons`` is a pair: the D binding and the D2 binding (grammar v1.1 —
     D2 groups must bind a *different* dragon than D). A hand's ``x_parity``
     filters the x candidates; suit-matched dragons need no slot here, they
     follow the suit map.
+
+    ``max_rank`` is the table's deck ceiling. A run must land entirely
+    inside it, or the binding names tiles nobody can draw — and since a
+    caller then counts *unseen copies* of those tiles to judge liveness, an
+    unfiltered range would keep dead lines looking alive on a short deck.
     """
     offsets = [g.offset for g in hand.groups if g.offset is not None]
     if offsets:
-        xs: list[int | None] = list(range(1, 10 - max(offsets)))
+        xs: list[int | None] = list(range(1, max_rank + 1 - max(offsets)))
         if hand.x_parity == "odd":
             xs = [x for x in xs if x is not None and x % 2 == 1]
         elif hand.x_parity == "even":
             xs = [x for x in xs if x is not None and x % 2 == 0]
     else:
         xs = [None]
+
 
     letters = sorted({g.suit for g in hand.groups if g.suit is not None})
     if letters:
@@ -330,6 +337,7 @@ def reachable_lines(
     exposures: list[Exposure],
     card: Card,
     seen_elsewhere: Counter[Tile],
+    max_rank: int = FULL_RANK,
     *,
     joker_copies: int = STANDARD_JOKERS,
 ) -> list[Hand]:
@@ -352,20 +360,26 @@ def reachable_lines(
         own[Tile.JOKER] += e.jokers
 
     def unseen(tile: Tile) -> int:
-        supply = joker_copies if tile is Tile.JOKER else copies(tile)
-        return max(0, supply - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
+        return max(
+            0,
+            copies_in_play(tile, max_rank, jokers=joker_copies)
+            - seen_elsewhere.get(tile, 0)
+            - own.get(tile, 0),
+        )
 
     live: list[Hand] = []
     for hand in card.hands:
         if hand.concealed and exposures:
             continue
-        if _line_reachable(hand, counts, jokers_held, exposures, unseen):
+        if _line_reachable(hand, counts, jokers_held, exposures, unseen, max_rank):
             live.append(hand)
     return live
 
 
-def _line_reachable(hand, concealed_counts, jokers_held, exposures, unseen) -> bool:
-    for x, suit_map, dragons in _bindings(hand):
+def _line_reachable(
+    hand, concealed_counts, jokers_held, exposures, unseen, max_rank=FULL_RANK
+) -> bool:
+    for x, suit_map, dragons in _bindings(hand, max_rank):
         resolved = [(g, _group_natural(g, x, suit_map, dragons)) for g in hand.groups]
         for used in _exposure_assignments(exposures, resolved):
             remaining = [rg for i, rg in enumerate(resolved) if i not in used]
@@ -389,13 +403,15 @@ def fallow_base_value(
     exposures: list[Exposure],
     card: Card,
     seen_elsewhere: Counter[Tile],
+    max_rank: int = FULL_RANK,
     *,
     joker_copies: int = STANDARD_JOKERS,
 ) -> int:
     """The Duel fallow payout's base: the survivor's lowest-value live line,
     or the card minimum when nothing is live (amendment 2)."""
     live = reachable_lines(
-        concealed, exposures, card, seen_elsewhere, joker_copies=joker_copies)
+        concealed, exposures, card, seen_elsewhere, max_rank,
+        joker_copies=joker_copies)
     if live:
         return min(h.value for h in live)
     return min(h.value for h in card.hands)
@@ -434,6 +450,7 @@ def closest_lines(
     card: Card,
     seen_elsewhere: Counter[Tile],
     limit: int | None = 3,
+    max_rank: int = FULL_RANK,
     *,
     joker_copies: int = STANDARD_JOKERS,
 ) -> list[Prospect]:
@@ -454,8 +471,12 @@ def closest_lines(
         own[Tile.JOKER] += e.jokers
 
     def unseen(tile: Tile) -> int:
-        supply = joker_copies if tile is Tile.JOKER else copies(tile)
-        return max(0, supply - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
+        return max(
+            0,
+            copies_in_play(tile, max_rank, jokers=joker_copies)
+            - seen_elsewhere.get(tile, 0)
+            - own.get(tile, 0),
+        )
 
     exposure_total = sum(e.count for e in exposures)
 
@@ -464,7 +485,7 @@ def closest_lines(
         if hand.concealed and exposures:
             continue
         best = _line_prospect(
-            hand, counts, jokers_held, exposures, exposure_total, unseen
+            hand, counts, jokers_held, exposures, exposure_total, unseen, max_rank
         )
         if best is not None:
             key = best.effort if RANK_BY_EFFORT else float(best.distance)
@@ -481,11 +502,12 @@ def _line_prospect(
     exposures: list[Exposure],
     exposure_total: int,
     unseen,
+    max_rank: int = FULL_RANK,
 ) -> Prospect | None:
     """Minimum distance over the line's live bindings, or None if none is
     live. First-found wins a distance tie, so the report is deterministic."""
     best: Prospect | None = None
-    for x, suit_map, dragons in _bindings(hand):
+    for x, suit_map, dragons in _bindings(hand, max_rank):
         resolved = [(g, _group_natural(g, x, suit_map, dragons)) for g in hand.groups]
         for used in _exposure_assignments(exposures, resolved):
             remaining = [rg for i, rg in enumerate(resolved) if i not in used]
@@ -588,6 +610,7 @@ def call_advice(
     card: Card,
     seen: Counter[Tile],
     tile: Tile,
+    max_rank: int = FULL_RANK,
     *,
     joker_copies: int = STANDARD_JOKERS,
 ) -> CallAdvice | None:
@@ -602,7 +625,8 @@ def call_advice(
     if tile is Tile.JOKER:
         return None
     before = closest_lines(
-        concealed, exposures, card, seen, limit=1, joker_copies=joker_copies)
+        concealed, exposures, card, seen, limit=1, max_rank=max_rank,
+        joker_copies=joker_copies)
     if not before:
         return None
     naturals = [t for t in concealed if t is tile]
@@ -622,7 +646,8 @@ def call_advice(
                 natural=tile, count=count,
                 jokers=sum(1 for t in given if t is Tile.JOKER),
             )],
-            card, seen, limit=1, joker_copies=joker_copies,
+            card, seen, limit=1, max_rank=max_rank,
+            joker_copies=joker_copies,
         )
         if not after or after[0].distance >= before[0].distance:
             continue

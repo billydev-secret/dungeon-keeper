@@ -595,7 +595,10 @@ class MahjongService:
 
             if state.phase is Phase.LOBBY:
                 if len(state.seats) == state.seat_count:
-                    state, events = engine.deal(state, shuffled_wall(self._rng, jokers=state.config.wall_jokers))
+                    state, events = engine.deal(state, shuffled_wall(
+                        self._rng, state.config.max_rank,
+                        jokers=state.config.wall_jokers,
+                    ))
                 else:  # never filled — dissolve + refund (§6.2)
                     state, events = engine.close_table(state, "dissolved")
             elif state.phase is Phase.SETTLE:
@@ -801,7 +804,11 @@ class MahjongService:
         table_id = int(row["id"])
         guild_id = int(row["guild_id"])
         if bool(row["practice"]):
-            return engine.deal(state, shuffled_wall(self._rng, jokers=state.config.wall_jokers))  # no escrow (B5)
+            # no escrow on a practice table (B5)
+            return engine.deal(state, shuffled_wall(
+                self._rng, state.config.max_rank,
+                jokers=state.config.wall_jokers,
+            ))
         next_gid = _hand_gid(table_id, state.hand_no + 1)
         amount = escrow_amount(card, int(row["mode"]), int(row["stake"]))
         for seat_state in state.seats:
@@ -819,7 +826,10 @@ class MahjongService:
                 wager_svc.refund_game(conn, GAME_TYPE, next_gid)
                 closed, ev = engine.close_table(state, "rematch_unfunded")
                 return closed, ev
-        return engine.deal(state, shuffled_wall(self._rng, jokers=state.config.wall_jokers))
+        return engine.deal(state, shuffled_wall(
+            self._rng, state.config.max_rank,
+            jokers=state.config.wall_jokers,
+        ))
 
     # ── Persistence plumbing ─────────────────────────────────────────────
 

@@ -42,7 +42,7 @@ from bot_modules.games.mahjong.game_logic import (
 )
 from bot_modules.games.mahjong import match_logic
 from bot_modules.games.mahjong.match_logic import closest_lines
-from bot_modules.games.mahjong.tiles import shuffled_wall
+from bot_modules.games.mahjong.tiles import FULL_RANK, shuffled_wall
 
 #: A hand cannot legally run forever — 152 tiles minus the deal is ~90 draws,
 #: and every step either acts or times out a phase. Well above any real game;
@@ -299,6 +299,7 @@ def simulate(
     seed: int = 0,
     wall_trim: int = 0,
     second_charleston: bool = True,
+    max_rank: int = FULL_RANK,
     workers: int = 1,
     rank_by_effort: bool = False,
 ) -> SimReport:
@@ -323,6 +324,7 @@ def simulate(
         seat_count=seat_count,
         wall_trim=wall_trim,
         second_charleston=second_charleston,
+        max_rank=max_rank,
     )
     report = _empty_report(card, games, seat_count, seed)
 
@@ -353,7 +355,7 @@ def _play_one(
     state = engine.create_table(config, _seat_id(0))
     for i in range(1, config.seat_count):
         state, _ = engine.join_table(state, _seat_id(i))
-    state, _ = engine.deal(state, shuffled_wall(rng))
+    state, _ = engine.deal(state, shuffled_wall(rng, config.max_rank))
 
     targets_taken = False
     opening: dict[int, str] = {}
@@ -461,6 +463,7 @@ def _closest_lines_by_seat(state: GameState, card: Card) -> dict[int, str]:
             card,
             obtainable_seen(state, seat, card),
             limit=1,
+            max_rank=state.config.max_rank,
         )
         if prospects:
             out[seat] = prospects[0].hand.id

@@ -484,6 +484,31 @@ def value_for_difficulty(score: float) -> int:
     return int(round(raw / 5) * 5)
 
 
+def required_rank(hand: Hand) -> int:
+    """Lowest deck ceiling this line can be played on.
+
+    A concrete rank needs a deck that reaches it; a run needs room for its
+    whole span, so ``x..x+4`` needs 5 even though no single token says so.
+    """
+    needed = 1
+    for g in hand.groups:
+        if g.kind is RankKind.CONCRETE and g.concrete is not None:
+            needed = max(needed, g.concrete)
+        elif g.kind is RankKind.VAR and g.offset is not None:
+            needed = max(needed, g.offset + 1)
+    return needed
+
+
+def lines_needing_more_rank(card: Card, max_rank: int) -> list[str]:
+    """Ids of lines a table playing to ``max_rank`` could never complete.
+
+    A short deck does not make a card invalid — it makes some of its lines
+    dead ink, which is a thing to warn an admin about at activation rather
+    than discover as an unwinnable hand.
+    """
+    return [h.id for h in card.hands if required_rank(h) > max_rank]
+
+
 def difficulty_profile(card: Card) -> dict[str, Difficulty]:
     """Every line's difficulty, by hand id — the card viewer's data."""
     return {h.id: difficulty(h) for h in card.hands}
