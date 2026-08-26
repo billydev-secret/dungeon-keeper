@@ -1,6 +1,9 @@
 import { api } from "../api.js";
 import { withLoading } from "../report-helpers.js";
-import { makeBarChart, CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, ROLE_COLORS } from "../charts.js";
+import {
+  makeBarChart, renderChartLegend, renderChartTable,
+  CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, CHART_SURFACE, ROLE_COLORS,
+} from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 import { renderEmpty, renderError } from "../states.js";
 import { filterSelect, multiFilterSelect } from "../filter-select.js";
@@ -31,12 +34,22 @@ const SOURCE_LABELS = {
 };
 // XP-source series colors, drawn from the shared categorical palette so the
 // panel reads as part of the same chart system as every other report.
+// Sequential slots rather than the old 0,2,4,1,3, so that *by declaration* the
+// palette's one weak pair (teal/orchid, ΔE 6.2 under deuteranopia) is two
+// slots apart.
+//
+// That is a best effort and not a guarantee: the API returns the series ordered
+// by magnitude, so which two segments actually share an edge depends on the
+// data, and teal/orchid do end up adjacent on a typical week. What makes that
+// legal is the 2px surface gap on every segment — the secondary encoding the
+// 6-8 band requires — plus the legend and table. The gap is load-bearing, not
+// decorative; do not remove it on the grounds that the colours look distinct.
 const SOURCE_COLORS = {
   text:        ROLE_COLORS[0],
-  reply:       ROLE_COLORS[2],
-  image_react: ROLE_COLORS[4],
-  voice:       ROLE_COLORS[1],
-  grant:       ROLE_COLORS[3],
+  reply:       ROLE_COLORS[1],
+  image_react: ROLE_COLORS[2],
+  voice:       ROLE_COLORS[3],
+  grant:       ROLE_COLORS[4],
 };
 const FALLBACK_SOURCE_COLOR = ROLE_COLORS[5];
 
@@ -66,7 +79,14 @@ export function mount(container, initialParams) {
           Show Bots
         </label>
       </div>
+      <div class="chart-caption" data-caption></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div data-legend></div>
+      <div data-members hidden>
+        <div class="section-label">Unique members</div>
+        <div class="chart-wrap chart-wrap--short"><canvas data-members-chart></canvas></div>
+      </div>
+      <div data-chart-table></div>
       <div data-slider-wrap></div>
     </div>
   `;
@@ -81,8 +101,13 @@ export function mount(container, initialParams) {
   includeBotsEl.checked = initialParams.include_bots === "1";
 
   let chart = null;
+  let membersChart = null;
   let slider = null;
   const sliderWrap = container.querySelector("[data-slider-wrap]");
+  const captionEl  = container.querySelector("[data-caption]");
+  const legendEl   = container.querySelector("[data-legend]");
+  const membersWrap = container.querySelector("[data-members]");
+  const tableEl    = container.querySelector("[data-chart-table]");
   // `search` reaches past the bounded page setOptions() is seeded with below,
   // so filtering the chart by a member who left long ago still works.
   const userFS = filterSelect("Type to filter…", [],
@@ -183,11 +208,16 @@ export function mount(container, initialParams) {
           `No ${data.mode} activity in this window. Try a wider resolution, clear the member or channel filter, or un-exclude a channel.`
         );
         sliderWrap.innerHTML = "";
+        captionEl.textContent = "";
+        legendEl.replaceChildren();
+        tableEl.replaceChildren();
+        membersWrap.hidden = true;
         return;
       }
 
       function renderChart(lo, hi) {
         if (chart) chart.destroy();
+        if (membersChart) { membersChart.destroy(); membersChart = null; }
         wrap.innerHTML = '<canvas data-chart></canvas>';
         const canvas = container.querySelector("[data-chart]");
         const sliced = {
@@ -203,11 +233,39 @@ export function mount(container, initialParams) {
         const title = `${data.y_label} — ${data.window_label} (${data.tz_label})`;
         const hasSeries = sliced.series.length > 0;
         const hasMembers = sliced.show_members && sliced.member_counts.length > 0;
-        if (hasSeries || hasMembers) {
-          chart = _makeActivityChart(canvas, sliced, title);
-        } else {
-          chart = makeBarChart(canvas, { labels: sliced.labels, data: sliced.counts, title, yLabel: data.y_label });
+
+        // The caption lives in HTML so it wears the page's type rather than
+        // whatever the canvas was handed, and can be selected and read aloud.
+        captionEl.textContent = title;
+
+        chart = hasSeries
+          ? _makeActivityChart(canvas, { ...sliced, hide_x_labels: hasMembers })
+          : makeBarChart(canvas, { labels: sliced.labels, data: sliced.counts, title: "", yLabel: data.y_label });
+
+        // A legend only earns its place with two or more series; with one, the
+        // caption already names it.
+        legendEl.replaceChildren();
+        if (hasSeries) renderChartLegend(legendEl, chart);
+
+        // Members get their own chart under the same x-axis instead of a second
+        // y-scale over the bars.
+        membersWrap.hidden = !hasMembers;
+        if (hasMembers) {
+          const mCanvas = container.querySelector("[data-members-chart]");
+          membersChart = _makeMembersChart(mCanvas, sliced.labels, sliced.member_counts);
         }
+
+        // Tooltips enhance; they must never be the only way to read a value —
+        // and three of the palette's slots sit under 3:1 on this surface, which
+        // obliges a table view.
+        renderChartTable(tableEl, {
+          labels: sliced.labels,
+          datasets: [
+            ...chart.data.datasets.map((d) => ({ label: d.label || data.y_label, data: d.data })),
+            ...(hasMembers ? [{ label: "Unique members", data: sliced.member_counts }] : []),
+          ],
+          indexLabel: data.x_label || "Period",
+        });
       }
 
       renderChart(0, data.labels.length - 1);
@@ -222,6 +280,10 @@ export function mount(container, initialParams) {
         `Couldn't load activity — ${err.message}. Change a control to try again.`
       );
       sliderWrap.innerHTML = "";
+      captionEl.textContent = "";
+      legendEl.replaceChildren();
+      tableEl.replaceChildren();
+      membersWrap.hidden = true;
     }
   }
 
@@ -229,13 +291,27 @@ export function mount(container, initialParams) {
 
   (async () => { await loadDropdowns(); await refresh(); })();
 
-  return { unmount() { if (chart) { chart.destroy(); chart = null; } if (slider) { slider.destroy(); slider = null; } } };
+  return {
+    unmount() {
+      if (chart) { chart.destroy(); chart = null; }
+      if (membersChart) { membersChart.destroy(); membersChart = null; }
+      if (slider) { slider.destroy(); slider = null; }
+    },
+  };
 }
 
-function _makeActivityChart(canvas, data, title) {
+/**
+ * The XP/message bars. Deliberately ONE y-axis.
+ *
+ * "Unique Members" used to ride a second, right-hand scale over these bars.
+ * Two independent scales means where the line sits relative to the bars is an
+ * artefact of autoscaling, so the chart implied relationships — "members
+ * tracked XP", "they diverged" — the data never claimed. It is its own chart
+ * below now, sharing this one's x-axis and labels.
+ */
+function _makeActivityChart(canvas, data) {
   const ctx = canvas.getContext("2d");
   const hasSeries = Array.isArray(data.series) && data.series.length > 0;
-  const hasMembers = data.show_members && Array.isArray(data.member_counts) && data.member_counts.length > 0;
 
   const datasets = [];
   if (hasSeries) {
@@ -245,6 +321,13 @@ function _makeActivityChart(canvas, data, title) {
         data: s.counts,
         backgroundColor: SOURCE_COLORS[s.source] || FALLBACK_SOURCE_COLOR,
         borderRadius: 2,
+        // A 2px gap in the surface colour between stacked segments. The
+        // palette's worst all-pairs CVD separation sits in the 6-8 band, which
+        // is permitted ONLY with secondary encoding — this gap is that
+        // encoding, so it is required, not decorative.
+        borderColor: CHART_SURFACE,
+        borderWidth: { top: 2 },
+        borderSkipped: false,
         order: 2,
         yAxisID: "y",
         stack: "xp",
@@ -260,25 +343,13 @@ function _makeActivityChart(canvas, data, title) {
       yAxisID: "y",
     });
   }
-  if (hasMembers) {
-    datasets.push({
-      label: "Unique Members",
-      data: data.member_counts,
-      type: "line",
-      borderColor: CHART_ACCENT,
-      backgroundColor: "transparent",
-      borderWidth: 2,
-      pointRadius: 2,
-      tension: 0.3,
-      order: 1,
-      yAxisID: "y1",
-    });
-  }
-
   const scales = {
     x: {
       stacked: hasSeries,
-      ticks: { color: CHART_TEXT, maxRotation: 45 },
+      // When the members chart is drawn underneath it repeats this exact axis,
+      // so the labels are hidden here rather than printed twice — the two
+      // charts share one x-axis, which is the whole point of splitting them.
+      ticks: { color: CHART_TEXT, maxRotation: 45, display: !data.hide_x_labels },
       grid: { color: CHART_GRID },
     },
     y: {
@@ -290,16 +361,6 @@ function _makeActivityChart(canvas, data, title) {
       beginAtZero: true,
     },
   };
-  if (hasMembers) {
-    scales.y1 = {
-      position: "right",
-      title: { display: true, text: "Unique Members", color: CHART_ACCENT },
-      ticks: { color: CHART_ACCENT },
-      grid: { drawOnChartArea: false },
-      beginAtZero: true,
-    };
-  }
-
   return new Chart(ctx, {
     type: "bar",
     data: { labels: data.labels, datasets },
@@ -308,8 +369,12 @@ function _makeActivityChart(canvas, data, title) {
       maintainAspectRatio: false,
       interaction: hasSeries ? { mode: "index", intersect: false } : undefined,
       plugins: {
-        title: { display: true, text: title, color: CHART_TEXT },
-        legend: { labels: { color: CHART_TEXT } },
+        // Both are drawn in HTML instead: canvas text cannot use the page's
+        // type, is unselectable, and is invisible to a screen reader. The
+        // caption is a sibling element; the legend comes from
+        // renderChartLegend, which also puts each series' total beside it.
+        title: { display: false },
+        legend: { display: false },
         tooltip: hasSeries ? {
           callbacks: {
             footer: (items) => {
@@ -323,6 +388,47 @@ function _makeActivityChart(canvas, data, title) {
         } : undefined,
       },
       scales,
+    },
+  });
+}
+
+/**
+ * Unique members over the same window, as its own chart.
+ *
+ * Markers are 4px radius — an 8px mark, the smallest the guidance allows — with
+ * a 12px hit radius so the hover target clears ~24px. They were 2px before,
+ * which is a 4px dot you have to land on dead centre.
+ */
+function _makeMembersChart(canvas, labels, counts) {
+  return new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        label: "Unique members",
+        data: counts,
+        borderColor: CHART_ACCENT,
+        backgroundColor: "transparent",
+        borderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        pointHitRadius: 12,
+        tension: 0.3,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        // One series: the section label above the chart names it, so a legend
+        // box would just repeat itself.
+        title: { display: false },
+        legend: { display: false },
+      },
+      scales: {
+        x: { ticks: { color: CHART_TEXT, maxRotation: 45 }, grid: { color: CHART_GRID } },
+        y: { ticks: { color: CHART_TEXT, precision: 0 }, grid: { color: CHART_GRID }, beginAtZero: true },
+      },
     },
   });
 }

@@ -4746,3 +4746,106 @@ fieldset.field {
 .panel-opt select,
 .panel-opt input { padding: 4px 6px; font-size: var(--t-2); max-width: 220px; }
 
+/* ── Chart legend + table view (js/charts.js) ─────────────────────────
+   Chart.js draws its own legend onto the canvas: chunky bordered boxes, in
+   whatever font the canvas was given, unselectable, and invisible to a screen
+   reader. This is an HTML one instead — thin pill marks rather than blocks, the
+   page's own type, real focusable buttons that toggle a series, and values
+   beside the labels.
+
+   The values are not decoration. Three slots in ROLE_COLORS sit below 3:1
+   against the chart surface, which is allowed only where visible labels or a
+   table view supply the relief — this legend and the table below are that
+   relief, so they are load-bearing rather than a nicety.
+   ──────────────────────────────────────────────────────────────────── */
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-4);
+  padding: var(--s-2) 0 0;
+  margin: 0;
+  list-style: none;
+}
+.chart-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  background: none;
+  border: 0;
+  padding: var(--s-1) 0;
+  cursor: pointer;
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: var(--t-2);
+  border-radius: var(--r-sm);
+}
+.chart-legend__item:hover { color: var(--ink-bright); }
+.chart-legend__item:focus-visible { outline: 2px solid var(--gold-solid); outline-offset: 2px; }
+/* A thin pill, not a block — it echoes the bar mark it stands for. */
+.chart-legend__swatch {
+  width: 14px;
+  height: 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.chart-legend__item[aria-pressed="false"] { color: var(--ink-mute); }
+.chart-legend__item[aria-pressed="false"] .chart-legend__swatch { opacity: 0.3; }
+.chart-legend__item[aria-pressed="false"] .chart-legend__label { text-decoration: line-through; }
+/* The number stays in ink, never the series colour — the pill carries identity. */
+.chart-legend__value {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-table-toggle {
+  background: none;
+  border: 0;
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: var(--t-2);
+  cursor: pointer;
+  padding: var(--s-1) 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.chart-table-toggle:hover { color: var(--ink-bright); }
+.chart-table-toggle:focus-visible { outline: 2px solid var(--gold-solid); outline-offset: 2px; }
+.chart-table-wrap {
+  max-height: 320px;
+  overflow: auto;
+  margin-top: var(--s-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-sm);
+}
+.chart-table-wrap[hidden] { display: none; }
+.chart-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-2);
+  font-variant-numeric: tabular-nums;
+}
+.chart-table th,
+.chart-table td { padding: var(--s-1) var(--s-3); text-align: right; white-space: nowrap; }
+.chart-table th:first-child,
+.chart-table td:first-child { text-align: left; }
+.chart-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-alt);
+  color: var(--ink-mute);
+  font-weight: 600;
+  border-bottom: 1px solid var(--rule);
+}
+.chart-table tbody td { border-bottom: 1px solid var(--rule-soft); color: var(--ink-dim); }
+.chart-table tbody tr:last-child td { border-bottom: 0; }
+
+/* A secondary chart under a primary one — the members series that used to ride
+   a second y-axis over the bars. Shorter, because it is the supporting view. */
+.chart-wrap--short { min-height: 150px; flex: none; height: 170px; }
+
+/* The chart's own caption, in HTML rather than painted onto the canvas. */
+.chart-caption {
+  font-size: var(--t-2);
+  color: var(--ink-dim);
+  padding: var(--s-1) 0 var(--s-2);
+}
