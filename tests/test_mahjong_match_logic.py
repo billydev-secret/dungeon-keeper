@@ -528,17 +528,19 @@ TIE_CARD = load_card({
 })
 
 
-def test_tie_break_is_value_then_card_order():
-    # Rack feeds all three lines identically (F*4 N*4 held): all tie on
-    # distance 6 → high value first, then the two 25s in card order.
+def test_tie_break_is_value_ascending_then_card_order():
+    # Rack feeds all three lines identically (F*4 N*4 held), so they tie on
+    # effort. Ties go to the CHEAPER line — the dearer one is reliably the
+    # harder one, and handing ties to it compounded the very bias effort
+    # ranking exists to remove.
     prospects = closest_lines(tiles("flower*4 wn*4 2b*2"), [], TIE_CARD, Counter(), limit=None)
-    assert [p.hand.id for p in prospects] == ["high", "low-first", "low-second"]
-    assert len({p.distance for p in prospects}) == 1
+    assert [p.hand.id for p in prospects] == ["low-first", "low-second", "high"]
+    assert len({p.effort for p in prospects}) == 1
 
 
 def test_limit_trims_after_ranking():
     prospects = closest_lines(tiles("flower*4 wn*4 2b*2"), [], TIE_CARD, Counter(), limit=2)
-    assert [p.hand.id for p in prospects] == ["high", "low-first"]
+    assert [p.hand.id for p in prospects] == ["low-first", "low-second"]
 
 
 def test_ranking_is_stable_across_calls(card):
@@ -569,9 +571,9 @@ def test_exposures_mark_compatible_lines_remaining_demand(card):
 def test_dead_weight_never_suggests_feeding_a_visible_threat(card):
     # The A6 rail end-to-end: the only dead-weight tile is also the visible
     # threat's want, so coach must stay silent rather than suggest it.
-    rack = tiles("flower*4 2d*4 6b*2 9b*3")
+    rack = tiles("flower*4 2d*4 6b*4 9b*2")
     prospects = closest_lines(rack, [], card, Counter(), limit=None)
-    assert dict(prospects[0].dead_weight) == {Tile.BAM9: 3}
+    assert dict(prospects[0].dead_weight) == {Tile.BAM9: 2}
     danger = dangerous_tiles(card, [[Exposure(natural=Tile.DOT9, count=4)]])
     assert Tile.BAM9 in danger
     assert suggest_discard(rack, prospects, danger) is None
@@ -586,7 +588,7 @@ def test_suggests_the_tile_fewest_lines_can_use(card):
     rack = tiles("flower*4 2d*4 6b*2 9d wn")
     prospects = closest_lines(rack, [], card, Counter(), limit=None)
     dead = dict(prospects[0].dead_weight)
-    assert set(dead) == {Tile.DOT9, Tile.NORTH}
+    assert set(dead) == {Tile.DOT9, Tile.BAM6, Tile.NORTH}
     have = Counter(t for t in rack if t is not Tile.JOKER)
     use = {
         t: sum(1 for p in prospects if have[t] - dict(p.dead_weight).get(t, 0) > 0)
@@ -660,9 +662,13 @@ def test_assist_invariants_hold_on_random_racks(card, seed):
             (t for t, _ in p.needed), key=TILE_ORDER.__getitem__
         )
         if previous is not None:
-            assert previous.distance <= p.distance
-            if previous.distance == p.distance:
-                assert previous.hand.value >= p.hand.value
+            # Ordered by effort, not raw distance: a tile missing from a
+            # pair costs more than one missing from a kong, because only
+            # the kong's can be claimed or jokered.
+            assert previous.effort <= p.effort
+            if previous.effort == p.effort:
+                # ties go to the cheaper — i.e. easier — line
+                assert previous.hand.value <= p.hand.value
         previous = p
         # Distance zero and only distance zero is an exact match (needs 14).
         if hold == 14 and not exposures:
@@ -681,17 +687,23 @@ def test_assist_invariants_hold_on_random_racks(card, seed):
 
 
 def test_suggestion_never_contradicts_a_shown_hands_need(card):
-    # The reproduced contradiction: this rack used to get "discard 5d" while
-    # shown hand #3 (sb-2) printed "need 5d ×3" in the same embed. The
-    # suggestion must come from the dead-weight intersection of the hands
-    # actually shown — the same set the embed prints — which provably
-    # excludes every shown hand's needed tile.
+    # The contradiction this guards: the embed once printed "discard 5d"
+    # beside a shown hand reading "need 5d ×3". The suggestion must come
+    # from the dead-weight intersection of the hands *actually shown* — the
+    # same set the embed prints — which provably excludes every one of their
+    # needed tiles.
+    #
+    # Effort ranking changed which three lines this rack shows, so the
+    # original 5d pairing no longer surfaces; the premise below is the
+    # general condition instead — a shown hand wants a tile the rack is
+    # holding, which is what makes a contradictory suggestion possible at
+    # all.
     rack = tiles("1c 1c 2b 2b 2b 3c 5c 5d 8b 9b dr soap ww")
     prospects = closest_lines(rack, [], card, Counter(), limit=None)
     shown = prospects[:3]
-    assert any(Tile.DOT5 in dict(p.needed) for p in shown)  # the trap exists
+    held = set(rack)
+    assert any(t in held for p in shown for t in dict(p.needed)), "no trap here"
     pick = suggest_discard(rack, prospects)
-    assert pick is not Tile.DOT5
     if pick is not None:
         for p in shown:
             assert pick not in dict(p.needed)

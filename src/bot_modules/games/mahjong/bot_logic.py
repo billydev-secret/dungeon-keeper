@@ -82,6 +82,7 @@ def _prospects(state: GameState, seat: int, card: Card) -> list[Prospect]:
         card,
         obtainable_seen(state, seat, card),
         limit=None,
+        max_rank=state.config.max_rank,
         joker_copies=state.config.wall_jokers,
     )
 
@@ -147,6 +148,7 @@ def _call_tiles(state: GameState, seat: int, card: Card) -> list[Tile] | None:
         card,
         obtainable_seen(state, seat, card),
         tile,
+        max_rank=state.config.max_rank,
         joker_copies=state.config.wall_jokers,
     )
     return list(advice.tiles) if advice is not None else None

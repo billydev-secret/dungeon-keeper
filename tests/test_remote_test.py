@@ -150,6 +150,152 @@ def test_run_falls_back_locally_on_unsafe_argument(capsys):
     assert "running locally" in capsys.readouterr().err
 
 
+# ── exec_remote: the transport without pytest ─────────────────────────────────
+
+
+def test_exec_remote_returns_none_when_unconfigured():
+    assert rt.exec_remote("python -c pass", env={}) is None
+
+
+def test_exec_remote_returns_none_on_bad_config_instead_of_raising(capsys):
+    assert rt.exec_remote("python -c pass", env={"REMOTE_TEST_HOST": "h"}) is None
+    assert "refusing to guess" in capsys.readouterr().err
+
+
+def test_exec_remote_falls_back_when_host_unreachable(monkeypatch, capsys):
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: False)
+    assert rt.exec_remote("python -c pass", env=FULL_ENV) is None
+    assert "running locally" in capsys.readouterr().err
+
+
+def test_exec_remote_retries_the_sync_once_then_gives_up(monkeypatch, capsys):
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    calls = []
+    monkeypatch.setattr(rt, "sync", lambda cfg: calls.append(1) or False)
+    assert rt.exec_remote("python -c pass", env=FULL_ENV) is None
+    assert len(calls) == 2
+    assert "running locally" in capsys.readouterr().err
+
+
+def test_exec_remote_runs_in_the_workspace_and_returns_the_exit_code(monkeypatch):
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    monkeypatch.setattr(rt, "sync", lambda cfg: True)
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return _Exit(7)
+
+    monkeypatch.setattr(rt.subprocess, "run", fake_run)
+    assert rt.exec_remote("python scripts/mahjong_sim.py -n 4", env=FULL_ENV) == 7
+    assert seen["argv"][0] == "ssh"
+    assert f"cd {RUN_DIR} && python scripts/mahjong_sim.py -n 4" in seen["argv"][-1]
+
+
+def test_exec_remote_treats_a_lost_connection_as_no_result(monkeypatch, capsys):
+    """255 is ssh, not the command — reporting it as an exit code would make
+    a network blip look like a failed simulation."""
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    monkeypatch.setattr(rt, "sync", lambda cfg: True)
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(255))
+    assert rt.exec_remote("python -c pass", env=FULL_ENV) is None
+    assert "transport failed" in capsys.readouterr().err
+
+
+def test_exec_remote_keeps_stdout_clean_for_piping(monkeypatch, capsys):
+    """A dispatched command's stdout is its result — callers redirect it to a
+    file. Every status line must go to stderr."""
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    monkeypatch.setattr(rt, "sync", lambda cfg: True)
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(0))
+    rt.exec_remote("python -c pass", env=FULL_ENV)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "dispatching" in captured.err
+
+
+def test_exec_remote_times_out_into_a_local_fallback(monkeypatch, capsys):
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    monkeypatch.setattr(rt, "sync", lambda cfg: True)
+
+    def boom(*a, **k):
+        raise rt.subprocess.TimeoutExpired(cmd="ssh", timeout=1)
+
+    monkeypatch.setattr(rt.subprocess, "run", boom)
+    assert rt.exec_remote("python -c pass", env=FULL_ENV, timeout=1) is None
+    assert "no result after" in capsys.readouterr().err
+
+
+def test_remote_python_and_jobs_read_the_config():
+    assert rt.remote_python(FULL_ENV) == FULL_ENV["REMOTE_TEST_PYTHON"]
+    assert rt.remote_jobs(FULL_ENV) == rt.DEFAULT_JOBS
+    assert rt.remote_python({}) is None
+    assert rt.remote_jobs({}) is None
+
+
+# ── mahjong_sim --remote dispatch ─────────────────────────────────────────────
+
+from scripts import mahjong_sim as ms  # noqa: E402
+
+
+def test_synced_roots_are_read_from_the_transport_not_restated():
+    roots = ms.synced_roots()
+    assert "src" in roots and "scripts" in roots
+    assert all(r in rt.SYNC_PATHS for r in roots)
+    # files in SYNC_PATHS are not directories a card could live in
+    assert "README.md" not in roots
+
+
+def test_no_card_means_the_shipped_default():
+    assert ms.remote_card_arg(None) is None
+
+
+def test_a_card_inside_a_synced_directory_becomes_a_relative_path():
+    card = rt.ROOT / "src/bot_modules/games/mahjong/cards/meadow_first_light.json"
+    assert ms.remote_card_arg(card) == (
+        "src/bot_modules/games/mahjong/cards/meadow_first_light.json"
+    )
+
+
+def test_a_card_outside_the_repo_is_refused_with_a_reason(tmp_path):
+    card = tmp_path / "card.json"
+    card.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="outside the repo"):
+        ms.remote_card_arg(card)
+
+
+def test_a_card_in_an_unsynced_repo_directory_is_refused(tmp_path):
+    """In the repo is not enough — the sync only ships some of it."""
+    with pytest.raises(ValueError, match="not synced"):
+        ms.remote_card_arg(rt.ROOT / "models" / "card.json")
+
+
+def test_the_forwarded_argv_round_trips_through_the_parser():
+    """Whatever --remote sends must mean the same thing over there."""
+    import argparse
+    parsed = argparse.Namespace(
+        card=None, games=250, seats=2, seed=9, wall_trim=60,
+        no_second_charleston=True, workers=12, top=5, json=True,
+    )
+    argv = ms._remote_argv(parsed, None)
+    assert argv[:2] == ["-n", "250"]
+    for flag, value in (("--seats", "2"), ("--seed", "9"),
+                        ("--wall-trim", "60"), ("-j", "12"), ("--top", "5")):
+        assert argv[argv.index(flag) + 1] == value
+    assert "--no-second-charleston" in argv and "--json" in argv
+    assert "--remote" not in argv, "the far side must not dispatch again"
+
+
+def test_the_card_leads_the_forwarded_argv():
+    import argparse
+    parsed = argparse.Namespace(
+        card=None, games=1, seats=4, seed=0, wall_trim=0,
+        no_second_charleston=False, workers=1, top=None, json=False,
+    )
+    argv = ms._remote_argv(parsed, "src/cards/x.json")
+    assert argv[0] == "src/cards/x.json"
+
+
 # ── command construction ───────────────────────────────────────────────────────
 
 

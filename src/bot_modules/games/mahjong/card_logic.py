@@ -370,6 +370,150 @@ def load_first_light() -> Card:
     return load_card_file(FIRST_LIGHT_PATH)
 
 
+# ── Difficulty (stage 4 of plans/mahjong-card-generator.md) ──────────────────
+
+#: Score at or above which a line is a **long shot**. Calibrated against
+#: simulation, not chosen: across two cards and ~150 measured games, lines
+#: scoring >= 12 took 295 opening picks between them and won **nothing**,
+#: while every one of the 63 wins came from below it. The separation is
+#: stable anywhere in [12, 14]; at 10 it starts leaking winners.
+LONG_SHOT_SCORE = 12.0
+
+#: Weights. Hand-set and individually explainable rather than fitted — a
+#: member is told *why* a line is hard, and "no group here takes a joker" is
+#: worth more to them than a star rating. Only the LONG_SHOT_SCORE boundary
+#: is validated against measurement; treat the fine-grained ordering as
+#: informed opinion until a larger run earns it.
+_W_RIGID = 1.0        # per tile in a group no joker may fill (§2.6)
+_W_DRAW_ONLY = 0.8    # per tile in a group that cannot be called either (§2.5)
+_W_CONCEALED = 3.0    # flat: the line forfeits calling entirely
+_W_SUIT = 1.5         # per distinct suit to chase
+_W_FORCED_JOKER = 2.0 # per tile demanded past the natural supply
+_W_VARIABLE = -2.0    # per rank variable: binds where your tiles already sit
+_W_FLOWER = -0.5      # per flower: eight copies, the cheapest tiles there are
+
+#: Score mapped onto the card's value range. 0 -> VALUE_MIN, 25 -> VALUE_MAX.
+_VALUE_SPAN = 25.0
+
+
+@dataclass(frozen=True)
+class Difficulty:
+    """How hard a line is to complete, from the tiles alone.
+
+    Structural: no simulation, so it can be shown the instant a card is
+    uploaded. The formula is what the simulator *calibrated*, not what it
+    runs — the expensive measurement happened once, offline, and this is the
+    cheap thing that carries its conclusion.
+
+    ``reasons`` names the terms that actually moved this line, worst first,
+    so a reader learns something about how to play it.
+    """
+
+    score: float
+    reasons: tuple[str, ...]
+
+    @property
+    def long_shot(self) -> bool:
+        return self.score >= LONG_SHOT_SCORE
+
+    @property
+    def band(self) -> str:
+        """Two bands, deliberately. Only the long-shot boundary is validated;
+        inventing a five-point scale would imply resolution we do not have."""
+        return "long shot" if self.long_shot else "standard"
+
+
+def difficulty(hand: Hand) -> Difficulty:
+    """Score a line's difficulty, with the reasons that drove it."""
+    rigid = sum(g.count for g in hand.groups if not g.takes_jokers)
+    draw_only = sum(g.count for g in hand.groups if g.count <= 2)
+    suits = len({g.suit for g in hand.groups if g.suit})
+    forced = sum(
+        max(0, g.count - (FLOWER_COPIES if g.kind is RankKind.FLOWER
+                          else NATURAL_COPIES))
+        for g in hand.groups
+    )
+    variables = sum(1 for g in hand.groups if g.kind is RankKind.VAR)
+    flowers = sum(g.count for g in hand.groups if g.kind is RankKind.FLOWER)
+
+    score = (
+        _W_RIGID * rigid
+        + _W_DRAW_ONLY * draw_only
+        + (_W_CONCEALED if hand.concealed else 0.0)
+        + _W_SUIT * suits
+        + _W_FORCED_JOKER * forced
+        + _W_VARIABLE * variables
+        + _W_FLOWER * flowers
+    )
+
+    reasons: list[tuple[float, str]] = []
+    if rigid == hand.tile_total:
+        reasons.append((_W_RIGID * rigid,
+                        "no group takes a joker — every tile must be a natural"))
+    elif rigid:
+        reasons.append((_W_RIGID * rigid,
+                        f"{rigid} of {hand.tile_total} tiles cannot take a joker"))
+    if draw_only:
+        reasons.append((_W_DRAW_ONLY * draw_only,
+                        f"{draw_only} tiles sit in groups too small to call"))
+    if hand.concealed:
+        reasons.append((_W_CONCEALED, "concealed — no exposures at all"))
+    if suits > 1:
+        reasons.append((_W_SUIT * suits, f"spans {suits} suits"))
+    if forced:
+        reasons.append((_W_FORCED_JOKER * forced,
+                        f"needs {forced} joker(s) past the natural supply"))
+    if variables:
+        reasons.append((_W_VARIABLE * variables,
+                        f"{variables} rank variable(s) — binds to the tiles you hold"))
+    if flowers:
+        reasons.append((_W_FLOWER * flowers, f"{flowers} flowers, of which 8 exist"))
+    reasons.sort(key=lambda r: -r[0])
+    return Difficulty(score=score, reasons=tuple(r[1] for r in reasons))
+
+
+def value_for_difficulty(score: float) -> int:
+    """Price a line from its difficulty, on the card's 25–75 scale.
+
+    A card already encodes difficulty in its values — First Light's author
+    and this score agree at r = 0.64 — but by hand and unevenly. Deriving it
+    makes the relationship explicit and consistent across a whole card.
+    """
+    span = VALUE_MAX - VALUE_MIN
+    raw = VALUE_MIN + span * max(0.0, min(1.0, score / _VALUE_SPAN))
+    return int(round(raw / 5) * 5)
+
+
+def required_rank(hand: Hand) -> int:
+    """Lowest deck ceiling this line can be played on.
+
+    A concrete rank needs a deck that reaches it; a run needs room for its
+    whole span, so ``x..x+4`` needs 5 even though no single token says so.
+    """
+    needed = 1
+    for g in hand.groups:
+        if g.kind is RankKind.CONCRETE and g.concrete is not None:
+            needed = max(needed, g.concrete)
+        elif g.kind is RankKind.VAR and g.offset is not None:
+            needed = max(needed, g.offset + 1)
+    return needed
+
+
+def lines_needing_more_rank(card: Card, max_rank: int) -> list[str]:
+    """Ids of lines a table playing to ``max_rank`` could never complete.
+
+    A short deck does not make a card invalid — it makes some of its lines
+    dead ink, which is a thing to warn an admin about at activation rather
+    than discover as an unwinnable hand.
+    """
+    return [h.id for h in card.hands if required_rank(h) > max_rank]
+
+
+def difficulty_profile(card: Card) -> dict[str, Difficulty]:
+    """Every line's difficulty, by hand id — the card viewer's data."""
+    return {h.id: difficulty(h) for h in card.hands}
+
+
 # ── Linter (§3.4) ────────────────────────────────────────────────────────────
 
 
@@ -416,12 +560,17 @@ def _shape_payload(g: Group) -> tuple[str, str]:
     return (g.kind.value, g.wind or g.dragon or "")
 
 
-def _canonical_shape(hand: Hand):
+def canonical_shape(hand: Hand) -> tuple[tuple[int, str, str, str], ...]:
     """Shape signature for the near-duplicate warning: groups sorted, suit
     letters canonicalized by taking the minimum over all 3! relabelings — so
     a line recolored *and* reordered still reads as the same shape. The
     parity lock is part of the identity: an odd/even twin pair is two
-    genuinely disjoint lines, not a near-duplicate (grammar-verify G3)."""
+    genuinely disjoint lines, not a near-duplicate (grammar-verify G3).
+
+    Public because the generator (`card_gen`) dedupes its candidate pool by
+    exactly the identity the linter warns about — two spellings of one shape
+    must not be able to enter the pool as separate hands.
+    """
     signatures = []
     for perm in permutations(_SUIT_LETTERS):
         mapping: dict[str, str] = dict(zip(_SUIT_LETTERS, perm))
@@ -590,7 +739,7 @@ def lint_card(card: Card) -> LintReport:
 
     shapes: dict[tuple[tuple[int, str, str, str], ...], str] = {}
     for hand in card.hands:
-        shape = _canonical_shape(hand)
+        shape = canonical_shape(hand)
         if shape in shapes:
             report.warnings.append(
                 f"hands {shapes[shape]!r} and {hand.id!r} are near-duplicates "

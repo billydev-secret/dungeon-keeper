@@ -51,6 +51,10 @@ class ConfigBody(BaseModel):
     assist_default: str = Field(pattern=f"^({'|'.join(ASSIST_MODES)})$")
     practice_bots: bool
     fill_bots: bool
+    # 0 = no quick tables; otherwise the rank ceiling they play to. Defaulted
+    # so a client that predates the option keeps the full deck rather than
+    # failing validation.
+    short_deck_rank: int = Field(default=0, ge=0, le=8)
 
 
 class CardUploadBody(BaseModel):
@@ -72,6 +76,7 @@ def _settings_payload(conn, guild_id: int) -> dict:
         "phase_timer": s.phase_timer,
         "duel_wall_trim": s.duel_wall_trim,
         "wall_jokers": s.wall_jokers,
+        "short_deck_rank": s.short_deck_rank,
         "second_charleston": s.second_charleston,
         "stakes_allowed": list(s.stakes_allowed),
         "assist_default": s.assist_default,
@@ -146,6 +151,8 @@ async def put_config(request: Request, body: ConfigBody, user=_ADMIN):
             set_config_value(conn, "mahjong_phase_timer", str(body.phase_timer), guild_id)
             set_config_value(conn, "mahjong_duel_wall_trim", str(body.duel_wall_trim), guild_id)
             set_config_value(conn, "mahjong_wall_jokers", str(body.wall_jokers), guild_id)
+            set_config_value(
+                conn, "mahjong_short_deck_rank", str(body.short_deck_rank), guild_id)
             set_config_value(
                 conn, "mahjong_second_charleston",
                 "1" if body.second_charleston else "0", guild_id)

@@ -37,12 +37,35 @@ from itertools import permutations
 
 from bot_modules.games.mahjong.card_logic import Card, Group, Hand, RankKind
 from bot_modules.games.mahjong.tiles import (
+    FULL_RANK,
     SUITS,
     STANDARD_JOKERS,
     TILE_ORDER,
     Tile,
-    copies,
+    copies_in_play,
 )
+
+#: How much dearer a draw-only tile is than one with three routes. Three
+#: opponents discard for every draw you take, so claims are the common way a
+#: tile arrives; 3.0 is that ratio rather than a fitted constant — and a
+#: sweep of 1.5 through 3.0 at 400 games each found the result insensitive
+#: across the whole range, so nothing hangs on the exact value.
+#:
+#: Lines are ranked by :attr:`Prospect.effort` rather than by raw tile
+#: distance. Distance treats every missing tile as equally costly, which is
+#: false: a tile missing from a kong can arrive three ways — drawn, claimed,
+#: or covered by a joker — while one missing from a pair can only be drawn,
+#: since pairs are uncallable (§2.5) and jokers never fill a group of two
+#: (§2.6). Ranking by distance therefore pointed players at pair-heavy hands
+#: that cannot be finished: across two cards, lines whose tiles mostly
+#: cannot take a joker drew 295 opening picks for **zero** wins, and on
+#: First Light `qp-2` alone was named the closest line 670 times out of
+#: 2,000 seat-hands and won nothing. Ranking by effort took that to zero and
+#: gained ~7 points of win rate over 500 paired games.
+#:
+#: ``distance`` keeps its plain meaning — it is the number a member is
+#: shown, and must not quietly become a weighted score.
+DRAW_ONLY_EFFORT = 3.0
 
 _WIND_TILES = {"N": Tile.NORTH, "E": Tile.EAST, "W": Tile.WEST, "S": Tile.SOUTH}
 _DRAGON_TILES = {"R": Tile.RED, "G": Tile.GREEN, "soap": Tile.SOAP}
@@ -94,23 +117,29 @@ class Match:
 # ── Binding enumeration ──────────────────────────────────────────────────────
 
 
-def _bindings(hand: Hand):
+def _bindings(hand: Hand, max_rank: int = FULL_RANK):
     """Yield every (x, suit_map, dragons) binding the hand's shape allows.
 
     ``dragons`` is a pair: the D binding and the D2 binding (grammar v1.1 —
     D2 groups must bind a *different* dragon than D). A hand's ``x_parity``
     filters the x candidates; suit-matched dragons need no slot here, they
     follow the suit map.
+
+    ``max_rank`` is the table's deck ceiling. A run must land entirely
+    inside it, or the binding names tiles nobody can draw — and since a
+    caller then counts *unseen copies* of those tiles to judge liveness, an
+    unfiltered range would keep dead lines looking alive on a short deck.
     """
     offsets = [g.offset for g in hand.groups if g.offset is not None]
     if offsets:
-        xs: list[int | None] = list(range(1, 10 - max(offsets)))
+        xs: list[int | None] = list(range(1, max_rank + 1 - max(offsets)))
         if hand.x_parity == "odd":
             xs = [x for x in xs if x is not None and x % 2 == 1]
         elif hand.x_parity == "even":
             xs = [x for x in xs if x is not None and x % 2 == 0]
     else:
         xs = [None]
+
 
     letters = sorted({g.suit for g in hand.groups if g.suit is not None})
     if letters:
@@ -310,6 +339,7 @@ def reachable_lines(
     exposures: list[Exposure],
     card: Card,
     seen_elsewhere: Counter[Tile],
+    max_rank: int = FULL_RANK,
     *,
     joker_copies: int = STANDARD_JOKERS,
 ) -> list[Hand]:
@@ -332,20 +362,26 @@ def reachable_lines(
         own[Tile.JOKER] += e.jokers
 
     def unseen(tile: Tile) -> int:
-        supply = joker_copies if tile is Tile.JOKER else copies(tile)
-        return max(0, supply - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
+        return max(
+            0,
+            copies_in_play(tile, max_rank, jokers=joker_copies)
+            - seen_elsewhere.get(tile, 0)
+            - own.get(tile, 0),
+        )
 
     live: list[Hand] = []
     for hand in card.hands:
         if hand.concealed and exposures:
             continue
-        if _line_reachable(hand, counts, jokers_held, exposures, unseen):
+        if _line_reachable(hand, counts, jokers_held, exposures, unseen, max_rank):
             live.append(hand)
     return live
 
 
-def _line_reachable(hand, concealed_counts, jokers_held, exposures, unseen) -> bool:
-    for x, suit_map, dragons in _bindings(hand):
+def _line_reachable(
+    hand, concealed_counts, jokers_held, exposures, unseen, max_rank=FULL_RANK
+) -> bool:
+    for x, suit_map, dragons in _bindings(hand, max_rank):
         resolved = [(g, _group_natural(g, x, suit_map, dragons)) for g in hand.groups]
         for used in _exposure_assignments(exposures, resolved):
             remaining = [rg for i, rg in enumerate(resolved) if i not in used]
@@ -369,13 +405,15 @@ def fallow_base_value(
     exposures: list[Exposure],
     card: Card,
     seen_elsewhere: Counter[Tile],
+    max_rank: int = FULL_RANK,
     *,
     joker_copies: int = STANDARD_JOKERS,
 ) -> int:
     """The Duel fallow payout's base: the survivor's lowest-value live line,
     or the card minimum when nothing is live (amendment 2)."""
     live = reachable_lines(
-        concealed, exposures, card, seen_elsewhere, joker_copies=joker_copies)
+        concealed, exposures, card, seen_elsewhere, max_rank,
+        joker_copies=joker_copies)
     if live:
         return min(h.value for h in live)
     return min(h.value for h in card.hands)
@@ -401,6 +439,11 @@ class Prospect:
     distance: int
     needed: tuple[tuple[Tile, int], ...]
     dead_weight: tuple[tuple[Tile, int], ...]
+    #: ``distance`` reweighted by how a tile can actually arrive: one point
+    #: per tile that a draw, a claim or a joker could supply, and
+    #: ``DRAW_ONLY_EFFORT`` per tile that only your own draw can. Always
+    #: what lines are ranked by; ``distance`` stays the plain tile count.
+    effort: float = 0.0
 
 
 def closest_lines(
@@ -409,6 +452,7 @@ def closest_lines(
     card: Card,
     seen_elsewhere: Counter[Tile],
     limit: int | None = 3,
+    max_rank: int = FULL_RANK,
     *,
     joker_copies: int = STANDARD_JOKERS,
 ) -> list[Prospect]:
@@ -417,8 +461,10 @@ def closest_lines(
     Liveness is judged per binding exactly as :func:`reachable_lines` does,
     and a line's distance is minimised over its *live* bindings only — a
     dead binding may sit nearer, but pointing at tiles that can no longer
-    be drawn would be a lie. Ties: distance, then value descending, then
-    card order (distances cluster hard, so ties are the common case).
+    be drawn would be a lie. Ranked by *effort*, not raw distance — see
+    `DRAW_ONLY_EFFORT`. Ties break on value **ascending** then card order:
+    ties cluster hard, and handing them to the dearer line would favour the
+    harder one every time.
     """
     counts = Counter(concealed)
     jokers_held = counts.pop(Tile.JOKER, 0)
@@ -429,20 +475,28 @@ def closest_lines(
         own[Tile.JOKER] += e.jokers
 
     def unseen(tile: Tile) -> int:
-        supply = joker_copies if tile is Tile.JOKER else copies(tile)
-        return max(0, supply - seen_elsewhere.get(tile, 0) - own.get(tile, 0))
+        return max(
+            0,
+            copies_in_play(tile, max_rank, jokers=joker_copies)
+            - seen_elsewhere.get(tile, 0)
+            - own.get(tile, 0),
+        )
 
     exposure_total = sum(e.count for e in exposures)
 
-    prospects: list[tuple[int, int, int, Prospect]] = []
+    prospects: list[tuple[float, int, int, Prospect]] = []
     for index, hand in enumerate(card.hands):
         if hand.concealed and exposures:
             continue
         best = _line_prospect(
-            hand, counts, jokers_held, exposures, exposure_total, unseen
+            hand, counts, jokers_held, exposures, exposure_total, unseen, max_rank
         )
         if best is not None:
-            prospects.append((best.distance, -hand.value, index, best))
+            # Ties break toward the *cheaper* line. They used to break on
+            # value descending, which handed a tie to the dearer — and the
+            # dearer line is reliably the harder one, so the tie-break was
+            # quietly compounding the very bias effort ranking removes.
+            prospects.append((best.effort, hand.value, index, best))
     prospects.sort(key=lambda p: p[:3])
     ranked = [p[3] for p in prospects]
     return ranked if limit is None else ranked[:limit]
@@ -455,11 +509,12 @@ def _line_prospect(
     exposures: list[Exposure],
     exposure_total: int,
     unseen,
+    max_rank: int = FULL_RANK,
 ) -> Prospect | None:
     """Minimum distance over the line's live bindings, or None if none is
     live. First-found wins a distance tie, so the report is deterministic."""
     best: Prospect | None = None
-    for x, suit_map, dragons in _bindings(hand):
+    for x, suit_map, dragons in _bindings(hand, max_rank):
         resolved = [(g, _group_natural(g, x, suit_map, dragons)) for g in hand.groups]
         for used in _exposure_assignments(exposures, resolved):
             remaining = [rg for i, rg in enumerate(resolved) if i not in used]
@@ -493,6 +548,7 @@ def _line_prospect(
                     needed[tile] += short_small
                 if (short_large := (n - small.get(tile, 0)) - to_large) > 0:
                     large_deficit[tile] += short_large
+            small_short = sum(needed.values())
             jokers_used = min(jokers_held, sum(large_deficit.values()))
             matched += jokers_used
 
@@ -508,7 +564,13 @@ def _line_prospect(
             needed.update(+large_deficit)  # unary + drops zeroed gaps
 
             distance = HAND_TILES - matched
-            if best is not None and distance >= best.distance:
+            # Draw-only tiles counted at their real cost; everything still
+            # missing from a 3+ group can also be claimed or jokered.
+            effort = (
+                small_short * DRAW_ONLY_EFFORT
+                + (distance - small_short) * 1.0
+            )
+            if best is not None and effort >= best.effort:
                 continue
             dead = {
                 tile: have - min(have, demand.get(tile, 0))
@@ -518,6 +580,7 @@ def _line_prospect(
             best = Prospect(
                 hand=hand,
                 distance=distance,
+                effort=effort,
                 needed=tuple(
                     sorted(needed.items(), key=lambda p: TILE_ORDER[p[0]])
                 ),
@@ -551,6 +614,7 @@ def call_advice(
     card: Card,
     seen: Counter[Tile],
     tile: Tile,
+    max_rank: int = FULL_RANK,
     *,
     joker_copies: int = STANDARD_JOKERS,
 ) -> CallAdvice | None:
@@ -565,7 +629,8 @@ def call_advice(
     if tile is Tile.JOKER:
         return None
     before = closest_lines(
-        concealed, exposures, card, seen, limit=1, joker_copies=joker_copies)
+        concealed, exposures, card, seen, limit=1, max_rank=max_rank,
+        joker_copies=joker_copies)
     if not before:
         return None
     naturals = [t for t in concealed if t is tile]
@@ -585,7 +650,8 @@ def call_advice(
                 natural=tile, count=count,
                 jokers=sum(1 for t in given if t is Tile.JOKER),
             )],
-            card, seen, limit=1, joker_copies=joker_copies,
+            card, seen, limit=1, max_rank=max_rank,
+            joker_copies=joker_copies,
         )
         if not after or after[0].distance >= before[0].distance:
             continue

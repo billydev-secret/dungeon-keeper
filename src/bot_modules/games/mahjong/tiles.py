@@ -112,6 +112,13 @@ class Tile(Enum):
     def __repr__(self) -> str:  # "Tile<5b>" beats "<Tile.BAM5: '5b'>" in diffs
         return f"Tile<{self.value}>"
 
+    #: Enum's own __hash__ hashes the member *name*; members are singletons
+    #: and compare by identity, so an identity hash is equivalent and much
+    #: cheaper. The matcher hashes tiles into Counters and dicts millions of
+    #: times per simulated game (tens of thousands per real turn), and this
+    #: one line took ~15% off a headless sim run.
+    __hash__ = object.__hash__
+
 
 _LABELS = {
     "wn": "North", "we": "East", "ww": "West", "ws": "South",
@@ -141,23 +148,65 @@ DECK_SIZE = 152
 #: harder in the same breath.
 STANDARD_JOKERS = 8
 
+#: Highest suited rank a table may play to. The full game is 9; a shorter
+#: deck is a per-table pacing option (see `TableConfig.max_rank`), because
+#: hand length tracks deck size almost exactly while the win rate does not
+#: move at all: measured at 1,000 games per arm, 152 tiles gives ~72 turns,
+#: 116 gives ~43 and 104 gives ~35, all at ~93% mahjong.
+#:
+#: The two dials are independent and both raise how often a hand finishes —
+#: jokers by closing gaps, a short deck by making the tiles a hand wants
+#: turn up sooner. Both default to the full game.
+FULL_RANK = 9
+MIN_RANK = 5   # below this the wall gets too short for four seats to finish
 
-def build_deck(*, jokers: int = STANDARD_JOKERS) -> list[Tile]:
-    """The 152-tile deck in definition order (unshuffled), or a deck with
-    ``jokers`` jokers instead of the standard eight."""
+
+def in_play(tile: Tile, max_rank: int = FULL_RANK) -> bool:
+    """Is this tile in a deck played to ``max_rank``? Honours, flowers and
+    jokers always are; only suited ranks are trimmed."""
+    return not tile.is_suited or (tile.rank or 0) <= max_rank
+
+
+def copies_in_play(
+    tile: Tile, max_rank: int = FULL_RANK, *, jokers: int = STANDARD_JOKERS
+) -> int:
+    """Physical copies of a tile on a table playing to ``max_rank``.
+
+    **Zero for a tile the deck does not contain.** Reachability counts
+    unseen copies to decide whether a line is still live, so a trimmed deck
+    that still reported four of every rank would have the matcher — and the
+    assist engine, and the bots — believing in tiles nobody can ever draw.
+    """
+    if not in_play(tile, max_rank):
+        return 0
+    return jokers if tile is Tile.JOKER else copies(tile)
+
+
+def deck_size(
+    max_rank: int = FULL_RANK, *, jokers: int = STANDARD_JOKERS
+) -> int:
+    return sum(copies_in_play(t, max_rank, jokers=jokers) for t in Tile)
+
+
+def build_deck(
+    max_rank: int = FULL_RANK, *, jokers: int = STANDARD_JOKERS
+) -> list[Tile]:
+    """The deck in definition order (unshuffled), trimmed to ``max_rank``,
+    with ``jokers`` jokers instead of the standard eight."""
     return [
         tile
         for tile in Tile
-        for _ in range(jokers if tile is Tile.JOKER else copies(tile))
+        for _ in range(copies_in_play(tile, max_rank, jokers=jokers))
     ]
 
 
 def shuffled_wall(
-    rng: random.Random | None = None, *, jokers: int = STANDARD_JOKERS
+    rng: random.Random | None = None, max_rank: int = FULL_RANK,
+    *, jokers: int = STANDARD_JOKERS
 ) -> list[Tile]:
     """A freshly shuffled wall. Shuffle is CSPRNG (§2.2) unless a test
     injects its own ``rng`` for determinism."""
-    wall = build_deck(jokers=jokers)
+    wall = build_deck(max_rank, jokers=jokers)
     (rng or secrets.SystemRandom()).shuffle(wall)
     return wall
 

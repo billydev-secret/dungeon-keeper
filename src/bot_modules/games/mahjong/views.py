@@ -17,7 +17,7 @@ import discord
 
 from bot_modules.games.mahjong.game_logic import GameState, Phase
 from bot_modules.games.mahjong.tile_render import chip, load_emoji_map
-from bot_modules.games.mahjong.tiles import Tile, sort_rack
+from bot_modules.games.mahjong.tiles import FULL_RANK, Tile, sort_rack
 
 if TYPE_CHECKING:
     from bot_modules.cogs.mahjong_cog import MahjongCog
@@ -362,20 +362,37 @@ class CreateTableView(discord.ui.View):
 
     def __init__(self, cog: "MahjongCog", stakes: tuple[int, ...],
                  escrow_for, seat_count: int | None = None,
-                 *, practice_open: bool = False):
+                 *, practice_open: bool = False, short_rank: int = 0,
+                 max_rank: int = FULL_RANK):
         super().__init__(timeout=300)
         self.cog = cog
         if seat_count is None:
-            for label, count in (("Duel (2)", 2), ("Full Table (4)", 4)):
-                b = discord.ui.Button(label=label,
-                                      style=discord.ButtonStyle.primary)
+            sizes = [("Duel (2)", 2, FULL_RANK), ("Full Table (4)", 4, FULL_RANK)]
+            if short_rank:
+                # A shorter deck is the length dial, so these are labelled by
+                # what a player notices — a faster game — with the numbers in
+                # play spelled out rather than left to be discovered mid-hand.
+                sizes += [
+                    (f"Quick Duel (1–{short_rank})", 2, short_rank),
+                    (f"Quick Table (1–{short_rank})", 4, short_rank),
+                ]
+            for label, count, rank in sizes:
+                b = discord.ui.Button(
+                    label=label,
+                    style=(discord.ButtonStyle.primary if rank == FULL_RANK
+                           else discord.ButtonStyle.success),
+                )
 
-                async def cb(interaction: discord.Interaction, count=count):
+                async def pick_size(interaction: discord.Interaction,
+                                    count=count, rank=rank):
+                    note = ("" if rank == FULL_RANK else
+                            f" (quick deck: numbers 1–{rank} only)")
                     await interaction.response.edit_message(
-                        content="Pick the stake — escrow locks when you sit:",
-                        view=CreateTableView(cog, stakes, escrow_for, count),
+                        content=f"Pick the stake — escrow locks when you sit{note}:",
+                        view=CreateTableView(cog, stakes, escrow_for, count,
+                                             max_rank=rank),
                     )
-                b.callback = cb
+                b.callback = pick_size
                 self.add_item(b)
             if practice_open:
                 for label, count in (("Practice Duel", 2), ("Practice Table", 4)):
@@ -407,19 +424,23 @@ class CreateTableView(discord.ui.View):
                     f"{stake}/point — {escrow_for(seat_count, stake)} coins "
                     "escrow locks when you open it."
                 ),
-                view=OpenTableView(cog, seat_count, stake),
+                view=OpenTableView(cog, seat_count, stake, max_rank),
             )
         select.callback = on_stake
         self.add_item(select)
 
 
 class OpenTableView(discord.ui.View):
-    def __init__(self, cog: "MahjongCog", seat_count: int, stake: int):
+    def __init__(self, cog: "MahjongCog", seat_count: int, stake: int,
+                 max_rank: int = FULL_RANK):
         super().__init__(timeout=300)
+        self.max_rank = max_rank
         b = discord.ui.Button(label="Open Table",
                               style=discord.ButtonStyle.success)
 
         async def cb(interaction: discord.Interaction):
-            await cog.handle_create_open(interaction, seat_count, stake)
+            await cog.handle_create_open(
+                interaction, seat_count, stake, max_rank
+            )
         b.callback = cb
         self.add_item(b)

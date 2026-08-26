@@ -57,7 +57,7 @@ def test_bot_discards_dead_weight_not_line_tiles():
     assert tile not in {Tile("flower"), Tile("2d"), Tile("6b")}
     # and the discard is legal: actually in the rack
     assert tile in state.seats[0].rack
-    state2, _ = G.discard(state, 0, tile)
+    state2, _ = G.discard(state, 0, tile, CARD)
     assert state2.phase is Phase.CLAIM_WINDOW
 
 
@@ -96,7 +96,7 @@ def _window(racks, discard_tile, *, discarder=1, pit=""):
     state = play_state(2, racks, turn=discarder)
     if pit:
         state.discards = [(discarder, t) for t in tiles(pit)]
-    state, _ = G.discard(state, discarder, Tile(discard_tile))
+    state, _ = G.discard(state, discarder, Tile(discard_tile), CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     return state
 
@@ -121,13 +121,27 @@ def test_bot_calls_when_the_exposure_advances_the_best_line():
     assert state2.seats[0].exposures
 
 
-def test_bot_passes_a_useless_discard_and_any_joker():
+def test_a_bot_spends_no_action_on_a_discard_it_could_never_claim():
+    """A seat with no legal route is passed for when the tile lands, so
+    there is nothing left for the brain to decide — and a useless discard
+    and a discarded joker are both exactly that case."""
     state = _window({0: "flower*4 2d*4 6b*2 9d wn 1b", 1: "9c*12 5c"}, "5c")
-    action = decide(state, 0, CARD, random.Random(0))
-    assert action == BotAction("claim", {"kind": "pass", "tiles": []})
+    assert state.claims[0] == (G.AUTO_PASS, [])
+    assert decide(state, 0, CARD, random.Random(0)) is None
+
     state = _window({0: "flower*4 2d*4 6b*2 9d wn 1b", 1: "9c*12 joker"}, "joker")
-    action = decide(state, 0, CARD, random.Random(0))
-    assert action == BotAction("claim", {"kind": "pass", "tiles": []})
+    assert state.claims[0] == (G.AUTO_PASS, [])
+    assert decide(state, 0, CARD, random.Random(0)) is None
+
+
+def test_a_bot_still_passes_a_discard_it_could_have_taken():
+    """The decision only disappears where there was none to make: holding
+    two matching tiles is a legal call, so the seat is left to choose."""
+    state = _window({0: "flower*4 2d*4 6b*2 5c*2 9d", 1: "9c*12 5c"}, "5c")
+    assert 0 not in state.claims
+    assert decide(state, 0, CARD, random.Random(0)) == BotAction(
+        "claim", {"kind": "pass", "tiles": []}
+    )
 
 
 def test_bot_never_acts_out_of_turn_or_when_fallow():
@@ -199,7 +213,7 @@ _ACTIONS = {
         st, seat, kw["n"]),
     "courtesy_pick": lambda st, seat, kw, rng: G.courtesy_pick(
         st, seat, kw["tiles"]),
-    "discard": lambda st, seat, kw, rng: G.discard(st, seat, kw["tile"]),
+    "discard": lambda st, seat, kw, rng: G.discard(st, seat, kw["tile"], CARD),
     "claim": lambda st, seat, kw, rng: G.claim(
         st, seat, kw["kind"], kw.get("tiles", []), CARD, rng),
     "redeem_joker": lambda st, seat, kw, rng: G.redeem_joker(
@@ -233,10 +247,17 @@ def _drive_full_game(seat_count: int, seed: int):
             state, _ = _ACTIONS[action.action](state, seat, action.kwargs, rng)
             acted = True
             break  # one action per iteration, like the real driver
-        assert acted, (
-            f"stalled in {state.phase} at step {step} "
-            f"(seed {seed}, {seat_count} seats)"
-        )
+        if not acted:
+            # Nothing for any seat to do. Since seats with no legal route to
+            # a discard are passed for automatically, a claim window can be
+            # fully answered the moment the tile lands — the real service
+            # arms a short deadline for exactly this, and the simulator does
+            # the same, so the harness feeds the timeout they would.
+            assert state.phase is Phase.CLAIM_WINDOW, (
+                f"stalled in {state.phase} at step {step} "
+                f"(seed {seed}, {seat_count} seats)"
+            )
+            state, _ = G.timeout(state, CARD, rng)
     pytest.fail(f"game never ended (seed {seed}, {seat_count} seats)")
 
 
@@ -270,7 +291,7 @@ def test_all_joker_rack_still_discards():
     action = decide(state, 0, CARD, random.Random(0))
     assert action is not None and action.action == "discard"
     assert action.kwargs["tile"] is Tile.JOKER   # nothing else to throw
-    state2, _ = G.discard(state, 0, action.kwargs["tile"])
+    state2, _ = G.discard(state, 0, action.kwargs["tile"], CARD)
     assert state2.phase is Phase.CLAIM_WINDOW
 
 

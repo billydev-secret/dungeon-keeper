@@ -36,14 +36,19 @@ from bot_modules.core.db_utils import get_config_value, open_db
 from bot_modules.games.mahjong import game_logic as engine
 from bot_modules.games.mahjong.bot_logic import bot_member_id, decide, is_bot_id
 from bot_modules.games.mahjong.game_logic import ASSIST_MODES
-from bot_modules.games.mahjong.card_logic import Card, CardError, load_card
+from bot_modules.games.mahjong.card_logic import (
+    Card,
+    CardError,
+    lines_needing_more_rank,
+    load_card,
+)
 from bot_modules.games.mahjong.game_logic import (
     ActionRejected,
     GameState,
     Phase,
     TableConfig,
 )
-from bot_modules.games.mahjong.tiles import shuffled_wall
+from bot_modules.games.mahjong.tiles import FULL_RANK, MIN_RANK, shuffled_wall
 from bot_modules.services import economy_wager_service as wager_svc
 from bot_modules.services.economy_service import (
     apply_credit,
@@ -62,6 +67,16 @@ DEAL_COUNTDOWN = 10.0
 #: Bot reaction delay bounds, seconds (bots plan B4): instant responses feel
 #: robotic and leak information; tests pin these to ~0.
 BOT_DELAY = (1.5, 4.0)
+#: How long a fully-answered claim window lingers: long enough for the table
+#: to register what was thrown, and no longer. Not zero — the window is also
+#: the beat in which a discard is read, and collapsing it would make tiles
+#: flash past unseen.
+ANSWERED_WINDOW = 1.5
+
+#: A quick (short-deck) table needs at least this many of the card's lines
+#: to still be reachable, or there is nothing to play for.
+MIN_PLAYABLE_LINES = 5
+
 #: Lobby that never fills / settle screen nobody rematches: dissolve (§6.2).
 LOBBY_LIFETIME = 600.0
 
@@ -88,9 +103,20 @@ class MahjongSettings:
     assist_default: str = "gap"  # house default for members with no pick (A8)
     practice_bots: bool = True   # solo practice tables (bots plan B7)
     fill_bots: bool = False      # house-staked fill seats — off until proven
+    #: Rank ceiling for "quick" tables, or 0 for none. A shorter deck is the
+    #: length dial: measured at 1,000 games per arm, 152 tiles runs ~72 turns
+    #: and 104 (ranks 1-5) ~35, with the win rate unmoved at ~93%. Off by
+    #: default — the full game stays what the server plays unless an admin
+    #: opens the option.
+    short_deck_rank: int = 0
 
     def claim_window(self, seat_count: int) -> float:
         return self.claim_window_2 if seat_count == 2 else self.claim_window_4
+
+
+def _short_rank(raw: int) -> int:
+    """0 (off) or a ceiling the engine will accept; anything else is off."""
+    return raw if MIN_RANK <= raw < FULL_RANK else 0
 
 
 def load_settings(conn, guild_id: int) -> MahjongSettings:
@@ -129,6 +155,7 @@ def load_settings(conn, guild_id: int) -> MahjongSettings:
             conn, "mahjong_practice_bots", "1", guild_id) == "1",
         fill_bots=get_config_value(
             conn, "mahjong_fill_bots", "0", guild_id) == "1",
+        short_deck_rank=_short_rank(_i("short_deck_rank", 0)),
     )
 
 
@@ -315,6 +342,7 @@ class MahjongService:
     async def create_table(
         self, guild_id: int, channel_id: int, host_id: int,
         seat_count: int, stake: int, *, practice: bool = False,
+        max_rank: int = FULL_RANK,
     ) -> int:
         """Open a lobby: validate the stake, hold the host's escrow, insert
         the table + seat rows. Raises TableError with the house ❌ copy.
@@ -341,12 +369,26 @@ class MahjongService:
                 if active is None:
                     raise TableError("No Meadow Card is active — an admin sets one on the dashboard.")
                 card_row_id, card = active
+                if max_rank != FULL_RANK:
+                    if settings.short_deck_rank != max_rank:
+                        raise TableError("Quick tables aren't open on this server.")
+                    # A short deck turns some lines into dead ink — a run
+                    # needs room for its whole span. A handful is expected;
+                    # a card that mostly needs the high numbers would leave
+                    # the table with almost nothing to play for.
+                    dead = lines_needing_more_rank(card, max_rank)
+                    if len(card.hands) - len(dead) < MIN_PLAYABLE_LINES:
+                        raise TableError(
+                            "The active card doesn't have enough hands that "
+                            "fit a quick deck — an admin can pick another."
+                        )
                 now = time.time()
                 config = TableConfig(
                     seat_count=seat_count,
                     wall_trim=settings.duel_wall_trim if seat_count == 2 else 0,
                     second_charleston=settings.second_charleston,
                     wall_jokers=settings.wall_jokers,
+                    max_rank=max_rank,
                 )
                 state = engine.create_table(config, host_id)
                 try:
@@ -552,7 +594,7 @@ class MahjongService:
             elif action == "courtesy_pick":
                 state, events = engine.courtesy_pick(state, seat, kwargs["tiles"])
             elif action == "discard":
-                state, events = engine.discard(state, seat, kwargs["tile"])
+                state, events = engine.discard(state, seat, kwargs["tile"], card)
             elif action == "claim":
                 state, events = engine.claim(
                     state, seat, kwargs["kind"], kwargs.get("tiles", []),
@@ -595,7 +637,10 @@ class MahjongService:
 
             if state.phase is Phase.LOBBY:
                 if len(state.seats) == state.seat_count:
-                    state, events = engine.deal(state, shuffled_wall(self._rng, jokers=state.config.wall_jokers))
+                    state, events = engine.deal(state, shuffled_wall(
+                        self._rng, state.config.max_rank,
+                        jokers=state.config.wall_jokers,
+                    ))
                 else:  # never filled — dissolve + refund (§6.2)
                     state, events = engine.close_table(state, "dissolved")
             elif state.phase is Phase.SETTLE:
@@ -646,12 +691,25 @@ class MahjongService:
         ended, close out rows if the table closed, persist, pick the next
         deadline. Runs inside the caller's transaction."""
         table_id = int(row["id"])
+        now = time.time()
+
+        # Stamp the deal here rather than at the three call sites: the engine
+        # is deliberately clock-free (parent plan D14), so the service owns
+        # every timestamp, and `hand_dealt` is emitted by exactly one
+        # transition however it was reached (lobby timer, or rematch).
+        # A deal and a settle never share a transition — a hand starts in one
+        # and ends in another — so the settle path below always reads this
+        # back from the row rather than needing it in hand here.
+        if any(k == "hand_dealt" for k, _ in events):
+            conn.execute(
+                "UPDATE mahjong_tables SET hand_started_at = ? WHERE id = ?",
+                (now, table_id),
+            )
 
         if any(k == "hand_settled" for k, _ in events):
             self._settle_money(conn, row, state)
 
         deadline: float | None
-        now = time.time()
         if state.phase is Phase.CLOSED:
             reason = next(
                 (d.get("reason") for k, d in events if k == "table_closed"),
@@ -679,7 +737,18 @@ class MahjongService:
         if state.phase is Phase.LOBBY:
             deadline = float(row["deadline_at"] or (now + LOBBY_LIFETIME))
         elif state.phase is Phase.CLAIM_WINDOW:
-            deadline = now + settings.claim_window(state.seat_count)
+            responders = [
+                s for s in state.live_seats() if s != state.live_discarder
+            ]
+            if responders and set(state.claims) >= set(responders):
+                # Every seat is already answered — nobody with a legal route
+                # is being waited on. Hold the tile just long enough for the
+                # table to see it rather than the full window, which is 8
+                # seconds on each of ~70 discards and, measured over 964
+                # windows, has nobody who can act 28.7% of the time.
+                deadline = now + ANSWERED_WINDOW
+            else:
+                deadline = now + settings.claim_window(state.seat_count)
         elif state.phase is Phase.AWAIT_DISCARD:
             deadline = now + settings.turn_timer
         elif state.phase is Phase.SETTLE:
@@ -713,16 +782,22 @@ class MahjongService:
             )
 
         now = time.time()
+        # Duration and length, so the seconds-per-discard figure every
+        # projected hand time rests on can be checked against real play.
+        # started_at is NULL for a hand dealt before migration 181 — readers
+        # must treat that as unknown, never as zero.
+        started_at = row["hand_started_at"]
         cur = conn.execute(
             "INSERT INTO mahjong_results (guild_id, table_id, hand_no, mode, "
             "stake, card_id, kind, winner_id, line_id, line_name, base_value, "
-            "won_by, jokerless, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "won_by, jokerless, created_at, started_at, discards) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (guild_id, table_id, state.hand_no, state.seat_count, stake,
              str(row["card_row_id"]), out.kind,
              member_of.get(out.winner) if out.winner is not None else None,
              out.line_id, out.line_name, out.value, out.won_by,
-             1 if out.jokerless_double else 0, now),
+             1 if out.jokerless_double else 0, now,
+             started_at, state.discard_count),
         )
         result_id = int(cur.lastrowid or 0)
         for seat, member_id in member_of.items():
@@ -782,7 +857,11 @@ class MahjongService:
         table_id = int(row["id"])
         guild_id = int(row["guild_id"])
         if bool(row["practice"]):
-            return engine.deal(state, shuffled_wall(self._rng, jokers=state.config.wall_jokers))  # no escrow (B5)
+            # no escrow on a practice table (B5)
+            return engine.deal(state, shuffled_wall(
+                self._rng, state.config.max_rank,
+                jokers=state.config.wall_jokers,
+            ))
         next_gid = _hand_gid(table_id, state.hand_no + 1)
         amount = escrow_amount(card, int(row["mode"]), int(row["stake"]))
         for seat_state in state.seats:
@@ -800,7 +879,10 @@ class MahjongService:
                 wager_svc.refund_game(conn, GAME_TYPE, next_gid)
                 closed, ev = engine.close_table(state, "rematch_unfunded")
                 return closed, ev
-        return engine.deal(state, shuffled_wall(self._rng, jokers=state.config.wall_jokers))
+        return engine.deal(state, shuffled_wall(
+            self._rng, state.config.max_rank,
+            jokers=state.config.wall_jokers,
+        ))
 
     # ── Persistence plumbing ─────────────────────────────────────────────
 

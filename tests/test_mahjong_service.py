@@ -254,6 +254,169 @@ async def test_wall_game_refunds_and_records(service, db):
         assert result["kind"] == "wall_game" and result["winner_id"] is None
 
 
+# ── Quick tables (short deck) ────────────────────────────────────────────────
+
+
+async def test_a_quick_table_is_refused_unless_the_house_opened_it(service, db):
+    with pytest.raises(TableError, match="Quick tables aren't open"):
+        await service.create_table(GUILD, CHANNEL, HOST, 2, 1, max_rank=5)
+
+
+async def test_a_quick_table_deals_a_short_deck(service, db):
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_short_deck_rank", "5", GUILD)
+    table_id = await service.create_table(GUILD, CHANNEL, HOST, 2, 1, max_rank=5)
+    await service.join_table(table_id, GUEST)
+    await service.timeout(table_id)  # deal
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT state FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+    state = engine.state_from_dict(json.loads(row["state"]))
+    assert state.config.max_rank == 5
+    seen = [t for s in state.seats for t in s.rack] + state.wall
+    assert seen and all(
+        not t.is_suited or (t.rank or 0) <= 5 for t in seen
+    ), "a tile above the ceiling reached the table"
+
+
+async def test_a_full_table_is_unaffected(service, db):
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_short_deck_rank", "5", GUILD)
+    table_id = await service.create_table(GUILD, CHANNEL, HOST, 2, 1)
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT state FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+    assert engine.state_from_dict(json.loads(row["state"])).config.max_rank == 9
+
+
+async def test_a_card_with_too_few_short_deck_lines_is_refused(service, db):
+    """A run needs room for its whole span, so a short deck turns some lines
+    into dead ink. A handful is expected; a card that mostly needs the high
+    numbers would leave the table with nothing to play for."""
+    high = {
+        "card_id": "high-only", "display_name": "High Only", "season": "t",
+        "hands": [
+            {"id": f"h{i}", "section": "S", "name": f"L{i}", "concealed": False,
+             "value": 25,
+             "groups": [{"count": 4, "rank": "9", "suit": "a"},
+                        {"count": 4, "rank": "8", "suit": "a"},
+                        {"count": 3, "rank": str(7 - i), "suit": "b"},
+                        {"count": 3, "rank": "F"}]}
+            for i in range(3)
+        ],
+    }
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_short_deck_rank", "5", GUILD)
+        row_id = save_card(conn, GUILD, high, uploaded_by=None)
+        set_card_status(conn, GUILD, row_id, "active")
+    with pytest.raises(TableError, match="quick deck"):
+        await service.create_table(GUILD, CHANNEL, HOST, 2, 1, max_rank=5)
+
+
+# ── Claim windows nobody can answer ──────────────────────────────────────────
+
+
+async def test_a_fully_answered_claim_window_gets_a_short_deadline(service, db):
+    """Every seat with a legal route is passed for when the tile lands, so
+    there is nobody to wait on — the window becomes a beat to read the
+    discard rather than eight seconds of dead time. Measured over 964
+    windows, 28.7% have nobody who can act at all."""
+    table_id = await make_duel(service, db)
+    await service.timeout(table_id)  # deal
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT * FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+        state = engine.state_from_dict(json.loads(row["state"]))
+        state.phase = engine.Phase.AWAIT_DISCARD
+        state.turn = 0
+        state.pending_picks = {}
+        # the opponent holds nothing that could take a 5c
+        state.seats[0].rack = [Tile("5c")] + [Tile("1d")] * 13
+        state.seats[1].rack = [Tile("9b")] * 13
+        conn.execute("UPDATE mahjong_tables SET state = ? WHERE id = ?",
+                     (json.dumps(engine.state_to_dict(state)), table_id))
+
+    before = time.time()
+    await service.act(table_id, "discard", member_id=HOST, tile=Tile("5c"))
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT * FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+    state = engine.state_from_dict(json.loads(row["state"]))
+    assert state.phase is engine.Phase.CLAIM_WINDOW  # still a visible beat
+    assert state.claims[1] == (engine.AUTO_PASS, [])
+    # ...but a short one, not the full claim window
+    assert row["deadline_at"] - before < 6.0
+
+
+# ── Hand timing (migration 181) ──────────────────────────────────────────────
+
+
+async def test_the_deal_is_stamped_on_the_table(service, db):
+    """The engine takes no clock (D14), so the service owns the timestamp —
+    stamped off the `hand_dealt` event rather than at each deal call site."""
+    table_id = await make_duel(service, db)
+    with open_db(db) as conn:
+        assert conn.execute(
+            "SELECT hand_started_at FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()["hand_started_at"] is None
+    before = time.time()
+    await service.timeout(table_id)  # deals
+    with open_db(db) as conn:
+        stamped = conn.execute(
+            "SELECT hand_started_at FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()["hand_started_at"]
+    assert stamped is not None and stamped >= before
+
+
+async def test_a_settled_hand_records_its_duration_and_length(service, db):
+    """Duration and discards together give seconds-per-discard, which is the
+    figure every projected hand length is scaled by and which currently
+    rests on a single observed game."""
+    table_id = await make_duel(service, db)
+    winner_rack = ([Tile.FLOWER] * 4 + [Tile("2d")] * 4 + [Tile("6b")] * 4
+                   + [Tile("8c")])
+    await play_to_settle(service, db, table_id,
+                         winner_rack=winner_rack, feed_tile="8c")
+    with open_db(db) as conn:
+        result = conn.execute(
+            "SELECT * FROM mahjong_results WHERE table_id = ?", (table_id,)
+        ).fetchone()
+    assert result["started_at"] is not None
+    assert result["created_at"] >= result["started_at"]
+    assert result["discards"] is not None and result["discards"] >= 1
+
+
+async def test_a_wall_game_records_its_length_too(service, db):
+    """The wall-game constant is the sim's most load-bearing claim; this is
+    what lets real play check it."""
+    table_id = await make_duel(service, db)
+    await service.timeout(table_id)
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT * FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+        state = engine.state_from_dict(json.loads(row["state"]))
+        state.phase = engine.Phase.AWAIT_DISCARD
+        state.turn = 0
+        state.pending_picks = {}
+        state.wall = []
+        conn.execute("UPDATE mahjong_tables SET state = ? WHERE id = ?",
+                     (json.dumps(engine.state_to_dict(state)), table_id))
+    await service.act(table_id, "discard", member_id=HOST,
+                      tile=state.seats[0].rack[0])
+    await service.act(table_id, "claim", member_id=GUEST, kind="pass")
+    with open_db(db) as conn:
+        result = conn.execute(
+            "SELECT * FROM mahjong_results WHERE table_id = ?", (table_id,)
+        ).fetchone()
+    assert result["kind"] == "wall_game"
+    assert result["discards"] is not None and result["started_at"] is not None
+
+
 # ── Rematch escrow ───────────────────────────────────────────────────────────
 
 

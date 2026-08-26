@@ -143,6 +143,25 @@ A hand is an ordered list of **groups**; each group = `{count, rank, suit}`.
 - `suit`: `"a" | "b" | "c"` for suited ranks (same letter = same suit; distinct letters = pairwise distinct suits; binding chosen by the player's tiles), omitted for honors/flowers.
 - Hand-level: `id`, `section`, `name`, `concealed: bool`, `value: int`, `display: str` (generated), `notes`.
 
+### 3.1a Deck ceiling (quick tables)
+
+A table plays to a **rank ceiling** (`TableConfig.max_rank`, 5&ndash;9,
+default 9). Below 9 the suited tiles above the ceiling are not in the deck
+at all; suits, winds, dragons, flowers and jokers are untouched. Measured at
+1,000 games per arm, this is the game's length dial and it is close to free:
+152 tiles runs ~72 turns, 116 (ranks 1&ndash;6) ~43 and 104 (ranks 1&ndash;5)
+~35, with the share of hands somebody wins unmoved at ~93%. Shortening the
+*wall* instead (`wall_trim`) is strictly worse &mdash; it truncates hands
+rather than speeding them, converting wins into wall games.
+
+Consequences the engine enforces: `copies_in_play` reports **zero** for a
+tile the table does not contain, so reachability cannot believe in tiles
+nobody can draw; a rank variable never binds past the ceiling; `deal`
+refuses a wall that does not match the table; and a card whose lines mostly
+need the high numbers is refused at table creation rather than discovered
+as an unwinnable hand. The house opens the option on the dashboard
+(`mahjong_short_deck_rank`, off by default) and a host chooses per table.
+
 ### 3.2 Card file
 ```json
 {

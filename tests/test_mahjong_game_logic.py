@@ -68,7 +68,8 @@ def fresh(seat_count: int, racks: list[list[Tile]] | None = None,
     state = G.create_table(TableConfig(seat_count=seat_count, **cfg), 100)
     for m in range(101, 100 + seat_count):
         state, _ = G.join_table(state, m)
-    wall = stacked_wall(racks, tail) if racks else shuffled_wall(random.Random(9))
+    wall = (stacked_wall(racks, tail) if racks
+            else shuffled_wall(random.Random(9), cfg.get("max_rank", 9)))
     state, _ = G.deal(state, wall)
     return state
 
@@ -93,6 +94,13 @@ def advance_to_play(state: GameState) -> GameState:
     return state
 
 
+#: Filler that can always respond to a discard: two jokers is what a *call*
+#: needs before the card is consulted, so a seat holding them is never
+#: passed for automatically. Cases that need a claim window to stay open for
+#: an uninvolved seat ask for this explicitly.
+CLAIMABLE_FILLER = "joker*2 9c*11"
+
+
 def play_state(
     seat_count: int,
     racks: dict[int, str],
@@ -100,13 +108,14 @@ def play_state(
     turn: int = 0,
     wall: str = "1c 1c 1c 1c",
     exposures: dict[int, list[G.ExposureState]] | None = None,
+    filler: str = "9c*13",
 ) -> GameState:
     """Surgical PLAY-phase state; engine transitions deepcopy, so sharing is safe."""
     seats = []
     for i in range(seat_count):
         seats.append(SeatState(
             member_id=100 + i,
-            rack=tiles(racks.get(i, "9c*13")),
+            rack=tiles(racks.get(i, filler)),
             exposures=(exposures or {}).get(i, []),
         ))
     return GameState(
@@ -173,6 +182,230 @@ def test_cancel_only_in_lobby():
     assert e.value.code is RejectCode.WRONG_PHASE
 
 
+# ── Short decks (TableConfig.max_rank) ───────────────────────────────────────
+
+
+@pytest.mark.parametrize("max_rank, size", [(9, 152), (6, 116), (5, 104)])
+def test_the_deck_shrinks_with_the_rank_ceiling(max_rank, size):
+    from bot_modules.games.mahjong.tiles import build_deck as bd, deck_size
+    assert deck_size(max_rank) == size
+    deck = bd(max_rank)
+    assert len(deck) == size
+    assert max((t.rank or 0) for t in deck if t.is_suited) == max_rank
+    # honours, flowers and jokers are never trimmed
+    assert sum(1 for t in deck if t is Tile.JOKER) == 8
+    assert sum(1 for t in deck if t.is_wind) == 16
+
+
+def test_a_trimmed_tile_reports_no_copies():
+    """The load-bearing one. Reachability counts *unseen copies* to judge
+    whether a line is still live, so a tile that is not in the deck must
+    report zero — otherwise the matcher, the assist engine and the bots all
+    keep believing in tiles nobody can draw."""
+    from bot_modules.games.mahjong.tiles import copies, copies_in_play
+    assert copies(Tile("9d")) == 4               # the tile exists as a kind
+    assert copies_in_play(Tile("9d"), 5) == 0    # but not on this table
+    assert copies_in_play(Tile("5d"), 5) == 4
+    assert copies_in_play(Tile.JOKER, 5) == 8
+
+
+@pytest.mark.parametrize("bad", [4, 10, 0, -1])
+def test_a_ceiling_outside_the_supported_range_is_refused(bad):
+    with pytest.raises(ValueError, match="max_rank"):
+        TableConfig(seat_count=4, max_rank=bad)
+
+
+def test_the_ceiling_survives_persistence_and_defaults_for_old_tables():
+    state = fresh(4, max_rank=6)
+    assert state.config.max_rank == 6
+    assert G.state_from_dict(G.state_to_dict(state)).config.max_rank == 6
+    # a table dealt before the option existed played the full game
+    data = G.state_to_dict(state)
+    del data["config"]["max_rank"]
+    assert G.state_from_dict(data).config.max_rank == 9
+
+
+def test_a_short_deck_deals_a_shorter_wall():
+    full = fresh(4)
+    short = fresh(4, max_rank=5)
+    assert len(short.wall) < len(full.wall)
+    assert len(short.wall) == 104 - (14 + 13 * 3)
+
+
+def test_no_line_stays_reachable_on_tiles_the_deck_lacks():
+    """The bug this plumbing exists to prevent: without a deck-aware copy
+    count, a line wanting 9s reads as live on a deck that stops at 5."""
+    from bot_modules.games.mahjong.match_logic import reachable_lines
+
+    card = load_card({
+        "card_id": "t", "display_name": "t", "season": "t",
+        "hands": [{"id": "highs", "section": "S", "name": "Highs",
+                   "concealed": False, "value": 25,
+                   "groups": [{"count": 4, "rank": "9", "suit": "a"},
+                              {"count": 4, "rank": "8", "suit": "a"},
+                              {"count": 3, "rank": "7", "suit": "a"},
+                              {"count": 3, "rank": "F"}]}],
+    })
+    # Nothing high is held: on the full deck the 3+ groups are joker- and
+    # draw-fillable, on the short deck neither route exists.
+    rack = tiles("1d*13")
+    assert [h.id for h in reachable_lines(rack, [], card, Counter(), 9)] == ["highs"]
+    assert reachable_lines(rack, [], card, Counter(), 5) == []
+
+
+def test_a_run_never_binds_past_the_ceiling():
+    from bot_modules.games.mahjong.match_logic import _bindings
+
+    hand = load_card({
+        "card_id": "t", "display_name": "t", "season": "t",
+        "hands": [{"id": "run", "section": "S", "name": "Run",
+                   "concealed": False, "value": 25,
+                   "groups": [{"count": 4, "rank": "x", "suit": "a"},
+                              {"count": 4, "rank": "x+1", "suit": "a"},
+                              {"count": 3, "rank": "x+2", "suit": "a"},
+                              {"count": 3, "rank": "F"}]}],
+    }).hands[0]
+    assert max(x for x, _, _ in _bindings(hand, 9)) == 7      # 7,8,9
+    assert max(x for x, _, _ in _bindings(hand, 5)) == 3      # 3,4,5
+
+
+def test_a_wall_that_does_not_match_the_table_is_refused():
+    """The engine trusts its caller for the wall, so this is the only place
+    a full deck dealt to a short table would ever be noticed."""
+    state = G.create_table(TableConfig(seat_count=4, max_rank=5), 100)
+    for m in (101, 102, 103):
+        state, _ = G.join_table(state, m)
+    with pytest.raises(ValueError, match="rank ceiling"):
+        G.deal(state, shuffled_wall(rng()))            # full 152-tile wall
+    state, _ = G.deal(state, shuffled_wall(rng(), 5))  # the right one
+    assert state.phase is Phase.CHARLESTON
+
+
+# ── Auto-pass: seats with no legal route (§2.5) ──────────────────────────────
+
+
+def _window_for(rack0: str, discard: str, seat_count: int = 2):
+    state = play_state(seat_count, {0: rack0, 1: f"9c*12 {discard}"}, turn=1)
+    return G.discard(state, 1, Tile(discard), CARD)[0]
+
+
+def _open_window_for(rack0: str, discard: str):
+    """A four-seat window that stays open after seat 0 responds: seat 2 holds
+    two of the discard, so it is a live responder and nothing resolves."""
+    state = play_state(
+        4, {0: rack0, 1: f"9c*12 {discard}", 2: f"{discard}*2 9d*11"}, turn=1
+    )
+    return G.discard(state, 1, Tile(discard), CARD)[0]
+
+
+def test_a_seat_with_no_legal_route_is_passed_for():
+    """The measured waste: over 964 windows only 31.5% of responder-slots
+    could act at all. Holding the table for a decision that does not exist
+    is the single largest avoidable delay in the game."""
+    state = _window_for("flower*4 1d*4 6b*3 8c 9b", "5c")
+    assert state.claims[0] == (G.AUTO_PASS, [])
+    assert state.phase is Phase.CLAIM_WINDOW  # the window still opens
+
+
+@pytest.mark.parametrize(
+    "rack0, discard",
+    [
+        pytest.param("flower*4 1d*4 6b*2 8c*2 9b", "6b", id="two-naturals"),
+        pytest.param("flower*4 1d*4 6b joker 8c*2 9b", "6b", id="natural-plus-joker"),
+        pytest.param("flower*4 2d*4 6b*4 8c", "8c", id="instant-mahjong"),
+    ],
+)
+def test_a_seat_with_any_legal_route_is_left_to_choose(rack0, discard):
+    """Generous on purpose: two matching tiles is what a call needs before
+    the card is even consulted, and an instant Mahjong is the other route.
+    Passing for a seat that had one would take a real decision away."""
+    assert 0 not in _window_for(rack0, discard).claims
+
+
+def test_a_discarded_joker_passes_the_whole_table():
+    """Claimable by nobody, ever — so nobody should be waited on."""
+    state = _window_for("flower*4 1d*4 6b*3 joker*2", "joker", seat_count=4)
+    assert all(state.claims[s] == (G.AUTO_PASS, []) for s in (0, 2, 3))
+
+
+def test_auto_pass_alone_does_not_resolve_the_window():
+    """The window is also the beat in which a table reads what was thrown;
+    the service arms a short deadline rather than collapsing it to zero."""
+    state = _window_for("flower*4 1d*4 6b*3 8c 9b", "5c")
+    assert state.phase is Phase.CLAIM_WINDOW
+    assert state.live_discard == Tile("5c")
+
+
+def test_a_seat_passed_for_may_still_tap_without_being_told_off():
+    """Its panel may still show the buttons. Being told "you've already
+    responded" for a choice the engine made on your behalf reads as a bug."""
+    state = _open_window_for("flower*4 1d*4 6b*3 8c 9b", "5c")
+    assert state.claims[0] == (G.AUTO_PASS, [])
+    state, _ = G.claim(state, 0, "pass", [], CARD, rng())  # must not raise
+    assert state.claims[0] == ("pass", [])
+
+
+def test_a_seat_passed_for_that_taps_call_still_fails_privately():
+    """§2.5's privacy rule outlives the shortcut: an illegal claim converts
+    to a pass without a visible error, and must not become one just because
+    the engine got there first."""
+    state = _open_window_for("flower*4 1d*4 6b*3 8c 9b", "5c")
+    state, ev = G.claim(state, 0, "call", tiles("9b*2"), CARD, rng())
+    assert any(k == "claim_downgraded" and d.get("private") for k, d in ev)
+    assert state.claims[0] == ("pass", [])
+
+
+def test_a_seat_that_chose_still_cannot_choose_again():
+    state = _open_window_for("flower*4 1d*4 6b*2 8c*2 9b", "6b")
+    assert 0 not in state.claims  # it had a route, so it was left to choose
+    state, _ = G.claim(state, 0, "pass", [], CARD, rng())
+    with pytest.raises(ActionRejected) as e:
+        G.claim(state, 0, "call", tiles("6b*2"), CARD, rng())
+    assert e.value.code is RejectCode.ALREADY_SUBMITTED
+
+
+def test_being_passed_for_counts_as_renouncing_the_tile():
+    """`obtainable_seen` stops discounting a discard once a seat has given
+    it up; a seat that never had a route has given it up too."""
+    state = _window_for("flower*4 1d*4 6b*3 8c 9b", "5c")
+    raw = G.seen_elsewhere(state, 0)
+    adjusted = G.obtainable_seen(state, 0, CARD)
+    assert adjusted.get(Tile("5c"), 0) == raw[Tile("5c")]
+
+
+def test_discard_count_counts_turns_not_the_pit():
+    """A called tile is popped back off the pit, so `len(discards)` is not
+    the number of turns taken — and turns are what cost a table its clock.
+
+    This is also why a wall game's pit always ends at wall size plus one
+    however many calls happened: a call adds a turn and removes a pit tile,
+    and the two cancel exactly.
+    """
+    state = play_state(4, {0: "1d*13"})
+    assert state.discard_count == 0
+    state, _ = G.discard(state, 0, Tile("1d"), CARD)
+    assert state.discard_count == 1 and len(state.discards) == 1
+
+    # a claim consumes the discard; the turn still happened
+    state.discards.pop()
+    assert state.discard_count == 1 and len(state.discards) == 0
+
+    # and it survives persistence
+    assert G.state_from_dict(G.state_to_dict(state)).discard_count == 1
+
+
+def test_a_fresh_deal_resets_the_turn_counter():
+    """Rematches deal into a state that already played a hand, so the deal
+    has to zero this or every later hand inherits the last one's count."""
+    state = fresh(4)
+    assert state.discard_count == 0
+    state.discard_count = 37  # as if a hand had just been played
+    state.phase = Phase.SETTLE
+    state.rematch_votes = {0, 1, 2, 3}
+    state, _ = G.deal(state, shuffled_wall(rng()))
+    assert state.discard_count == 0
+
+
 def test_wall_trim_shortens_the_wall():
     plain = fresh(2)
     trimmed = fresh(2, wall_trim=60)
@@ -184,7 +417,7 @@ def test_wall_trim_shortens_the_wall():
 def test_wrong_phase_actions_reject():
     state = G.create_table(TableConfig(seat_count=2), 100)
     for fn in (
-        lambda: G.discard(state, 0, Tile.NORTH),
+        lambda: G.discard(state, 0, Tile.NORTH, CARD),
         lambda: G.charleston_pick(state, 0, [], 0, rng()),
         lambda: G.vote_second_charleston(state, 0, True),
         lambda: G.courtesy_propose(state, 0, 0),
@@ -443,7 +676,7 @@ def test_courtesy_timeouts_auto_resolve():
 
 
 def open_window(state: GameState, seat: int, tile: Tile):
-    state, _ = G.discard(state, seat, tile)
+    state, _ = G.discard(state, seat, tile, CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     return state
 
@@ -451,15 +684,15 @@ def open_window(state: GameState, seat: int, tile: Tile):
 def test_discard_guards():
     state = play_state(2, {0: "1c*14", 1: "9d*13"})
     with pytest.raises(ActionRejected) as e:
-        G.discard(state, 1, Tile("9d"))
+        G.discard(state, 1, Tile("9d"), CARD)
     assert e.value.code is RejectCode.NOT_YOUR_TURN
     with pytest.raises(ActionRejected) as e:
-        G.discard(state, 0, Tile("5b"))
+        G.discard(state, 0, Tile("5b"), CARD)
     assert e.value.code is RejectCode.TILE_NOT_IN_RACK
 
 
 def test_all_pass_draws_for_the_next_seat():
-    state = play_state(4, {0: "1c*14"}, wall="5d 6d 7d")
+    state = play_state(4, {0: "1c*14"}, wall="5d 6d 7d", filler=CLAIMABLE_FILLER)
     state = open_window(state, 0, Tile("1c"))
     r = rng()
     for s in (1, 2):
@@ -494,7 +727,7 @@ def test_claim_window_guards():
 
 def test_call_makes_an_exposure_and_turn_continues_right():
     r = rng()
-    state = play_state(4, {0: "5b 1c*13", 2: "5b*2 9d*11"}, wall="2b 3b 4b")
+    state = play_state(4, {0: "5b 1c*13", 2: "5b*2 9d*11"}, wall="2b 3b 4b", filler=CLAIMABLE_FILLER)
     state = open_window(state, 0, Tile("5b"))
     state, _ = G.claim(state, 1, "pass", [], CARD, r)
     state, _ = G.claim(state, 3, "pass", [], CARD, r)
@@ -506,7 +739,7 @@ def test_call_makes_an_exposure_and_turn_continues_right():
     assert state.discards == []  # claimed tile left the pit
     assert len(state.seats[2].rack) == 11  # 13 - 2 exposed
     # claimant discards; on all-pass, play continues to the claimant's right
-    state, _ = G.discard(state, 2, Tile("9d"))
+    state, _ = G.discard(state, 2, Tile("9d"), CARD)
     for s in (0, 1):
         state, _ = G.claim(state, s, "pass", [], CARD, rng())
     state, _ = G.claim(state, 3, "pass", [], CARD, rng())
@@ -567,7 +800,7 @@ def test_mahjong_claim_wins_and_reveals():
 
 
 def test_invalid_mahjong_claim_fails_privately_and_window_continues():
-    state = play_state(4, {0: "8c 1c*13", 1: "9d*13"})
+    state = play_state(4, {0: "8c 1c*13", 1: "9d*13"}, filler=CLAIMABLE_FILLER)
     state = open_window(state, 0, Tile("8c"))
     state, ev = G.claim(state, 1, "mahjong", [], CARD, rng())
     assert ("claim_downgraded", {"seat": 1, "why": "invalid_mahjong", "private": True}) in ev
@@ -635,7 +868,7 @@ def test_two_mahjong_claims_nearest_wins():
 
 
 def test_claim_window_timeout_resolves_with_standing_claims():
-    state = play_state(4, {0: "5b 1c*13", 2: "5b*2 9d*11"}, wall="2b")
+    state = play_state(4, {0: "5b 1c*13", 2: "5b*2 9d*11"}, wall="2b", filler=CLAIMABLE_FILLER)
     state = open_window(state, 0, Tile("5b"))
     r = rng()
     state, _ = G.claim(state, 2, "call", tiles("5b*2"), CARD, r)
@@ -689,7 +922,7 @@ def test_three_consecutive_timeouts_fold_a_seat_and_timely_acts_reset():
         state, _ = G.timeout(state, CARD, r)
     assert state.seats[0].strikes == 2 and state.turn == 0
     # …then acts in time: the consecutive run breaks
-    state, _ = G.discard(state, 0, state.seats[0].rack[0])
+    state, _ = G.discard(state, 0, state.seats[0].rack[0], CARD)
     assert state.seats[0].strikes == 0
 
 
@@ -702,14 +935,14 @@ def test_third_consecutive_timeout_goes_fallow_and_turns_skip():
     # seat 0 auto-discarded nothing — the hand moved to seat 1's draw
     assert state.turn == 1 and state.phase is Phase.AWAIT_DISCARD
     # fallow seats are not claim responders
-    state, _ = G.discard(state, 1, state.seats[1].rack[0])
+    state, _ = G.discard(state, 1, state.seats[1].rack[0], CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     r = rng()
     state, _ = G.claim(state, 2, "pass", [], CARD, r)
     state, _ = G.claim(state, 3, "pass", [], CARD, r)
     assert state.phase is Phase.AWAIT_DISCARD  # window closed without seat 0
     with pytest.raises(ActionRejected) as e:
-        G.discard(state, 0, state.seats[0].rack[0])
+        G.discard(state, 0, state.seats[0].rack[0], CARD)
     assert e.value.code is RejectCode.SEAT_FALLOW
 
 
@@ -1010,7 +1243,7 @@ def state_at_phase(name: str) -> GameState:
     state, _ = G.courtesy_pick(state, 1, first_nonjokers(state.seats[1].rack, 1))
     if name == "await_discard":
         return state
-    state, _ = G.discard(state, state.turn, first_nonjokers(state.seats[state.turn].rack, 1)[0])
+    state, _ = G.discard(state, state.turn, first_nonjokers(state.seats[state.turn].rack, 1)[0], CARD)
     if name == "claim_window":
         return state
     state, _ = G.timeout(state, CARD, r)
@@ -1256,7 +1489,7 @@ def test_table_config_validation():
 def test_unseated_and_out_of_range_actors_reject():
     state = play_state(2, {0: "1c*14", 1: "9d*13"})
     with pytest.raises(ActionRejected) as e:
-        G.discard(state, 7, Tile("1c"))
+        G.discard(state, 7, Tile("1c"), CARD)
     assert e.value.code is RejectCode.NOT_SEATED
     settled = settled_state()
     with pytest.raises(ActionRejected) as e:
@@ -1285,7 +1518,7 @@ def test_double_vote_and_double_claim_and_bad_kind():
         G.vote_second_charleston(state, 0, True)
     assert e.value.code is RejectCode.ALREADY_SUBMITTED
 
-    play = play_state(4, {0: "1c*14"})
+    play = play_state(4, {0: "1c*14"}, filler=CLAIMABLE_FILLER)
     play = open_window(play, 0, Tile("1c"))
     play, _ = G.claim(play, 1, "pass", [], CARD, rng())
     with pytest.raises(ActionRejected) as e:
@@ -1389,7 +1622,7 @@ def test_all_afk_fold_settles_from_every_simultaneous_phase(phase_name):
 
 def test_4seat_wall_game_and_rematch_rotation():
     # wall game with four seats: all zero deltas
-    state = play_state(4, {0: "1c*14"}, wall="")
+    state = play_state(4, {0: "1c*14"}, wall="", filler=CLAIMABLE_FILLER)
     state = open_window(state, 0, Tile("1c"))
     r = rng()
     for s in (1, 2):
@@ -1491,13 +1724,13 @@ def test_full_turn_loop_hand_call_redemption_discard_win():
         tiles("flower*4 2d*4 6b*2 joker 8c 9d"))
 
     # Turn 1: dealer feeds the 6b; opp calls a kong with its joker riding
-    state, _ = G.discard(state, 0, Tile("6b"))
+    state, _ = G.discard(state, 0, Tile("6b"), CARD)
     state, ev = G.claim(state, 1, "call", tiles("6b*2 joker"), CARD, r)
     assert any(k == "exposure_made" for k, _ in ev)
     exp = state.seats[1].exposures[0]
     assert (exp.natural, exp.count, exp.jokers) == (Tile("6b"), 4, 1)
     assert state.turn == 1 and state.turn_source == "call"
-    state, _ = G.discard(state, 1, Tile("9d"))          # the claimant's discard
+    state, _ = G.discard(state, 1, Tile("9d"), CARD)          # the claimant's discard
 
     # window lapses; the dealer draws the scripted junk tile
     state, _ = G.claim(state, 0, "pass", [], CARD, r)
@@ -1509,7 +1742,7 @@ def test_full_turn_loop_hand_call_redemption_discard_win():
     assert any(k == "joker_redeemed" for k, _ in ev)
     assert Tile.JOKER in state.seats[0].rack
     assert state.seats[1].exposures[0].jokers == 0
-    state, _ = G.discard(state, 0, Tile("8c"))
+    state, _ = G.discard(state, 0, Tile("8c"), CARD)
     state, ev = G.claim(state, 1, "mahjong", [], CARD, r)
 
     out = state.outcome
@@ -1530,7 +1763,7 @@ def test_force_fallow_on_turn_advances_the_hand():
 
 
 def test_force_fallow_last_responder_resolves_the_window():
-    state = play_state(4, {0: "1c*14"}, wall="9d*5")
+    state = play_state(4, {0: "1c*14"}, wall="9d*5", filler=CLAIMABLE_FILLER)
     state = open_window(state, 0, Tile("1c"))
     r = rng()
     state, _ = G.claim(state, 1, "pass", [], CARD, r)
@@ -1595,14 +1828,14 @@ def test_assist_coach_respects_the_visible_threat_rail():
     exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("9d"),
                                      count=4, jokers=0)]}
     state = play_state(
-        2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*9"}, exposures=exposures
+        2, {0: "flower*4 2d*4 6b*4 9b*2", 1: "9c*9"}, exposures=exposures
     )
     r = G.assist_readout(state, 0, CARD, "coach")
     assert r is not None
-    assert dict(r.prospects[0].dead_weight) == {Tile("9b"): 3}
+    assert dict(r.prospects[0].dead_weight) == {Tile("9b"): 2}
     assert r.suggestion is None
     # take the exposure away and the same rack gets its suggestion back
-    state2 = play_state(2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*13"})
+    state2 = play_state(2, {0: "flower*4 2d*4 6b*4 9b*2", 1: "9c*13"})
     r2 = G.assist_readout(state2, 0, CARD, "coach")
     assert r2 is not None and r2.suggestion == Tile("9b")
 
@@ -1644,7 +1877,7 @@ def test_claim_window_live_discard_counts_as_obtainable_for_claimants():
         2, {0: "flower*4 2d*4 6b*4 8c", 1: "flower*4 2d*4 6b*4 8c"}, turn=1,
     )
     state.discards = [(0, Tile("8c")), (1, Tile("8c"))]
-    state, _ = G.discard(state, 1, Tile("8c"))
+    state, _ = G.discard(state, 1, Tile("8c"), CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     assert state.live_discard is Tile("8c")
     # The claimant is told the truth: one tile away, and it's the live one.
@@ -1692,7 +1925,7 @@ def test_fallow_settle_counts_the_live_discard_as_takeable():
     state.discards = (
         [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4 + [(1, Tile("8c"))] * 2
     )
-    state, _ = G.discard(state, 1, Tile("8c"))
+    state, _ = G.discard(state, 1, Tile("8c"), FALLOW_VALUE_CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     state, ev = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
     assert state.outcome is not None and state.outcome.kind == "fallow_end"
@@ -1709,7 +1942,7 @@ def test_fallow_settle_discarders_own_tile_stays_gone():
     state.discards = (
         [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4 + [(1, Tile("8c"))] * 2
     )
-    state, _ = G.discard(state, 0, Tile("8c"))
+    state, _ = G.discard(state, 0, Tile("8c"), CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     state, ev = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
     assert state.outcome is not None and state.outcome.kind == "fallow_end"
@@ -1722,9 +1955,10 @@ def test_claim_window_discount_stops_after_a_pass():
     # claimants keep the window open after seat 0's pass.
     state = play_state(
         4, {0: "flower*4 2d*4 6b*4 8c", 1: "9c*12 8c"}, turn=1,
+        filler=CLAIMABLE_FILLER,
     )
     state.discards = [(2, Tile("8c")), (3, Tile("8c"))]
-    state, _ = G.discard(state, 1, Tile("8c"))
+    state, _ = G.discard(state, 1, Tile("8c"), CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     before = G.assist_readout(state, 0, CARD, "gap")
     gh1 = next(p for p in before.prospects if p.hand.id == "gh-1")
@@ -1742,7 +1976,7 @@ def test_fallow_seats_exposures_never_gate_the_coach():
     exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("9d"),
                                      count=4, jokers=0)]}
     state = play_state(
-        2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*9"}, exposures=exposures
+        2, {0: "flower*4 2d*4 6b*4 9b*2", 1: "9c*9"}, exposures=exposures
     )
     silenced = G.assist_readout(state, 0, CARD, "coach")
     assert silenced is not None and silenced.suggestion is None  # live: rail
@@ -1776,7 +2010,7 @@ def test_fallow_settle_pair_mate_two_away_is_not_takeable():
     state.discards = (
         [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4 + [(1, Tile("8c"))] * 2
     )
-    state, _ = G.discard(state, 1, Tile("8c"))
+    state, _ = G.discard(state, 1, Tile("8c"), CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     state, _ = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
     assert state.outcome is not None
@@ -1797,7 +2031,7 @@ def test_fallow_settle_discarded_joker_is_unclaimable():
         + [(0, Tile("6d"))] * 4 + [(0, Tile("6c"))] * 4
         + [(0, Tile("8d"))] * 4 + [(0, Tile("8b"))] * 4
     )
-    state, _ = G.discard(state, 1, Tile.JOKER)
+    state, _ = G.discard(state, 1, Tile.JOKER, CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     state, _ = G.force_fallow(state, 1, FALLOW_VALUE_CARD, rng())
     assert state.outcome is not None
@@ -1825,7 +2059,10 @@ def test_obtainable_seen_discounts_only_legal_routes(rack0, discard, discounted)
     # up by two matching rack tiles (naturals or jokers, §2.5). Anything
     # else, the live discard stays counted as gone.
     state = play_state(2, {0: rack0, 1: f"9c*12 {discard}"}, turn=1)
-    state, _ = G.discard(state, 1, Tile(discard))
+    # The same card the routes are judged against below: whether a seat is
+    # passed for automatically depends on the card, so dealing the discard
+    # with a different one would hide the mahjong route this is testing.
+    state, _ = G.discard(state, 1, Tile(discard), FALLOW_VALUE_CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     raw = G.seen_elsewhere(state, 0)
     adjusted = G.obtainable_seen(state, 0, FALLOW_VALUE_CARD)
@@ -1870,7 +2107,7 @@ def test_coach_suggestion_never_contradicts_the_ONE_shown_hand():
 
 def _claim_state(rack0: str, discard: str, rack1: str = "9c*12"):
     state = play_state(2, {0: rack0, 1: f"{rack1} {discard}"}, turn=1)
-    state, _ = G.discard(state, 1, Tile(discard))
+    state, _ = G.discard(state, 1, Tile(discard), CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     return state
 

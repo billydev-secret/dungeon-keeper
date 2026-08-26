@@ -65,7 +65,7 @@ def state_seq():
     state, _ = G.courtesy_pick(state, 1, give1)
     out["await_discard"] = state
     tile = state.seats[0].rack[0]
-    state, _ = G.discard(state, 0, tile)
+    state, _ = G.discard(state, 0, tile, CARD)
     out["claim_window"] = state
     state, _ = G.timeout(state, CARD, r)
     out["mid_play"] = state

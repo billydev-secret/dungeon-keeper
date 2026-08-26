@@ -52,6 +52,7 @@ def test_config_round_trip_and_staged_key_sweep(authed_client):
         "turn_timer": 30, "phase_timer": 90, "duel_wall_trim": 60, "wall_jokers": 14,
         "second_charleston": False, "stakes_allowed": [1, 5],
         "assist_default": "coach", "practice_bots": False, "fill_bots": True,
+        "short_deck_rank": 5,
     }
     r = authed_client.put("/api/mahjong/config", json=body)
     assert r.status_code == 200, r.text
@@ -65,6 +66,7 @@ def test_config_round_trip_and_staged_key_sweep(authed_client):
     assert got["assist_default"] == "coach"
     assert got["practice_bots"] is False
     assert got["fill_bots"] is True
+    assert got["short_deck_rank"] == 5
     # staged-config sweep: every key the PUT writes has a dataclass reader —
     # the settings payload echoes exactly the fields the PUT accepts
     assert set(got) == set(body)
