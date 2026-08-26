@@ -1,6 +1,7 @@
 import { api, apiPut, apiPost, apiDelete, request, esc } from "../api.js";
 import {
-  showStatus, guardForm, mountAsync, loadMembers, loadChannels, mountChannelPicker,
+  showStatus, guardForm, mountAsync, loadMembers, loadChannels, loadRoles,
+  mountChannelPicker,
 } from "../config-helpers.js";
 import { confirmDialog, promptDialog, toast } from "../ui.js";
 
@@ -480,12 +481,89 @@ function render(container, cfg, pricing, icons, colors = [], channels = []) {
           </div>
         </div>
       </section>
+
+      <section class="form card" style="margin-top:1.5rem;">
+        <div class="section-label">Custom Shop Items</div>
+        <div class="field-hint" style="margin-bottom:1rem;">
+          Things <b>you</b> decide to sell, listed in <code>/bank shop</code> under
+          “Server Store” beside the built-in perks. Each one either <b>grants a role</b>
+          the moment it is bought, or <b>goes on the mod todo list</b> for a human to do —
+          and is either a <b>one-off</b> purchase or a <b>weekly rental</b> that renews out
+          of the buyer’s wallet. Money is taken at purchase either way; if you turn an
+          order down, the buyer gets it back. An item somebody has an open order or a live
+          rental on can’t be deleted — switch it off instead, and the people already
+          holding it keep it.
+        </div>
+
+        <div data-items></div>
+        <div data-items-empty class="field-hint" style="display:none;">
+          Nothing in the store yet. Add something below and it appears in the shop.
+        </div>
+
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
+          <div class="section-label">Add an Item</div>
+          <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
+            <div class="field">
+              <label for="item-add-name">Name</label>
+              <input type="text" id="item-add-name" data-item-name maxlength="60"
+                     placeholder="e.g. Shoutout" style="max-width:200px;" />
+            </div>
+            <div class="field">
+              <label for="item-add-blurb">Short Note</label>
+              <input type="text" id="item-add-blurb" data-item-blurb maxlength="40"
+                     placeholder="e.g. in announcements" style="max-width:180px;" />
+              <div class="field-hint">Shown beside the name in the shop. Keep it short.</div>
+            </div>
+            <div class="field">
+              <label for="item-add-price">Price</label>
+              <input type="number" id="item-add-price" data-item-price min="0"
+                     max="${DEFAULT_MAX}" step="1" value="100" style="max-width:110px;" />
+            </div>
+            <div class="field">
+              <label for="item-add-kind">When bought</label>
+              <select id="item-add-kind" data-item-kind style="max-width:190px;">
+                <option value="manual">Add to the mod todo list</option>
+                <option value="role">Give them a role</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="item-add-billing">Charge</label>
+              <select id="item-add-billing" data-item-billing style="max-width:150px;">
+                <option value="once">Once</option>
+                <option value="weekly">Every week</option>
+              </select>
+            </div>
+            <div class="field" data-item-role-wrap style="display:none;">
+              <label for="item-add-role">Role</label>
+              <select id="item-add-role" data-item-role style="max-width:190px;"></select>
+            </div>
+            <button type="button" class="btn btn-primary" data-item-add>Add Item</button>
+            <span data-item-add-status></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="form card" style="margin-top:1.5rem;">
+        <div class="section-label">Orders Waiting on Staff</div>
+        <div class="field-hint" style="margin-bottom:1rem;">
+          Every custom item somebody bought that a human still has to do. These are the
+          same jobs that appear on your <a href="#/mod-todo">todo board</a> — tick one off
+          there (or in Discord) once it’s done and the buyer’s payment is kept. Turn one
+          down here instead and the money goes straight back to them.
+        </div>
+        <div data-orders></div>
+        <div data-orders-empty class="field-hint" style="display:none;">
+          Nothing waiting. Orders show up here the moment somebody buys one.
+        </div>
+      </section>
     </div>`;
 
   wirePrices(container, cfg);
   wireCatalog(container, icons);
   wirePalette(container, colors, channels);
   wireEmojiQueue(container);
+  wireShopItems(container);
+  wireShopOrders(container);
 }
 
 function emojiRow(sub, memberName) {
@@ -958,4 +1036,304 @@ function wirePalette(container, colors, channels) {
       repostBtn.disabled = false;
     }
   });
+}
+
+// ── Custom shop items ───────────────────────────────────────────────────────
+//
+// Admin-defined products sold beside the built-in perks. Two axes per item —
+// what buying it does (grant a role, or file a mod todo) and how often it
+// charges (once, or weekly) — so the row editor is wider than the icon
+// catalog's, but it is the same delegated save/delete shape.
+
+const ITEM_KINDS = { manual: "Mod todo", role: "Gives a role" };
+const ITEM_BILLING = { once: "Once", weekly: "Weekly" };
+
+function itemStockLabel(item) {
+  if (item.stock === null || item.stock === undefined) return "Unlimited";
+  const left = Math.max(0, item.stock - item.sold);
+  return `${left} of ${item.stock} left`;
+}
+
+function itemRow(item, roleName) {
+  const enabledAttr = item.enabled ? " checked" : "";
+  // A role item whose role has since been deleted can still be bought, and the
+  // grant would silently do nothing — say so where the admin is looking.
+  const brokenRole = item.kind === "role" && item.role_id && !roleName
+    ? `<span class="badge" style="background:var(--danger,#e55);"
+         title="This role no longer exists, so buying the item would grant nothing">Role is gone</span>`
+    : "";
+  const roleChip = item.kind === "role" && roleName
+    ? `<span class="badge">${esc(roleName)}</span>` : "";
+  const soldOut = item.stock !== null && item.stock !== undefined
+    && item.sold >= item.stock
+    ? `<span class="badge">Sold out</span>` : "";
+  return `
+    <div class="card" data-item-id="${item.id}"
+         style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
+      <div class="field" style="margin:0;">
+        <label>Name</label>
+        <input type="text" data-name maxlength="60" value="${esc(item.name)}" style="max-width:180px;" />
+      </div>
+      <div class="field" style="margin:0;">
+        <label>Short Note</label>
+        <input type="text" data-blurb maxlength="40" value="${esc(item.blurb || "")}" style="max-width:160px;" />
+      </div>
+      <div class="field" style="margin:0;">
+        <label>Price</label>
+        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${item.price}" style="max-width:110px;" />
+      </div>
+      <div class="field" style="margin:0;">
+        <label>Stock</label>
+        <input type="number" data-stock min="0" step="1" placeholder="∞"
+               value="${item.stock === null || item.stock === undefined ? "" : item.stock}" style="max-width:90px;" />
+        <div class="field-hint">${esc(itemStockLabel(item))}</div>
+      </div>
+      <div class="field" style="margin:0;">
+        <label>Max Each</label>
+        <input type="number" data-limit min="1" step="1" placeholder="∞"
+               value="${item.per_member_limit === null || item.per_member_limit === undefined ? "" : item.per_member_limit}" style="max-width:90px;" />
+      </div>
+      <span class="badge">${esc(ITEM_KINDS[item.kind] || item.kind)}</span>
+      <span class="badge">${esc(ITEM_BILLING[item.billing] || item.billing)}</span>
+      ${roleChip}${brokenRole}${soldOut}
+      <label style="display:flex;gap:6px;align-items:center;">
+        <input type="checkbox" data-enabled${enabledAttr} /> Offer in the shop
+      </label>
+      <label style="display:flex;gap:6px;align-items:center;">
+        <input type="checkbox" data-ask-note${item.ask_note ? " checked" : ""} /> Ask for a note
+      </label>
+      <div style="display:flex;gap:8px;margin-left:auto;">
+        <button type="button" class="btn btn-primary" data-save>Save</button>
+        <button type="button" class="btn btn-danger" data-delete>Delete</button>
+      </div>
+      <span data-row-status></span>
+    </div>`;
+}
+
+/** Read the optional whole-number fields back, treating blank as "no limit". */
+function optionalInt(input) {
+  const raw = String(input.value || "").trim();
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function wireShopItems(container) {
+  const listEl = container.querySelector("[data-items]");
+  const emptyEl = container.querySelector("[data-items-empty]");
+  const kindSel = container.querySelector("[data-item-kind]");
+  const roleWrap = container.querySelector("[data-item-role-wrap]");
+  const roleSel = container.querySelector("[data-item-role]");
+  const addBtn = container.querySelector("[data-item-add]");
+  const addStatus = container.querySelector("[data-item-add-status]");
+
+  let roleName = () => "";
+
+  // The role picker only exists for role items, so it only appears for them.
+  function syncKind() {
+    roleWrap.style.display = kindSel.value === "role" ? "" : "none";
+  }
+  kindSel.addEventListener("change", syncKind);
+  syncKind();
+
+  function renderList(rows) {
+    listEl.innerHTML = rows.map((i) => itemRow(i, roleName(i.role_id))).join("");
+    emptyEl.style.display = rows.length ? "none" : "block";
+  }
+
+  async function refresh() {
+    let items = [];
+    try {
+      const [roles, rows] = await Promise.all([
+        loadRoles().catch(() => []),
+        api("/api/economy/shop-items"),
+      ]);
+      const byId = new Map(roles.map((r) => [String(r.id), r.name]));
+      roleName = (id) => (id ? byId.get(String(id)) || "" : "");
+      roleSel.innerHTML = roles
+        .map((r) => `<option value="${esc(String(r.id))}">${esc(r.name)}</option>`)
+        .join("");
+      items = rows;
+    } catch {
+      emptyEl.textContent = "Couldn’t load the store items.";
+      emptyEl.style.display = "block";
+      return;
+    }
+    renderList(items);
+  }
+
+  listEl.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const row = btn.closest("[data-item-id]");
+    const id = row.getAttribute("data-item-id");
+    const rowStatus = row.querySelector("[data-row-status]");
+
+    if (btn.hasAttribute("data-save")) {
+      const nameInput = row.querySelector("[data-name]");
+      if (!nameInput.value.trim()) {
+        showStatus(rowStatus, false, "Name cannot be empty");
+        nameInput.focus();
+        return;
+      }
+      const price = parseInt(row.querySelector("[data-price]").value, 10);
+      if (!Number.isFinite(price) || price < 0 || price > DEFAULT_MAX) {
+        showStatus(rowStatus, false, `Price must be a whole number from 0 to ${DEFAULT_MAX}`);
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const current = (await api("/api/economy/shop-items"))
+          .find((i) => String(i.id) === String(id));
+        if (!current) throw new Error("That item is gone — reload the page.");
+        await request("PATCH", `/api/economy/shop-items/${id}`, {
+          body: {
+            ...current,
+            name: nameInput.value.trim(),
+            blurb: row.querySelector("[data-blurb]").value.trim(),
+            price,
+            stock: optionalInt(row.querySelector("[data-stock]")),
+            per_member_limit: optionalInt(row.querySelector("[data-limit]")),
+            enabled: row.querySelector("[data-enabled]").checked,
+            ask_note: row.querySelector("[data-ask-note]").checked,
+          },
+        });
+        showStatus(rowStatus, true);
+        await refresh();
+      } catch (err) {
+        showStatus(rowStatus, false, err.message);
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
+
+    if (btn.hasAttribute("data-delete")) {
+      const name = row.querySelector("[data-name]").value.trim() || "this item";
+      const ok = await confirmDialog(
+        `"${name}" stops being sold and disappears from the shop. Anything already `
+        + "bought is untouched. To retire an item while keeping it for the people "
+        + "already holding it, clear \"Offer in the shop\" and save instead.",
+        { title: "Delete this item?", danger: true, confirmLabel: "Delete" },
+      );
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await apiDelete(`/api/economy/shop-items/${id}`);
+        toast("Item deleted.");
+        await refresh();
+      } catch (err) {
+        showStatus(rowStatus, false, err.message);
+        btn.disabled = false;
+      }
+    }
+  });
+
+  addBtn.addEventListener("click", async () => {
+    const name = container.querySelector("[data-item-name]").value.trim();
+    if (!name) {
+      showStatus(addStatus, false, "Give the item a name");
+      return;
+    }
+    const price = parseInt(container.querySelector("[data-item-price]").value, 10);
+    if (!Number.isFinite(price) || price < 0 || price > DEFAULT_MAX) {
+      showStatus(addStatus, false, `Price must be a whole number from 0 to ${DEFAULT_MAX}`);
+      return;
+    }
+    const kind = kindSel.value;
+    if (kind === "role" && !roleSel.value) {
+      showStatus(addStatus, false, "Pick the role this item gives");
+      return;
+    }
+    addBtn.disabled = true;
+    try {
+      await apiPost("/api/economy/shop-items", {
+        name,
+        blurb: container.querySelector("[data-item-blurb]").value.trim(),
+        description: "",
+        price,
+        kind,
+        billing: container.querySelector("[data-item-billing]").value,
+        role_id: kind === "role" ? roleSel.value : null,
+        stock: null,
+        per_member_limit: null,
+        available_from: null,
+        available_until: null,
+        ask_note: false,
+        enabled: true,
+        sort_order: 0,
+      });
+      container.querySelector("[data-item-name]").value = "";
+      container.querySelector("[data-item-blurb]").value = "";
+      showStatus(addStatus, true, "Added");
+      await refresh();
+    } catch (err) {
+      showStatus(addStatus, false, err.message);
+    } finally {
+      addBtn.disabled = false;
+    }
+  });
+
+  refresh();
+}
+
+function orderRow(order) {
+  const note = order.note
+    ? `<div class="field-hint">“${esc(order.note)}”</div>` : "";
+  return `
+    <div class="card" data-order-id="${order.id}"
+         style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
+      <div>
+        <div><b>${esc(order.item_name)}</b>
+          <span class="field-hint">(${order.price})</span></div>
+        <div class="field-hint">for ${esc(order.user_name || order.user_id)}</div>
+        ${note}
+      </div>
+      <div style="display:flex;gap:8px;margin-left:auto;">
+        <button type="button" class="btn btn-danger" data-refund>Turn Down &amp; Refund</button>
+      </div>
+      <span data-row-status></span>
+    </div>`;
+}
+
+function wireShopOrders(container) {
+  const listEl = container.querySelector("[data-orders]");
+  const emptyEl = container.querySelector("[data-orders-empty]");
+
+  async function refresh() {
+    try {
+      const data = await api("/api/economy/shop-orders");
+      const rows = data.orders || [];
+      listEl.innerHTML = rows.map(orderRow).join("");
+      emptyEl.style.display = rows.length ? "none" : "block";
+    } catch {
+      emptyEl.textContent = "Couldn’t load the orders.";
+      emptyEl.style.display = "block";
+    }
+  }
+
+  listEl.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-refund]");
+    if (!btn) return;
+    const row = btn.closest("[data-order-id]");
+    const id = row.getAttribute("data-order-id");
+    const rowStatus = row.querySelector("[data-row-status]");
+    const reason = await promptDialog(
+      "The buyer gets their money back and the job comes off the todo board. "
+      + "Anything you type here is for your own records.",
+      { title: "Turn this order down?", confirmLabel: "Refund", danger: true },
+    );
+    if (reason === null) return;
+    btn.disabled = true;
+    try {
+      await apiPost(`/api/economy/shop-orders/${id}/refund`, { reason: reason || "" });
+      toast("Refunded.");
+      await refresh();
+    } catch (err) {
+      showStatus(rowStatus, false, err.message);
+      btn.disabled = false;
+    }
+  });
+
+  refresh();
 }

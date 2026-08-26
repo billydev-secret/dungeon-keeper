@@ -48,6 +48,8 @@ from bot_modules.economy.perks import (
     perk_price,
 )
 from bot_modules.economy.shop import build_shop_embed
+from bot_modules.economy.shop_items import ItemView, Refusal, refusal_text
+from bot_modules.services import economy_shop_items_service as shop_items_svc
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -324,6 +326,11 @@ class _ShopContext(NamedTuple):
     refundable: list[dict]
     shields_held: int
     shield_price: int
+    # Admin-defined custom items this viewer should see, and which of them
+    # they already hold — empty in a guild that has defined none, which is
+    # also the switch that hides the Server Store section and its button.
+    items: list[ItemView]
+    owned_item_ids: set[int]
 
 
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".avif")
@@ -652,6 +659,10 @@ _ICON_SELECT_LIMIT = 24
 # The palette picker has no Custom slot, so it gets Discord's full 25.
 _COLOR_SELECT_LIMIT = 25
 
+#: Discord's own ceiling on select options. A guild past this many items has a
+#: curation problem, not a shop problem.
+_STORE_SELECT_LIMIT = 25
+
 
 class _IconCatalogSelect(discord.ui.Select):
     """A picker of curated role icons; choosing one rents or switches to it.
@@ -777,6 +788,154 @@ class _ColorPaletteView(_MemberScopedView):
     ) -> None:
         super().__init__(user_id)
         self.add_item(_ColorPaletteSelect(cog, settings, guild, colors))
+
+
+def _item_bought_text(
+    settings: EconSettings,
+    outcome: shop_items_svc.PurchaseOutcome,
+    *,
+    granted: bool,
+) -> str:
+    """What the buyer is told, which depends on what actually happened.
+
+    A staff-fulfilled order says so plainly and does not promise a time: the
+    honest answer is that a human has to do it, and inventing an ETA is how a
+    member decides the bot is broken an hour later.
+    """
+    paid = f"{settings.currency_emoji} **{outcome.price:,}**"
+    head = f"✅ Bought **{outcome.item_name}** for {paid}"
+    if outcome.state == "pending":
+        return (
+            f"{head}.\n"
+            "The staff have it on their list — you'll get it once someone's "
+            "picked it up. If they can't, you get your "
+            f"{settings.currency_plural} back."
+        )
+    if not granted:
+        return (
+            f"{head}, but I couldn't hand you the role — a mod will need to "
+            "sort that out. Your purchase is recorded."
+        )
+    if outcome.state == "live":
+        return f"{head}/week. It renews weekly — cancel any time from the shop."
+    return f"{head}. Enjoy!"
+
+
+class _StoreSelect(discord.ui.Select):
+    """Picker of the guild's custom shop items.
+
+    Sold-out and already-held rows are listed but not selectable — removing
+    them would make the picker disagree with the Server Store table the member
+    just read, which reads as the button being broken rather than as the item
+    being gone.
+    """
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        items: list[ItemView],
+        owned_item_ids: set[int],
+    ) -> None:
+        self.cog = cog
+        self.settings = settings
+        self.guild = guild
+        self.items = {i.item_id: i for i in items}
+        options: list[discord.SelectOption] = []
+        for item in items[:_STORE_SELECT_LIMIT]:
+            bits = [f"{settings.currency_emoji} {item.price:,}"]
+            if item.is_rental:
+                bits.append("weekly")
+            if item.item_id in owned_item_ids:
+                bits.append("✅ yours")
+            elif item.remaining == 0:
+                bits.append("sold out")
+            elif item.remaining is not None:
+                bits.append(f"{item.remaining} left")
+            desc = " · ".join(bits)
+            if item.blurb:
+                desc = f"{item.blurb} — {desc}"
+            options.append(
+                discord.SelectOption(
+                    label=item.name[:100],
+                    value=str(item.item_id),
+                    description=desc[:100],
+                )
+            )
+        super().__init__(
+            placeholder="Pick something to buy…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        item = self.items.get(int(self.values[0]))
+        if item is None:  # edited away between render and click
+            await interaction.response.send_message(
+                refusal_text(Refusal.UNKNOWN), ephemeral=True
+            )
+            return
+        if item.ask_note:
+            await interaction.response.send_modal(
+                _StoreNoteModal(self.cog, self.settings, self.guild, item)
+            )
+            return
+        await self.cog.do_buy_item(interaction, self.settings, self.guild, item)
+
+
+class _StoreView(_MemberScopedView):
+    """Ephemeral store picker, scoped to the member who opened the shop."""
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        user_id: int,
+        items: list[ItemView],
+        owned_item_ids: set[int],
+    ) -> None:
+        super().__init__(user_id)
+        self.add_item(
+            _StoreSelect(cog, settings, guild, items, owned_item_ids)
+        )
+
+
+class _StoreNoteModal(discord.ui.Modal):
+    """The one free-text field an item can ask its buyer for.
+
+    Only opened for items whose admin ticked "ask for a note" — the name to
+    engrave, the colour they want — so a plain purchase never grows a form.
+    """
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        item: ItemView,
+    ) -> None:
+        super().__init__(title=f"Buy {item.name}"[:45])
+        self.cog = cog
+        self.settings = settings
+        self.guild = guild
+        self.item = item
+        self.note: discord.ui.TextInput = discord.ui.TextInput(
+            label="Anything the staff should know?",
+            placeholder="e.g. the name to put on it",
+            required=False,
+            max_length=shop_items_svc.NOTE_MAX_LEN,
+            style=discord.TextStyle.paragraph,
+        )
+        self.add_item(self.note)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.do_buy_item(
+            interaction, self.settings, self.guild, self.item,
+            note=str(self.note.value or ""),
+        )
 
 
 class _RefundSelect(discord.ui.Select):
@@ -917,6 +1076,7 @@ class _ShopView(_MemberScopedView):
         shields_held: int = 0,
         refundable: list[dict] | None = None,
         shield_price: int = 0,
+        items: list[ItemView] | None = None,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog
@@ -924,6 +1084,7 @@ class _ShopView(_MemberScopedView):
         self.guild = guild
         self.refundable = refundable or []
         self.shield_price = shield_price
+        self.items = items or []
         for perk in SELF_PERKS:
             if perk == "role_preset":
                 # No palette, no product — the embed drops the row too, so a
@@ -1037,6 +1198,17 @@ class _ShopView(_MemberScopedView):
             )
             button.callback = self._make_shield_callback()
             self.add_item(button)
+        if self.items:
+            # One picker rather than a button per item: a guild can define far
+            # more items than a view has slots, and the same browse-then-buy
+            # shape already covers the icon catalog and the colour palette.
+            button = discord.ui.Button(
+                label="🎁 Store",
+                style=discord.ButtonStyle.secondary,
+                custom_id="econ_shop_items",
+            )
+            button.callback = self._make_store_callback()
+            self.add_item(button)
         if self.refundable or self.shield_price > 0:
             # One entry point for everything cancellable, rather than a
             # second button per owned row — the picker underneath handles
@@ -1084,6 +1256,12 @@ class _ShopView(_MemberScopedView):
             await interaction.response.send_modal(
                 _RaffleBuyModal(self.cog, self.settings)
             )
+
+        return _cb
+
+    def _make_store_callback(self):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await self.cog.open_store(interaction, self.settings, self.guild)
 
         return _cb
 
@@ -1791,6 +1969,8 @@ class EconomyCog(commands.Cog):
             color_catalog=shop.color_range,
             balance=shop.balance,
             shields_held=shop.shields_held,
+            items=shop.items,
+            owned_item_ids=shop.owned_item_ids,
         )
         view = _ShopView(
             self, settings, guild, user_id, gated, shop.owned,
@@ -1802,7 +1982,7 @@ class EconomyCog(commands.Cog):
                 shop.color_range is not None or "role_preset" in shop.owned
             ),
             shields_held=shop.shields_held, refundable=shop.refundable,
-            shield_price=shop.shield_price,
+            shield_price=shop.shield_price, items=shop.items,
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -2631,6 +2811,113 @@ class EconomyCog(commands.Cog):
             ephemeral=True,
         )
 
+    async def open_store(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+    ) -> None:
+        """Show the guild's custom shop items as a picker."""
+        user_id = interaction.user.id
+
+        def _load() -> tuple[list[ItemView], set[int]]:
+            with self.bot.ctx.open_db() as conn:
+                items = shop_items_svc.shop_items_for(
+                    conn, guild.id, now=time.time(), user_id=user_id
+                )
+                owned = {
+                    i.item_id
+                    for i in items
+                    if shop_items_svc.owned_count(conn, guild.id, user_id, i.item_id)
+                }
+            return items, owned
+
+        items, owned = await asyncio.to_thread(_load)
+        if not items:
+            await interaction.response.send_message(
+                "❌ This server hasn't put anything in the store yet.",
+                ephemeral=True,
+            )
+            return
+        note = ""
+        if len(items) > _STORE_SELECT_LIMIT:
+            note = f"\n_Showing the first {_STORE_SELECT_LIMIT}._"
+        await interaction.response.send_message(
+            f"What the server is selling:{note}",
+            view=_StoreView(self, settings, guild, user_id, items, owned),
+            ephemeral=True,
+        )
+
+    async def do_buy_item(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+        item: ItemView,
+        *,
+        note: str = "",
+    ) -> None:
+        """Buy one custom shop item, then run its Discord side of the deal.
+
+        The money and the row are the service's; this method owns only what
+        Discord has to be told. A role grant that fails does NOT unwind the
+        purchase — the member paid, the order exists, and a mod can hand the
+        role over — so the failure is reported as a thing staff will fix rather
+        than as a refusal that would contradict the debit already taken.
+        """
+        user_id = interaction.user.id
+
+        def _buy() -> shop_items_svc.PurchaseOutcome:
+            with self.bot.ctx.open_db() as conn:
+                return shop_items_svc.purchase(
+                    conn, settings, guild.id, user_id, item.item_id, note=note,
+                )
+
+        outcome = await asyncio.to_thread(_buy)
+        if not outcome.ok:
+            text = refusal_text(outcome.refusal)
+            if outcome.refusal is Refusal.INSUFFICIENT:
+                text = await self._short_funds_text(
+                    settings, guild.id, user_id, item.price
+                )
+            await interaction.response.send_message(text, ephemeral=True)
+            return
+
+        granted = True
+        if outcome.grant_role_id:
+            granted = await self._grant_item_role(
+                guild, user_id, int(outcome.grant_role_id)
+            )
+
+        await interaction.response.send_message(
+            _item_bought_text(settings, outcome, granted=granted), ephemeral=True
+        )
+
+    async def _grant_item_role(
+        self, guild: discord.Guild, user_id: int, role_id: int
+    ) -> bool:
+        """Give the buyer the role their item grants. False if it didn't land.
+
+        Best effort by design: a deleted role, a role above the bot, or a
+        member who left between paying and this call are all staff problems,
+        not reasons to fail a completed purchase.
+        """
+        member = guild.get_member(user_id)
+        role = guild.get_role(role_id)
+        if member is None or role is None:
+            return False
+        if role in member.roles:
+            return True
+        try:
+            await member.add_roles(role, reason="Economy: shop item purchased")
+        except (discord.Forbidden, discord.HTTPException):
+            log.warning(
+                "Economy: failed to grant shop-item role %s to %s in %s.",
+                role_id, user_id, guild.id,
+            )
+            return False
+        return True
+
     async def pick_catalog_color(
         self, interaction: discord.Interaction, guild: discord.Guild, color_id: int
     ) -> None:
@@ -3349,7 +3636,9 @@ class EconomyCog(commands.Cog):
         with self.bot.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             if not settings.enabled:
-                return _ShopContext(settings, set(), set(), 0, None, None, [], 0, 0)
+                return _ShopContext(
+                    settings, set(), set(), 0, None, None, [], 0, 0, [], set()
+                )
             # Both halves here rather than through ``effective_entitlements``:
             # settings are already in hand, and the shop is the one surface
             # that needs to tell a comped row from a rented one.
@@ -3367,9 +3656,18 @@ class EconomyCog(commands.Cog):
             shields_held, shield_price = get_streak_shield_status(
                 conn, guild_id, user_id, settings
             )
+            now = time.time()
+            items = shop_items_svc.shop_items_for(
+                conn, guild_id, now=now, user_id=user_id
+            )
+            owned_items = {
+                i.item_id
+                for i in items
+                if shop_items_svc.owned_count(conn, guild_id, user_id, i.item_id)
+            }
         return _ShopContext(
             settings, ent, comped, balance, icon_range, color_range, rentals,
-            shields_held, shield_price,
+            shields_held, shield_price, items, owned_items,
         )
 
     def _load_role_ctx(

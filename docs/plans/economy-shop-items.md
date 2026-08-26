@@ -1,6 +1,6 @@
 # Custom shop items (economy spending)
 
-**Status:** STAGE 1 IN PROGRESS (2026-08-25) · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
+**Status:** ALL FIVE STAGES BUILT (2026-08-26) · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
 
 ## Goal
 
@@ -137,6 +137,11 @@ Unfulfilled orders expire on `shop_item_expire_days` (default 14), the emoji
 sponsor sweep pattern.
 
 ## Stages
+
+All five landed. Stage 1 shipped 2026-08-25 (`eefd885f`), with a round of
+`/code-review` fixes in `5e178c58` — the sharp one being that a refused
+`purchase()` was committing its writes, because `open_db` commits on normal
+exit and a returned refusal is not a rollback. Stages 2–5 shipped 2026-08-26.
 
 1. **Migration + logic + service.** `economy_shop_items_logic.py` (pure
    purchasability verdict: enabled, window, stock, per-member limit, funds) and

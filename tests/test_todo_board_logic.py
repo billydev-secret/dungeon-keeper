@@ -12,6 +12,7 @@ from bot_modules.todo.board_logic import (
     EMPTY_CHORES,
     MAX_BOARD_ROWS,
     MAX_CHORE_ROWS,
+    ORDER_MARKER,
     RECURRING_MARKER,
     STREAK_MARKER,
     CHORE_HEADING,
@@ -646,3 +647,50 @@ def test_chores_cannot_fill_the_whole_complete_picker():
     options = completable_options(chores, tasks)
     assert len(options) - MAX_CHORE_ROWS == len(tasks)
     assert any(o["task"].startswith("Task") for o in options[:25])
+
+
+# ── shop orders on the board ──────────────────────────────────────────
+
+
+def _order(todo_id: int, task: str, *, buyer_name="", purchase_id=7):
+    row = _row(todo_id, task)
+    row["purchase_id"] = purchase_id
+    row["buyer_name"] = buyer_name
+    return row
+
+
+def test_an_order_is_marked_and_says_who_it_is_for():
+    body = render_rows([_order(1, "Deliver Custom Emoji", buyer_name="Billy")])
+    assert ORDER_MARKER in body
+    assert "for Billy" in body
+
+
+def test_the_buyer_is_outside_the_code_span():
+    """The name is live text, not part of the aligned cell."""
+    body = render_rows([_order(1, "Deliver Custom Emoji", buyer_name="Billy")])
+    cell = body.split("`")[1]
+    assert "Billy" not in cell
+
+
+def test_an_erased_buyer_leaves_the_order_readable():
+    """The purchase row is purged, so the join finds nobody — the work stands."""
+    body = render_rows([_order(1, "Deliver Custom Emoji", buyer_name="")])
+    assert "Deliver Custom Emoji" in body
+    assert " · for " not in body
+
+
+def test_an_ordinary_task_carries_no_order_marker():
+    assert ORDER_MARKER not in render_rows([_row(1, "fix the quote bot")])
+
+
+def test_a_renamed_buyer_repaints_the_board():
+    """Same row, different nickname — the board says something different."""
+    before = board_signature([_order(1, "Deliver X", buyer_name="Billy")])
+    after = board_signature([_order(1, "Deliver X", buyer_name="Bill")])
+    assert before != after
+
+
+def test_becoming_an_order_repaints_the_board():
+    assert board_signature([_order(1, "Deliver X")]) != board_signature(
+        [_row(1, "Deliver X")]
+    )

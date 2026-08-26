@@ -92,12 +92,25 @@ def list_todos(
 #: The only columns the board and its Complete picker actually read. Selecting
 #: the full row would haul up to 200 × (500-char task + 1000-char description)
 #: out of SQLite every refresh to render fifteen short lines.
-_BOARD_COLS = "id, task, description, created_at, recurring_id"
+_BOARD_COLS = (
+    "t.id, t.task, t.description, t.created_at, t.recurring_id, t.purchase_id"
+)
+
+#: A purchase-spawned row names the item, never the buyer (see
+#: ``economy/shop_items.todo_task_text`` for why). The buyer is joined in here
+#: instead, so the board can say who an order is for while the stored text
+#: stays free of them — and so an erased buyer's row simply renders as unknown,
+#: because the purchase row is purged and the join finds nothing.
+_BUYER_JOIN = (
+    " LEFT JOIN econ_shop_purchases p ON p.id = t.purchase_id"
+)
 
 #: A row is outstanding only while it is neither ticked nor written off. The
 #: ``missed_at`` half is what stops a chore the daily reset closed yesterday
 #: from lingering on the all-todos board forever.
 _OPEN = "completed_at IS NULL AND missed_at IS NULL"
+#: The same predicate, qualified for the buyer-join query above.
+_OPEN_T = "t.completed_at IS NULL AND t.missed_at IS NULL"
 
 
 #: Chore-spawned rows are excluded from the board's Tasks section because the
@@ -120,11 +133,12 @@ def pending_todos(
     ``exclude_chores`` drops rows a recurring definition spawned; the board
     passes it, the dashboard does not (its one list is the whole list).
     """
-    where = _OPEN + (f" AND {_NOT_A_CHORE}" if exclude_chores else "")
+    where = _OPEN_T + (f" AND t.{_NOT_A_CHORE}" if exclude_chores else "")
     return conn.execute(
-        f"SELECT {_BOARD_COLS} FROM todos"
-        f" WHERE guild_id = ? AND {where}"
-        f" ORDER BY created_at ASC LIMIT ?",
+        f"SELECT {_BOARD_COLS}, p.user_id AS buyer_id FROM todos t"
+        f"{_BUYER_JOIN}"
+        f" WHERE t.guild_id = ? AND {where}"
+        f" ORDER BY t.created_at ASC LIMIT ?",
         (guild_id, int(limit)),
     ).fetchall()
 

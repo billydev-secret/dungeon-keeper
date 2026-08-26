@@ -496,7 +496,7 @@
         <tr><td><strong><a href="#confessions">Confessions</a></strong></td><td>Anonymous member submissions with anonymous threaded replies; mods trace authorship on the admin-only audit panel.</td></tr>
         <tr><td><strong><a href="#pen-pals">Pen Pals</a></strong></td><td>Opt-in pool that pairs members into private 2-person channels with a conversation starter; channels retire automatically after a configurable session length.</td></tr>
         <tr><td><strong><a href="#community">Community &amp; XP</a></strong></td><td>Earn XP by posting / replying / image-reacts / voice. Manual XP grants. Role grants (denizen, NSFW, etc). Leave-of-absence system. Starboard.</td></tr>
-        <tr><td><strong><a href="#economy">Economy &amp; Perk Shop</a></strong></td><td>Per-server currency earned from activity — daily logins, quests, games, QOTD — spent on weekly-renewing role perks (color, name, icon, palette, gradient, holographic) and gifts.</td></tr>
+        <tr><td><strong><a href="#economy">Economy &amp; Perk Shop</a></strong></td><td>Per-server currency earned from activity — daily logins, quests, games, QOTD — spent on weekly-renewing role perks (color, name, icon, palette, gradient, holographic), gifts, and whatever else the server puts in its <a href="#economy-store">store</a>.</td></tr>
         <tr><td><strong><a href="#voice">Voice Control</a></strong></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
         <tr><td><strong><a href="#music">Music</a></strong></td><td>YouTube/Spotify playback in voice channels.</td></tr>
         <tr><td><strong><a href="#music-playlist">Music Playlist</a></strong></td><td>A watched channel feeds a rolling Spotify playlist of the last 30 songs members posted — drop a Spotify or YouTube link and it's on the playlist.</td></tr>
@@ -1190,6 +1190,23 @@
       </div>
     </div>
 
+    <h3 id="economy-store">The Server Store</h3>
+    <p>Beside the built-in perks, a server can sell <strong>whatever it likes</strong> — a shoutout, a custom emoji, a role, a favour. These appear in <code>/bank shop</code> under <strong>Server Store</strong>, and you buy them from the <strong>🎁 Store</strong> button in the same private menu. A server that hasn't set any up doesn't show the section at all.</p>
+    <p>Each item is one of two things when you buy it:</p>
+    <ul>
+      <li><strong>It gives you a role</strong> — that happens straight away, nothing to wait for.</li>
+      <li><strong>It goes on the mod team's list</strong> — a human does it. You'll be told that's what happened; there's no promised time, because it depends on somebody being around.</li>
+    </ul>
+    <p>And it charges either <strong>once</strong> or <strong>every week</strong>. A weekly one behaves exactly like a perk: it renews out of your wallet, you can cancel it any time, and it lapses if a renewal can't be paid.</p>
+    <p>Rows can say <strong>sold out</strong> (a limited run), <strong>N left</strong>, or <strong>one each</strong> (you can only buy it once). Some items ask you for a note when you buy — the name to put on something, the color you want — and that note goes to the staff along with the order.</p>
+    <div class="callout callout-info">
+      <span class="callout-icon">💰</span>
+      <div class="callout-body">
+        <strong>Your money is taken when you buy, and given back if it can't happen</strong>
+        <p>Buying takes the payment right away, even for something a human has to do — so you can't accidentally promise the same coins twice. If the staff turn the order down, or nobody gets to it within a couple of weeks, you're refunded automatically and in full. You can also change your mind and cancel an order yourself while it's still waiting.</p>
+      </div>
+    </div>
+
     <h3 id="economy-casino">Casino</h3>
     <h4>The casino floor</h4>
     <p>Where the server has opened it, one channel becomes the casino floor: the bot keeps a <strong>🎲 Golden Meadow</strong> panel there with a button per table, and everything happens through those buttons — there are no casino commands. Every bet comes straight out of your wallet, and every win lands straight back in.</p>
@@ -1251,6 +1268,8 @@
         <tr><td><strong>Economy → <a href="/#/economy-bank-manager">Bank</a></strong> → Grant / Remove Currency</td><td>Hand currency to a member, or take it back. <strong>Grant</strong> applies the booster bonus, so granting 100 to a booster credits 150. <strong>Remove</strong> takes exactly the amount you type — no bonus, boosters included — and asks you to confirm first. Removing more than they hold empties their wallet and tells you what actually went; balances never go below zero, so nobody ends up owing coins. Both write an audit row you can find in the same page's <strong>Ledger Audit</strong> (kinds <code>grant</code> and <code>admin_remove</code>), stamped with who did it and the reason typed. Grants post to the public register feed; <strong>removals deliberately don't</strong> — the member sees the entry in their own wallet history, but the server isn't told</td></tr>
         <tr><td><code>/qotd post [question]</code></td><td>Post today's question of the day as a banner card. Members who <strong>reply to</strong> that message earn currency, once each, until end of day. Leave <em>question</em> blank to post the next approved <strong>sponsored</strong> question instead, credited to the member who paid for it. You don't need the command to ask: any message from a mod that <strong>tags the QOTD role</strong> becomes that day's question too</td></tr>
         <tr><td><strong>Economy → Settings</strong> → Post to Discord → Economy Panel</td><td>Post (or refresh) your server's one economy panel: today's pulse, top earners, community-goal progress, a combined <strong>Quest board &amp; community goals</strong> section, and an anonymous feed of today's completions — it repaints itself within a couple of minutes of economy activity and stays pinned to the bottom of its channel. Four buttons sit under it: <strong>Show My Quests</strong> (a member's own quest list, the <code>/bank quests</code> view), <strong>Wallet</strong> (their balance and recent activity, the <code>/bank wallet</code> view), <strong>❓ How it Works</strong> (the full how-the-economy-works guide, templated with your branding and live rates) and <strong>🔔 Notifications</strong> (the opt-in for economy DMs). Because the guide and the opt-in live on it, put it somewhere members can see</td></tr>
+        <tr><td><strong>Economy → Shop &amp; Perks</strong> → Custom Shop Items</td><td>Sell things the bot doesn't have built in. Give each one a name, a price, and pick what buying it does — <em>give them a role</em> (instant) or <em>add it to the mod todo list</em> (a human does it) — plus whether it charges once or every week. Optional limits: total stock, a maximum per person, and whether to ask the buyer for a note. An item can't be deleted while somebody has an order or a rental open on it; switch off <strong>Offer in the shop</strong> instead and the people already holding it keep it</td></tr>
+        <tr><td><strong>Economy → Shop &amp; Perks</strong> → Orders Waiting on Staff</td><td>Everything bought that a human still owes. These are the same jobs as on the <a href="#todo">todo board</a> — tick one off there or in Discord once it's done. <strong>Turn Down &amp; Refund</strong> here is the other outcome: the buyer's money goes back and the job comes off the board. Orders nobody resolves are refunded automatically after two weeks</td></tr>
         <tr><td><strong>Economy → Settings</strong> → Post to Discord → Perk Shop</td><td>Post a persistent shop panel — its Open Shop button gives each member their personal shop menu (rent, customize, refunds). Like the economy panel it stays at the bottom of its channel: chat there and the panel reposts itself a few seconds after the room falls quiet</td></tr>
       </tbody>
     </table>

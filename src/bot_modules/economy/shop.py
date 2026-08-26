@@ -25,9 +25,18 @@ from bot_modules.economy.perks import (
     SELF_PERKS,
     perk_price,
 )
+from bot_modules.economy.shop_items import ItemView
 from bot_modules.services.embeds import pad_cell as _pad
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_service import EconSettings
+
+#: Store rows shown inline before the section defers to the picker. The embed
+#: already carries the perk table above, so this stays well short of the
+#: description cap and of a wall on a phone.
+_MAX_ITEM_ROWS = 8
+
+#: "N left" appears only when N is small enough to be a reason to hurry.
+_LOW_STOCK = 5
 
 def shop_row_price(
     settings: EconSettings,
@@ -59,6 +68,58 @@ def shop_row_price(
     return price, f"{price:,}"
 
 
+def _item_note(item: ItemView, owned: bool) -> str:
+    """The trailing note on a store row: state first, then scarcity.
+
+    At most one, and the most actionable one. "Sold out" beats "3 per person"
+    because the second is advice about a purchase that can no longer happen.
+    """
+    if owned:
+        return " · ✅"
+    remaining = item.remaining
+    if remaining == 0:
+        return " · _sold out_"
+    if remaining is not None and remaining <= _LOW_STOCK:
+        return f" · _{remaining} left_"
+    if item.per_member_limit == 1:
+        return " · _one each_"
+    return ""
+
+
+def _items_block(
+    settings: EconSettings,
+    items: list[ItemView],
+    owned_item_ids: set[int] | frozenset[int],
+) -> str:
+    """The Server Store section: one aligned cell per admin-defined item.
+
+    Same two-cell shape as the perk table above, so the two sections read as
+    one storefront rather than two lists that happen to share an embed. Width
+    is measured over these rows only — the perk table sizes itself separately,
+    and forcing one shared width would let a long item name push every perk
+    row wide.
+    """
+    shown = items[:_MAX_ITEM_ROWS]
+    label_width = max(len(i.name) for i in shown)
+    blurb_width = max(len(i.blurb) for i in shown) if any(i.blurb for i in shown) else 0
+
+    lines = []
+    for item in shown:
+        cell = _pad(item.name, label_width)
+        if blurb_width:
+            cell += "  " + _pad(item.blurb, blurb_width)
+        rent = "/wk" if item.is_rental else ""
+        lines.append(
+            f"`{cell}` {settings.currency_emoji} **{item.price:,}**{rent}"
+            f"{_item_note(item, item.item_id in owned_item_ids)}"
+        )
+    hidden = len(items) - len(shown)
+    if hidden:
+        lines.append(f"…and **{hidden}** more — tap 🎁 Store to see them all.")
+    lines.append("\nTap **🎁 Store** to buy.")
+    return "\n".join(lines)
+
+
 def build_shop_embed(
     settings: EconSettings,
     gated: set[str],
@@ -71,6 +132,8 @@ def build_shop_embed(
     color_catalog: tuple[int, int, int] | None = None,
     balance: int | None = None,
     shields_held: int = 0,
+    items: list[ItemView] | None = None,
+    owned_item_ids: set[int] | frozenset[int] = frozenset(),
 ) -> discord.Embed:
     """The shop listing, shared by /bank shop and the channel panel.
 
@@ -86,6 +149,11 @@ def build_shop_embed(
     ``shields_held`` marks the shield row — all only meaningful for the
     ephemeral per-member view; the channel panel is member-agnostic and passes
     none of them.
+    ``items`` are the guild's admin-defined custom items (already filtered to
+    what this viewer should see by ``shop_items_for``); they render as their own
+    section below the perk table and the section is absent entirely in a guild
+    that has defined none. ``owned_item_ids`` marks the viewer's live rentals
+    and delivered one-offs among them.
     ``icon_catalog`` is (min price, max price, icon count) across the guild's
     curated catalog; when set, the role-icon row shows that span and its size
     instead of a single flat price. ``color_catalog`` is the same triple for the
@@ -202,6 +270,12 @@ def build_shop_embed(
                 "roll; the winner's next weekly perk payment is free "
                 "(and they're announced by name)."
             ),
+            inline=False,
+        )
+    if items:
+        embed.add_field(
+            name="Server Store",
+            value=_items_block(settings, items, owned_item_ids),
             inline=False,
         )
     embed.add_field(

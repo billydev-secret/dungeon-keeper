@@ -51,7 +51,9 @@ from bot_modules.services.economy_service import (
     load_econ_settings,
     save_econ_settings,
 )
+from bot_modules.services import economy_shop_items_service as shop_items_svc
 from web_server.auth import AuthenticatedUser
+from web_server.helpers import resolve_names
 from web_server.routes.panel_posting import (
     ChannelIdBody,
     guild_or_503,
@@ -796,3 +798,273 @@ async def delete_color_swatch(
         return _swatch_listing(ctx.db_path, guild_id)
 
     return await run_query(_delete)
+
+
+# ── Custom shop items ───────────────────────────────────────────────────────
+#
+# Admin-defined products sold beside the built-in perks
+# (docs/plans/economy-shop-items.md). The editor and the order queue live on
+# the Shop & Perks page rather than a nav entry of their own, so the Spending
+# group stays at two entries and the prices sit beside the ones they compete
+# with.
+
+
+class ShopItemBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=60)
+    blurb: str = Field(default="", max_length=40)
+    description: str = Field(default="", max_length=500)
+    price: int = Field(ge=0)
+    kind: str = "manual"
+    billing: str = "once"
+    role_id: str | None = None
+    stock: int | None = Field(default=None, ge=0)
+    per_member_limit: int | None = Field(default=None, ge=1)
+    available_from: float | None = None
+    available_until: float | None = None
+    ask_note: bool = False
+    enabled: bool = True
+    sort_order: int = 0
+
+
+class ShopOrderResolveBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(default="", max_length=500)
+
+
+def _shop_item_dict(row) -> dict:
+    """One item for the editor. Snowflakes as strings, per the precision sweep."""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "blurb": row["blurb"],
+        "description": row["description"],
+        "price": row["price"],
+        "kind": row["kind"],
+        "billing": row["billing"],
+        "role_id": str(row["role_id"]) if row["role_id"] else None,
+        "stock": row["stock"],
+        "sold": row["sold"],
+        "per_member_limit": row["per_member_limit"],
+        "available_from": row["available_from"],
+        "available_until": row["available_until"],
+        "ask_note": bool(row["ask_note"]),
+        "enabled": bool(row["enabled"]),
+        "sort_order": row["sort_order"],
+    }
+
+
+def _item_body_fields(body: ShopItemBody) -> dict:
+    """The editable half of a body, with the role snowflake parsed back to int."""
+    return {
+        "blurb": body.blurb,
+        "description": body.description,
+        "role_id": int(body.role_id) if body.role_id else None,
+        "stock": body.stock,
+        "per_member_limit": body.per_member_limit,
+        "available_from": body.available_from,
+        "available_until": body.available_until,
+        "ask_note": int(body.ask_note),
+        "enabled": int(body.enabled),
+        "sort_order": body.sort_order,
+    }
+
+
+@router.get("/economy/shop-items")
+async def list_shop_items(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Every custom item this guild has defined, in display order."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return [
+                _shop_item_dict(r)
+                for r in shop_items_svc.list_items(conn, guild_id)
+            ]
+
+    return await run_query(_q)
+
+
+@router.post("/economy/shop-items")
+async def create_shop_item(
+    request: Request,
+    body: ShopItemBody,
+    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Define a new item. Validation errors come back as 400, not 500."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            try:
+                item_id = shop_items_svc.create_item(
+                    conn, guild_id,
+                    name=body.name, price=body.price, kind=body.kind,
+                    billing=body.billing, created_by=int(user.user_id or 0),
+                    **_item_body_fields(body),
+                )
+            except (ValueError, KeyError) as exc:
+                raise HTTPException(400, str(exc)) from None
+            row = next(
+                r for r in shop_items_svc.list_items(conn, guild_id)
+                if int(r["id"]) == item_id
+            )
+            return _shop_item_dict(row)
+
+    return await run_query(_q)
+
+
+@router.patch("/economy/shop-items/{item_id}")
+async def patch_shop_item(
+    item_id: int,
+    request: Request,
+    body: ShopItemBody,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Edit an item.
+
+    A price change lands on new purchases and on the next renewal of a live
+    rental — never retroactively on an order already placed, whose price was
+    snapshotted so a refund returns what was actually taken.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            values = {
+                "name": body.name, "price": body.price, "kind": body.kind,
+                "billing": body.billing, **_item_body_fields(body),
+            }
+            try:
+                found = shop_items_svc.update_item(conn, guild_id, item_id, values)
+            except (ValueError, KeyError) as exc:
+                raise HTTPException(400, str(exc)) from None
+            if not found:
+                raise HTTPException(404, "Item not found.")
+            row = next(
+                r for r in shop_items_svc.list_items(conn, guild_id)
+                if int(r["id"]) == item_id
+            )
+            return _shop_item_dict(row)
+
+    return await run_query(_q)
+
+
+@router.delete("/economy/shop-items/{item_id}")
+async def delete_shop_item(
+    item_id: int,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Remove an item — refused (409) while any order is still open.
+
+    Deleting one with escrow behind it would strand a member's coins and leave
+    a live rental billing for a row nobody can price. Disabling is how you
+    retire an item people still hold: the shop keeps showing it to its own
+    renters so they can find the thing they are paying for.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            try:
+                found = shop_items_svc.delete_item(conn, guild_id, item_id)
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from None
+            if not found:
+                raise HTTPException(404, "Item not found.")
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.get("/economy/shop-orders")
+async def list_shop_orders(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Orders waiting on staff, oldest first, with the buyer resolved."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return [
+                {
+                    "id": r["id"],
+                    "user_id": str(r["user_id"]),
+                    "user_name": "",
+                    "item_id": r["item_id"],
+                    "item_name": r["item_name"],
+                    "item_kind": r["item_kind"],
+                    "item_billing": r["item_billing"],
+                    "price": r["price"],
+                    "note": r["note"],
+                    "todo_id": r["todo_id"],
+                    "created_at": r["created_at"],
+                }
+                for r in shop_items_svc.pending_orders(conn, guild_id)
+            ]
+
+    orders = await run_query(_q)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    await resolve_names(ctx, guild, orders, ("user_id", "user_name"))
+    return {"orders": orders}
+
+
+@router.post("/economy/shop-orders/{order_id}/refund")
+async def refund_shop_order(
+    order_id: int,
+    request: Request,
+    body: ShopOrderResolveBody,
+    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Refuse an order: give the coins back and take it off the todo board.
+
+    Delivering is done by ticking the todo off, in Discord or on the Todo List
+    page — this endpoint is only the other outcome. The refund is exactly-once,
+    so a double click answers 409 rather than paying twice, and the todo closes
+    as *missed*: a refunded order must never render as delivered.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            refunded = shop_items_svc.refund_order(
+                conn, guild_id, order_id, state="denied",
+                resolver_id=int(user.user_id or 0), reason=body.reason,
+            )
+            if refunded is None:
+                raise HTTPException(409, "That order is already resolved.")
+            return {"ok": True, "refunded": refunded}
+
+    result = await run_query(_q)
+    await _refresh_todo_board(ctx, guild_id)
+    return result
+
+
+async def _refresh_todo_board(ctx, guild_id: int) -> None:
+    """Repaint the todo board after an order left it. Best effort.
+
+    The 60s loop picks it up anyway, so a missing bot or a Discord hiccup means
+    the board is up to a minute stale rather than the refund not happening.
+    """
+    bot = getattr(ctx, "bot", None)
+    cog = bot.get_cog("TodoCog") if bot else None
+    if cog is None:
+        return
+    try:
+        await cog.refresh_board(guild_id)
+    except Exception:  # pragma: no cover - defensive
+        pass

@@ -43,6 +43,7 @@ from bot_modules.services.economy_service import (
 )
 from bot_modules.services.quote_renderer import THEMES
 from bot_modules.services.voice_master_service import add_name_blocklist
+from bot_modules.services.economy_shop_items_service import get_item
 from tests.db_template import migrated_db
 from tests.fakes import FakeGuild, FakeRole, fake_interaction
 
@@ -3738,3 +3739,126 @@ async def test_qotd_ping_cannot_smuggle_an_everyone_mention(ctx, db):
     assert allowed.everyone is False
     assert allowed.users is False
     assert allowed.replied_user is False
+
+
+# ── custom shop items (glue only — the money is tested in the service) ──
+
+
+def _store_item(db, **over):
+    from bot_modules.services.economy_shop_items_service import create_item
+
+    fields = {"name": "Shoutout", "price": 100}
+    fields.update(over)
+    with open_db(db) as conn:
+        return create_item(conn, GUILD_ID, **fields)
+
+
+@pytest.mark.asyncio
+async def test_buying_a_role_item_grants_the_role(tmp_path):
+    """The one thing the cog owns: telling Discord about a completed sale."""
+    db = tmp_path / "econ.db"
+    migrated_db(db)
+    _enable(db)
+    item_id = _store_item(db, kind="role", role_id=777, billing="once")
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 500, "grant")
+
+    ctx = SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    cog = _make_cog(ctx)
+    actor = _member(member_id=500)
+    interaction = _interaction(actor)
+    guild = interaction.guild
+    role = MagicMock(spec=discord.Role)
+    guild.get_role = MagicMock(return_value=role)
+    guild.get_member = MagicMock(return_value=actor)
+    actor.roles = []
+    actor.add_roles = AsyncMock()
+
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD_ID)
+        item = get_item(conn, GUILD_ID, item_id)
+
+    await cog.do_buy_item(interaction, settings, guild, item)
+
+    actor.add_roles.assert_awaited_once()
+    assert "Bought" in interaction.response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_role_grant_still_keeps_the_purchase(tmp_path):
+    """The member paid and the order exists — refusing now would contradict
+    a debit that has already been taken, so it reads as staff work instead."""
+    db = tmp_path / "econ.db"
+    migrated_db(db)
+    _enable(db)
+    item_id = _store_item(db, kind="role", role_id=777, billing="once")
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 500, "grant")
+
+    ctx = SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    cog = _make_cog(ctx)
+    actor = _member(member_id=500)
+    interaction = _interaction(actor)
+    guild = interaction.guild
+    guild.get_role = MagicMock(return_value=None)  # role deleted since setup
+    guild.get_member = MagicMock(return_value=actor)
+
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD_ID)
+        item = get_item(conn, GUILD_ID, item_id)
+
+    await cog.do_buy_item(interaction, settings, guild, item)
+
+    text = interaction.response.send_message.await_args.args[0]
+    assert "couldn't hand you the role" in text
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 400
+
+
+@pytest.mark.asyncio
+async def test_buying_a_manual_item_promises_no_time(tmp_path):
+    """A human has to do it; inventing an ETA is how a member decides the bot
+    is broken an hour later."""
+    db = tmp_path / "econ.db"
+    migrated_db(db)
+    _enable(db)
+    item_id = _store_item(db)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 500, "grant")
+
+    ctx = SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD_ID)
+        item = get_item(conn, GUILD_ID, item_id)
+
+    await cog.do_buy_item(interaction, settings, interaction.guild, item)
+
+    text = interaction.response.send_message.await_args.args[0]
+    assert "staff" in text.lower()
+    assert "back" in text  # the refund promise
+
+
+@pytest.mark.asyncio
+async def test_an_unaffordable_item_is_refused_without_charging(tmp_path):
+    db = tmp_path / "econ.db"
+    migrated_db(db)
+    _enable(db)
+    item_id = _store_item(db, price=100)
+
+    ctx = SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD_ID)
+        item = get_item(conn, GUILD_ID, item_id)
+
+    await cog.do_buy_item(interaction, settings, interaction.guild, item)
+
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 0
+        rows = conn.execute("SELECT COUNT(*) AS n FROM econ_shop_purchases").fetchone()
+    assert rows["n"] == 0

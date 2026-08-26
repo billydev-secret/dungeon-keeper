@@ -101,6 +101,9 @@ class ItemView:
     item_id: int
     name: str
     price: int
+    #: The one-line cell beside the name in the shop table. Kept short — the
+    #: row is one monospace cell and anything wider wraps on a phone.
+    blurb: str = ""
     #: The longer text shown on the buy confirmation and carried onto the
     #: staff todo, where there is room for it.
     description: str = ""
