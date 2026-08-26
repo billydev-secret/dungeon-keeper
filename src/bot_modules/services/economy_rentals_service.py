@@ -66,13 +66,14 @@ if TYPE_CHECKING:
 # ``beneficiary_id`` != ``user_id`` (the gift_color kind retired in 091).
 _PERKS = (
     "role_color", "role_name", "role_gradient", "role_holographic",
-    "role_icon", "role_preset", "voice_style",
+    "role_icon", "role_preset", "voice_style", "custom_item",
 )
 
 _RENTAL_COLS = (
     "id, guild_id, user_id, perk, state, price, started_at, next_bill_at, "
     "grace_since, cancel_at_period_end, suspended, suspended_since, "
-    "beneficiary_id, catalog_icon_id, catalog_color_id, meta, created_at"
+    "beneficiary_id, catalog_icon_id, catalog_color_id, catalog_item_id, "
+    "meta, created_at"
 )
 
 # Personal-role columns a caller may write via upsert_personal_role.
@@ -140,6 +141,22 @@ def _catalog_color_price(
     return int(row["price"]) or None
 
 
+def _custom_item_price(
+    conn: sqlite3.Connection, guild_id: int, item_id: int
+) -> int | None:
+    """A custom shop item's current weekly price, or None if it has vanished.
+
+    Unlike the icon and colour catalogs there is no flat per-guild fallback to
+    land on — the item *is* the price list — so the caller bills the rental's
+    own snapshotted price instead of inventing one.
+    """
+    row = conn.execute(
+        "SELECT price FROM econ_shop_items WHERE guild_id = ? AND id = ?",
+        (guild_id, item_id),
+    ).fetchone()
+    return None if row is None else int(row["price"])
+
+
 def _price_for(
     conn: sqlite3.Connection,
     settings: EconSettings,
@@ -148,6 +165,8 @@ def _price_for(
     catalog_icon_id: int | None,
     meta_json: str | None = None,
     catalog_color_id: int | None = None,
+    catalog_item_id: int | None = None,
+    fallback_price: int | None = None,
 ) -> int:
     """The current weekly price for a rental.
 
@@ -167,6 +186,20 @@ def _price_for(
         price = _catalog_color_price(conn, guild_id, int(catalog_color_id))
         if price is not None:
             return price
+    if perk == "custom_item":
+        # A custom item has no `settings.price_custom_item` to fall through to,
+        # so this branch must always return. A deleted item bills the rental's
+        # snapshotted price rather than 0 (which would silently make a live
+        # rental free) — and the dashboard refuses to delete an item with live
+        # rentals in the first place, so this is a belt-and-braces path.
+        price = (
+            _custom_item_price(conn, guild_id, int(catalog_item_id))
+            if catalog_item_id
+            else None
+        )
+        if price is not None:
+            return price
+        return int(fallback_price or 0)
     if perk == "emoji":
         # Animated emojis bill their own rate; the flag rides the rental meta
         # written at upload time (economy_emoji_service.finalize_upload).
@@ -212,6 +245,7 @@ def rent_perk(
     beneficiary_id: int | None = None,
     catalog_icon_id: int | None = None,
     catalog_color_id: int | None = None,
+    catalog_item_id: int | None = None,
     now: float | None = None,
 ) -> sqlite3.Row:
     """Rent a perk: charge the first week upfront and open a live rental row.
@@ -221,7 +255,9 @@ def rent_perk(
     icon, whose per-icon price is billed instead of the flat
     ``settings.price_role_icon`` (NULL = a bring-your-own icon at the flat
     price); ``catalog_color_id`` does the same for a ``role_preset`` rental
-    against the colour palette. ``beneficiary_id`` defaults to ``user_id``; a gift passes the
+    against the colour palette, and ``catalog_item_id`` for a ``custom_item``
+    rental against the guild's custom shop items — whose price list has no flat
+    fallback, since the item *is* the price. ``beneficiary_id`` defaults to ``user_id``; a gift passes the
     friend's id, making them the beneficiary of the base perk. It is always
     stored non-NULL so the live-rental unique index fires. Raises ValueError: unknown ``perk``; "already rented" when a live
     rental for this (perk, beneficiary) exists (IntegrityError on the partial
@@ -236,7 +272,7 @@ def rent_perk(
     beneficiary = user_id if beneficiary_id is None else beneficiary_id
     price = _price_for(
         conn, settings, guild_id, perk, catalog_icon_id,
-        catalog_color_id=catalog_color_id,
+        catalog_color_id=catalog_color_id, catalog_item_id=catalog_item_id,
     )
     next_bill_at = now + WEEK_SECONDS
 
@@ -246,12 +282,13 @@ def rent_perk(
             INSERT INTO econ_rentals
                 (guild_id, user_id, perk, state, price, started_at,
                  next_bill_at, cancel_at_period_end, suspended,
-                 beneficiary_id, catalog_icon_id, catalog_color_id, created_at)
-            VALUES (?, ?, ?, 'active', ?, ?, ?, 0, 0, ?, ?, ?, ?)
+                 beneficiary_id, catalog_icon_id, catalog_color_id,
+                 catalog_item_id, created_at)
+            VALUES (?, ?, ?, 'active', ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)
             """,
             (
                 guild_id, user_id, perk, price, now, next_bill_at, beneficiary,
-                catalog_icon_id, catalog_color_id, now,
+                catalog_icon_id, catalog_color_id, catalog_item_id, now,
             ),
         )
     except sqlite3.IntegrityError as exc:
@@ -670,6 +707,8 @@ def bill_rental(
         conn, settings, int(rental["guild_id"]), perk,
         rental["catalog_icon_id"], meta_json=rental["meta"],
         catalog_color_id=rental["catalog_color_id"],
+        catalog_item_id=rental["catalog_item_id"],
+        fallback_price=int(rental["price"]),
     )
     ok = try_redeem_voucher(
         conn, int(rental["guild_id"]), user_id, rental_id=rental_id,

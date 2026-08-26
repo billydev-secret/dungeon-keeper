@@ -266,6 +266,12 @@ class EconSettings:
     emoji_sponsor_expire_days: int = 14
     price_text_room: int = 200
     price_voice_room: int = 200
+    # Custom shop items (docs/plans/economy-shop-items.md): admin-defined
+    # items sold beside the built-in perks. A manual item escrows the price
+    # and files a todo; this is how long that order waits for staff before the
+    # member gets their coins back (the emoji/QOTD sponsor sweep pattern).
+    # 0 disables the sweep rather than expiring every open order at once.
+    shop_item_expire_days: int = 14
     # Weekly raffle (sinks round 3, stage 5): week-scoped tickets, weighted
     # draw at the ISO-week roll, prize = a free-perk-week voucher (never
     # coins — ticket revenue is a pure burn). Default OFF; the winner is
@@ -1428,6 +1434,7 @@ _PURGE_USER_ID_TABLES: tuple[str, ...] = (
     "econ_intake_rewards",
     "econ_qotd_rewards",
     "econ_pin_submissions",
+    "econ_shop_purchases",
     "econ_community_contrib",
     "econ_community_tier_payouts",
     "econ_game_wagers",

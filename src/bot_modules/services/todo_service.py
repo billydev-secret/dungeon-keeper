@@ -35,7 +35,8 @@ LIST_LIMIT = 200
 
 _TODO_COLS = (
     "id, guild_id, added_by, task, description, source_message_url,"
-    " created_at, completed_at, completed_by, recurring_id, missed_at"
+    " created_at, completed_at, completed_by, recurring_id, missed_at,"
+    " purchase_id"
 )
 
 
@@ -48,14 +49,21 @@ def create_todo(
     description: str | None = None,
     source_message_url: str | None = None,
     recurring_id: int | None = None,
+    purchase_id: int | None = None,
     now_ts: float | None = None,
 ) -> int:
-    """Insert a new to do and return its ID."""
+    """Insert a new to do and return its ID.
+
+    ``purchase_id`` marks a row a custom-shop-item order spawned, the way
+    ``recurring_id`` marks one a recurring definition spawned. The task text of
+    such a row names the item and never the buyer — see
+    ``economy/shop_items.todo_task_text``.
+    """
     cur = conn.execute(
         "INSERT INTO todos"
         " (guild_id, added_by, task, description, source_message_url,"
-        "  recurring_id, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "  recurring_id, purchase_id, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             guild_id,
             added_by,
@@ -63,6 +71,7 @@ def create_todo(
             description,
             source_message_url,
             recurring_id,
+            purchase_id,
             time.time() if now_ts is None else now_ts,
         ),
     )
@@ -141,13 +150,44 @@ def complete_todo(
     refuses a row the daily reset already wrote off: yesterday's chore is
     finished business, and letting a late tick credit it would both invent a
     completion that never happened and corrupt the streak either side of it.
+
+    A row a custom-shop-item order spawned also DELIVERS that order here,
+    releasing the escrowed coins to the server (and opening the rental, for a
+    weekly item). It hangs off the guarded UPDATE's rowcount rather than
+    guarding itself, so it inherits that exactly-once property — and it lives
+    in here rather than at the two call sites so neither the board button nor
+    the dashboard can tick an order off without settling it.
     """
+    now = time.time() if now_ts is None else now_ts
     cur = conn.execute(
         f"UPDATE todos SET completed_at = ?, completed_by = ?"
         f" WHERE id = ? AND guild_id = ? AND {_OPEN}",
-        (time.time() if now_ts is None else now_ts, completed_by, todo_id, guild_id),
+        (now, completed_by, todo_id, guild_id),
     )
-    return cur.rowcount > 0
+    if cur.rowcount == 0:
+        return False
+    _settle_purchase(conn, todo_id, completed_by, now)
+    return True
+
+
+def _settle_purchase(
+    conn: sqlite3.Connection, todo_id: int, completed_by: int, now: float
+) -> None:
+    """Deliver the shop order behind a just-completed todo, if there is one.
+
+    Deferred import: the economy imports the todo board, not the other way
+    round, and this keeps that true for every caller who never sells anything.
+    """
+    row = conn.execute(
+        "SELECT purchase_id FROM todos WHERE id = ?", (todo_id,)
+    ).fetchone()
+    if row is None or not row["purchase_id"]:
+        return
+    from bot_modules.services.economy_shop_items_service import (  # noqa: PLC0415
+        fulfil_for_todo,
+    )
+
+    fulfil_for_todo(conn, todo_id, completed_by, now=now)
 
 
 def mark_missed(
