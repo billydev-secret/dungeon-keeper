@@ -1143,6 +1143,26 @@ def run_sponsor_expiry(
     ]
 
 
+def run_shop_order_expiry(
+    conn: sqlite3.Connection, guild_id: int, now_ts: float
+) -> list[int]:
+    """Refund custom-item orders staff never got to. Returns the ids expired.
+
+    The same deal the sponsored-question and emoji sweeps make: an order left
+    pending past ``shop_item_expire_days`` gives the member their coins back
+    rather than holding them indefinitely against work that is not going to
+    happen. Only 'pending' rows — a delivered or already-refunded order is
+    settled business.
+
+    Shipped without a caller, which made the fourteen-day promise on the shop
+    page and in the manual a no-op; a member's escrow could sit forever.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not settings.enabled:
+        return []
+    return shop_items_svc.expire_orders(conn, guild_id, settings, now=now_ts)
+
+
 # ── rental billing pass ────────────────────────────────────────────────
 
 
@@ -1843,6 +1863,7 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         sponsor_notices, emoji_notices = [], []
         pin_sweep = PinSweep(refunds=[], unpins=[])
         bounty_notices: list[ExpiredBountyNotice] = []
+        expired_orders: list[int] = []
         def _expiry_sweeps(gid: int = guild.id):
             with open_db(db_path) as conn:
                 return (
@@ -1850,6 +1871,7 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                     run_emoji_expiry(conn, gid, now_ts),
                     run_pin_expiry(conn, gid, now_ts),
                     run_bounty_expiry(conn, gid, now_ts),
+                    run_shop_order_expiry(conn, gid, now_ts),
                 )
 
         try:
@@ -1858,6 +1880,7 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                 emoji_notices,
                 pin_sweep,
                 bounty_notices,
+                expired_orders,
             ) = await asyncio.to_thread(_expiry_sweeps)
         except asyncio.CancelledError:
             raise
@@ -1865,6 +1888,26 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
             log.exception(
                 "Economy loop: sponsor-expiry sweep failed for guild %s.", guild.id
             )
+
+        if expired_orders:
+            # Each expiry closed a todo as missed, so the mods' board is now
+            # showing work that no longer exists. Best effort — the refunds are
+            # already committed and a Discord hiccup must not fail the tick.
+            # ``bot`` is typed as the bare Client here; only a commands.Bot
+            # carries cogs, which the runtime one always is.
+            get_cog = getattr(bot, "get_cog", None)
+            todo_cog = get_cog("TodoCog") if get_cog else None
+            if todo_cog is not None:
+                try:
+                    await todo_cog.refresh_board(guild.id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.warning(
+                        "Economy loop: failed to repaint the todo board for %s "
+                        "after expiring %d shop order(s).",
+                        guild.id, len(expired_orders),
+                    )
 
         for notice in sponsor_notices:
             try:

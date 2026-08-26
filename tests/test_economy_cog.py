@@ -3862,3 +3862,71 @@ async def test_an_unaffordable_item_is_refused_without_charging(tmp_path):
         assert get_balance(conn, GUILD_ID, 500) == 0
         rows = conn.execute("SELECT COUNT(*) AS n FROM econ_shop_purchases").fetchone()
     assert rows["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_buying_a_staff_item_repaints_the_todo_board(tmp_path):
+    """The order lands on the mods' board, so the board has to be told.
+
+    Every other path that adds a todo repaints (/todo, the board's own Add
+    button, the dashboard). This one didn't, and the 60s loop is no backstop —
+    it only repaints guilds where a recurring chore spawned or was written off.
+    A bought order therefore stayed invisible in Discord until somebody
+    happened to chat in the board's channel.
+    """
+    db = tmp_path / "econ.db"
+    migrated_db(db)
+    _enable(db)
+    item_id = _store_item(db)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 500, "grant")
+
+    todo_cog = MagicMock()
+    todo_cog.refresh_board = AsyncMock()
+    ctx = SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    cog = _make_cog(ctx)
+    cog.bot.get_cog = MagicMock(
+        side_effect=lambda name: todo_cog if name == "TodoCog" else None
+    )
+    interaction = _interaction(_member(member_id=500))
+
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD_ID)
+        item = get_item(conn, GUILD_ID, item_id)
+
+    await cog.do_buy_item(interaction, settings, interaction.guild, item)
+
+    todo_cog.refresh_board.assert_awaited_once_with(GUILD_ID)
+
+
+@pytest.mark.asyncio
+async def test_buying_a_role_item_does_not_touch_the_todo_board(tmp_path):
+    """Nothing lands on the board, so nothing needs repainting."""
+    db = tmp_path / "econ.db"
+    migrated_db(db)
+    _enable(db)
+    item_id = _store_item(db, kind="role", role_id=777, billing="once")
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 500, "grant")
+
+    todo_cog = MagicMock()
+    todo_cog.refresh_board = AsyncMock()
+    ctx = SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    cog = _make_cog(ctx)
+    cog.bot.get_cog = MagicMock(
+        side_effect=lambda name: todo_cog if name == "TodoCog" else None
+    )
+    actor = _member(member_id=500)
+    interaction = _interaction(actor)
+    interaction.guild.get_role = MagicMock(return_value=MagicMock(spec=discord.Role))
+    interaction.guild.get_member = MagicMock(return_value=actor)
+    actor.roles = []
+    actor.add_roles = AsyncMock()
+
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD_ID)
+        item = get_item(conn, GUILD_ID, item_id)
+
+    await cog.do_buy_item(interaction, settings, interaction.guild, item)
+
+    todo_cog.refresh_board.assert_not_awaited()
