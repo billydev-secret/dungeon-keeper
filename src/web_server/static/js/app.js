@@ -1019,6 +1019,12 @@ function renderNav(activeId) {
     group.textContent = sec.label;
     group.setAttribute("role", "button");
     group.tabIndex = 0;
+    // The rail marks where you are by setting this header wider (Archivo's
+    // wdth axis, see .nav-group.current in app.css). It is deliberately not
+    // keyed off aria-expanded: several sections can be open at once, so
+    // "expanded" and "the section I am in" are different questions.
+    if (activeSection && sec.id === activeSection.id) group.classList.add("current");
+
     // Open the active page's section plus any the user opened previously
     // (persisted across navigations, W-N8).
     const startCollapsed =

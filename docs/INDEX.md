@@ -65,6 +65,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [quote_renderer_spec.md](quote_renderer_spec.md) | Quote/banner card renderer (shared service: themes, fonts, slim/custom borders) |
 | [rename_spec.md](rename_spec.md) | `/rename` (moderator nickname change/reset) |
 | [dashboard_ia.md](dashboard_ia.md) | Dashboard information architecture: the nav sections and their gates, the "settings live with the data they produce" rule (which six features moved into their report/queue panels and which ~30 stay under Config), route-id/label naming conventions, and the panel-local URL-state convention |
+| [dashboard_visual_language.md](dashboard_visual_language.md) | Dashboard visual system: why the palette stays Discord's (and which two contrast decisions must survive a repaint), the two self-hosted typefaces and why Archivo's width axis is load-bearing, the type/spacing scales that replaced 17 ad-hoc font sizes and 22 spacing values, and the nav-rail signature |
 | [web_testing.md](web_testing.md) | Dashboard test suite overview: authz sweep, snowflake-precision sweep, manual broken-link check, plus the browser suite (layout + panel-load health); marker/tiers/where-each-runs |
 | [mobile_layout_testing.md](mobile_layout_testing.md) | Browser-driven responsive-layout gate: overflow/clip checks across every panel at phone/tablet/desktop; scoped per-commit, full nightly |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |

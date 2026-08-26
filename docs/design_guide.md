@@ -229,6 +229,13 @@ use them:
   consequence sentence, `danger` styling — never native `confirm()`.
   → `embed_style_guide.md` § Dashboard (JS) specifics, `web_testing.md`
 
+**Styling picks a step off the scale; it does not invent a value.** Sizes come
+from `--t-1..--t-6`, spacing from `--s-0..--s-7`, and the rule for a config
+page is compact rows, airy sections. The palette is Discord's on purpose, two
+of its contrast decisions are load-bearing, and Archivo's width axis is what
+the nav rail uses to mark the section you're in — so it is not swappable for a
+static face. → `dashboard_visual_language.md`
+
 **Run the JS gates before pushing.** Node 20 is installed user-local purely so
 the blocking CI lint job can be reproduced: `npm install --no-save` once per
 worktree, then `npx eslint src/web_server/static/js` and

@@ -149,33 +149,84 @@ const ICON_NOTE = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><
 const ICON_X = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 2L8 8M8 2L2 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 const ICON_DOC = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 11V3a1 1 0 011-1h6l4 4v5a1 1 0 01-1 1H2a1 1 0 01-1-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 2v4h4" stroke="currentColor" stroke-width="1.5"/></svg>`;
 
+/**
+ * The action row, split by *what each action acts on*.
+ *
+ * These seven controls operate on two different objects: some change the
+ * ticket's state, and some write a permanent moderation record against a
+ * member. Presented as one flat row of equal-weight buttons that distinction
+ * was invisible, and the most visually prominent control on the page was the
+ * solid-red Jail button — the destructive one. Grouping them under two labels
+ * makes the difference legible, and the destructive styling moves to the
+ * confirm dialog, which is where the decision actually happens.
+ *
+ * The primary action is state-dependent, because "the obvious next thing"
+ * genuinely changes: an unclaimed ticket wants Claim, one you already hold
+ * wants Close Ticket. Previously every button looked equally likely.
+ */
+function memberLabel(t) {
+  // Matches the SUBJECT card exactly — the API derives subject.user_id from
+  // the ticket's own user_id, so the two can never disagree.
+  return esc(String((t && (t.user_name || t.user_id)) || "this member"));
+}
+
 function renderActions(t) {
   if (t && (t.status === "closed" || t.status === "deleted")) {
     return `
-      <div class="td-actions">
-        <button class="act-btn" data-action="note">${ICON_NOTE}Add Note</button>
-        <span class="act-spacer"></span>
-        <button class="act-btn" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
-        <button class="act-btn warn" data-action="reopen">Reopen Ticket</button>
+      <div class="td-act-groups">
+        <div class="td-act-group">
+          <div class="section-label">This ticket</div>
+          <div class="td-actions">
+            <button class="act-btn primary" data-action="reopen">Reopen Ticket</button>
+            <span class="act-spacer"></span>
+            <button class="act-btn ghost" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
+          </div>
+        </div>
+        <div class="td-act-group">
+          <div class="section-label">This member <span class="td-act-who">${memberLabel(t)}</span></div>
+          <div class="td-actions">
+            <button class="act-btn" data-action="note">${ICON_NOTE}Add Note</button>
+          </div>
+        </div>
       </div>
     `;
   }
   const me = window.__dk_user;
   const claimedByMe = t && t.claimer_id && me && String(t.claimer_id) === String(me.user_id);
-  const claimLabel = claimedByMe ? "Claimed by you" : (t && t.claimer_id ? "Reassign to me" : "Claim");
+  // Claimed by you ⇒ closing is the next step and the Claim button is noise
+  // (the header already states who holds it). Claimed by someone else ⇒ the
+  // meaningful move is taking it over.
+  const primary = !t || !t.claimer_id
+    ? { action: "claim", label: "Claim" }
+    : claimedByMe
+      ? { action: "close", label: "Close Ticket" }
+      : { action: "claim", label: "Reassign to me" };
+  const closeBtn = primary.action === "close"
+    ? ""
+    : `<button class="act-btn" data-action="close">Close Ticket${ICON_X}</button>`;
   return `
-    <div class="td-actions">
-      <button class="act-btn warn" data-action="warn">${ICON_WARN}Warn</button>
-      <div class="split-btn">
-        <button class="act-btn jail" data-action="jail">${ICON_JAIL}Jail · 24h</button>
-        <button class="act-btn jail" data-action="jail-custom" aria-label="Change duration">${ICON_CHEV}</button>
+    <div class="td-act-groups">
+      <div class="td-act-group">
+        <div class="section-label">This ticket</div>
+        <div class="td-actions">
+          <button class="act-btn primary" data-action="${primary.action}">${esc(primary.label)}</button>
+          ${closeBtn}
+          <button class="act-btn" data-action="dismiss">Dismiss</button>
+          <span class="act-spacer"></span>
+          <button class="act-btn ghost" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
+        </div>
       </div>
-      <button class="act-btn" data-action="note">${ICON_NOTE}Add Note</button>
-      <button class="act-btn ghost" data-action="dismiss">Dismiss</button>
-      <span class="act-spacer"></span>
-      <button class="act-btn ghost" data-action="claim"${claimedByMe ? " disabled" : ""}>${esc(claimLabel)}</button>
-      <button class="act-btn" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
-      <button class="act-btn" data-action="close">Close Ticket${ICON_X}</button>
+      <div class="td-act-group">
+        <div class="section-label">This member <span class="td-act-who">${memberLabel(t)}</span></div>
+        <div class="td-actions">
+          <button class="act-btn" data-action="warn">${ICON_WARN}Warn</button>
+          <div class="split-btn">
+            <button class="act-btn danger" data-action="jail">${ICON_JAIL}Jail · 24h</button>
+            <button class="act-btn danger" data-action="jail-custom" aria-label="Change duration">${ICON_CHEV}</button>
+          </div>
+          <button class="act-btn" data-action="note">${ICON_NOTE}Add Note</button>
+        </div>
+      </div>
     </div>
   `;
 }

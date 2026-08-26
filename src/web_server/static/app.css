@@ -1,3 +1,54 @@
+/* ══════════════════════════════════════════════════════════════════
+   Typefaces — self-hosted, so the dashboard makes no third-party
+   request at page load. Provenance and licence: static/fonts/README.md.
+
+   Until this landed the stack began with "gg sans", which is Discord's
+   proprietary face and ships with no browser: every page ever served
+   actually rendered in Noto Sans or Helvetica. Public Sans is the
+   closest openly-licensed match to that intended register.
+
+   Archivo is variable on BOTH weight and width, and the width axis is
+   load-bearing — the nav rail marks the section you are in by setting
+   its header wider rather than by colouring it. Colour is spoken for
+   here (semantic red/green), and width survives greyscale and every
+   form of colour blindness. Swapping Archivo for a non-variable face
+   would silently drop that signal.
+   ══════════════════════════════════════════════════════════════════ */
+@font-face {
+  font-family: "Archivo";
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url("fonts/archivo-var-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Archivo";
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url("fonts/archivo-var-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/publicsans-var-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/publicsans-var-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 :root {
   /* Primary palette (mockup) */
   --bg:            #313338;
@@ -34,8 +85,38 @@
   --blurple:       #5865f2;
   --plum:          #c07aa1;
   --plum-soft:     #c07aa11a;
-  --sans: "gg sans", "Noto Sans", "Helvetica Neue", helvetica, arial, sans-serif;
+  /* Seam colour for the nav rail's spine — gold at 16%, the one place
+     the accent does structural rather than decorative work. */
+  --gold-seam:     #e6b84c29;
+
+  /* Body/UI face. "gg sans" is gone: it never loaded anywhere. */
+  --sans: "Public Sans", "Noto Sans", "Helvetica Neue", helvetica, arial, sans-serif;
+  /* Display face, used with restraint — rail, panel titles, group labels. */
+  --display: "Archivo", "Public Sans", "Helvetica Neue", helvetica, arial, sans-serif;
   --mono: "ui-monospace", "SFMono-Regular", menlo, consolas, monospace;
+
+  /* ── Type scale ──────────────────────────────────────────────────
+     Six steps replacing the 17 ad-hoc sizes this file grew. New work
+     picks a step; it does not invent a size. */
+  --t-1: 11px;    /* eyebrows, tallies, rail section headers */
+  --t-2: 12.5px;  /* help text, subtitles, table meta */
+  --t-3: 14px;    /* UI text — labels, inputs, nav items, body */
+  --t-4: 16px;    /* group legends, card titles */
+  --t-5: 20px;    /* panel titles */
+  --t-6: 28px;    /* stat numbers */
+
+  /* ── Spacing scale ───────────────────────────────────────────────
+     Eight steps replacing 22 ad-hoc values. The house rule is compact
+     rows, airy sections: 8–12 between dials inside a group, 24–32
+     between groups, so the whitespace itself carries the grouping. */
+  --s-0: 2px;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
   --r-sm: 4px;
   --r:    8px;
   --sidebar-w:           240px;
@@ -244,22 +325,43 @@ a { text-decoration: none; }
 #sidebar-items {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 8px 20px;
+  padding: var(--s-1) var(--s-2) 20px;
   display: block;
+  /* The seam: one gold hairline running the full scroll height, which the
+     whole index hangs off. Painted as a `local` background rather than a
+     positioned pseudo-element so it scrolls with the list instead of
+     staying pinned to the viewport of the scroll container. */
+  background-image: linear-gradient(to bottom, var(--gold-seam), var(--gold-seam));
+  background-repeat: no-repeat;
+  background-position: 3px 0;
+  background-size: 1px 100%;
+  background-attachment: local;
 }
+/* Collapsed to the icon rail there is no index to hang, so the seam goes. */
 .collapsed .nav-scroll,
-#sidebar.collapsed #sidebar-items { padding: 10px 4px 20px; }
+#sidebar.collapsed #sidebar-items {
+  padding: 10px var(--s-1) 20px;
+  background-image: none;
+}
 
 .nav-item.nav-direct { margin-bottom: 2px; }
 .nav-item.nav-direct + .nav-group { margin-top: 6px; }
 
+/* The section header is the signature of the whole dashboard: the section
+   containing the page you are on sets WIDER (Archivo's wdth axis) rather
+   than picking up a colour. `.current` is applied in app.js's renderNav —
+   note that several sections can be expanded at once, so aria-expanded is
+   not the same question as "where am I". */
 .nav-group {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-family: var(--display);
+  font-size: var(--t-1);
+  font-weight: 600;
+  font-variation-settings: "wdth" 85, "wght" 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-mute);
-  padding: 12px 8px 4px;
+  padding: 14px var(--s-2) var(--s-1);
+  transition: font-variation-settings 0.22s ease, color 0.15s ease;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -284,6 +386,12 @@ a { text-decoration: none; }
   transition: transform 0.15s;
 }
 .nav-group.collapsed::before { transform: rotate(0deg); }
+.nav-group.current {
+  font-variation-settings: "wdth" 125, "wght" 700;
+  font-weight: 700;
+  color: var(--ink-bright);
+}
+.nav-group:hover { color: var(--ink-dim); }
 .nav-group.has-alert::after {
   content: "";
   width: 6px;
@@ -298,9 +406,11 @@ a { text-decoration: none; }
 .collapsed .nav-group::after { margin: 0; }
 
 .nav-subgroup {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-family: var(--display);
+  font-size: 10.5px;
+  font-weight: 650;
+  font-variation-settings: "wdth" 92, "wght" 650;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--ink-mute);
   padding: 8px 8px 3px 14px;
@@ -340,10 +450,10 @@ a { text-decoration: none; }
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  margin: 1px 0;
-  font-size: 14px;
+  gap: var(--s-2);
+  padding: 5px var(--s-2);
+  margin: 0;
+  font-size: var(--t-3);
   color: var(--ink-dim);
   cursor: pointer;
   border-radius: var(--r-sm);
@@ -384,7 +494,21 @@ a { text-decoration: none; }
 .nav-item.has-alert .tally { background: var(--red); color: #fff; }
 .nav-item:hover { background: var(--hover); color: var(--ink-bright); }
 .nav-item.active { background: var(--active); color: var(--ink-bright); }
-.nav-item.active .icn { color: var(--ink-bright); }
+.nav-item.active .icn { color: var(--gold-solid); }
+/* The active page thickens a segment of the seam rather than floating a
+   separate pill beside it — the accent stays structural. The offset lands
+   the marker on the seam's 3px, given the list's 8px padding. */
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 3px;
+  bottom: 3px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--gold-solid);
+}
+.collapsed .nav-item.active::before { display: none; }
 .nav-item.is-subitem { padding-left: 20px; }
 
 .collapsed .nav-item { justify-content: center; padding: 8px 0; }
@@ -519,16 +643,18 @@ a { text-decoration: none; }
   overflow-x: hidden;
 }
 
-.panel header { margin-bottom: 16px; }
+.panel header { margin-bottom: 20px; }
 .panel h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
+  margin: 0 0 var(--s-1);
+  font-family: var(--display);
+  font-size: var(--t-5);
   font-weight: 700;
+  font-variation-settings: "wdth" 108, "wght" 700;
   color: var(--ink-bright);
   letter-spacing: -0.005em;
 }
 .panel h2 em { font-style: normal; color: var(--gold); }
-.panel .subtitle { color: var(--ink-dim); font-size: 13px; }
+.panel .subtitle { color: var(--ink-dim); font-size: var(--t-2); }
 
 /* ════════════════════════════════════════════════════════════════════
    Canonical UI primitives
@@ -627,7 +753,7 @@ a { text-decoration: none; }
 .form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--s-3);
   max-width: 640px;
 }
 .field-row {
@@ -643,7 +769,7 @@ a { text-decoration: none; }
   gap: 4px;
 }
 .field > label {
-  font-size: 12px;
+  font-size: var(--t-2);
   font-weight: 600;
   color: var(--ink-dim);
 }
@@ -773,8 +899,8 @@ textarea.field-input { resize: vertical; }
   font-size: 12px;
   margin-left: 12px;
 }
-.save-ok  { color: var(--green); }
-.save-err { color: var(--red); }
+.save-ok  { color: var(--green-text); }
+.save-err { color: var(--red-text); }
 
 /* Scrollable list of checkboxes (config-spoiler, config-welcome). */
 .checkbox-list {
@@ -823,7 +949,7 @@ textarea.field-input { resize: vertical; }
   padding: 0 2px;
   border-radius: 50%;
 }
-.tag-remove:hover { color: var(--red); background: var(--red-soft); }
+.tag-remove:hover { color: var(--red-text); background: var(--red-soft); }
 
 /* Explanation / context block. Used inside cards and panels for "How
    this works" copy. Dim body, bright <strong>, gold accent rail. */
@@ -912,9 +1038,9 @@ textarea.field-input { resize: vertical; }
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
-.chip-success { background: var(--green-soft); color: var(--green); }
+.chip-success { background: var(--green-soft); color: var(--green-text); }
 .chip-warning { background: var(--gold-soft);  color: var(--gold-solid); }
-.chip-danger  { background: var(--red-soft);   color: var(--red); }
+.chip-danger  { background: var(--red-soft);   color: var(--red-text); }
 .chip-neutral { background: var(--rule-soft);  color: var(--ink-dim); }
 
 /* Wrapping row of chips. Wraps rather than scrolling because the lists it
@@ -963,19 +1089,23 @@ textarea.field-input { resize: vertical; }
   font-variant-numeric: tabular-nums;
 }
 .num-dim { color: var(--ink-dim); }
-.num-err { color: var(--red); }
+.num-err { color: var(--red-text); }
 
 /* ── Section label ─────────────────────────────────────────────────
    Tiny uppercase divider used between groups inside a panel/card.
    Replaces .td-section, ad-hoc <h3>s. */
 
 .section-label {
-  font-size: 11px;
-  font-weight: 700;
+  font-family: var(--display);
+  font-size: var(--t-1);
+  font-weight: 650;
+  font-variation-settings: "wdth" 96, "wght" 650;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.09em;
   color: var(--ink-mute);
-  margin: 18px 0 10px;
+  /* Airy between groups — this margin is the main thing that makes a long
+     config page read as grouped rather than as one undifferentiated list. */
+  margin: var(--s-6) 0 var(--s-3);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -993,7 +1123,7 @@ textarea.field-input { resize: vertical; }
   background: var(--bg-card);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r);
-  padding: 18px 20px;
+  padding: var(--s-4) 20px;
 }
 .panel > .form { max-width: none; }
 /* A form that is itself just a stack of .card sections: drop the outer box so
@@ -1007,7 +1137,7 @@ textarea.field-input { resize: vertical; }
 .panel > .form   + .form,
 .panel > section + .form,
 .panel > .form   + section {
-  margin-top: 12px;
+  margin-top: var(--s-5);
 }
 
 /* ── End canonical primitives ─────────────────────────────────────── */
@@ -1066,7 +1196,7 @@ textarea.field-input { resize: vertical; }
   text-align: center;
   font-size: 14px;
 }
-.error { color: var(--red); }
+.error { color: var(--red-text); }
 
 /* Loading spinner */
 .panel-loading, .home-loading {
@@ -1657,7 +1787,7 @@ textarea.field-input { resize: vertical; }
 }
 .exempt-chip button:hover {
   background: var(--red-soft);
-  color: var(--red);
+  color: var(--red-text);
 }
 
 .prune-preview-table {
@@ -1763,8 +1893,8 @@ textarea.field-input { resize: vertical; }
   background: var(--rule);
   color: var(--ink);
 }
-.badge-danger  { background: #9E3B2E33; color: var(--red); }
-.badge-success { background: #7F8F3A33; color: var(--green); }
+.badge-danger  { background: #9E3B2E33; color: var(--red-text); }
+.badge-success { background: #7F8F3A33; color: var(--green-text); }
 .badge-info    { background: #B36A9233; color: var(--plum); }
 .badge-warning { background: #E6B84C33; color: var(--yellow); }
 .badge-dim     { background: var(--rule); color: var(--ink-dim); }
@@ -1940,7 +2070,7 @@ textarea.field-input { resize: vertical; }
   font-size: 12px;
   font-weight: 600;
 }
-.home-mod-danger { background: #9E3B2E22; color: var(--red); }
+.home-mod-danger { background: #9E3B2E22; color: var(--red-text); }
 .home-mod-info   { background: #B36A9222; color: var(--plum); }
 .home-mod-warn   { background: #E6B84C22; color: var(--yellow); }
 .home-mod-row {
@@ -2073,7 +2203,7 @@ textarea.field-input { resize: vertical; }
   line-height: 1;
   padding: 2px 4px;
 }
-.widget-remove:hover { color: var(--red); }
+.widget-remove:hover { color: var(--red-text); }
 
 .widget-resize {
   position: absolute;
@@ -3130,20 +3260,28 @@ textarea.field-input { resize: vertical; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
+  /* Wraps rather than crushing: at phone width the queue tabs need a second
+     row, and without this the "Queue" label was squeezed against a two-row
+     control group. Nothing was clipped or off-screen, so the responsive gate
+     passed it — this is the failure mode that gate cannot see. */
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
   border-bottom: 1px solid var(--rule-soft);
 }
 .ticket-list-head h3 {
-  font-size: 14px;
-  font-weight: 700;
+  font-family: var(--display);
+  font-size: var(--t-3);
+  font-weight: 650;
+  font-variation-settings: "wdth" 104, "wght" 650;
   color: var(--ink-bright);
   margin: 0;
 }
-.ticket-list-head .ctrl-group { padding: 2px; }
-.ticket-list-head .ctrl-group button { padding: 3px 9px; font-size: 12px; }
+.ticket-list-head .ctrl-group { padding: var(--s-0); }
+.ticket-list-head .ctrl-group button { padding: 3px 9px; font-size: var(--t-2); }
 
 .ticket-search {
-  padding: 8px 10px;
+  padding: var(--s-2) var(--s-3);
   border-bottom: 1px solid var(--rule-soft);
 }
 .ticket-search input[type="search"] {
@@ -3152,9 +3290,9 @@ textarea.field-input { resize: vertical; }
   background: var(--bg-rail);
   color: var(--ink);
   border: 1px solid var(--rule);
-  border-radius: 4px;
-  padding: 6px 9px;
-  font-size: 13px;
+  border-radius: var(--r-sm);
+  padding: 6px var(--s-2);
+  font-size: var(--t-3);
 }
 .ticket-search input[type="search"]::placeholder { color: var(--ink-mute); }
 .ticket-search input[type="search"]:focus {
@@ -3165,22 +3303,22 @@ textarea.field-input { resize: vertical; }
 .ticket-list {
   overflow-y: auto;
   flex: 1;
-  padding: 6px;
+  padding: var(--s-2);
 }
 .ticket-list .empty {
-  padding: 24px 12px;
+  padding: var(--s-5) var(--s-3);
   text-align: center;
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--t-2);
 }
 .ticket-item {
   display: grid;
   grid-template-columns: 4px 1fr auto;
-  gap: 10px;
-  padding: 10px 12px 10px 8px;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3) var(--s-2) var(--s-2);
   border-radius: var(--r-sm);
   cursor: pointer;
-  margin-bottom: 2px;
+  margin-bottom: var(--s-0);
   transition: background 0.1s;
 }
 .ticket-item:hover { background: var(--hover); }
@@ -3195,45 +3333,52 @@ textarea.field-input { resize: vertical; }
 .ticket-item.low .pri { background: var(--blurple); }
 .ticket-item .body { min-width: 0; }
 .ticket-item .subj {
-  font-size: 13px;
+  font-size: var(--t-3);
   font-weight: 600;
   color: var(--ink-bright);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-bottom: 3px;
+  margin-bottom: var(--s-1);
 }
 .ticket-item .row {
   display: flex;
-  gap: 8px;
+  /* Wrap whole chips and the reporter name onto a new line instead of letting
+     a squeezed flex item break "by User 800000" across two lines mid-name. */
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  row-gap: var(--s-1);
   align-items: center;
-  font-size: 11px;
+  font-size: var(--t-1);
   color: var(--ink-dim);
 }
+.ticket-item .row > span { min-width: 0; }
 .ticket-item .row .ch { color: var(--gold-solid); }
 .ticket-item .row .dot { color: var(--ink-mute); }
 .ticket-item .right {
   text-align: right;
-  font-size: 11px;
+  font-size: var(--t-1);
   color: var(--ink-mute);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.ticket-item .id { font-family: var(--mono); font-size: 10px; }
-.ticket-item .age { color: var(--ink-dim); font-weight: 600; display: block; margin-top: 2px; }
+.ticket-item .id { font-family: var(--mono); font-size: var(--t-1); }
+.ticket-item .age { color: var(--ink-dim); font-weight: 600; display: block; margin-top: var(--s-0); }
 
 .t-chip {
   display: inline-block;
-  font-size: 10px;
+  font-family: var(--display);
+  font-size: var(--t-1);
   font-weight: 700;
-  padding: 1px 6px;
+  font-variation-settings: "wdth" 92, "wght" 700;
+  padding: var(--s-0) var(--s-2);
   border-radius: 3px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
-.t-chip.open { background: var(--red-soft); color: var(--red); }
+.t-chip.open { background: var(--red-soft); color: var(--red-text); }
 .t-chip.claimed { background: var(--gold-soft); color: var(--gold-solid); }
-.t-chip.resolved { background: var(--green-soft); color: var(--green); }
+.t-chip.resolved { background: var(--green-soft); color: var(--green-text); }
 .t-chip.closed { background: var(--rule-soft); color: var(--ink-dim); }
 
 .ticket-detail {
@@ -3249,23 +3394,25 @@ textarea.field-input { resize: vertical; }
   display: grid;
   place-items: center;
   color: var(--ink-mute);
-  font-size: 14px;
-  padding: 40px;
+  font-size: var(--t-3);
+  padding: var(--s-7);
 }
 .td-head {
-  padding: 16px 20px 14px;
+  padding: var(--s-4) var(--s-5) var(--s-3);
   border-bottom: 1px solid var(--rule-soft);
 }
 .td-crumb {
-  font-size: 11px;
+  font-size: var(--t-1);
   color: var(--ink-mute);
   font-variant-numeric: tabular-nums;
   margin-bottom: 4px;
   font-family: var(--mono);
 }
 .td-title {
-  font-size: 19px;
+  font-family: var(--display);
+  font-size: var(--t-5);
   font-weight: 700;
+  font-variation-settings: "wdth" 108, "wght" 700;
   color: var(--ink-bright);
   letter-spacing: -0.01em;
   margin: 0 0 10px;
@@ -3274,13 +3421,13 @@ textarea.field-input { resize: vertical; }
   display: flex;
   gap: 18px;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: var(--t-2);
   color: var(--ink-dim);
 }
 .td-meta b { color: var(--ink-bright); font-weight: 600; }
 .td-meta .pair { display: inline-flex; gap: 6px; align-items: center; }
 .td-meta .pair .k {
-  font-size: 10px;
+  font-size: var(--t-1);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -3293,7 +3440,7 @@ textarea.field-input { resize: vertical; }
   padding: 16px 20px;
 }
 .td-section {
-  font-size: 11px;
+  font-size: var(--t-1);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -3328,18 +3475,18 @@ textarea.field-input { resize: vertical; }
   place-items: center;
   color: #fff;
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--t-3);
   flex-shrink: 0;
 }
 .td-body .msg-head { display: flex; align-items: baseline; gap: 8px; }
-.td-body .msg-name { font-size: 14px; font-weight: 600; color: var(--ink-bright); }
+.td-body .msg-name { font-size: var(--t-3); font-weight: 600; color: var(--ink-bright); }
 .td-body .msg-time {
-  font-size: 11px;
+  font-size: var(--t-1);
   color: var(--ink-mute);
   margin-left: 0;
 }
 .td-body .msg-text {
-  font-size: 14px;
+  font-size: var(--t-3);
   color: var(--ink);
   line-height: 1.45;
   white-space: pre-wrap;
@@ -3347,13 +3494,13 @@ textarea.field-input { resize: vertical; }
 }
 .td-body .msg-flag {
   display: inline-block;
-  font-size: 10px;
+  font-size: var(--t-1);
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 3px;
   margin-left: 6px;
   background: var(--red-soft);
-  color: var(--red);
+  color: var(--red-text);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -3364,12 +3511,12 @@ textarea.field-input { resize: vertical; }
   grid-template-columns: 72px 1fr auto;
   gap: 12px;
   padding: 6px 0;
-  font-size: 12px;
+  font-size: var(--t-2);
   align-items: center;
 }
 .history-row + .history-row { border-top: 1px solid var(--rule-soft); }
 .history-row .h-kind {
-  font-size: 10px;
+  font-size: var(--t-1);
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 3px;
@@ -3378,7 +3525,7 @@ textarea.field-input { resize: vertical; }
   text-transform: uppercase;
 }
 .h-kind.warn { background: var(--gold-soft); color: var(--gold-solid); }
-.h-kind.jail { background: var(--red-soft); color: var(--red); }
+.h-kind.jail { background: var(--red-soft); color: var(--red-text); }
 .h-kind.note { background: var(--plum-soft); color: var(--plum); }
 .history-row .h-body {
   color: var(--ink);
@@ -3388,7 +3535,7 @@ textarea.field-input { resize: vertical; }
 }
 .history-row .h-body b { color: var(--ink-bright); font-weight: 600; }
 .history-row .h-time {
-  font-size: 11px;
+  font-size: var(--t-1);
   color: var(--ink-mute);
   font-variant-numeric: tabular-nums;
 }
@@ -3411,15 +3558,15 @@ textarea.field-input { resize: vertical; }
   place-items: center;
   color: #fff;
   font-weight: 700;
-  font-size: 16px;
+  font-size: var(--t-4);
 }
-.user-card .info .n { font-size: 15px; font-weight: 700; color: var(--ink-bright); }
-.user-card .info .m { font-size: 12px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
-.user-card .counts { display: flex; gap: 10px; font-size: 11px; color: var(--ink-dim); }
+.user-card .info .n { font-size: var(--t-4); font-weight: 700; color: var(--ink-bright); }
+.user-card .info .m { font-size: var(--t-2); color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.user-card .counts { display: flex; gap: 10px; font-size: var(--t-1); color: var(--ink-dim); }
 .user-card .counts b {
   display: block;
   color: var(--ink-bright);
-  font-size: 16px;
+  font-size: var(--t-4);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -3428,19 +3575,47 @@ textarea.field-input { resize: vertical; }
 .td-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 20px;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-5);
   border-top: 1px solid var(--rule-soft);
   background: var(--bg-alt);
   flex-wrap: wrap;
 }
+
+/* Actions grouped by the object they act on: one group changes the ticket's
+   state, the other writes a moderation record against a member. Scoped so the
+   shared .td-actions used by Jails and the Todo board keeps its own chrome. */
+.td-act-groups {
+  border-top: 1px solid var(--rule-soft);
+  background: var(--bg-alt);
+  padding: var(--s-3) var(--s-5) var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+.td-act-groups .td-actions {
+  border-top: 0;
+  background: none;
+  padding: 0;
+}
+.td-act-groups .section-label { margin: 0 0 var(--s-2); }
+/* The eyebrow is uppercase; a member's display name is not. Discord names are
+   chosen, and shouting one back ("ROSETHORN") both misrepresents it and reads
+   as a different string than the one in the SUBJECT card above. */
+.td-act-who {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-dim);
+  font-weight: 600;
+}
+.td-act-who::before { content: "— "; color: var(--ink-mute); }
 .act-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 7px 14px;
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--t-2);
   font-weight: 600;
   border: 1px solid var(--rule);
   background: var(--bg-input);
@@ -3449,10 +3624,18 @@ textarea.field-input { resize: vertical; }
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .act-btn:hover { background: var(--hover); border-color: var(--ink-mute); color: var(--ink-bright); }
-.act-btn.warn { border-color: transparent; background: var(--gold-solid); color: #1a1108; }
-.act-btn.warn:hover { background: #f0c460; color: #1a1108; }
-.act-btn.jail { border-color: transparent; background: var(--red); color: #fff; }
-.act-btn.jail:hover { background: #ff5256; color: #fff; }
+/* One filled button per group, and it is whatever the obvious next step is —
+   never a destructive action. `.warn` and `.jail` used to be a gold fill and a
+   solid red fill, which made "jail this person" the loudest thing on the page. */
+.act-btn.primary { border-color: transparent; background: var(--gold-solid); color: #1a1108; }
+.act-btn.primary:hover { background: #f0c460; color: #1a1108; }
+
+/* Destructive actions read as destructive without shouting: outlined, in the
+   AA-safe red text tier. The solid-red treatment now lives on the confirm
+   dialog's button, which is where the decision is actually taken. */
+.act-btn.danger { background: transparent; border-color: #f23f4359; color: var(--red-text); }
+.act-btn.danger:hover { background: var(--red-soft); border-color: var(--red); color: var(--red-text); }
+.split-btn .act-btn.danger:first-child { border-right-color: #f23f4359; }
 .act-btn.ghost { background: transparent; }
 .act-btn.ghost:hover { background: var(--hover); }
 .act-btn .chev { color: currentcolor; opacity: 0.7; }
@@ -3744,7 +3927,7 @@ input[type="radio"] { accent-color: var(--gold-solid); }
 }
 .doc-ed-actions { display: flex; gap: 10px; align-items: center; }
 .doc-danger {
-  background: transparent; color: var(--red); border: 1px solid var(--red-soft);
+  background: transparent; color: var(--red-text); border: 1px solid var(--red-soft);
   border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;
 }
 .doc-danger:hover { background: var(--red-soft); }
@@ -3783,7 +3966,7 @@ input[type="radio"] { accent-color: var(--gold-solid); }
 .doc-pin.on { opacity: 1; filter: none; }
 .doc-pin:disabled { cursor: default; opacity: .3; }
 .doc-x { background: transparent; border: none; color: var(--ink-mute); cursor: pointer; font-size: 13px; }
-.doc-x:hover { color: var(--red); }
+.doc-x:hover { color: var(--red-text); }
 .doc-add-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
 .dp-image { display: block; max-width: 100%; max-height: 300px; border-radius: 4px; margin-top: 8px; }
 
@@ -3895,8 +4078,8 @@ input[type="radio"] { accent-color: var(--gold-solid); }
 }
 .ann-badge-draft { background: var(--bg-rail); color: var(--ink-dim); }
 .ann-badge-scheduled { background: var(--gold); color: var(--bg-rail); }
-.ann-badge-sent { background: var(--green-soft); color: var(--green); }
-.ann-badge-error { background: #f23f431a; color: var(--red); }
+.ann-badge-sent { background: var(--green-soft); color: var(--green-text); }
+.ann-badge-error { background: #f23f431a; color: var(--red-text); }
 .ann-mention {
   display: inline-block; font-size: 12px; font-weight: 500; padding: 0 4px;
   border-radius: 3px; background: #5865f24d; color: #c9cdfb;
@@ -3958,7 +4141,7 @@ input[type="radio"] { accent-color: var(--gold-solid); }
   overflow-wrap: break-word;
   min-width: 0;
 }
-.sugg-ready   { background: var(--green-soft); color: var(--green); }
+.sugg-ready   { background: var(--green-soft); color: var(--green-text); }
 .sugg-partial { background: var(--gold-soft);  color: var(--gold-solid); }
 .sugg-unset   { background: var(--rule-soft);  color: var(--ink-mute); }
 .sugg-blurb { color: var(--ink-dim); margin-top: 2px; overflow-wrap: anywhere; }
@@ -4488,3 +4671,19 @@ fieldset.field {
 .panel-opt { display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-width: 0; }
 .panel-opt select,
 .panel-opt input { padding: 4px 6px; font-size: 13px; max-width: 220px; }
+
+/* ════════════════════════════════════════════════════════════════════
+   Reduced motion
+   ────────────────────────────────────────────────────────────────────
+   The rail's width transition is the only motion this restyle added.
+   Someone who asks for less of it still gets the full signal — the
+   active section is simply wide immediately instead of widening.
+   ════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  .nav-group,
+  .nav-item,
+  .nav-group::before,
+  .nav-subgroup::before {
+    transition: none;
+  }
+}

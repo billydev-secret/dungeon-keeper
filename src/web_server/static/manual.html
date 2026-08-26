@@ -5,8 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dungeon Keeper — User &amp; Moderator Guide</title>
 <style>
+  /* Read standalone at /static/manual.html this page paints itself; inside the
+     dashboard the Help panel extracts its sections and help-panel.css styles
+     them with var(--sans). Declaring the faces here keeps the two views in the
+     same typeface instead of leaving the standalone one on system fonts. */
+  @font-face {
+    font-family: "Archivo";
+    font-style: normal;
+    font-weight: 100 900;
+    font-stretch: 62% 125%;
+    font-display: swap;
+    src: url("/static/fonts/archivo-var-latin.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Public Sans";
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("/static/fonts/publicsans-var-latin.woff2") format("woff2");
+  }
+
   /* ── Variables ─────────────────────────────────────────────── */
   :root {
+    --sans:    "Public Sans", "Noto Sans", "Helvetica Neue", helvetica, arial, sans-serif;
+    --display: "Archivo", "Public Sans", "Helvetica Neue", helvetica, arial, sans-serif;
     --brand:      #5865F2;
     --brand-dark: #4752c4;
     --accent:     #57F287;
@@ -26,7 +48,7 @@
   /* ── Reset ─────────────────────────────────────────────────── */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--sans);
     color: var(--text);
     background: var(--bg);
     line-height: 1.65;
@@ -210,11 +232,11 @@
     color: var(--muted);
     display: block;
     margin-bottom: 0.2rem;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--sans);
   }
   .cmd-block .cmd-desc {
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--sans);
     font-size: 0.875rem;
     display: block;
   }
@@ -222,7 +244,7 @@
     margin-top: 0.35rem;
     font-size: 0.8rem;
     color: var(--muted);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--sans);
   }
 
   /* ── Permission badges ─────────────────────────────────────── */
@@ -1948,6 +1970,15 @@
       <strong>Moderation → Warnings</strong> — it lists active and revoked warnings with dates,
       reasons, and the issuing mod. The old <code>/warnings</code> command was removed; the
       dashboard page is the reference.</p>
+
+    <p class="note">Working a ticket happens on the dashboard under
+      <strong>Moderation &rarr; Tickets</strong>. The buttons under an open ticket are split into
+      two groups, because they do two different things: <strong>This ticket</strong> (Claim, Close,
+      Dismiss, Transcript) changes the state of the ticket itself, while <strong>This member</strong>
+      (Warn, Jail, Add Note) writes a permanent record against the person the ticket is about.
+      The highlighted button is whatever the sensible next step is &mdash; <strong>Claim</strong> while
+      nobody has picked the ticket up, <strong>Close Ticket</strong> once it's yours &mdash; and a
+      destructive action is never the highlighted one.</p>
 
     <h3 id="ticket-cmds">Ticket Commands</h3>
 
