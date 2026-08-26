@@ -139,6 +139,7 @@ def _row_to_view(row: sqlite3.Row) -> ItemView:
         item_id=int(row["id"]),
         name=str(row["name"]),
         price=int(row["price"]),
+        blurb=str(row["blurb"] or ""),
         description=str(row["description"] or ""),
         kind=str(row["kind"]),
         billing=str(row["billing"]),

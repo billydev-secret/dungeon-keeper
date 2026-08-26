@@ -380,6 +380,8 @@ class TodoCog(commands.Cog):
             chore["completed_by_name"] = self._display_name(
                 guild, chore.get("completed_by")
             )
+        for row in rows:
+            row["buyer_name"] = self._display_name(guild, row.get("buyer_id"))
         accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="todo")
         embed = discord.Embed(
             title="📋 Server Todo",

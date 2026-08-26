@@ -26,6 +26,10 @@ _MIN_ID_WIDTH = 5
 
 RECURRING_MARKER = "🔁"
 
+#: Marks a row a shop purchase spawned, so a mod can tell paid work — which
+#: has a member's coins sitting in escrow behind it — from an ordinary task.
+ORDER_MARKER = "🎁"
+
 EMPTY_BODY = "Nothing pending — the list is clear. ✨"
 
 
@@ -63,9 +67,19 @@ def render_rows(
     lines: list[str] = []
     for row in shown:
         marker = f" {RECURRING_MARKER}" if row.get("recurring_id") else ""
+        # A shop order says who it is for. The name is resolved by the cog and
+        # attached as ``buyer_name`` — it is deliberately NOT in the task text
+        # (see economy/shop_items.todo_task_text), so it appears only here, and
+        # an erased buyer simply has none to show.
+        if row.get("purchase_id"):
+            marker += f" {ORDER_MARKER}"
+        buyer = _flatten(row.get("buyer_name") or "")
+        for_whom = f" · for {buyer}" if buyer else ""
         ident = f"#{row['id']}".ljust(id_width)
         cell = ident + pad_cell(_flatten(row["task"]), _TASK_WIDTH)
-        lines.append(f"`{cell}`{marker} {rel_ts(row['created_at'])}")
+        lines.append(
+            f"`{cell}`{marker} {rel_ts(row['created_at'])}{for_whom}"
+        )
 
     hidden = total - len(shown)
     if hidden > 0:
@@ -96,7 +110,15 @@ def board_signature(
     visible window to detect overflow, and that row is never rendered.
     """
     shown = tuple(
-        (row["id"], _flatten(row["task"]), bool(row.get("recurring_id")))
+        (
+            row["id"],
+            _flatten(row["task"]),
+            bool(row.get("recurring_id")),
+            bool(row.get("purchase_id")),
+            # In the fingerprint because a buyer who changes their nickname
+            # changes what the board says, and the row is otherwise identical.
+            _flatten(row.get("buyer_name") or ""),
+        )
         for row in list(rows)[:limit]
     )
     return (shown, len(shown) if total is None else total)

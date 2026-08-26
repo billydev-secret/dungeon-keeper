@@ -99,6 +99,7 @@ from bot_modules.services.voice_master_service import (
     resolve_channel_name,
 )
 from bot_modules.services import economy_emoji_service as emoji_svc
+from bot_modules.services import economy_shop_items_service as shop_items_svc
 from bot_modules.services import economy_demurrage_service as demurrage_svc
 from bot_modules.services import economy_bounty_service as bounty_svc
 from bot_modules.services import economy_pin_service as pin_svc
@@ -1356,6 +1357,55 @@ async def _delete_sponsored_emoji(
         )
 
 
+async def _revoke_custom_item(
+    bot: discord.Client,
+    db_path: Path,
+    guild_id: int,
+    rental_id: int,
+    beneficiary_id: int,
+) -> None:
+    """A custom shop item's rental ended: strip its role and close the order.
+
+    State first, like the sponsored emoji: the order is marked ended in its own
+    transaction before the Discord call, so a failure to remove the role can't
+    leave the ledger believing the item is still paid for. The role removal is
+    best effort — a missing role, a departed member or a permissions problem
+    logs and moves on rather than wedging the billing loop.
+
+    The role is read from the item, not from the rental, so an admin who
+    repointed the item takes the role that is configured *now* — the same
+    re-read-at-billing-time rule the price follows.
+    """
+    def _close() -> int | None:
+        with open_db(db_path) as conn:
+            shop_items_svc.end_rental_order(conn, rental_id)
+            row = conn.execute(
+                "SELECT i.role_id FROM econ_rentals r"
+                " JOIN econ_shop_items i ON i.id = r.catalog_item_id"
+                " WHERE r.id = ?",
+                (rental_id,),
+            ).fetchone()
+        return int(row["role_id"]) if row and row["role_id"] else None
+
+    role_id = await asyncio.to_thread(_close)
+    if not role_id:
+        return
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+    member = guild.get_member(beneficiary_id)
+    role = guild.get_role(role_id)
+    if member is None or role is None or role not in member.roles:
+        return
+    try:
+        await member.remove_roles(role, reason="Economy: shop item rental ended")
+    except (discord.Forbidden, discord.HTTPException):
+        log.warning(
+            "Economy loop: failed to strip shop-item role %s from %s in %s.",
+            role_id, beneficiary_id, guild_id,
+        )
+
+
 async def revoke_perk_effect(
     bot: discord.Client,
     db_path: Path,
@@ -1368,15 +1418,18 @@ async def revoke_perk_effect(
 
     Dispatches per perk kind: ``voice_style`` walks back the live temp
     channel (no personal role involved), ``emoji`` deletes the sponsored
-    emoji, everything else re-projects/deletes the personal role via
-    ``revoke_role_perks``. Shared by the billing loop (lapse / period-end
-    cancel) and the member self-service refund flow, which must strip the
-    perk immediately rather than waiting for period end.
+    emoji, ``custom_item`` strips the role the item granted, everything else
+    re-projects/deletes the personal role via ``revoke_role_perks``. Shared by
+    the billing loop (lapse / period-end cancel) and the member self-service
+    refund flow, which must strip the perk immediately rather than waiting for
+    period end.
     """
     if perk == "voice_style":
         await revert_voice_style(bot, db_path, guild_id, beneficiary_id)
     elif perk == "emoji":
         await _delete_sponsored_emoji(bot, db_path, guild_id, rental_id)
+    elif perk == "custom_item":
+        await _revoke_custom_item(bot, db_path, guild_id, rental_id, beneficiary_id)
     else:
         await revoke_role_perks(bot, db_path, guild_id, beneficiary_id)
 

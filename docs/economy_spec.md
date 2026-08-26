@@ -1345,7 +1345,10 @@ a gift is the base perk rented with `beneficiary_id` = the friend; the old
 perk CHECK once for the round's later kinds, `voice_style` and `emoji` —
 see `docs/plans/economy-sinks-round-3.md`). **Custom shop items** (2026-08-25)
 open the catalogue to admins — see the row below and
-`docs/plans/economy-shop-items.md`. Private rooms stay **Stage 6**
+`docs/plans/economy-shop-items.md` — **fully shipped 2026-08-26**: the
+Server Store section and 🎁 Store picker in `/bank shop`, the item editor and
+order queue on the Shop & Perks page, and the mod todo board as the fulfilment
+queue. Private rooms stay **Stage 6**
 and the spotlight slot stays **v2** — both still design-only below.
 
 Weekly rentals bill on personal anniversary tick. Defaults below; every price per-guild

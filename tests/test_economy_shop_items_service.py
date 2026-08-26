@@ -626,3 +626,35 @@ def test_purging_a_buyer_closes_their_open_order(conn):
     ).fetchone()
     assert todo["purchase_id"] is None
     assert todo["missed_at"] is not None
+
+
+def test_the_board_query_joins_the_buyer_back_onto_the_order(conn):
+    """The task text can't name the buyer, so the board has to join for them."""
+    from bot_modules.services.todo_service import pending_todos
+
+    _fund(conn, 500)
+    out = purchase(conn, SETTINGS, GUILD, USER, _item(conn), now=NOW)
+    row = next(r for r in pending_todos(conn, GUILD) if r["id"] == out.todo_id)
+    assert row["purchase_id"] == out.purchase_id
+    assert row["buyer_id"] == USER
+
+
+def test_an_ordinary_task_has_no_buyer(conn):
+    from bot_modules.services.todo_service import create_todo, pending_todos
+
+    todo_id = create_todo(conn, GUILD, MOD, "Sweep up", now_ts=NOW)
+    row = next(r for r in pending_todos(conn, GUILD) if r["id"] == todo_id)
+    assert row["purchase_id"] is None
+    assert row["buyer_id"] is None
+
+
+def test_purging_the_buyer_leaves_the_board_row_anonymous(conn):
+    """The work stands; the person disappears from it."""
+    from bot_modules.services.economy_service import econ_purge_user
+    from bot_modules.services.todo_service import pending_todos
+
+    _fund(conn, 500)
+    out = purchase(conn, SETTINGS, GUILD, USER, _item(conn), now=NOW)
+    econ_purge_user(conn, GUILD, USER)
+    # The order closed as missed, so it leaves the pending list entirely.
+    assert all(r["id"] != out.todo_id for r in pending_todos(conn, GUILD))
