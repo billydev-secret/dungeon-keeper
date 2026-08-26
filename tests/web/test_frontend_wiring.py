@@ -87,6 +87,39 @@ def test_every_hand_written_hash_names_a_real_route(route_ids):
     assert not bad, f"panels rewrite the URL to unknown routes: {bad}"
 
 
+def test_every_rendered_link_names_a_real_route(route_ids):
+    """`href="#/id"` links inside rendered panel markup, and in manual.html.
+
+    The two tests above cover the URL a panel *writes*. They do not cover the
+    links a panel *draws*, which is most of the cross-referencing on the
+    dashboard — every "set that on <a href=#/economy-config>Settings</a>" hint.
+    A typo there produces a link that looks fine, renders fine, and lands on
+    "Page Not Available"; nothing failed when the Spending section was split
+    three ways and every one of those hints had to be repointed.
+
+    A retired id is legitimate if MOVED_PAGES redirects it, so those count as
+    known routes too.
+    """
+    app = (_JS / "app.js").read_text(encoding="utf-8")
+    moved = set(re.findall(r'^\s*"([A-Za-z0-9_-]+)":\s*"[A-Za-z0-9_-]+",', app, re.M))
+    known = route_ids | moved
+
+    targets: list[tuple[str, str]] = []
+    sources = [*_panel_files(), _JS.parent / "manual.html"]
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        # Both forms occur: "#/id" inside panels, "/#/id" in the standalone manual.
+        for hit in re.findall(r'href="/?#/([A-Za-z0-9_-]+)', text):
+            targets.append((path.name, hit))
+
+    assert targets, "link scrape found nothing — the pattern must have drifted"
+    bad = sorted({t for t in targets if t[1] not in known})
+    assert not bad, (
+        "rendered links point at routes the router cannot mount — they render "
+        f"normally and land on 'Page Not Available': {bad}"
+    )
+
+
 def test_apply_me_data_drops_guild_scoped_caches():
     """S2: the guild switch must invalidate every guild-scoped module cache.
 

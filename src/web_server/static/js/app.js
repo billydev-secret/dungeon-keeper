@@ -219,10 +219,20 @@ const SECTIONS = [
         // MOVED_PAGES for the deep link.
         { id: "economy-qotd-submissions", label: "QOTD", module: "./panels/economy-qotd-submissions.js", keywords: "question of the day qotd ping role sponsored paid queue submissions approve decline" },
       ]},
-      // Everything a member can spend on. Custom shop items and private rooms
-      // land here.
+      // Everything a member can spend on. One 1,339-line page until it was split
+      // three ways by what each part IS: work you action, things you curate,
+      // numbers you set. `order` states that frequency rather than leaving it to
+      // alphabetical accident — the queue is what you open most and the prices
+      // are what you open least.
       { heading: "Spending", items: [
-        { id: "economy-sinks", label: "Shop & Perks", module: "./panels/economy-sinks.js", adminOnly: true, keywords: "sinks shop perks icons prices palette rake", help: "help-economy" },
+        // Deliberately NOT adminOnly. /api/economy/emoji-submissions is gated
+        // `require_economy_manager`, so the backend lets a manager work this
+        // queue — but it lived on the adminOnly page below, which meant a
+        // manager could never reach it. Claims and QOTD, the comparable queues,
+        // are not adminOnly either.
+        { id: "shop-approvals", label: "Approvals", order: 1, module: "./panels/shop-approvals.js", keywords: "emoji submissions approve deny queue orders waiting staff fulfil refund sponsored", help: "help-economy" },
+        { id: "economy-sinks", label: "Shop & Perks", order: 2, module: "./panels/economy-sinks.js", adminOnly: true, keywords: "sinks shop perks icons catalog palette colors swatches custom items store", help: "help-economy" },
+        { id: "pricing", label: "Pricing", order: 3, module: "./panels/pricing.js", adminOnly: true, keywords: "prices perk rent consumables raffle hoard tax demurrage rake sponsored", help: "help-economy" },
       ]},
       // Staking coins on an outcome — the house takes a cut, so these are
       // sinks too, but they are run and tuned as games.
