@@ -152,6 +152,7 @@ _PERK_LABELS: dict[str, str] = {
     "role_preset": "Palette role color",
     "voice_style": "Voice room lease",
     "emoji": "Sponsored emoji",
+    "custom_item": "Custom shop item",
     "gift_color": "Gifted role color",
 }
 

@@ -4,10 +4,10 @@ Shared per-guild todo list for the mod team. Tasks arrive from a slash command,
 from a sticky Discord board, from the web dashboard, or from a recurring
 schedule; they all land in the same list, curated from the dashboard.
 
-The list has **two** Discord boards. The original shows everything outstanding;
-the **mod chore board** shows only recurring chores, as a daily "did we do it
-today?" scoreboard. They are configured the same way and **may never share a
-channel** — see "Two boards, never one channel" below.
+The list has **one** Discord board, carrying two headed sections: **today's
+chores** as a "did we do it today?" scoreboard, then **everything else
+outstanding**. It was two separate boards between migrations 166 and 180 — see
+"Why the split was undone" below.
 
 ## Surfaces
 
@@ -15,12 +15,11 @@ channel** — see "Two boards, never one channel" below.
 |---|---|---|---|
 | `/todo task:<text>` | Slash | Moderator (server only) | Add a free-form task |
 | Board **➕ Add Task** | Button + modal | Moderator | Add a task with optional notes |
-| Board **✅ Complete** | Button + select | Moderator | Tick one or several tasks off |
-| Chore board **✅ Mark Done** | Button + select | Moderator | Tick off today's chores |
+| Board **✅ Complete** | Button + select | Moderator | Tick one or several off — chores first, then tasks |
 | `GET /api/todos` | Web | Mod | List todos (newest first, capped at 200) + board placement |
 | `POST /api/todos` | Web | Mod | Create a free-form todo as the authenticated user |
 | `POST /api/todos/{id}/complete` | Web | Mod | Mark a todo complete |
-| `PUT /api/todos/board` | Web | **Admin** | Post / move / remove either board (`kind`: `all` \| `chores`) |
+| `PUT /api/todos/board` | Web | **Admin** | Post / move / remove the board |
 | `GET/POST /api/todos/recurring` | Web | Mod | List / create recurring definitions |
 | `PUT/DELETE /api/todos/recurring/{id}` | Web | Mod | Edit / delete a definition |
 | `POST /api/todos/recurring/{id}/{pause,resume,run-now}` | Web | Mod | Row actions |
@@ -36,8 +35,8 @@ Until 2026-08-18 the two disagreed. Discord gated on the games cogs'
 `has_mod_or_admin_permissions` (administrator, manage_guild, manage_channels)
 while the web resolved `moderator` from a wider bit set (adding kick, ban,
 manage_messages, manage_roles, moderate_members). A mod with Timeout Members
-and no Manage Server passed on the dashboard and was refused by the chore
-board's buttons; Manage Channels did the reverse. The configured mod role — the
+and no Manage Server passed on the dashboard and was refused by the board's
+buttons; Manage Channels did the reverse. The configured mod role — the
 thing a server actually means by "moderator" — was consulted by neither. Roles
 now decide, with the two elevated bits kept as a short-circuit and a bits-only
 fallback for a guild that has configured no staff roles at all. `admin` and
@@ -45,7 +44,6 @@ fallback for a guild that has configured no staff roles at all. `admin` and
 
 Board *placement* is the one admin-gated action: choosing a channel makes the
 bot post into it, which is server configuration rather than worklist curation.
-Both boards go through the same endpoint, distinguished by `kind`.
 
 ## Behavior
 
@@ -59,13 +57,23 @@ Rejects DMs. Refreshes the board if one is posted.
 
 A single message the bot keeps at the **bottom of a configured channel**.
 
-- **Contents.** Outstanding tasks only — neither completed nor written off —
-  **oldest first** — the longest-waiting task
-  sits at the top where it nags. Each row is one padded monospace cell
-  (`` `#12  Post QOTD` ``) followed by a live `<t:…:R>` age outside the code
-  span, per `docs/embed_style_guide.md`. Rows spawned by a recurring definition
-  carry a 🔁 marker. Capped at 15 rows, then "…and **N** more on the dashboard".
-  Accent from `safe_resolve_accent`.
+- **Contents.** Two headed sections — **🔁 Today's chores**, then **📋 Tasks**.
+  Each is omitted entirely when empty, rather than stacking two "nothing here"
+  sentences; when both are, the board says so once.
+- **Tasks.** Outstanding tasks only — neither completed nor written off —
+  **oldest first**, so the longest-waiting task sits at the top where it nags.
+  Each row is one padded monospace cell (`` `#12  Post QOTD` ``) followed by a
+  live `<t:…:R>` age outside the code span, per `docs/embed_style_guide.md`.
+  **Chore-spawned rows are excluded** — the chores section above already shows
+  them, with more state than a task line can carry, and listing them twice was
+  the first thing that looked wrong when the boards merged.
+- **Row budget.** 15 rows across both sections. Chores take up to 8 off the top
+  and tasks get the rest, floored at 3 — a day with many chores must never push
+  the task list off the board, which is the failure the merge existed to end,
+  just pointing the other way. Overflow reads "…and **N** more on the
+  dashboard". Accent from `safe_resolve_accent`.
+- **Footer.** `N of M chores done · K tasks · updates automatically`. The chore
+  half is dropped in a guild with none configured rather than reading "0 of 0".
 - **Staying at the bottom.** A member message in the board's channel arms a 6s
   debounce, then the board is deleted and re-posted (Discord has no reorder
   API). Reuses `economy.guide.should_restick_guide` — bot messages are filtered
@@ -78,6 +86,14 @@ A single message the bot keeps at the **bottom of a configured channel**.
   unchanged — ages tick client-side, so "2h → 3h" costs no API call.
 - **Self-healing.** If the board message is deleted by hand, the next refresh
   re-posts it rather than going quietly dead.
+- **One repaint on boot.** The 60s loop's first pass repaints *every* posted
+  board, not only the guilds where something spawned. A board posted by a
+  previous release can be carrying a view the running one no longer registers —
+  after the 180 merge the surviving message is the old chore board's, and its
+  ✅ Mark Done button answers "This interaction failed" until something
+  repaints it. An edit replaces the view along with the content, so one pass on
+  boot closes that window instead of waiting for the next message in the
+  channel. It also heals any board that drifted while the bot was down.
 - **Post before delete.** The replacement is sent *first*, then the old board
   removed. Deleting first would destroy a working board whenever the new
   channel turns out to be unpostable — and if the target is the old channel
@@ -91,10 +107,16 @@ A single message the bot keeps at the **bottom of a configured channel**.
 The view is a static-`custom_id` persistent view (`todo_board_add`,
 `todo_board_complete`) re-registered in `cog_load`, so buttons survive restarts.
 
-### The mod chore board
+**One Complete button over both sections.** `board_logic.completable_options`
+puts open chores first, then tasks, and carries a chore forward by its
+`todo_id`: the thing being completed is a todo row either way, and the select
+only ever needed the id. Two boards meant two buttons and a mod having to know
+which list a row was on before they could tick it.
 
-A second sticky panel, same machinery, different question. The all-todos board
-asks "what is outstanding?"; this one asks **"did we do it today?"**
+### Today's chores
+
+The board's top section, same question it always asked: **"did we do it
+today?"**, where the Tasks section below asks "what is outstanding?"
 
 - **Contents.** One row per *active* recurring definition — its **latest**
   instance, done or not — in `time_of_day` order, so it reads like a shift
@@ -130,42 +152,49 @@ asks "what is outstanding?"; this one asks **"did we do it today?"**
   is closed business `complete_todo` refuses anyway. It lives beside
   `chore_state` rather than in the cog so the button and the board read the
   same rows through the same rule; while the filter lived alone in the cog the
-  two disagreed about a definition with no instance. When it offers nothing,
-  `nothing_to_tick_message` distinguishes three cases that used to be spoken as
-  one: no chores configured, none due yet (naming the soonest and when it
-  lands), and genuinely all ticked off.
-- **One button, `todo_chore_board_complete`.** No Add: a chore is a *recurring
-  definition* with a cadence, created on the dashboard — the thing the other
-  board's Add button makes is a one-off task, which is exactly what this board
-  exists not to show. The picker offers only chores still open; a done one has
-  nothing to tick and a missed one is closed business `complete_todo` refuses.
+  two disagreed about a definition with no instance. When the button has
+  nothing at all to offer, `nothing_to_tick_message` distinguishes three cases
+  that used to be spoken as one: no chores configured, none due yet (naming the
+  soonest and when it lands), and genuinely all ticked off. It is only reached
+  when chores exist and no tasks are pending either — with tasks outstanding
+  the picker is never empty.
+- **No separate Add.** A chore is a *recurring definition* with a cadence,
+  created on the dashboard; **➕ Add Task** makes a one-off.
 
-### Two boards, never one channel
+### Why the split was undone (migration 180, 2026-08-25)
 
-A Discord channel has exactly one bottom slot, and both boards want it. Put
-them in the same channel and every member message wakes both: they race, and
-whichever lands second owns the bottom while the other sits buried above it —
-the one state a sticky panel exists to avoid, and one no amount of activity in
-the channel repairs.
+Migration 166 split the board in two so a daily "post the QOTD" wasn't buried
+among "fix the quote bot". It solved that by putting the two lists in two
+channels, and that cost more than it saved:
 
-Neither board sets `restick_on_bot`, so this is *not* the repost storm
-`docs/reviews/2026-08-06-sticky-panel-machinery.md` F1 found between the casino
-and bounty hubs — they cannot chase each other's reposts at all. It is quieter
-and permanent. Measured with that file's harness over 10 member
-messages, the split between the two panels varies run to run (3/7 placements in
-one run, 9/10 in another; with three panels one took 0 of 10) — so the
-committed test asserts the part that doesn't vary, **one bottom, one winner**,
-rather than a send count that would make it flaky.
+- The boards could never share a channel. A Discord channel has one bottom
+  slot; both wanting it meant every member message woke both, they raced, and
+  whichever landed second owned the bottom while the other sat buried — quiet,
+  permanent, and unrepairable by any amount of activity in the channel. So a
+  server with one mod channel had to choose.
+- **Choosing is what happened.** In prod the chore board was posted and the
+  all-todos board never was, leaving 25 open tasks — the oldest from 12 June —
+  with no Discord surface at all.
+- Every path forked: two placements, two refreshes, two views, two sticky
+  listeners, a collision check and its 409.
 
-The sticky layer cannot arbitrate this — someone has to lose — so
-`todo_service.conflicting_board` refuses the configuration where a human can
-still read the reason, and `PUT /api/todos/board` answers **409** naming the
-board already in that channel. The check runs *before* anything is posted, and
-catches the collision from either direction. Unposting a board frees its
-channel for the other.
+One board with headed sections answers both questions in one place, which is
+what having two boards was trying to do. `todo_board.kind` went with the split
+— a single-valued discriminator is a worse lie than no column — and the
+`conflicting_board` / `board_conflict_detail` pair went with it. The general
+`panel_posting.sticky_conflict` guard still covers collisions with *other*
+sticky panels, which is the case that remains real.
+
+**Merge rule.** Keep the posted row. If a guild somehow has both posted, keep
+the **chores** channel: chores are mod-facing and the merged board carries
+them, so landing it in a public channel would disclose more than landing tasks
+in a mod channel. The losing board's Discord message is left where it is — a
+migration cannot call Discord — and goes stale until someone deletes it. In
+prod this never arises. Pinned in
+`tests/test_migration_180_todo_board_merge.py` against production's real rows.
 
 > Not covered: `economy_auction_service.sticky_panel_channels` still does not
-> know about either todo board, so `/bank auction start` won't warn about them.
+> know about the todo board, so `/bank auction start` won't warn about it.
 > Tracked as todo #103.
 
 ### Recurring tasks
@@ -242,32 +271,28 @@ and is excluded from the Pending filter — the same rule the boards and
 three states independently rather than deriving one by subtraction, and a
 **Missed** tile appears only when there is something in it.
 
-**Board placement is visible.** Each board card states whether it is posted,
-and the all-todos card carries a warning while it is not: it is the only
-Discord surface that can complete an ordinary todo, since the chore board's
-**Mark Done** offers recurring instances and nothing else. The same cost is
-spelled out in that card's remove confirmation and appended to the 409 when the
-all-todos board is the resident of a channel another board is being placed in —
-clearing it is the way through that refusal, so the price belongs in the
-sentence that sends a mod to do it. In prod the all-todos board was unposted at
-12:15 on 2026-08-18 to free ✅│todo for the chore board, and the loss of every
-Discord completion path went unannounced; it was found by failing to tick
-anything off.
+**Board placement is visible.** The board card states whether it is posted, and
+carries a warning while it is not: it is the only Discord surface that can tick
+anything off. The same cost is spelled out in the remove confirmation. In prod
+the all-todos board was unposted at 12:15 on 2026-08-18 to free ✅│todo for the
+chore board, and the loss of every Discord completion path went unannounced; it
+was found by failing to tick anything off, and it stayed unposted until the
+boards merged.
 
 Creating, editing, deleting, pausing or resuming a **definition** repaints the
-chore board directly. The 60s loop is not a backstop for it: that only repaints
-guilds where a spawn or a write-off happened, and the chore board is one row per
-definition — so without the explicit repaint an added chore stays invisible and
-a deleted one leaves a ghost row until the next scheduled fire, a day away for a
-daily and a week for a weekly.
+board directly. The 60s loop is not a backstop for it: that only repaints
+guilds where a spawn or a write-off happened, and the chores section is one row
+per definition — so without the explicit repaint an added chore stays invisible
+and a deleted one leaves a ghost row until the next scheduled fire, a day away
+for a daily and a week for a weekly.
 
 ## Permissions
 
 - Discord: moderator-gated through `AppContext.is_mod` — administrator or
   manage_guild, otherwise a configured mod/admin role. `/todo` rejects DMs.
 - Web: every endpoint requires `moderator`, resolved by `resolve_guild_perms`
-  from the same rule; `PUT /api/todos/board` additionally requires `admin`, for
-  either `kind`. The panel disables both board cards off `can_manage_board`.
+  from the same rule; `PUT /api/todos/board` additionally requires `admin`. The
+  panel disables the board card off `can_manage_board`.
 - The parity between the two is pinned by `tests/test_todo_mod_tier_parity.py`,
   which asserts both surfaces agree case by case.
 
@@ -282,12 +307,10 @@ daily and a week for a weekly.
 | Task is longer than 500 characters | "Task must be 500 characters or fewer." |
 | Web completion targets a missing or already-completed row | HTTP 404: "Todo not found or already completed." |
 | Board channel doesn't exist in the guild | HTTP 400: "That channel doesn't exist here." |
-| Board `kind` is neither `all` nor `chores` | HTTP 400: "Unknown board." |
-| The other todo board already holds the chosen channel | HTTP 409: "The server todo board is already in that channel. Two sticky boards can't share one — they'd take turns being buried. Move that one first, or pick a different channel." When the resident is the all-todos board the refusal adds what clearing it costs (see *Board placement is visible*). |
-| Chore board **Mark Done** with everything ticked | "Every chore is already ticked off. ✨" |
-| Chore board **Mark Done** with chores configured but none yet due | "Nothing due yet — **&lt;chore&gt;** first lands &lt;relative timestamp&gt;. ⏳" |
-| Chore board **Mark Done** with no chores configured at all | "No recurring chores set up yet — add them on the dashboard. ✨" |
-| Chore board button clicked by a non-moderator | "Only moderators can tick off chores." |
+| A `kind` field in the board body | HTTP 422 — the body forbids extras, so a client still sending it is told rather than having it silently ignored |
+| **Complete** with chores configured, all ticked, nothing else pending | "Every chore is already ticked off. ✨" |
+| **Complete** with chores configured but none yet due, nothing else pending | "Nothing due yet — **&lt;chore&gt;** first lands &lt;relative timestamp&gt;. ⏳" |
+| **Complete** with no chores configured and nothing pending | "Nothing pending — the list is already clear. ✨" |
 | Bot can't post in the chosen channel | HTTP 400: "I can't post in that channel — check my Send Messages and Embed Links permissions." |
 | Board action while the bot is disconnected | HTTP 503: "The bot isn't connected right now — try again in a moment." |
 | Weekly recurrence with no days | HTTP 400: "Pick at least one day of the week." |
@@ -324,14 +347,14 @@ Three tables, all per-guild:
 
 - `todos` — headline, optional description and source URL, creator id, creation
   timestamp, completion timestamp + completer id, `recurring_id` provenance, and
-  `missed_at` (migration 166) for a recurring row the daily reset wrote off. No
+  `missed_at` (migration 166) for a recurring row the daily reset wrote off, and
+  `purchase_id` (migration 179) for a row a custom-shop-item order spawned. No
   per-user PII beyond Discord ids. Registered in `docs/data_register.md`.
-- `todo_board` — `(guild_id, kind)` PK, `channel_id`, `message_id`,
-  `updated_at`; zeroes mean "not posted". `kind` is `all` or `chores`
-  (migration 166 widened the key from `guild_id` alone; existing rows became
-  `all`). One row per board keeps a board's channel and message ids atomic,
-  which was the original reason for the table and survives the composite key
-  unchanged.
+- `todo_board` — `guild_id` PK, `channel_id`, `message_id`, `updated_at`;
+  zeroes mean "not posted". One row per guild keeps the board's channel and
+  message ids atomic, which is the original reason for the table. Migration 166
+  widened the key to `(guild_id, kind)` for the second board; **migration 180
+  narrowed it back** when the boards merged.
 - `todo_recurring` — definition, cadence, `next_run_at` cache, `status`,
   `last_run_at`/`last_status`.
 

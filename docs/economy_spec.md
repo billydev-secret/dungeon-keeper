@@ -1343,7 +1343,9 @@ a gift is the base perk rented with `beneficiary_id` = the friend; the old
 `gift_color` kind and its separate `price_gift_color` retired in migration
 091, which rewrote live rows to `role_color`-with-beneficiary and widened the
 perk CHECK once for the round's later kinds, `voice_style` and `emoji` —
-see `docs/plans/economy-sinks-round-3.md`). Private rooms stay **Stage 6**
+see `docs/plans/economy-sinks-round-3.md`). **Custom shop items** (2026-08-25)
+open the catalogue to admins — see the row below and
+`docs/plans/economy-shop-items.md`. Private rooms stay **Stage 6**
 and the spotlight slot stays **v2** — both still design-only below.
 
 Weekly rentals bill on personal anniversary tick. Defaults below; every price per-guild
@@ -1363,6 +1365,7 @@ re-read price differs from the previous cycle's **DMs the owner** the old and ne
 | Holographic (Discord's fixed shimmer preset) | 300 | `role_holographic` perk (migration 107): the projector sets the fixed `(primary, secondary, tertiary)` triple Discord accepts for `tertiary_color`; requires the same Enhanced Role Styles feature; supersedes gradient; member picks nothing (no customise modal) |
 | Private text room | 200 | §8 (Stage 6) |
 | Private voice room | 200 | §8 (Stage 6) |
+| Custom shop item | admin-set, per item | **Custom shop items** (migration 179, `docs/plans/economy-shop-items.md`). Admin-defined on the Shop & Perks page rather than compiled into `perks.py`; rendered as the shop's own section, absent entirely in a guild with none. Two axes per item: `kind` `role` (grant a role automatically) or `manual` (staff to-do), and `billing` `once` or `weekly` (a real `econ_rentals` row, perk `custom_item`, tagged `catalog_item_id`). Optional stock, per-member limit and availability window. A manual purchase escrows the price (`shop_item` kind) and spawns a row on the **existing mod todo board** (`todos.purchase_id`); ticking it off delivers the order, riding `complete_todo`'s guarded UPDATE for exactly-once. Refusing refunds (`shop_item_refund`, `refunded_at` predicate) and closes the todo as **missed**, never as done. Unresolved orders refund after `shop_item_expire_days` (14) |
 | Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
 | Streak shield | 30 once | One-shot consumable, not a rental — §3.1; shop "One-shot" row + panel button, wallet shows "held" |
 | Sponsored emoji | 60/wk (animated 90) | **Sinks round 3, stage 4.** `/bank emoji image: name:` escrows week one (`emoji_sponsor` kind); mod approves on the Shop & Perks page queue → two-phase claim-then-upload opens a real `econ_rentals` row (perk `emoji`, meta carries `animated` so renewals bill the right rate); deny/cancel/expiry refund exactly-once (`emoji_sponsor_refund`, `refunded_at` predicate); lapse deletes the emoji and frees the slot + name. Caps: `emoji_sponsor_slots` (default 5) + never the guild's last free emoji slot of that kind. One in flight per member and one claim per name via partial unique indexes (migration 092). Names: 2–32 `[A-Za-z0-9_]` + the shared blocklist. `price_emoji` 0 disables new sponsorships; pending reviews auto-refund after `emoji_sponsor_expire_days` (default 14, QOTD-sponsor sweep pattern) |

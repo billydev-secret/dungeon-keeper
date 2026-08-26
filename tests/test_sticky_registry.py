@@ -201,13 +201,10 @@ def _seed_config_key(key: str):
     return seed
 
 
-def _seed_todo_board(kind: str):
-    def seed(conn, channel_id: int) -> None:
-        from bot_modules.services.todo_service import save_board
+def _seed_todo_board(conn, channel_id: int) -> None:
+    from bot_modules.services.todo_service import save_board
 
-        save_board(conn, GUILD, channel_id, 1, kind=kind)
-
-    return seed
+    save_board(conn, GUILD, channel_id, 1)
 
 
 def _seed_survivor(conn, channel_id: int) -> None:
@@ -241,10 +238,8 @@ def _seed_survivor_unposted(conn, channel_id: int) -> None:
             _seed_config_key("guess_prompt_channel_id"),
             "guess-prompt", "the Guess Who prompt", False, id="guess-prompt",
         ),
-        pytest.param(_seed_todo_board("all"), "todo-board", "the todo board", False,
+        pytest.param(_seed_todo_board, "todo-board", "the todo board", False,
                      id="todo-board"),
-        pytest.param(_seed_todo_board("chores"), "todo-chores", "the chore board",
-                     False, id="todo-chores"),
         # The sharp one: the Survivor panel follows the bot's own Reckoning and
         # last-call posts down, so sharing its channel is the refuse case — and
         # it was the least visible of the six.

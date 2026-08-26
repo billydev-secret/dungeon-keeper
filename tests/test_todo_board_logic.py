@@ -11,17 +11,27 @@ from bot_modules.todo.board_logic import (
     EMPTY_BODY,
     EMPTY_CHORES,
     MAX_BOARD_ROWS,
+    MAX_CHORE_ROWS,
     RECURRING_MARKER,
     STREAK_MARKER,
+    CHORE_HEADING,
+    EMPTY_BOARD,
+    MIN_TASK_ROWS,
+    TASK_HEADING,
+    board_content_signature,
     board_signature,
     chore_signature,
+    completable_options,
     chore_state,
     complete_option_label,
     nothing_to_tick_message,
     render_chore_footer,
     render_chore_rows,
+    render_board,
+    render_board_footer,
     render_footer,
     render_rows,
+    task_row_budget,
     tickable_chores,
 )
 
@@ -480,3 +490,159 @@ def test_nothing_to_tick_still_says_done_when_everything_is_done():
 def test_nothing_to_tick_on_an_empty_board_points_at_the_dashboard():
     """No chores at all is not "all ticked off" either."""
     assert nothing_to_tick_message([]) == EMPTY_CHORES
+
+
+# ── the combined board (migration 180) ────────────────────────────────
+
+
+def test_both_sections_appear_under_their_headings():
+    body = render_board(
+        [_chore(1, "Do a QOTD")], [_row(7, "fix the quote bot")], task_total=1
+    )
+    assert CHORE_HEADING in body
+    assert TASK_HEADING in body
+    assert "Do a QOTD" in body
+    assert "fix the quote bot" in body
+    # Chores first: the daily scoreboard is the glanceable half.
+    assert body.index(CHORE_HEADING) < body.index(TASK_HEADING)
+
+
+def test_a_guild_with_no_chores_gets_no_chore_heading():
+    """A heading over an empty-state sentence reads as broken."""
+    body = render_board([], [_row(7, "fix the quote bot")], task_total=1)
+    assert CHORE_HEADING not in body
+    assert EMPTY_CHORES not in body
+    assert "fix the quote bot" in body
+
+
+def test_a_guild_with_no_tasks_gets_no_task_heading():
+    body = render_board([_chore(1, "Do a QOTD")], [], task_total=0)
+    assert TASK_HEADING not in body
+    assert EMPTY_BODY not in body
+    assert "Do a QOTD" in body
+
+
+def test_a_wholly_empty_board_says_so_once():
+    assert render_board([], [], task_total=0) == EMPTY_BOARD
+
+
+def test_chores_cannot_crowd_the_tasks_off_the_board():
+    """The failure the merge was meant to end, pointing the other way."""
+    chores = [_chore(n, f"Chore {n}", todo_id=n) for n in range(20)]
+    tasks = [_row(n, f"Task {n}") for n in range(10)]
+    body = render_board(chores, tasks, task_total=10)
+    assert "Task 0" in body
+    for n in range(MIN_TASK_ROWS):
+        assert f"Task {n}" in body
+
+
+@pytest.mark.parametrize(
+    ("chores_shown", "expected"),
+    [
+        pytest.param(0, MAX_BOARD_ROWS, id="no-chores-full-budget"),
+        pytest.param(5, MAX_BOARD_ROWS - 5, id="chores-take-their-slice"),
+        pytest.param(MAX_BOARD_ROWS, MIN_TASK_ROWS, id="floor-holds"),
+        pytest.param(99, MIN_TASK_ROWS, id="floor-holds-past-the-limit"),
+    ],
+)
+def test_task_row_budget(chores_shown, expected):
+    assert task_row_budget(chores_shown) == expected
+
+
+# ── the combined footer ───────────────────────────────────────────────
+
+
+def test_footer_reports_both_halves():
+    footer = render_board_footer(
+        [_chore(1, "A", completed_at=NOW), _chore(2, "B")], 25
+    )
+    assert "1 of 2 chores done" in footer
+    assert "25 tasks" in footer
+
+
+def test_footer_drops_the_chore_half_when_there_are_none():
+    """'0 of 0 chores done' is noise in a guild that configured none."""
+    footer = render_board_footer([], 25)
+    assert "chores" not in footer
+    assert "25 tasks" in footer
+
+
+@pytest.mark.parametrize(
+    ("total", "expected"),
+    [pytest.param(1, "1 task", id="singular"), pytest.param(2, "2 tasks", id="plural")],
+)
+def test_footer_pluralises_tasks(total, expected):
+    assert expected in render_board_footer([], total)
+
+
+# ── the combined signature ────────────────────────────────────────────
+
+
+def test_board_signature_is_stable_across_age_only_changes():
+    """<t:…:R> ticks client-side, so an age change is not worth an API call."""
+    first = board_content_signature(
+        [_chore(1, "A")], [_row(7, "fix it", created_at=NOW)], 1
+    )
+    later = board_content_signature(
+        [_chore(1, "A")], [_row(7, "fix it", created_at=NOW - 9999)], 1
+    )
+    assert first == later
+
+
+@pytest.mark.parametrize(
+    ("chores", "tasks", "total"),
+    [
+        pytest.param([_chore(1, "A", completed_at=NOW)], [_row(7, "fix it")], 1,
+                     id="a-chore-was-ticked"),
+        pytest.param([_chore(1, "A")], [_row(7, "renamed")], 1, id="a-task-changed"),
+        pytest.param([_chore(1, "A")], [_row(7, "fix it")], 9, id="the-total-moved"),
+    ],
+)
+def test_board_signature_changes_when_the_board_would_look_different(
+    chores, tasks, total
+):
+    base = board_content_signature([_chore(1, "A")], [_row(7, "fix it")], 1)
+    assert board_content_signature(chores, tasks, total) != base
+
+
+def test_board_signature_is_hashable():
+    assert hash(board_content_signature([_chore(1, "A")], [_row(7, "x")], 1))
+
+
+# ── one Complete button over both sections ────────────────────────────
+
+
+def test_completable_offers_chores_first_then_tasks():
+    options = completable_options(
+        [_chore(1, "Do a QOTD", todo_id=42)], [_row(7, "fix the quote bot")]
+    )
+    assert [o["id"] for o in options] == [42, 7]
+
+
+def test_a_chore_is_offered_by_its_todo_id_not_its_definition_id():
+    """The thing being completed is a todo row either way."""
+    options = completable_options([_chore(99, "Do a QOTD", todo_id=42)], [])
+    assert options[0]["id"] == 42
+
+
+def test_a_ticked_chore_is_not_offered_again():
+    options = completable_options(
+        [_chore(1, "Done already", todo_id=42, completed_at=NOW)], []
+    )
+    assert options == []
+
+
+def test_a_chore_with_no_instance_yet_is_not_offered():
+    options = completable_options([_chore(1, "Not due", todo_id=None)], [])
+    assert options == []
+
+
+def test_chores_cannot_fill_the_whole_complete_picker():
+    """Discord caps a select at 25 options. Uncapped chores would fill it in a
+    guild with many, leaving no way to tick an ordinary task off in Discord —
+    the capability the merge existed to restore."""
+    chores = [_chore(n, f"Chore {n}", todo_id=1000 + n) for n in range(30)]
+    tasks = [_row(n, f"Task {n}") for n in range(5)]
+    options = completable_options(chores, tasks)
+    assert len(options) - MAX_CHORE_ROWS == len(tasks)
+    assert any(o["task"].startswith("Task") for o in options[:25])

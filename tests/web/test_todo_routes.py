@@ -12,10 +12,6 @@ from fastapi.testclient import TestClient
 
 from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services.todo_service import (
-    BOARD_ALL,
-    BOARD_CHORES,
-    UNPOSTED_ALL_COST,
-    clear_board,
     create_todo,
     save_board,
 )
@@ -63,10 +59,6 @@ def _attach_bot(fake_ctx, *, channel=True, perm_bits=0x8):
     cog.place_board = AsyncMock(return_value=message)
     cog.unpost_board = AsyncMock(return_value=True)
     cog.refresh_board = AsyncMock(return_value=True)
-    cog.place_chore_board = AsyncMock(return_value=message)
-    cog.unpost_chore_board = AsyncMock(return_value=True)
-    cog.refresh_chore_board = AsyncMock(return_value=True)
-    cog.refresh_boards = AsyncMock(return_value=None)
 
     member = MagicMock()
     member.guild_permissions.value = perm_bits
@@ -141,18 +133,18 @@ def test_create_then_complete(authed_client, fake_ctx):
 
 
 def test_mutations_refresh_the_board(authed_client, fake_ctx):
-    """Both boards: the dashboard cannot cheaply tell whether the row it just
-    touched was a recurring instance, and each panel is signature-guarded."""
+    """Adding and completing each repaint it; the panel is signature-guarded,
+    so a call that changed nothing costs a DB read and no API call."""
     cog = _attach_bot(fake_ctx)
     todo_id = authed_client.post("/api/todos", json={"task": "Do it"}).json()["id"]
     authed_client.post(f"/api/todos/{todo_id}/complete")
-    assert cog.refresh_boards.await_count == 2
+    assert cog.refresh_board.await_count == 2
 
 
 def test_board_refresh_failure_does_not_fail_the_request(authed_client, fake_ctx):
     """The 60s loop repaints anyway — a Discord hiccup must not lose the task."""
     cog = _attach_bot(fake_ctx)
-    cog.refresh_boards = AsyncMock(side_effect=RuntimeError("gateway down"))
+    cog.refresh_board = AsyncMock(side_effect=RuntimeError("gateway down"))
     assert authed_client.post("/api/todos", json={"task": "Do it"}).status_code == 200
 
 
@@ -259,14 +251,14 @@ def test_board_warns_beside_a_human_only_panel(authed_client, fake_ctx):
     cog.place_board.assert_awaited_once()
 
 
-def _seed_board(fake_ctx, channel_id: int, kind: str) -> None:
+def _seed_board(fake_ctx, channel_id: int) -> None:
     """Record a board as posted. ``place_board`` is mocked in these tests, so
     the row it would normally write has to be put there directly."""
     from bot_modules.core.db_utils import open_db
     from bot_modules.services.todo_service import save_board
 
     with open_db(fake_ctx.db_path) as conn:
-        save_board(conn, GUILD, channel_id, 1, kind=kind)
+        save_board(conn, GUILD, channel_id, 1)
 
 
 def test_reposting_a_board_where_it_already_is_is_not_a_conflict(
@@ -275,23 +267,11 @@ def test_reposting_a_board_where_it_already_is_is_not_a_conflict(
     """Re-posting is how a board that has drifted out of view is rescued, so
     a board must never be refused on account of itself."""
     cog = _attach_bot(fake_ctx)
-    _seed_board(fake_ctx, 555, "all")
+    _seed_board(fake_ctx, 555)
     resp = authed_client.put("/api/todos/board", json={"channel_id": "555"})
     assert resp.status_code == 200
     assert resp.json()["warning"] is None
     cog.place_board.assert_awaited_once()
-
-
-def test_the_sibling_board_still_gets_its_own_wording(authed_client, fake_ctx):
-    """The 409 names what clearing the resident would cost; the registry's
-    generic warning must not replace it."""
-    _attach_bot(fake_ctx)
-    _seed_board(fake_ctx, 555, "all")
-    resp = authed_client.put(
-        "/api/todos/board", json={"channel_id": "555", "kind": "chores"}
-    )
-    assert resp.status_code == 409
-    assert "todo" in resp.json()["detail"].lower()
 
 
 # ── recurring tasks ───────────────────────────────────────────────────
@@ -425,7 +405,7 @@ def test_run_now_spawns_a_task(authed_client, fake_ctx):
     assert resp.json()["spawned"] is True
     todos = authed_client.get("/api/todos").json()["todos"]
     assert [t["task"] for t in todos] == ["Post QOTD"]
-    cog.refresh_boards.assert_awaited()
+    cog.refresh_board.assert_awaited()
 
 
 def test_run_now_twice_does_not_duplicate(authed_client, fake_ctx):
@@ -480,131 +460,28 @@ def test_run_now_leaves_the_schedule_alone(authed_client, fake_ctx):
     assert after == before
 
 
-# ── the chore board, and the collision guard ──────────────────────────
+# ── the one board (migration 180) ─────────────────────────────────────
 
 
-def test_list_includes_both_boards(authed_client, fake_ctx):
+def test_the_list_no_longer_carries_a_second_board(authed_client, fake_ctx):
+    """Migration 180 left one board; a stale second key would mislead a client."""
     with open_db(fake_ctx.db_path) as conn:
-        save_board(conn, GUILD, 111, 222, kind=BOARD_ALL)
-        save_board(conn, GUILD, 333, 444, kind=BOARD_CHORES)
+        save_board(conn, GUILD, 111, 222)
     data = authed_client.get("/api/todos").json()
     assert data["board"]["channel_id"] == "111"
-    assert data["chore_board"]["channel_id"] == "333"
-    assert data["chore_board"]["posted"] is True
+    assert data["board"]["posted"] is True
+    assert "chore_board" not in data
+    assert "kind" not in data["board"]
 
 
-def test_admin_can_post_the_chore_board(authed_client, fake_ctx):
-    cog = _attach_bot(fake_ctx)
-    resp = authed_client.put(
-        "/api/todos/board", json={"channel_id": "555", "kind": "chores"}
-    )
-    assert resp.status_code == 200
-    assert resp.json()["kind"] == "chores"
-    cog.place_chore_board.assert_awaited_once()
-    cog.place_board.assert_not_awaited()
-
-
-def test_chore_board_placement_requires_admin(mod_client, fake_ctx):
-    cog = _attach_bot(fake_ctx, perm_bits=_MOD_ONLY_BITS)
-    resp = mod_client.put(
-        "/api/todos/board", json={"channel_id": "555", "kind": "chores"}
-    )
-    assert resp.status_code == 403
-    cog.place_chore_board.assert_not_awaited()
-
-
-def test_zero_channel_unposts_the_chore_board(authed_client, fake_ctx):
-    cog = _attach_bot(fake_ctx)
-    resp = authed_client.put(
-        "/api/todos/board", json={"channel_id": "0", "kind": "chores"}
-    )
-    assert resp.status_code == 200
-    cog.unpost_chore_board.assert_awaited_once()
-    cog.unpost_board.assert_not_awaited()
-
-
-def test_an_unknown_board_kind_is_a_400(authed_client, fake_ctx):
+def test_a_stray_kind_field_is_refused(authed_client, fake_ctx):
+    """The body forbids extras, so a client still sending `kind` is told so
+    rather than having it silently ignored and posting the wrong board."""
     _attach_bot(fake_ctx)
     resp = authed_client.put(
-        "/api/todos/board", json={"channel_id": "555", "kind": "nonsense"}
-    )
-    assert resp.status_code == 400
-
-
-def test_omitting_the_kind_still_means_the_all_todos_board(authed_client, fake_ctx):
-    """An older client that never learned about `kind` keeps working."""
-    cog = _attach_bot(fake_ctx)
-    resp = authed_client.put("/api/todos/board", json={"channel_id": "555"})
-    assert resp.status_code == 200
-    cog.place_board.assert_awaited_once()
-    cog.place_chore_board.assert_not_awaited()
-
-
-def test_the_two_boards_are_refused_the_same_channel(authed_client, fake_ctx):
-    """The guard this feature exists behind.
-
-    A channel has one bottom slot. Two sticky boards in it wake on the same
-    message, race, and one ends up buried above the other with nothing anyone
-    does in the channel able to raise it (see
-    ``test_two_default_panels_cannot_both_hold_the_channel_bottom`` in
-    tests/test_core_sticky.py). The sticky layer cannot arbitrate that —
-    someone has to lose — so configuration refuses it, and nothing is posted.
-    """
-    cog = _attach_bot(fake_ctx)
-    with open_db(fake_ctx.db_path) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
-
-    resp = authed_client.put(
         "/api/todos/board", json={"channel_id": "555", "kind": "chores"}
     )
-    assert resp.status_code == 409
-    detail = resp.json()["detail"]
-    assert "server todo board" in detail
-    # Clearing the resident is the way through this refusal — and the way the
-    # all-todos board went unposted in prod — so the 409 has to price it.
-    assert UNPOSTED_ALL_COST in detail
-    cog.place_chore_board.assert_not_awaited()
-
-
-def test_the_collision_is_refused_from_either_direction(authed_client, fake_ctx):
-    """Adding the second board must not open the hole the other way round."""
-    cog = _attach_bot(fake_ctx)
-    with open_db(fake_ctx.db_path) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_CHORES)
-
-    resp = authed_client.put(
-        "/api/todos/board", json={"channel_id": "555", "kind": "all"}
-    )
-    assert resp.status_code == 409
-    assert "chore board" in resp.json()["detail"]
-    cog.place_board.assert_not_awaited()
-
-
-def test_a_board_can_be_reposted_into_its_own_channel(authed_client, fake_ctx):
-    """Re-posting where it already lives is a move, not a collision."""
-    cog = _attach_bot(fake_ctx)
-    with open_db(fake_ctx.db_path) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
-
-    resp = authed_client.put("/api/todos/board", json={"channel_id": "555"})
-    assert resp.status_code == 200
-    cog.place_board.assert_awaited_once()
-
-
-def test_removing_one_board_frees_its_channel_for_the_other(authed_client, fake_ctx):
-    """Unposting must actually release the channel, not reserve it forever."""
-    cog = _attach_bot(fake_ctx)
-    with open_db(fake_ctx.db_path) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
-        # What the real cog's _write_ids does on unpost. The cog here is a
-        # mock, so driving it through the route would not touch the DB.
-        clear_board(conn, GUILD, kind=BOARD_ALL)
-
-    resp = authed_client.put(
-        "/api/todos/board", json={"channel_id": "555", "kind": "chores"}
-    )
-    assert resp.status_code == 200
-    cog.place_chore_board.assert_awaited_once()
+    assert resp.status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -616,10 +493,10 @@ def test_removing_one_board_frees_its_channel_for_the_other(authed_client, fake_
         ("delete", "/api/todos/recurring/{id}", None),
     ],
 )
-def test_changing_a_definition_repaints_the_chore_board(
+def test_changing_a_definition_repaints_the_board(
     authed_client, fake_ctx, method, path, body
 ):
-    """The chore board is one row per *definition*, so a CRUD change alters it
+    """The board lists one row per chore *definition*, so a CRUD change alters it
     even though no todo row moved — and the 60s loop is no backstop, since it
     only repaints guilds where a spawn or a write-off happened. Without this an
     added chore stays invisible and a deleted one leaves a ghost row until the
@@ -628,32 +505,32 @@ def test_changing_a_definition_repaints_the_chore_board(
     existing = authed_client.post(
         "/api/todos/recurring", json={"task": "Seed", "recurrence": "daily"}
     ).json()["id"]
-    cog.refresh_chore_board.reset_mock()
+    cog.refresh_board.reset_mock()
 
     url = path.format(id=existing)
     resp = getattr(authed_client, method)(url, **({"json": body} if body else {}))
 
     assert resp.status_code == 200
-    cog.refresh_chore_board.assert_awaited()
+    cog.refresh_board.assert_awaited()
 
 
-def test_editing_a_definition_repaints_the_chore_board(authed_client, fake_ctx):
+def test_editing_a_definition_repaints_the_board(authed_client, fake_ctx):
     cog = _attach_bot(fake_ctx)
     rid = authed_client.post(
         "/api/todos/recurring", json={"task": "Seed", "recurrence": "daily"}
     ).json()["id"]
-    cog.refresh_chore_board.reset_mock()
+    cog.refresh_board.reset_mock()
 
     resp = authed_client.put(
         f"/api/todos/recurring/{rid}",
         json={"task": "Renamed", "recurrence": "daily"},
     )
     assert resp.status_code == 200
-    cog.refresh_chore_board.assert_awaited()
+    cog.refresh_board.assert_awaited()
 
 
 def test_a_failed_definition_change_does_not_repaint(authed_client, fake_ctx):
     """A 404 changed nothing, so it should cost no Discord edit."""
     cog = _attach_bot(fake_ctx)
     assert authed_client.delete("/api/todos/recurring/9999").status_code == 404
-    cog.refresh_chore_board.assert_not_awaited()
+    cog.refresh_board.assert_not_awaited()

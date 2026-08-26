@@ -6,15 +6,10 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.todo_service import (
-    BOARD_ALL,
-    BOARD_CHORES,
     clear_board,
     complete_todo,
     create_todo,
     get_board,
-    UNPOSTED_ALL_COST,
-    board_conflict_detail,
-    conflicting_board,
     guilds_with_board,
     list_todos,
     mark_missed,
@@ -263,131 +258,46 @@ def test_guilds_with_board_lists_only_posted(db):
         assert guilds_with_board(conn) == [GUILD]
 
 
-# ── The two boards are separate rows ────────────────────────────────────
+# ── One board per guild ─────────────────────────────────────────────────
 
 
-def test_the_two_boards_are_independent(db):
-    """Widening the key must not let one board's placement clobber the other's."""
-    with open_db(db) as conn:
-        save_board(conn, GUILD, 111, 222, kind=BOARD_ALL)
-        save_board(conn, GUILD, 333, 444, kind=BOARD_CHORES)
-
-        assert get_board(conn, GUILD, BOARD_ALL).channel_id == 111
-        assert get_board(conn, GUILD, BOARD_ALL).message_id == 222
-        assert get_board(conn, GUILD, BOARD_CHORES).channel_id == 333
-        assert get_board(conn, GUILD, BOARD_CHORES).message_id == 444
-
-
-def test_get_board_defaults_to_the_all_todos_board(db):
-    """The original board is the default kind, so pre-existing callers are unmoved."""
+def test_save_and_read_the_board(db):
     with open_db(db) as conn:
         save_board(conn, GUILD, 111, 222)
-        assert get_board(conn, GUILD).kind == BOARD_ALL
-        assert get_board(conn, GUILD).channel_id == 111
-        assert not get_board(conn, GUILD, BOARD_CHORES).posted
+        board = get_board(conn, GUILD)
+        assert (board.channel_id, board.message_id) == (111, 222)
+        assert board.posted
 
 
-def test_clearing_one_board_leaves_the_other_posted(db):
+def test_an_unplaced_guild_reads_as_unposted(db):
     with open_db(db) as conn:
-        save_board(conn, GUILD, 111, 222, kind=BOARD_ALL)
-        save_board(conn, GUILD, 333, 444, kind=BOARD_CHORES)
-        clear_board(conn, GUILD, kind=BOARD_CHORES)
-
-        assert get_board(conn, GUILD, BOARD_ALL).posted
-        assert not get_board(conn, GUILD, BOARD_CHORES).posted
+        assert not get_board(conn, GUILD).posted
 
 
-def test_guilds_with_board_is_scoped_by_kind(db):
-    """The refresh loop drives each panel from its own work list.
-
-    A guild running only the chore board must not be handed to the all-todos
-    panel's refresh, and vice versa.
-    """
+def test_saving_again_moves_the_board_rather_than_adding_one(db):
+    """One row per guild — migration 180 made guild_id the whole key."""
     with open_db(db) as conn:
-        save_board(conn, GUILD, 111, 222, kind=BOARD_ALL)
-        save_board(conn, 999, 333, 444, kind=BOARD_CHORES)
+        save_board(conn, GUILD, 111, 222)
+        save_board(conn, GUILD, 333, 444)
+        assert get_board(conn, GUILD).channel_id == 333
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM todo_board WHERE guild_id = ?", (GUILD,)
+        ).fetchone()[0]
+        assert rows == 1
 
-        assert guilds_with_board(conn, BOARD_ALL) == [GUILD]
-        assert guilds_with_board(conn, BOARD_CHORES) == [999]
 
-
-# ── Two boards can never share a channel ────────────────────────────────
-
-
-def test_conflicting_board_names_the_other_resident(db):
-    """The guard that keeps the second sticky panel out of the first's channel.
-
-    Neither board sets ``restick_on_bot``, so they cannot storm the way the two
-    opted-in economy panels did (F1,
-    docs/reviews/2026-08-06-sticky-panel-machinery.md). What they do instead is
-    the *fix* for that storm turned against us: both wake on the same human
-    message, race for the channel's one bottom slot, and the loser yields to
-    ``core.sticky.was_placed`` — permanently, while the other keeps winning.
-    So the collision is refused where a human can still read the reason.
-    """
+def test_clearing_forgets_the_placement(db):
     with open_db(db) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
-        assert conflicting_board(conn, GUILD, BOARD_CHORES, 555) == BOARD_ALL
+        save_board(conn, GUILD, 111, 222)
+        clear_board(conn, GUILD)
+        assert not get_board(conn, GUILD).posted
 
 
-def test_conflicting_board_catches_the_collision_from_either_side(db):
-    """Whichever board is placed second is the one refused."""
+def test_guilds_with_board_lists_only_the_posted_ones(db):
     with open_db(db) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_CHORES)
-        assert conflicting_board(conn, GUILD, BOARD_ALL, 555) == BOARD_CHORES
-
-
-def test_conflict_detail_prices_clearing_the_all_todos_board():
-    """The 409 is where a mod decides how to make room, so it has to say what
-    clearing the all-todos board costs: with it gone, nothing in Discord can
-    complete an ordinary todo. In prod that was discovered three days later by
-    failing to tick anything off."""
-    detail = board_conflict_detail(BOARD_ALL)
-    assert "The server todo board is already in that channel" in detail
-    assert UNPOSTED_ALL_COST in detail
-
-
-def test_conflict_detail_does_not_price_the_chore_board():
-    """Nothing is lost by moving the chore board: every chore on it is also on
-    the all-todos board while outstanding, and completable there."""
-    detail = board_conflict_detail(BOARD_CHORES)
-    assert "The mod chore board is already in that channel" in detail
-    assert UNPOSTED_ALL_COST not in detail
-
-
-def test_conflicting_board_allows_a_free_channel(db):
-    with open_db(db) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
-        assert conflicting_board(conn, GUILD, BOARD_CHORES, 777) is None
-
-
-def test_a_board_does_not_conflict_with_itself(db):
-    """Re-posting a board into the channel it already occupies is a move, not a clash."""
-    with open_db(db) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
-        assert conflicting_board(conn, GUILD, BOARD_ALL, 555) is None
-
-
-def test_an_unposted_board_frees_its_channel(db):
-    """Removing one board must let the other take the channel it vacated."""
-    with open_db(db) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
-        clear_board(conn, GUILD, kind=BOARD_ALL)
-        assert conflicting_board(conn, GUILD, BOARD_CHORES, 555) is None
-
-
-def test_unposting_can_never_conflict(db):
-    """channel_id 0 means "take it down" — there is nothing to collide with."""
-    with open_db(db) as conn:
-        save_board(conn, GUILD, 555, 222, kind=BOARD_ALL)
-        assert conflicting_board(conn, GUILD, BOARD_CHORES, 0) is None
-
-
-def test_conflicting_board_is_scoped_by_guild(db):
-    """Another server's board in the same channel id is not this server's problem."""
-    with open_db(db) as conn:
-        save_board(conn, 999, 555, 222, kind=BOARD_ALL)
-        assert conflicting_board(conn, GUILD, BOARD_CHORES, 555) is None
+        save_board(conn, GUILD, 111, 222)
+        save_board(conn, 999, 0, 0)
+        assert guilds_with_board(conn) == [GUILD]
 
 
 # ── The third state ─────────────────────────────────────────────────────

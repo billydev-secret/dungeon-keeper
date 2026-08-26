@@ -314,3 +314,136 @@ def chore_signature(
         for row in rows[:limit]
     )
     return (shown, len(rows))
+
+
+# ── The combined board ──────────────────────────────────────────────────────
+#
+# Migration 180 merged the two boards back into one. The renderers above stay
+# exactly as they were and become *section* builders: the chore scoreboard
+# answers "did we do it today?", the task list answers "what's outstanding?",
+# and a mod reads both without the server having to spend two channels on the
+# question. See the migration for why the split was undone.
+
+CHORE_HEADING = "🔁 **Today's chores**"
+TASK_HEADING = "📋 **Tasks**"
+
+#: Chores are a short daily list, so they take a bounded slice off the top and
+#: leave the rest of the budget to tasks.
+MAX_CHORE_ROWS = 8
+
+#: ...but never all of it. A day with many chores must not push the task list
+#: off the board entirely — that is precisely the failure the merge was meant
+#: to end, just pointing the other way.
+MIN_TASK_ROWS = 3
+
+EMPTY_BOARD = "Nothing pending and no chores yet — all clear. ✨"
+
+
+def task_row_budget(chores_shown: int, *, limit: int = MAX_BOARD_ROWS) -> int:
+    """How many task rows fit under the chores, never fewer than MIN_TASK_ROWS."""
+    return max(MIN_TASK_ROWS, limit - chores_shown)
+
+
+def render_board(
+    chore_rows: Sequence[Mapping[str, Any]],
+    task_rows: Sequence[Mapping[str, Any]],
+    *,
+    task_total: int | None = None,
+    limit: int = MAX_BOARD_ROWS,
+) -> str:
+    """The whole board body: the chore scoreboard, then the task list.
+
+    Each section is omitted when it has nothing in it, rather than rendering a
+    heading over an empty-state sentence — two "nothing here" lines stacked on
+    one board reads as broken. When *both* are empty the board says so once.
+
+    ``task_rows`` must already exclude chore-spawned rows (see
+    ``todo_service.pending_todos(exclude_chores=True)``): the chore section
+    shows those, with more state than a task line can carry.
+    """
+    sections: list[str] = []
+    chores_shown = min(len(chore_rows), MAX_CHORE_ROWS)
+    if chore_rows:
+        sections.append(
+            CHORE_HEADING + "\n" + render_chore_rows(chore_rows, limit=MAX_CHORE_ROWS)
+        )
+    if task_rows:
+        sections.append(
+            TASK_HEADING
+            + "\n"
+            + render_rows(
+                task_rows,
+                total=task_total,
+                limit=task_row_budget(chores_shown, limit=limit),
+            )
+        )
+    if not sections:
+        return EMPTY_BOARD
+    return "\n\n".join(sections)
+
+
+def render_board_footer(
+    chore_rows: Sequence[Mapping[str, Any]], task_total: int
+) -> str:
+    """``2 of 3 chores done · 25 tasks · updates automatically``.
+
+    Both halves, because the board now answers both questions and a footer that
+    reported only one would silently contradict the section it left out. The
+    chore half is dropped entirely in a guild with no chores configured, rather
+    than reading "0 of 0 chores done".
+    """
+    parts: list[str] = []
+    if chore_rows:
+        done = sum(1 for row in chore_rows if chore_state(row) == "done")
+        parts.append(f"{done} of {len(chore_rows)} chores done")
+    noun = "task" if task_total == 1 else "tasks"
+    parts.append(f"{task_total} {noun}")
+    parts.append("updates automatically")
+    return " · ".join(parts)
+
+
+def board_content_signature(
+    chore_rows: Sequence[Mapping[str, Any]],
+    task_rows: Sequence[Mapping[str, Any]],
+    task_total: int | None = None,
+    *,
+    limit: int = MAX_BOARD_ROWS,
+) -> tuple:
+    """A fingerprint of the whole board, for the refresh loop's skip check.
+
+    Just the two section fingerprints side by side — each already excludes the
+    relative timestamps that re-render client-side, so a board whose only
+    change is "2h" becoming "3h" still costs no API call.
+    """
+    chores_shown = min(len(chore_rows), MAX_CHORE_ROWS)
+    return (
+        chore_signature(chore_rows, limit=MAX_CHORE_ROWS),
+        board_signature(
+            task_rows, task_total, limit=task_row_budget(chores_shown, limit=limit)
+        ),
+    )
+
+
+def completable_options(
+    chore_rows: Sequence[Mapping[str, Any]],
+    task_rows: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Everything the one Complete button can offer, chores first.
+
+    Two boards meant two buttons — Complete for tasks, Mark Done for chores —
+    and a mod had to know which list a row was on before they could tick it.
+    One board offers one button over both, so a chore row carries its
+    ``todo_id`` forward as ``id``: the thing being completed is a todo either
+    way, and the select only ever needed the id.
+
+    Chores take the same bounded slice here that they take on the board.
+    Without the cap, a guild with 25+ open chore instances would fill Discord's
+    25-option select with chores alone and no ordinary task could be ticked off
+    from Discord at all — the exact capability the merge existed to restore.
+    """
+    options: list[Mapping[str, Any]] = [
+        {"id": row["todo_id"], "task": row["task"], "description": ""}
+        for row in tickable_chores(chore_rows)[:MAX_CHORE_ROWS]
+    ]
+    options.extend(task_rows)
+    return options

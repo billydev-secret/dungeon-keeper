@@ -1663,7 +1663,7 @@
         <tr><td><strong>Meadow Mahjong</strong> &mdash; who sat at which table, each settled hand&rsquo;s winner and line, your per-hand coin results, and running totals (hands, wins, coins won and lost), plus the assistance level you picked in My Settings. Practice games against house bots keep only the table row and your seat &mdash; no results, no stats, no coins. While a hand is live, the table&rsquo;s full state &mdash; including everyone&rsquo;s hidden tiles &mdash; is stored so the game survives a restart; nobody but the bot reads it</td><td>Running the tables: escrow has to settle, and the results page and your <em>My Stats</em> button read the history</td><td>Indefinitely; an erasure request removes your seats, results, stats and assistance preference (a hand you won stays as a nameless entry so the other players&rsquo; history survives), and dissolves any table you&rsquo;re sitting at with everyone&rsquo;s escrow returned</td></tr>
         <tr><td><strong>Music playlist posts</strong> — which track you posted into the playlist channel, and any link of yours that's waiting in the review queue</td><td>Running the rolling community playlist: crediting posts, skipping duplicates, and removing a song when its message is deleted</td><td>Indefinitely (rolled-off songs are kept as playlist history); cleared in full by an erasure request</td></tr>
         <tr><td><strong>Risky Rolls</strong> — your dice rolls in an open round, and <strong>the text of a question you ask</strong> (the reply you give is not stored)</td><td>Running the round: working out who asks and who answers, keeping the question attached to its Reply button, and putting the round back after a bot restart</td><td>A round is deleted when it closes; a posted question is deleted 7 days after it was asked. Cleared in full by an erasure request</td></tr>
-        <tr><td><strong>Mod worklist</strong> (moderators only) — if you're on the mod team, which tasks and <a href="#todo-chore-board">chores</a> you added and which you ticked off, and when</td><td>Running the shared <a href="#todo">todo list</a> and the chore board: crediting who did a chore and counting the days it's been kept up</td><td>Indefinitely. An erasure clears your name off them but leaves the tasks — they're the team's outstanding work, not a record about you</td></tr>
+        <tr><td><strong>Mod worklist</strong> (moderators only) — if you're on the mod team, which tasks and <a href="#todo-chore-board">chores</a> you added and which you ticked off, and when</td><td>Running the shared <a href="#todo">todo list</a>: crediting who did a chore and counting the days it's been kept up</td><td>Indefinitely. An erasure clears your name off them but leaves the tasks — they're the team's outstanding work, not a record about you</td></tr>
         <tr><td><strong>Anonymous features</strong> — Whisper, Confessions, Guess, and the anonymous party games</td><td>See the box below — "anonymous" means anonymous to other members, not to moderators</td><td>Varies; see below</td></tr>
         <tr><td><strong>Moderation records</strong> — warnings, jails, tickets and their transcripts, notes about rule-breaking, and flags raised by the automated Rules Watch</td><td>The record of moderation decisions, and the ability to justify one if challenged</td><td>Indefinitely</td></tr>
         <tr><td><strong>Image checks</strong> — for pictures you post in <strong>age-gated channels and spoiler-required channels</strong>, a score for how explicit the picture is, plus which body parts were detected and roughly where in the frame. Elsewhere, only the score, and only while a rule is deciding what to do — nothing is written down. Every removal is recorded wherever it happens</td><td>Enforcing the spoiler rule and keeping explicit images out of SFW channels. All of it runs on the bot's own machine; no picture is ever uploaded anywhere</td><td>Indefinitely. Admin-only — never shown to other members</td></tr>
@@ -2191,19 +2191,20 @@
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="todo" class="section-break"><span class="section-num">24</span> Todo List &amp; Boards</h2>
     <p>A shared worklist for the mod team. Tasks can be added from Discord or from the dashboard, and everything lands in the same list. It is moderator-only end to end — members never see it unless you post the board in a channel they can read.</p>
-    <p>There are <strong>two</strong> boards you can post, and they answer different questions. The <a href="#todo-board">todo board</a> shows everything outstanding. The <a href="#todo-chore-board">mod chore board</a> shows only recurring chores, as a daily "did we do it today?" scoreboard — so a daily "post the QOTD" isn't buried among "fix the quote bot" and "rotate the tunnel token". You can post either, or both, but <strong>not in the same channel</strong>.</p>
+    <p>There is <strong>one</strong> board you can post, and it answers both questions the team asks: <em>did we do today's chores?</em> and <em>what else is outstanding?</em> It shows <a href="#todo-chore-board">today's chores</a> first, as a "did we do it today?" scoreboard, then <a href="#todo-board">everything else</a> oldest-first. Until August 2026 these were two separate boards needing two separate channels; servers with one mod channel had to pick, and the tasks half usually lost.</p>
 
     <h3 id="todo-board">The Discord board</h3>
-    <p>The board is a single message the bot keeps at the <strong>bottom of a channel</strong>. It lists every pending task oldest-first, so whatever has been waiting longest sits at the top. It carries two buttons:</p>
+    <p>The board is a single message the bot keeps at the <strong>bottom of a channel</strong>. Under <strong>Tasks</strong> it lists everything pending oldest-first, so whatever has been waiting longest sits at the top. It carries two buttons:</p>
     <ul>
       <li><strong>➕ Add Task</strong> — opens a small form for the task and optional notes.</li>
-      <li><strong>✅ Complete</strong> — shows a private picker of pending tasks; tick one or several off at once.</li>
+      <li><strong>✅ Complete</strong> — shows a private picker of everything still open, chores first, then tasks; tick one or several off at once.</li>
     </ul>
     <p>Both buttons are moderator-only. Anyone else who clicks gets a private "moderators only" reply and nothing changes.</p>
-    <p>The board updates itself. Adding or completing a task anywhere — the buttons, <code>/todo</code>, or the dashboard — is reflected within about a minute, and immediately when the action came from Discord. When people chat in the channel, the board deletes itself and re-posts underneath so it never scrolls out of sight. Tasks marked 🔁 came from a recurring entry.</p>
+    <p>The board updates itself. Adding or completing a task anywhere — the buttons, <code>/todo</code>, or the dashboard — is reflected within about a minute, and immediately when the action came from Discord. When people chat in the channel, the board deletes itself and re-posts underneath so it never scrolls out of sight.</p>
+    <p>Because the board holds your mod chores as well as your tasks, put it in a <strong>mod channel</strong> if the chores are for the mod team.</p>
 
-    <h3 id="todo-chore-board">The mod chore board</h3>
-    <p>A second board for your mod team's own channel, showing <strong>only</strong> recurring chores. Where the todo board asks "what's outstanding?", this one asks "did we do it today?" — so it keeps a chore on screen after it's ticked, rather than removing the answer the moment it's yes.</p>
+    <h3 id="todo-chore-board">Today's chores</h3>
+    <p>The top section of the board, showing <strong>only</strong> recurring chores. Where the Tasks section asks "what's outstanding?", this one asks "did we do it today?" — so it keeps a chore on screen after it's ticked, rather than removing the answer the moment it's yes. A chore appears here and not in Tasks, so nothing is listed twice.</p>
     <p>Each row shows the chore, whether it's been done, who did it and when, and how many days running it's been done:</p>
     <ul>
       <li><strong>✅</strong> — done. The name and time beside it are whoever ticked it off.</li>
@@ -2211,23 +2212,15 @@
       <li><strong>❌ missed last run</strong> — still to do today, <em>and</em> the last one went by without anyone doing it. It clears as soon as the chore is ticked again.</li>
       <li><strong>🔥 6</strong> — six days running. Shown from two days up.</li>
     </ul>
-    <p>The footer keeps the score for the day — "2 of 3 done", plus a count of anything whose last run was missed. Chores you've <em>paused</em> are left off entirely: a chore parked for the holidays isn't one the team is failing.</p>
-    <p>One button, <strong>✅ Mark Done</strong>, moderator-only, offering only the chores still open. There's no Add button here — chores are recurring entries with a schedule, set up on the dashboard, and a one-off task belongs on the other board.</p>
-    <p>When it has nothing to offer it says which of three things is true, because they mean very different things: <em>"Every chore is already ticked off"</em>, <em>"Nothing due yet"</em> — naming the next chore and when it lands, for a weekly set up on a day it doesn't run — or that no chores are configured at all.</p>
+    <p>The footer keeps the score for the day — "2 of 3 chores done", alongside the number of tasks still pending. Chores you've <em>paused</em> are left off entirely: a chore parked for the holidays isn't one the team is failing.</p>
+    <p>Chores are ticked off with the board's own <strong>✅ Complete</strong> button, which offers them above the ordinary tasks. There's no separate Add for a chore — chores are recurring entries with a schedule, set up on the dashboard, and <strong>➕ Add Task</strong> adds a one-off.</p>
+    <p>When there is nothing at all to offer, the reply says which of three things is true, because they mean very different things: <em>"Every chore is already ticked off"</em>, <em>"Nothing due yet"</em> — naming the next chore and when it lands, for a weekly set up on a day it doesn't run — or that no chores are configured at all.</p>
 
     <div class="callout callout-warn">
       <span class="callout-icon">⚠️</span>
       <div class="callout-body">
-        <strong>The two boards need separate channels</strong>
-        <p>A Discord channel has one bottom, and both boards want to sit in it. Put them together and they take turns being buried, which no amount of chatting in the channel fixes. The dashboard refuses the second one with a message naming the board already there — move that one first, or pick a different channel.</p>
-      </div>
-    </div>
-
-    <div class="callout callout-warn">
-      <span class="callout-icon">⚠️</span>
-      <div class="callout-body">
-        <strong>Leaving the todo board unposted takes something away</strong>
-        <p>The todo board is the <em>only</em> place in Discord an ordinary task can be ticked off — the chore board's <strong>Mark Done</strong> offers recurring chores and nothing else. With it unposted, anyone can still add tasks with <code>/todo</code>, but completing one means going to the dashboard. The panel says so on the board's card whenever it isn't posted, and warns you before you remove it.</p>
+        <strong>Leaving the board unposted takes something away</strong>
+        <p>The board is the <em>only</em> place in Discord anything can be ticked off. With it unposted, anyone can still add tasks with <code>/todo</code>, but completing one means going to the dashboard. The panel says so on the board's card whenever it isn't posted, and warns you before you remove it.</p>
       </div>
     </div>
 
@@ -2235,7 +2228,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Posted from the <a href="/">web dashboard</a></strong>
-        <p>Pick a channel on the <a href="/#/mod-todo">Todo List</a> panel and press <strong>Post Board</strong>. The mod chore board has its own card just below it, with its own channel and its own <strong>Post Chore Board</strong> button. Posting or moving either board is an <em>administrator</em> action; managing the tasks and recurring entries on them only needs moderator. Removing a board deletes the message but keeps every task.</p>
+        <p>Pick a channel on the <a href="/#/mod-todo">Todo List</a> panel and press <strong>Post Board</strong>. Posting or moving the board is an <em>administrator</em> action; managing the tasks and recurring entries on it only needs moderator. Removing the board deletes the message but keeps every task.</p>
         <p><strong>Who counts as a moderator</strong> is the same answer in Discord and on the dashboard: anyone holding a role you've configured as a mod or admin role, plus anyone with Discord's <em>Administrator</em> or <em>Manage Server</em> permission. Set those roles under Server Settings on the dashboard. (Before 18 August 2026 the two surfaces used different rules, so a mod could be let in on one and turned away on the other.)</p>
       </div>
     </div>
@@ -2243,7 +2236,7 @@
     <h3 id="todo-recurring">Recurring tasks</h3>
     <p>Recurring entries put a chore on the list on a schedule — "Post QOTD" every morning at 09:00, "Photo challenge prompt" every Monday. Set them up on the dashboard panel with a daily or weekly cadence and a time of day (server local time).</p>
     <p>These are <strong>reminders, not automation</strong>. When one comes due the bot adds the task to the list; a moderator then does the thing and ticks it off. The bot does not post the QOTD or the photo prompt for you.</p>
-    <p>Each recurring task <strong>resets</strong> rather than carrying over. When the next one comes due and the last is still untouched, that one is marked <strong>missed</strong> and a fresh task takes its place. Only ever one copy is outstanding, so nothing piles up — and the days a chore didn't happen stay on the record, which is what the chore board's ❌ marks and 🔥 streaks are counted from. A missed task can't be ticked off later: it's yesterday's box, and crediting it would put a hole in the streak either side of it.</p>
+    <p>Each recurring task <strong>resets</strong> rather than carrying over. When the next one comes due and the last is still untouched, that one is marked <strong>missed</strong> and a fresh task takes its place. Only ever one copy is outstanding, so nothing piles up — and the days a chore didn't happen stay on the record, which is what the board's ❌ marks and 🔥 streaks are counted from. A missed task can't be ticked off later: it's yesterday's box, and crediting it would put a hole in the streak either side of it.</p>
     <p>Two things deliberately don't reset. <strong>Run now</strong> adds one instance there and then without touching the schedule or un-pausing a paused entry — and pressing it twice just tells you one is already on the list, rather than marking your first press missed. And if the bot is offline for three days, it comes back and adds <em>one</em> task, marking one instance missed rather than three: the record covers the days the bot was watching, not the days it was away.</p>
     <p>Set a chore up <em>after</em> its time of day has passed and it lands on the list right away, rather than waiting until tomorrow — a 09:00 daily added at lunchtime is something you can tick off this afternoon. It doesn't shift the schedule: the next one still comes at 09:00 tomorrow. A weekly chore added on a day it doesn't run simply waits for its day.</p>
     <p>Each entry can be paused, edited or deleted. Deleting an entry stops it repeating but leaves any copy already on the list, since that is real outstanding work.</p>
@@ -2284,7 +2277,7 @@
       re-posting whenever somebody chats under them — the economy panel, the
       perk shop, the bounty board, the casino hub, the pen pals signup, the DM
       request panel, the Voice Control owner panel, the Guess Who prompt, the
-      todo and chore boards, and the Survivor panel. Discord only has one
+      todo board, and the Survivor panel. Discord only has one
       bottom, so two of them in one channel push each other up all day.</p>
     <ul>
       <li><strong>Some pairings are refused outright.</strong> The casino hub,

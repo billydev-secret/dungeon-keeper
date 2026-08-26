@@ -570,10 +570,8 @@ _TODO_STUB = {
         }
         for i in range(15)
     ],
-    "board": {"kind": "all", "channel_id": "0", "message_id": "0",
+    "board": {"channel_id": "0", "message_id": "0",
               "posted": False, "updated_at": 0},
-    "chore_board": {"kind": "chores", "channel_id": "0", "message_id": "0",
-                    "posted": False, "updated_at": 0},
     "can_manage_board": True,
 }
 

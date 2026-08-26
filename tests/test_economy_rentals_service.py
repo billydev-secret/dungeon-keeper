@@ -900,3 +900,17 @@ def test_bill_renewal_previous_price_zero_when_unchanged(db):
     res = _bill(db, r["id"], T0 + WEEK_SECONDS + 1)
     assert res.action == "charge"
     assert res.previous_price == 0
+
+
+def test_a_custom_item_rental_without_an_item_id_is_refused(tmp_path):
+    """There is no flat `price_custom_item` to fall back on, so pricing at 0
+    would open a permanently free, silently renewing rental."""
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.economy_rentals_service import rent_perk
+    from bot_modules.services.economy_service import EconSettings
+    from tests.db_template import migrated_db
+
+    path = tmp_path / "custom.db"
+    migrated_db(path)
+    with open_db(path) as conn, pytest.raises(ValueError, match="catalog_item_id"):
+        rent_perk(conn, EconSettings(enabled=True), 900, 5, "custom_item")
