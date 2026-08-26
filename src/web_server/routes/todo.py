@@ -21,13 +21,8 @@ from bot_modules.services.todo_recurring_service import (
     update_recurring,
 )
 from bot_modules.services.todo_service import (
-    BOARD_ALL,
-    BOARD_CHORES,
-    BOARD_KINDS,
     TASK_MAX_LEN,
-    board_conflict_detail,
     complete_todo,
-    conflicting_board,
     create_todo,
     get_board,
     list_todos,
@@ -54,9 +49,6 @@ class BoardBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     channel_id: str = "0"
-    #: Which board to place. Defaults to the original all-todos board so an
-    #: older client that never sends the field keeps working.
-    kind: str = BOARD_ALL
 
 
 class RecurringBody(BaseModel):
@@ -71,7 +63,6 @@ class RecurringBody(BaseModel):
 
 def _board_dict(board) -> dict:
     return {
-        "kind": board.kind,
         "channel_id": str(board.channel_id),
         "message_id": str(board.message_id),
         "posted": board.posted,
@@ -109,8 +100,7 @@ async def list_todos_endpoint(
     def _q():
         with ctx.open_db() as conn:
             rows = list_todos(conn, guild_id, status=status)
-            board = get_board(conn, guild_id, BOARD_ALL)
-            chore_board = get_board(conn, guild_id, BOARD_CHORES)
+            board = get_board(conn, guild_id)
 
         todos = [
             {
@@ -144,7 +134,6 @@ async def list_todos_endpoint(
             "missed_count": sum(1 for t in todos if t["missed_at"] is not None),
             "todos": todos,
             "board": _board_dict(board),
-            "chore_board": _board_dict(chore_board),
         }
 
     result = await run_query(_q)
@@ -158,13 +147,12 @@ async def list_todos_endpoint(
     )
     result["can_manage_board"] = "admin" in user.perms
     if guild is not None:
-        for key in ("board", "chore_board"):
-            board = result[key]
-            if board["posted"]:
-                board["jump_url"] = (
-                    f"https://discord.com/channels/{guild_id}"
-                    f"/{board['channel_id']}/{board['message_id']}"
-                )
+        board = result["board"]
+        if board["posted"]:
+            board["jump_url"] = (
+                f"https://discord.com/channels/{guild_id}"
+                f"/{board['channel_id']}/{board['message_id']}"
+            )
     return result
 
 
@@ -230,35 +218,21 @@ async def _refresh_board(ctx, guild_id: int) -> None:
     anyway, so a missing bot or a Discord hiccup just means a board is up to a
     minute stale rather than the task silently not being saved.
 
-    Both, because the dashboard cannot cheaply tell whether the row it just
-    touched was a recurring instance, and each panel is signature-guarded — the
-    board nothing changed on costs a DB read and no API call.
+    Also the path a changed *definition* takes. The board is one row per
+    definition, so adding, renaming, deleting, pausing or resuming one changes
+    what it shows even though no todo row moved — and the 60s loop is not a
+    backstop there, since it only repaints guilds where a spawn or a write-off
+    happened. Without this an added chore would stay invisible and a deleted
+    one leave a ghost row until the next scheduled fire, up to a day away for a
+    daily and a week for a weekly. The repaint is signature-guarded, so a call
+    that changed nothing costs a DB read and no API call.
     """
     cog = _todo_cog(ctx)
     if cog is None:
         return
     try:
-        await cog.refresh_boards(guild_id)
+        await cog.refresh_board(guild_id)
     except Exception:  # pragma: no cover - defensive
-        pass
-
-
-async def _refresh_chore_board(ctx, guild_id: int) -> None:
-    """Repaint the chore board after a *definition* changed.
-
-    The chore board is one row per definition, so adding, renaming, deleting,
-    pausing or resuming one changes what it shows even though no todo row
-    moved. The 60s loop is not a backstop here — it only repaints guilds where
-    a spawn or a write-off happened — so without this an added chore stays
-    invisible and a deleted one leaves a ghost row until the next scheduled
-    fire, up to a day away for a daily and a week for a weekly.
-    """
-    cog = _todo_cog(ctx)
-    if cog is None:
-        return
-    try:
-        await cog.refresh_chore_board(guild_id)
-    except Exception:  # pragma: no cover - defensive, same as _refresh_board
         pass
 
 
@@ -270,10 +244,6 @@ async def set_board(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-
-    kind = body.kind or BOARD_ALL
-    if kind not in BOARD_KINDS:
-        raise HTTPException(status_code=400, detail="Unknown board.")
 
     try:
         channel_id = int(body.channel_id or "0")
@@ -291,11 +261,8 @@ async def set_board(
     if guild is None:
         raise HTTPException(status_code=503, detail="The bot isn't in this server.")
 
-    unpost = cog.unpost_board if kind == BOARD_ALL else cog.unpost_chore_board
-    place = cog.place_board if kind == BOARD_ALL else cog.place_chore_board
-
     if not channel_id:
-        await unpost(guild)
+        await cog.unpost_board(guild)
         return {"ok": True, "posted": False}
 
     channel = guild.get_channel(channel_id)
@@ -304,29 +271,13 @@ async def set_board(
         # check here would admit types place_board is not typed to accept.
         raise HTTPException(status_code=400, detail="That channel doesn't exist here.")
 
-    # Refuse a shared channel *before* posting anything. Two sticky panels
-    # cannot both hold the bottom of one channel: they wake on the same
-    # message, race, and the loser yields to core.sticky's was_placed guard for
-    # as long as the winner keeps winning — leaving one board permanently
-    # buried, with nothing anyone does in the channel able to raise it.
-    def _conflict():
-        with ctx.open_db() as conn:
-            return conflicting_board(conn, guild_id, kind, channel_id)
+    # There is only one todo board since migration 180, so the sibling-board
+    # collision this used to refuse with a 409 no longer exists. Every *other*
+    # sticky panel still would bury it — the casino hub and the Survivor panel
+    # repaint on their own schedule — so the general guard stays.
+    warning = await sticky_conflict(ctx, guild_id, channel_id, excluding="todo-board")
 
-    resident = await run_query(_conflict)
-    if resident:
-        raise HTTPException(status_code=409, detail=board_conflict_detail(resident))
-    # The sibling board is handled above, with wording that names the cost of
-    # clearing it. This catches every *other* sticky panel — the casino hub and
-    # the Survivor panel would bury a board on every repaint of their own.
-    warning = await sticky_conflict(
-        ctx,
-        guild_id,
-        channel_id,
-        excluding="todo-board" if kind == BOARD_ALL else "todo-chores",
-    )
-
-    message = await place(guild, channel)
+    message = await cog.place_board(guild, channel)
     if message is None:
         raise HTTPException(
             status_code=400,
@@ -335,7 +286,6 @@ async def set_board(
     return {
         "ok": True,
         "posted": True,
-        "kind": kind,
         "message_id": str(message.id),
         "warning": warning,
     }
@@ -387,7 +337,7 @@ async def create_recurring_endpoint(
         new_id = await run_query(_q)
     except RecurringValidationError as err:
         raise HTTPException(status_code=400, detail=str(err)) from None
-    await _refresh_chore_board(ctx, guild_id)
+    await _refresh_board(ctx, guild_id)
     return {"ok": True, "id": new_id}
 
 
@@ -423,7 +373,7 @@ async def update_recurring_endpoint(
         raise HTTPException(status_code=400, detail=str(err)) from None
     if not ok:
         raise HTTPException(status_code=404, detail="That recurring task no longer exists.")
-    await _refresh_chore_board(ctx, guild_id)
+    await _refresh_board(ctx, guild_id)
     return {"ok": True}
 
 
@@ -442,7 +392,7 @@ async def delete_recurring_endpoint(
 
     if not await run_query(_q):
         raise HTTPException(status_code=404, detail="That recurring task no longer exists.")
-    await _refresh_chore_board(ctx, guild_id)
+    await _refresh_board(ctx, guild_id)
     return {"ok": True}
 
 
@@ -467,7 +417,7 @@ async def _set_recurring_status(request: Request, recurring_id: int, status: str
 
     if not await run_query(_q):
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    await _refresh_chore_board(ctx, guild_id)
+    await _refresh_board(ctx, guild_id)
     return {"ok": True}
 
 

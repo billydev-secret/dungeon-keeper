@@ -10,13 +10,10 @@ import pytest
 from bot_modules.cogs.todo_cog import (
     TodoAddModal,
     TodoBoardView,
-    TodoChoreBoardView,
     TodoCog,
 )
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.todo_service import (
-    BOARD_ALL,
-    BOARD_CHORES,
     create_todo,
     get_board,
     save_board,
@@ -418,68 +415,48 @@ async def test_todo_answers_the_interaction_before_repainting():
     assert order == ["reply", "repaint"]
 
 
-# ── the chore board (glue only — rendering is covered in board_logic) ──
+# ── the one board (glue only — rendering is covered in board_logic) ──
 
 
 @pytest.mark.asyncio
-async def test_chore_button_rejects_non_mods():
-    """The safety gate on the second board's only button."""
-    view = TodoChoreBoardView()
-    interaction = _button_interaction(_member(mod=False))
-    with patch("bot_modules.cogs.todo_cog._resolve_cog", return_value=_cog()), \
-         patch("bot_modules.cogs.todo_cog.chore_board_rows") as rows:
-        await view._complete.callback(interaction)
-    rows.assert_not_called()
-    assert "moderator" in interaction.response.send_message.await_args.args[0].lower()
-
-
-@pytest.mark.asyncio
-async def test_the_two_boards_keep_separate_placements(board_db):
-    """The wiring the widened key exists for: one cog, two independent panels."""
+async def test_the_board_keeps_one_placement(board_db):
+    """Migration 180 collapsed the two placements into one row per guild."""
     channel, _ = _fake_channel()
     cog = _board_cog(board_db, _fake_guild(channel))
 
     cog._write_ids(123, 111, 222)
-    cog._write_chore_ids(123, 333, 444)
-
     assert cog._read_ids(123) == (111, 222)
-    assert cog._read_chore_ids(123) == (333, 444)
     with open_db(board_db) as conn:
-        assert get_board(conn, 123, BOARD_ALL).channel_id == 111
-        assert get_board(conn, 123, BOARD_CHORES).channel_id == 333
+        assert get_board(conn, 123).channel_id == 111
 
 
 @pytest.mark.asyncio
-async def test_on_message_is_forwarded_to_both_panels(board_db):
-    """A miss here leaves one board unable to re-stick at all."""
+async def test_on_message_is_forwarded_to_the_panel(board_db):
+    """A miss here leaves the board unable to re-stick at all."""
     channel, _ = _fake_channel()
     cog = _board_cog(board_db, _fake_guild(channel))
     cog.board.on_message = AsyncMock()
-    cog.chore_board.on_message = AsyncMock()
 
     message = MagicMock(spec=discord.Message)
     await cog._restick_board(message)
 
     cog.board.on_message.assert_awaited_once_with(message)
-    cog.chore_board.on_message.assert_awaited_once_with(message)
 
 
 @pytest.mark.asyncio
-async def test_channel_delete_is_forwarded_to_both_panels(board_db):
+async def test_channel_delete_is_forwarded_to_the_panel(board_db):
     channel, _ = _fake_channel()
     cog = _board_cog(board_db, _fake_guild(channel))
     cog.board.on_channel_delete = AsyncMock()
-    cog.chore_board.on_channel_delete = AsyncMock()
 
     deleted = MagicMock(spec=discord.TextChannel)
     await cog._forget_deleted_board_channel(deleted)
 
     cog.board.on_channel_delete.assert_awaited_once_with(deleted)
-    cog.chore_board.on_channel_delete.assert_awaited_once_with(deleted)
 
 
 @pytest.mark.asyncio
-async def test_mark_done_sees_every_chore_the_board_renders(board_db):
+async def test_complete_sees_every_chore_the_board_renders(board_db):
     """The button read a shorter slice than the board drew, so a guild whose
     first 25 chores were all done got "everything is ticked off" while open
     rows were visible in the message directly above it."""
@@ -501,12 +478,42 @@ async def test_mark_done_sees_every_chore_the_board_renders(board_db):
 
     channel, _ = _fake_channel()
     cog = _board_cog(board_db, _fake_guild(channel))
-    view = TodoChoreBoardView()
+    view = TodoBoardView()
     interaction = _button_interaction(_member(mod=True))
     with patch("bot_modules.cogs.todo_cog._resolve_cog", return_value=cog):
         await view._complete.callback(interaction)
 
     # A picker, not "everything is done".
     kwargs = interaction.response.send_message.await_args.kwargs
-    assert "Which chore" in interaction.response.send_message.await_args.args[0]
+    assert "What did you finish" in interaction.response.send_message.await_args.args[0]
     assert len(kwargs["view"].children[0].options) == 5
+
+
+@pytest.mark.asyncio
+async def test_complete_offers_chores_and_tasks_together(board_db):
+    """One button over both sections — a mod no longer has to know which list
+    a row was on before they can tick it."""
+    from bot_modules.services.todo_recurring_service import create_recurring, run_now
+    from bot_modules.services.todo_service import create_todo as _create
+
+    with open_db(board_db) as conn:
+        rid = create_recurring(
+            conn, 123, task="Do a QOTD", recurrence="daily",
+            time_of_day=0, created_by=1, now_ts=0.0,
+        )
+        run_now(conn, rid, 123, now_ts=0.0)
+        _create(conn, 123, 42, "fix the quote bot", now_ts=1.0)
+
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    view = TodoBoardView()
+    interaction = _button_interaction(_member(mod=True))
+    with patch("bot_modules.cogs.todo_cog._resolve_cog", return_value=cog):
+        await view._complete.callback(interaction)
+
+    options = interaction.response.send_message.await_args.kwargs["view"].children[0].options
+    labels = [o.label for o in options]
+    assert any("Do a QOTD" in label for label in labels)
+    assert any("fix the quote bot" in label for label in labels)
+    # Chores first: they are what the board lists first.
+    assert "Do a QOTD" in labels[0]

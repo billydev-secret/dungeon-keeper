@@ -131,19 +131,11 @@ def _guess_prompt_channel(
 
 
 def _todo_board_channel(
-    chores: bool,
-) -> Callable[[sqlite3.Connection, int], tuple[int, ...]]:
-    def read(conn: sqlite3.Connection, guild_id: int) -> tuple[int, ...]:
-        from bot_modules.services.todo_service import (  # noqa: PLC0415
-            BOARD_ALL,
-            BOARD_CHORES,
-            get_board,
-        )
+    conn: sqlite3.Connection, guild_id: int
+) -> tuple[int, ...]:
+    from bot_modules.services.todo_service import get_board  # noqa: PLC0415
 
-        kind = BOARD_CHORES if chores else BOARD_ALL
-        return _one(get_board(conn, guild_id, kind).channel_id)
-
-    return read
+    return _one(get_board(conn, guild_id).channel_id)
 
 
 def _survivor_posted_channel(
@@ -219,8 +211,7 @@ _STICKY_PANELS: tuple[
     ("dm-perms", "the DM request panel", False, _dm_perms_channel),
     ("voice-control", "the Voice Control owner panel", False, _voice_control_channel),
     ("guess-prompt", "the Guess Who prompt", False, _guess_prompt_channel),
-    ("todo-board", "the todo board", False, _todo_board_channel(chores=False)),
-    ("todo-chores", "the chore board", False, _todo_board_channel(chores=True)),
+    ("todo-board", "the todo board", False, _todo_board_channel),
     # restick_on_bot: the Reckoning and last-call posts are the panel's own
     # main buriers, so it follows them down — and blocks anything else here.
     ("survivor", "the Survivor panel", True, _survivor_posted_channel),

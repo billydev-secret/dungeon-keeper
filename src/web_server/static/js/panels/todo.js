@@ -271,19 +271,12 @@ export function mount(container, initialParams = {}) {
           buttons. It updates itself as tasks come and go, and hops back down when
           people chat. The buttons are moderator-only.
         </div>
-        <div data-board-body>${renderLoading("Loading board…")}</div>
-      </section>
-
-      <section class="card" data-chore-board-card style="margin-top:20px">
-        <div class="section-label">Mod Chore Board</div>
         <div class="field-hint" style="margin-bottom:8px">
-          A second board for the mod team, showing <b>only</b> recurring chores —
-          today's list, who ticked each one, and how many days running it has been
-          done. Put it in a mod channel so a daily “post the QOTD” isn't buried in
-          the main list. It needs its own channel: two sticky boards can't share
-          one, because only one of them can sit at the bottom.
+          It shows <b>today's chores</b> first — who ticked each one and how many
+          days running it's been kept up — then everything else outstanding. Put it
+          in a mod channel if the chores are for the mod team.
         </div>
-        <div data-chore-board-body>${renderLoading("Loading chore board…")}</div>
+        <div data-board-body>${renderLoading("Loading board…")}</div>
       </section>
 
       <section class="card" style="margin-top:20px">
@@ -318,7 +311,6 @@ export function mount(container, initialParams = {}) {
     activeId: initialParams.task ? Number(initialParams.task) : null,
     completing: false,
     board: null,
-    choreBoard: null,
     canManageBoard: false,
     channels: [],
     recurring: [],
@@ -353,12 +345,13 @@ export function mount(container, initialParams = {}) {
     pushHash();
   }
 
-  // ── board cards ─────────────────────────────────────────────────────
+  // ── board card ──────────────────────────────────────────────────────
   //
-  // Two sticky boards of the same shape: the all-todos board and the mod chore
-  // board. They are configured identically and can never share a channel — the
-  // API answers that with a 409, because a Discord channel has exactly one
-  // bottom slot and two sticky panels in it leave one of them buried.
+  // One sticky board since migration 180. It was two — an all-todos board and a
+  // mod chore board — which forced a server with one mod channel to choose, and
+  // choosing is what happened: in prod the chore board was posted and the
+  // all-todos board never was, leaving 25 open tasks with no Discord surface.
+  // The single board carries both as headed sections.
 
   const BOARD_CARDS = [
     {
@@ -371,43 +364,19 @@ export function mount(container, initialParams = {}) {
       removeLabel: "Remove Board",
       removeTitle: "Remove the board?",
       removeBody:
-        "The board message will be deleted from its channel. Tasks themselves are "
-        + "untouched — but this is the only place in Discord an ordinary todo can be "
-        + "ticked off, so completing one will mean coming back to the dashboard.",
+        "The board message will be deleted from its channel. Tasks and chores "
+        + "themselves are untouched — but this is the only place in Discord anything "
+        + "can be ticked off, so completing one will mean coming back to the dashboard.",
       postedToast: "Board posted.",
       removedToast: "Board removed.",
       lockedHint: "Only administrators can post or move the board.",
       jumpLabel: "jump to the board ↗",
-      // The all-todos board is the *only* Discord surface that can complete an
-      // ordinary todo — the chore board's Mark Done offers recurring chores and
-      // nothing else. Unposting it therefore removes a capability, silently,
-      // and the way through the same-channel 409 is to unpost one of the two.
-      // It sat unposted for three days in prod and was noticed by a mod failing
-      // to tick anything off.
+      // The board is the *only* Discord surface that can tick anything off, so
+      // unposting it removes a capability, silently. It sat unposted for three
+      // days in prod and was noticed by a mod failing to tick anything off.
       unpostedWarning:
-        "Not posted — no one can complete an ordinary todo from Discord. "
-        + "The chore board's ✅ Mark Done only offers recurring chores, so tasks "
-        + "can still be added with /todo but only ticked off here on the dashboard.",
-    },
-    {
-      kind: "chores",
-      stateKey: "choreBoard",
-      selector: "[data-chore-board-body]",
-      pickerLabel: "Chore Board Channel",
-      postLabel: "Post Chore Board",
-      moveLabel: "Move / Repost Chore Board",
-      removeLabel: "Remove Chore Board",
-      removeTitle: "Remove the chore board?",
-      removeBody:
-        "The chore board message will be deleted from its channel. The chores themselves are untouched.",
-      postedToast: "Chore board posted.",
-      removedToast: "Chore board removed.",
-      lockedHint: "Only administrators can post or move the chore board.",
-      jumpLabel: "jump to the chore board ↗",
-      // Nothing is lost by leaving this one unposted: every chore it shows is
-      // also on the all-todos board while it is outstanding, and completable
-      // there. So it gets a plain "not posted", not a warning.
-      unpostedWarning: "",
+        "Not posted — nothing can be ticked off from Discord. Tasks can still be "
+        + "added with /todo, but completing one means coming back to the dashboard.",
     },
   ].map((card) => ({ ...card, body: container.querySelector(card.selector) }));
 
@@ -488,7 +457,7 @@ export function mount(container, initialParams = {}) {
       btn.disabled = true;
       try {
         const res = await apiPut(
-          "/api/todos/board", { channel_id: channelId, kind: card.kind });
+          "/api/todos/board", { channel_id: channelId });
         toast(remove ? card.removedToast : card.postedToast, "success");
         // Posted, but another sticky panel already holds that channel's bottom.
         if (res && res.warning) toast(res.warning, "info");
@@ -669,7 +638,6 @@ export function mount(container, initialParams = {}) {
       const data = await api("/api/todos");
       state.todos = data.todos || [];
       state.board = data.board || null;
-      state.choreBoard = data.chore_board || null;
       state.canManageBoard = !!data.can_manage_board;
       renderStats();
       render();
