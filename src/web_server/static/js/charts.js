@@ -10,26 +10,53 @@
 //   CHART_TEXT    — axis/legend/label text color
 //   CHART_GRID    — gridline/border/wick color
 
+// The categorical series palette. Every value here was chosen by running the
+// six-check validator against the dark chart surface (#2b2d31), not by eye —
+// see tests/web/test_chart_palette.py, which re-runs those checks in CI.
+//
+// The palette it replaced was all warm: gold 85.6°, amber 81.2°, moss 118.7°,
+// clay 30.1° — four of six hues inside a 90° wedge. Two of them, moss and
+// amber, measured ΔE 1.8 under protanopia and 8.7 with NORMAL vision, against
+// a floor of 15. They were indistinguishable to everyone and identical to a
+// red-blind viewer, and the Activity chart stacked them adjacently.
+//
+// An all-warm palette cannot separate six series; that is arithmetic, not
+// taste. These keep an earthy, desaturated feel (chroma capped at 0.115) and
+// lead with amber so a single-series chart still reads as the brand, but the
+// hues are spread around the wheel because they have to be.
 export const ROLE_COLORS = [
-  "#E6B84C", // poppy gold
-  "#B36A92", // warm mauve
-  "#7F8F3A", // golden moss
-  "#9E3B2E", // clay red
-  "#B88A2C", // shadow amber
-  "#949ba4", // muted
+  "#B58030", // amber
+  "#4A7023", // moss
+  "#00A29C", // teal
+  "#2167A1", // slate
+  "#9D79C3", // orchid
+  "#97435C", // wine
 ];
 
+// A 7th series is NOT a generated or recycled hue — past six, adjacent classes
+// blur no matter what you pick. Callers with more series fold the tail into
+// "Other", facet into small multiples, or switch to a table.
+export const SERIES_OVERFLOW = "#6b7076";
+
+/** Colour for series `i`, or the overflow neutral once the palette runs out. */
+export function seriesColor(i) {
+  return ROLE_COLORS[i] || SERIES_OVERFLOW;
+}
+
 export const GENDER_COLORS = {
-  male:      "#E6B84C",
-  female:    "#B36A92",
-  nonbinary: "#7F8F3A",
-  unknown:   "#949ba4",
+  male:      "#B58030",
+  female:    "#9D79C3",
+  nonbinary: "#00A29C",
+  unknown:   "#6b7076",
 };
 
 export const CHART_BAR    = "#E6B84C";
 export const CHART_ACCENT = "#B36A92";
 export const CHART_TEXT   = "#dbdee1";
 export const CHART_GRID   = "#3f4147";
+// --bg-alt: the card a chart sits on. Painted between stacked segments to
+// read as a 2px gap rather than a border.
+export const CHART_SURFACE = "#2b2d31";
 
 const BAR     = CHART_BAR;
 const ACCENT  = CHART_ACCENT;
@@ -38,7 +65,10 @@ const GRID    = CHART_GRID;
 
 Chart.defaults.color = TEXT;
 Chart.defaults.borderColor = GRID;
-Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+// Canvas cannot read a CSS custom property, so the dashboard's body face is
+// restated here. Without this every chart label was in the system font while
+// the page around it was in Public Sans.
+Chart.defaults.font.family = '"Public Sans", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif';
 
 // Keep the x-axis minimum pinned to the original (labeled) edge when zooming,
 // instead of letting the zoom plugin center the visible range on the cursor.
@@ -134,8 +164,10 @@ export function makeLineChart(canvas, { labels, series, title }) {
   const datasets = series.map((s, i) => ({
     label: s.role || s.gender || s.label,
     data: s.counts,
-    borderColor: s.color || ROLE_COLORS[i % ROLE_COLORS.length],
-    backgroundColor: (s.color || ROLE_COLORS[i % ROLE_COLORS.length]) + "33",
+    // seriesColor, not `i % length`: cycling silently gives series 7 the same
+    // hue as series 1, so two different things share an identity.
+    borderColor: s.color || seriesColor(i),
+    backgroundColor: (s.color || seriesColor(i)) + "33",
     borderWidth: 2,
     pointRadius: 3,
     pointHoverRadius: 5,
@@ -377,4 +409,131 @@ export function makeCandlestickChart(canvas, { buckets, title, noZoom: _noZoom }
   });
   addResetZoom(chart);
   return chart;
+}
+
+
+// ── HTML legend + table view ────────────────────────────────────────────
+//
+// Chart.js's own legend is drawn onto the canvas: bordered boxes in the canvas
+// font, unselectable and invisible to assistive tech. These build the same
+// information in HTML — thin pill marks, the page's type, real buttons — and
+// the table is the relief that the three sub-3:1 palette slots oblige.
+
+const _fmt = (n) =>
+  n === null || n === undefined || Number.isNaN(n)
+    ? "—"
+    : (Math.abs(n) >= 1000 ? Math.round(n).toLocaleString() : String(Math.round(n * 10) / 10));
+
+/**
+ * Render an HTML legend for `chart` into `host`, one entry per dataset, each
+ * showing the series total. Clicking an entry toggles that series.
+ * Returns a `refresh()` that re-reads the chart, for when data changes.
+ */
+export function renderChartLegend(host, chart) {
+  if (!host) return { refresh() {} };
+
+  function total(ds) {
+    return (ds.data || []).reduce((a, v) => a + (Number.isFinite(v) ? v : 0), 0);
+  }
+
+  function paint() {
+    host.className = "chart-legend";
+    host.replaceChildren();
+    chart.data.datasets.forEach((ds, i) => {
+      const visible = chart.isDatasetVisible(i);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chart-legend__item";
+      btn.setAttribute("aria-pressed", String(visible));
+
+      const swatch = document.createElement("span");
+      swatch.className = "chart-legend__swatch";
+      // A line series carries its identity in borderColor, a bar in background.
+      swatch.style.background =
+        (typeof ds.backgroundColor === "string" && ds.backgroundColor !== "transparent"
+          ? ds.backgroundColor
+          : ds.borderColor) || SERIES_OVERFLOW;
+      btn.appendChild(swatch);
+
+      const label = document.createElement("span");
+      label.className = "chart-legend__label";
+      label.textContent = ds.label || `Series ${i + 1}`;
+      btn.appendChild(label);
+
+      const value = document.createElement("span");
+      value.className = "chart-legend__value";
+      value.textContent = _fmt(total(ds));
+      btn.appendChild(value);
+
+      btn.addEventListener("click", () => {
+        chart.setDatasetVisibility(i, !chart.isDatasetVisible(i));
+        chart.update();
+        paint();
+      });
+      host.appendChild(btn);
+    });
+  }
+
+  paint();
+  return { refresh: paint };
+}
+
+/**
+ * A "Show the numbers" disclosure holding every plotted value as a real table.
+ * Tooltips enhance; they must never be the only way to read a value, and three
+ * of the palette's slots are below 3:1 against the surface, which obliges this.
+ */
+export function renderChartTable(host, { labels, datasets, indexLabel = "Period" }) {
+  if (!host) return;
+  host.replaceChildren();
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "chart-table-toggle";
+  const wrap = document.createElement("div");
+  wrap.className = "chart-table-wrap";
+  wrap.hidden = true;
+
+  const setLabel = () => {
+    toggle.textContent = wrap.hidden ? "Show the numbers" : "Hide the numbers";
+    toggle.setAttribute("aria-expanded", String(!wrap.hidden));
+  };
+  toggle.addEventListener("click", () => {
+    wrap.hidden = !wrap.hidden;
+    setLabel();
+  });
+  setLabel();
+
+  const table = document.createElement("table");
+  table.className = "chart-table";
+  const thead = document.createElement("thead");
+  const hrow = document.createElement("tr");
+  for (const text of [indexLabel, ...datasets.map((d) => d.label || "Series")]) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = text;
+    hrow.appendChild(th);
+  }
+  thead.appendChild(hrow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  labels.forEach((lab, r) => {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th");
+    th.scope = "row";
+    th.textContent = lab;
+    tr.appendChild(th);
+    for (const ds of datasets) {
+      const td = document.createElement("td");
+      td.textContent = _fmt(ds.data ? ds.data[r] : null);
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+
+  host.appendChild(toggle);
+  host.appendChild(wrap);
 }
