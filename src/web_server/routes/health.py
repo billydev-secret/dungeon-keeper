@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from functools import partial
-from typing import Any, Callable, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -18,7 +18,6 @@ from bot_modules.services.channel_rollup import build_resolver, guild_channel_id
 from bot_modules.services.health_metrics import (
     compute_channel_health,
     compute_cohort_retention,
-    compute_composite_health,
     compute_dau_mau,
     compute_gini,
     compute_heatmap,
@@ -538,87 +537,6 @@ async def health_tiles(
                         "latest_cohort_size": cached["latest_cohort_size"],
                     }
 
-
-                if _want("composite"):
-                    # Composite depends on other tiles being cached — compute
-                    # any missing dependencies first so get_cached finds them.
-                    # The trailing bool is "this dep is built from the live
-                    # member list", i.e. it must not be cached while degraded.
-                    composite_deps: list[
-                        tuple[str, Callable[..., Any], dict[str, Any], bool]
-                    ] = [
-                        (
-                            "dau_mau",
-                            compute_dau_mau,
-                            {
-                                "member_count": extras["member_count"],
-                                "voice_active_count": extras["voice_active"],
-                                "include_bots": include_bots,
-                            },
-                            False,
-                        ),
-                        ("gini", compute_gini, {"include_bots": include_bots}, False),
-                        (
-                            "social_graph",
-                            compute_social_graph,
-                            {"nsfw_channel_ids": extras["nsfw_ids"]},
-                            False,
-                        ),
-                        (
-                            "sentiment",
-                            compute_sentiment,
-                            {"include_bots": include_bots},
-                            False,
-                        ),
-                        (
-                            "cohort_retention",
-                            compute_cohort_retention,
-                            {
-                                "join_times": extras["recent_joins"],
-                                "include_bots": include_bots,
-                            },
-                            True,
-                        ),
-                        (
-                            "heatmap",
-                            compute_heatmap,
-                            {"include_bots": include_bots},
-                            False,
-                        ),
-                    ]
-                    dep_payloads: dict[str, Any] = {}
-                    for dep_key, dep_fn, dep_kw, needs_guild in composite_deps:
-                        dep_payloads[dep_key] = get_cached(conn, guild_id, ck(dep_key))
-                        if dep_payloads[dep_key] is None:
-                            dep_result = dep_fn(conn, guild_id, **dep_kw)
-                            _cache_unless_degraded(
-                                conn,
-                                guild_id,
-                                ck(dep_key),
-                                dep_result,
-                                degraded=needs_guild and extras["degraded"],
-                            )
-                            dep_payloads[dep_key] = dep_result
-
-                    # Read the payloads collected above, not the cache: a
-                    # degraded dep is deliberately absent from the cache, and
-                    # re-reading would hand ``None`` to the composite.
-                    composite = compute_composite_health(
-                        conn,
-                        guild_id,
-                        dau_mau_data=dep_payloads["dau_mau"],
-                        gini_data=dep_payloads["gini"],
-                        social_data=dep_payloads["social_graph"],
-                        sentiment_data=dep_payloads["sentiment"],
-                        retention_data=dep_payloads["cohort_retention"],
-                        heatmap_data=dep_payloads["heatmap"],
-                    )
-                    tiles["composite"] = {
-                        "score": composite["score"],
-                        "badge": composite["badge"],
-                        "dimensions": composite["dimensions"],
-                    }
-
             # Resolve names for channel health top5 + sentiment feed
             ch_ids = set()
             for tile_key in ("channel_health",):
@@ -1068,65 +986,5 @@ async def health_mod_engagement(
             for m in data["mods"]:
                 m["user_name"] = names.get(int(m["user_id"]), "")
             return data
-
-    return await run_query(_q)
-
-
-@router.get("/health/composite-score")
-async def health_composite_score(
-    request: Request,
-    include_bots: bool = Query(False),
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-    extras = _guild_extras(ctx, guild)
-    ck = partial(cache_key, include_bots=include_bots)
-
-    def _q():
-        with ctx.open_db() as conn:
-            dau_data = get_cached(conn, guild_id, ck("dau_mau")) or compute_dau_mau(
-                conn,
-                guild_id,
-                member_count=extras["member_count"],
-                voice_active_count=extras["voice_active"],
-                include_bots=include_bots,
-            )
-            gini_data = get_cached(conn, guild_id, ck("gini")) or compute_gini(
-                conn, guild_id, include_bots=include_bots
-            )
-            social_data = get_cached(
-                conn, guild_id, ck("social_graph")
-            ) or compute_social_graph(
-                conn,
-                guild_id,
-                nsfw_channel_ids=extras["nsfw_ids"],
-            )
-            sentiment_data = get_cached(
-                conn, guild_id, ck("sentiment")
-            ) or compute_sentiment(conn, guild_id, include_bots=include_bots)
-            retention_data = get_cached(
-                conn, guild_id, ck("cohort_retention")
-            ) or compute_cohort_retention(
-                conn,
-                guild_id,
-                join_times=extras["recent_joins"],
-                include_bots=include_bots,
-            )
-            heatmap_data = get_cached(conn, guild_id, ck("heatmap")) or compute_heatmap(
-                conn, guild_id, include_bots=include_bots
-            )
-            return compute_composite_health(
-                conn,
-                guild_id,
-                dau_mau_data=dau_data,
-                gini_data=gini_data,
-                social_data=social_data,
-                sentiment_data=sentiment_data,
-                retention_data=retention_data,
-                heatmap_data=heatmap_data,
-            )
 
     return await run_query(_q)

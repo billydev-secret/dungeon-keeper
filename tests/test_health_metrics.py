@@ -935,49 +935,6 @@ def test_compute_mod_workload_excludes_voice_master_self_service(db_conn):
     assert not any(t["action"].startswith("vm_") for t in out["action_types"])
 
 
-# ── compute_composite_health ─────────────────────────────────────────
-
-
-def test_compute_composite_health_perfect_inputs():
-    out = hm.compute_composite_health(
-        None,  # type: ignore[arg-type]
-        GUILD,
-        dau_mau_data={"dau_mau": 40},
-        gini_data={"gini": 0.3},
-        social_data={"clustering_coefficient": 0.5},
-        sentiment_data={"avg_sentiment": 0.5},
-        retention_data={"d7": 80},
-        heatmap_data={"dead_hours": 0},
-    )
-    assert out["score"] >= 80
-    assert out["badge"] == "excellent"
-
-
-def test_compute_composite_health_all_defaults_low():
-    out = hm.compute_composite_health(None, GUILD)  # type: ignore[arg-type]
-    # With nothing provided, distribution & engagement & retention & sentiment all stuck at floor
-    assert out["score"] >= 0
-    assert "dimensions" in out and len(out["dimensions"]) == 6
-
-
-def test_compute_composite_health_recommendations_show_weakest():
-    out = hm.compute_composite_health(
-        None,  # type: ignore[arg-type]
-        GUILD,
-        dau_mau_data={"dau_mau": 0},
-        gini_data={"gini": 0.99},
-        social_data={"clustering_coefficient": 0.0},
-        sentiment_data={"avg_sentiment": -0.5},
-        retention_data={"d7": 0},
-        heatmap_data={"dead_hours": 168},
-    )
-    # Three weakest recommended actions surfaced
-    assert len(out["recommendations"]) == 3
-    # Each carries an estimated_impact ≥ 0
-    for rec in out["recommendations"]:
-        assert rec["estimated_impact"] >= 0
-
-
 # ── compute_mod_engagement ───────────────────────────────────────────
 
 

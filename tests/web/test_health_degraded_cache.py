@@ -192,18 +192,6 @@ def test_tiles_do_not_cache_guild_derived_metrics_while_degraded(
     assert tile in _cache_keys(fake_ctx)
 
 
-def test_composite_tile_does_not_cache_its_guild_derived_dependency(
-    open_client, fake_ctx
-):
-    """The composite pre-warms its deps; the guild-derived one must be exempt."""
-    body = open_client.get("/api/health/tiles?tiles=composite").json()
-    assert "composite" in body["tiles"]  # still answered
-    keys = _cache_keys(fake_ctx)
-    assert "cohort_retention" not in keys
-    # ...but the deps that read only the DB are cached as before.
-    assert {"gini", "heatmap", "sentiment"} <= keys
-
-
 # ── scope: DB-only metrics are unaffected ────────────────────────────────
 
 

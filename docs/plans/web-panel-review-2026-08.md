@@ -62,7 +62,7 @@ moving, check whether the Bank panel still needs its `[data-sec='community']`
 wrapper and the `members` argument, and whether the settle handler still needs
 `refreshLedger` once it lives on another page.
 
-## Stage 3 — ☐ Drop the Health Score page
+## Stage 3 — ☑ Drop the Health Score page
 
 **DECIDED: remove it.** The composite score's whole surface:
 

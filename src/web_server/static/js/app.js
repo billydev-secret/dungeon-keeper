@@ -53,7 +53,6 @@ const SECTIONS = [
       ]},
       { heading: "General", items: [
         { id: "health-heatmap",         label: "Activity Heatmap",   module: "./panels/health-heatmap.js" },
-        { id: "health-composite-score", label: "Health Score",       module: "./panels/health-composite-score.js", keywords: "overview composite" },
         { id: "activity",             label: "Activity",             module: "./panels/activity.js" },
         { id: "channels",             label: "Channels",             module: "./panels/channels.js", keywords: "channel health comparison staleness" },
       ]},
