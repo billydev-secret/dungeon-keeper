@@ -2888,10 +2888,35 @@ class EconomyCog(commands.Cog):
             granted = await self._grant_item_role(
                 guild, user_id, int(outcome.grant_role_id)
             )
+        if outcome.todo_id:
+            await self._repaint_todo_board(guild.id)
 
         await interaction.response.send_message(
             _item_bought_text(settings, outcome, granted=granted), ephemeral=True
         )
+
+    async def _repaint_todo_board(self, guild_id: int) -> None:
+        """Tell the mods' board a new order just landed on it.
+
+        Every other path that adds a todo repaints — ``/todo``, the board's own
+        Add button, the dashboard — and the 60s loop is NOT a backstop here: it
+        only repaints guilds where a recurring chore spawned or was written
+        off. Without this a bought order stayed invisible in Discord until
+        somebody happened to chat in the board's channel. Best effort: the
+        purchase is already committed, so a Discord hiccup must not surface as
+        a failed buy.
+        """
+        cog = self.bot.get_cog("TodoCog")
+        refresh = getattr(cog, "refresh_board", None)
+        if refresh is None:
+            return
+        try:
+            await refresh(guild_id)
+        except Exception:  # pragma: no cover - defensive
+            log.warning(
+                "Economy: failed to repaint the todo board for %s after a "
+                "shop-item order.", guild_id,
+            )
 
     async def _grant_item_role(
         self, guild: discord.Guild, user_id: int, role_id: int

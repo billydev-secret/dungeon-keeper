@@ -658,3 +658,39 @@ def test_purging_the_buyer_leaves_the_board_row_anonymous(conn):
     econ_purge_user(conn, GUILD, USER)
     # The order closed as missed, so it leaves the pending list entirely.
     assert all(r["id"] != out.todo_id for r in pending_todos(conn, GUILD))
+
+
+# ── the sweep has to actually be wired to something ──────────────────
+
+
+def test_the_expiry_sweep_is_reachable_from_the_economy_loop():
+    """`expire_orders` refunds orders staff never got to. It shipped with
+    nothing calling it, so the fourteen-day promise in the manual was a
+    no-op — a member's escrow could sit forever."""
+    import inspect
+
+    from bot_modules.services import economy_loop
+
+    source = inspect.getsource(economy_loop)
+    assert "expire_orders" in source
+
+
+def test_the_loop_sweep_refunds_a_stale_order(conn):
+    """The daily tick's half of the fourteen-day promise."""
+    from bot_modules.core.db_utils import set_config_value
+    from bot_modules.services.economy_loop import run_shop_order_expiry
+
+    set_config_value(conn, "econ_enabled", "1", GUILD)
+    _fund(conn, 500)
+    out = purchase(conn, SETTINGS, GUILD, USER, _item(conn), now=NOW)
+    assert run_shop_order_expiry(conn, GUILD, NOW + 15 * DAY) == [out.purchase_id]
+    assert get_balance(conn, GUILD, USER) == 500
+
+
+def test_the_loop_sweep_is_silent_while_the_economy_is_off(conn):
+    """A disabled economy bills nothing, so it refunds nothing either."""
+    from bot_modules.services.economy_loop import run_shop_order_expiry
+
+    _fund(conn, 500)
+    purchase(conn, SETTINGS, GUILD, USER, _item(conn), now=NOW)
+    assert run_shop_order_expiry(conn, GUILD, NOW + 15 * DAY) == []
