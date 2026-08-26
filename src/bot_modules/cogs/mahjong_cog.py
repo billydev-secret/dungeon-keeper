@@ -34,6 +34,7 @@ from bot_modules.core.utils import has_mod_or_admin_permissions
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.games.mahjong import embeds as mj_embeds
 from bot_modules.games.mahjong.bot_logic import bot_name, is_bot_id
+from bot_modules.games.mahjong.tiles import FULL_RANK
 from bot_modules.games.mahjong import match_logic as mj_match
 from bot_modules.games.mahjong import views as mj_views
 from bot_modules.games.mahjong.game_logic import (
@@ -420,13 +421,15 @@ class MahjongCog(commands.Cog):
             "Table size?",
             view=mj_views.CreateTableView(
                 self, settings.stakes_allowed, escrow_for,
+                short_rank=settings.short_deck_rank,
                 practice_open=settings.practice_bots,
             ),
             ephemeral=True,
         )
 
     async def handle_create_open(
-        self, interaction: discord.Interaction, seat_count: int, stake: int
+        self, interaction: discord.Interaction, seat_count: int, stake: int,
+        max_rank: int = FULL_RANK,
     ) -> None:
         guild = interaction.guild
         assert guild is not None and interaction.channel_id is not None
@@ -442,7 +445,7 @@ class MahjongCog(commands.Cog):
         try:
             table_id = await self.service.create_table(
                 guild.id, interaction.channel_id, interaction.user.id,
-                seat_count, stake,
+                seat_count, stake, max_rank=max_rank,
             )
         except (TableError, ActionRejected) as e:
             await interaction.followup.send(self._dress(str(e)), ephemeral=True)

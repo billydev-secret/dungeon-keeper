@@ -36,14 +36,19 @@ from bot_modules.core.db_utils import get_config_value, open_db
 from bot_modules.games.mahjong import game_logic as engine
 from bot_modules.games.mahjong.bot_logic import bot_member_id, decide, is_bot_id
 from bot_modules.games.mahjong.game_logic import ASSIST_MODES
-from bot_modules.games.mahjong.card_logic import Card, CardError, load_card
+from bot_modules.games.mahjong.card_logic import (
+    Card,
+    CardError,
+    lines_needing_more_rank,
+    load_card,
+)
 from bot_modules.games.mahjong.game_logic import (
     ActionRejected,
     GameState,
     Phase,
     TableConfig,
 )
-from bot_modules.games.mahjong.tiles import shuffled_wall
+from bot_modules.games.mahjong.tiles import FULL_RANK, MIN_RANK, shuffled_wall
 from bot_modules.services import economy_wager_service as wager_svc
 from bot_modules.services.economy_service import (
     apply_credit,
@@ -67,6 +72,10 @@ BOT_DELAY = (1.5, 4.0)
 #: the beat in which a discard is read, and collapsing it would make tiles
 #: flash past unseen.
 ANSWERED_WINDOW = 1.5
+
+#: A quick (short-deck) table needs at least this many of the card's lines
+#: to still be reachable, or there is nothing to play for.
+MIN_PLAYABLE_LINES = 5
 
 #: Lobby that never fills / settle screen nobody rematches: dissolve (§6.2).
 LOBBY_LIFETIME = 600.0
@@ -94,9 +103,20 @@ class MahjongSettings:
     assist_default: str = "gap"  # house default for members with no pick (A8)
     practice_bots: bool = True   # solo practice tables (bots plan B7)
     fill_bots: bool = False      # house-staked fill seats — off until proven
+    #: Rank ceiling for "quick" tables, or 0 for none. A shorter deck is the
+    #: length dial: measured at 1,000 games per arm, 152 tiles runs ~72 turns
+    #: and 104 (ranks 1-5) ~35, with the win rate unmoved at ~93%. Off by
+    #: default — the full game stays what the server plays unless an admin
+    #: opens the option.
+    short_deck_rank: int = 0
 
     def claim_window(self, seat_count: int) -> float:
         return self.claim_window_2 if seat_count == 2 else self.claim_window_4
+
+
+def _short_rank(raw: int) -> int:
+    """0 (off) or a ceiling the engine will accept; anything else is off."""
+    return raw if MIN_RANK <= raw < FULL_RANK else 0
 
 
 def load_settings(conn, guild_id: int) -> MahjongSettings:
@@ -135,6 +155,7 @@ def load_settings(conn, guild_id: int) -> MahjongSettings:
             conn, "mahjong_practice_bots", "1", guild_id) == "1",
         fill_bots=get_config_value(
             conn, "mahjong_fill_bots", "0", guild_id) == "1",
+        short_deck_rank=_short_rank(_i("short_deck_rank", 0)),
     )
 
 
@@ -321,6 +342,7 @@ class MahjongService:
     async def create_table(
         self, guild_id: int, channel_id: int, host_id: int,
         seat_count: int, stake: int, *, practice: bool = False,
+        max_rank: int = FULL_RANK,
     ) -> int:
         """Open a lobby: validate the stake, hold the host's escrow, insert
         the table + seat rows. Raises TableError with the house ❌ copy.
@@ -347,12 +369,26 @@ class MahjongService:
                 if active is None:
                     raise TableError("No Meadow Card is active — an admin sets one on the dashboard.")
                 card_row_id, card = active
+                if max_rank != FULL_RANK:
+                    if settings.short_deck_rank != max_rank:
+                        raise TableError("Quick tables aren't open on this server.")
+                    # A short deck turns some lines into dead ink — a run
+                    # needs room for its whole span. A handful is expected;
+                    # a card that mostly needs the high numbers would leave
+                    # the table with almost nothing to play for.
+                    dead = lines_needing_more_rank(card, max_rank)
+                    if len(card.hands) - len(dead) < MIN_PLAYABLE_LINES:
+                        raise TableError(
+                            "The active card doesn't have enough hands that "
+                            "fit a quick deck — an admin can pick another."
+                        )
                 now = time.time()
                 config = TableConfig(
                     seat_count=seat_count,
                     wall_trim=settings.duel_wall_trim if seat_count == 2 else 0,
                     second_charleston=settings.second_charleston,
                     wall_jokers=settings.wall_jokers,
+                    max_rank=max_rank,
                 )
                 state = engine.create_table(config, host_id)
                 try:

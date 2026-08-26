@@ -15,7 +15,7 @@ import discord
 
 from bot_modules.games.mahjong.card_logic import Card
 from bot_modules.games.mahjong.game_logic import AssistReadout, GameState, Outcome, Phase
-from bot_modules.games.mahjong.tiles import Tile, sort_rack
+from bot_modules.games.mahjong.tiles import FULL_RANK, Tile, sort_rack
 from bot_modules.games.mahjong.tile_render import back_str, chip, rack_str, tile_str
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR
 from bot_modules.services.embeds import COLOR_GREEN
@@ -98,6 +98,11 @@ def build_table_panel(
 ) -> discord.Embed:
     accent = accent or DEFAULT_ACCENT_COLOR
     mode = MODE_NAMES.get(state.seat_count, str(state.seat_count))
+    # A short deck has to be on the card itself. Players notice missing
+    # numbers within a turn or two, and discovering it mid-hand reads as a
+    # bug rather than the option the host chose.
+    if state.config.max_rank != FULL_RANK:
+        mode = f"Quick {mode} · 1–{state.config.max_rank}"
     e = discord.Embed(
         title=(f"Practice Table — {mode}" if practice
                else f"Mahjong Table — {mode}"),

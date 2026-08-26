@@ -254,6 +254,67 @@ async def test_wall_game_refunds_and_records(service, db):
         assert result["kind"] == "wall_game" and result["winner_id"] is None
 
 
+# ── Quick tables (short deck) ────────────────────────────────────────────────
+
+
+async def test_a_quick_table_is_refused_unless_the_house_opened_it(service, db):
+    with pytest.raises(TableError, match="Quick tables aren't open"):
+        await service.create_table(GUILD, CHANNEL, HOST, 2, 1, max_rank=5)
+
+
+async def test_a_quick_table_deals_a_short_deck(service, db):
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_short_deck_rank", "5", GUILD)
+    table_id = await service.create_table(GUILD, CHANNEL, HOST, 2, 1, max_rank=5)
+    await service.join_table(table_id, GUEST)
+    await service.timeout(table_id)  # deal
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT state FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+    state = engine.state_from_dict(json.loads(row["state"]))
+    assert state.config.max_rank == 5
+    seen = [t for s in state.seats for t in s.rack] + state.wall
+    assert seen and all(
+        not t.is_suited or (t.rank or 0) <= 5 for t in seen
+    ), "a tile above the ceiling reached the table"
+
+
+async def test_a_full_table_is_unaffected(service, db):
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_short_deck_rank", "5", GUILD)
+    table_id = await service.create_table(GUILD, CHANNEL, HOST, 2, 1)
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT state FROM mahjong_tables WHERE id = ?", (table_id,)
+        ).fetchone()
+    assert engine.state_from_dict(json.loads(row["state"])).config.max_rank == 9
+
+
+async def test_a_card_with_too_few_short_deck_lines_is_refused(service, db):
+    """A run needs room for its whole span, so a short deck turns some lines
+    into dead ink. A handful is expected; a card that mostly needs the high
+    numbers would leave the table with nothing to play for."""
+    high = {
+        "card_id": "high-only", "display_name": "High Only", "season": "t",
+        "hands": [
+            {"id": f"h{i}", "section": "S", "name": f"L{i}", "concealed": False,
+             "value": 25,
+             "groups": [{"count": 4, "rank": "9", "suit": "a"},
+                        {"count": 4, "rank": "8", "suit": "a"},
+                        {"count": 3, "rank": str(7 - i), "suit": "b"},
+                        {"count": 3, "rank": "F"}]}
+            for i in range(3)
+        ],
+    }
+    with open_db(db) as conn:
+        set_config_value(conn, "mahjong_short_deck_rank", "5", GUILD)
+        row_id = save_card(conn, GUILD, high, uploaded_by=None)
+        set_card_status(conn, GUILD, row_id, "active")
+    with pytest.raises(TableError, match="quick deck"):
+        await service.create_table(GUILD, CHANNEL, HOST, 2, 1, max_rank=5)
+
+
 # ── Claim windows nobody can answer ──────────────────────────────────────────
 
 

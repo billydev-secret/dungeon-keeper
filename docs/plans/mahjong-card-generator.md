@@ -469,7 +469,18 @@ is the flexibility-competition effect (rank-variable runs outdraw
 1-instantiation honours lines for attention), and it is a card-composition
 problem for stage 4's section weighting, not a deck one.
 
-**Built 2026-08-25 (engine half).** `TableConfig.max_rank` (5–9, default 9),
+**Built 2026-08-25.** Engine: `TableConfig.max_rank` (5–9, default 9), a
+deck that trims to it, `copies_in_play` returning **zero** for absent tiles,
+`_bindings` refusing runs past the ceiling, the ceiling threaded from
+`state.config` to the assist engine and the bots, and `deal()` refusing a
+wall that does not match the table. Surface: `mahjong_short_deck_rank` on
+the dashboard (off by default, 1–6 or 1–5), Quick Duel / Quick Table buttons
+in the create flow when the house opens it, the table card labelled *Quick ·
+1–N* so nobody discovers a short deck mid-hand, and a refusal at table
+creation when the active card has fewer than five lines that fit.
+`card_logic.lines_needing_more_rank` is what that check reads.
+
+**Superseded note (engine half).** `TableConfig.max_rank` (5–9, default 9),
 a deck that trims to it, `copies_in_play` returning **zero** for a tile the
 table does not contain, `_bindings` refusing to propose a run past the
 ceiling, and the ceiling threaded from `state.config` through
