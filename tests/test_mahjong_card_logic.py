@@ -474,6 +474,102 @@ def test_no_false_duplicate_between_concrete_and_var():
     assert not any("near-duplicates" in w for w in report.warnings)
 
 
+# ── Difficulty (stage 4 of plans/mahjong-card-generator.md) ──────────────────
+
+
+def test_the_long_shot_threshold_still_separates_first_light():
+    """**Calibration lock.** These six lines are exactly the ones that scored
+    at or above the threshold when it was fitted, and across two cards the
+    lines above it took 295 opening picks in simulation for zero wins.
+
+    If a weight or the threshold changes, this fails — which is the point.
+    The number is not arbitrary and must not be re-tuned without re-running
+    `scripts/mahjong_sim.py` and checking the separation still holds.
+    """
+    card = load_first_light()
+    flagged = {h.id for h in card.hands if difficulty(h).long_shot}
+    assert flagged == {"qp-1", "qp-2", "qp-3", "eg-3", "ws-4", "sb-2"}
+
+
+def test_an_all_pairs_concealed_line_is_a_long_shot():
+    hand = load_card(card_dict([hand_dict(
+        [group(2, "1", "a"), group(2, "3", "a"), group(2, "5", "b"),
+         group(2, "7", "b"), group(2, "9", "c"), group(2, "R"), group(2, "G")],
+        concealed=True)])).hands[0]
+    d = difficulty(hand)
+    assert d.long_shot and d.band == "long shot"
+    assert "no group takes a joker" in d.reasons[0]
+
+
+def test_a_flower_heavy_kong_line_is_not():
+    hand = load_card(card_dict([hand_dict(
+        [group(4, "F"), group(4, "1", "a"), group(4, "2", "a"),
+         group(2, "3", "a")])])).hands[0]
+    assert not difficulty(hand).long_shot
+
+
+def test_quints_cost_more_than_kongs_because_jokers_are_finite():
+    """Nothing else in the score notices a group larger than its natural
+    supply, and a group of five cannot be built from naturals at all."""
+    kongs = load_card(card_dict([hand_dict(
+        [group(4, "1", "a"), group(4, "2", "a"), group(4, "3", "a"),
+         group(2, "F")])])).hands[0]
+    quints = load_card(card_dict([hand_dict(
+        [group(5, "1", "a"), group(5, "2", "a"), group(4, "3", "a")])])).hands[0]
+    assert difficulty(quints).score > difficulty(kongs).score
+    assert any("past the natural supply" in r for r in difficulty(quints).reasons)
+
+
+def test_flowers_do_not_count_as_forced_jokers_until_past_eight():
+    """Eight flowers exist, so six of them force nothing."""
+    hand = load_card(card_dict([hand_dict(
+        [group(6, "F"), group(4, "1", "a"), group(4, "2", "a")])])).hands[0]
+    assert not any("past the natural supply" in r for r in difficulty(hand).reasons)
+
+
+def test_a_rank_variable_makes_a_line_easier_than_its_concrete_twin():
+    concrete = load_card(card_dict([hand_dict(
+        [group(4, "1", "a"), group(4, "2", "a"), group(4, "3", "a"),
+         group(2, "F")])])).hands[0]
+    variable = load_card(card_dict([hand_dict(
+        [group(4, "x", "a"), group(4, "x+1", "a"), group(4, "x+2", "a"),
+         group(2, "F")])])).hands[0]
+    assert difficulty(variable).score < difficulty(concrete).score
+
+
+def test_reasons_lead_with_the_biggest_contributor():
+    hand = load_card(card_dict([hand_dict(
+        [group(2, "1", "a"), group(2, "3", "a"), group(2, "5", "b"),
+         group(2, "7", "b"), group(2, "9", "c"), group(2, "R"), group(2, "G")],
+        concealed=True)])).hands[0]
+    reasons = difficulty(hand).reasons
+    assert reasons and "joker" in reasons[0]
+
+
+def test_value_for_difficulty_spans_the_card_range_in_fives():
+    assert value_for_difficulty(-100) == VALUE_MIN
+    assert value_for_difficulty(0) == VALUE_MIN
+    assert value_for_difficulty(1000) == VALUE_MAX
+    for score in (0, 3.3, 7.5, 12, 18.6, 25, 40):
+        v = value_for_difficulty(score)
+        assert VALUE_MIN <= v <= VALUE_MAX and v % 5 == 0
+
+
+def test_value_for_difficulty_never_decreases_with_difficulty():
+    values = [value_for_difficulty(s) for s in range(-5, 40)]
+    assert values == sorted(values)
+
+
+def test_difficulty_profile_covers_every_line():
+    card = load_first_light()
+    profile = difficulty_profile(card)
+    assert set(profile) == {h.id for h in card.hands}
+
+
+def test_difficulty_is_pure():
+    hand = load_first_light().hands[0]
+    assert difficulty(hand) == difficulty(hand)
+
 def test_structural_problems_surface_through_lint_card_data():
     report = lint_card_data(card_dict([hand_dict([group(3, "K", "a")])]))
     assert any("unknown rank token" in e for e in report.errors)

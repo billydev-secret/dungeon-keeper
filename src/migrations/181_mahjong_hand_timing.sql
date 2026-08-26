@@ -1,4 +1,4 @@
--- 179_mahjong_hand_timing.sql
+-- 181_mahjong_hand_timing.sql
 -- Meadow Mahjong: how long a hand actually takes, on real tables.
 --
 -- Simulation says a wall game is exactly 100 discards and a winning hand

@@ -784,7 +784,7 @@ class MahjongService:
         now = time.time()
         # Duration and length, so the seconds-per-discard figure every
         # projected hand time rests on can be checked against real play.
-        # started_at is NULL for a hand dealt before migration 179 — readers
+        # started_at is NULL for a hand dealt before migration 181 — readers
         # must treat that as unknown, never as zero.
         started_at = row["hand_started_at"]
         cur = conn.execute(

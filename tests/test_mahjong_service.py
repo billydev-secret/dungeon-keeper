@@ -352,7 +352,7 @@ async def test_a_fully_answered_claim_window_gets_a_short_deadline(service, db):
     assert row["deadline_at"] - before < 6.0
 
 
-# ── Hand timing (migration 179) ──────────────────────────────────────────────
+# ── Hand timing (migration 181) ──────────────────────────────────────────────
 
 
 async def test_the_deal_is_stamped_on_the_table(service, db):

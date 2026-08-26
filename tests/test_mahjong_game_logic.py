@@ -2107,7 +2107,7 @@ def test_coach_suggestion_never_contradicts_the_ONE_shown_hand():
 
 def _claim_state(rack0: str, discard: str, rack1: str = "9c*12"):
     state = play_state(2, {0: rack0, 1: f"{rack1} {discard}"}, turn=1)
-    state, _ = G.discard(state, 1, Tile(discard))
+    state, _ = G.discard(state, 1, Tile(discard), CARD)
     assert state.phase is Phase.CLAIM_WINDOW
     return state
 
