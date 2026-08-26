@@ -2,8 +2,8 @@
 
 The weekly billing state machine's decision function plus the perk-entitlement
 and color-mode derivations. Everything is deterministic on its inputs so the
-billing matrix (state × due × grace-age × cancel × suspended) stays fully
-table-testable.
+billing matrix (state × due × grace-age × cancel × suspended × discontinued)
+stays fully table-testable.
 
 ``classify`` deliberately never returns ``ENTER_GRACE``: a due active rental
 returns ``CHARGE`` and the service downgrades to grace only when the debit
@@ -45,8 +45,8 @@ class BillingAction(Enum):
     """A billing decision (from ``classify``) or reported outcome.
 
     ``classify`` returns only NONE / CHARGE / RETRY / REVOKE /
-    CANCEL_PERIOD_END. ENTER_GRACE is reported by the service after a failed
-    debit — see the module docstring.
+    CANCEL_PERIOD_END / DISCONTINUED. ENTER_GRACE is reported by the service
+    after a failed debit — see the module docstring.
     """
 
     NONE = "none"
@@ -55,6 +55,13 @@ class BillingAction(Enum):
     RETRY = "retry"
     REVOKE = "revoke"
     CANCEL_PERIOD_END = "cancel_period_end"
+    #: The admin switched this perk off and the rental has reached its
+    #: anniversary. Ends it exactly like CANCEL_PERIOD_END — no charge, perk
+    #: revoked, the week they paid for honoured in full — but stays a separate
+    #: value because the two differ in who decided: a member cancelling their
+    #: own rental is told nothing (they already know), while someone whose perk
+    #: stopped being sold out from under them is owed a DM.
+    DISCONTINUED = "discontinued"
 
 
 def classify(
@@ -64,17 +71,30 @@ def classify(
     cancel_at_period_end: bool,
     suspended: bool,
     now: float,
+    perk_disabled: bool = False,
 ) -> BillingAction:
     """Decide what the billing loop should do with a rental *right now*.
 
     - Suspended (a required guild feature vanished): NONE — the billing clock
       is frozen; the service pushes ``next_bill_at`` forward on resume.
     - Active and past its anniversary: CANCEL_PERIOD_END if the owner asked to
-      cancel at period end, else CHARGE (the caller checks funds and downgrades
-      to grace on failure). Not yet due: NONE.
+      cancel at period end, DISCONTINUED if the guild stopped selling the perk,
+      else CHARGE (the caller checks funds and downgrades to grace on failure).
+      Not yet due: NONE.
     - Grace: RETRY while within the 36h window, REVOKE once it has elapsed
       (revoke fires exactly at 36h — ``>=`` GRACE_SECONDS).
     - lapsed / cancelled (terminal): NONE.
+
+    ``perk_disabled`` is read fresh from guild settings every tick and stored
+    nowhere, which is what makes an admin's checkbox reversible: a rental only
+    notices the perk is off at the moment it comes due, so re-checking the box
+    any time before someone's anniversary renews them as if nothing happened.
+    An own-cancel wins over it when both apply — the member asked first, and
+    reporting DISCONTINUED there would DM them about a decision they made.
+    A rental in grace is discontinued outright rather than retried: grace means
+    the anniversary passed and the debit failed, so no paid week is left to
+    honour, and a retry that succeeded would bill a fresh week for a perk that
+    is no longer sold.
     """
     if suspended:
         return BillingAction.NONE
@@ -83,8 +103,17 @@ def classify(
             return BillingAction.NONE
         if cancel_at_period_end:
             return BillingAction.CANCEL_PERIOD_END
+        if perk_disabled:
+            return BillingAction.DISCONTINUED
         return BillingAction.CHARGE
     if state == "grace":
+        if perk_disabled:
+            # End it rather than retry. Grace means the anniversary already
+            # passed and the debit FAILED, so there is no paid week left to
+            # honour — and a retry that succeeded would charge them a fresh
+            # week for a perk the server has stopped selling, which is the one
+            # thing this switch must never do.
+            return BillingAction.DISCONTINUED
         if grace_since is None:
             # Defensive: a grace row with no anchor can't age out — revoke it
             # rather than retry forever.
@@ -122,7 +151,11 @@ def entitled_perks(rentals: Iterable[Mapping[str, object] | object]) -> set[str]
 
 
 def comp_entitlements(
-    rented: set[str], *, is_staff: bool, comp_enabled: bool
+    rented: set[str],
+    *,
+    is_staff: bool,
+    comp_enabled: bool,
+    on_sale: Iterable[str] | None = None,
 ) -> set[str]:
     """Fold the staff comp into a member's rented entitlements.
 
@@ -136,9 +169,17 @@ def comp_entitlements(
     Union, not replacement: a mod who was already paying for a rental keeps
     that rental (we never cancel or refund it on their behalf), so their
     entitlement set is the same either way and cancelling stays their call.
+
+    ``on_sale`` narrows the comp to the perks the guild still sells: switching
+    a perk off has to take it off the staff too, or the one group who can see
+    the checkbox would be the one group it doesn't apply to. It never touches
+    ``rented`` — a mod who is genuinely paying for a discontinued perk keeps it
+    until their week runs out, exactly like everyone else. None means "no
+    restriction", for callers with no settings in hand.
     """
     if is_staff and comp_enabled:
-        return set(rented) | set(COMPED_PERKS)
+        comped = COMPED_PERKS if on_sale is None else COMPED_PERKS & set(on_sale)
+        return set(rented) | set(comped)
     return set(rented)
 
 

@@ -152,6 +152,19 @@ class EconomyConfigUpdate(BaseModel):
     price_role_gradient: int | None = Field(default=None, ge=0)
     price_role_holographic: int | None = Field(default=None, ge=0)
     price_voice_style: int | None = Field(default=None, ge=0)
+    # What the shop actually sells — one checkbox per line, Shop & Perks page.
+    # These are the only off switch (migration 182); a price of 0 is a price of
+    # zero and nothing more. Unchecking a line pulls it from the shop and the
+    # pickers, refuses new purchases and gifts, drops it from the staff comp,
+    # and lets any live rental run to its anniversary before it stops renewing.
+    shop_role_color_enabled: bool | None = None
+    shop_role_name_enabled: bool | None = None
+    shop_role_preset_enabled: bool | None = None
+    shop_role_gradient_enabled: bool | None = None
+    shop_role_holographic_enabled: bool | None = None
+    shop_role_icon_enabled: bool | None = None
+    shop_voice_style_enabled: bool | None = None
+    shop_streak_shield_enabled: bool | None = None
     mod_perk_comp: bool | None = None
     price_emoji: int | None = Field(default=None, ge=0)
     price_emoji_animated: int | None = Field(default=None, ge=0)

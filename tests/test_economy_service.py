@@ -1261,6 +1261,42 @@ def test_purchase_shield_refused_while_holding(db):
         assert get_balance(conn, GUILD, USER) == 100 - _shield_price()
 
 
+def test_purchase_shield_refused_when_the_guild_stopped_selling_it(db):
+    """The Shop & Perks checkbox, enforced where the money moves.
+
+    Hiding the shop row is not enough on its own — a stale embed left open in
+    someone's client still has a live 🛡️ button behind it.
+    """
+    from dataclasses import replace
+
+    off = replace(S, shop_streak_shield_enabled=False)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        with pytest.raises(ValueError, match="not for sale"):
+            purchase_streak_shield(conn, off, GUILD, USER)
+        # Refused before the slot claim and before any debit.
+        assert get_streak_shields(conn, GUILD, USER) == 0
+        assert get_balance(conn, GUILD, USER) == 100
+
+
+def test_a_held_shield_survives_the_guild_switching_it_off(db):
+    """Switching the line off stops sales; it doesn't confiscate stock.
+
+    The shield is a one-shot they already paid for, and burning it to save a
+    streak is the entire thing they bought.
+    """
+    from dataclasses import replace
+
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        purchase_streak_shield(conn, S, GUILD, USER)
+    off = replace(S, shop_streak_shield_enabled=False)
+    with open_db(db) as conn:
+        assert get_streak_shields(conn, GUILD, USER) == 1
+        # And they can still get their money back for it.
+        assert refund_streak_shield(conn, GUILD, USER, off) == S.price_streak_shield
+
+
 def test_purchase_shield_insufficient_leaves_no_claim(db):
     with open_db(db) as conn:
         apply_credit(conn, GUILD, USER, _shield_price() - 1, "grant")

@@ -39,10 +39,10 @@ const PRICE_FIELDS = [
     hint: "Weekly rent for naming their own role. 0 makes it free.",
   }],
   ["price_role_icon", "Custom Role Icon, Per Week", {
-    hint: "Weekly rent when a member uploads an icon of their own. The curated catalog icons on Shop &amp; Perks are priced one by one instead.",
+    hint: "Weekly rent when a member uploads an icon of their own. The curated catalog icons on Shop & Perks are priced one by one instead.",
   }],
   ["price_role_preset", "Palette Color, Per Week", {
-    hint: "Weekly rent for a color from your curated palette (set up on Shop &amp; Perks). Members pick a named gradient instead of choosing their own two colors, so price it below the Role Gradient. A palette color given its own price overrides this one. 0 makes it free.",
+    hint: "Weekly rent for a color from your curated palette (set up on Shop & Perks). Members pick a named gradient instead of choosing their own two colors, so price it below the Role Gradient. A palette color given its own price overrides this one. 0 makes it free.",
   }],
   ["price_role_gradient", "Role Gradient, Per Week", {
     hint: "Weekly rent for a two-color gradient a member picks themselves. Worth pricing above the curated Palette Color, since this is the same effect with a free choice of colors. 0 makes it free.",
@@ -51,7 +51,7 @@ const PRICE_FIELDS = [
     hint: "Discord's fixed holographic shimmer — a separate, pricier tier than the two-color gradient. There is nothing to pick; renting it is the whole perk. Your server needs Discord's enhanced role colors feature for it to show up at all.",
   }],
   ["price_voice_style", "Voice Room Lease, Per Week", {
-    hint: "Weekly rent for the Voice Control rename and user-limit controls. 0 (the default) leaves those controls free for everyone. Setting a price is what launches this as a paid perk, so tell members before you do.",
+    hint: "Weekly rent for the Voice Control rename and user-limit controls. Whether you sell this at all is the Voice Style checkbox on Shop & Perks — leave it unchecked and those controls stay free for everyone, which is how servers start out. Checking it is what launches this as a paid perk, so tell members before you do. A price of 0 with the box checked means members must still claim it from the shop, but it costs them nothing.",
   }],
 ];
 
@@ -66,7 +66,7 @@ const CONSUMABLE_FIELDS = [
     max: 100,
   }],
   ["price_streak_shield", "Streak Shield", {
-    hint: "A one-time buy that is spent automatically to rescue a login streak the free grace day cannot cover. A member can hold only one at a time. 0 removes it from the shop.",
+    hint: "A one-time buy that is spent automatically to rescue a login streak the free grace day cannot cover. A member can hold only one at a time. 0 makes it free; to stop selling it, uncheck Streak Shield on Shop & Perks. A shield someone already holds keeps working either way.",
   }],
   ["price_pin_of_day", "Pin of the Day", {
     hint: "What /bank pin costs. A member pays to pin a short message, a moderator approves it, and Dungeon Keeper pins a card for 24 hours before unpinning it again. 0 turns it off. It also needs a pin channel set on the Economy Settings page. Coins are taken when the request is sent and refunded if it is declined or expires unreviewed. This one is very public — tell members before switching it on.",
@@ -158,7 +158,24 @@ function fieldMax(opts) {
   return opts && opts.max != null ? opts.max : DEFAULT_MAX;
 }
 
-function numField(key, label, opts = {}, pricing) {
+/**
+ * The Shop & Perks checkbox governing this price, or null if it has none.
+ *
+ * Only the eight switchable shop lines have one, and their keys line up by
+ * construction (`price_role_icon` -> `shop_role_icon_enabled`). Anything else
+ * — rakes, sponsor prices, room prices — is priced but not switchable, and
+ * returns null so it renders exactly as before.
+ */
+function saleKeyFor(key) {
+  const SWITCHABLE = new Set([
+    "price_role_color", "price_role_name", "price_role_preset",
+    "price_role_gradient", "price_role_holographic", "price_role_icon",
+    "price_voice_style", "price_streak_shield",
+  ]);
+  return SWITCHABLE.has(key) ? `shop_${key.slice("price_".length)}_enabled` : null;
+}
+
+function numField(key, label, opts = {}, pricing, cfg) {
   const { hint } = opts;
   const hintHtml = hint ? `<div class="field-hint">${esc(hint)}</div>` : "";
   const suggested = pricing && pricing.hints ? pricing.hints[key] : null;
@@ -166,11 +183,21 @@ function numField(key, label, opts = {}, pricing) {
   const suggest = suggested != null
     ? `<div class="field-hint">Suggested: about ${suggested}, based on a median weekly income of ${median}.</div>`
     : "";
+  // A read-only echo of the Shop & Perks checkbox, never a second control:
+  // two places to switch one thing off is the ambiguity this feature removed.
+  // Without it, a price sitting here for something nobody can buy reads as a
+  // live setting, and the two pages quietly disagree.
+  const saleKey = saleKeyFor(key);
+  const offNote = saleKey && cfg && !cfg[saleKey]
+    ? `<div class="field-hint"><strong>Not on sale.</strong> Members can’t buy this —
+        turn it back on under What’s On Sale on <a href="#/economy-sinks">Shop &amp; Perks</a>.</div>`
+    : "";
   return `
     <div class="field">
       <label for="sink-${key}">${esc(label)}</label>
       <input type="number" name="${key}" id="sink-${key}" required
         min="0" max="${fieldMax(opts)}" step="1" style="max-width:140px;" />
+      ${offNote}
       ${hintHtml}
       ${suggest}
     </div>`;
@@ -211,7 +238,7 @@ function render(container, cfg, pricing) {
         <div class="card">
           <div class="section-label">Perk Prices</div>
           <div class="field-row" style="flex-wrap:wrap;">
-            ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+            ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
           </div>
           <div class="field" style="margin-top:8px;">
             <label style="display:flex;gap:6px;align-items:center;">
@@ -230,7 +257,7 @@ function render(container, cfg, pricing) {
         <div class="card">
           <div class="section-label">Consumables</div>
           <div class="field-row" style="flex-wrap:wrap;">
-            ${CONSUMABLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+            ${CONSUMABLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
           </div>
         </div>
 
@@ -245,7 +272,7 @@ function render(container, cfg, pricing) {
               happens.</div>
           </div>
           <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
-            ${RAFFLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+            ${RAFFLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
           </div>
           <div class="field-hint">
             The draw happens when the week rolls over. The prize is one week of perks
@@ -258,7 +285,7 @@ function render(container, cfg, pricing) {
         <div class="card">
           <div class="section-label">Hoard Tax and Rakes</div>
           <div class="field-row" style="flex-wrap:wrap;">
-            ${DEMURRAGE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+            ${DEMURRAGE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
           </div>
           <div class="field-hint">
             These are the dials that take currency back out of circulation, and all of
@@ -272,14 +299,14 @@ function render(container, cfg, pricing) {
         <div class="card">
           <div class="section-label">Sponsored Emojis</div>
           <div class="field-row" style="flex-wrap:wrap;">
-            ${EMOJI_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+            ${EMOJI_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
           </div>
         </div>
 
         <div class="card">
           <div class="section-label">Sponsored QOTD</div>
           <div class="field-row" style="flex-wrap:wrap;">
-            ${QOTD_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+            ${QOTD_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
           </div>
         </div>
 

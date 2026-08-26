@@ -814,10 +814,10 @@ class VoiceMasterCog(commands.Cog):
                     econ = load_econ_settings(conn, guild_id)
                     if style_lease_blocks(
                         economy_enabled=econ.enabled,
-                        price=econ.price_voice_style,
+                        on_sale=econ.shop_voice_style_enabled,
                         entitled=(
                             econ.enabled
-                            and econ.price_voice_style > 0
+                            and econ.shop_voice_style_enabled
                             and "voice_style"
                             in effective_entitlements(
                                 conn, guild_id, member_id, is_staff=member_is_staff

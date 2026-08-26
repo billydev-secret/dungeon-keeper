@@ -10,8 +10,9 @@ panel, which passes none of them.
 
 Pricing is not purely presentational — ``shop_row_price`` folds the flat
 ``price_role_icon`` into a curated catalog's span and decides the sort floor,
-and ``build_shop_embed`` decides row visibility from the voice-lease, streak
-shield and raffle prices. That policy lives here with the table it drives.
+and ``build_shop_embed`` decides row visibility from the guild's per-perk shop
+switches, the palette's stock and the raffle. That policy lives here with the
+table it drives.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from bot_modules.economy.perks import (
     PERK_SHORT,
     PERK_TIERS,
     SELF_PERKS,
+    perk_on_sale,
     perk_price,
 )
 from bot_modules.economy.shop_items import ItemView
@@ -195,22 +197,38 @@ def build_shop_embed(
     show_palette = color_catalog is not None or "role_preset" in owned
 
     def _stocked(perks: tuple[str, ...]) -> tuple[str, ...]:
-        if show_palette:
-            return perks
-        return tuple(p for p in perks if p != "role_preset")
+        """Drop rows this guild isn't selling, for the same reason as above.
+
+        A switched-off perk leaves the table exactly like an empty palette
+        does — including the width calculation, so a hidden row can never pad
+        the visible ones. The one carve-out is identical too: a member still
+        renting it out to their anniversary keeps their row, because billing
+        them for a perk with no row and no ✅ anywhere in the shop is how you
+        get a support ticket instead of a clean wind-down.
+        """
+        return tuple(
+            p
+            for p in perks
+            if (p != "role_preset" or show_palette)
+            and (perk_on_sale(settings, p) or p in owned)
+        )
 
     tiers = [(name, _stocked(perks)) for name, perks in PERK_TIERS]
     table_perks: list[str] = list(_stocked(SELF_PERKS))
-    # The Voice tier exists only while the lease is priced (> 0 = the paywall
-    # is armed); at the price-0 dark default the shop shows no trace of it.
-    if settings.price_voice_style > 0:
+    # The Voice tier exists only while the guild sells the lease. Its price is
+    # no longer the switch — a price of 0 means a free lease, not a hidden one
+    # (see SHOP_TOGGLE_PERKS).
+    if _stocked(("voice_style",)):
         tiers.append(("Voice", ("voice_style",)))
         table_perks.append("voice_style")
 
     # One width per table, not per tier, so cells line up across the whole
-    # embed rather than jumping at each heading.
-    label_width = max(len(PERK_SHORT[p]) for p in table_perks)
-    blurb_width = max(len(PERK_BLURBS[p]) for p in table_perks)
+    # embed rather than jumping at each heading. Defaulted, not asserted: a
+    # guild that switches every perk off has an empty table and still gets a
+    # valid embed — the Server Store, the raffle and the gifting note can all
+    # carry a shop on their own, and `max()` over nothing raises.
+    label_width = max((len(PERK_SHORT[p]) for p in table_perks), default=0)
+    blurb_width = max((len(PERK_BLURBS[p]) for p in table_perks), default=0)
 
     def _line(perk: str) -> str:
         _sort, price_str = shop_row_price(settings, perk, icon_catalog, color_catalog)
@@ -246,9 +264,12 @@ def build_shop_embed(
             value="\n".join(_line(p) for p in ordered) + "\n​",
             inline=False,
         )
-    if settings.price_streak_shield > 0:
+    if settings.shop_streak_shield_enabled:
         # One-shot, not a rental — the only non-weekly row, so it carries its
         # own field with the "once" spelled out instead of joining the table.
+        # No ``or held`` carve-out: a held shield needs no shop row to work, it
+        # burns itself when a streak is at risk, and re-advertising a line the
+        # guild has stopped selling would invite a second purchase it refuses.
         held = " · 🛡️ **held**" if shields_held > 0 else ""
         embed.add_field(
             name="One-shot",
@@ -278,14 +299,17 @@ def build_shop_embed(
             value=_items_block(settings, items, owned_item_ids),
             inline=False,
         )
-    embed.add_field(
-        name="For a Friend",
-        value=(
-            "🎁 Any perk above can be gifted at its listed price — "
-            "you pay the weekly rent, they wear it. Send one with `/bank gift`."
-        ),
-        inline=False,
-    )
+    # Gifting needs something to gift: with every perk switched off, the only
+    # rows left are the store's own items, which `/bank gift` doesn't sell.
+    if table_perks:
+        embed.add_field(
+            name="For a Friend",
+            value=(
+                "🎁 Any perk above can be gifted at its listed price — "
+                "you pay the weekly rent, they wear it. Send one with `/bank gift`."
+            ),
+            inline=False,
+        )
 
     embed.set_footer(
         text=(
