@@ -77,7 +77,7 @@ in 2026-08 (IA2):
 | Page | id | Kind | Gate | Cadence |
 |---|---|---|---|---|
 | Approvals | `shop-approvals` | work queues — emoji submissions, custom-item orders | **not** adminOnly | whenever something is bought |
-| Shop & Perks | `economy-sinks` | catalogs — palette, role icons, custom items | adminOnly | setup burst, then dormant |
+| Shop & Perks | `economy-sinks` | what's on sale (per-perk switches) + catalogs — palette, role icons, custom items | adminOnly | setup burst, then dormant |
 | Pricing | `pricing` | one form of priced dials | adminOnly | launch, then a few times a year |
 
 `economy-sinks` keeps its id because the page still exists, so no `MOVED_PAGES`

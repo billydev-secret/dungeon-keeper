@@ -616,19 +616,27 @@ def select_effective_bitrate(
 
 
 def style_lease_blocks(
-    *, economy_enabled: bool, price: int, entitled: bool
+    *, economy_enabled: bool, on_sale: bool, entitled: bool
 ) -> bool:
     """Whether the voice-style lease blocks rename/limit for this member.
 
     Economy sinks round 3, stage 3 (spec §6): rename and user-limit are leased
     controls, but the paywall arms only while the guild's economy is enabled
-    AND ``price_voice_style`` is above zero — price 0 is the shipped-dark
-    default where every member keeps the controls free, and it doubles as the
-    per-guild opt-out. An armed paywall passes members entitled to the
-    ``voice_style`` perk (beneficiary-based, so a gifted lease counts). The
-    access dial, invite/kick/transfer, and reset are never gated.
+    AND the guild actually sells the lease (``shop_voice_style_enabled``, the
+    Shop & Perks checkbox). Not selling it means the controls are free for
+    everyone — the shipped default, and the per-guild opt-out. An armed paywall
+    passes members entitled to the ``voice_style`` perk (beneficiary-based, so a
+    gifted lease counts). The access dial, invite/kick/transfer, and reset are
+    never gated.
+
+    The switch replaced ``price_voice_style > 0`` here (migration 182). Price 0
+    used to mean "paywall off", which made 0 mean *free* on this dial and
+    *hidden* on the streak shield's — the ambiguity the checkbox removes. A
+    guild can now legitimately sell the lease at 0, which arms the paywall and
+    charges nothing: rename and limit become perks you must claim from the shop
+    rather than controls you simply have.
     """
-    return economy_enabled and price > 0 and not entitled
+    return economy_enabled and on_sale and not entitled
 
 
 def build_skipped_payload(

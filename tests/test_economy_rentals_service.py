@@ -34,6 +34,7 @@ from bot_modules.services.economy_rentals_service import (
     upsert_personal_role,
 )
 from bot_modules.services.economy_service import (
+    SHOP_TOGGLE_PERKS,
     EconSettings,
     apply_credit,
     get_balance,
@@ -496,12 +497,12 @@ def test_bill_renewal_charge_leaves_ended_at_null(db):
 # ── bill_rental: the billing matrix ────────────────────────────────────
 
 
-def _bill(db, rental_id, now):
+def _bill(db, rental_id, now, settings=SETTINGS):
     with open_db(db) as conn:
         row = conn.execute(
             "SELECT * FROM econ_rentals WHERE id = ?", (rental_id,)
         ).fetchone()
-        return bill_rental(conn, SETTINGS, row, now)
+        return bill_rental(conn, settings, row, now)
 
 
 def test_bill_not_due_is_noop(db):
@@ -625,6 +626,160 @@ def test_bill_cancel_at_period_end_finalizes_without_charge(db):
     assert get_balance_helper(db, USER) == before
 
 
+# ── the guild stopped selling the perk (Shop & Perks checkboxes) ───────
+
+
+#: SETTINGS with one perk withdrawn, the way an admin unchecking a box leaves it.
+NO_GRADIENT = EconSettings(
+    enabled=True, booster_multiplier=1.5, shop_role_gradient_enabled=False
+)
+
+
+def test_rent_refuses_a_perk_the_guild_stopped_selling(db):
+    _fund(db, USER, 500)
+    before = get_balance_helper(db, USER)
+    with pytest.raises(ValueError, match="not for sale"), open_db(db) as conn:
+        rent_perk(conn, NO_GRADIENT, GUILD, USER, "role_gradient", now=T0)
+    # Refused BEFORE any money moves and without opening a row — a checkbox
+    # that charged you and then failed would be worse than no checkbox.
+    assert get_balance_helper(db, USER) == before
+    with open_db(db) as conn:
+        assert list_rentals(conn, GUILD) == []
+
+
+def test_rent_refuses_a_gift_of_a_withdrawn_perk(db):
+    # `/bank gift` reaches rent_perk by its own route, so the guard has to be
+    # here rather than on the shop's buttons.
+    _fund(db, USER, 500)
+    with pytest.raises(ValueError, match="not for sale"), open_db(db) as conn:
+        rent_perk(
+            conn, NO_GRADIENT, GUILD, USER, "role_gradient",
+            beneficiary_id=OTHER, now=T0,
+        )
+
+
+def test_rent_still_allows_the_perks_left_on_sale(db):
+    _fund(db, USER, 500)
+    with open_db(db) as conn:
+        row = rent_perk(conn, NO_GRADIENT, GUILD, USER, "role_color", now=T0)
+    assert row["state"] == "active"
+
+
+def test_custom_items_are_not_governed_by_the_perk_checkboxes(db):
+    """A custom shop item carries its own ``enabled`` column.
+
+    ``custom_item`` is outside SHOP_TOGGLE_PERKS, so ``perk_on_sale`` must let
+    it through — otherwise every custom item in the guild would vanish the
+    moment an admin unchecked an unrelated perk.
+    """
+    from bot_modules.economy.perks import perk_on_sale
+
+    all_off = EconSettings(
+        enabled=True,
+        **{f"shop_{p}_enabled": False for p in SHOP_TOGGLE_PERKS},
+    )
+    assert perk_on_sale(all_off, "custom_item") is True
+    assert perk_on_sale(all_off, "emoji") is True
+
+
+def test_a_live_rental_runs_to_its_anniversary_then_stops_renewing(db):
+    """The decision Billy made: run to expiry, don't cut anyone off mid-week."""
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_gradient")  # bought while still on sale
+    paid = get_balance_helper(db, USER)
+
+    # Admin unchecks the box. Mid-week, nothing happens at all: they keep the
+    # perk they paid for, and they are not charged.
+    res = _bill(db, r["id"], T0 + WEEK_SECONDS - 1, settings=NO_GRADIENT)
+    assert res.action == "none"
+    assert _get(db, r["id"])["state"] == "active"
+    assert get_balance_helper(db, USER) == paid
+
+    # At the anniversary it ends — unbilled, and reported distinctly from a
+    # member's own cancel so the loop knows to DM them.
+    res = _bill(db, r["id"], T0 + WEEK_SECONDS, settings=NO_GRADIENT)
+    assert res.action == "discontinued"
+    assert res.charged == 0
+    assert _get(db, r["id"])["state"] == "cancelled"
+    assert get_balance_helper(db, USER) == paid
+
+
+def test_re_checking_the_box_before_the_anniversary_renews_normally(db):
+    """Nothing is written when a perk goes off sale, so it is reversible.
+
+    An admin who unchecks a box and thinks better of it before anyone's week
+    runs out leaves no trace: the rental renews at the normal price.
+    """
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_gradient")
+    # Off, then on again, all before the anniversary.
+    assert _bill(db, r["id"], T0 + 10, settings=NO_GRADIENT).action == "none"
+    assert _get(db, r["id"])["cancel_at_period_end"] == 0  # no stored flag
+    res = _bill(db, r["id"], T0 + WEEK_SECONDS, settings=SETTINGS)
+    assert res.action == "charge"
+    assert res.charged == SETTINGS.price_role_gradient
+    assert _get(db, r["id"])["state"] == "active"
+
+
+def test_a_members_own_cancel_wins_over_the_switch(db):
+    # Same ending, but "cancel_period_end" is silent and "discontinued" DMs.
+    # Telling someone the server withdrew a perk they cancelled themselves
+    # would be a lie about who decided.
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_gradient")
+    _set(db, r["id"], cancel_at_period_end=1)
+    res = _bill(db, r["id"], T0 + WEEK_SECONDS, settings=NO_GRADIENT)
+    assert res.action == "cancel_period_end"
+
+
+def test_a_withdrawn_perk_in_grace_is_never_charged_to_recover(db):
+    """The regression this guards: grace + withdrawn must not bill a new week.
+
+    A grace rental with funds available recovers by paying — which for a perk
+    the server has stopped selling would mean charging someone a fresh week for
+    something they can no longer buy. Grace has no paid week left to honour
+    (the anniversary passed, the debit failed), so it ends instead.
+    """
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_gradient")
+    _set(db, r["id"], state="grace", grace_since=T0 + WEEK_SECONDS)
+    funded = get_balance_helper(db, USER)  # deliberately solvent
+    res = _bill(db, r["id"], T0 + WEEK_SECONDS + 10, settings=NO_GRADIENT)
+    assert res.action == "discontinued"
+    assert res.charged == 0
+    assert get_balance_helper(db, USER) == funded
+    assert _get(db, r["id"])["state"] == "cancelled"
+
+
+def test_a_withdrawn_perk_can_still_be_refunded(db):
+    # Ending a rental early stays the member's call. Withdrawing the perk must
+    # not trap them in it — the refund path is not gated by the switch.
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_gradient")
+    with open_db(db) as conn:
+        out = refund_rental(
+            conn, GUILD, r["id"], requester_id=USER, now=T0 + 10
+        )
+    assert out.refund > 0
+    assert _get(db, r["id"])["state"] == "cancelled"
+
+
+def test_staff_comp_drops_a_withdrawn_perk(db):
+    """The comp is derived live, so unchecking a box takes it off mods too."""
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (GUILD, "econ_mod_perk_comp", "1"),
+        )
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (GUILD, "econ_shop_role_gradient_enabled", "0"),
+        )
+        ent = effective_entitlements(conn, GUILD, USER, is_staff=True)
+    assert "role_gradient" not in ent
+    assert "role_color" in ent  # still sold, still comped
+
+
 # ── suspension clock ───────────────────────────────────────────────────
 
 
@@ -721,8 +876,26 @@ def _set_comp(db, on: bool) -> None:
 
 
 def test_effective_entitlements_comps_staff(db):
+    """The comp covers every perk the guild actually sells.
+
+    Not ``COMPED_PERKS`` outright: the voice lease ships unsold (its checkbox
+    defaults off, matching the price-0 dark default it replaced), so a guild
+    that has configured nothing comps the six role perks and not the lease.
+    Comping a line the server doesn't sell is exactly what the switches exist
+    to prevent.
+    """
     _set_comp(db, True)
     with open_db(db) as conn:
+        ent = effective_entitlements(conn, GUILD, USER, is_staff=True)
+    assert ent == set(COMPED_PERKS) - {"voice_style"}
+
+
+def test_effective_entitlements_comps_the_voice_lease_once_it_is_sold(db):
+    from bot_modules.services.economy_service import save_econ_settings
+
+    _set_comp(db, True)
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"shop_voice_style_enabled": True})
         ent = effective_entitlements(conn, GUILD, USER, is_staff=True)
     assert ent == set(COMPED_PERKS)
 
@@ -765,8 +938,10 @@ def test_comp_leaves_a_staff_members_own_rental_billable(db):
     _set_comp(db, True)
     with open_db(db) as conn:
         assert entitlements(conn, GUILD, USER) == {"role_color"}
-        assert effective_entitlements(conn, GUILD, USER, is_staff=True) == set(
-            COMPED_PERKS
+        # Minus the voice lease, which this guild doesn't sell (see
+        # test_effective_entitlements_comps_staff).
+        assert effective_entitlements(conn, GUILD, USER, is_staff=True) == (
+            set(COMPED_PERKS) - {"voice_style"}
         )
         assert len(list_rentals(conn, GUILD)) == 1
 

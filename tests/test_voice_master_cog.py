@@ -619,12 +619,26 @@ async def test_apply_invite_with_remember_writes_to_trust_list(ctx, voice_channe
 # ── voice-style lease gate on rename/limit (sinks round 3, stage 3) ─────────
 
 
-def _arm_style_paywall(ctx, *, price: int = 30, enabled: bool = True) -> None:
+def _arm_style_paywall(
+    ctx, *, price: int = 30, enabled: bool = True, on_sale: bool = True
+) -> None:
+    """Arm the lease paywall.
+
+    What arms it is the Shop & Perks checkbox (``shop_voice_style_enabled``),
+    not the price — a price of 0 now means a free lease members still claim
+    from the shop, where it used to mean the paywall was off entirely.
+    """
     from bot_modules.services.economy_service import save_econ_settings
 
     with open_db(ctx.db_path) as conn:
         save_econ_settings(
-            conn, GUILD, {"enabled": enabled, "price_voice_style": price}
+            conn,
+            GUILD,
+            {
+                "enabled": enabled,
+                "price_voice_style": price,
+                "shop_voice_style_enabled": on_sale,
+            },
         )
 
 
@@ -687,8 +701,10 @@ async def test_apply_rename_free_while_dark_or_economy_off(ctx, voice_channel):
     from bot_modules.commands.voice_master_commands import _apply_rename
     from bot_modules.services.voice_master_service import get_active_channel
 
-    # Case 1: economy on but price 0 (the shipped-dark default).
-    _arm_style_paywall(ctx, price=0)
+    # Case 1: economy on but the guild doesn't sell the lease (the shipped
+    # default). Expressed as the checkbox now, not as price 0 — a free lease
+    # and an unsold one are different things and used to share one value.
+    _arm_style_paywall(ctx, price=0, on_sale=False)
     with open_db(ctx.db_path) as conn:
         insert_active_channel(
             conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0
@@ -705,6 +721,15 @@ async def test_apply_rename_free_while_dark_or_economy_off(ctx, voice_channel):
     inter = _wire_interaction(ctx)
     await _apply_rename(inter, voice_channel, row, new_name="Still Free")
     voice_channel.edit.assert_awaited_once()
+
+    # Case 3, newly expressible: sold at a price of 0. The paywall IS armed —
+    # members must claim the lease from the shop — it just costs nothing. This
+    # pairing had no representation while price 0 meant "paywall off".
+    voice_channel.edit.reset_mock()
+    _arm_style_paywall(ctx, price=0, on_sale=True)
+    inter = _wire_interaction(ctx)
+    await _apply_rename(inter, voice_channel, row, new_name="Not Claimed")
+    voice_channel.edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

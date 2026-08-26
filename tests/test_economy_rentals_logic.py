@@ -72,9 +72,95 @@ def test_classify_matrix(state, next_bill_at, grace_since, cancel, suspended, ex
     )
 
 
+@pytest.mark.parametrize(
+    ("state", "next_bill_at", "grace_since", "cancel", "suspended", "expected"),
+    _CASES,
+)
+def test_classify_matrix_is_unchanged_when_the_perk_is_still_sold(
+    state, next_bill_at, grace_since, cancel, suspended, expected
+):
+    """perk_disabled=False must reproduce the whole pre-existing matrix.
+
+    The switch is additive: passing it explicitly off is the same as the
+    default, so no existing billing path can shift under it.
+    """
+    assert (
+        classify(
+            state, next_bill_at, grace_since, cancel, suspended, NOW,
+            perk_disabled=False,
+        )
+        is expected
+    )
+
+
+# (state, next_bill_at, grace_since, cancel, suspended) -> expected, with the
+# guild no longer selling the perk.
+_DISABLED_CASES = [
+    # The whole point: due, nobody cancelled, perk withdrawn → ends unbilled.
+    pytest.param("active", NOW, None, False, False, A.DISCONTINUED, id="due-exactly"),
+    pytest.param("active", NOW - 1, None, False, False, A.DISCONTINUED, id="past-due"),
+    pytest.param(
+        "active", NOW - WEEK_SECONDS, None, False, False, A.DISCONTINUED,
+        id="long-past-due",
+    ),
+    # NOT yet due → NONE. This is what makes "run to expiry" true and the
+    # checkbox reversible: the week they paid for runs out in full, and
+    # re-checking the box before then renews them as if nothing happened.
+    pytest.param("active", NOW + 10, None, False, False, A.NONE, id="not-due-yet"),
+    pytest.param(
+        "active", NOW + WEEK_SECONDS, None, False, False, A.NONE,
+        id="not-due-a-whole-week-out",
+    ),
+    # The member's own cancel wins — same ending, but reporting DISCONTINUED
+    # would DM them about a decision they made themselves.
+    pytest.param(
+        "active", NOW, None, True, False, A.CANCEL_PERIOD_END, id="own-cancel-wins",
+    ),
+    # Suspended still freezes everything, switch or no switch.
+    pytest.param("active", NOW - 1, None, False, True, A.NONE, id="suspended-wins"),
+    # In grace the anniversary has already passed and the debit FAILED, so
+    # there is no paid week left to protect. End it instead of retrying — a
+    # retry that succeeded would charge a fresh week for a withdrawn perk.
+    pytest.param(
+        "grace", NOW, NOW - 5, False, False, A.DISCONTINUED, id="grace-ends-early",
+    ),
+    pytest.param(
+        "grace", NOW, NOW - GRACE_SECONDS, False, False, A.DISCONTINUED,
+        id="grace-past-window-ends-too",
+    ),
+    pytest.param(
+        "grace", NOW, None, False, False, A.DISCONTINUED, id="grace-no-anchor-ends",
+    ),
+    # Terminal rows stay terminal.
+    pytest.param("lapsed", NOW - 1, None, False, False, A.NONE, id="lapsed-stays"),
+    pytest.param(
+        "cancelled", NOW - 1, None, False, False, A.NONE, id="cancelled-stays",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("state", "next_bill_at", "grace_since", "cancel", "suspended", "expected"),
+    _DISABLED_CASES,
+)
+def test_classify_when_the_guild_stopped_selling_the_perk(
+    state, next_bill_at, grace_since, cancel, suspended, expected
+):
+    assert (
+        classify(
+            state, next_bill_at, grace_since, cancel, suspended, NOW,
+            perk_disabled=True,
+        )
+        is expected
+    )
+
+
 def test_classify_never_returns_enter_grace():
     # ENTER_GRACE is an outcome the service reports, never a classify decision.
     seen = {classify(c[0], c[1], c[2], c[3], c[4], NOW) for c in _CASES}
+    seen |= {
+        classify(*c.values[:5], NOW, perk_disabled=True) for c in _DISABLED_CASES
+    }
     assert BillingAction.ENTER_GRACE not in seen
 
 
@@ -163,6 +249,56 @@ def test_comp_entitlements_does_not_mutate_the_input():
     # The caller's rental truth is what billing and refunds read — the comp
     # must never leak back into it.
     assert rented == {"role_color"}
+
+
+# ── comp_entitlements × the shop switches ──────────────────────────────
+
+
+def test_comp_narrows_to_what_the_guild_still_sells():
+    """Switching a perk off takes it off the comped staff too.
+
+    Otherwise the one group who can see the checkbox would be the one group it
+    doesn't apply to, and a server that "turned gradient roles off" would still
+    have its mods wearing them.
+    """
+    on_sale = {"role_color", "role_name"}
+    assert comp_entitlements(
+        set(), is_staff=True, comp_enabled=True, on_sale=on_sale
+    ) == on_sale
+
+
+def test_comp_with_nothing_on_sale_comps_nothing():
+    # Billy's actual ask — every box unchecked — must leave staff with an
+    # empty comp rather than falling back to "everything".
+    assert comp_entitlements(
+        set(), is_staff=True, comp_enabled=True, on_sale=set()
+    ) == set()
+
+
+def test_comp_never_strips_a_perk_the_mod_is_actually_paying_for():
+    # A mod mid-rental on a withdrawn perk winds down like everyone else: they
+    # keep it to their anniversary. The comp narrowing must not cut it short.
+    assert comp_entitlements(
+        {"role_gradient"}, is_staff=True, comp_enabled=True,
+        on_sale={"role_color"},
+    ) == {"role_gradient", "role_color"}
+
+
+def test_comp_without_an_on_sale_list_is_unrestricted():
+    # The default keeps the pure function usable by callers with no settings
+    # in hand, and pins the pre-existing behaviour.
+    assert comp_entitlements(
+        set(), is_staff=True, comp_enabled=True
+    ) == set(COMPED_PERKS)
+
+
+def test_comp_narrowing_does_not_invent_perks():
+    # on_sale is an intersection, never a source: a string that isn't a
+    # rentable perk can't be comped into existence by listing it.
+    assert comp_entitlements(
+        set(), is_staff=True, comp_enabled=True,
+        on_sale={"role_color", "not_a_perk"},
+    ) == {"role_color"}
 
 
 # ── prorated_refund ──────────────────────────────────────────────────────

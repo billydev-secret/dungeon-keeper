@@ -80,7 +80,7 @@ import discord
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.core.sticky import StickyPanel
 from bot_modules.economy import live_signal, logic, quests
-from bot_modules.economy.perks import FEATURE_GATED
+from bot_modules.economy.perks import FEATURE_GATED, PERK_LABELS
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -1464,6 +1464,8 @@ async def _dispatch_rental_effects(
     grace ticks report ``retry`` — silent); ``revoke`` revokes the beneficiary's
     perk, DMs the owner, and courtesy-DMs the beneficiary of a lapsed *gift*;
     ``cancel_period_end`` revokes the beneficiary silently (member-initiated);
+    ``discontinued`` revokes the same way but DMs both parties, because there
+    the *server* stopped selling the perk and nobody involved asked for it;
     ``charge`` (renewal or grace-recovery) and ``retry`` are silent with NO
     re-projection — grace never revoked the perk, so nothing needs rebuilding —
     EXCEPT a charge whose re-read price differs from the previous cycle's,
@@ -1504,6 +1506,7 @@ async def _dispatch_rental_effects(
         elif res.action in (
             BillingAction.REVOKE.value,
             BillingAction.CANCEL_PERIOD_END.value,
+            BillingAction.DISCONTINUED.value,
         ):
             try:
                 await revoke_perk_effect(
@@ -1526,6 +1529,31 @@ async def _dispatch_rental_effects(
                     await _safe_dm(
                         bot, db_path, guild_id, res.beneficiary_id,
                         "A perk gifted to you has lapsed.",
+                    )
+            elif res.action == BillingAction.DISCONTINUED.value:
+                # The one ending nobody asked for: the server stopped selling
+                # the perk. Say so plainly and say the money part out loud —
+                # the week they already paid for ran in full and there is no
+                # charge today — because "my perk vanished" otherwise reads as
+                # a billing failure. No "re-rent from /bank shop" line: it
+                # isn't there to re-rent. A member-initiated cancel stays
+                # silent (CANCEL_PERIOD_END above); they knew it was coming.
+                # PERK_LABELS.get, not [...]: `custom_item` and `emoji` are
+                # real perk kinds with no entry, and a KeyError here would kill
+                # the tick's remaining effects over a DM's wording.
+                label = PERK_LABELS.get(res.perk, res.perk)
+                await _safe_dm(
+                    bot, db_path, guild_id, res.user_id,
+                    f"The server has stopped offering **{label}**, so your "
+                    "rental ended today at the end of the week you'd paid for. "
+                    "You haven't been charged again, and nothing further is "
+                    "owed.",
+                )
+                if res.beneficiary_id != res.user_id:
+                    await _safe_dm(
+                        bot, db_path, guild_id, res.beneficiary_id,
+                        f"**{label}**, gifted to you, has ended — the server "
+                        "has stopped offering it.",
                     )
         elif res.action == BillingAction.CHARGE.value and res.previous_price:
             # A renewal at a changed price is the one charge that must not be

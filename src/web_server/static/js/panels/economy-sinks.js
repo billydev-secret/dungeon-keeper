@@ -4,8 +4,11 @@
  * This page used to be all sixteen sections of the perk shop at once: the priced
  * dials, two work queues, and these three catalogs, 3,589px of scroll on an
  * empty database and growing with every icon, colour and item added. It is now
- * the catalogs only. Its route id is unchanged — ids are frozen, and this page
- * still exists, so nothing needs a MOVED_PAGES entry.
+ * the three catalogs plus one card — What's On Sale, the per-perk switches,
+ * which belongs with the catalogs rather than with the prices because it
+ * answers "is this sold here", not "what does it cost". Its route id is
+ * unchanged — ids are frozen, and this page still exists, so nothing needs a
+ * MOVED_PAGES entry.
  *
  *   #/pricing         the numbers (one form, one Save, admin only)
  *   #/shop-approvals  the queues (manager-visible, which the old page was not)
@@ -20,13 +23,33 @@
  * the hints say so, and say where, because "the price above" stopped being true
  * when the dials moved.
  */
-import { api, apiPost, apiDelete, request, esc } from "../api.js";
+import { api, apiPost, apiPut, apiDelete, request, esc } from "../api.js";
 import {
   showStatus, guardForm, mountAsync, loadChannels, loadRoles,
   mountChannelPicker,
 } from "../config-helpers.js";
 import { confirmDialog, toast } from "../ui.js";
 import { DEFAULT_MAX, economyOffBanner } from "./economy-shop-shared.js";
+
+/**
+ * The shop lines an admin can switch off, in the order the shop shows them.
+ * Mirrors ``SHOP_TOGGLE_PERKS`` in economy_service.py — a row here with no
+ * field there (or the reverse) is a checkbox that saves nothing, so the two
+ * lists are asserted against each other in the tests rather than trusted.
+ *
+ * The blurbs are the shop's own, so an admin reading this list sees what a
+ * member sees rather than a column of field names.
+ */
+const SHOP_LINES = [
+  ["shop_role_name_enabled", "Custom Role Name", "nickname + role"],
+  ["shop_role_color_enabled", "Custom Role Color", "any solid color"],
+  ["shop_role_preset_enabled", "Palette Color", "a curated fade"],
+  ["shop_role_gradient_enabled", "Gradient Role", "a two-color fade they pick"],
+  ["shop_role_holographic_enabled", "Holographic Role", "Discord’s shimmer preset"],
+  ["shop_role_icon_enabled", "Role Icon", "a badge beside their name"],
+  ["shop_voice_style_enabled", "Voice Style", "renaming and sizing their voice room"],
+  ["shop_streak_shield_enabled", "Streak Shield", "one-shot, saves a login streak"],
+];
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading the shop…</div></div>`;
@@ -39,10 +62,51 @@ export function mount(container) {
       loadChannels().catch(() => []),
     ]);
     render(container, cfg);
+    wireOnSale(container, cfg);
     wirePalette(container, colors, channels);
     wireCatalog(container, icons);
     wireShopItems(container);
   }, { errorMsg: "Couldn’t load the shop catalogs." });
+}
+
+/**
+ * The "What's On Sale" checkboxes.
+ *
+ * Saved as one PUT of all eight, not one per click: the whole point of the card
+ * is deciding what the shop stocks, and a half-applied set (some boxes saved,
+ * one request failed) would leave the page disagreeing with the bot with no
+ * sign of which half won. Check-all / uncheck-all only move the boxes — they
+ * still go through Save, so "turn the whole shop off" is never one stray click.
+ */
+function wireOnSale(container, cfg) {
+  const form = container.querySelector("[data-onsale-form]");
+  const status = form.querySelector("[data-onsale-status]");
+  const boxes = [...form.querySelectorAll("[data-onsale]")];
+
+  for (const box of boxes) box.checked = !!cfg[box.name];
+
+  guardForm(form);
+
+  const setAll = (on) => {
+    for (const box of boxes) box.checked = on;
+    // The buttons bypass the inputs' own change events, so nudge the form's
+    // dirty tracking the same way typing would.
+    form.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  form.querySelector("[data-onsale-all]").addEventListener("click", () => setAll(true));
+  form.querySelector("[data-onsale-none]").addEventListener("click", () => setAll(false));
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {};
+    for (const box of boxes) payload[box.name] = box.checked;
+    try {
+      await apiPut("/api/economy/config", payload);
+      showStatus(status, true);
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  });
 }
 
 function render(container, cfg) {
@@ -50,12 +114,46 @@ function render(container, cfg) {
     <div class="panel">
       <header>
         <h2>Shop &amp; Perks</h2>
-        <div class="subtitle">What members can buy: the colour palette, the rentable
-          icon catalog, and your own custom items. Prices live on
-          <a href="#/pricing">Pricing</a> and purchases needing a person are on
-          <a href="#/shop-approvals">Approvals</a>.</div>
+        <div class="subtitle">What members can buy: which perks are on sale at all,
+          the colour palette, the rentable icon catalog, and your own custom items.
+          Prices live on <a href="#/pricing">Pricing</a> and purchases needing a
+          person are on <a href="#/shop-approvals">Approvals</a>.</div>
       </header>
       ${economyOffBanner(cfg)}
+
+      <form class="form card" data-onsale-form>
+        <div class="section-label">What’s On Sale</div>
+        <div class="field-hint" style="margin-bottom:10px;">
+          Uncheck anything you don’t want sold here. It disappears from the shop and
+          from <code>/bank gift</code>, and nobody can buy it — including moderators,
+          if you have them comped. Anyone already renting it keeps it until their
+          week is up, then it stops renewing and they aren’t charged again; the bot
+          DMs them to say why it ended. Re-check it before their week runs out and
+          they simply renew as normal, so this is safe to change your mind about.
+        </div>
+        <div data-onsale-list>
+          ${SHOP_LINES.map(([key, label, blurb]) => `
+            <label class="field" style="display:flex;gap:8px;align-items:baseline;margin-bottom:6px;">
+              <input type="checkbox" name="${key}" data-onsale />
+              <span><strong>${esc(label)}</strong>
+                <span class="field-hint" style="display:inline;">— ${esc(blurb)}</span>
+              </span>
+            </label>`).join("")}
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+          <button type="button" class="btn" data-onsale-all>Check all</button>
+          <button type="button" class="btn" data-onsale-none>Uncheck all</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+          <span data-onsale-status></span>
+        </div>
+        <div class="field-hint" style="margin-top:10px;">
+          The weekly raffle has its own switch on <a href="#/pricing">Pricing</a>, and
+          each of your custom items below has its own — they aren’t repeated here,
+          so there’s only ever one place that decides whether something is sold.
+          Prices are on <a href="#/pricing">Pricing</a>: a price of 0 means free, not
+          off. This is the off switch.
+        </div>
+      </form>
 
       <section class="form card">
         <div class="section-label">Color Palette</div>

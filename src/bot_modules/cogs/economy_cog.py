@@ -45,7 +45,9 @@ from bot_modules.economy.perks import (
     PERK_REFUSAL_FALLBACK as _PERK_REFUSAL_FALLBACK,
     PERK_SHORT,
     SELF_PERKS,
+    perk_on_sale,
     perk_price,
+    perks_on_sale,
 )
 from bot_modules.economy.shop import build_shop_embed
 from bot_modules.economy.shop_items import ItemView, Refusal, refusal_text
@@ -1086,6 +1088,13 @@ class _ShopView(_MemberScopedView):
         self.shield_price = shield_price
         self.items = items or []
         for perk in SELF_PERKS:
+            if not perk_on_sale(settings, perk) and perk not in owned:
+                # Switched off on the Shop & Perks page: no row in the embed,
+                # so no button either. A member still renting it to their
+                # anniversary keeps theirs — the embed keeps their row too, and
+                # they need the customise button to reach what they're paying
+                # for (the rent branch below can't fire; they already own it).
+                continue
             if perk == "role_preset":
                 # No palette, no product — the embed drops the row too, so a
                 # button here would point at nothing.
@@ -1158,7 +1167,7 @@ class _ShopView(_MemberScopedView):
                 )
                 button.callback = self._make_rent_callback(perk)
             self.add_item(button)
-        if settings.price_voice_style > 0:
+        if settings.shop_voice_style_enabled or "voice_style" in owned:
             if "voice_style" in owned:
                 button = discord.ui.Button(
                     label="🎙️ Leased",
@@ -1182,7 +1191,7 @@ class _ShopView(_MemberScopedView):
             )
             button.callback = self._make_raffle_callback()
             self.add_item(button)
-        if settings.price_streak_shield > 0:
+        if settings.shop_streak_shield_enabled:
             # A held shield stays visible (green, disabled) so the cap reads
             # as "you have one", not as the button being broken.
             held = shields_held > 0
@@ -1307,6 +1316,17 @@ async def _rent_perk_flow(
     """
     ctx = cog.bot.ctx
     user_id = interaction.user.id
+    if not perk_on_sale(settings, perk):
+        # BEFORE the comp check below, which skips rent_perk entirely and so
+        # would sail straight past its "not for sale" guard — a comped mod
+        # clicking a stale button would otherwise be handed a perk the server
+        # had switched off. The button is normally gone; a shop embed left open
+        # in someone's client, and the icon/palette pickers' own entry points,
+        # are what make this reachable.
+        await interaction.response.send_message(
+            "❌ This server has stopped selling that perk.", ephemeral=True
+        )
+        return
     # A comped member is already entitled, so there is nothing to buy — take
     # the money-free path rather than opening a rental they'd then be billed
     # for. The shop hides rent buttons for perks it shows as owned, but the
@@ -1329,6 +1349,10 @@ async def _rent_perk_flow(
             )
         elif "already rented" in msg:
             text = "❌ You're already renting that perk."
+        elif "not for sale" in msg:
+            # Reachable despite the button being hidden: a stale shop embed
+            # someone left open, or the icon/colour picker's own entry points.
+            text = "❌ This server has stopped selling that perk."
         else:
             text = "❌ That perk isn't available."
         await interaction.response.send_message(text, ephemeral=True)
@@ -2012,6 +2036,8 @@ class EconomyCog(commands.Cog):
                     "❌ You're already holding a 🛡️ shield — it burns "
                     "automatically if a missed day would break your streak."
                 )
+            elif "not for sale" in msg:
+                text = "❌ This server has stopped selling streak shields."
             else:
                 text = "❌ That isn't available right now."
             await interaction.response.send_message(text, ephemeral=True)
@@ -2601,31 +2627,63 @@ class EconomyCog(commands.Cog):
 
     # ── gift ─────────────────────────────────────────────────────────────
 
+    async def _giftable_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """The perks THIS guild sells, for `/bank gift`.
+
+        Autocomplete rather than a static ``@app_commands.choices`` list
+        because the choices on a slash command are baked in at import and are
+        the same in every guild, so a switched-off perk would keep offering
+        itself in the picker and refuse only after someone picked it. The
+        refusal in the command body stays regardless — autocomplete is a
+        convenience, and Discord will happily deliver a hand-typed value that
+        never appeared in it.
+        """
+        if interaction.guild is None:
+            return []
+        guild_id = interaction.guild.id
+
+        def _settings() -> EconSettings:
+            with self.bot.ctx.open_db() as conn:
+                return load_econ_settings(conn, guild_id)
+
+        settings = await asyncio.to_thread(_settings)
+        needle = current.casefold()
+        return [
+            app_commands.Choice(name=PERK_LABELS[p], value=p)
+            for p in perks_on_sale(settings, GIFTABLE_PERKS)
+            if needle in PERK_LABELS[p].casefold()
+        ][:25]
+
     @bank.command(
         name="gift",
         description="Gift a friend a perk — you pay its weekly price.",
     )
     @app_commands.describe(member="Who to gift it to", perk="Which perk to gift")
-    @app_commands.choices(
-        perk=[
-            app_commands.Choice(name=PERK_LABELS[p], value=p)
-            for p in GIFTABLE_PERKS
-        ]
-    )
+    @app_commands.autocomplete(perk=_giftable_autocomplete)
     async def bank_gift(
         self,
         interaction: discord.Interaction,
         member: discord.Member,
-        perk: app_commands.Choice[str],
+        perk: str,
     ) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
         gifter = interaction.user
         assert isinstance(gifter, discord.Member)
-        perk_key = perk.value
+        perk_key = perk
 
         settings = await self._settings_or_refuse(interaction, guild.id)
         if settings is None:
+            return
+        if perk_key not in GIFTABLE_PERKS:
+            # Free-text now that the picker is autocomplete: a typo or a stale
+            # client can deliver anything at all.
+            await interaction.response.send_message(
+                "❌ That isn't a perk you can gift. Pick one from the list.",
+                ephemeral=True,
+            )
             return
         if member.bot:
             await interaction.response.send_message(
@@ -2637,17 +2695,25 @@ class EconomyCog(commands.Cog):
                 "❌ Rent your own perks with /bank shop.", ephemeral=True
             )
             return
+        if not perk_on_sale(settings, perk_key):
+            # Covers the voice lease's old price-0 check and every other perk
+            # besides: a switched-off perk can't be bought for yourself OR for
+            # a friend, or the gift route would be a hole straight through the
+            # checkbox.
+            #
+            # Checked BEFORE the Discord feature gate below. Both refuse, but
+            # only one is actionable: "needs a server feature" sends an admin
+            # hunting a boost level for a perk they themselves unchecked.
+            await interaction.response.send_message(
+                f"❌ **{PERK_LABELS[perk_key]}** isn't for sale here right now.",
+                ephemeral=True,
+            )
+            return
         if perk_key in FEATURE_GATED and not await feature_gate_ok(
             self.bot, guild.id, perk_key
         ):
             await interaction.response.send_message(
                 "❌ That perk needs a server feature that isn't enabled here.",
-                ephemeral=True,
-            )
-            return
-        if perk_key == "voice_style" and settings.price_voice_style <= 0:
-            await interaction.response.send_message(
-                "❌ The voice-style lease isn't active here right now.",
                 ephemeral=True,
             )
             return
@@ -2709,6 +2775,8 @@ class EconomyCog(commands.Cog):
                 )
             elif "already rented" in msg:
                 text = f"❌ You're already gifting them **{label}**."
+            elif "not for sale" in msg:
+                text = f"❌ This server has stopped selling **{label}**."
             else:
                 text = "❌ That gift isn't available."
             await self._reply(interaction, text, via_confirm=via_confirm)

@@ -239,9 +239,13 @@ def test_shop_embed_shield_row_and_held_marker(db):
     ("overrides", "field", "token"),
     [
         # token None → the row must be absent entirely.
-        ({"price_streak_shield": 0}, "One-shot", None),
-        ({}, "Voice", None),  # price_voice_style defaults to 0 — shipped dark
-        ({"price_voice_style": 30}, "Voice", "30"),
+        # Visibility follows the Shop & Perks checkbox now, not the price: a
+        # price of 0 means free, and "don't sell it" is its own switch.
+        ({"shop_streak_shield_enabled": False}, "One-shot", None),
+        ({"price_streak_shield": 0}, "One-shot", "0"),  # free, still on sale
+        ({}, "Voice", None),  # the lease ships unsold
+        ({"price_voice_style": 30}, "Voice", None),  # priced but not switched on
+        ({"price_voice_style": 30, "shop_voice_style_enabled": True}, "Voice", "30"),
         ({}, "Weekly Raffle", None),
         ({"raffle_enabled": True}, "Weekly Raffle", "10"),  # ticket price
     ],
@@ -254,3 +258,108 @@ def test_shop_embed_row_visibility(db, overrides, field, token):
     else:
         row = next(f for f in embed.fields if f.name == field)
         assert token in row.value
+
+
+# ── the per-perk shop switches (Shop & Perks: What's On Sale) ───────────
+
+
+def _labels(embed) -> set[str]:
+    """Every shop-table cell label in the embed, across all tiers."""
+    found = set()
+    for field in embed.fields:
+        for line in field.value.splitlines():
+            if line.startswith("`"):
+                found.add(line[1:].split("`")[0].strip().split("  ")[0].strip())
+    return found
+
+
+def test_a_switched_off_perk_leaves_the_shop_table(db):
+    _enable(db, shop_role_gradient_enabled=False)
+    embed = build_shop_embed(_settings(db), set(), None, panel=True)
+    labels = _labels(embed)
+    assert "Gradient" not in labels
+    assert "Color" in labels  # the rest of the shop is untouched
+
+
+def test_a_switched_off_perk_does_not_pad_the_rows_that_remain(db):
+    """A hidden row must leave the width calculation too.
+
+    The palette row already worked this way; a switched-off perk has to match,
+    or the widest hidden label would pad every visible row and the table would
+    render with a column of unexplained whitespace.
+    """
+    _enable(db, price_role_name=35, price_role_color=50)
+    with_holo = _shop_row(
+        build_shop_embed(_settings(db), set(), None, panel=True), "Color"
+    )
+    _enable(db, shop_role_holographic_enabled=False)  # "Holo" is not the widest…
+    _enable(db, shop_role_gradient_enabled=False)  # …but "Gradient" is
+    without = _shop_row(
+        build_shop_embed(_settings(db), set(), None, panel=True), "Color"
+    )
+    assert len(without) < len(with_holo)
+
+
+def test_the_voice_tier_follows_its_checkbox_not_its_price(db):
+    # Priced but unsold → absent. This is the pairing that used to be
+    # impossible to express: price 0 meant "free", never "don't sell it".
+    _enable(db, price_voice_style=40, shop_voice_style_enabled=False)
+    assert "Voice" not in _labels(build_shop_embed(_settings(db), set(), None))
+
+    # Sold at 0 → present, and free. Also newly expressible.
+    _enable(db, price_voice_style=0, shop_voice_style_enabled=True)
+    assert "Voice" in _labels(build_shop_embed(_settings(db), set(), None))
+
+
+def test_the_streak_shield_field_follows_its_checkbox(db):
+    _enable(db, price_streak_shield=30, shop_streak_shield_enabled=True)
+    assert "One-shot" in [f.name for f in build_shop_embed(_settings(db), set(), None).fields]
+    _enable(db, shop_streak_shield_enabled=False)
+    assert "One-shot" not in [
+        f.name for f in build_shop_embed(_settings(db), set(), None).fields
+    ]
+
+
+def test_a_member_mid_rental_keeps_their_row_after_the_perk_is_withdrawn(db):
+    """They're still being billed until their anniversary, so they still see it.
+
+    Hiding the row of a live rental is how you get "I'm paying for something
+    that isn't in the shop and I can't find the cancel button".
+    """
+    _enable(db, shop_role_gradient_enabled=False)
+    embed = build_shop_embed(
+        _settings(db), set(), None, panel=False, owned={"role_gradient"}
+    )
+    row = _shop_row(embed, "Gradient")
+    assert "✅" in row
+
+
+def test_the_whole_shop_can_be_switched_off(db):
+    """Billy's literal ask: every box unchecked, and the embed still renders.
+
+    The perk table empties out entirely — the width calculation used to raise
+    on an empty table — and the gifting note goes with it, since there is
+    nothing left to gift.
+    """
+    from bot_modules.services.economy_service import SHOP_TOGGLE_PERKS
+
+    _enable(db, **{f"shop_{p}_enabled": False for p in SHOP_TOGGLE_PERKS})
+    embed = build_shop_embed(_settings(db), set(), None, panel=True)
+    assert _labels(embed) == set()
+    assert "For a Friend" not in [f.name for f in embed.fields]
+    assert embed.title == "🛍️ Perk Shop"
+
+
+def test_switching_everything_off_still_shows_the_server_store(db):
+    """The custom items keep their own per-item switch, so they survive.
+
+    Two independent controls, and this is the test that proves the perk
+    checkboxes don't reach past their own eight lines.
+    """
+    from bot_modules.economy.shop_items import ItemView
+    from bot_modules.services.economy_service import SHOP_TOGGLE_PERKS
+
+    _enable(db, **{f"shop_{p}_enabled": False for p in SHOP_TOGGLE_PERKS})
+    item = ItemView(item_id=1, name="Tuckshop Voucher", blurb="a treat", price=25)
+    embed = build_shop_embed(_settings(db), set(), None, items=[item])
+    assert "Server Store" in [f.name for f in embed.fields]

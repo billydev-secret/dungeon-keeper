@@ -7,13 +7,19 @@ release, which made the wallet import the shop to learn a label — the tables
 are the shop's *subject*, not its property.
 
 Adding a perk means adding a row to each table here, and nowhere else in this
-package. ``economy/register.py`` keeps a separate label map on purpose: it
-carries retired kinds (``gift_color``) so old ledger rows still render.
+package — plus its ``shop_<perk>_enabled`` field and its ``SHOP_TOGGLE_PERKS``
+entry, which live in ``economy_service`` because the settings dataclass is
+there (this module imports it, not the other way round).
+
+``economy/register.py`` keeps a separate label map on purpose: it carries
+retired kinds (``gift_color``) so old ledger rows still render.
 """
 
 from __future__ import annotations
 
-from bot_modules.services.economy_service import EconSettings
+from collections.abc import Iterable
+
+from bot_modules.services.economy_service import SHOP_TOGGLE_PERKS, EconSettings
 
 # Human labels for the rentable perks (shop rows, wallet field, DMs).
 PERK_LABELS = {
@@ -88,6 +94,26 @@ PERK_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 def perk_price(settings: EconSettings, perk: str) -> int:
     return int(getattr(settings, f"price_{perk}"))
+
+
+def perk_on_sale(settings: EconSettings, perk: str) -> bool:
+    """Whether this guild currently sells ``perk`` at all.
+
+    The admin checkbox on the Shop & Perks page, and the only thing that
+    answers this question — a price of 0 means free, not off (see
+    ``SHOP_TOGGLE_PERKS``). Anything outside that tuple is not a switchable
+    shop line (``custom_item`` carries its own per-item ``enabled`` column,
+    ``emoji`` is priced dark) and is reported as on sale, so this can be
+    called on any perk string without the caller pre-filtering.
+    """
+    if perk not in SHOP_TOGGLE_PERKS:
+        return True
+    return bool(getattr(settings, f"shop_{perk}_enabled"))
+
+
+def perks_on_sale(settings: EconSettings, perks: Iterable[str]) -> tuple[str, ...]:
+    """``perks`` filtered to the ones this guild sells, order preserved."""
+    return tuple(p for p in perks if perk_on_sale(settings, p))
 
 
 # What each role-studio setter says when the member hasn't rented its perk.

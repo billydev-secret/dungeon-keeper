@@ -53,8 +53,13 @@ from typing import TYPE_CHECKING
 
 from bot_modules.economy import rentals
 from bot_modules.economy.rentals import WEEK_SECONDS, BillingAction, classify, prorated_refund
+from bot_modules.economy.perks import perk_on_sale, perks_on_sale
 from bot_modules.services.economy_raffle_service import try_redeem_voucher
-from bot_modules.services.economy_service import apply_credit, apply_debit
+from bot_modules.services.economy_service import (
+    SHOP_TOGGLE_PERKS,
+    apply_credit,
+    apply_debit,
+)
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
@@ -262,7 +267,8 @@ def rent_perk(
     rental against the guild's custom shop items — whose price list has no flat
     fallback, since the item *is* the price. ``beneficiary_id`` defaults to ``user_id``; a gift passes the
     friend's id, making them the beneficiary of the base perk. It is always
-    stored non-NULL so the live-rental unique index fires. Raises ValueError: unknown ``perk``; "already rented" when a live
+    stored non-NULL so the live-rental unique index fires. Raises ValueError: unknown ``perk``; "not for sale" when the guild has
+    switched this perk off on the Shop & Perks page; "already rented" when a live
     rental for this (perk, beneficiary) exists (IntegrityError on the partial
     unique index); "insufficient" when the upfront debit fails (guarded UPDATE →
     zero writes, and the whole insert rolls back with it).
@@ -271,6 +277,13 @@ def rent_perk(
         # Validate BEFORE the insert so the perk CHECK can never masquerade as
         # the live-rental collision (only that index may fire in the try below).
         raise ValueError(f"unknown perk: {perk!r}")
+    if not perk_on_sale(settings, perk):
+        # The guild switched this perk off. Refusing HERE rather than at each
+        # button is the point: the shop hides the row, but the icon picker's
+        # Custom entry, the palette picker and `/bank gift` all reach a rental
+        # by their own routes, and a checkbox that only greys out a button is
+        # not a checkbox that turns anything off.
+        raise ValueError("not for sale")
     now = time.time() if now is None else now
     beneficiary = user_id if beneficiary_id is None else beneficiary_id
     price = _price_for(
@@ -659,7 +672,9 @@ def bill_rental(
     caller's transaction. Renewals bill the CURRENT guild price
     (``settings.price_<perk>``) — a mid-rental price change takes effect at the
     next anniversary (spec §6/§9). A suspended rental returns ``none`` (billing
-    frozen; the clock resumes via ``set_rental_suspended``).
+    frozen; the clock resumes via ``set_rental_suspended``). A rental whose perk
+    the guild has stopped selling returns ``discontinued`` at its anniversary:
+    the paid week is honoured in full, then the rental ends without a charge.
     """
     rental_id = int(rental["id"])
     perk = str(rental["perk"])
@@ -684,17 +699,21 @@ def bill_rental(
         cancel_at_period_end=bool(rental["cancel_at_period_end"]),
         suspended=bool(rental["suspended"]),
         now=now,
+        perk_disabled=not perk_on_sale(settings, perk),
     )
 
     if action is BillingAction.NONE:
         return _result(BillingAction.NONE)
 
-    if action is BillingAction.CANCEL_PERIOD_END:
+    if action in (BillingAction.CANCEL_PERIOD_END, BillingAction.DISCONTINUED):
+        # Same write for both — the rental ends unbilled at its anniversary.
+        # They stay distinct on the way out so the effects layer knows whether
+        # to DM (see BillingAction.DISCONTINUED).
         conn.execute(
             "UPDATE econ_rentals SET state = 'cancelled', ended_at = ? WHERE id = ?",
             (now, rental_id),
         )
-        return _result(BillingAction.CANCEL_PERIOD_END)
+        return _result(action)
 
     if action is BillingAction.REVOKE:
         conn.execute(
@@ -835,7 +854,10 @@ def effective_entitlements(
 
     settings = load_econ_settings(conn, guild_id)
     return rentals.comp_entitlements(
-        rented, is_staff=True, comp_enabled=settings.mod_perk_comp
+        rented,
+        is_staff=True,
+        comp_enabled=settings.mod_perk_comp,
+        on_sale=perks_on_sale(settings, SHOP_TOGGLE_PERKS),
     )
 
 

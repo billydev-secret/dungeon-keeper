@@ -84,7 +84,8 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
   voice→text, and a guild that prices voice at or below text pays nothing.
 - **Grace:** one free missed day per rolling 7, automatic and silent; second miss resets.
 - **Streak shield (sinks round 3, stage 2):** a prepaid one-shot bought in `/bank shop`
-  (`price_streak_shield`, default 30; 0 hides the row), held at most ONE, auto-burned
+  (`price_streak_shield`, default 30; the row is shown while
+  `shop_streak_shield_enabled` is on — see §6.1), held at most ONE, auto-burned
   when a reset would land — it covers what grace can't. Covers consume grace-first:
   a 2-day gap survives on grace *or* shield, a 3-day gap only with both, 4+ always
   resets, and a hopeless gap leaves the shield held. Purchase is a guarded
@@ -1378,14 +1379,79 @@ re-read price differs from the previous cycle's **DMs the owner** the old and ne
 | Private voice room | 200 | §8 (Stage 6) |
 | Custom shop item | admin-set, per item | **Custom shop items** (migration 179, `docs/plans/economy-shop-items.md`). Admin-defined on the Shop & Perks page (the order queue lives on **Approvals**) rather than compiled into `perks.py`; rendered as the shop's own section, absent entirely in a guild with none. Two axes per item: `kind` `role` (grant a role automatically) or `manual` (staff to-do), and `billing` `once` or `weekly` (a real `econ_rentals` row, perk `custom_item`, tagged `catalog_item_id`). Optional stock, per-member limit and availability window. A manual purchase escrows the price (`shop_item` kind) and spawns a row on the **existing mod todo board** (`todos.purchase_id`); ticking it off delivers the order, riding `complete_todo`'s guarded UPDATE for exactly-once. Refusing refunds (`shop_item_refund`, `refunded_at` predicate) and closes the todo as **missed**, never as done. Unresolved orders refund after `shop_item_expire_days` (14) |
 | Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
-| Streak shield | 30 once | One-shot consumable, not a rental — §3.1; shop "One-shot" row + panel button, wallet shows "held" |
-| Sponsored emoji | 60/wk (animated 90) | **Sinks round 3, stage 4.** `/bank emoji image: name:` escrows week one (`emoji_sponsor` kind); mod approves on the Approvals page queue → two-phase claim-then-upload opens a real `econ_rentals` row (perk `emoji`, meta carries `animated` so renewals bill the right rate); deny/cancel/expiry refund exactly-once (`emoji_sponsor_refund`, `refunded_at` predicate); lapse deletes the emoji and frees the slot + name. Caps: `emoji_sponsor_slots` (default 5) + never the guild's last free emoji slot of that kind. One in flight per member and one claim per name via partial unique indexes (migration 092). Names: 2–32 `[A-Za-z0-9_]` + the shared blocklist. `price_emoji` 0 disables new sponsorships; pending reviews auto-refund after `emoji_sponsor_expire_days` (default 14, QOTD-sponsor sweep pattern) |
-| Voice room lease | **0 (dark)**, suggested 30 | Leases Voice Control **rename + user limit** (sinks round 3, stage 3). Shown on the Shop & Perks page as "Voice room lease" (the `price_voice_style` field); this is the price the shop charges for a voice room — distinct from the dormant stage-6 `price_voice_room` (private rooms), which is not wired to anything and is not shown on the dashboard. Price 0 = paywall off (the shipped default AND the per-guild opt-out); pricing it on the Shop & Perks page is the launch switch — announce first. Armed only while the economy is enabled. Entitlement is beneficiary-based (giftable); saved VM profiles stay stored but only re-apply while leased; lapse best-effort walks a live temp channel back to the template name + default limit (no role involved). Access dial / invite / kick / transfer / reset stay free. Verdict is pure (`voice_master/logic.style_lease_blocks`), enforced in `_apply_rename`/`_apply_limit` (one choke point for slash + panel) and the spawn profile loader |
+| Streak shield | 30 once | One-shot consumable, not a rental — §3.1; shop "One-shot" row + panel button, wallet shows "held". Switchable off per guild (§6.1); a shield already held keeps working and stays refundable, since it is stock the member paid for |
+| Sponsored emoji | 60/wk (animated 90) | **Sinks round 3, stage 4.** `/bank emoji image: name:` escrows week one (`emoji_sponsor` kind); mod approves on the Approvals page queue → two-phase claim-then-upload opens a real `econ_rentals` row (perk `emoji`, meta carries `animated` so renewals bill the right rate); deny/cancel/expiry refund exactly-once (`emoji_sponsor_refund`, `refunded_at` predicate); lapse deletes the emoji and frees the slot + name. Caps: `emoji_sponsor_slots` (default 5) + never the guild's last free emoji slot of that kind. One in flight per member and one claim per name via partial unique indexes (migration 092). Names: 2–32 `[A-Za-z0-9_]` + the shared blocklist. `price_emoji` 0 disables new sponsorships (the one price-as-off dial migration 182 left standing — emoji sponsorship is not one of the eight switchable shop lines in §6.1); pending reviews auto-refund after `emoji_sponsor_expire_days` (default 14, QOTD-sponsor sweep pattern) |
+| Voice room lease | **not sold by default**; price 0, suggested 30 | Leases Voice Control **rename + user limit** (sinks round 3, stage 3). Shown on the Shop & Perks page as "Voice room lease" (the `price_voice_style` field); this is the price the shop charges for a voice room — distinct from the dormant stage-6 `price_voice_room` (private rooms), which is not wired to anything and is not shown on the dashboard. The paywall arms on `shop_voice_style_enabled` (§6.1), NOT on the price: checking the box on Shop & Perks is the launch switch — announce first — and unchecking it is the per-guild opt-out, which leaves rename/limit free for everyone. It defaults off, matching the price-0 dark default it replaced in migration 182. Selling it at a price of 0 is now a distinct, legitimate state: the paywall is armed and the lease costs nothing, so members claim it from the shop rather than simply having it. Armed only while the economy is enabled. Entitlement is beneficiary-based (giftable); saved VM profiles stay stored but only re-apply while leased; lapse best-effort walks a live temp channel back to the template name + default limit (no role involved). Access dial / invite / kick / transfer / reset stay free. Verdict is pure (`voice_master/logic.style_lease_blocks`), enforced in `_apply_rename`/`_apply_limit` (one choke point for slash + panel) and the spawn profile loader |
 | PvP game wager | player-chosen, uncapped | **Sinks round 2, stage 4b** (built 2026-07-20). Optional `wager:` on all six duel/group games: equal ante, winner takes the pot minus the optional house rake — `wager_rake_pct`, default **0 (dark)**, capped 50, added 2026-07-20 revising the round's original no-rake stance (at 0 a wager is still the pure transfer that made the games matter; a priced rake evaporates its cut of every settled pot, read at settlement time like rental renewals, never snapshotted). Refunds are never raked, nor is a single-stake pot (a winner reclaiming their own ante isn't a contest); the payout announcement and register memo both name the cut (`meta.rake`) so the arithmetic visibly adds up. Escrow in `econ_game_wagers` (migration 094) keyed to (game_type, game_id, user_id); duels declare at challenge and debit both sides at accept (decline/timeout costs nothing), lobbies debit on join and refund on leave. Settlement/refund rides the stage-4a terminal seam, exactly-once via `settled_at`. Every non-settling terminal state (ABANDONED / VOID / EXPIRED_LOBBY / DECLINED) and a `winner_id` of None refunds; a guild-leaver's stake is refunded by the economy cog's member-remove listener. Ledger kinds `wager_stake` / `wager_payout` / `wager_refund`, payout and refund unboosted so a wager can never mint |
 | Raffle ticket | 10 each, ≤10/member/week | **Sinks round 3, stage 5.** Week-scoped tickets (`raffle_ticket` burn, no refunds); weighted draw at the ISO-week roll, exactly-once via the `econ_raffle_draws` PK (claim-before-side-effect). Prize is NEVER coins: a `free_week` voucher (28-day expiry) auto-covers the winner's next rental debit — renewal or first week of a new rent — as a 0-amount `rental` ledger row (`meta.voucher_id`). Winner DMed (opt-in-role gated) and **named** on the economy panel's raffle section (the deliberate anonymous-ticker carve-out — buying in is opting in). `raffle_enabled` default **off**; enabling is a comms decision, announce first. Shop: ticket row + quantity modal (ephemeral + persistent panel). Migration 093 |
 | Hoard tax (demurrage) | **0% (dark)**, suggested 2%/wk over a 500 floor | **Built 2026-07-20 (migration 100).** The only sink that needs no buyer: at the ISO-week roll, every wallet above `demurrage_threshold` loses `demurrage_rate_pct`% of the **excess** only — the floor is protected, so nobody is taxed below it and 100% is a hard wealth cap, not a wipe. Floor-division grace: a tax that rounds to 0 goes uncollected. Exactly-once via the `econ_demurrage_sweeps` (guild, week) PK — claim-before-debit, the raffle-draw pattern — with per-sweep totals recorded for metrics. Ledger kind `demurrage` (meta: closed week + pre-tax balance) narrated by the register feed (🐉 "Hoard tax") — no separate announcement. Rate 0 default = off; both knobs on the Shop & Perks page; enabling is a comms decision, announce first (`economy_demurrage_service.py`, swept from the week roll beside the raffle draw) |
 | Casino | fixed paytables, not priced | **Built 2026-07-22** — house gambling (coinflip, slots, blackjack, roulette) in one configured channel; net sink via tested house edges, bounded by a per-member daily wager cap. Kinds `casino_stake`/`casino_payout`/`casino_refund`, payouts never boosted. Own spec: [casino_spec.md](casino_spec.md) (dashboard: Economy → Casino) |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
+
+### 6.1 What the shop sells (per-perk switches, migration 182)
+
+Eight shop lines carry a per-guild on/off switch, set from the **What's On
+Sale** card on the Shop & Perks page: the six self-rented role perks, the voice
+room lease, and the streak shield. Each owns a `shop_<perk>_enabled` config key
+and an `EconSettings` field; the tuple is `SHOP_TOGGLE_PERKS` in
+`economy_service.py`, and `perks.perk_on_sale(settings, perk)` is the one
+question every surface asks. Anything outside that tuple answers True — custom
+shop items carry their own per-item `enabled` column and emoji sponsorship is
+priced dark, so neither is reachable from this card.
+
+**These are the only off switch.** Before 182, a price of 0 was the de-facto
+one and meant three different things: `price_streak_shield` 0 hid the row,
+`price_emoji` 0 blocked new sponsorships, and `price_voice_style` 0 disarmed
+the paywall and made the controls **free for everyone** — the opposite of off.
+A price is now only a price; 0 means free. (The emoji dial is the one survivor,
+being outside the eight.)
+
+**Defaults:** every line on except `voice_style`, which ships off to match the
+price-0 dark default it replaced — a guild that has never configured its
+economy keeps its free rename/limit controls instead of waking up behind a
+paywall. Migration 182 backfills the switch from each guild's stored prices
+(`price_voice_style > 0` → on; `price_streak_shield` explicitly 0 → off), so
+nothing visibly changes on upgrade.
+
+**Enforcement** (a preference that isn't enforced is not shipped):
+
+- `rent_perk` raises `ValueError("not for sale")` — one chokepoint covering the
+  shop's Rent button, the icon and palette pickers' own entry points, and
+  `/bank gift`. `purchase_streak_shield` raises the same.
+- `build_shop_embed` drops the row from the table **and from the width
+  calculation** (the palette row's rule), drops the Voice tier and the One-shot
+  field, and drops the "For a Friend" note when nothing is left to gift. The
+  shop view drops the matching buttons.
+- `/bank gift`'s perk parameter is **autocomplete**, not a static
+  `app_commands.choices` list, because choices are baked in at import and are
+  identical in every guild. The command body re-checks regardless: autocomplete
+  is a convenience and Discord will deliver a hand-typed value.
+- The staff comp narrows to what the guild sells (`comp_entitlements(...,
+  on_sale=)`) — otherwise the one group who can see the checkbox would be the
+  one group it doesn't apply to.
+- `style_lease_blocks` arms on the switch rather than `price > 0`.
+
+**Live rentals run to expiry, then stop renewing.** Nothing is written when a
+perk goes off sale. `classify` takes `perk_disabled` — read fresh from settings
+each tick — and returns the new `BillingAction.DISCONTINUED` only once an
+active rental reaches its anniversary: the paid week is honoured in full, the
+rental ends unbilled, and the perk is revoked. Because no flag is stored, an
+admin who re-checks the box before someone's anniversary renews them as if
+nothing had happened.
+
+Ordering rules inside `classify`: a member's own `cancel_at_period_end` wins
+(same ending, but a member-initiated cancel is silent and this one DMs — saying
+the server withdrew a perk they cancelled themselves would misreport who
+decided); `suspended` still wins over everything. A rental in **grace** is
+discontinued outright rather than retried — grace means the anniversary passed
+and the debit failed, so there is no paid week left to honour, and a retry that
+succeeded would bill a fresh week for a perk that is no longer sold.
+
+`DISCONTINUED` writes exactly what `CANCEL_PERIOD_END` writes and stays a
+separate value purely so the effects layer can DM: the owner is told the server
+stopped offering it and that they have not been charged again, and the
+beneficiary of a gift gets a courtesy note. A member can still refund a
+withdrawn rental early — withdrawing a perk must not trap anyone in it.
 
 **Curated role-icon catalog (currency sink).** Alongside bring-your-own icon
 uploads, an admin can stock a per-guild catalog of named role icons, each with its

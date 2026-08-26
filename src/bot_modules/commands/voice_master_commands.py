@@ -795,7 +795,7 @@ async def _style_gate_blocked(
     """True (after an ephemeral upsell) when the voice-style lease gates this
     member out of rename/limit — the single choke point for both the slash
     commands and the panel actions. The verdict itself is the pure
-    ``style_lease_blocks`` (economy on + price > 0 + not entitled)."""
+    ``style_lease_blocks`` (economy on + the lease on sale + not entitled)."""
     ctx = _ctx_from_interaction(interaction)
     if ctx is None:
         return False
@@ -808,7 +808,7 @@ async def _style_gate_blocked(
     def _check() -> bool:
         with ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
-            if not settings.enabled or settings.price_voice_style <= 0:
+            if not settings.enabled or not settings.shop_voice_style_enabled:
                 # Skip the entitlement read entirely while the paywall is dark.
                 return False
             ent = effective_entitlements(
@@ -816,7 +816,7 @@ async def _style_gate_blocked(
             )
             return style_lease_blocks(
                 economy_enabled=settings.enabled,
-                price=settings.price_voice_style,
+                on_sale=settings.shop_voice_style_enabled,
                 entitled="voice_style" in ent,
             )
 

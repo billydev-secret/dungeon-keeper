@@ -1058,6 +1058,85 @@ async def test_cancel_at_period_end_revokes_with_no_dm(db, monkeypatch):
     assert notify.calls == []  # … but member-initiated: silent
 
 
+# ── the guild stops selling a perk (Shop & Perks checkboxes) ───────────
+
+
+async def test_withdrawn_perk_runs_to_expiry_then_ends_and_dms(db, monkeypatch):
+    """End to end through the loop: nothing mid-week, then a DM'd ending.
+
+    ``cancel_period_end`` is deliberately silent because the member asked for
+    it; this one is the server's decision, so it has to say so.
+    """
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 2 * PRICE_COLOR)  # funded for a second week they won't be charged
+    rid = _rent(db, USER, "role_color")
+    due = _rental(db, rid)["next_bill_at"]
+
+    # The admin unchecks the box mid-week: nothing happens to anyone.
+    _enable(db, shop_role_color_enabled=False)
+    await _rental_tick(_rental_bot(), db, due - 1.0)
+    assert _rental(db, rid)["state"] == "active"
+    assert rec.revoke_calls == [] and notify.calls == []
+    assert _balance(db) == PRICE_COLOR
+
+    # At the anniversary it ends, unbilled and revoked, and they are told why.
+    await _rental_tick(_rental_bot(), db, due)
+    assert _rental(db, rid)["state"] == "cancelled"
+    assert _balance(db) == PRICE_COLOR  # NOT charged a second week
+    assert rec.revoke_calls == [(GUILD, USER)]
+    assert len(notify.calls) == 1
+    body = notify.calls[0][2] or ""
+    assert "stopped offering" in body
+    assert "haven't been charged" in body
+    # The human label, not the raw perk key — "your **role_color** perk" is
+    # not a sentence to send a member.
+    assert "Custom Role Color" in body
+    assert "role_color" not in body
+
+
+async def test_withdrawn_gift_dms_both_the_payer_and_the_wearer(db, monkeypatch):
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 2 * PRICE_COLOR)
+    rid = _rent(db, USER, "role_color", beneficiary_id=OTHER)
+    due = _rental(db, rid)["next_bill_at"]
+    _enable(db, shop_role_color_enabled=False)
+
+    await _rental_tick(_rental_bot(), db, due)
+
+    assert _rental(db, rid)["state"] == "cancelled"
+    assert rec.revoke_calls == [(GUILD, OTHER)]  # the wearer loses the role
+    dmed = {(gid, uid) for gid, uid, _ in notify.calls}
+    assert dmed == {(GUILD, USER), (GUILD, OTHER)}
+
+
+async def test_re_enabling_before_the_anniversary_renews_as_normal(db, monkeypatch):
+    """Reversible, because nothing is written when a perk goes off sale."""
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 2 * PRICE_COLOR)
+    rid = _rent(db, USER, "role_color")
+    due = _rental(db, rid)["next_bill_at"]
+
+    _enable(db, shop_role_color_enabled=False)
+    await _rental_tick(_rental_bot(), db, due - 100.0)
+    _enable(db, shop_role_color_enabled=True)  # thought better of it
+    await _rental_tick(_rental_bot(), db, due)
+
+    row = _rental(db, rid)
+    assert row["state"] == "active"
+    assert row["next_bill_at"] == due + WEEK_SECONDS
+    assert _balance(db) == 0  # charged the second week, as normal
+    assert rec.revoke_calls == [] and notify.calls == []
+
+
 # ── feature-gate suspension sweep ──────────────────────────────────────
 
 
@@ -1493,7 +1572,7 @@ async def test_voice_style_revoke_reverts_channel_not_role(db, monkeypatch):
 
     import discord as _discord
 
-    _enable(db, price_voice_style=30)
+    _enable(db, price_voice_style=30, shop_voice_style_enabled=True)
     rec = _patch_perks(monkeypatch)
     notify = _NotifyRecorder()
     monkeypatch.setattr(economy_loop, "notify_member", notify)
@@ -1530,7 +1609,7 @@ async def test_voice_style_revoke_reverts_channel_not_role(db, monkeypatch):
 
 
 async def test_voice_style_revoke_without_live_channel_is_quiet(db, monkeypatch):
-    _enable(db, price_voice_style=30)
+    _enable(db, price_voice_style=30, shop_voice_style_enabled=True)
     rec = _patch_perks(monkeypatch)
     notify = _NotifyRecorder()
     monkeypatch.setattr(economy_loop, "notify_member", notify)

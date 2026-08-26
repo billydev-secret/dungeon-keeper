@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
-from discord import app_commands
 
 from bot_modules.core.db_utils import (
     get_config_value,
@@ -1947,10 +1946,10 @@ async def test_shop_table_row_and_its_button_agree(ctx, db, overrides, field, cu
 
 
 async def _gift(cog, interaction, member, perk="role_color") -> None:
-    from bot_modules.economy.perks import PERK_LABELS
-
-    choice = app_commands.Choice(name=PERK_LABELS[perk], value=perk)
-    await cog.bank_gift.callback(cog, interaction, member, choice)
+    # A bare string, not an app_commands.Choice: the perk parameter moved to
+    # autocomplete so the picker can be per-guild (a switched-off perk must
+    # not be offered), and autocomplete parameters arrive as their raw value.
+    await cog.bank_gift.callback(cog, interaction, member, perk)
 
 
 @pytest.mark.asyncio
@@ -2999,7 +2998,8 @@ async def test_refund_confirm_survives_a_failed_perk_revoke(ctx, db):
 
 @pytest.mark.asyncio
 async def test_rent_voice_style_skips_role_projection(ctx, db):
-    _enable(db, price_voice_style=30)
+    # Both dials: pricing the lease no longer implies selling it.
+    _enable(db, price_voice_style=30, shop_voice_style_enabled=True)
     _credit(db, 500, 100)
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
@@ -3017,16 +3017,31 @@ async def test_rent_voice_style_skips_role_projection(ctx, db):
 
 @pytest.mark.asyncio
 async def test_gift_voice_style_dark_refused_priced_allowed(ctx, db):
+    """Gifting follows the Shop & Perks checkbox, not the price.
+
+    The refusal used to hang off ``price_voice_style <= 0``; it is now the
+    generic "is this on sale here" guard, so pricing the lease is no longer
+    enough on its own — the box has to be checked.
+    """
     _enable(db)
     _credit(db, 500, 100)
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
     with _patch_projection():
         await _gift(cog, interaction, _member(member_id=900), perk="voice_style")
-    assert "isn't active" in interaction.response.send_message.await_args.args[0]
+    assert "isn't for sale" in interaction.response.send_message.await_args.args[0]
     assert _live_rentals(db) == []
 
+    # Priced but still unchecked: the shop doesn't sell it, so neither does
+    # the gift route.
     _enable(db, price_voice_style=30)
+    interaction = _interaction(_member(member_id=500))
+    with _patch_projection():
+        await _gift(cog, interaction, _member(member_id=900), perk="voice_style")
+    assert "isn't for sale" in interaction.response.send_message.await_args.args[0]
+    assert _live_rentals(db) == []
+
+    _enable(db, price_voice_style=30, shop_voice_style_enabled=True)
     interaction = _interaction(_member(member_id=500))
     with _patch_projection() as (apply_mock, _r, _n):
         await _gift(cog, interaction, _member(member_id=900), perk="voice_style")
@@ -3035,6 +3050,89 @@ async def test_gift_voice_style_dark_refused_priced_allowed(ctx, db):
     assert len(rentals) == 1
     assert rentals[0]["perk"] == "voice_style"
     assert rentals[0]["user_id"] == 500 and rentals[0]["beneficiary_id"] == 900
+
+
+@pytest.mark.asyncio
+async def test_gift_autocomplete_offers_only_what_the_guild_sells(ctx, db):
+    """The wiring reason the perk parameter stopped being a static Choice list.
+
+    ``@app_commands.choices`` is baked in at import and identical in every
+    guild, so a switched-off perk would keep appearing in the picker and only
+    refuse after someone chose it.
+    """
+    _enable(db, shop_role_gradient_enabled=False, shop_voice_style_enabled=True)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    choices = await cog._giftable_autocomplete(interaction, "")
+    values = [c.value for c in choices]
+    assert "role_gradient" not in values
+    assert "role_color" in values and "voice_style" in values
+
+
+@pytest.mark.asyncio
+async def test_gift_autocomplete_filters_by_what_was_typed(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    choices = await cog._giftable_autocomplete(interaction, "gradient")
+    assert [c.value for c in choices] == ["role_gradient"]
+
+
+@pytest.mark.asyncio
+async def test_gift_refuses_a_perk_that_never_appeared_in_the_picker(ctx, db):
+    # Autocomplete is a convenience, not a gate: Discord delivers whatever the
+    # client sends, including a hand-typed value.
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with _patch_projection():
+        await _gift(cog, interaction, _member(member_id=900), perk="not_a_perk")
+    assert "isn't a perk" in interaction.response.send_message.await_args.args[0]
+    assert _live_rentals(db) == []
+
+
+@pytest.mark.asyncio
+async def test_gift_refused_for_a_perk_the_guild_switched_off(ctx, db):
+    _enable(db, shop_role_gradient_enabled=False)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with _patch_projection():
+        await _gift(cog, interaction, _member(member_id=900), perk="role_gradient")
+    assert "isn't for sale" in interaction.response.send_message.await_args.args[0]
+    assert _live_rentals(db) == []
+
+
+@pytest.mark.asyncio
+async def test_rent_refused_for_a_perk_the_guild_switched_off(ctx, db):
+    _enable(db, shop_role_color_enabled=False)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with _patch_projection():
+        await cog.do_rent(interaction, _settings(db), _guild_roles(), "role_color")
+    assert "stopped selling" in interaction.response.send_message.await_args.args[0]
+    assert _live_rentals(db) == []
+
+
+@pytest.mark.asyncio
+async def test_a_comped_mod_cannot_claim_a_switched_off_perk(ctx, db):
+    """The bypass this guards: the comp path skips ``rent_perk`` entirely.
+
+    A comped moderator never reaches the service-layer refusal, so a stale
+    shop button would have handed them a perk the server had switched off —
+    and moderators are exactly the people looking at a shop embed left open
+    while they change the settings.
+    """
+    _enable(db, mod_perk_comp=True, shop_role_color_enabled=False)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    ctx.is_mod = lambda _i: True
+    with _patch_projection() as (apply_mock, _r, _n):
+        await cog.do_rent(interaction, _settings(db), _guild_roles(), "role_color")
+    assert "stopped selling" in interaction.response.send_message.await_args.args[0]
+    apply_mock.assert_not_awaited()  # no role projected either
 
 
 # ── /bank emoji guards (sinks round 3, stage 4) ──────────────────────────────

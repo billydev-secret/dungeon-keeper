@@ -1606,18 +1606,25 @@ def test_build_knock_request_embed_omits_guild_when_not_given():
 
 
 def test_style_lease_blocks_table():
+    """The paywall arms on the Shop & Perks checkbox, not on the price.
+
+    It used to arm on ``price_voice_style > 0``, which made a price of 0 mean
+    *free for everyone* here while the same 0 meant *hidden* on the streak
+    shield — the overload the per-perk switches removed. Price is now only
+    ever a price; ``on_sale`` is the whole verdict.
+    """
     from bot_modules.voice_master.logic import style_lease_blocks
 
     cases = [
-        # (economy_enabled, price, entitled) -> blocked
-        ((True, 30, False), True),    # armed paywall, no lease -> blocked
-        ((True, 30, True), False),    # leased (or gifted) -> free
-        ((True, 0, False), False),    # price 0 = shipped dark -> free for all
-        ((False, 30, False), False),  # economy off -> paywall can't arm
-        ((False, 0, False), False),
-        ((True, 1, False), True),     # any positive price arms it
+        # (economy_enabled, on_sale, entitled) -> blocked
+        ((True, True, False), True),    # sold here, no lease -> blocked
+        ((True, True, True), False),    # leased (or gifted) -> free
+        ((True, False, False), False),  # not sold -> controls free for all
+        ((True, False, True), False),   # not sold, but they hold a live lease
+        ((False, True, False), False),  # economy off -> paywall can't arm
+        ((False, False, False), False),
     ]
-    for (economy_enabled, price, entitled), blocked in cases:
+    for (economy_enabled, on_sale, entitled), blocked in cases:
         assert style_lease_blocks(
-            economy_enabled=economy_enabled, price=price, entitled=entitled
-        ) is blocked, (economy_enabled, price, entitled)
+            economy_enabled=economy_enabled, on_sale=on_sale, entitled=entitled
+        ) is blocked, (economy_enabled, on_sale, entitled)

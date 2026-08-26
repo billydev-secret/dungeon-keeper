@@ -24,6 +24,30 @@ if TYPE_CHECKING:
 
 ECON_PREFIX = "econ_"
 
+#: The shop lines an admin can switch off one at a time, in shop display order.
+#: Each one owns a ``shop_<perk>_enabled`` field on :class:`EconSettings`.
+#:
+#: Seven of the eight are rentable perks; ``streak_shield`` is the one-shot
+#: consumable, which shares the vocabulary because it shares the checkbox. The
+#: raffle and the guild's custom shop items are deliberately absent — they came
+#: with their own switches (``raffle_enabled`` and a per-item ``enabled``
+#: column), and a second control for the same thing is the overload this
+#: feature exists to remove.
+#:
+#: It lives here rather than in ``economy/perks.py`` because that module
+#: imports this one for :class:`EconSettings`; the perk vocabulary re-exports
+#: it so callers can keep reading perk facts from one place.
+SHOP_TOGGLE_PERKS: tuple[str, ...] = (
+    "role_color",
+    "role_name",
+    "role_preset",
+    "role_gradient",
+    "role_holographic",
+    "role_icon",
+    "voice_style",
+    "streak_shield",
+)
+
 
 @dataclass(frozen=True)
 class EconSettings:
@@ -217,6 +241,32 @@ class EconSettings:
     auction_min_increment: int = 5
     auction_soft_close_seconds: int = 300
     auction_max_duration_hours: int = 168
+    # ── What the shop actually sells ──────────────────────────────────────
+    # One checkbox per rentable perk (plus the one-shot shield), set on the
+    # Shop & Perks page. Unchecked = not for sale: the row leaves the shop
+    # embed and the picker, `rent_perk`/`purchase_streak_shield` refuse, the staff
+    # comp stops entitling it, and a live rental runs to its anniversary and
+    # then stops renewing instead of being cut off mid-week (economy spec §6).
+    #
+    # These are the ONLY off switch. Price 0 used to double as one for the
+    # shield (hid the row) and the voice lease (disarmed the paywall), which
+    # meant the same 0 meant "hidden" on one dial and "free for everyone" on
+    # another; migration 182 moved every guild onto the checkbox and 0 went
+    # back to meaning nothing but a price of zero.
+    #
+    # voice_style defaults OFF because its price defaults to 0 — a guild that
+    # has never touched the economy keeps its free rename/user-limit controls
+    # rather than waking up with a paywall. Everything else defaults ON, which
+    # is what those guilds already had.
+    shop_role_color_enabled: bool = True
+    shop_role_name_enabled: bool = True
+    shop_role_preset_enabled: bool = True
+    shop_role_gradient_enabled: bool = True
+    shop_role_holographic_enabled: bool = True
+    shop_role_icon_enabled: bool = True
+    shop_voice_style_enabled: bool = False
+    shop_streak_shield_enabled: bool = True
+
     # Prepaid streak shield (sinks round 3, stage 2): a one-shot consumable
     # held (max 1) until a login gap would reset the streak, then auto-burned
     # to save it — covers what the free grace day can't. 0 hides the shop row
@@ -333,7 +383,13 @@ class EconSettings:
 
 DEFAULT_ECON_SETTINGS = EconSettings()
 
-_BOOL_KEYS = ["enabled", "transfers_enabled", "raffle_enabled", "mod_perk_comp"]
+_BOOL_KEYS = [
+    "enabled",
+    "transfers_enabled",
+    "raffle_enabled",
+    "mod_perk_comp",
+    *(f"shop_{p}_enabled" for p in SHOP_TOGGLE_PERKS),
+]
 _FLOAT_KEYS = ["booster_multiplier", "xp_per_coin"]
 _STR_KEYS = [
     "currency_name",
@@ -861,9 +917,17 @@ def purchase_streak_shield(
     moves, so two concurrent buys can't both charge; the debit failing then
     unwinds the claim with the caller's transaction. Purchasable at any streak,
     including 0 (it protects the next streak). Returns the price charged.
-    Raises ValueError: "already holding" when a shield is held, "insufficient"
-    when the debit fails.
+    Raises ValueError: "not for sale" when the guild has switched the shield
+    off on the Shop & Perks page, "already holding" when a shield is held,
+    "insufficient" when the debit fails.
+
+    A shield already held keeps working after the switch goes off — it is a
+    one-shot the member has already paid for, and burning it to save their
+    streak is the whole thing they bought. Switching the line off stops new
+    sales; it does not confiscate stock.
     """
+    if not settings.shop_streak_shield_enabled:
+        raise ValueError("not for sale")
     price = int(settings.price_streak_shield)
     cur = conn.execute(
         """
