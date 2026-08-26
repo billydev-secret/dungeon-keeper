@@ -207,26 +207,12 @@ def test_rng_streams_are_per_game_and_distinct():
     assert _rng_for(3, 7).random() == _rng_for(3, 7).random()
 
 
-def test_the_effort_flag_is_off_by_default_and_restored_per_run():
-    """It mutates a module global inside worker processes, so the one thing
-    that must never happen is a run leaving it set for whatever comes next
-    in the same interpreter."""
-    from bot_modules.games.mahjong import match_logic
-
-    simulate(TINY, games=1, seed=0)
-    assert match_logic.RANK_BY_EFFORT is False
-    simulate(TINY, games=1, seed=0, rank_by_effort=True)
-    assert match_logic.RANK_BY_EFFORT is True
-    simulate(TINY, games=1, seed=0)
-    assert match_logic.RANK_BY_EFFORT is False
-
-
-def test_effort_ranking_changes_which_line_leads_for_a_pair_heavy_rack():
-    """The whole point of the experiment: a hand of pairs looks closest by
-    raw tile count and is the hardest thing on the card to finish."""
+def test_effort_ranking_prefers_the_line_that_can_actually_be_finished():
+    """Distance treats every missing tile alike; effort does not. A hand of
+    pairs looks nearest by raw count and is the hardest thing on the card to
+    finish, because none of its tiles can be claimed or jokered."""
     from collections import Counter as _Counter
 
-    from bot_modules.games.mahjong import match_logic
     from bot_modules.games.mahjong.match_logic import closest_lines
 
     card = _card(
@@ -242,32 +228,44 @@ def test_effort_ranking_changes_which_line_leads_for_a_pair_heavy_rack():
                     {"count": 4, "rank": "3", "suit": "a"},
                     {"count": 2, "rank": "F"}]},
     )
-    # Three pairs made, four draw-only tiles still wanted (5 by distance),
-    # against a kong line eight tiles out. Distance says the pairs line is
-    # nearer; effort says the kong line is cheaper, because six of those
-    # eight can be claimed or jokered and none of the pairs can.
-    #
-    # Note while building this: at equal effort the sort tie-breaks on value
-    # *descending*, so a tie goes to the dearer line — which is reliably the
-    # harder one. That compounds the very bias being tested and is worth
-    # revisiting separately; it is not what this case measures.
     rack = [Tile(f"{n}d") for n in (1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 8, 9)] \
         + [Tile("dr")]
-    try:
-        match_logic.RANK_BY_EFFORT = False
-        by_distance = closest_lines(rack, [], card, _Counter(), limit=None)
-        match_logic.RANK_BY_EFFORT = True
-        by_effort = closest_lines(rack, [], card, _Counter(), limit=None)
-    finally:
-        match_logic.RANK_BY_EFFORT = False
+    ranked = closest_lines(rack, [], card, _Counter(), limit=None)
 
-    assert by_distance[0].hand.id == "pairs", "the bias this experiment tests"
-    assert by_effort[0].hand.id == "kongs", "effort should prefer the reachable line"
-    # distance keeps its plain meaning under either ranking — it is what a
-    # member is shown, and it must not silently become a weighted number
-    assert {p.hand.id: p.distance for p in by_distance} == {
-        p.hand.id: p.distance for p in by_effort
-    }
+    assert ranked[0].hand.id == "kongs"
+    # the pairs line is genuinely nearer in raw tiles — which is the trap
+    by_id = {p.hand.id: p for p in ranked}
+    assert by_id["pairs"].distance < by_id["kongs"].distance
+    # distance keeps its plain meaning; effort is what ordered them
+    assert by_id["pairs"].effort > by_id["kongs"].effort
+
+
+def test_a_tie_goes_to_the_cheaper_line():
+    """Ties used to break on value descending, handing them to the dearer —
+    and the dearer line is reliably the harder one, so the tie-break was
+    compounding the bias the ranking exists to remove."""
+    from collections import Counter as _Counter
+
+    from bot_modules.games.mahjong.match_logic import closest_lines
+
+    card = _card(
+        {"id": "dear", "section": "A", "name": "Dear", "concealed": False,
+         "value": 75,
+         "groups": [{"count": 4, "rank": "1", "suit": "a"},
+                    {"count": 4, "rank": "2", "suit": "a"},
+                    {"count": 4, "rank": "3", "suit": "a"},
+                    {"count": 2, "rank": "F"}]},
+        {"id": "cheap", "section": "B", "name": "Cheap", "concealed": False,
+         "value": 25,
+         "groups": [{"count": 4, "rank": "1", "suit": "b"},
+                    {"count": 4, "rank": "2", "suit": "b"},
+                    {"count": 4, "rank": "3", "suit": "b"},
+                    {"count": 2, "rank": "F"}]},
+    )
+    rack = [Tile("1d")] * 2 + [Tile("1b")] * 2 + [Tile("9c")] * 9
+    ranked = closest_lines(rack, [], card, _Counter(), limit=None)
+    assert ranked[0].effort == ranked[1].effort, "the case only works on a tie"
+    assert ranked[0].hand.id == "cheap"
 
 
 def test_sharding_and_merging_reproduce_the_serial_run():
@@ -278,7 +276,7 @@ def test_sharding_and_merging_reproduce_the_serial_run():
     config = TableConfig(seat_count=4, wall_trim=0, second_charleston=True)
     merged = _empty_report(TINY, 4, 4, 9)
     for start, stop in ((0, 2), (2, 4)):
-        merge_into(merged, _run_shard((TINY, config, 9, start, stop, False)))
+        merge_into(merged, _run_shard((TINY, config, 9, start, stop)))
 
     assert _fingerprint(merged) == _fingerprint(serial)
 

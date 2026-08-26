@@ -45,24 +45,26 @@ from bot_modules.games.mahjong.tiles import (
     copies_in_play,
 )
 
-#: **Experiment flag, default off — production behaviour is unchanged.**
-#: Simulation found that ranking lines by raw tile distance sends players at
-#: pair-heavy hands that never finish: across two cards, lines whose tiles
-#: mostly cannot take a joker took 295 opening picks for zero wins. The
-#: cause is that `distance` treats every missing tile as equally costly,
-#: when a tile missing from a kong can arrive three ways (draw, claim, or a
-#: joker standing in) and one missing from a pair can only be drawn — pairs
-#: are uncallable (§2.5) and jokers never fill a group of two (§2.6).
-#:
-#: With this on, ranking uses `Prospect.effort` instead. `distance` keeps its
-#: plain meaning either way, because it is what a member is shown.
-#: `sim_logic.simulate(rank_by_effort=True)` sets it inside its own worker
-#: processes to A/B the two; nothing else writes it.
-RANK_BY_EFFORT = False
-
 #: How much dearer a draw-only tile is than one with three routes. Three
 #: opponents discard for every draw you take, so claims are the common way a
-#: tile arrives; 3.0 is that ratio, not a fitted constant.
+#: tile arrives; 3.0 is that ratio rather than a fitted constant — and a
+#: sweep of 1.5 through 3.0 at 400 games each found the result insensitive
+#: across the whole range, so nothing hangs on the exact value.
+#:
+#: Lines are ranked by :attr:`Prospect.effort` rather than by raw tile
+#: distance. Distance treats every missing tile as equally costly, which is
+#: false: a tile missing from a kong can arrive three ways — drawn, claimed,
+#: or covered by a joker — while one missing from a pair can only be drawn,
+#: since pairs are uncallable (§2.5) and jokers never fill a group of two
+#: (§2.6). Ranking by distance therefore pointed players at pair-heavy hands
+#: that cannot be finished: across two cards, lines whose tiles mostly
+#: cannot take a joker drew 295 opening picks for **zero** wins, and on
+#: First Light `qp-2` alone was named the closest line 670 times out of
+#: 2,000 seat-hands and won nothing. Ranking by effort took that to zero and
+#: gained ~7 points of win rate over 500 paired games.
+#:
+#: ``distance`` keeps its plain meaning — it is the number a member is
+#: shown, and must not quietly become a weighted score.
 DRAW_ONLY_EFFORT = 3.0
 
 _WIND_TILES = {"N": Tile.NORTH, "E": Tile.EAST, "W": Tile.WEST, "S": Tile.SOUTH}
@@ -440,7 +442,7 @@ class Prospect:
     #: ``distance`` reweighted by how a tile can actually arrive: one point
     #: per tile that a draw, a claim or a joker could supply, and
     #: ``DRAW_ONLY_EFFORT`` per tile that only your own draw can. Always
-    #: computed; only used for ranking when ``RANK_BY_EFFORT`` is on.
+    #: what lines are ranked by; ``distance`` stays the plain tile count.
     effort: float = 0.0
 
 
@@ -459,8 +461,10 @@ def closest_lines(
     Liveness is judged per binding exactly as :func:`reachable_lines` does,
     and a line's distance is minimised over its *live* bindings only — a
     dead binding may sit nearer, but pointing at tiles that can no longer
-    be drawn would be a lie. Ties: distance, then value descending, then
-    card order (distances cluster hard, so ties are the common case).
+    be drawn would be a lie. Ranked by *effort*, not raw distance — see
+    `DRAW_ONLY_EFFORT`. Ties break on value **ascending** then card order:
+    ties cluster hard, and handing them to the dearer line would favour the
+    harder one every time.
     """
     counts = Counter(concealed)
     jokers_held = counts.pop(Tile.JOKER, 0)
@@ -488,8 +492,11 @@ def closest_lines(
             hand, counts, jokers_held, exposures, exposure_total, unseen, max_rank
         )
         if best is not None:
-            key = best.effort if RANK_BY_EFFORT else float(best.distance)
-            prospects.append((key, -hand.value, index, best))
+            # Ties break toward the *cheaper* line. They used to break on
+            # value descending, which handed a tie to the dearer — and the
+            # dearer line is reliably the harder one, so the tie-break was
+            # quietly compounding the very bias effort ranking removes.
+            prospects.append((best.effort, hand.value, index, best))
     prospects.sort(key=lambda p: p[:3])
     ranked = [p[3] for p in prospects]
     return ranked if limit is None else ranked[:limit]
@@ -563,11 +570,8 @@ def _line_prospect(
                 small_short * DRAW_ONLY_EFFORT
                 + (distance - small_short) * 1.0
             )
-            if best is not None:
-                rank = effort if RANK_BY_EFFORT else float(distance)
-                incumbent = best.effort if RANK_BY_EFFORT else float(best.distance)
-                if rank >= incumbent:
-                    continue
+            if best is not None and effort >= best.effort:
+                continue
             dead = {
                 tile: have - min(have, demand.get(tile, 0))
                 for tile, have in concealed_counts.items()

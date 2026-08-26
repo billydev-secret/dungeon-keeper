@@ -40,7 +40,6 @@ from bot_modules.games.mahjong.game_logic import (
     TableConfig,
     obtainable_seen,
 )
-from bot_modules.games.mahjong import match_logic
 from bot_modules.games.mahjong.match_logic import closest_lines
 from bot_modules.games.mahjong.tiles import FULL_RANK, shuffled_wall
 
@@ -276,15 +275,10 @@ def merge_into(target: SimReport, other: SimReport) -> None:
         into.jokerless_wins += stat.jokerless_wins
 
 
-def _run_shard(job: tuple[Card, TableConfig, int, int, int, bool]) -> SimReport:
+def _run_shard(job: tuple[Card, TableConfig, int, int, int]) -> SimReport:
     """One worker's slice: games [start, stop). Module-level and
     argument-closed so it pickles into a process pool."""
-    card, config, seed, start, stop, rank_by_effort = job
-    # Set inside the worker, where this process runs nothing else. The flag
-    # has to reach the matcher somehow and it is read deep inside a call
-    # chain the bot brain owns; threading a parameter through six signatures
-    # for an experiment would be worse than one assignment made here.
-    match_logic.RANK_BY_EFFORT = rank_by_effort
+    card, config, seed, start, stop = job
     report = _empty_report(card, stop - start, config.seat_count, seed)
     for i in range(start, stop):
         _play_one(card, config, _rng_for(seed, i), report)
@@ -301,16 +295,11 @@ def simulate(
     second_charleston: bool = True,
     max_rank: int = FULL_RANK,
     workers: int = 1,
-    rank_by_effort: bool = False,
 ) -> SimReport:
     """Play ``card`` ``games`` times with every seat botted, and measure it.
 
-    ``rank_by_effort`` switches the assist engine's line ranking for the
-    whole run (`match_logic.RANK_BY_EFFORT`) so the two can be A/B'd at
-    identical seeds. It is off by default, matching production.
-
     Deterministic in (card, games, seat_count, seed, wall_trim,
-    second_charleston, rank_by_effort) — and *not* in ``workers``: game *i* always runs on
+    second_charleston, max_rank) — and *not* in ``workers``: game *i* always runs on
     the stream derived from (seed, i), so 1 worker and 12 return identical
     reports. A real game costs seconds of bot thinking, so anything past a
     few hundred games wants ``workers`` above 1.
@@ -319,7 +308,6 @@ def simulate(
         raise ValueError("games must be >= 1")
     if workers < 1:
         raise ValueError("workers must be >= 1")
-    match_logic.RANK_BY_EFFORT = rank_by_effort
     config = TableConfig(
         seat_count=seat_count,
         wall_trim=wall_trim,
@@ -339,7 +327,7 @@ def simulate(
     shards = min(workers, games)
     edges = [games * k // shards for k in range(shards + 1)]
     jobs = [
-        (card, config, seed, edges[k], edges[k + 1], rank_by_effort)
+        (card, config, seed, edges[k], edges[k + 1])
         for k in range(shards)
         if edges[k] < edges[k + 1]
     ]

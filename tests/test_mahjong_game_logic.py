@@ -1828,14 +1828,14 @@ def test_assist_coach_respects_the_visible_threat_rail():
     exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("9d"),
                                      count=4, jokers=0)]}
     state = play_state(
-        2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*9"}, exposures=exposures
+        2, {0: "flower*4 2d*4 6b*4 9b*2", 1: "9c*9"}, exposures=exposures
     )
     r = G.assist_readout(state, 0, CARD, "coach")
     assert r is not None
-    assert dict(r.prospects[0].dead_weight) == {Tile("9b"): 3}
+    assert dict(r.prospects[0].dead_weight) == {Tile("9b"): 2}
     assert r.suggestion is None
     # take the exposure away and the same rack gets its suggestion back
-    state2 = play_state(2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*13"})
+    state2 = play_state(2, {0: "flower*4 2d*4 6b*4 9b*2", 1: "9c*13"})
     r2 = G.assist_readout(state2, 0, CARD, "coach")
     assert r2 is not None and r2.suggestion == Tile("9b")
 
@@ -1976,7 +1976,7 @@ def test_fallow_seats_exposures_never_gate_the_coach():
     exposures = {1: [G.ExposureState(exposure_id=1, natural=Tile("9d"),
                                      count=4, jokers=0)]}
     state = play_state(
-        2, {0: "flower*4 2d*4 6b*2 9b*3", 1: "9c*9"}, exposures=exposures
+        2, {0: "flower*4 2d*4 6b*4 9b*2", 1: "9c*9"}, exposures=exposures
     )
     silenced = G.assist_readout(state, 0, CARD, "coach")
     assert silenced is not None and silenced.suggestion is None  # live: rail

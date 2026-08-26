@@ -406,6 +406,34 @@ inside `match_logic._bindings`, so making it per-table is the same plumbing
 problem as `RANK_BY_EFFORT`, and a two-suit table needs its card checked for
 three-letter lines at activation.
 
+### The assist engine's ranking was pointing players at traps
+
+Shipped 2026-08-25. `closest_lines` ranked by raw tile distance, which
+treats every missing tile as equally costly. It is not: a tile missing from
+a 3+ group can be drawn, claimed, or covered by a joker; one missing from a
+pair can only be drawn, since pairs are uncallable (§2.5) and jokers never
+fill a group of two (§2.6). Pair-heavy hands therefore looked *nearest* from
+almost any rack and could not be finished.
+
+Measured: across First Light and a generated card, lines whose tiles mostly
+cannot take a joker drew **295 opening picks for zero wins**. On First Light
+`qp-2` alone was named the closest line **670 times out of 2,000 seat-hands**
+and won nothing, keeping 41 of those seats to the end. Ranking by
+`Prospect.effort` instead — one point per missing tile with three routes,
+`DRAW_ONLY_EFFORT` per tile with one — took trap openings to zero and gained
+**~7 points of win rate** over 500 paired games.
+
+A weight sweep at 400 games each found the result insensitive from 1.5 to
+3.0 (trap openings 1.5% at 1.5, zero by 2.5; win rate flat inside the band),
+so 3.0 stands on its derivation — three opponents discard for every draw you
+take — rather than on a fit.
+
+Two things that came with it. `distance` keeps its plain meaning, because it
+is the number a member is shown and must not quietly become a weighted
+score. And ties used to break on **value descending**, handing them to the
+dearer line — which is reliably the harder one, so the tie-break was
+compounding the very bias being removed. Ties now go to the cheaper line.
+
 ### Deck size is the length dial, and it is free
 
 Confirmed 2026-08-25 at **1,000 games per arm** (2 seeds x 500), every arm
