@@ -56,19 +56,30 @@ def test_empty_list_reads_as_clear():
     assert render_rows([]) == EMPTY_BODY
 
 
-def test_row_carries_id_task_and_live_timestamp():
+def test_row_carries_the_id_and_the_task():
     body = render_rows([_row(12, "Post QOTD")])
     assert "#12" in body
     assert "Post QOTD" in body
-    # Ages must be live client-side timestamps, not baked-in text.
-    assert f"<t:{int(NOW)}:R>" in body
 
 
-def test_timestamp_stays_outside_the_code_span():
-    """A code span freezes `<t:…:R>`, so the cell must close before it."""
+def test_only_the_id_is_monospace():
+    """Everything else flows, so a short task is a short line on a phone."""
     line = render_rows([_row(12, "Post QOTD")])
     assert line.count("`") == 2
-    assert line.index("`", line.index("`") + 1) < line.index("<t:")
+    assert line.split("`")[1] == "#12"
+
+
+def test_task_rows_carry_no_age():
+    """Measured on the production board, a relative age costs ~9 extra wrapped
+    phone lines across 13 tasks — "2 months ago" pushes almost every short row
+    over a phone's width by itself. The list is oldest-first, so position
+    already says what has waited longest."""
+    assert "<t:" not in render_rows([_row(12, "Post QOTD")])
+
+
+def test_a_short_task_fits_a_phone_line():
+    """The whole point of the reflow: 34 characters is about a phone's width."""
+    assert len(render_rows([_row(12, "more qotd prompts")])) <= 34
 
 
 def test_recurring_rows_are_marked():
@@ -123,21 +134,27 @@ def test_exactly_at_the_cap_has_no_overflow_note():
     assert "more on the dashboard" not in render_rows(rows)
 
 
-def test_columns_align_across_varied_id_widths():
+def test_ids_are_never_padded_out():
+    """Nothing is spent on alignment any more — a short id is a short chip, so
+    a short row stays a short row."""
     body = render_rows([_row(1, "Short"), _row(12345, "Another")])
     cells = [line.split("`")[1] for line in body.splitlines()]
-    assert len({len(c) for c in cells}) == 1
+    assert cells == ["#1", "#12345"]
 
 
 def test_wide_ids_are_never_truncated():
-    """Regression: the id is the handle a mod reads off the board to talk about
-    a task. A fixed 5-wide column rendered #10042 as "#100…", which could
-    collide with a different real id — the column grows instead."""
+    """The id is the handle a mod reads off the board to talk about a task. A
+    fixed 5-wide column once rendered #10042 as "#100…", which could collide
+    with a different real id."""
     body = render_rows([_row(10042, "Post QOTD"), _row(7, "Short")])
     assert "#10042" in body
     assert "#100…" not in body
-    cells = [line.split("`")[1] for line in body.splitlines()]
-    assert len({len(c) for c in cells}) == 1
+
+
+def test_a_long_task_is_clipped_rather_than_owning_the_screen():
+    body = render_rows([_row(1, "x" * 200)])
+    assert body.endswith("…")
+    assert len(body) < 60
 
 
 # ── render_footer ─────────────────────────────────────────────────────

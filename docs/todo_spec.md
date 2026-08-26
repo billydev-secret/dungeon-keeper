@@ -62,11 +62,23 @@ A single message the bot keeps at the **bottom of a configured channel**.
   sentences; when both are, the board says so once.
 - **Tasks.** Outstanding tasks only — neither completed nor written off —
   **oldest first**, so the longest-waiting task sits at the top where it nags.
-  Each row is one padded monospace cell (`` `#12  Post QOTD` ``) followed by a
-  live `<t:…:R>` age outside the code span, per `docs/embed_style_guide.md`.
+  Each row is `` `#12` `` — the id as a monospace chip — followed by the task
+  as ordinary flowing text, clipped at `TASK_CLIP` (44).
   **Chore-spawned rows are excluded** — the chores section above already shows
   them, with more state than a task line can carry, and listing them twice was
   the first thing that looked wrong when the boards merged.
+- **No age on a task row, and why.** The row used to end in a live `<t:…:R>`,
+  inside a cell padded to a fixed 48 characters. Measured against the 13 real
+  tasks on the production board at a phone's ~34-character width: the padded
+  layout cost 27 wrapped lines, dropping the padding but keeping the age cost
+  **43**, and no layout that keeps the age beats the padded one — "2 months
+  ago" pushes almost every short row over the width by itself. The current
+  shape costs **22**, while showing more of each task than the old cell did
+  (44 characters against 42). The list is oldest-first, so *position* already
+  carries what the age was for here, and the exact date is one tap away on the
+  dashboard. The chore rows keep their timestamp: there is one per chore, a
+  handful per guild, and "who did it and when" is the question that board
+  answers.
 - **Row budget.** 15 rows across both sections. Chores take up to 8 off the top
   and tasks get the rest, floored at 3 — a day with many chores must never push
   the task list off the board, which is the failure the merge existed to end,
@@ -121,8 +133,10 @@ today?"**, where the Tasks section below asks "what is outstanding?"
 - **Contents.** One row per *active* recurring definition — its **latest**
   instance, done or not — in `time_of_day` order, so it reads like a shift
   checklist rather than by an id nobody thinks in. Each row is a state box
-  (✅ / ⬜) plus the chore in a padded monospace cell, then who ticked it and a
-  live `<t:…:R>`, then a 🔥 streak. Paused definitions are left out: a
+  (✅ / ⬜) leading the line, the chore in bold, then who ticked it and a live
+  `<t:…:R>`, then a 🔥 streak. No padded cell: the boxes align just as well by
+  starting the line, and a fixed-width cell wrapped on a phone and stranded a
+  bare backtick on its own line. Paused definitions are left out: a
   chore parked for the holidays is not one the team is failing, and showing it
   with a dead streak reads as a reproach.
 - **A scoreboard, not a pending list.** A ticked chore *stays* on the board
