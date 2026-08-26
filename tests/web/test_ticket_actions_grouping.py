@@ -22,6 +22,7 @@ Marked ``browser``. Auto-skips without Playwright / Chromium.
 
 from __future__ import annotations
 
+import json
 import socket
 import sqlite3
 import sys
@@ -46,6 +47,7 @@ from mobile_layout_scan import serve  # noqa: E402
 from tests.db_template import migrated_db  # noqa: E402
 
 _GUILD = 123
+_ME = 900999  # the viewer, for the claimed-by-me branch
 
 
 def _chromium_available() -> bool:
@@ -92,6 +94,24 @@ class _Server:
             (_GUILD, 800002, 700002, "Someone else is already on this one",
              "open", 900123, 0, now - 7200),
         )
+        # Claimed by whoever is looking. The dashboard's open-auth user has id 0,
+        # which is falsy and so can never satisfy the claimedByMe check — the
+        # test sets window.__dk_user instead, which is the same global
+        # renderActions reads.
+        con.execute(
+            "INSERT INTO tickets (guild_id, user_id, channel_id, description,"
+            " status, claimer_id, escalated, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (_GUILD, 800003, 700003, "This one is mine already",
+             "open", _ME, 0, now - 1800),
+        )
+        con.execute(
+            "INSERT INTO tickets (guild_id, user_id, channel_id, description,"
+            " status, claimer_id, escalated, created_at, closed_at, closed_by,"
+            " close_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (_GUILD, 800004, 700004, "Handled last week and closed",
+             "closed", _ME, 0, now - 90000, now - 86400, _ME, "Duplicate"),
+        )
         con.commit()
         con.close()
         self.port = _free_port()
@@ -125,9 +145,11 @@ def browser(dashboard) -> Iterator[object]:
 
 UNCLAIMED = "Reposting the same link everywhere"
 HELD_BY_OTHER = "Someone else is already on this one"
+HELD_BY_ME = "This one is mine already"
+CLOSED = "Handled last week and closed"
 
 
-def _open_ticket(browser, base: str, subject: str):
+def _open_ticket(browser, base: str, subject: str, as_me: bool = False, tab: str | None = None):
     """Pick the ticket by its text, not its row index.
 
     The queue's sort order is a product decision that may well change; a test
@@ -136,8 +158,27 @@ def _open_ticket(browser, base: str, subject: str):
     subject keeps the failure pointing at whatever actually broke.
     """
     page = browser.new_page(viewport={"width": 1440, "height": 900})
+    if as_me:
+        # app.js populates window.__dk_user from /api/me after load, so setting
+        # the global up front is clobbered. Patch the response instead, and only
+        # the id — replacing the whole payload would strip the permissions the
+        # panel needs to render its actions at all.
+        def _as_me(route):
+            original = route.fetch()
+            payload = original.json()
+            payload["user_id"] = str(_ME)
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(payload),
+            )
+
+        page.route("**/api/me", _as_me)
     page.goto(f"{base}/#/mod-tickets", wait_until="domcontentloaded", timeout=20_000)
     page.wait_for_selector(".ticket-item", timeout=30_000)
+    if tab:
+        page.locator(".ticket-list-head .ctrl-group button", has_text=tab).first.click()
+        page.wait_for_timeout(400)
     page.locator(".ticket-item", has_text=subject).first.click()
     page.wait_for_selector(".td-act-groups", timeout=15_000)
     return page
@@ -221,5 +262,90 @@ def test_jail_is_outlined_not_filled(browser, dashboard):
         assert style is not None, "no outlined danger Jail button found"
         # rgba(...,0) or 'transparent' — either way, not a solid fill.
         assert "rgba" in style["bg"] and style["bg"].rstrip(")").endswith(" 0"), style
+    finally:
+        page.close()
+
+
+# ── the branches that ship green because nothing reaches them ───────────────
+
+
+def test_a_ticket_you_hold_offers_closing_it(browser, dashboard):
+    """The claimed-by-me branch swaps the primary and drops the spare Close.
+
+    Untested until now, and it is the exact step the branch's QA card asks a
+    tester to perform: "press Claim, and the highlighted button becomes Close
+    Ticket". A regression leaving two Close buttons, or none, shipped green.
+    """
+    page = _open_ticket(browser, dashboard.base, HELD_BY_ME, as_me=True)
+    try:
+        info = page.evaluate(
+            """() => {
+              const g = document.querySelector('.td-act-groups');
+              return {
+                primary: [...g.querySelectorAll('.act-btn.primary')]
+                  .map(b => ({ label: b.textContent.trim(), action: b.dataset.action })),
+                closes: [...g.querySelectorAll('[data-action="close"]')].length,
+                claims: [...g.querySelectorAll('[data-action="claim"]')].length,
+              };
+            }"""
+        )
+        assert len(info["primary"]) == 1, info
+        assert info["primary"][0]["action"] == "close", info
+        assert info["primary"][0]["label"] == "Close Ticket", info
+        # Exactly one Close: the primary. The standalone one must be dropped.
+        assert info["closes"] == 1, info
+        # And no Claim button — the header already says who holds it.
+        assert info["claims"] == 0, info
+    finally:
+        page.close()
+
+
+def test_a_closed_ticket_offers_reopening_and_still_groups(browser, dashboard):
+    """The closed/deleted branch renders a different row and was also untested."""
+    page = _open_ticket(browser, dashboard.base, CLOSED, as_me=True, tab="Closed")
+    try:
+        info = page.evaluate(
+            """() => {
+              const g = document.querySelector('.td-act-groups');
+              if (!g) return null;
+              return {
+                labels: [...g.querySelectorAll('.section-label')]
+                  .map(e => e.textContent.trim().toLowerCase()),
+                primary: [...g.querySelectorAll('.act-btn.primary')]
+                  .map(b => b.dataset.action),
+              };
+            }"""
+        )
+        assert info is not None, "closed ticket rendered no grouped action row"
+        assert len(info["labels"]) == 2, info
+        assert info["labels"][0].startswith("this ticket"), info
+        assert info["labels"][1].startswith("this member"), info
+        assert info["primary"] == ["reopen"], info
+    finally:
+        page.close()
+
+
+def test_the_member_name_keeps_its_own_weight_and_width(browser, dashboard):
+    """font-weight and font-stretch inherit, so the name must restate both.
+
+    The original test asserted only text-transform, so it stayed green while
+    the name silently wore the eyebrow's 650 weight and 96% width.
+    """
+    page = _open_ticket(browser, dashboard.base, UNCLAIMED)
+    try:
+        style = page.evaluate(
+            """() => {
+              const el = document.querySelector('.td-act-who');
+              const cs = getComputedStyle(el);
+              const parent = getComputedStyle(el.parentElement);
+              return { weight: cs.fontWeight, stretch: cs.fontStretch,
+                       parentWeight: parent.fontWeight, parentStretch: parent.fontStretch };
+            }"""
+        )
+        assert style["weight"] == "600", style
+        assert style["stretch"] == "100%", style
+        # If these matched the parent the declarations would be doing nothing.
+        assert style["weight"] != style["parentWeight"], style
+        assert style["stretch"] != style["parentStretch"], style
     finally:
         page.close()

@@ -7,7 +7,7 @@
 .dk-help {
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: var(--t-3);
   line-height: 1.55;
   max-width: 920px;
 }
@@ -17,8 +17,10 @@
 
 /* Any other h2 (rare, only inside Quick Reference area) styled as small */
 .dk-help h2 {
-  margin: 22px 0 10px;
-  font-size: 16px;
+  margin: var(--s-5) 0 var(--s-3);
+  font-size: var(--t-4);
+  font-family: var(--display);
+  font-stretch: 106%;
   font-weight: 700;
   color: var(--ink-bright);
 }
@@ -26,15 +28,17 @@
 
 /* h3 → mirror .section-label exactly (uppercase + trailing rule) */
 .dk-help h3 {
-  font-size: 11px;
+  font-size: var(--t-1);
+  font-family: var(--display);
+  font-stretch: 96%;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--ink-mute);
-  margin: 22px 0 10px;
+  margin: var(--s-5) 0 var(--s-3);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--s-3);
 }
 .dk-help h3::after {
   content: "";
@@ -51,15 +55,17 @@
    reader actually sees: it reads as body-scale and bright rather than as
    another small uppercase label competing with the header. */
 .dk-help h4 {
-  font-size: 14px;
+  font-size: var(--t-3);
+  font-family: var(--display);
+  font-stretch: 106%;
   font-weight: 600;
   color: var(--ink-bright);
-  margin: 20px 0 8px;
+  margin: var(--s-4) 0 var(--s-2);
 }
 .dk-help h4:first-child { margin-top: 0; }
 
 /* Body text */
-.dk-help p { margin: 0 0 10px; color: var(--ink); }
+.dk-help p { margin: 0 0 var(--s-3); color: var(--ink); }
 .dk-help p:last-child { margin-bottom: 0; }
 
 .dk-help a { color: var(--blurple); }
@@ -73,7 +79,7 @@
   font-family: var(--mono);
   font-size: 0.85em;
   background: var(--bg-rail);
-  padding: 1px 6px;
+  padding: 1px var(--s-2);
   border-radius: var(--r-sm);
   color: var(--gold-solid);
   border: 1px solid var(--rule-soft);
@@ -85,38 +91,38 @@
   border: 1px solid var(--rule-soft);
   border-left: 3px solid var(--blurple);
   border-radius: var(--r);
-  padding: 12px 16px;
-  margin: 10px 0;
+  padding: var(--s-3) var(--s-4);
+  margin: var(--s-3) 0;
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: var(--t-2);
 }
-.dk-help .cmd-block + .cmd-block { margin-top: 8px; }
+.dk-help .cmd-block + .cmd-block { margin-top: var(--s-2); }
 .dk-help .cmd-block .cmd-name {
   font-family: var(--mono);
   font-weight: 600;
   color: var(--ink-bright);
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: var(--s-2);
   word-break: break-word;
-  font-size: 13px;
+  font-size: var(--t-2);
 }
 .dk-help .cmd-block .cmd-perm {
-  font-size: 11px;
+  font-size: var(--t-1);
   color: var(--ink-mute);
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: var(--s-2);
 }
 .dk-help .cmd-block .cmd-desc {
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--t-2);
   display: block;
   line-height: 1.5;
 }
 .dk-help .cmd-block .cmd-params {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: var(--s-2);
+  padding-top: var(--s-2);
   border-top: 1px solid var(--rule-soft);
-  font-size: 12px;
+  font-size: var(--t-2);
   color: var(--ink-dim);
   line-height: 1.55;
 }
@@ -130,9 +136,11 @@
 .dk-help .perm {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  padding: var(--s-0) var(--s-2);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--t-1);
+  font-family: var(--display);
+  font-stretch: 94%;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -149,10 +157,10 @@
 /* ── Callouts → tighter, dashboard-restrained ───────────────── */
 .dk-help .callout {
   border-radius: var(--r);
-  padding: 12px 14px;
-  margin: 14px 0;
+  padding: var(--s-3) var(--s-4);
+  margin: var(--s-4) 0;
   display: flex;
-  gap: 10px;
+  gap: var(--s-3);
   align-items: flex-start;
   background: var(--bg-card);
   border: 1px solid var(--rule-soft);
@@ -163,13 +171,13 @@
 .dk-help .callout-body strong {
   display: block;
   margin-bottom: 4px;
-  font-size: 13px;
+  font-size: var(--t-2);
   font-weight: 600;
   color: var(--ink-bright);
 }
-.dk-help .callout-body p { margin: 0; font-size: 13px; line-height: 1.5; }
-.dk-help .callout-body p + p { margin-top: 6px; }
-.dk-help .callout-body table { margin: 8px 0 0; }
+.dk-help .callout-body p { margin: 0; font-size: var(--t-2); line-height: 1.5; }
+.dk-help .callout-body p + p { margin-top: var(--s-2); }
+.dk-help .callout-body table { margin: var(--s-2) 0 0; }
 .dk-help .callout-tip   { border-left-color: var(--blurple); }
 .dk-help .callout-warn  { border-left-color: var(--gold-solid); }
 .dk-help .callout-info  { border-left-color: var(--green); }
@@ -178,22 +186,22 @@
 .dk-help table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
-  margin: 10px 0 16px;
+  font-size: var(--t-2);
+  margin: var(--s-3) 0 var(--s-4);
 }
 .dk-help th {
   text-align: left;
-  padding: 8px 10px;
+  padding: var(--s-2) var(--s-3);
   border-bottom: 1px solid var(--rule);
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--t-1);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   background: transparent;
 }
 .dk-help td {
-  padding: 8px 10px;
+  padding: var(--s-2) var(--s-3);
   border-bottom: 1px solid var(--rule-soft);
   vertical-align: top;
   color: var(--ink);
@@ -202,11 +210,11 @@
 .dk-help tr:hover td { background: var(--bg-card-hover); }
 .dk-help td code,
 .dk-help td a code { color: var(--gold-solid); }
-.dk-help td:first-child code { font-size: 12px; }
+.dk-help td:first-child code { font-size: var(--t-2); }
 
 /* ── Lists ─────────────────────────────────────────────────── */
-.dk-help ul, .dk-help ol { padding-left: 22px; margin: 0 0 10px; }
-.dk-help li { margin-bottom: 4px; }
+.dk-help ul, .dk-help ol { padding-left: var(--s-5); margin: 0 0 var(--s-3); }
+.dk-help li { margin-bottom: var(--s-1); }
 
 .dk-help .steps { list-style: none; padding: 0; counter-reset: steps; }
 /* The badge is positioned, not a flex sibling. A step's body is prose with
@@ -219,7 +227,7 @@
   counter-increment: steps;
   position: relative;
   padding-left: 32px;   /* 20px badge + the 12px gap it used to get from flex */
-  margin-bottom: 10px;
+  margin-bottom: var(--s-3);
 }
 .dk-help .steps li::before {
   content: counter(steps);
@@ -228,7 +236,7 @@
   top: 1px;
   background: var(--blurple);
   color: #fff;
-  font-size: 11px;
+  font-size: var(--t-1);
   font-weight: 700;
   width: 20px;
   height: 20px;
@@ -242,11 +250,11 @@
 .dk-help .qr-table .qr-section td {
   background: var(--bg-rail);
   font-weight: 700;
-  font-size: 11px;
+  font-size: var(--t-1);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-mute);
-  padding: 10px;
+  padding: var(--s-3);
   border-bottom: 1px solid var(--rule);
 }
 .dk-help .qr-table td:nth-child(2) { white-space: nowrap; }
@@ -261,8 +269,8 @@
   border-radius: var(--r-sm);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 12px;
-  padding: 5px 10px;
+  font-size: var(--t-2);
+  padding: var(--s-1) var(--s-3);
   width: 200px;
 }
 .dk-help-search:focus {
@@ -272,16 +280,16 @@
 
 .dk-help-results-count {
   color: var(--ink-dim);
-  font-size: 12px;
-  margin: 0 0 12px;
+  font-size: var(--t-2);
+  margin: 0 0 var(--s-3);
 }
 .dk-help-result {
   display: block;
   background: var(--bg-card);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r);
-  padding: 10px 14px;
-  margin-bottom: 8px;
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-2);
   text-decoration: none;
 }
 .dk-help-result:hover {
@@ -290,20 +298,22 @@
 }
 .dk-help-result-title {
   color: var(--ink-bright);
-  font-size: 13px;
+  font-size: var(--t-2);
+  font-family: var(--display);
+  font-stretch: 104%;
   font-weight: 600;
-  margin-bottom: 3px;
+  margin-bottom: var(--s-1);
 }
 .dk-help-result-snippet {
   color: var(--ink-dim);
-  font-size: 12px;
+  font-size: var(--t-2);
   line-height: 1.5;
 }
 .dk-help-result-snippet mark {
   background: var(--gold-soft);
   color: var(--gold-solid);
   border-radius: 2px;
-  padding: 0 2px;
+  padding: 0 var(--s-0);
 }
 
 /* Search-result deep-link landing flash */

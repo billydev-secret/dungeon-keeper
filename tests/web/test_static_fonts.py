@@ -80,9 +80,50 @@ def test_archivo_is_declared_variable_on_width():
         )
 
 
-def test_no_third_party_font_host():
-    """Self-hosted means self-hosted — no CDN request at page load."""
-    for path in (_CSS, _STATIC / "login.html", _STATIC / "index.html"):
-        text = path.read_text(encoding="utf-8")
-        for host in ("fonts.googleapis.com", "fonts.gstatic.com", "use.typekit"):
-            assert host not in text, f"{path.name} reaches out to {host}"
+@pytest.mark.parametrize(
+    "name",
+    ["app.css", "login.html", "index.html", "manual.html", "help-panel.css"],
+)
+def test_no_third_party_font_host(name):
+    """Self-hosted means self-hosted — no CDN request at page load.
+
+    manual.html matters most here and was originally missed: it is hand-edited
+    prose, so it is the file most likely to acquire a Google Fonts link from
+    someone pasting in a snippet.
+    """
+    text = (_STATIC / name).read_text(encoding="utf-8")
+    for host in ("fonts.googleapis.com", "fonts.gstatic.com", "use.typekit"):
+        assert host not in text, f"{name} reaches out to {host}"
+
+
+def test_every_page_declaring_a_face_can_actually_use_it():
+    """A page that ships an @font-face but never references the family has paid
+    the download cost for nothing — and, worse, looks different from the same
+    content rendered elsewhere. manual.html did exactly this: it declared
+    Archivo and then set every heading in the body face, while the Help panel
+    rendered the same sections in Archivo."""
+    for name in ("login.html", "manual.html"):
+        text = (_STATIC / name).read_text(encoding="utf-8")
+        families = set(re.findall(r'@font-face\s*\{[^}]*?font-family:\s*"([^"]+)"', text))
+        if not families:
+            continue
+        # Strip @font-face blocks AND the :root token declarations. Naming a
+        # family in `--display: "Archivo", ...` is not using it; a font-family
+        # declaration on a real selector is. (Checking only for the name would
+        # pass on the very file this test was written for.)
+        body = re.sub(r"@font-face\s*\{[^}]*\}", "", text)
+        used = re.findall(r"font-family:\s*([^;]+);", body)
+        used = [u for u in used if not u.strip().startswith('"')]
+        tokens_used = {t for u in used for t in re.findall(r"var\(--([a-z-]+)\)", u)}
+        token_defs = dict(re.findall(r"--([a-z-]+):\s*(\"[^;]+);", text))
+        reachable = {
+            fam
+            for tok in tokens_used
+            for fam in re.findall(r'"([^"]+)"', token_defs.get(tok, ""))
+        }
+        missing = families - reachable
+        assert not missing, (
+            f"{name} declares @font-face for {sorted(missing)} but no rule "
+            f"reaches it — either use it or drop the download. Naming it in a "
+            f":root token does not count."
+        )

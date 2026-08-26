@@ -166,8 +166,11 @@ const ICON_DOC = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><p
  */
 function memberLabel(t) {
   // Matches the SUBJECT card exactly — the API derives subject.user_id from
-  // the ticket's own user_id, so the two can never disagree.
-  return esc(String((t && (t.user_name || t.user_id)) || "this member"));
+  // the ticket's own user_id, so the two can never disagree about *who*. The
+  // unresolved fallback has to match too: this said "this member" while the
+  // three `reporter` sites say "unknown", so one ticket showed both names for
+  // the same person.
+  return esc(String((t && (t.user_name || t.user_id)) || "unknown"));
 }
 
 function renderActions(t) {

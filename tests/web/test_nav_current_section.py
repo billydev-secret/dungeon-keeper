@@ -182,19 +182,43 @@ def test_current_section_is_actually_set_wider(browser, dashboard):
     Guards against Archivo being replaced by a static face, or the rule being
     reduced to a colour change — either leaves `.current` present and correct
     while the thing the user actually perceives is gone.
+
+    Read through ``font-stretch`` rather than ``font-variation-settings``: the
+    low-level property overrides ``font-weight`` and inherits into children, so
+    the rail states its width the high-level way and a child can still set its
+    own weight. If that ever regresses to font-variation-settings, this reads
+    the initial ``100%`` for both and fails.
     """
     page = _open(browser, dashboard.base, "xp-leaderboard")
     try:
         widths = page.evaluate(
             """() => {
-              const read = (el) => getComputedStyle(el).fontVariationSettings || '';
+              const read = (el) => getComputedStyle(el).fontStretch || '';
               const cur = document.querySelector('.nav-group.current');
               const other = [...document.querySelectorAll('.nav-group')]
                 .find(g => !g.classList.contains('current'));
               return { current: read(cur), other: read(other) };
             }"""
         )
-        assert '"wdth" 125' in widths["current"], widths
-        assert '"wdth" 85' in widths["other"], widths
+        assert widths["current"] == "125%", widths
+        assert widths["other"] == "85%", widths
+    finally:
+        page.close()
+
+
+def test_current_section_is_announced_to_assistive_tech(browser, dashboard):
+    """Width and gold are both purely visual; a screen reader gets neither."""
+    page = _open(browser, dashboard.base, "xp-leaderboard")
+    try:
+        state = page.evaluate(
+            """() => ({
+              sections: [...document.querySelectorAll('.nav-group[aria-current]')]
+                .map(g => g.textContent.trim()),
+              pages: [...document.querySelectorAll('.nav-item[aria-current]')]
+                .map(b => b.getAttribute('aria-current')),
+            })"""
+        )
+        assert state["sections"] == ["Reports"], state
+        assert state["pages"] == ["page"], state
     finally:
         page.close()
