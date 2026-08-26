@@ -92,7 +92,7 @@ export function mount(container) {
               <div class="field-hint">A fallback folder path on the machine running
                 Dungeon Keeper (not on your computer, and not a link) holding color
                 palette swatch images. Only used while no swatches have been uploaded
-                under <a href="#/economy-sinks">Sinks → Color Palette</a>, which is the
+                under <a href="#/economy-sinks">Shop &amp; Perks → Color Palette</a>, which is the
                 normal way to manage them.</div>
             </div>
           </div>

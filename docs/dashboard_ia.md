@@ -67,9 +67,49 @@ in 2026-08 (IA2):
 
 * **Operations** — Bank (relabelled from "Operations"), Statistics, Settings.
 * **Earning** — Income Sources, Quests, Claims, Mention Awards, QOTD.
-* **Spending** — Shop & Perks (relabelled from "Sinks"). Custom shop items and
-  private rooms land here.
+* **Spending** — Approvals, Shop & Perks (relabelled from "Sinks"), Pricing.
+  One page until 2026-08-26; see below.
 * **Wagering** — Casino, Pools.
+
+**Spending was one 1,339-line page and is now three**, split by what each part
+*is* rather than by what data it touches:
+
+| Page | id | Kind | Gate | Cadence |
+|---|---|---|---|---|
+| Approvals | `shop-approvals` | work queues — emoji submissions, custom-item orders | **not** adminOnly | whenever something is bought |
+| Shop & Perks | `economy-sinks` | catalogs — palette, role icons, custom items | adminOnly | setup burst, then dormant |
+| Pricing | `pricing` | one form of priced dials | adminOnly | launch, then a few times a year |
+
+`economy-sinks` keeps its id because the page still exists, so no `MOVED_PAGES`
+entry is owed — that mechanism is for **retired** ids. The `order` field states
+the frequency deliberately: the queue you work is first and the prices you
+rarely touch are last, rather than leaving it to an alphabetical accident that a
+future relabel would silently reshuffle.
+
+Three things forced the split, and none of them were the page's height:
+
+1. **Approvals must not be adminOnly.** `/api/economy/emoji-submissions` is
+   gated `require_economy_manager`, so the backend grants the economy-manager
+   role access — but the queue lived on an adminOnly page, so a manager could
+   never reach it. Claims and QOTD, the comparable queues, were already open.
+   Loosening the settings page's gate instead would have handed managers the
+   hoard-tax dial.
+2. **One Save governed six unrelated groups.** All six dial cards sat in a single
+   `<form>`, so saving a raffle price also wrote the tax rate. The form is now
+   the whole of `pricing`.
+3. **A shared dirty bit.** `guardForm`'s unsaved-edits flag is a module global in
+   `config-helpers.js` and `showStatus(el, true, …)` clears it. The old page had
+   41 `showStatus` call sites, so approving an emoji — or merely *starting* an
+   image upload — cleared the warning protecting a half-typed price.
+
+The precedent that settles the "a price belongs beside its queue" objection is
+already in the tree: sponsored QOTD's price and its submission queue have been
+on separate pages all along.
+
+Cross-page hints are the maintenance cost. A palette row priced 0 falls through
+to the flat dial on `pricing`, and the icon catalog overrides another; those
+hints used to say "above" and "further down" and now have to be links. When
+moving a dial away from the thing it prices, grep the hint text.
 
 Two rules are at work and both are load-bearing. Headings are **the job** — run
 it, pay it out, spend it, wager it. Inside a heading a **feature that spans

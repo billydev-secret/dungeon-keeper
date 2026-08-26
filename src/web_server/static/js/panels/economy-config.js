@@ -43,7 +43,8 @@ function render(container, cfg, channels, roles, members) {
       <header>
         <h2>Economy Settings</h2>
         <div class="subtitle">Where the economy lives and what the currency is called.
-          Prices are set on <a href="#/economy-sinks">Sinks</a> and earnings on
+          Prices are set on <a href="#/pricing">Pricing</a>, what members can buy on
+          <a href="#/economy-sinks">Shop &amp; Perks</a>, and earnings on
           <a href="#/economy-income-sources">Income Sources</a>.</div>
       </header>
       ${renderMetaWarning()}

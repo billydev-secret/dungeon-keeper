@@ -1,0 +1,227 @@
+/**
+ * The two work queues the perk shop generates: sponsored emoji submissions
+ * waiting on a decision, and custom-item orders waiting on a human.
+ *
+ * These were the third and the sixteenth section of a 1,339-line settings page.
+ * Two things were wrong with that, both structural:
+ *
+ *  - WRONG AUDIENCE. `/api/economy/emoji-submissions` (list, approve, deny) is
+ *    gated `require_economy_manager` — admins OR the configured economy-manager
+ *    role. The backend deliberately lets a manager work this queue. But the page
+ *    hosting it was `adminOnly: true`, so a manager could never reach it. The
+ *    comparable queues, Claims and QOTD, are not adminOnly. This page is not
+ *    either, which is what makes the backend's grant mean something.
+ *
+ *  - WRONG PLACE FOR WORK. A queue fills up on its own and has to be worked
+ *    through; a price dial sits still until someone changes it. Burying pending
+ *    work at scroll positions 3 and 16 of a settings page meant nothing told you
+ *    it was there. As its own page it can carry a count in the nav.
+ *
+ * Both queues are read-mostly and poll on mount only — no timers, so leaving the
+ * page open costs nothing.
+ */
+import { api, apiPost, esc } from "../api.js";
+import { mountAsync, showStatus, loadMembers } from "../config-helpers.js";
+import { promptDialog, toast } from "../ui.js";
+import { economyOffBanner } from "./economy-shop-shared.js";
+
+export function mount(container) {
+  container.innerHTML = `<div class="panel"><div class="empty">Loading approvals…</div></div>`;
+
+  return mountAsync(container, async () => {
+    // The config fetch is only for the economy-off banner, and it is
+    // admin-gated — an economy manager gets a 403. Swallow it: the queues are
+    // the point of this page and they are manager-readable.
+    const cfg = await api("/api/economy/config").catch(() => null);
+    render(container, cfg);
+    wireEmojiQueue(container);
+    wireShopOrders(container);
+  }, { errorMsg: "Couldn’t load the approval queues." });
+}
+
+function render(container, cfg) {
+  container.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>Approvals</h2>
+        <div class="subtitle">Purchases that need a person before they take effect.
+          What members can buy is curated on
+          <a href="#/economy-sinks">Shop &amp; Perks</a>, and priced on
+          <a href="#/pricing">Pricing</a>.</div>
+      </header>
+      ${economyOffBanner(cfg)}
+
+      <section class="form card">
+        <div class="section-label">Emoji Approval Queue</div>
+        <div class="field-hint" style="margin-bottom:1rem;">
+          Emojis members have sponsored and paid for, waiting on your decision.
+          Approving uploads the emoji to the server and starts its weekly rent — the
+          first week is already paid. Turning one down refunds the member in full. If a
+          rental later lapses, the emoji comes back down on its own.
+        </div>
+        <div data-emoji-queue></div>
+        <div data-emoji-empty class="field-hint" style="display:none;">Nothing is waiting for review.</div>
+      </section>
+
+      <section class="form card" style="margin-top:1.5rem;">
+        <div class="section-label">Orders Waiting on Staff</div>
+        <div class="field-hint" style="margin-bottom:1rem;">
+          Every custom item somebody bought that a human still has to do. These are the
+          same jobs that appear on your <a href="#/mod-todo">todo board</a> — tick one off
+          there (or in Discord) once it’s done and the buyer’s payment is kept. Turn one
+          down here instead and the money goes straight back to them.
+        </div>
+        <div data-orders></div>
+        <div data-orders-empty class="field-hint" style="display:none;">
+          Nothing waiting. Orders show up here the moment somebody buys one.
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function emojiRow(sub, memberName) {
+  const kind = sub.animated ? "animated" : "static";
+  return `
+    <div class="card" data-sub-id="${sub.id}"
+         style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
+      <img src="/api/economy/emoji-submissions/${sub.id}/image" alt=""
+           width="48" height="48"
+           style="width:48px;height:48px;object-fit:contain;
+                  background:repeating-conic-gradient(#808080 0% 25%, #a0a0a0 0% 50%) 50% / 12px 12px" />
+      <div>
+        <div><code>:${esc(sub.name)}:</code> <span class="field-hint">(${kind}, ${sub.price}/wk)</span></div>
+        <div class="field-hint">from <span data-member-id="${esc(sub.user_id)}">${esc(memberName(sub.user_id))}</span></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-left:auto;">
+        <button type="button" class="btn btn-primary" data-approve>Approve and Upload</button>
+        <button type="button" class="btn btn-danger" data-deny>Turn Down</button>
+      </div>
+      <span data-row-status></span>
+    </div>`;
+}
+
+function wireEmojiQueue(container) {
+  const listEl = container.querySelector("[data-emoji-queue]");
+  const emptyEl = container.querySelector("[data-emoji-empty]");
+
+  // Every other moderator queue on the dashboard resolves people through
+  // loadMembers(); this one printed the raw snowflake, which tells a reviewer
+  // nothing about who is asking. Falls back to the id when the member list is
+  // unavailable, or the sponsor has left and isn't in it.
+  let nameById = new Map();
+  const memberName = (id) => nameById.get(String(id)) || String(id);
+
+  async function refresh() {
+    let subs = [];
+    try {
+      const [members, data] = await Promise.all([
+        loadMembers().catch(() => []),
+        api("/api/economy/emoji-submissions?state=pending"),
+      ]);
+      nameById = new Map(
+        members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
+      );
+      subs = data.submissions;
+    } catch (err) {
+      listEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      return;
+    }
+    listEl.innerHTML = subs.map((s) => emojiRow(s, memberName)).join("");
+    emptyEl.style.display = subs.length ? "none" : "block";
+  }
+  refresh();
+
+  listEl.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const row = btn.closest("[data-sub-id]");
+    const id = row.getAttribute("data-sub-id");
+    const rowStatus = row.querySelector("[data-row-status]");
+    btn.disabled = true;
+    try {
+      if (btn.hasAttribute("data-approve")) {
+        const out = await apiPost(`/api/economy/emoji-submissions/${id}/approve`, {});
+        showStatus(rowStatus, out.ok, out.ok ? "Live" : out.error);
+      } else if (btn.hasAttribute("data-deny")) {
+        // Shared dialog rather than the browser's native prompt(), so it is
+        // themed, focus-trapped, and keyboard-accessible like every other
+        // confirmation on the dashboard.
+        const reason = await promptDialog(
+          "This member is refunded in full and sent your reason. What should they be told?",
+          { title: "Turn down this emoji?", confirmLabel: "Turn Down", danger: true },
+        );
+        if (reason === null) { btn.disabled = false; return; }
+        await apiPost(`/api/economy/emoji-submissions/${id}/deny`, {
+          reason: reason.trim() || "not a fit for the server",
+        });
+        showStatus(rowStatus, true, "Turned down and refunded");
+      }
+      await refresh();
+    } catch (err) {
+      showStatus(rowStatus, false, err.message);
+      btn.disabled = false;
+    }
+  });
+}
+
+function orderRow(order) {
+  const note = order.note
+    ? `<div class="field-hint">“${esc(order.note)}”</div>` : "";
+  return `
+    <div class="card" data-order-id="${order.id}"
+         style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
+      <div>
+        <div><b>${esc(order.item_name)}</b>
+          <span class="field-hint">(${order.price})</span></div>
+        <div class="field-hint">for ${esc(order.user_name || order.user_id)}</div>
+        ${note}
+      </div>
+      <div style="display:flex;gap:8px;margin-left:auto;">
+        <button type="button" class="btn btn-danger" data-refund>Turn Down &amp; Refund</button>
+      </div>
+      <span data-row-status></span>
+    </div>`;
+}
+
+function wireShopOrders(container) {
+  const listEl = container.querySelector("[data-orders]");
+  const emptyEl = container.querySelector("[data-orders-empty]");
+
+  async function refresh() {
+    try {
+      const data = await api("/api/economy/shop-orders");
+      const rows = data.orders || [];
+      listEl.innerHTML = rows.map(orderRow).join("");
+      emptyEl.style.display = rows.length ? "none" : "block";
+    } catch {
+      emptyEl.textContent = "Couldn’t load the orders.";
+      emptyEl.style.display = "block";
+    }
+  }
+
+  listEl.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-refund]");
+    if (!btn) return;
+    const row = btn.closest("[data-order-id]");
+    const id = row.getAttribute("data-order-id");
+    const rowStatus = row.querySelector("[data-row-status]");
+    const reason = await promptDialog(
+      "The buyer gets their money back and the job comes off the todo board. "
+      + "Anything you type here is for your own records.",
+      { title: "Turn this order down?", confirmLabel: "Refund", danger: true },
+    );
+    if (reason === null) return;
+    btn.disabled = true;
+    try {
+      await apiPost(`/api/economy/shop-orders/${id}/refund`, { reason: reason || "" });
+      toast("Refunded.");
+      await refresh();
+    } catch (err) {
+      showStatus(rowStatus, false, err.message);
+      btn.disabled = false;
+    }
+  });
+
+  refresh();
+}
