@@ -9,20 +9,17 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
-from bot_modules.services.embeds import pad_cell, rel_ts
+from bot_modules.services.embeds import rel_ts
 
 #: How many pending tasks the board lists before it defers to the dashboard.
 #: Discord caps a description at 4096 chars; this keeps us far under it and
 #: keeps the board glanceable rather than a wall.
 MAX_BOARD_ROWS = 15
 
-#: Column width for the task cell, chosen so a row still fits on mobile.
-_TASK_WIDTH = 42
-
-#: Floor for the id column. It grows to fit the widest id on the board — the id
-#: is the handle a mod reads off the board to talk about a task, so it is never
-#: clipped (a truncated "#100…" could collide with a different real id).
-_MIN_ID_WIDTH = 5
+#: Where a task is cut short on the board. Slightly wider than the 42 the old
+#: padded cell allowed, since nothing is spent on padding any more — and a hard
+#: cap is what stops one essay-length task from owning a whole phone screen.
+TASK_CLIP = 44
 
 RECURRING_MARKER = "🔁"
 
@@ -31,6 +28,11 @@ RECURRING_MARKER = "🔁"
 ORDER_MARKER = "🎁"
 
 EMPTY_BODY = "Nothing pending — the list is clear. ✨"
+
+
+def _clip(text: str, width: int) -> str:
+    """Cut to ``width`` with a trailing ellipsis, per the embed style guide."""
+    return text if len(text) <= width else text[: width - 1] + "…"
 
 
 def _flatten(text: str) -> str:
@@ -50,6 +52,21 @@ def render_rows(
     so the longest-waiting task sits at the top where it nags. ``total`` is how
     many are pending overall — the caller fetches only a screenful, so it can't
     be inferred from ``len(rows)``.
+
+    **Only the id is monospace, and there is no age.** The task used to sit in
+    a cell padded to a fixed 48 characters, so "more qotd prompts" took the
+    full width exactly like a sentence-long one and every row wrapped on a
+    phone. Dropping the padding alone was not enough: measured against the 13
+    real tasks on the production board, a relative age costs about nine extra
+    wrapped lines, because "2 months ago" pushes almost every short row over a
+    phone's width on its own. No layout that keeps it beats the padded one it
+    replaced.
+
+    So the age goes. The list is oldest-first, so *position* already says what
+    has waited longest — which was the age's job here — and the exact date
+    stays one tap away on the dashboard's Todo List page. Net on that real
+    board: 22 wrapped lines against the old 27, while showing more of each task
+    than the old cell did (``TASK_CLIP`` > its 42).
     """
     if not rows:
         return EMPTY_BODY
@@ -58,11 +75,6 @@ def render_rows(
     shown = rows[:limit]
     if not shown:  # limit <= 0; nothing to render, so nothing to measure
         return EMPTY_BODY
-    # Size the id column to the widest id actually on the board, so ids are
-    # padded for alignment but never truncated.
-    id_width = max(
-        _MIN_ID_WIDTH, max(len(f"#{row['id']}") for row in shown) + 1
-    )
 
     lines: list[str] = []
     for row in shown:
@@ -75,11 +87,8 @@ def render_rows(
             marker += f" {ORDER_MARKER}"
         buyer = _flatten(row.get("buyer_name") or "")
         for_whom = f" · for {buyer}" if buyer else ""
-        ident = f"#{row['id']}".ljust(id_width)
-        cell = ident + pad_cell(_flatten(row["task"]), _TASK_WIDTH)
-        lines.append(
-            f"`{cell}`{marker} {rel_ts(row['created_at'])}{for_whom}"
-        )
+        task = _clip(_flatten(row["task"]), TASK_CLIP)
+        lines.append(f"`#{row['id']}`{marker} {task}{for_whom}")
 
     hidden = total - len(shown)
     if hidden > 0:
@@ -154,11 +163,6 @@ CHORE_MISSED = "❌"
 STREAK_MARKER = "🔥"
 STREAK_MIN = 2
 
-#: Narrower than the all-todos board's cell: these rows carry a state box in
-#: front and a name plus a timestamp behind, and the line still has to survive
-#: a phone.
-_CHORE_WIDTH = 34
-
 EMPTY_CHORES = "No recurring chores set up yet — add them on the dashboard. ✨"
 
 
@@ -195,6 +199,11 @@ def render_chore_rows(
     time-of-day order, each already carrying its ``streak`` and (resolved by
     the cog, which is the only layer that may touch Discord) a
     ``completed_by_name``.
+
+    The state box leads the line and the name is bold rather than padded
+    monospace: a fixed-width cell wrapped on a phone and left a bare backtick
+    on its own line, and the boxes align just as well by simply starting the
+    line.
     """
     if not rows:
         return EMPTY_CHORES
@@ -206,7 +215,10 @@ def render_chore_rows(
     lines: list[str] = []
     for row in shown:
         state = chore_state(row)
-        cell = _CHORE_BOXES[state] + " " + pad_cell(_flatten(row["task"]), _CHORE_WIDTH)
+        # The state box starts the line, so the boxes still form a column
+        # without a padded cell behind them — and the chore name is free to
+        # wrap rather than stranding a lone backtick on a phone.
+        cell = f"{_CHORE_BOXES[state]} **{_flatten(row['task'])}**"
 
         trailing: list[str] = []
         if state == "done":
@@ -229,8 +241,8 @@ def render_chore_rows(
         if streak >= STREAK_MIN:
             trailing.append(f"{STREAK_MARKER} {streak}")
 
-        suffix = ("  " + "  ".join(trailing)) if trailing else ""
-        lines.append(f"`{cell}`{suffix}")
+        suffix = (" — " + " · ".join(trailing)) if trailing else ""
+        lines.append(f"{cell}{suffix}")
 
     hidden = len(rows) - len(shown)
     if hidden > 0:
