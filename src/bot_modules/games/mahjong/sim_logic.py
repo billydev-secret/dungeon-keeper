@@ -432,7 +432,7 @@ def _apply(
         case "courtesy_pick":
             return engine.courtesy_pick(state, seat, kw["tiles"])
         case "discard":
-            return engine.discard(state, seat, kw["tile"])
+            return engine.discard(state, seat, kw["tile"], card)
         case "claim":
             return engine.claim(
                 state, seat, kw["kind"], kw.get("tiles", []), card, rng)

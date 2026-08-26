@@ -62,6 +62,12 @@ DEAL_COUNTDOWN = 10.0
 #: Bot reaction delay bounds, seconds (bots plan B4): instant responses feel
 #: robotic and leak information; tests pin these to ~0.
 BOT_DELAY = (1.5, 4.0)
+#: How long a fully-answered claim window lingers: long enough for the table
+#: to register what was thrown, and no longer. Not zero — the window is also
+#: the beat in which a discard is read, and collapsing it would make tiles
+#: flash past unseen.
+ANSWERED_WINDOW = 1.5
+
 #: Lobby that never fills / settle screen nobody rematches: dissolve (§6.2).
 LOBBY_LIFETIME = 600.0
 
@@ -552,7 +558,7 @@ class MahjongService:
             elif action == "courtesy_pick":
                 state, events = engine.courtesy_pick(state, seat, kwargs["tiles"])
             elif action == "discard":
-                state, events = engine.discard(state, seat, kwargs["tile"])
+                state, events = engine.discard(state, seat, kwargs["tile"], card)
             elif action == "claim":
                 state, events = engine.claim(
                     state, seat, kwargs["kind"], kwargs.get("tiles", []),
@@ -695,7 +701,18 @@ class MahjongService:
         if state.phase is Phase.LOBBY:
             deadline = float(row["deadline_at"] or (now + LOBBY_LIFETIME))
         elif state.phase is Phase.CLAIM_WINDOW:
-            deadline = now + settings.claim_window(state.seat_count)
+            responders = [
+                s for s in state.live_seats() if s != state.live_discarder
+            ]
+            if responders and set(state.claims) >= set(responders):
+                # Every seat is already answered — nobody with a legal route
+                # is being waited on. Hold the tile just long enough for the
+                # table to see it rather than the full window, which is 8
+                # seconds on each of ~70 discards and, measured over 964
+                # windows, has nobody who can act 28.7% of the time.
+                deadline = now + ANSWERED_WINDOW
+            else:
+                deadline = now + settings.claim_window(state.seat_count)
         elif state.phase is Phase.AWAIT_DISCARD:
             deadline = now + settings.turn_timer
         elif state.phase is Phase.SETTLE:

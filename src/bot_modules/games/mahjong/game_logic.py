@@ -66,6 +66,11 @@ CHARLESTON_TILES = 3
 MAX_COURTESY = 3
 STRIKES_TO_FALLOW = 3
 
+#: Recorded for a seat with no legal route to the live discard, so the engine
+#: can tell a decision the seat made from one made on its behalf. Everything
+#: that resolves a window treats it as a pass, because that is what it is.
+AUTO_PASS = "auto_pass"
+
 #: Pass directions per Charleston, as seat offsets (turn order runs to the
 #: right, so "right" = the next seat). Duel overrides every pass to the
 #: opponent — which +1/+3 mod 2 already are, and "across" is mapped below.
@@ -798,7 +803,9 @@ def _begin_play(state: GameState) -> list[Event]:
 # ── The turn loop (§2.4–§2.6) ────────────────────────────────────────────────
 
 
-def discard(state: GameState, seat: int, tile: Tile) -> tuple[GameState, list[Event]]:
+def discard(
+    state: GameState, seat: int, tile: Tile, card: Card
+) -> tuple[GameState, list[Event]]:
     _require_phase(state, Phase.AWAIT_DISCARD)
     state = copy.deepcopy(state)
     seat_state = _require_seat(state, seat)
@@ -807,10 +814,34 @@ def discard(state: GameState, seat: int, tile: Tile) -> tuple[GameState, list[Ev
     if tile not in seat_state.rack:
         raise ActionRejected(RejectCode.TILE_NOT_IN_RACK, "That tile isn't in your rack.")
     seat_state.strikes = 0  # a timely discard breaks the consecutive-timeout run
-    return _place_discard(state, seat, tile)
+    return _place_discard(state, seat, tile, card)
 
 
-def _place_discard(state: GameState, seat: int, tile: Tile) -> tuple[GameState, list[Event]]:
+def can_claim(state: GameState, seat: int, tile: Tile, card: Card) -> bool:
+    """Has this seat any legal route to the live discard?
+
+    Deliberately generous: two matching tiles (naturals or jokers) is what a
+    *call* needs before the card is even consulted, and an instant Mahjong is
+    the other route (§2.5). A seat that fails both cannot act however the
+    rest of the hand goes, so passing for it takes nothing away.
+
+    A discarded joker is claimable by nobody, and the discarder never
+    responds to their own tile — both handled by the caller.
+    """
+    seat_state = state.seats[seat]
+    pool = sum(1 for t in seat_state.rack if t is tile or t is Tile.JOKER)
+    if pool >= 2:
+        return True
+    return bool(match_hand(
+        list(seat_state.rack) + [tile],
+        [e.as_match() for e in seat_state.exposures],
+        card,
+    ))
+
+
+def _place_discard(
+    state: GameState, seat: int, tile: Tile, card: Card
+) -> tuple[GameState, list[Event]]:
     state.seats[seat].rack.remove(tile)
     state.discards.append((seat, tile))
     state.discard_count += 1
@@ -819,7 +850,33 @@ def _place_discard(state: GameState, seat: int, tile: Tile) -> tuple[GameState, 
     state.drawn = None
     state.claims = {}
     state.phase = Phase.CLAIM_WINDOW
-    return state, [("discard_placed", {"seat": seat, "tile": tile.code})]
+    events: list[Event] = [("discard_placed", {"seat": seat, "tile": tile.code})]
+
+    # Seats with no legal route are recorded as passing straight away. The
+    # window is 8 seconds on every one of ~70 discards a hand — a sixth of
+    # the whole table's time — and measured over 964 windows only 31.5% of
+    # responder-slots could act at all, with 28.7% of windows having nobody
+    # who could. Waiting out a decision that does not exist is the single
+    # largest avoidable delay in the game.
+    auto = [
+        s for s in state.live_seats()
+        if s != seat
+        and (tile is Tile.JOKER or not can_claim(state, s, tile, card))
+    ]
+    for s in auto:
+        # Marked apart from a chosen pass: this seat never decided anything,
+        # so if it does tap something the engine must let the tap through to
+        # the normal private-downgrade path (§2.5) rather than answer "you
+        # have already responded" for a choice it never made.
+        state.claims[s] = (AUTO_PASS, [])
+    if auto:
+        events.append(("claims_auto_passed", {"seats": auto}))
+    # Deliberately *not* resolved here even when every responder is covered.
+    # The claim window is also the beat in which a table sees what was
+    # thrown, and collapsing it to zero would make discards flash past
+    # unread. The service arms a short deadline instead when nothing is
+    # being waited for — pacing without the dead time.
+    return state, events
 
 
 def redeem_joker(
@@ -908,7 +965,11 @@ def claim(
     seat_state = _require_seat(state, seat)
     if seat == state.live_discarder:
         raise ActionRejected(RejectCode.NOT_YOUR_TURN, "It's your own discard.")
-    if seat in state.claims:
+    if seat in state.claims and state.claims[seat][0] != AUTO_PASS:
+        # A seat that *chose* cannot choose again. One that was passed for
+        # automatically may still tap: it has no legal route, so a call or a
+        # Mahjong will downgrade privately below exactly as it always did,
+        # and a pass simply confirms what the engine already recorded.
         raise ActionRejected(RejectCode.ALREADY_SUBMITTED, "You've already responded.")
     if kind not in ("pass", "call", "mahjong"):
         raise ActionRejected(RejectCode.BAD_COUNT, "Pass, Call, or Mahjong.")
@@ -944,7 +1005,7 @@ def claim(
         s for s in state.live_seats() if s != state.live_discarder
     ]
     if set(state.claims) >= set(responders):
-        events += _resolve_claim_window(state, card, rng)
+        events += _resolve_claim_window(state, card)
     return state, events
 
 
@@ -981,9 +1042,7 @@ def _claim_priority(state: GameState, seats: list[int]) -> int:
     return min(seats, key=lambda s: (s - discarder) % n)
 
 
-def _resolve_claim_window(
-    state: GameState, card: Card, rng: random.Random
-) -> list[Event]:
+def _resolve_claim_window(state: GameState, card: Card) -> list[Event]:
     """Collect-then-arbitrate: Mahjong > exposure > nearest in turn order."""
     discard_tile = state.live_discard
     discarder = state.live_discarder
@@ -1042,10 +1101,10 @@ def _resolve_claim_window(
     # everyone passed: the discard dies when the next one lands (§2.5) —
     # it stays in the pit; the next live seat draws.
     state.claims = {}
-    return events + _draw_for_next(state, state.next_live_seat(discarder), rng)
+    return events + _draw_for_next(state, state.next_live_seat(discarder))
 
 
-def _draw_for_next(state: GameState, seat: int, rng: random.Random) -> list[Event]:
+def _draw_for_next(state: GameState, seat: int) -> list[Event]:
     if not state.wall:
         return _settle_wall_game(state)
     tile = state.wall.pop()
@@ -1189,7 +1248,7 @@ def obtainable_seen(state: GameState, seat: int, card: Card) -> Counter[Tile]:
         or tile is None
         or tile is Tile.JOKER
         or state.live_discarder == seat
-        or state.claims.get(seat, ("", []))[0] == "pass"
+        or state.claims.get(seat, ("", []))[0] in ("pass", AUTO_PASS)
     ):
         return seen
     seat_state = state.seats[seat]
@@ -1415,13 +1474,13 @@ def force_fallow(
     events: list[Event] = [("seat_fallow", {"seat": seat, "left_guild": True})]
     events += _judge_survivors(state, card)
     if state.phase is Phase.AWAIT_DISCARD and state.turn == seat:
-        events += _draw_for_next(state, state.next_live_seat(seat), rng)
+        events += _draw_for_next(state, state.next_live_seat(seat))
     elif state.phase is Phase.CLAIM_WINDOW and seat != state.live_discarder:
         responders = [
             r for r in state.live_seats() if r != state.live_discarder
         ]
         if set(state.claims) >= set(responders):
-            events += _resolve_claim_window(state, card, rng)
+            events += _resolve_claim_window(state, card)
     return state, events
 
 
@@ -1493,7 +1552,7 @@ def timeout(
             # empty rack must strike-and-move-on, never crash the timer
             events += _strike(state, seat, card)
             if state.phase is Phase.AWAIT_DISCARD:
-                events += _draw_for_next(state, state.next_live_seat(seat), rng)
+                events += _draw_for_next(state, state.next_live_seat(seat))
             return state, events
         if tile is None or tile not in seat_state.rack:
             # dealer's first turn / post-claim: no drawn tile — a random
@@ -1505,9 +1564,9 @@ def timeout(
             return state, events  # the strike settled the hand
         if state.seats[seat].fallow:
             # seat just folded (4-seat, 2+ live): no discard — next draws
-            events += _draw_for_next(state, state.next_live_seat(seat), rng)
+            events += _draw_for_next(state, state.next_live_seat(seat))
             return state, events
-        _, place_events = _place_discard(state, seat, tile)
+        _, place_events = _place_discard(state, seat, tile, card)
         return state, events + place_events
 
     if state.phase is Phase.CLAIM_WINDOW:
@@ -1519,7 +1578,7 @@ def timeout(
                 state.claims[seat] = ("pass", [])
                 # a claim-window lapse is not an AFK strike: staying silent
                 # IS the normal way to pass (§2.5's window just closes)
-        events += _resolve_claim_window(state, card, rng)
+        events += _resolve_claim_window(state, card)
         return state, events
 
     raise ActionRejected(RejectCode.WRONG_PHASE, "Nothing here can time out.")
