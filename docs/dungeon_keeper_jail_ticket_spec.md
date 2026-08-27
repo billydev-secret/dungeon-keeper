@@ -49,6 +49,8 @@ The dashboard mirrors the moderator surface. Jail endpoints are read-only — re
 | `POST` | `/api/moderation/tickets/{id}/jail` | Jail the ticket subject |
 | `POST` | `/api/moderation/tickets/{id}/note` | Add an internal mod-only note |
 | `GET` | `/api/moderation/warnings` | List warnings |
+| `POST` | `/api/moderation/warnings/{id}/revoke` | Revoke a warning (mod) |
+| `DELETE` | `/api/moderation/warnings/{id}` | Erase a warning outright (**admin**) |
 | `GET` | `/api/moderation/policy-tickets` | List escalated tickets |
 | `GET` | `/api/moderation/transcript` | Fetch a transcript |
 | `GET` | `/api/moderation/audit` | List audit log entries |
@@ -135,7 +137,7 @@ Transcripts are delivered as Markdown (`.md`) files. They're readable in any tex
 
 ### Warnings
 
-`/warn` records a warning, DMs the member with the reason and their current active warning count, and writes an audit embed. When a member's active warning count **reaches** the configured threshold (default 3) the bot posts a highlighted alert in the log channel that pings admin roles. **The threshold never auto-jails** — it escalates to humans, who decide what happens next. Reading a member's warning history — active and revoked, with dates, reasons, and the issuing mod — is the dashboard's Warnings page (`GET /api/moderation/warnings`); the `/warnings` command that duplicated it was removed 2026-07-28. `/revokewarn` stays in Discord as a deliberate manual soft-delete — no timed expiry — and takes the numeric ID shown on that page.
+`/warn` records a warning, DMs the member with the reason and their current active warning count, and writes an audit embed. When a member's active warning count **reaches** the configured threshold (default 3) the bot posts a highlighted alert in the log channel that pings admin roles. **The threshold never auto-jails** — it escalates to humans, who decide what happens next. Reading a member's warning history — active and revoked, with dates, reasons, and the issuing mod — is the dashboard's Warnings page (`GET /api/moderation/warnings`); the `/warnings` command that duplicated it was removed 2026-07-28. `/revokewarn` stays in Discord as a deliberate manual soft-delete — no timed expiry — and takes the numeric ID shown on that page. That page also acts: each warning's detail carries a **Revoke** button (moderator, optional reason prompt, same soft-delete as `/revokewarn`) and, for admins only, a confirm-gated **Delete** that erases the row outright. Revoke is hidden on an already-revoked warning — the endpoint 409s on a second revoke.
 
 ### Modinfo
 
@@ -155,7 +157,7 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 
 **User needs:**
 - Mod role (configured on the dashboard): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/revokewarn`, `/modinfo`, `/policy vote`, `/policy list`, and the dashboard moderation routes.
-- Admin role: `/policy open`, `/policy close`, dashboard config writes. Admin roles are also the ones pinged on warning threshold and ticket escalation.
+- Admin role: `/policy open`, `/policy close`, dashboard config writes, and deleting a warning outright (`DELETE /api/moderation/warnings/{id}`). Admin roles are also the ones pinged on warning threshold and ticket escalation.
 - Everyone: `/ticket open`, the panel button, and the "Open Ticket About This Message" menu.
 
 ## User-visible errors
@@ -178,6 +180,12 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 
 - **No auto-jail.** Warning thresholds never trigger jail automatically — they ping admins.
 - **No auto-revoke for warnings.** Warnings only clear when a mod manually revokes them.
+- **Deleting a warning is the exception, not the correction.** Revoking is what a mod
+  reaches for when a warning shouldn't count any more — the row stays, marked revoked.
+  Deletion exists only for a warning that should never have existed (wrong member, a test
+  row), so it's admin-gated, confirm-first, and has no Discord command. The `warnings` row
+  goes, but a `warning_delete` audit entry keeps what it held, so the deletion itself is
+  never a silent gap in the record.
 - **No appeal system.** There's no member-facing "appeal my jail" flow; the jail channel itself is the conversation.
 - **No web-side jail release or ticket delete.** Both destructive actions happen only in Discord.
 - **No per-user ticket cap.** A member can open as many tickets as they want.

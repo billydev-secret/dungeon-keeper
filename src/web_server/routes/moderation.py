@@ -14,6 +14,7 @@ from bot_modules.services.moderation import (
     claim_ticket,
     close_ticket,
     create_warning,
+    delete_warning,
     escalate_ticket,
     fmt_duration,
     get_active_warning_count,
@@ -1005,6 +1006,52 @@ async def warning_revoke_route(
             return {
                 "ok": True,
                 "message": f"Warning #{warning_id} revoked — {count} active warning(s) remain.",
+            }
+
+    return await run_query(_q)
+
+
+@router.delete("/moderation/warnings/{warning_id}", response_model=SimpleActionResult)
+async def warning_delete_route(
+    request: Request,
+    warning_id: int,
+    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Erase a warning outright — admin-only, no Discord equivalent.
+
+    Revoking is the ordinary correction and keeps the record; this is for a
+    warning that should never have existed. The row goes, but the audit entry
+    keeps what it held (member, reason, who issued it, when), so deleting
+    still leaves a trace of the deletion itself rather than a silent gap.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = delete_warning(conn, guild_id, warning_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="Warning not found")
+            target_id = int(row["user_id"])
+            count = get_active_warning_count(conn, guild_id, target_id)
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="warning_delete",
+                actor_id=user.user_id,
+                target_id=target_id,
+                extra={
+                    "warning_id": warning_id,
+                    "reason": row["reason"],
+                    "moderator_id": str(row["moderator_id"]),
+                    "created_at": row["created_at"],
+                    "was_revoked": bool(row["revoked"]),
+                    "count": count,
+                },
+            )
+            return {
+                "ok": True,
+                "message": f"Warning #{warning_id} deleted — {count} active warning(s) remain.",
             }
 
     return await run_query(_q)
