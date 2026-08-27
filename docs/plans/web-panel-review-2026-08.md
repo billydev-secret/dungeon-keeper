@@ -88,7 +88,7 @@ Grep for `composite` before finishing — `core/scoring.py`,
 `emoji_stealer/dedupe.py`, `quote_renderer.py`, `guess_crop_renderer.py` all use
 the word for unrelated things. **Do not touch those.**
 
-## Stage 4 — ☐ Suggested setup rows become clearable
+## Stage 4 — ☑ Suggested setup rows become clearable
 
 `tiles/setup-suggestions.js` renders `/help/suggestions`
 (`routes/advisor.py:172`) → `advisor_gaps.suggestions()` →
@@ -109,7 +109,12 @@ un-dismiss path so a cleared row can come back, and the control on the tile. The
 same suggestions surface in the `config-advisor` panel — keep both consistent.
 Dismissal is an admin action; gate it accordingly.
 
-Complex: investigate, bring the approach and open questions back before building.
+**Shipped as migration 183 + `advisor_gaps.dismiss/restore/dismissed_slugs`.**
+Decisions taken while building: dismissed features are *marked, not hidden* in
+`scan_guild` / `format_gap_report`, so Billy-bot still tells an admin the
+feature exists and that the server passed on it; the un-dismiss surface is a
+Suggested Setup card on the AI Assistant page, which the tile's `nav:` already
+pointed at while showing no suggestions at all.
 
 ## Stage 5 — ☐ Bring back the social network visualizer
 

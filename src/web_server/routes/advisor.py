@@ -173,6 +173,7 @@ async def help_advisor(
 async def help_suggestions(
     request: Request,
     limit: int = 3,
+    include_dismissed: bool = False,
     guild_id: int = Depends(get_active_guild_id),
     # Admin-gated for the same reason the gap tool is: a list of what a server
     # hasn't set up is reconnaissance, and only admins can act on it anyway.
@@ -183,15 +184,20 @@ async def help_suggestions(
     Same scan as Billy-bot's ``find_setup_gaps`` tool, rendered as structured
     rows instead of prose. No model call: this is a DB read against the
     registry, so it's cheap enough to sit on the home page.
+
+    ``include_dismissed`` is what the manage view asks for: it has to show a
+    cleared row before it can offer to bring it back. The tile never does.
     """
     from bot_modules.services.advisor_gaps import suggestions
 
     ctx = get_ctx(request)
-    limit = max(1, min(int(limit), 10))
+    limit = max(1, min(int(limit), 40))
 
     def _q():
         with ctx.open_db() as conn:
-            return suggestions(conn, guild_id, limit)
+            return suggestions(
+                conn, guild_id, limit, include_dismissed=include_dismissed
+            )
 
     gaps = await run_query(_q)
     return {
@@ -204,11 +210,62 @@ async def help_suggestions(
                 "panel": g.feature.panel,
                 "status": g.status,
                 "effort": g.effort,
+                "dismissed": g.dismissed,
                 "missing": [{"key": s.key, "label": s.label} for s in g.missing],
             }
             for g in gaps
         ],
     }
+
+
+@router.post("/help/suggestions/{slug}/dismiss")
+async def dismiss_suggestion(
+    request: Request,
+    slug: str,
+    guild_id: int = Depends(get_active_guild_id),
+    # Dismissing records a decision on behalf of the whole server, so it takes
+    # the same admin gate as reading the list.
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Clear one suggestion for this guild, permanently, for every admin."""
+    from bot_modules.services.advisor_gaps import dismiss
+
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            ok = dismiss(conn, guild_id, slug)
+            if ok:
+                conn.commit()
+            return ok
+
+    if not await run_query(_q):
+        raise HTTPException(status_code=404, detail="No such feature")
+    return {"ok": True, "slug": slug, "dismissed": True}
+
+
+@router.delete("/help/suggestions/{slug}/dismiss")
+async def restore_suggestion(
+    request: Request,
+    slug: str,
+    guild_id: int = Depends(get_active_guild_id),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Bring a dismissed suggestion back into the rotation."""
+    from bot_modules.services.advisor_gaps import restore
+
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            ok = restore(conn, guild_id, slug)
+            if ok:
+                conn.commit()
+            return ok
+
+    if not await run_query(_q):
+        raise HTTPException(status_code=404, detail="No such feature")
+    return {"ok": True, "slug": slug, "dismissed": False}
 
 
 # ── GET/PUT /config/advisor — the AI assistant config panel ────────────────
