@@ -552,24 +552,12 @@ to.) Authoring
 lives on the **Quests** page (library w/ pool summary + inline edit → **Board
 size** dials (§4.6, admin-only — the section is read-only prose for
 manager-role holders, since `GET/PUT /economy/config` is admin-gated) → quest
-editor → AI ideas) with in-place editing (PUT); the sign-off inbox is the
+editor) with in-place editing (PUT); the sign-off inbox is the
 **Claims** page (pending queue with Approve/Deny plus a state filter over the
 paid/denied/expired history); the remaining operational cards — community
 goals → grant → remove → rentals → ledger, with member pickers for
 grant/remove/ledger and a ledger kind datalist — live on the **Operations**
 page.
-
-**AI idea generator.** The New-quest form has a "Generate ideas" button
-(`POST /api/economy/quests/generate`, manager-gated) that batches suggestions for
-the selected quest type. It uses the **Anthropic cloud path** — the same
-`bot_modules.games.utils.ai_client.generate_text` the party-game studio uses, *not*
-the local moderation LLM — and prompts for in-band rewards (daily 10–20, weekly 25–75)
-plus a `community_target` for community goals. Ideas render as clickable cards; picking
-one loads title/description/criteria/reward into the form. **Nothing is persisted** —
-a suggestion is inert until the manager reviews and submits it. Prompt building and the
-tolerant JSON parser (fenced-array / leading-prose / title-only fallbacks) live in
-`bot_modules/economy/quest_ai.py`; the prompt text is hardcoded for v1 (editable-prompt
-parity with the Games Studio is a parking-lot item).
 
 ### 4.2 Member Flow
 - `/bank quests` + wallet page: active quests, progress, claim state. The
@@ -780,7 +768,7 @@ pay*:
   no time gate. `quest_period('event', …)` deliberately raises; only listeners
   build occurrence keys. Slot rule: **1 active event quest per trigger kind**
   (`can_activate_event`); different kinds coexist, and event quests occupy no
-  daily/weekly/community slot. Not offered by the AI idea generator.
+  daily/weekly/community slot.
 
 All firing funnels through `fire_trigger_quests` (service) — one member, one
 kind, every matching active quest — riding the normal `claim_quest` machine, so
@@ -1793,7 +1781,7 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   member cache so a bad id can't credit a phantom wallet), **remove**,
   rentals, ledger audit), **Claims** (the pending
   sign-off queue with Approve/Deny + a state filter over paid/denied/expired
-  history), **Quests** (library + authoring + AI ideas), **Income Sources**
+  history), **Quests** (library + authoring), **Income Sources**
   (trigger switches + faucet rates), **Statistics**, and admin-only
   **Settings** (wiring, branding, perk prices — hidden from non-admin
   managers since its endpoints require admin). It is the dashboard

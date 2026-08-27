@@ -94,7 +94,6 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 - [ ] **Approve/Deny a sign-off claim** — Approve a pending claim from its bank-channel card; confirm payout + DM. Deny another with a reason; confirm the reason DM and that the period stays re-claimable.
 - [ ] **Community quest progress + settlement** — Advance a community quest's progress; confirm it flat-pays every recently-active member exactly once on completion.
 - [ ] **Quest authoring (dashboard)** — Create a new daily/weekly/community/event quest with reward + completion mode; confirm it becomes claimable.
-- [ ] **AI idea generator (dashboard)** — Click "Generate ideas" on the quest form; confirm suggestions render without persisting anything until you pick one.
 - [ ] **Settle sign-off community quest (dashboard)** — Manually run Settle; confirm the auto weekly sweep never double-pays it.
 
 ### QOTD
