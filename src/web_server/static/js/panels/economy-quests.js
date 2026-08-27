@@ -256,22 +256,6 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
             <span data-status-quest></span>
           </div>
         </form>
-        <div class="ai-gen" data-quest-ai style="margin-top:14px;">
-          <div class="section-label" style="font-size:.85em;">✨ Need ideas?</div>
-          <div class="field-row" style="align-items:flex-end;flex-wrap:wrap;">
-            <div class="field"><label for="q-ai-theme">Theme (optional)</label>
-              <input type="text" id="q-ai-theme" data-ai-theme maxlength="200" placeholder="e.g. summer event, voice chat, art"
-                     style="max-width:260px;" /></div>
-            <div class="field"><label for="q-ai-count">How Many Ideas</label>
-              <input type="number" id="q-ai-count" data-ai-count min="1" max="10" step="1" value="5" style="max-width:90px;" /></div>
-            <div class="field" style="align-self:flex-end;">
-              <button type="button" class="btn" data-ai-generate>Generate Ideas</button></div>
-          </div>
-          <div class="field-hint" style="opacity:.75;">Ideas are written for whichever quest
-            type is selected above. Click one to drop it into the form. Nothing is saved
-            until you press Create Quest, so you can edit freely first.</div>
-          <div data-ai-results></div>
-        </div>
       </section>
     </div>`;
 
@@ -653,8 +637,6 @@ function wireAuthoring(container, channels) {
   updateHint();
   updateCommunity();
 
-  wireQuestAi(container, form, { updateHint, updateCommunity });
-
   const exitEditMode = () => {
     editingId = null;
     form.reset();
@@ -802,96 +784,6 @@ function wireAuthoring(container, channels) {
       refreshQuests(container);
     } catch (err) {
       showStatus(status, false, err.message);
-    }
-  });
-}
-
-// ── AI quest-idea generator ──────────────────────────────────────────
-// Batches suggestions for the currently-selected quest type, renders them as
-// clickable cards, and loads a picked idea into the New-quest form. Nothing is
-// persisted here — the manager still reviews and submits.
-
-function wireQuestAi(container, form, { updateHint, updateCommunity }) {
-  const root = container.querySelector("[data-quest-ai]");
-  if (!root) return;
-  const btn = root.querySelector("[data-ai-generate]");
-  const results = root.querySelector("[data-ai-results]");
-  const qtypeSel = form.querySelector("[name=qtype]");
-
-  const setField = (name, value) => {
-    const el = form.querySelector(`[name=${name}]`);
-    if (el != null) el.value = value == null ? "" : value;
-  };
-
-  const loadIdea = (idea) => {
-    setField("title", idea.title || "");
-    setField("description", idea.description || "");
-    setField("criteria", idea.criteria || "");
-    setField("reward", idea.reward ?? "");
-    if (qtypeSel.value === "community" && idea.community_target != null) {
-      setField("community_target", idea.community_target);
-    }
-    updateHint();
-    updateCommunity();
-    form.querySelector("[name=title]").focus();
-    toast("Idea loaded — edit and create", "success");
-    form.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  };
-
-  const renderIdeas = (ideas) => {
-    if (!ideas.length) {
-      results.innerHTML = `<div class="empty">No ideas came back — try again.</div>`;
-      return;
-    }
-    results.innerHTML = "";
-    ideas.forEach((idea) => {
-      const card = document.createElement("div");
-      card.className = "ai-idea";
-      card.style.cssText =
-        "border:1px solid var(--border,#3a3a3a);border-radius:8px;padding:8px 10px;margin:6px 0;cursor:pointer;";
-      const target =
-        idea.community_target != null
-          ? ` · target ${idea.community_target}`
-          : "";
-      card.innerHTML =
-        `<div style="display:flex;justify-content:space-between;gap:8px;">` +
-        `<strong>${esc(idea.title || "(untitled)")}</strong>` +
-        `<span class="badge">${idea.reward ?? 0}${esc(target)}</span></div>` +
-        (idea.description ? `<div style="opacity:.85;margin-top:2px;">${esc(idea.description)}</div>` : "") +
-        (idea.criteria ? `<div style="opacity:.65;font-size:.9em;margin-top:2px;">✓ ${esc(idea.criteria)}</div>` : "");
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      card.addEventListener("click", () => loadIdea(idea));
-      // Cards are role="button" tabindex="0" — activate with Enter/Space too.
-      card.addEventListener("keydown", (e) => {
-        if (e.key !== "Enter" && e.key !== " ") return;
-        e.preventDefault();
-        loadIdea(idea);
-      });
-      results.appendChild(card);
-    });
-  };
-
-  btn.addEventListener("click", async () => {
-    const theme = root.querySelector("[data-ai-theme]").value.trim();
-    const count = Math.max(1, Math.min(10, parseInt(root.querySelector("[data-ai-count]").value, 10) || 5));
-    const qtype = qtypeSel.value;
-    if (qtype === "event") {
-      results.innerHTML = `<div class="empty">Event quests have a fixed trigger — no ideas to generate. Pick another type.</div>`;
-      return;
-    }
-    btn.disabled = true;
-    const label = btn.textContent;
-    btn.textContent = "Generating…";
-    results.innerHTML = `<div class="empty">Generating ${count} ${esc(qtype)} idea(s)…</div>`;
-    try {
-      const data = await apiPost("/api/economy/quests/generate", { qtype, count, theme });
-      renderIdeas(data.ideas || []);
-    } catch (err) {
-      results.innerHTML = `<div class="error">${esc(err.message)}</div>`;
-    } finally {
-      btn.disabled = false;
-      btn.textContent = label;
     }
   });
 }

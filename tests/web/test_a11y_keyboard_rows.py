@@ -43,9 +43,7 @@ def test_click_rows_are_focusable_buttons(panel: str, marker: str) -> None:
         assert 'role="button"' in tag, f"{panel}: row has no button role: {tag}"
 
 
-@pytest.mark.parametrize(
-    "panel", ["qa-tracker.js", "role-menus.js", "docs.js", "economy-quests.js"]
-)
+@pytest.mark.parametrize("panel", ["qa-tracker.js", "role-menus.js", "docs.js"])
 def test_panels_bind_enter_space_activation(panel: str) -> None:
     """A keydown listener mirrors the click handler for Enter/Space."""
     src = _source(panel)
@@ -53,13 +51,6 @@ def test_panels_bind_enter_space_activation(panel: str) -> None:
     assert re.search(r'e\.key !== "Enter" && e\.key !== " "', src), (
         f"{panel}: keydown handler does not gate on Enter/Space"
     )
-
-
-def test_quest_idea_cards_are_focusable_buttons() -> None:
-    """economy-quests builds its idea cards imperatively, not from markup."""
-    src = _source("economy-quests.js")
-    assert "card.tabIndex = 0;" in src
-    assert 'card.setAttribute("role", "button");' in src
 
 
 def test_qa_row_exposes_expanded_state() -> None:
