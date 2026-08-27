@@ -1,16 +1,18 @@
 # Server Map — The Golden Meadow
 
 > **Snapshot, not live-synced.** Pulled directly from the Discord API on
-> 2026-07-18 (77 channels, 109 roles at the time). Channels/roles change as
-> the server evolves — treat this as a point-in-time reference, not a
-> mirror. Re-generate rather than hand-editing when it drifts. (No
-> generator script is checked in — the 2026-07-18 snapshot was produced
-> ad hoc; small factual rot has been spot-fixed since, last 2026-07-21.)
+> 2026-08-27 (63 channels in 15 categories, 133 roles at
+> the time). Channels/roles change as the server evolves — treat this as a
+> point-in-time reference, not a mirror. Re-generate rather than hand-editing
+> when it drifts.
 
-A guided tour of the server's channels and roles, organized the way a
-member sees them. Channel descriptions below are the server's own channel
-topics where one exists; channels without a topic are described from their
-purpose in the bot's feature specs (see `docs/INDEX.md`).
+A guided tour of the server's channels and roles, organized the way a member
+sees them. Ephemeral per-member channels (`jail-*`, `ticket-*`, `penpals-*`)
+are described by their category rather than listed.
+
+A separate **member-facing** map lives as a `docs` row (`doc_key = server-map`)
+rendered into `📜│rules-and-faq`. That one omits the staff categories and the
+pre-verification pages; this file is the internal reference and covers both.
 
 ---
 
@@ -21,142 +23,161 @@ purpose in the bot's feature specs (see `docs/INDEX.md`).
 |---|---|
 | ✔️│verify-here | Verify with Double Counter to gain entry to the rest of the server. |
 | 🕊️│welcome-chat | Say hello — new members introduce themselves and settle in. |
+| 🏢│welcome-tracker-test | Staff-facing: scratch channel for welcome-tracker work. |
 | 🏢│welcome-procedure | Staff-facing: the onboarding checklist for new members. |
 | 🏢│greeter-chat | Staff-facing: coordination channel for the Greeters role. |
 | 🏢│leave-join-log | Staff-facing: automated join/leave log. |
-| 🏢│promotion-reviews | Staff-facing: discussion of member promotions (e.g. to Moderator). |
+| 🏢│promotion-reviews | Staff-facing: discussion of member promotions. |
+| 💤│inactive-chat | Where members land after the 60-day sweep; posting anywhere clears `Inactive`. |
+
+### intro_pages *(pre-verification)*
+| Channel | Notes |
+|---|---|
+| 👋│server-rules | Pre-verification copy of the rules. Visible to `@everyone`, **denied to `Member`** — it disappears once you are in. |
+| 👋│frequently-asked-questions | Pre-verification copy of the FAQ. Same visibility rule as `👋│server-rules`. |
+| 👋│moderation-team-bios | Pre-verification copy of the mod bios. |
 
 ### Front Office
 | Channel | Notes |
 |---|---|
-| 📣│announcements | Official server news, updates, and events. |
-| 👋│staff-bios | Meet the team running the Meadow — who we are and how to reach us. |
+| 📣│announcements *(announcement)* | Official server news, updates, and events. |
+| 👋│staff-bios | Meet the team running the Meadow. |
 | 🫂│server-friends | Partnered and affiliated servers. |
-| 📜│rules-and-faq | House rules and answers to common questions — read before posting. |
+| 📜│rules-and-faq | Post-verification copy of the rules, FAQ and member-facing server map. Denied to `@everyone`, allowed to `Member`. |
 | 📈│level-up | XP level-up pings and role rewards land here. |
-| 🙏│booster-perks | Perks and thank-yous for server boosters. |
 | 🎟️│open-help-ticket | Open a private ticket with staff (spawns a `ticket-*` channel under **Tickets**). |
 | 💌│dm-permissions | Set who can DM you server-side — opt in or out, consent first. |
-| 🔝│bumpatorium | Bump the server on listing sites when the cooldown's up. |
 
 ### Community
 | Channel | Notes |
 |---|---|
 | 💛│the-meadow | Main gathering spot. Conversation can get spicy; media must stay strictly SFW. |
-| 👋│about-us | General "about the server" info. |
-| 🤳│selfies | SFW selfies and images. |
+| 👋│about-us | Member bios. |
+| 🤳│selfies | SFW selfies. |
 | 📸│photo-fun | General SFW photo sharing. |
-| ⭐│star-board | React ⭐ to pin a message here — the server's hall of fame. |
-| 🎵│music | Queue tracks with the music bot (`/play`). |
-| 💜│big-feelings | Softer space for venting and support — SFW, lead with care. |
-| 💛│golden-girls | Role-gated lounge for the Golden Girls crew. |
-| ✨│special-interests (forum) | Members create their own topic threads — SFW only. |
+| ⭐│star-board | Starboard destination — enough ⭐ reactions pins a message here. |
+| 🎵│music | Music bot queue. |
+| 💜│big-feelings | Softer space for venting and support. SFW. |
+| 💛│golden-girls | Role-gated lounge for the `✨Golden Girl✨` crew. |
+| ✨│special-interests *(forum)* | Member-created threads for special interests. Media stays SFW. |
 
-### Spicy *(NSFW-gated)*
+### Spicy 🔞
 | Channel | Notes |
 |---|---|
-| 🫦│spicy-chat | Auto-deletes every 30 days. Vulnerable-space etiquette (CWs, consent for tags/photos, no screenshotting). |
-| 🫦│photo-challenge | Timed NSFW photo prompts — own content only. |
-| 🔥│flash-channel | Spicy conversation and NSFW media. |
+| 🫦│spicy-etiquette | The interaction & etiquette guide. Gated to `Spicy`. |
+| 🫦│spicy-chat | Main NSFW room. Auto-deletes on a 30-day rule. |
+| 🔥│flash-channel | NSFW media and conversation. |
 | 😮‍💨│spicy-audios | Spicy audio clips. |
-| 🤷│guess-who | Guess-the-member game — see `docs/guess_spec.md` (`/veil`, crop-and-guess flow). |
-| 🎲│risky-rolls | `/roll`-driven Q&A game — high roll asks, low roll answers. Safeword: Kiwi 🥝. |
+| 🤷│guess-who | Guess-the-member game — `/veil optin` to enter the pool. |
+| 🎲│risky-rolls | `/roll`-driven Q&A. Safeword: Kiwi 🥝. |
 | 🫦│spicy-games | NSFW party games and prompts. |
-| 🤐│confessions | Anonymous confessions via the bot — logged for admin review. |
-| 🤫│whisper | Anonymous DM-relay game with a 3-guess reveal — see `docs/whisper_spec.md`. |
+| 🤐│confessions | Anonymous posts via the bot; logged for admin review. |
+| 🤫│whisper | `/whisper` anonymous messages; recipient gets 3 guesses to unmask. |
 | 🙋‍♂️│ama | Ask-me-anything hot seat. |
-| 🫦│spicy-interests (forum) | NSFW discussion forum, thread-tagged for consent. |
-
-### Spicy games
-*(empty at snapshot time — reserved category)*
+| 🫦│spicy-interests *(forum)* | NSFW discussion forum, thread-tagged for consent. |
 
 ### Games
 | Channel | Notes |
 |---|---|
-| 🎲│games | Party games, minigames, and leaderboards (`/games`). |
-| 🎲│wordle | Daily Wordle — post your grid, chase the streak. |
+| 🎲│game-host-chat | For members who run games for everyone else. |
+| 🎲│games | Party games, minigames, and leaderboards. |
+| 🎲│wordle | Daily Wordle. |
 | 🎲│co-ordle | Co-op Wordle. |
-| 🎲│cat-bot | Home for the external Cat Bot. |
-| 🎲│quizzlers | Quiz game channel. |
+| 🎲│cat-bot | Home for Cat Bot. |
+| 🏈│nfl-survivor-league | Season-long NFL survivor pool. |
 
-### economy game
+### Economy Game
 | Channel | Notes |
 |---|---|
-| 🏦│how-it-works | Explains the currency/quest/perk-shop economy — see `docs/economy_spec.md`. |
-| 📈│stats | Economy stats/leaderboard. |
-| 🪙│shop | Perk shop. |
+| 🏦│how-it-works | How the currency, quests, and perk shop work. |
+| 🪙│shop | Spend coins on perks, roles, and rentals. |
+| 🎰│the-casino | Casino games of chance. |
+| 💹│the-prediction-market | Prediction market betting. |
+| 🎯│bounty-board | Member-funded bounties. |
+| 💸│register | Economy sign-up, and the ledger feed. |
+
+### Pen Pals
+| Channel | Notes |
+|---|---|
+| join-here | Pen Pals opt-in; matches spawn `penpals-*` channels. |
+| `penpals-*` | One auto-created channel per active match. |
+
+### Hidden Channels
+| Channel | Notes |
+|---|---|
+| 🔝│bumpatorium | Bump the server on listing sites when the cooldown is up. |
+| ❔│quizzlers | Quiz game channel. |
+| 🪧│the-auction-house | Auction house for coin bidding. |
 
 ### Voice Channels
 | Channel | Notes |
 |---|---|
-| events (voice) | Scheduled voice events. |
-| Join To Create (voice) | Voice Control hub — join to spin up your own personal voice channel. |
-| voice-how-to | How to use Join To Create rooms — make your own channel, control who gets in. |
+| Lobby *(voice)* | General drop-in voice room. |
+| Join To Create *(voice)* | Join to spin up a personal Voice Master room. |
+| voice-how-to | How Join To Create rooms work. |
+
+### Bio-writer
+Empty at snapshot time — category exists with no channels in it.
 
 ### Admin *(staff-only)*
 | Channel | Notes |
 |---|---|
-| 🏢│mod-chat | Moderator coordination. |
-| 🤖│bot-command-spam | Staff sandbox for bot commands. |
+| ✅│todo | Staff-facing: the bot-managed todo board. |
+| 🏢│mod-chat | Staff-facing: mod coordination. |
+| 🤖│bot-command-spam | Staff-facing: bot command scratch channel. |
 
 ### Jail *(staff-only, ephemeral)*
-One `jail-<member>-<date>` channel per jailed member, auto-created by the
-jail/ticket system — see `docs/dungeon_keeper_jail_ticket_spec.md`.
+Empty at snapshot time. One channel per jailed member is auto-created here (`jail-*`).
 
 ### Tickets *(staff-only, ephemeral)*
-One `ticket-<member>-<date>` channel per open help ticket, spawned from
-🎟️│open-help-ticket.
-
-### Hidden Channels
-*(empty at snapshot time — working category for the `/hidden` cog, which
-temporarily relocates channels here; see `docs/hidden_channels_spec.md`)*
-
-### intro_pages
-| Channel | Notes |
-|---|---|
-| 👋│server-rules | Rules reference. |
-| 👋│frequently-asked-questions | FAQ reference. |
-| 👋│moderation-team-bios | Mod team bios. |
-
-### Bio-writer
-*(empty at snapshot time — working category for the Bios cog's private per-member profile-wizard channels)*
+Empty at snapshot time. One channel per open ticket is spawned here from `🎟️│open-help-ticket` (`ticket-*`).
 
 ### dev *(staff-only)*
 | Channel | Notes |
 |---|---|
-| testing-queue | QA Tracker cards post here — one per feature branch, written at `/dk-ship` teardown from every `Testing:` section it merged (the old `docs/TESTING_QUEUE.md` mirror was retired 2026-07-18). |
-| admin-tests / moderator-tests / user-tests | Role-scoped QA checklists. |
-| dev-discussion | Dev coordination. |
-
+| testing-queue | Staff-facing: dev testing queue. |
+| dev-discussion | Staff-facing: dev chat. |
 ---
 
 ## Roles, at a glance
 
-109 roles exist; most are functional (self-assigned via role menus,
-bot-managed, or cosmetic name colors) rather than a strict permission
-ladder. Grouped by purpose rather than listed individually:
+133 roles exist; most are functional (self-selected, bot-managed, or
+cosmetic name colors) rather than a strict permission ladder.
+
+**Self-selection is Discord's own onboarding, not the bot's Role Menus** —
+`role_menus` holds a single empty test menu. Members pick roles through
+**Channels & Roles** (`<id:customize>`), whose prompts are the grouping below.
+
+That config has **two writers**: a human editing it in Server Settings, and DK
+(`services/onboarding_service.py`, driven from the dashboard's Onboarding panel,
+confirm-only and never on a loop). `economy_loop._sync_setup_marks` also *reads*
+it hourly to mark the `role_pick` quest. Whichever writes it, the API replaces
+the **entire** prompt list — there is no append — so always read the current
+config and send it back whole, or options silently vanish. Editing by hand
+against the API is the same contract: `GET` then `PUT /guilds/{id}/onboarding`.
 
 - **Staff & access** — `Dungeon-Keeper` (bot, admin), `Admin`, `#### Mods`,
   `Moderator`, `Greeters`, `game-host`, `Jailed`.
-- **Membership milestones** — `Member` (base verified role), `Denizen`,
-  `veteran`, `✨Golden Girl✨`, `Boosters ❤️`.
-- **DM preference** (self-assigned, mutually exclusive) — `DMs: Open`,
-  `DMs: Ask`, `DMs: Closed` — see `docs/dm_perms_spec.md`.
-- **Content/interest self-select** — `Spicy`, `Games 🃏`, `Spicy Games`,
-  `Risky rolls🎲`, `Guess Who`, `whisper`, `veil`, `ama`, `Music League`,
-  `Worldle`, `Co-ordle`, `Cat Bot`, `FlashChannel`, `TruthOrDare`,
-  `Policy polls 🤓`, `QOTD`.
-- **Age ranges** (self-select) — `21-29` … `60-69`.
-- **Regions** (self-select) — `North America`, `South America`, `Europe`,
-  `Asia`, `Oceania`, `Africa`.
-- **Cosmetics** (name-color only, no permissions) — `dusk ember`,
-  `firefly`, `golden hour`, `meadow sunrise`, `midnight poppy`,
-  `molten core`, `neon meadow`, `velvet dusk`, `wildflower`, `rose gold`,
-  plus several emoji-named color roles.
-- **Bot-managed utility** — `Double Counter`, `Needle`, `Gait`,
-  `To-do Bot`, `OpenMusicBot`, `Cat Bot`, `Gamebot`, `DISBOARD.org`,
-  `Top.gg`, `Discadia`, `QuizBot` — attached to their respective
-  integrations, not assigned to members.
-
-Most self-select roles above are granted through Role Menus
-(`docs/role_menus_spec.md`) rather than commands.
+- **Membership milestones** — `Member` (base verified role), `veteran`,
+  `✨Golden Girl✨`, `Boosters ❤️`. There is **no `Denizen` role**: `denizen` is
+  the *grant name* in `grant_roles` that hands out `Member`, which is how the
+  dead name kept surfacing in member-facing copy.
+- **Bot-managed lifecycle** — `Spicy` is granted by staff via the `nsfw` grant
+  and pruned after **30 days** of inactivity (`inactivity_prune_rules`);
+  `Inactive` is applied by the separate **60-day** sweep
+  (`inactive_threshold_days`) and cleared on the member's next message.
+- **Asked during onboarding** (single-select) — region (`North America`, `South America`, `Europe`, `Asia`, `Oceania`, `Africa`),
+  age bracket (`21-29`, `30-39`, `40-49`, `50-59`, `60-69`), DM preference (`DMs: Ask`, `DMs: Closed`, `DMs: Open`); see
+  `docs/dm_perms_spec.md`.
+- **Community Messages** (opt-in pings) — `QOTD`, `LovedbyLoaf`, `Chat-revive`.
+- **SFW Community Notifications** (opt-in pings) — `Games 🃏`, `Music League`, `Fashion`, `Policy polls 🤓`, `Cats!`, `VC 🎙️`.
+- **NSFW Games** (opt-in pings) — `Risky rolls🎲`, `FlashChannel`, `TruthOrDare`, `Spicy Games`, `Guess Who`, `whisper`, `Spicy VC`, `Photo-challenge`, `ama`.
+- **Pick a color** (name-color only, no permissions) — `🌹`, `💛`, `🔴`, `🔵`, `🟦`, `🟢`, `🩷`, `💜`.
+- **Not in any picker** — exist but are granted by a feature, a purchase or
+  staff: the palette set (`dusk ember`, `firefly`, `golden hour`,
+  `meadow sunrise`, `midnight poppy`, `molten core`, `neon meadow`,
+  `velvet dusk`, `wildflower`, `rose gold`), `veil`, `Worldle`, `Co-ordle`,
+  `Cat Bot`, and the per-member vanity roles.
+- **Bot-managed utility** — `Double Counter`, `Needle`, `Gait`, `To-do Bot`,
+  `OpenMusicBot`, `Cat Bot`, `Gamebot`, `DISBOARD.org`, `Top.gg`, `Discadia`,
+  `QuizBot` — attached to their integrations, not assigned to members.

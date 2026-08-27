@@ -71,7 +71,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |
 | [role_grant_spec.md](role_grant_spec.md) | Role Grant (`/grant`, fixed allowlist grants) — distinct from role_menus_spec.md |
 | [server_announcement_style.md](server_announcement_style.md) | Member/mod-facing guide for formatting server announcements & pinned posts (spacing, headings, links). A draft to post/pin in Discord, not bot behavior |
-| [server_map.md](server_map.md) | Server map: channel/category guide + role groupings for The Golden Meadow. **Snapshot** from the live Discord API (2026-07-18) — re-generate rather than hand-editing when it drifts |
+| [server_map.md](server_map.md) | Server map: channel/category guide + role groupings for The Golden Meadow. **Snapshot** from the live Discord API (2026-08-27) — re-generate rather than hand-editing when it drifts |
 | [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch functional spec (v0.3 + §12 ledger) |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |
 | [starboard_spec.md](starboard_spec.md) | Starboard (threshold, self-star block, NSFW guard) |
