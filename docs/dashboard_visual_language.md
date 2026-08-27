@@ -87,11 +87,54 @@ red fill, which made "jail this person" the loudest control on the page while
 you were still reading the queue. Solid-red styling belongs on the confirm
 dialog's button, where a decision is actually being taken.
 
+That rule reaches both button kits. `.btn-danger` — the `.btn` kit's
+destructive variant, and the far more used one, 33 call sites against
+`.act-btn.danger`'s two — was still a solid `--red` fill with white text, which
+is 3.77:1 as well as too loud. It is now outlined in the same `--red-text`
+tier, and the solid treatment is **scoped to `.confirm-box`**, which is the
+exception the rule already named. That button's fill is Discord's darker
+`#da373c`, because `--red` under white is under AA at `--btn`'s 12.5px.
+`tests/web/test_css_contrast_tiers.py` pins both halves.
+
 Where a pane's actions operate on more than one object, group them and say
 which is which — Tickets splits **This ticket** (state) from **This member**
 (a permanent moderation record), using the existing `.section-label`. A member's
 display name inside such a label wears `.td-act-who`, which cancels the
 uppercase: an eyebrow is uppercase, a name someone chose is not.
+
+## Anything you can click, you can reach with a keyboard
+
+Three shapes on this dashboard were mouse-only, each because a plain `<div>` or
+`<th>` was given a click listener and nothing else.
+
+**Queue rows.** Tickets, Jails, Warnings and Todo render a list of
+`.ticket-item` rows, and each drives its detail pane entirely from which row is
+selected — so a keyboard-only moderator could not reach the right-hand half of
+the moderation surface at all. The rows carry `tabindex="0"`, `role="button"`
+and `aria-current`, and activation comes from `bindRowActivation` in `ui.js`
+rather than a fifth copy of the same click/keydown pair. `.active` was
+colour-only; `aria-current` is what says "this one" out loud.
+
+**Sortable headers.** `renderSortableTable` backs 14 panels and emitted bare
+`<th data-sort>` with a delegated click. `aria-sort` appeared nowhere in the
+static tree, so the current sort was carried by a `::after` arrow alone.
+Headers are now focusable, answer Enter and Space, and declare
+`aria-sort="ascending|descending|none"`. Re-rendering replaces the table, so a
+keyboard sort restores focus to the header it was on — otherwise the user is
+dropped at the top of the document.
+
+**Comboboxes.** A picker's slot is *replaced* by the widget, so `field()` can
+never pair the visible `<label>` with it by id the way it does for a real
+input. `mountPicker` now reads the label off the enclosing `.field` /
+`.ctrl-field`, so a named control is the default and `label` is the override.
+Before that, a caller who forgot `label` shipped a combobox announcing only
+"Type to filter…".
+
+The global `:focus-visible` rule means all three get the gold ring for free —
+`--blurple` was 2.74:1, under the 3:1 floor WCAG 1.4.11 sets for a focus
+indicator, which is why the ring is gold everywhere.
+
+`tests/web/test_a11y_keyboard_rows.py` holds the line on all of it.
 
 ## Two typefaces, both self-hosted
 

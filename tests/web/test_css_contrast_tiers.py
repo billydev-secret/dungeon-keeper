@@ -131,3 +131,44 @@ def test_saturated_tier_would_still_fail_ie_the_rule_is_load_bearing():
         "--red now clears AA as text, so the two-tier split no longer earns "
         "its keep — re-check whether --red-text is still needed"
     )
+
+
+# ── the destructive-button rule ─────────────────────────────────────────
+#
+# docs/dashboard_visual_language.md: "A destructive action is never the filled
+# one." `.act-btn.danger` honoured it; `.btn-danger` — the other button kit,
+# and the one with 33 uses against that kit's two — was a solid `--red` fill
+# with white text, which is both the loudest control on the page and 3.77:1.
+#
+# The one exception the rule names is a confirm dialog, where a decision is
+# actually being taken. That is why the solid treatment is scoped to
+# `.confirm-box` rather than deleted.
+
+
+def _rule_body(css: str, selector: str) -> str:
+    m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    assert m, f"{selector} not found in app.css"
+    return m.group(1)
+
+
+def test_the_in_page_destructive_button_is_outlined():
+    css = _strip_comments((_STATIC / "app.css").read_text(encoding="utf-8"))
+    body = _rule_body(css, ".btn-danger")
+    assert "background: transparent" in body, (
+        "in-page .btn-danger is a filled button — see the destructive-action "
+        "rule in docs/dashboard_visual_language.md"
+    )
+    assert "var(--red-text)" in body, "outlined danger uses the --red-text tier"
+
+
+def test_the_confirm_dialogs_button_stays_solid_and_clears_aa():
+    css = _strip_comments((_STATIC / "app.css").read_text(encoding="utf-8"))
+    body = _rule_body(css, ".confirm-box .btn-danger")
+    m = re.search(r"background:\s*(#[0-9a-fA-F]{6})", body)
+    assert m, "the confirm dialog's danger button has no solid fill"
+    assert "color: #fff" in body
+    # .btn is var(--t-2) — 12.5px, so this is normal text at the 4.5:1 floor.
+    ratio = _contrast(_rgb("#ffffff"), _rgb(m.group(1)))
+    assert ratio >= 4.5, (
+        f"white on {m.group(1)} is {ratio:.2f}:1, under AA for 12.5px text"
+    )

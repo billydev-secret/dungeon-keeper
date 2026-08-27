@@ -763,13 +763,29 @@ a { text-decoration: none; }
   border-color: transparent;
   color: #1a1108;
 }
+/* A destructive action is never the filled one — see
+   docs/dashboard_visual_language.md. The outlined treatment matches
+   .act-btn.danger, which is the same rule in the other button kit. */
 .btn-danger {
-  background: var(--red);
+  background: transparent;
+  border-color: #f23f4359;
+  color: var(--red-text);
+}
+.btn-danger:hover {
+  background: var(--red-soft);
+  border-color: var(--red);
+  color: var(--red-text);
+}
+/* The exception the rule names: inside a confirm dialog a decision is actually
+   being taken, so that button is solid. --red under white text is 3.77:1, so
+   the fill is Discord's own darker danger red, which clears AA at 12.5px. */
+.confirm-box .btn-danger {
+  background: #da373c;
   border-color: transparent;
   color: #fff;
 }
-.btn-danger:hover {
-  background: #ff5256;
+.confirm-box .btn-danger:hover {
+  background: #c62828;
   border-color: transparent;
   color: #fff;
 }

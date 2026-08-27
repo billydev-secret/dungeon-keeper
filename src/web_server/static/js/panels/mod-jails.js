@@ -1,6 +1,6 @@
 import { api, apiPost, esc } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
-import { toast, promptDialog } from "../ui.js";
+import { toast, promptDialog, bindRowActivation } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { syncHash, updatedStampText } from "../report-helpers.js";
@@ -96,7 +96,8 @@ function renderList(jails, activeId, filter) {
       ? fmtRemaining(j.expires_at) + " left"
       : fmtAge(j.released_at || j.created_at) + " ago";
     return `
-      <div class="ticket-item ${cls}" data-jail-id="${esc(j.id)}">
+      <div class="ticket-item ${cls}" data-jail-id="${esc(j.id)}"
+           tabindex="0" role="button" aria-current="${j.id === activeId ? "true" : "false"}">
         <div class="pri"></div>
         <div class="body">
           <div class="subj">${esc(jailSubject(j))}</div>
@@ -394,9 +395,7 @@ export function mount(container, initialParams = {}) {
     render();
   });
 
-  listEl.addEventListener("click", (e) => {
-    const row = e.target.closest(".ticket-item");
-    if (!row) return;
+  bindRowActivation(listEl, ".ticket-item", (row) => {
     state.activeId = Number(row.dataset.jailId);
     render();
   });

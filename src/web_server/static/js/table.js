@@ -49,7 +49,8 @@ const _sortHandlers = new WeakMap();
 function _detach(container) {
   const prev = _sortHandlers.get(container);
   if (prev) {
-    container.removeEventListener("click", prev);
+    container.removeEventListener("click", prev.onClick);
+    container.removeEventListener("keydown", prev.onKeydown);
     _sortHandlers.delete(container);
   }
 }
@@ -90,7 +91,13 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
       // Labels are escaped too: they read as developer constants, but
       // interaction-graph builds one out of a member's display name
       // (`% of ${userName}'s total`), which is the same untrusted input.
-      return `<th data-sort="${esc(c.key)}" class="${esc(cls)}">${esc(c.label)}</th>`;
+      // A sortable header is an operable control: it takes focus, answers
+      // Enter/Space, and says which way it is sorted. Without this, sorting is
+      // mouse-only on 14 panels and the current sort is carried by an ::after
+      // arrow alone — `aria-sort` appeared nowhere in the static tree.
+      const ariaSort = c.key === sortKey ? (sortAsc ? "ascending" : "descending") : "none";
+      return `<th data-sort="${esc(c.key)}" class="${esc(cls)}" `
+        + `tabindex="0" aria-sort="${ariaSort}">${esc(c.label)}</th>`;
     }).join("");
 
     const bodyRows = rows.map((row, idx) => {
@@ -117,9 +124,7 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
 
   render();
 
-  const onClick = (e) => {
-    const th = e.target.closest("th[data-sort]");
-    if (!th) return;
+  const sortBy = (th, restoreFocus) => {
     const key = th.dataset.sort;
     if (sortKey === key) {
       sortAsc = !sortAsc;
@@ -130,7 +135,26 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
       sortAsc = sample && typeof sample[key] === "string";
     }
     render();
+    // render() replaces the whole table, so the header that was just activated
+    // is a different element now. A keyboard sort would otherwise drop focus
+    // to the top of the document and strand the user.
+    if (restoreFocus) {
+      container.querySelector(`th[data-sort="${CSS.escape(key)}"]`)?.focus();
+    }
+  };
+
+  const onClick = (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (th) sortBy(th, false);
+  };
+  const onKeydown = (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    e.preventDefault();   // Space would scroll the page
+    sortBy(th, true);
   };
   container.addEventListener("click", onClick);
-  _sortHandlers.set(container, onClick);
+  container.addEventListener("keydown", onKeydown);
+  _sortHandlers.set(container, { onClick, onKeydown });
 }

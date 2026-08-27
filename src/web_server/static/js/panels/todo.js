@@ -3,7 +3,7 @@ import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { syncHash } from "../report-helpers.js";
 import { guardForm, loadChannels, mountAsync, mountChannelPicker, showStatus } from "../config-helpers.js";
-import { confirmDialog, toast } from "../ui.js";
+import { confirmDialog, toast, bindRowActivation } from "../ui.js";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -39,7 +39,8 @@ function renderList(todos, activeId, filter) {
           ? '<span class="t-chip closed" style="margin-left:4px">Missed</span>'
           : '<span class="t-chip open" style="margin-left:4px">Pending</span>';
       return `
-      <div class="ticket-item ${esc(cls)}" data-todo-id="${esc(t.id)}">
+      <div class="ticket-item ${esc(cls)}" data-todo-id="${esc(t.id)}"
+           tabindex="0" role="button" aria-current="${t.id === activeId ? "true" : "false"}">
         <div class="pri"></div>
         <div class="body">
           <div class="subj">${esc(preview)}</div>
@@ -675,9 +676,7 @@ export function mount(container, initialParams = {}) {
     render();
   });
 
-  listEl.addEventListener("click", (e) => {
-    const row = e.target.closest(".ticket-item");
-    if (!row) return;
+  bindRowActivation(listEl, ".ticket-item", (row) => {
     state.activeId = Number(row.dataset.todoId);
     render();
   });

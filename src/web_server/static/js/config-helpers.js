@@ -554,7 +554,20 @@ function _normalizeIds(values) {
 // Pass `label` with the visible field label to give the search input an
 // accessible name (aria-label) — otherwise every picker announces only its
 // placeholder. Applies to every mount* helper below.
+// A picker's slot is *replaced* by the widget, so `field()` can never pair the
+// visible <label> with it by id the way it does for a real input — and a
+// caller who forgets `label` ships a combobox whose only accessible name is
+// "Type to filter…". Read the label off the field the slot is sitting in
+// instead, so the default is a named control and `label` is the override.
+function _withDerivedLabel(slotEl, opts) {
+  if (opts.label) return opts;
+  const lbl = slotEl.closest?.(".field, .ctrl-field")?.querySelector("label");
+  const text = lbl ? lbl.textContent.trim().replace(/\s+/g, " ") : "";
+  return text ? { ...opts, label: text } : opts;
+}
+
 export function mountPicker(slotEl, options, value, opts = {}) {
+  opts = _withDerivedLabel(slotEl, opts);
   const fs = filterSelect(opts.placeholder || "Type to filter…", options, opts);
   fs.setValue(value);
   slotEl.replaceWith(fs.el);
@@ -563,6 +576,7 @@ export function mountPicker(slotEl, options, value, opts = {}) {
 
 // Mount a multi-value chip picker, replacing `slotEl`.
 export function mountMultiPicker(slotEl, options, values, opts = {}) {
+  opts = _withDerivedLabel(slotEl, opts);
   const fs = multiFilterSelect(opts.placeholder || "Type to filter…", options, opts);
   fs.setValues(_normalizeIds(values));
   slotEl.replaceWith(fs.el);

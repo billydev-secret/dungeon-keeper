@@ -557,3 +557,80 @@ def test_games_config_clears_the_audit_channel_with_a_delete(page):
     assert out["puts"] == 0, "cleared audit channel was still PUT"
     assert "Pick a channel first" not in out["status"]
     assert "Cleared" in out["status"], out["status"]
+
+
+# ── The Gini panel that rendered nothing but its empty state ─────────────
+
+# compute_gini returns `tiers` as an object keyed by tier name. The panel
+# guarded on `(d.tiers || []).length`, which is `undefined` on an object, so
+# the guard was always true.
+_GINI_BODY = {
+    "gini": 0.62,
+    "badge": "healthy",
+    "tiers": {"lurker": 4, "light": 30, "moderate": 12, "active": 5, "power": 2},
+    "lorenz": [[0, 0], [50, 20], [100, 100]],
+    "sparkline": [0.6, 0.61, 0.62, 0.62],
+    "gini_history": [],
+    "top_share": 41.0,
+    "median_msgs": 7,
+    "contributors": 53,
+}
+
+
+def test_gini_renders_its_data_instead_of_the_empty_state(page):
+    """Fails against the pre-fix panel, which showed the empty state for a
+    month with no console error to give it away."""
+    _mount(page, "/static/js/panels/health-gini.js",
+           {"/api/health/gini": {"body": _GINI_BODY}})
+    html = page.inner_html("#host")
+    assert "No messages in the last 30 days" not in html, (
+        "panel still short-circuits to its empty state with data present"
+    )
+    assert "0.62" in html, "the headline Gini figure never rendered"
+
+
+def test_gini_still_shows_the_empty_state_when_every_tier_is_zero(page):
+    """The guard has to keep working — the fix is a real emptiness test, not
+    its removal."""
+    body = {**_GINI_BODY, "tiers": {"lurker": 0, "light": 0, "moderate": 0,
+                                    "active": 0, "power": 0}}
+    _mount(page, "/static/js/panels/health-gini.js",
+           {"/api/health/gini": {"body": body}})
+    assert "No messages in the last 30 days" in page.inner_html("#host")
+
+
+# ── Comboboxes announce the field they sit in ────────────────────────────
+
+
+def test_a_picker_takes_its_name_from_the_field_it_sits_in(page):
+    """A picker's slot is replaced by the widget, so `field()` can never pair
+    the visible <label> with it by id. Callers that forgot `label` shipped a
+    combobox whose only accessible name was its placeholder."""
+    name = page.evaluate("""
+      async () => {
+        const h = await import('/static/js/config-helpers.js');
+        document.body.innerHTML = '<div id="host"></div>';
+        const slot = document.createElement('span');
+        const fieldEl = h.field('Starboard Channel', slot, 'where posts go');
+        document.getElementById('host').appendChild(fieldEl);
+        h.mountChannelPicker(slot, [], '0');
+        return document.querySelector('#host input[role="combobox"]')
+                 ?.getAttribute('aria-label');
+      }
+    """)
+    assert name == "Starboard Channel", f"combobox announced {name!r}"
+
+
+def test_an_explicit_label_still_wins_over_the_derived_one(page):
+    name = page.evaluate("""
+      async () => {
+        const h = await import('/static/js/config-helpers.js');
+        document.body.innerHTML = '<div id="host"></div>';
+        const slot = document.createElement('span');
+        document.getElementById('host').appendChild(h.field('Visible', slot));
+        h.mountChannelPicker(slot, [], '0', { label: 'Explicit' });
+        return document.querySelector('#host input[role="combobox"]')
+                 ?.getAttribute('aria-label');
+      }
+    """)
+    assert name == "Explicit"

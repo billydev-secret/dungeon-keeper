@@ -1,7 +1,7 @@
 import { api, apiPost, apiDelete, esc } from "../api.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { fmtTs } from "../audit-helpers.js";
-import { toast, promptDialog, confirmDialog } from "../ui.js";
+import { toast, promptDialog, confirmDialog, bindRowActivation } from "../ui.js";
 
 // Read straight off the session blob the way mod-tickets.js does, rather than
 // importing config-helpers.js — this panel needs one boolean, not the config
@@ -36,7 +36,8 @@ function renderList(warnings, activeId, activeOnly) {
     const reason = (w.reason || "").trim();
     const preview = reason ? (reason.length > 60 ? reason.slice(0, 57) + "…" : reason) : "(no reason)";
     return `
-      <div class="ticket-item low${cls}" data-warn-id="${esc(w.id)}">
+      <div class="ticket-item low${cls}" data-warn-id="${esc(w.id)}"
+           tabindex="0" role="button" aria-current="${w.id === activeId ? "true" : "false"}">
         <div class="pri"></div>
         <div class="body">
           <div class="subj">${esc(preview)}</div>
@@ -199,9 +200,7 @@ export function mount(container) {
     render();
   });
 
-  listEl.addEventListener("click", (e) => {
-    const row = e.target.closest(".ticket-item");
-    if (!row) return;
+  bindRowActivation(listEl, ".ticket-item", (row) => {
     state.activeId = Number(row.dataset.warnId);
     render();
   });
