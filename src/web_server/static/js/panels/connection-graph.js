@@ -4,8 +4,8 @@ import { renderEmpty, renderError, renderLoading } from "../states.js";
 import { rangePicker } from "../report-helpers.js";
 import { renderSortableTable } from "../table.js";
 import {
-  ROLE_COLORS, SERIES_OVERFLOW,
-  CHART_SURFACE, CHART_TEXT, CHART_GRID, CHART_ACCENT,
+  ROLE_COLORS, seriesColor,
+  CHART_SURFACE, CHART_TEXT, CHART_GRID, CHART_BAR, CHART_ACCENT,
 } from "../charts.js";
 
 // Force-directed network graph rendered on a <canvas>. Restored 2026-08-26
@@ -23,9 +23,15 @@ import {
 const BG        = CHART_SURFACE;
 const NODE_2ND  = ROLE_COLORS[1];
 const FOCUS_CLR = CHART_ACCENT;
-const EDGE_CLR  = "rgba(230,184,76,0.25)";  // CHART_BAR at 25%
+const EDGE_CLR  = _alpha(CHART_BAR, 0.25);
 const TEXT_CLR  = CHART_TEXT;
 const HIGHLIGHT = CHART_ACCENT;
+
+/** `#rrggbb` at the given alpha — canvas takes no CSS colour functions. */
+function _alpha(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
 
 // Cluster colour is a grouping cue, not a legend-matched series, but the
 // palette's own rule holds: past six slots adjacent classes blur whatever you
@@ -33,8 +39,9 @@ const HIGHLIGHT = CHART_ACCENT;
 // hues. On both live servers Louvain finds eight clusters and the two beyond
 // the sixth hold two members each — the Clusters filter isolates them.
 function clusterColor(id) {
-  const i = Number(id) || 0;
-  return i < ROLE_COLORS.length ? ROLE_COLORS[i] : SERIES_OVERFLOW;
+  // seriesColor, not a hand-rolled modulo: past the palette it folds to the
+  // overflow neutral instead of silently handing cluster 7 cluster 1's hue.
+  return seriesColor(Number(id) || 0);
 }
 
 export function mount(container, initialParams) {
@@ -957,7 +964,7 @@ export function mount(container, initialParams) {
         const raw = mat[i][j];
         const frac = raw / rowTotals[i];
         const alpha = Math.min(1, Math.sqrt(frac));
-        const bg = `rgba(230,184,76,${alpha.toFixed(3)})`;
+        const bg = _alpha(CHART_BAR, Number(alpha.toFixed(3)));
         const pctLabel = (frac * 100).toFixed(0) + "%";
         cells.push(`
           <div title="${esc(labels[i])} → ${esc(labels[j])}: ${raw} interactions (${pctLabel} of ${esc(labels[i])}'s out-edges)"
