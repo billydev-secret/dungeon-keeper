@@ -69,10 +69,6 @@ def _row_to_round(row: sqlite3.Row) -> GuessRound:
         difficulty=row["difficulty"],
         candidate_count=row["candidate_count"],
         reroll_count=row["reroll_count"],
-        allow_reuse=bool(row["allow_reuse"]),
-        is_reuse=bool(row["is_reuse"]),
-        original_round_id=row["original_round_id"],
-        reuse_blocked=bool(row["reuse_blocked"]),
         created_at=row["created_at"],
         solved_at=row["solved_at"],
         solver_id=row["solver_id"],
@@ -102,9 +98,6 @@ def insert_round(
     crop_url: str = "",
     difficulty: str = "medium",
     candidate_count: int = 0,
-    allow_reuse: bool = False,
-    is_reuse: bool = False,
-    original_round_id: int | None = None,
     round_type: str = "photo",
     confession_text: str = "",
     confession_prompt_text: str = "",
@@ -113,14 +106,12 @@ def insert_round(
         """
         INSERT INTO guess_rounds
             (guild_id, submitter_id, answer_id, channel_id, message_id,
-             crop_path, crop_url, difficulty, candidate_count,
-             allow_reuse, is_reuse, original_round_id, created_at,
+             crop_path, crop_url, difficulty, candidate_count, created_at,
              round_type, confession_text, confession_prompt_text)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (guild_id, submitter_id, answer_id, channel_id, message_id,
-         crop_path, crop_url, difficulty, candidate_count,
-         int(allow_reuse), int(is_reuse), original_round_id, time.time(),
+         crop_path, crop_url, difficulty, candidate_count, time.time(),
          round_type, confession_text, confession_prompt_text),
     )
     return cur.lastrowid  # type: ignore[return-value]
@@ -232,24 +223,6 @@ def get_active_rounds_for_guild(
         ORDER BY created_at DESC LIMIT ?
         """,
         (guild_id, limit),
-    ).fetchall()
-    return [_row_to_round(r) for r in rows]
-
-
-def get_reusable_rounds(
-    conn: sqlite3.Connection, guild_id: int, *, min_age_seconds: float
-) -> list[GuessRound]:
-    cutoff = time.time() - min_age_seconds
-    rows = conn.execute(
-        """
-        SELECT * FROM guess_rounds
-        WHERE guild_id = ? AND allow_reuse = 1 AND reuse_blocked = 0
-          AND solved_at IS NOT NULL AND created_at <= ?
-          AND deleted_at IS NULL
-        ORDER BY created_at ASC
-        LIMIT 200
-        """,
-        (guild_id, cutoff),
     ).fetchall()
     return [_row_to_round(r) for r in rows]
 

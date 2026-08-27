@@ -13,7 +13,6 @@ from bot_modules.services.guess_repo import (
     get_all_active_round_ids,
     get_guesses_for_round,
     get_last_guess_by_user_for_round,
-    get_reusable_rounds,
     get_round,
     get_guess_config,
     insert_guess,
@@ -58,7 +57,6 @@ def test_insert_and_get_round(sync_db_path: Path):
     assert r.id == rid
     assert r.difficulty == "hard"
     assert r.candidate_count == 3
-    assert r.allow_reuse is False
     assert r.solved_at is None
     assert r.deleted_at is None
 
@@ -105,22 +103,6 @@ def test_get_active_rounds_excludes_deleted(sync_db_path: Path):
         active_ids = {r.id for r in get_active_rounds_for_guild(conn, GUILD)}
     assert r2 in active_ids
     assert r1 not in active_ids
-
-
-def test_get_reusable_rounds_includes_eligible(sync_db_path: Path):
-    with open_db(sync_db_path) as conn:
-        rid = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_B, allow_reuse=True)
-        mark_round_solved(conn, rid, solver_id=USER_B, guesses_to_solve=1, unique_guessers_to_solve=1)
-        rounds = get_reusable_rounds(conn, GUILD, min_age_seconds=0)
-    assert any(r.id == rid for r in rounds)
-
-
-def test_get_reusable_rounds_excludes_no_allow_reuse(sync_db_path: Path):
-    with open_db(sync_db_path) as conn:
-        rid = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_B, allow_reuse=False)
-        mark_round_solved(conn, rid, solver_id=USER_B, guesses_to_solve=1, unique_guessers_to_solve=1)
-        rounds = get_reusable_rounds(conn, GUILD, min_age_seconds=0)
-    assert not any(r.id == rid for r in rounds)
 
 
 def test_insert_and_get_guesses(sync_db_path: Path):
@@ -341,3 +323,17 @@ def test_rejoining_records_fresh_consent_keeping_the_old_row(sync_db_path: Path)
     assert latest["consented_at"] == 3000.0
     assert latest["withdrawn_at"] is None
     assert rows == 2
+
+
+def test_guess_rounds_has_no_reuse_columns(sync_db_path: Path):
+    """Migration 184 drops the ballast left by the cut round-reuse feature.
+
+    They were write-only after the feature was cut: every insert passed a
+    hardcoded False and the one reader had no caller. Regressing would mean a
+    schema that advertises a gate nothing enforces.
+    """
+    with open_db(sync_db_path) as conn:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(guess_rounds)")}
+    assert columns.isdisjoint(
+        {"allow_reuse", "is_reuse", "original_round_id", "reuse_blocked"}
+    )

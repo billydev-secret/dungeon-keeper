@@ -159,7 +159,6 @@ def _do_insert_round(
     answer_id: int,
     channel_id: int,
     difficulty: str,
-    allow_reuse: bool,
     candidate_count: int,
     round_type: str = "photo",
     confession_text: str = "",
@@ -173,7 +172,6 @@ def _do_insert_round(
             answer_id=answer_id,
             channel_id=channel_id,
             difficulty=difficulty,
-            allow_reuse=allow_reuse,
             candidate_count=candidate_count,
             round_type=round_type,
             confession_text=confession_text,
@@ -1110,7 +1108,6 @@ class CropEditorView(discord.ui.View):
             answer_id=self._answer_id,
             channel_id=self.guess_channel_id,
             difficulty=self._difficulty,
-            allow_reuse=False,
             candidate_count=self._candidate_count,
         )
 
@@ -1556,7 +1553,6 @@ class ConfessionPreviewView(discord.ui.View):
             answer_id=self._submitter_id,
             channel_id=self._guess_channel_id,
             difficulty="confession",
-            allow_reuse=False,
             candidate_count=0,
             round_type="confession",
             confession_text=self._text,

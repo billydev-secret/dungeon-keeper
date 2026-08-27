@@ -293,7 +293,7 @@ The following were described as current behavior in earlier versions of this spe
 
 ### Removed gameplay concepts
 
-- **Consent system (`/consent`, `/consent-status`).** Fully deleted from the codebase — only an empty `games_consent/__pycache__/` remains. There is no per-user opt-in flag and no game blocks on consent. If per-user consent gating is ever revived, it would be a new build, not a re-enable of paused wiring. (Note: unrelated "consent" systems exist elsewhere — DM permissions and Rules Watch — and are *not* part of the games suite.)
+- **Consent system (`/consent`, `/consent-status`).** Fully deleted. The empty `games_consent/` directory went in `49a02867` and the orphan `games_consent` table — one row, zero code references — was dropped in migration 184. There is no per-user opt-in flag and no game blocks on consent. If per-user consent gating is ever revived, it would be a new build, not a re-enable of paused wiring. (Note: unrelated "consent" systems exist elsewhere — DM permissions and Rules Watch — and are *not* part of the games suite.)
 - **LegitLibs Hot Seat mode.** Older specs listed a third "Hot Seat" LegitLibs mode as a stub. It has been removed; only `classic` and `quiplash` exist today. A one-at-a-time LegitLibs variant could be revisited as a roadmap item.
 
 ### Collection-without-surface

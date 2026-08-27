@@ -56,8 +56,7 @@ def test_guess_round_optional_fields_are_none():
         channel_id=333, message_id=444, crop_path="", crop_url="",
         original_path="",
         difficulty="medium", candidate_count=1, reroll_count=0,
-        allow_reuse=False, is_reuse=False, original_round_id=None,
-        reuse_blocked=False, created_at=time.time(), solved_at=None,
+        created_at=time.time(), solved_at=None,
         solver_id=None, guesses_to_solve=None, unique_guessers_to_solve=None,
         answer_optout=False, deleted_at=None,
     )
