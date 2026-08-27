@@ -13,6 +13,15 @@ from bot_modules.cogs.todo_cog import (
     TodoCog,
 )
 from bot_modules.core.db_utils import open_db
+from bot_modules.services.economy_quests_service import (
+    claim_quest,
+    create_quest,
+    set_quest_active,
+)
+from bot_modules.services.economy_service import (
+    load_econ_settings,
+    save_econ_settings,
+)
 from bot_modules.services.todo_service import (
     create_todo,
     get_board,
@@ -569,3 +578,106 @@ async def test_later_ticks_only_repaint_what_changed():
 
     # Two iterations ran; only the first had work.
     assert cog.refresh_board.await_count == 1
+
+
+# ── quest sign-offs on the board ──────────────────────────────────────
+
+
+def _pending_claim(db_path, *, title="Post a selfie", reward=500, user_id=777) -> int:
+    """A claim waiting on a mod, in the guild the board fixtures use."""
+    with open_db(db_path) as conn:
+        save_econ_settings(conn, 123, {"enabled": True, "currency_emoji": "🪙"})
+        qid = create_quest(
+            conn, 123, title=title, description="", qtype="weekly", reward=reward,
+            signoff=1, criteria="Show a screenshot", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=1,
+        )
+        set_quest_active(conn, 123, qid, True)
+        settings = load_econ_settings(conn, 123)
+        out = claim_quest(
+            conn, settings, 123, qid, user_id, period="2026-W28", booster=False
+        )
+    return out.claim_id
+
+
+@pytest.mark.asyncio
+async def test_the_board_shows_who_is_waiting_on_a_sign_off(board_db):
+    channel, _ = _fake_channel()
+    guild = _fake_guild(channel)
+    claimant = MagicMock()
+    claimant.display_name = "Alex"
+    guild.get_member = MagicMock(return_value=claimant)
+    cog = _board_cog(board_db, guild)
+    _pending_claim(board_db)
+    with open_db(board_db) as conn:
+        create_todo(conn, 123, 42, "Post QOTD")
+
+    with patch("bot_modules.core.branding.resolve_accent_color",
+               new=AsyncMock(return_value=discord.Color.blurple())):
+        await cog.place_board(guild, channel)
+
+    embed = channel.send.await_args.kwargs["embed"]
+    assert "Alex" in embed.description
+    assert "Post a selfie" in embed.description
+    assert "🪙 500" in embed.description  # the guild's own currency emoji
+    assert "Post QOTD" in embed.description  # the task list is still there
+    assert "1 sign-off waiting" in embed.footer.text
+
+
+@pytest.mark.asyncio
+async def test_a_resolved_claim_leaves_the_board(board_db):
+    """Only pending claims are read, so resolving one is what removes it —
+    there is no mirrored todo row to clean up."""
+    channel, _ = _fake_channel()
+    guild = _fake_guild(channel)
+    cog = _board_cog(board_db, guild)
+    claim_id = _pending_claim(board_db)
+    with open_db(board_db) as conn:
+        conn.execute(
+            "UPDATE econ_quest_claims SET state = 'denied' WHERE id = ?", (claim_id,)
+        )
+
+    with patch("bot_modules.core.branding.resolve_accent_color",
+               new=AsyncMock(return_value=discord.Color.blurple())):
+        await cog.place_board(guild, channel)
+
+    embed = channel.send.await_args.kwargs["embed"]
+    assert "Post a selfie" not in embed.description
+    assert "sign-off" not in embed.footer.text
+
+
+@pytest.mark.asyncio
+async def test_a_sign_off_is_never_offered_to_the_complete_button(board_db):
+    """A claim is approved, not ticked off. It has no todo row, so the picker
+    that lists todos can't reach it."""
+    channel, _ = _fake_channel()
+    guild = _fake_guild(channel)
+    cog = _board_cog(board_db, guild)
+    _pending_claim(board_db)
+    interaction = _interaction(_member(mod=True))
+    interaction.guild = guild
+    interaction.client = MagicMock()
+    interaction.client.get_cog = MagicMock(return_value=cog)
+
+    await TodoBoardView()._complete.callback(interaction)
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "already clear" in msg  # the claim is not on offer
+
+
+@pytest.mark.asyncio
+async def test_the_signoffs_button_hands_off_to_the_economy(board_db):
+    """The button is only a door: the gate and the flow behind it are the
+    economy's, because approving pays real currency."""
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    interaction = _interaction(_member(mod=False))
+    interaction.client = MagicMock()
+    interaction.client.get_cog = MagicMock(return_value=cog)
+
+    with patch(
+        "bot_modules.cogs.todo_cog.open_signoff_picker", new=AsyncMock()
+    ) as picker:
+        await TodoBoardView()._signoffs.callback(interaction)
+
+    picker.assert_awaited_once_with(interaction)

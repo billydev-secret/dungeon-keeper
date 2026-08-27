@@ -25,6 +25,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.perk_actions import revoke_role_perks
+from bot_modules.economy.quest_views import refresh_signoff_board
+from bot_modules.economy.signoff_notice import announce_signoff_outcome
 from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_qotd_sponsor_service as sponsor_svc
@@ -521,11 +523,13 @@ async def _resolve_and_notify(
     resolver_id: int,
     deny_reason: str | None,
 ) -> dict:
-    """Resolve a pending claim, then best-effort edit its card + DM.
+    """Resolve a pending claim, then best-effort announce the outcome.
 
-    Booster status is the CLAIMANT's (read before resolving). The card edit and
-    DM only run when the bot is ready; either failing leaves the API 200 with
-    ``card_updated: false``.
+    Booster status is the CLAIMANT's (read before resolving). The announcement
+    — a register post for a denial, plus a repaint of the todo board the claim
+    was listed on — only runs when the bot is ready, and failing leaves the API
+    200 with ``announced: false``. An approval announces itself: the credit
+    writes ledger kind ``quest`` and the register drain posts it.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -540,9 +544,14 @@ async def _resolve_and_notify(
                 (claim_id, guild_id),
             ).fetchone()
             settings = load_econ_settings(conn, guild_id)
-            return claim, settings
+            quest = (
+                quests_svc.get_quest(conn, guild_id, int(claim["quest_id"]))
+                if claim is not None
+                else None
+            )
+            return claim, settings, quest
 
-    claim, settings = await run_query(_read)
+    claim, settings, quest = await run_query(_read)
     if claim is None:
         raise HTTPException(404, "claim not found")
     claimant_id = int(claim["user_id"])
@@ -566,76 +575,50 @@ async def _resolve_and_notify(
 
     resolution = await run_query(_resolve)
 
-    # Phase 3 (async): best-effort Discord card edit + DM. Never fatal.
-    card_updated = False
+    # Phase 3 (async): best-effort register post + board repaint. Never fatal.
+    announced = False
     if bot is not None and bot.is_ready():
-        card_updated = await _update_card_and_dm(
-            bot, ctx, guild_id, claim, settings, approve, resolution
+        announced = await _announce_resolution(
+            bot, ctx, guild_id, claim, quest, approve, resolution
         )
 
     return {
         "ok": True,
         "paid": resolution.paid,
-        "card_updated": card_updated,
+        "announced": announced,
     }
 
 
-async def _update_card_and_dm(
-    bot, ctx, guild_id, claim, settings, approve, resolution
+async def _announce_resolution(
+    bot, ctx, guild_id: int, claim, quest, approve: bool, resolution
 ) -> bool:
-    """Edit the sign-off card to reflect the resolution and DM the claimant.
+    """Tell the server what happened, from a dashboard resolution.
 
-    Returns True only if the card message was edited; DM failure alone does not
-    flip it back. All Discord errors are swallowed (logged) so the API stays
-    200 regardless.
+    The same two effects the board's own Approve/Deny has, so a claim resolved
+    from the dashboard is indistinguishable from one resolved in Discord: a
+    denial goes to the register channel (an approval is already there, via the
+    ledger drain), and the todo board repaints so the row drops off it.
+
+    Returns True only when a register post actually landed. All Discord errors
+    are swallowed inside the helpers so the API stays 200 regardless — the
+    resolution and any payout are already committed.
     """
-    import discord
-
-    unit = settings.currency_plural if resolution.paid != 1 else settings.currency_name
-    card_updated = False
-    channel_id = claim["card_channel_id"]
-    message_id = claim["card_message_id"]
-    if channel_id and message_id:
-        try:
-            channel = bot.get_channel(int(channel_id))
-            if isinstance(channel, discord.abc.Messageable):
-                message = await channel.fetch_message(int(message_id))
-                embed = message.embeds[0] if message.embeds else discord.Embed()
-                if approve:
-                    embed.color = discord.Color.green()
-                    embed.add_field(
-                        name="Approved",
-                        value=f"Paid {resolution.paid:,} {unit}.",
-                        inline=False,
-                    )
-                else:
-                    embed.color = discord.Color.red()
-                    embed.add_field(
-                        name="Denied",
-                        value=resolution.deny_reason or "—",
-                        inline=False,
-                    )
-                await message.edit(embed=embed, view=None)
-                card_updated = True
-        except (discord.HTTPException, discord.NotFound, discord.Forbidden, IndexError):
-            _log.warning("quest claim card edit failed", exc_info=True)
-
-    try:
-        if approve:
-            content = (
-                f"Your quest claim was approved — {resolution.paid:,} "
-                f"{unit} {settings.currency_emoji}."
-            )
-        else:
-            reason = resolution.deny_reason or ""
-            content = f"Your quest claim was denied. {reason}".strip()
-        await notify_member(
-            bot, ctx.db_path, guild_id, int(claim["user_id"]), content=content
+    title = str(quest["title"]) if quest is not None else "a quest"
+    trigger_kind = quest["trigger_kind"] if quest is not None else ""
+    announced = False
+    if not approve:
+        announced = await announce_signoff_outcome(
+            bot,
+            ctx.db_path,
+            guild_id,
+            state="denied",
+            user_id=int(claim["user_id"]),
+            quest_title=title,
+            trigger_kind=trigger_kind,
+            deny_reason=resolution.deny_reason,
         )
-    except Exception:  # noqa: BLE001 — notification must never fail the request
-        _log.warning("quest claim DM failed", exc_info=True)
-
-    return card_updated
+    await refresh_signoff_board(bot, guild_id)
+    return announced
 
 
 @router.post("/economy/claims/{claim_id}/approve")

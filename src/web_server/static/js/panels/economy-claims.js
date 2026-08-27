@@ -1,7 +1,8 @@
 // Economy — Claims. The sign-off inbox: pending quest claims to approve or
 // deny, plus a state filter for the resolved history (approved / denied /
-// expired). Approve/Deny resolves the same claim as the bank-channel card
-// buttons. Gated by the economy manager role (or admin).
+// expired). Approve/Deny resolves the same claim as the todo board's Sign-Offs
+// button, and either surface repaints that board. Gated by the economy manager
+// role (or admin).
 import { api, apiPost, esc, fmtAge } from "../api.js";
 import { showStatus, loadMembers, mountAsync } from "../config-helpers.js";
 import { promptDialog } from "../ui.js";

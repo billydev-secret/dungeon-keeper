@@ -595,15 +595,42 @@ page.
   local day / ISO week with no reset sweep. Instant quests insert `paid` and credit in
   one transaction; sign-off quests insert `pending`.
 - **Instant quests:** claim → immediate payout (ledger kind `quest`).
-- **Sign-off quests:** claim → a card in the bank channel carrying Approve/Deny as
+- **Sign-off quests (moved to the todo board, 2026-08-27):** claim → a pending
+  row in the **✍️ Quest sign-offs** section at the top of the mods' sticky todo
+  board (`todo/board_logic.py`; rows read live from `econ_quest_claims` via
+  `pending_signoff_rows`, never mirrored into `todos`, so nothing can drift and
+  the board's Complete button can't offer one). The board's **Sign-Offs**
+  button (`todo_board_signoffs`) opens an ephemeral pick-one select →
+  the claim's detail (the same `render_signoff_card_embed`) → Approve/Deny as
   persistent `DynamicItem` buttons (`custom_id` `econ_claim:approve|deny:<claim_id>`,
   re-registered in `cog_load` so they survive a restart — no per-message view store).
-  Approve pays and DMs; Deny opens a reason modal, DMs the reason, and leaves the period
-  re-claimable. One pending claim per quest per member; a claim left pending **>7 days**
-  expires via the hourly loop (`expire_stale_claims`), DMs the claimant, and frees a
-  re-claim. **Approve/Deny works from both surfaces** — the bank-channel card and the
-  Claims page's pending queue resolve the same claim; a dashboard resolution also
-  best-effort edits the card and DMs the claimant over the shared event loop.
+  Gated on `can_manage_economy`, not the board's own mod check: approving pays.
+  Deny opens a reason modal and leaves the period re-claimable. One pending
+  claim per quest per member; a claim left pending **>7 days** expires via the
+  hourly loop (`expire_stale_claims`) and frees a re-claim.
+  **Approve/Deny works from both surfaces** — the board and the Claims page's
+  pending queue resolve the same claim, and either way the todo board is
+  repainted (`refresh_signoff_board`) so the row drops off it.
+
+  *Why the board and not a card:* a card per claim landed in
+  `🏦│how-it-works`, a member-facing explainer channel, and a mod had to
+  scroll for it. The board is one sticky message a mod already reads. Discord
+  caps components per message, so Approve/Deny cannot hang off it N times —
+  hence the button-opens-a-select shape the board's Complete button already
+  uses.
+- **Sign-off outcomes are announced in the register channel, never DMed
+  (2026-08-27):** an approval needs no work — it credits ledger kind `quest`
+  and the register drain (§10.1) posts it. A **denial** (with its reason) and
+  an **expiry** move no currency and so write no ledger row; they are posted
+  directly by `economy/signoff_notice.announce_signoff_outcome`, built by
+  `register.build_signoff_notice_embed` in the feed's own silhouette but with
+  no amount and no balance. Two cases post **nothing at all, deliberately**:
+  a quest on a privacy-suppressed trigger kind (`suppress_signoff_notice`,
+  the same `ANON_KINDS` rule the payout drain applies — "X's claim for *Send a
+  Whisper* was denied" names the whisperer exactly as the payout would), and a
+  guild with no register channel configured. In both, the member sees the claim
+  reopen on their own `/quests` board and nowhere else. Every announcement is
+  best-effort: the resolution and any payout are committed before it runs.
 
 ### 4.3 Community Quests
 Guild-wide objective with a progress bar; never member-claimable. Two flavors
@@ -676,9 +703,10 @@ the board always shows up to 2 goals rather than 1:
   and a name-free resolution beat sheet — because naming the most active
   confessors/whisperers/askers would deanonymize the feed, and a top
   `guess_post` list would spoil several live rounds at once. The same set
-  now gates two further surfaces: the register feed drops these payouts
-  (§10.1) and sign-off is refused at config time (a sign-off card names the
-  claimant in the bank channel).
+  now gates three surfaces: the register feed drops these payouts (§10.1),
+  sign-off is refused at config time (a pending claim names the claimant on
+  the todo board), and a denial or expiry on such a quest is never posted to
+  the register (`suppress_signoff_notice`).
 - **Beat sheets, not bot posts:** kickoff / final-24h / resolution are **DMed
   to the community host** (`EconSettings.community_host_user_id`, 0 → guild
   owner) as numbers + suggested copy — the host narrates publicly in their own
@@ -1168,11 +1196,13 @@ meter read the same `effective_target`.
 
 Game-fired claims are **silent in-channel** (matching the participation faucet —
 a game recap followed by a dozen quest embeds would be noise); the wallet ledger
-and `/quests` carry the news, and sign-off claims still post the bank-channel
-card. The photo-post and media-post listeners announce (✅/📝 on the member's
-own message — the payout lands on the post itself). Hooks that fire inside another module's open
+and `/quests` carry the news, and sign-off claims still reach the mods through
+the todo board (one repaint per batch, not one per claimant). The photo-post
+and media-post listeners announce (✅/📝 on the member's own message — the
+payout lands on the post itself). Hooks that fire inside another module's open
 transaction use `fire_trigger_inline` (savepoint-wrapped, never raises, no
-bank-card posting — pending sign-off claims still appear on the claims panel).
+board repaint — pending sign-off claims still appear on the claims panel, and
+on the board at its next repaint).
 
 **Income Sources page** (Economy section of the dashboard): a per-guild
 enable switch for every trigger kind, stored in `econ_income_sources`
@@ -1949,8 +1979,11 @@ member-to-member consent and does **not** gate bot DMs — no interaction there.
 turns on a running public feed of the guild's currency movements — a bank
 register. Unset (`0`) is off; the picker **is** the toggle. It is deliberately
 a *separate* channel from `bank_channel_id`: the bank channel is the
-interactive approval surface (sign-off cards, ceiling alerts, DM fallback), and
-posting register entries there would double up every signed-off quest.
+interactive approval surface (ceiling alerts, DM fallback), and posting
+register entries there would double up every signed-off quest. Since
+2026-08-27 the register is also where a **denial or expiry** is announced —
+see the sign-off bullet in §4 — which is the one thing in the feed that does
+not come from the ledger drain.
 
 **Source: the ledger, not the call sites.** The feed drains `econ_ledger` by
 `id`. Since `apply_credit` / `apply_debit` are the only paths that mutate a

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -653,7 +654,10 @@ class _NotifyRecorder:
         return True
 
 
-async def test_run_tick_expires_stale_claims_and_dms_once(db, monkeypatch):
+async def test_run_tick_announces_expired_claims_once_and_never_dms(db, monkeypatch):
+    """An expiry is the third sign-off outcome and goes where the other two go:
+    the register channel. It used to DM the claimant; nothing about a sign-off
+    DMs any more."""
     _enable(db)
     quest_id = _create_quest(db, qtype="daily", reward=15, signoff=1, active=True)
     _make_pending_claim(db, quest_id, USER, D1)
@@ -661,6 +665,10 @@ async def test_run_tick_expires_stale_claims_and_dms_once(db, monkeypatch):
 
     recorder = _NotifyRecorder()
     monkeypatch.setattr(economy_loop, "notify_member", recorder)
+    announced = AsyncMock(return_value=True)
+    repainted = AsyncMock()
+    monkeypatch.setattr(economy_loop, "announce_signoff_outcome", announced)
+    monkeypatch.setattr(economy_loop, "refresh_signoff_board", repainted)
     bot = _Bot([])  # isolate expiry from the per-guild roll
 
     # Claims were created at wall-clock now; expire 8 days in the future so the
@@ -668,14 +676,18 @@ async def test_run_tick_expires_stale_claims_and_dms_once(db, monkeypatch):
     future = time.time() + 8 * 86400
     await _tick(bot, db, future)
 
-    dmed = {(gid, uid) for gid, uid, _ in recorder.calls}
-    assert dmed == {(GUILD, USER), (GUILD, OTHER)}
-    assert all("expired" in (content or "") for _, _, content in recorder.calls)
+    told = {(c.kwargs["state"], c.kwargs["user_id"]) for c in announced.await_args_list}
+    assert told == {("expired", USER), ("expired", OTHER)}
+    assert recorder.calls == []  # no DMs, for either claimant
+    # Two claims in one guild, one repaint — the board shows both at once.
+    repainted.assert_awaited_once()
 
-    # Second tick: rows are already 'expired', so no one is DM'd again.
-    recorder.calls.clear()
+    # Second tick: rows are already 'expired', so nothing is announced again.
+    announced.reset_mock()
+    repainted.reset_mock()
     await _tick(bot, db, future + 3600)
-    assert recorder.calls == []
+    assert announced.await_args_list == []
+    repainted.assert_not_awaited()
 
 
 def test_run_claim_expiry_returns_notices_with_quest_title(db):
@@ -692,6 +704,9 @@ def test_run_claim_expiry_returns_notices_with_quest_title(db):
     assert notices[0].guild_id == GUILD
     assert notices[0].quest_id == quest_id
     assert notices[0].quest_title  # non-empty, drawn from the quest row
+    # Carried so the announcer can apply the register's privacy rule without
+    # re-reading the quest.
+    assert notices[0].trigger_kind == ""
 
 
 # ── sponsored-QOTD expiry (run_sponsor_expiry) ─────────────────────────

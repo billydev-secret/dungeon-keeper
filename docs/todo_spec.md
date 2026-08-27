@@ -4,10 +4,11 @@ Shared per-guild todo list for the mod team. Tasks arrive from a slash command,
 from a sticky Discord board, from the web dashboard, or from a recurring
 schedule; they all land in the same list, curated from the dashboard.
 
-The list has **one** Discord board, carrying two headed sections: **today's
-chores** as a "did we do it today?" scoreboard, then **everything else
-outstanding**. It was two separate boards between migrations 166 and 180 — see
-"Why the split was undone" below.
+The list has **one** Discord board, carrying three headed sections: **quest
+sign-offs** waiting on a mod, **today's chores** as a "did we do it today?"
+scoreboard, then **everything else outstanding**. It was two separate boards
+between migrations 166 and 180 — see "Why the split was undone" below — and it
+took over the quest sign-off queue on 2026-08-27.
 
 ## Surfaces
 
@@ -16,6 +17,7 @@ outstanding**. It was two separate boards between migrations 166 and 180 — see
 | `/todo task:<text>` | Slash | Moderator (server only) | Add a free-form task |
 | Board **➕ Add Task** | Button + modal | Moderator | Add a task with optional notes |
 | Board **✅ Complete** | Button + select | Moderator | Tick one or several off — chores first, then tasks |
+| Board **✍️ Sign-Offs** | Button + select | **Economy manager** | Review a pending quest claim and approve or deny it |
 | `GET /api/todos` | Web | Mod | List todos (newest first, capped at 200) + board placement |
 | `POST /api/todos` | Web | Mod | Create a free-form todo as the authenticated user |
 | `POST /api/todos/{id}/complete` | Web | Mod | Mark a todo complete |
@@ -57,9 +59,15 @@ Rejects DMs. Refreshes the board if one is posted.
 
 A single message the bot keeps at the **bottom of a configured channel**.
 
-- **Contents.** Two headed sections — **🔁 Today's chores**, then **📋 Tasks**.
-  Each is omitted entirely when empty, rather than stacking two "nothing here"
-  sentences; when both are, the board says so once.
+- **Contents.** Three headed sections — **✍️ Quest sign-offs**, **🔁 Today's
+  chores**, then **📋 Tasks**. Each is omitted entirely when empty, rather than
+  stacking "nothing here" sentences; when all are, the board says so once.
+- **Quest sign-offs.** Pending `econ_quest_claims` rows, oldest first, one line
+  each: `**Alex** — Post a selfie · 🪙 500` (the guild's own currency emoji).
+  They lead the board because they are the only section where somebody else is
+  waiting on the mods rather than the other way round, and they carry **no id**
+  — a claim `#14` printed beside a task list whose `#14` is a different row
+  invites the wrong one being ticked. See "Sign-offs on the board" below.
 - **Tasks.** Outstanding tasks only — neither completed nor written off —
   **oldest first**, so the longest-waiting task sits at the top where it nags.
   Each row is `` `#12` `` — the id as a monospace chip — followed by the task
@@ -79,13 +87,15 @@ A single message the bot keeps at the **bottom of a configured channel**.
   dashboard. The chore rows keep their timestamp: there is one per chore, a
   handful per guild, and "who did it and when" is the question that board
   answers.
-- **Row budget.** 15 rows across both sections. Chores take up to 8 off the top
-  and tasks get the rest, floored at 3 — a day with many chores must never push
-  the task list off the board, which is the failure the merge existed to end,
-  just pointing the other way. Overflow reads "…and **N** more on the
-  dashboard". Accent from `safe_resolve_accent`.
-- **Footer.** `N of M chores done · K tasks · updates automatically`. The chore
-  half is dropped in a guild with none configured rather than reading "0 of 0".
+- **Row budget.** 15 rows across the sections. Sign-offs take up to 5 off the
+  top and chores up to 8, and tasks get the rest, floored at 3 — neither a
+  backlog of claims nor a day of many chores may push the task list off the
+  board, which is the failure the merge existed to end, just pointing the other
+  way. Overflow reads "…and **N** more on the dashboard". Accent from
+  `safe_resolve_accent`.
+- **Footer.** `J sign-offs waiting · N of M chores done · K tasks · updates
+  automatically`. Each half is dropped when its section is, rather than reading
+  "0 sign-offs waiting" or "0 of 0 chores done".
 - **Staying at the bottom.** A member message in the board's channel arms a 6s
   debounce, then the board is deleted and re-posted (Discord has no reorder
   API). Reuses `economy.guide.should_restick_guide` — bot messages are filtered
@@ -117,13 +127,48 @@ A single message the bot keeps at the **bottom of a configured channel**.
   under a board that lives by delete-and-repost.
 
 The view is a static-`custom_id` persistent view (`todo_board_add`,
-`todo_board_complete`) re-registered in `cog_load`, so buttons survive restarts.
+`todo_board_complete`, `todo_board_signoffs`) re-registered in `cog_load`, so
+buttons survive restarts.
 
 **One Complete button over both sections.** `board_logic.completable_options`
 puts open chores first, then tasks, and carries a chore forward by its
 `todo_id`: the thing being completed is a todo row either way, and the select
 only ever needed the id. Two boards meant two buttons and a mod having to know
 which list a row was on before they could tick it.
+
+### Sign-offs on the board
+
+Quest claims that need a human to say yes moved here from a per-claim card in
+the economy's bank channel on **2026-08-27**. Nothing about them is stored by
+this feature:
+
+- **No mirrored rows.** The section reads `econ_quest_claims` live, through
+  `economy_quests_service.pending_signoff_rows` (claim joined to quest, oldest
+  first) and `pending_signoff_count` for the footer. There is nothing to keep
+  in sync, resolving a claim anywhere removes it from the board, and the
+  Complete button structurally cannot offer one — a claim is approved, not
+  ticked off.
+- **The button, not the row, acts.** The board is one sticky message and
+  Discord caps components per message, so Approve/Deny cannot hang off it once
+  per claim. **✍️ Sign-Offs** opens an ephemeral pick-one select (Discord's
+  25-option cap), and picking a claim edits that ephemeral into the claim's
+  full detail — member, quest, reward, criteria, prior denials — with
+  Approve/Deny under it. The identical shape the Complete button uses. A claim
+  someone else resolved while the picker was open renders as resolved, with no
+  buttons.
+- **Whose permission.** `can_manage_economy` (admin or the configured economy
+  manager role), *not* the board's `AppContext.is_mod` — approving pays real
+  currency. In the main guild the two roles are the same one, so the move shut
+  nobody out. The board's own Add/Complete buttons keep the mod gate.
+- **Repaints.** Every edge repaints the board: a claim filed (`/bank quests`,
+  a trigger phrase, a game — one repaint per batch there, not per claimant),
+  resolved from the board or the dashboard, or expired by the sweep. All
+  best-effort via `quest_views.refresh_signoff_board`, which reaches the cog
+  through `get_cog("TodoCog")` — the claim is already committed and, on the
+  resolving side, the member already paid.
+- **Where the outcome is announced.** Not here, and never by DM — the register
+  channel carries it. See `docs/economy_spec.md` §4 (sign-off quests) for the
+  full rule, including the two cases that announce nowhere at all.
 
 ### Today's chores
 
@@ -348,6 +393,10 @@ for a daily and a week for a weekly.
   DM the creator; a due recurring task doesn't ping anyone.
 - **No in-Discord configuration.** Board placement and recurring definitions are
   dashboard-only, per the project's configuration rule.
+- **The sign-off section is a guest, not a feature of this list.** It renders
+  claims the economy owns; this feature stores nothing about them, adds no
+  column, and gains no migration for them. If quest sign-offs ever go away, the
+  section goes with them and the todo list is unchanged.
 - **No per-chore reset rule.** The reset is uniform. A per-definition "carry
   over vs. reset" switch was considered and dropped: two rules doubles what a
   streak, a footer, and a missed row each mean, for a distinction a mod team can
@@ -372,8 +421,20 @@ Three tables, all per-guild:
 - `todo_recurring` — definition, cadence, `next_run_at` cache, `status`,
   `last_run_at`/`last_status`.
 
+The sign-off section adds **no fourth table and no migration**: it reads
+`econ_quest_claims`, which the economy owns and `docs/data_register.md` already
+covers.
+
 ## Notes / history
 
+- **Quest sign-offs moved onto the board (2026-08-27).** They used to post one
+  Approve/Deny card per claim into the economy's bank channel — which in the
+  main guild is `🏦│how-it-works`, a member-facing explainer channel a mod had
+  to go looking in. The board is one sticky message the mod team already reads,
+  and it already had the shape the move needed (a button that opens an
+  ephemeral select) from the Complete button. The card's builder survives as
+  the ephemeral detail view; its persistent Approve/Deny buttons stay
+  registered so the cards posted before the move are still clickable.
 - The **`Add to Todo` message context menu** described in earlier revisions of
   this spec **does not exist in the code** — no `ContextMenu` is registered, and
   nothing but the slash command, the board, and the web routes calls

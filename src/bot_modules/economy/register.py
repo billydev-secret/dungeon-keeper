@@ -548,3 +548,69 @@ def build_register_embed(
     balance_text = f"{entry.balance_after:,} {balance_emoji}".rstrip()
     embed.set_footer(text=f"{footer}{balance_text}")
     return embed
+
+
+# ── sign-off outcomes ────────────────────────────────────────────────────────
+#
+# A denied or expired claim writes no ledger row — nothing moved — so neither
+# reaches the feed through the drain above. They are posted directly by the
+# resolving code instead, in the register's own shape, because the register is
+# now the *only* place a member is told what happened to a claim: the
+# per-claim card in the bank channel is gone and nothing DMs.
+#
+# An approval needs none of this. It credits kind ``quest``, so the drain has
+# always posted it.
+
+#: Denial is money that didn't arrive, which is close enough to money out for
+#: the feed's red to read correctly. An expiry is neither a decision nor a
+#: movement, so it gets its own muted colour rather than borrowing one.
+SIGNOFF_DENIED_COLOUR = DEBIT_COLOUR
+SIGNOFF_EXPIRED_COLOUR = discord.Colour(0x9E9E9E)
+
+_SIGNOFF_DISPLAY: dict[str, tuple[str, str, discord.Colour]] = {
+    "denied": ("❌", "Quest sign-off denied", SIGNOFF_DENIED_COLOUR),
+    "expired": ("⏳", "Quest claim expired", SIGNOFF_EXPIRED_COLOUR),
+}
+
+
+def suppress_signoff_notice(trigger_kind: object) -> bool:
+    """True when a claim's outcome must not be posted to the register.
+
+    The same privacy rule the payout drain applies in :func:`_anon_quest_ids`,
+    and for the same reason: "**X**'s claim for *Send a Whisper* was denied"
+    names the whisperer just as surely as the payout would have. A suppressed
+    outcome is posted nowhere at all — the member still sees the claim reopen
+    on their own ``/quests`` board, which is the private surface the whole
+    suppression exists to keep it on.
+    """
+    return str(trigger_kind or "") in quest_logic.ANON_KINDS
+
+
+def build_signoff_notice_embed(
+    state: str,
+    *,
+    member_name: str,
+    quest_title: str,
+    deny_reason: str | None = None,
+    avatar_url: str | None = None,
+) -> discord.Embed:
+    """A denied/expired claim as a register entry.
+
+    Deliberately the same silhouette as :func:`build_register_embed` — author
+    line is the member, description is glyph + what happened — so the feed
+    reads as one thing rather than two. It carries no amount and no balance:
+    nothing moved, and printing a wallet total next to a denial would imply it
+    did.
+    """
+    glyph, label, colour = _SIGNOFF_DISPLAY.get(state, _SIGNOFF_DISPLAY["expired"])
+    title = quest_title or "a quest"
+    description = f"{glyph} **{label}** · {title}"
+    reason = (deny_reason or "").strip()
+    if reason:
+        # Blockquoted rather than inlined: the reason is the member's own
+        # copy — the deny modal says "shown to the member" — and it reads as
+        # quoted words rather than as more of the feed's own narration.
+        description += f"\n> {reason}"
+    embed = discord.Embed(color=colour, description=description)
+    embed.set_author(name=member_name or "someone", icon_url=avatar_url)
+    return embed

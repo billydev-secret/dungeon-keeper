@@ -6,6 +6,7 @@ import datetime
 import sqlite3
 import time
 import types
+from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
 
@@ -224,7 +225,7 @@ def test_approve_pays_and_flips_state(authed_client, fake_ctx):
     assert resp.status_code == 200
     body = resp.json()
     assert body["paid"] == 20
-    assert body["card_updated"] is False  # no bot in tests
+    assert body["announced"] is False  # no bot in tests
 
     with open_db(fake_ctx.db_path) as conn:
         assert get_balance(conn, fake_ctx.guild_id, 555) == 20
@@ -238,6 +239,58 @@ def test_approve_pays_and_flips_state(authed_client, fake_ctx):
         authed_client.post(f"/api/economy/claims/{claim_id}/approve").status_code
         == 409
     )
+
+
+def test_a_dashboard_denial_announces_it_and_repaints_the_board(
+    authed_client, fake_ctx, monkeypatch
+):
+    """A claim resolved on the dashboard must land exactly where one resolved
+    in Discord does: the denial in the register channel, and the todo board
+    repainted so the row drops off it."""
+    from web_server.routes import economy_manager as mod
+
+    announced = AsyncMock(return_value=True)
+    repainted = AsyncMock()
+    monkeypatch.setattr(mod, "announce_signoff_outcome", announced)
+    monkeypatch.setattr(mod, "refresh_signoff_board", repainted)
+    bot = MagicMock()
+    bot.is_ready = MagicMock(return_value=True)
+    monkeypatch.setattr(fake_ctx, "bot", bot, raising=False)
+
+    qid = _make_quest(authed_client, signoff=True, reward=20)["id"]
+    claim_id = _seed_pending_claim(fake_ctx, qid, user_id=557, period="2026-07-10")
+    resp = authed_client.post(
+        f"/api/economy/claims/{claim_id}/deny", json={"reason": "Too blurry"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["announced"] is True
+    kwargs = announced.await_args.kwargs
+    assert kwargs["state"] == "denied"
+    assert kwargs["deny_reason"] == "Too blurry"
+    assert kwargs["user_id"] == 557
+    repainted.assert_awaited_once()
+
+
+def test_a_dashboard_approval_announces_nothing_itself(
+    authed_client, fake_ctx, monkeypatch
+):
+    """The credit writes ledger kind "quest" and the register drain posts it."""
+    from web_server.routes import economy_manager as mod
+
+    announced = AsyncMock(return_value=True)
+    monkeypatch.setattr(mod, "announce_signoff_outcome", announced)
+    monkeypatch.setattr(mod, "refresh_signoff_board", AsyncMock())
+    bot = MagicMock()
+    bot.is_ready = MagicMock(return_value=True)
+    monkeypatch.setattr(fake_ctx, "bot", bot, raising=False)
+
+    qid = _make_quest(authed_client, signoff=True, reward=20)["id"]
+    claim_id = _seed_pending_claim(fake_ctx, qid, user_id=558, period="2026-07-10")
+    resp = authed_client.post(f"/api/economy/claims/{claim_id}/approve")
+
+    assert resp.status_code == 200
+    announced.assert_not_awaited()
 
 
 def test_deny_requires_reason_and_reclaimable(authed_client, fake_ctx):

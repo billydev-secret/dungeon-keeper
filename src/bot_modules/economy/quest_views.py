@@ -1,20 +1,28 @@
 """Discord views for economy quests — the ``/bank quests`` claim UI and the
-manager sign-off cards.
+manager sign-off flow.
 
 Two surfaces live here:
 
 * ``QuestClaimView`` — an ephemeral select attached to ``/bank quests``. Its
   callback claims the picked quest at click time (the ``period`` key is
   computed then, so a claim that straddles a day/week roll lands in the right
-  bucket) and either confirms an instant payout or posts a sign-off card.
+  bucket) and either confirms an instant payout or files a sign-off claim.
 
-* The sign-off card — a **persistent** Approve/Deny pair. The buttons are
-  ``discord.ui.DynamicItem`` subclasses whose ``custom_id`` embeds the
-  ``claim_id`` (``econ_claim:approve:<id>`` / ``econ_claim:deny:<id>``), so a
-  click still routes after a bot restart once the cog re-registers the classes
-  with ``bot.add_dynamic_items``. Approve resolves straight away; Deny opens a
-  reason modal first. Every handler is fail-safe: a service error surfaces as
-  an ephemeral note, never a dead button.
+* The sign-off flow — how a manager approves or denies a claim. Pending
+  claims are listed on the **todo board** (``todo/board_logic.py``); its
+  Sign-Offs button opens :func:`open_signoff_picker`, an ephemeral pick-one
+  select that leads to the claim's detail and an Approve/Deny pair. Approve
+  resolves straight away; Deny opens a reason modal first. Every handler is
+  fail-safe: a service error surfaces as an ephemeral note, never a dead
+  button.
+
+  The Approve/Deny buttons are ``discord.ui.DynamicItem`` subclasses whose
+  ``custom_id`` embeds the ``claim_id`` (``econ_claim:approve:<id>`` /
+  ``econ_claim:deny:<id>``). Nothing posts a card carrying them any more —
+  claims moved to the board — but they stay registered so the cards already
+  sitting in bank channels from before the move are still clickable, and a
+  click still routes after a restart once the cog re-registers the classes with
+  ``bot.add_dynamic_items``.
 
 The claim-credit booster flag is always the *claimant's* boost status at the
 moment of the credit — for instant claims that is the clicker, for sign-off it
@@ -41,19 +49,19 @@ from bot_modules.economy.leaderboard import bar_fill, progress_bar
 from bot_modules.economy.view_helpers import unit as _unit
 from bot_modules.economy.quests import quest_period
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
+from bot_modules.economy.signoff_notice import announce_signoff_outcome
 from bot_modules.services.economy_quests_service import (
     claim_quest,
     deny_history,
     get_quest,
+    pending_signoff_rows,
     reroll_board_slot,
     resolve_claim,
-    set_claim_card,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
     load_econ_settings,
     member_is_booster,
-    notify_member,
 )
 from bot_modules.services.embeds import (
     COLOR_GREEN,
@@ -297,7 +305,7 @@ def build_quest_board_embed(
     return embed
 
 
-# ── sign-off card embed ───────────────────────────────────────────────────────
+# ── sign-off claim embed ─────────────────────────────────────────────────────
 
 #: Trailing blank line that gives each embed section breathing room (a newline
 #: plus a zero-width space) — the style guide's section-spacing convention.
@@ -317,10 +325,12 @@ def render_signoff_card_embed(
     resolver_id: int | None = None,
     deny_reason: str | None = None,
 ) -> discord.Embed:
-    """Build the bank-channel sign-off card for a claim in the given state.
+    """Build the sign-off view of a claim in the given state.
 
-    Reused for the initial ``pending`` post and for the resolved/refresh edit,
-    so the card always mirrors the claim's true state. Color is semantic on
+    The board's Sign-Offs button renders this as its ephemeral detail, and the
+    resolved/refresh edit reuses it, so what a manager looks at always mirrors
+    the claim's true state. It began as the bank-channel card and survives the
+    move to the board unchanged. Color is semantic on
     resolution (green approved, red denied) and accent while pending.
     """
     if state == "paid":
@@ -434,7 +444,7 @@ class QuestDenyButton(
 
 
 class QuestSignoffView(discord.ui.View):
-    """The persistent Approve/Deny pair posted with a sign-off card."""
+    """The persistent Approve/Deny pair under a claim's detail view."""
 
     def __init__(self, claim_id: int) -> None:
         super().__init__(timeout=None)
@@ -515,21 +525,34 @@ async def _handle_resolution(
     deny_reason: str | None,
     card_message: discord.Message | None = None,
 ) -> None:
-    """Approve/deny a sign-off claim: gate, resolve, edit card, DM claimant.
+    """Approve/deny a sign-off claim: gate, resolve, repaint, announce.
 
     Fail-safe throughout — any error becomes an ephemeral note so the button
     never dies. ``card_message`` is supplied by the deny modal (a modal-submit
     interaction has no ``.message``); the approve button uses its own message.
+    Either way, an *ephemeral* one means the board flow — see below.
+
+    The announcement is a register post and only for a denial: an approval
+    credits ledger kind ``quest``, which the register drain posts on its own.
+    Nothing DMs (2026-08-27).
     """
     guild = interaction.guild
     member = interaction.user
     bot = cast("Bot", interaction.client)
     ctx = bot.ctx
     card = card_message if card_message is not None else interaction.message
+    if card is not None and getattr(card.flags, "ephemeral", False):
+        # The board flow. Its detail view *is* a message and arrives here like
+        # a card would, but an ephemeral message cannot be edited through the
+        # channel-message endpoint — only through the interaction that owns it.
+        # Dropping it here routes the repaint down the ``card is None`` branch
+        # below rather than burning an API call that always 404s.
+        card = None
 
-    # Ack immediately: this chain does several awaits (accent, resolve, card
-    # edit, DM) before it replies, which can blow past the 3s interaction
-    # window. Deferring keeps the token alive; _safe_ephemeral is defer-aware.
+    # Ack immediately: this chain does several awaits (accent, resolve, the
+    # repaint, the register post) before it replies, which can blow past the 3s
+    # interaction window. Deferring keeps the token alive; _safe_ephemeral is
+    # defer-aware.
     try:
         await interaction.response.defer(ephemeral=True)
     except discord.HTTPException:
@@ -560,12 +583,14 @@ async def _handle_resolution(
     accent = await safe_resolve_accent(ctx, guild, log_label="quest", default=DEFAULT_ACCENT_COLOR)
     claimant_id = int(claim["user_id"])
 
-    # Already resolved (e.g. from the dashboard) — refresh the card to the true
-    # state and tell the clicker, rather than double-crediting.
+    # Already resolved (e.g. from the dashboard, or by a second mod) — repaint
+    # to the true state and tell the clicker, rather than double-crediting.
     if claim["state"] != "pending":
-        await _refresh_resolved_card(card, accent, settings, claim, quest, bundle)
+        await _refresh_resolved_card(
+            interaction, card, accent, settings, claim, quest, bundle
+        )
         await _safe_ephemeral(
-            interaction, "❌ That claim was already resolved — I refreshed the card."
+            interaction, "❌ That claim was already resolved — I refreshed it above."
         )
         return
 
@@ -596,10 +621,10 @@ async def _handle_resolution(
             fresh = None
         if fresh is not None and fresh["quest"] is not None:
             await _refresh_resolved_card(
-                card, accent, settings, fresh["claim"], fresh["quest"], fresh
+                interaction, card, accent, settings, fresh["claim"], fresh["quest"], fresh
             )
         await _safe_ephemeral(
-            interaction, "❌ That claim was already resolved — I refreshed the card."
+            interaction, "❌ That claim was already resolved — I refreshed it above."
         )
         return
     except Exception:
@@ -621,16 +646,34 @@ async def _handle_resolution(
         deny_reason=deny_reason,
     )
     if card is not None:
+        # A legacy card in a bank channel, clicked directly.
         try:
             await card.edit(embed=embed, view=None)
         except discord.HTTPException:
-            log.warning("econ quests: failed to edit sign-off card for %s", claim_id)
+            log.warning("econ quests: failed to edit the sign-off card for %s", claim_id)
+    else:
+        # The board flow: repaint the ephemeral detail in place, so the outcome
+        # appears where the decision was made rather than only in an ack.
+        try:
+            await interaction.edit_original_response(embed=embed, view=None)
+        except discord.HTTPException:
+            log.debug("econ quests: failed to repaint sign-off detail", exc_info=True)
 
     paid = int(getattr(resolution, "paid", 0))
-    await _dm_resolution(
-        bot, ctx.db_path, guild.id, claimant_id, settings, quest, approve, paid,
-        deny_reason,
-    )
+    # An approval is already public: the credit writes ledger kind "quest" and
+    # the register drain posts it. Only a denial needs announcing by hand.
+    if not approve:
+        await announce_signoff_outcome(
+            bot,
+            ctx.db_path,
+            guild.id,
+            state="denied",
+            user_id=claimant_id,
+            quest_title=str(quest["title"]),
+            trigger_kind=quest["trigger_kind"],
+            deny_reason=deny_reason,
+        )
+    await refresh_signoff_board(bot, guild.id)
 
     if approve:
         ack = f"Approved — paid {_reward_text(settings, paid)} to <@{claimant_id}>."
@@ -640,6 +683,7 @@ async def _handle_resolution(
 
 
 async def _refresh_resolved_card(
+    interaction: discord.Interaction,
     card: discord.Message | None,
     accent: discord.Color,
     settings: EconSettings,
@@ -647,8 +691,13 @@ async def _refresh_resolved_card(
     quest,
     bundle: dict,
 ) -> None:
-    if card is None:
-        return
+    """Repaint whatever surface the click came from to the claim's true state.
+
+    Reached when a claim was resolved elsewhere between the read and the write
+    — from the dashboard, or by a second mod. ``card`` is a legacy bank-channel
+    card; without one the click came from the board's ephemeral detail, which
+    is edited in place instead.
+    """
     embed = render_signoff_card_embed(
         accent,
         settings,
@@ -664,123 +713,175 @@ async def _refresh_resolved_card(
         deny_reason=claim["deny_reason"],
     )
     try:
-        await card.edit(embed=embed, view=None)
+        if card is not None:
+            await card.edit(embed=embed, view=None)
+        else:
+            await interaction.edit_original_response(embed=embed, view=None)
     except discord.HTTPException:
         log.debug("econ quests: failed to refresh resolved card", exc_info=True)
 
 
-async def _dm_resolution(
-    bot: Bot,
-    db_path,
-    guild_id: int,
-    claimant_id: int,
-    settings: EconSettings,
-    quest,
-    approve: bool,
-    paid: int,
-    deny_reason: str | None,
-) -> None:
-    title = str(quest["title"])
-    if approve:
-        embed = discord.Embed(
-            title="✅ Quest Approved",
-            description=(
-                f"Your claim for **{title}** was approved — "
-                f"{_reward_text(settings, paid)} added to your wallet."
-            ),
-            color=discord.Color(COLOR_GREEN),
-        )
-    else:
-        embed = discord.Embed(
-            title="❌ Quest Claim Denied",
-            description=(
-                f"Your claim for **{title}** was denied. You can try again."
-            ),
-            color=discord.Color(COLOR_RED),
-        )
-        if deny_reason:
-            embed.add_field(name="Reason", value=deny_reason, inline=False)
-    try:
-        await notify_member(bot, db_path, guild_id, claimant_id, embed=embed)
-    except Exception:
-        log.debug("econ quests: failed to DM claim resolution", exc_info=True)
+async def refresh_signoff_board(bot: discord.Client, guild_id: int) -> None:
+    """Repaint the todo board, where pending sign-offs are listed.
 
-
-# ── sign-off card posting (from the claim select) ─────────────────────────────
-
-
-async def post_signoff_card(
-    bot: Bot,
-    ctx: AppContext,
-    guild: discord.Guild,
-    settings: EconSettings,
-    accent: discord.Color,
-    claim_id: int,
-    claimant: discord.Member,
-) -> None:
-    """Best-effort: post a sign-off card to the bank channel and record its ids.
-
-    The pending claim row already exists, so a missing/forbidden bank channel
-    must never raise back to the claimant — a cardless pending is still
-    resolvable from the dashboard. Records the card ids only on a real send.
+    Called on both edges — a claim filed and a claim resolved — because the
+    board's own 60s loop only repaints guilds where a recurring chore spawned
+    or was written off, so without this a claim would sit invisible until
+    something else happened to move the board. Best effort in the strongest
+    sense: by the time this runs the claim is committed and, on the resolving
+    side, the member has been paid; a Discord hiccup must never surface as a
+    failed claim or a failed payout.
     """
-    if not settings.bank_channel_id:
+    # ``bot`` is annotated as the bare Client because the expiry sweep holds
+    # one; only a commands.Bot carries cogs, which the runtime one always is.
+    get_cog = getattr(bot, "get_cog", None)
+    cog = get_cog("TodoCog") if get_cog is not None else None
+    refresh = getattr(cog, "refresh_board", None)
+    if refresh is None:
         return
-    channel = guild.get_channel(settings.bank_channel_id)
-    if not isinstance(channel, discord.abc.Messageable):
-        return
-
-    def _card_ctx() -> dict | None:
-        with ctx.open_db() as conn:
-            quest = conn.execute(
-                """
-                SELECT q.* FROM econ_quests q
-                JOIN econ_quest_claims c ON c.quest_id = q.id
-                WHERE c.id = ?
-                """,
-                (claim_id,),
-            ).fetchone()
-            if quest is None:
-                return None
-            deny_count = len(
-                deny_history(conn, int(quest["id"]), claimant.id)
-            )
-        return {"quest": quest, "deny_count": deny_count}
-
     try:
-        card_ctx = await asyncio.to_thread(_card_ctx)
-        if card_ctx is None:
+        await refresh(guild_id)
+    except Exception:  # pragma: no cover - defensive
+        log.warning(
+            "econ quests: failed to repaint the todo board for %s after a "
+            "sign-off change.",
+            guild_id,
+        )
+
+
+# ── the board's Sign-Offs button ─────────────────────────────────────────────
+#
+# The todo board is one sticky message and Discord caps the components on a
+# message, so Approve/Deny cannot hang off it once per pending claim. The
+# board's Complete button already solved the same shape: a button that opens an
+# ephemeral select. Sign-offs follow it — pick a claim, read its criteria, act.
+
+
+class SignoffPickSelect(discord.ui.Select):
+    """Ephemeral picker listing the claims waiting on a sign-off."""
+
+    def __init__(self, rows: list[dict], settings: EconSettings) -> None:
+        options = []
+        for row in rows[:25]:  # Discord caps a select at 25 options
+            label = f"{row['claimant_name']} — {row['quest_title']}"
+            if len(label) > 100:
+                label = label[:99] + "…"
+            # The one place the reward and the criteria fit before a mod
+            # commits to opening a claim; the full criteria is on the detail
+            # view behind it.
+            reward = int(row["reward"])
+            desc = f"{reward:,} {_unit(settings, reward)} · {row['criteria']}"
+            if len(desc) > 100:
+                desc = desc[:99] + "…"
+            options.append(
+                discord.SelectOption(
+                    label=label, value=str(row["id"]), description=desc or None
+                )
+            )
+        super().__init__(
+            placeholder="Pick a claim to review…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        claim_id = int(self.values[0])
+        bot = cast("Bot", interaction.client)
+        guild = interaction.guild
+        if guild is None:
+            await _safe_ephemeral(interaction, "❌ This only works in a server.")
             return
-        quest = card_ctx["quest"]
+        try:
+            bundle = await asyncio.to_thread(_read_claim_bundle, bot.ctx, claim_id)
+        except Exception:
+            log.exception("econ quests: failed to load claim %s for review", claim_id)
+            await _safe_ephemeral(
+                interaction, "❌ Couldn't load that claim — try again."
+            )
+            return
+        if bundle is None or bundle["quest"] is None:
+            await _safe_ephemeral(interaction, "❌ That claim no longer exists.")
+            return
+
+        claim = bundle["claim"]
+        quest = bundle["quest"]
+        accent = await safe_resolve_accent(
+            bot.ctx, guild, log_label="quest", default=DEFAULT_ACCENT_COLOR
+        )
+        # The same builder the bank-channel card used, in the same states — so
+        # a claim someone resolved while this picker was open renders here as
+        # resolved, with no buttons, instead of offering a decision already
+        # made.
+        state = str(claim["state"])
         embed = render_signoff_card_embed(
             accent,
-            settings,
-            claimant_mention=claimant.mention,
+            bundle["settings"],
+            claimant_mention=f"<@{int(claim['user_id'])}>",
             quest_title=str(quest["title"]),
             reward=int(quest["reward"]),
             criteria=str(quest["criteria"]),
-            deny_count=card_ctx["deny_count"],
-            state="pending",
+            deny_count=bundle["deny_count"],
+            state=state,
+            resolver_id=(
+                int(claim["resolver_id"]) if claim["resolver_id"] is not None else None
+            ),
+            deny_reason=claim["deny_reason"],
         )
-        message = await channel.send(embed=embed, view=QuestSignoffView(claim_id))
-    except discord.HTTPException:
-        log.warning("econ quests: failed to post sign-off card for %s", claim_id)
-        return
-    except Exception:
-        log.exception("econ quests: unexpected error posting card %s", claim_id)
+        view = QuestSignoffView(claim_id) if state == "pending" else None
+        try:
+            await interaction.response.edit_message(embed=embed, view=view)
+        except discord.HTTPException:
+            log.debug("econ quests: failed to open claim detail", exc_info=True)
+
+
+async def open_signoff_picker(interaction: discord.Interaction) -> None:
+    """The todo board's Sign-Offs button: gate, then offer the pending claims.
+
+    Gated on ``can_manage_economy`` rather than on the board's own moderator
+    check — approving pays real currency, so this stays the economy's gate even
+    though the button that opens it sits on the todo board. In the main guild
+    the two roles are the same one, so nobody who could sign off before is shut
+    out by the move.
+    """
+    guild = interaction.guild
+    member = interaction.user
+    bot = cast("Bot", interaction.client)
+    if guild is None or not isinstance(member, discord.Member):
+        await _safe_ephemeral(interaction, "❌ This only works in a server.")
         return
 
-    def _record() -> None:
-        with ctx.open_db() as conn:
-            set_claim_card(conn, claim_id, channel.id, message.id)
+    def _load() -> tuple[EconSettings, list[dict]]:
+        with bot.ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild.id)
+            rows = [dict(r) for r in pending_signoff_rows(conn, guild.id, limit=25)]
+        return settings, rows
 
     try:
-        await asyncio.to_thread(_record)
+        settings, rows = await asyncio.to_thread(_load)
     except Exception:
-        log.debug("econ quests: failed to record card ids", exc_info=True)
+        log.exception("econ quests: failed to load pending sign-offs")
+        await _safe_ephemeral(
+            interaction, "❌ Couldn't load the sign-offs — try again."
+        )
+        return
 
+    if not can_manage_economy(member, settings):
+        await _safe_ephemeral(interaction, MANAGE_DENIED_MSG)
+        return
+    if not rows:
+        await _safe_ephemeral(interaction, "No quest sign-offs are waiting. ✨")
+        return
 
-# ── /bank quests claim select ─────────────────────────────────────────────────
+    for row in rows:
+        claimant = guild.get_member(int(row["user_id"]))
+        row["claimant_name"] = claimant.display_name if claimant else "someone"
+
+    view = discord.ui.View(timeout=_CLAIM_VIEW_TIMEOUT)
+    view.add_item(SignoffPickSelect(rows, settings))
+    await interaction.response.send_message(
+        "Which claim do you want to review?", view=view, ephemeral=True
+    )
 
 
 class QuestDetailSelect(discord.ui.Select):
@@ -946,15 +1047,11 @@ class QuestClaimSelect(discord.ui.Select):
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
-        # Sign-off: post the card best-effort, then confirm submission.
-        accent = await safe_resolve_accent(self.ctx, self.guild, log_label="quest", default=DEFAULT_ACCENT_COLOR)
-        claim_id = int(getattr(outcome, "claim_id", 0))
-        await post_signoff_card(
-            bot, self.ctx, self.guild, settings, accent, claim_id, member
-        )
+        # Sign-off: the claim is filed, so nudge the mods' board, then confirm.
+        await refresh_signoff_board(bot, self.guild.id)
         await interaction.followup.send(
-            f"Submitted **{meta['title']}** for manager sign-off — "
-            "you'll be notified when it's reviewed.",
+            f"Submitted **{meta['title']}** for mod sign-off — "
+            "the result will show on your quest board.",
             ephemeral=True,
         )
 

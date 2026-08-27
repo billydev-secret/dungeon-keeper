@@ -2231,9 +2231,9 @@ async def test_trigger_quest_completion_is_reaction_only_regardless_of_role(ctx,
 
 
 @pytest.mark.asyncio
-async def test_signoff_trigger_quest_posts_card_and_reacts_only(ctx, db):
-    """A sign-off quest still files the claim and posts the manager card, but
-    the member only gets the 📝 reaction — no reply, no DM, regardless of
+async def test_signoff_trigger_quest_boards_the_claim_and_reacts_only(ctx, db):
+    """A sign-off quest still files the claim and puts it on the mods' board,
+    but the member only gets the 📝 reaction — no reply, no DM, regardless of
     game_role_id."""
     _enable(db, game_role_id=777)
     _mk_quest(db, reward=10, signoff=1, trigger_words="did it")
@@ -2243,8 +2243,8 @@ async def test_signoff_trigger_quest_posts_card_and_reacts_only(ctx, db):
         msg = _trigger_message(author=member, content="did it")
         with (
             patch(
-                "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
-            ) as card,
+                "bot_modules.cogs.economy_cog.refresh_signoff_board", new=AsyncMock()
+            ) as board,
             patch(
                 "bot_modules.cogs.economy_cog.notify_member",
                 new=AsyncMock(return_value=True),
@@ -2252,7 +2252,7 @@ async def test_signoff_trigger_quest_posts_card_and_reacts_only(ctx, db):
         ):
             await cog._on_trigger_message(msg)
 
-        card.assert_awaited_once()
+        board.assert_awaited_once()  # the claim shows up on the todo board
         msg.add_reaction.assert_awaited_once_with("📝")
         msg.reply.assert_not_awaited()
         notify.assert_not_awaited()
@@ -2303,7 +2303,7 @@ async def test_trigger_channel_scope(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_trigger_signoff_quest_files_pending_claim_and_card(ctx, db):
+async def test_trigger_signoff_quest_files_pending_claim_and_boards_it(ctx, db):
     _enable(db)
     qid = _mk_quest(db, reward=10, signoff=1, trigger_words="did it")
     cog = _make_cog(ctx)
@@ -2311,12 +2311,12 @@ async def test_trigger_signoff_quest_files_pending_claim_and_card(ctx, db):
 
     msg = _trigger_message(author=member, content="I did it!")
     with patch(
-        "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
-    ) as card:
+        "bot_modules.cogs.economy_cog.refresh_signoff_board", new=AsyncMock()
+    ) as board:
         await cog._on_trigger_message(msg)
 
     assert _balance(db, 501) == 0  # sign-off gates the payout
-    card.assert_awaited_once()
+    board.assert_awaited_once()
     msg.add_reaction.assert_awaited_once_with("📝")
     with open_db(db) as conn:
         claim = conn.execute(
@@ -2668,12 +2668,12 @@ async def test_photo_post_signoff_files_pending_claim(ctx, db):
     cog = _make_cog(ctx)
     msg = _photo_msg(author=_member(member_id=501))
     with patch(
-        "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
-    ) as card:
+        "bot_modules.cogs.economy_cog.refresh_signoff_board", new=AsyncMock()
+    ) as board:
         await cog._on_photo_post(msg)
 
     assert _balance(db, 501) == 0  # sign-off gates the payout
-    card.assert_awaited_once()
+    board.assert_awaited_once()
     msg.add_reaction.assert_awaited_once_with("📝")
     with open_db(db) as conn:
         claim = conn.execute(
