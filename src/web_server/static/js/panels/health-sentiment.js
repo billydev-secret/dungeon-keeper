@@ -40,7 +40,7 @@ export function mount(container) {
 
     function msgRow(m) {
       const score = (m.sentiment > 0 ? "+" : "") + m.sentiment.toFixed(2);
-      const scoreColor = m.sentiment >= 0 ? "var(--green)" : "var(--red)";
+      const scoreColor = m.sentiment >= 0 ? "var(--green-text)" : "var(--red-text)";
       const channel = m.channel_name ? "#" + esc(m.channel_name) : "";
       const content = esc((m.content || "").slice(0, 100));
       return `<tr>

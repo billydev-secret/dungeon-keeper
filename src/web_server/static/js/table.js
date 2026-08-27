@@ -9,7 +9,7 @@
  *       { key: "score",     label: "Score",  format: (v) => v.toFixed(1) },
  *       // Opt in per column when the format() return is deliberately markup:
  *       { key: "trend", label: "Trend", html: true,
- *         format: (v) => `<span style="color:var(--green)">${v}%</span>` },
+ *         format: (v) => `<span style="color:var(--green-text)">${v}%</span>` },
  *     ],
  *     data: entries,           // array of objects
  *     defaultSort: "score",    // initial sort key

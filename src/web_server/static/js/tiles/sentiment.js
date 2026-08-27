@@ -27,7 +27,7 @@ export function renderTile(el, data, names) {
 
   function msgSnippet(m, _label) {
     const score = (m.sentiment > 0 ? "+" : "") + m.sentiment.toFixed(2);
-    const scoreColor = m.sentiment >= 0 ? "var(--green)" : "var(--red)";
+    const scoreColor = m.sentiment >= 0 ? "var(--green-text)" : "var(--red-text)";
     const author = uNames[m.author_id] || "";
     const channel = chNames[m.channel_id] ? "#" + chNames[m.channel_id] : "";
     const snippet = m.content && m.content.length > 60

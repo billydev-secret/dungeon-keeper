@@ -27,6 +27,7 @@ import pytest
 
 _STATIC = Path(__file__).resolve().parents[2] / "src" / "web_server" / "static"
 _SHEETS = [_STATIC / "app.css", _STATIC / "help-panel.css"]
+_JS = _STATIC / "js"
 
 # Not preceded by a hyphen or word char — that exemption is what lets
 # `border-left-color: var(--red)` stay saturated, which is correct: a 4px
@@ -49,6 +50,123 @@ def test_no_saturated_red_or_green_as_text(sheet):
         "saturated red/green used as a text colour — use --red-text / "
         "--green-text (see :root in app.css):\n" + "\n".join(offenders)
     )
+
+
+# ── the same rule, in the place it was actually broken ──────────────────────
+#
+# The sweep above scans stylesheets. Its regex would have matched the JS
+# offenders verbatim; panel JS was simply out of scope. So the rule held in
+# app.css and broke in inline styles built from template literals — which is
+# where most of this dashboard's colour decisions are actually made.
+#
+# This one is strict by default: **any** saturated token written in JS is an
+# offender unless the line says it is a fill. A first draft matched only the
+# obvious shapes — a literal `color:`, an assignment to `.style.color`, and a
+# local holding "var(--red)" — and missed live-log.js entirely, because its
+# saturated red sits in a multi-line object literal and reaches the DOM through
+# a destructured loop variable. Enumerating the ways a value can travel is a
+# losing game; requiring the fill to declare itself is not.
+
+_JS_TOKEN = re.compile(r"var\(--(red|green)\)")
+
+# Properties that legitimately take the saturated tier. A line carrying one of
+# these is a fill, and fills are exactly what the saturated tokens are for.
+_FILL_CONTEXT = re.compile(
+    r"background|border(?!-radius)|\bfill\b|stroke|box-shadow|accent-color|outline"
+)
+
+# Declarations whose values reach a fill somewhere other than their own line —
+# a colour map read later as `background:${…}`, or a helper whose return value
+# is. Keyed by (file, declaration name); every entry needs a reason, and
+# test_the_indirect_fill_exemptions_are_real checks each still reaches a fill.
+_INDIRECT_FILLS = {
+    ("tiles/tile-helpers.js", "BADGE_COLORS"):
+        "badgeHTML renders it as background: on .health-tile-badge",
+    ("tiles/composite-score.js", "color"):
+        "used as background: on .health-dim-fill",
+    ("tiles/channel-health.js", "BAR_FILL"):
+        "passed as the bar-fill colour option to miniBarHTML",
+    ("panels/channels.js", "STATUS_COLORS"):
+        "rendered as background: on .health-tile-badge",
+    ("panels/system-stats.js", "pctColor"):
+        "its return feeds pctBar, which renders it as background:",
+}
+
+
+def _exempt_ranges(rel: str, src: str) -> list[range]:
+    """Line ranges covered by this file's exempted declarations."""
+    out = []
+    lines = src.splitlines()
+    for (f, name), _why in _INDIRECT_FILLS.items():
+        if f != rel:
+            continue
+        for i, line in enumerate(lines):
+            if not re.search(r"\b(?:const|let|var|function)\s+" + re.escape(name) + r"\b", line):
+                continue
+            # Single-line declaration, or a braced block: walk to its close.
+            depth = line.count("{") - line.count("}")
+            j = i
+            while depth > 0 and j + 1 < len(lines):
+                j += 1
+                depth += lines[j].count("{") - lines[j].count("}")
+            out.append(range(i + 1, j + 2))
+    return out
+
+
+def _js_files():
+    return sorted(
+        p for p in _JS.rglob("*.js")
+        if "vendor" not in p.parts and "node_modules" not in p.parts
+    )
+
+
+def test_no_saturated_red_or_green_as_text_in_panel_js():
+    offenders = []
+    for path in _js_files():
+        rel = path.relative_to(_JS).as_posix()
+        src = path.read_text(encoding="utf-8")
+        exempt = _exempt_ranges(rel, src)
+        for i, line in enumerate(src.splitlines(), 1):
+            if not _JS_TOKEN.search(line):
+                continue
+            if _FILL_CONTEXT.search(line):
+                continue
+            if any(i in r for r in exempt):
+                continue
+            offenders.append(f"{rel}:{i}: {line.strip()[:95]}")
+    assert not offenders, (
+        "saturated red/green in panel JS outside a fill context — use "
+        "--red-text / --green-text for anything that renders as words. If it "
+        "really is a fill, say so on the line (background/border/fill/stroke) "
+        "or add its declaration to _INDIRECT_FILLS with a reason:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_the_indirect_fill_exemptions_are_real():
+    """An exemption that no longer names a fill has become a hole."""
+    for (rel, name), why in _INDIRECT_FILLS.items():
+        src = (_JS / rel).read_text(encoding="utf-8")
+        assert re.search(r"\b(?:const|let|var|function)\s+" + re.escape(name) + r"\b", src), (
+            f"{rel}: `{name}` is gone; drop the exemption"
+        )
+        assert re.search(r"(background|fill|stroke)", src), (
+            f"{rel}: nothing in this file is a fill any more ({why})"
+        )
+
+
+def test_the_js_sweep_can_see_the_shapes_it_claims_to():
+    """Guard the guard, against the shapes that actually occurred."""
+    assert _JS_TOKEN.search('`<span style="color:var(--red)">x</span>`')
+    assert _JS_TOKEN.search('el.style.color = "var(--green)";')
+    assert _JS_TOKEN.search('const c = ok ? "var(--green)" : "var(--red)";')
+    assert _JS_TOKEN.search('  "ERROR": "var(--red)",')   # the one the first draft missed
+    # ...and a fill declares itself on its own line.
+    assert _FILL_CONTEXT.search('`<div style="border-color: var(--red)">`')
+    assert _FILL_CONTEXT.search('`<div style="background:var(--green)">`')
+    assert not _FILL_CONTEXT.search('`<span style="color:var(--red)">`')
+    # border-radius must not read as a fill context on its own.
+    assert not _FILL_CONTEXT.search('border-radius:4px;color:var(--red)')
 
 
 # ── the arithmetic behind the rule ──────────────────────────────────────────

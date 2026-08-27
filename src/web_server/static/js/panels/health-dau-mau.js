@@ -22,7 +22,7 @@ export function mount(container) {
 
     const compParts = [];
     if (d.composition) {
-      compParts.push(`<span style="color:var(--green)">${d.composition.returning} returning</span>`);
+      compParts.push(`<span style="color:var(--green-text)">${d.composition.returning} returning</span>`);
       compParts.push(`<span style="color:var(--yellow)">${d.composition.reactivated} reactivated</span>`);
       compParts.push(`<span style="color:var(--plum)">${d.composition.new} new</span>`);
     }

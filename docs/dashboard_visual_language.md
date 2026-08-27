@@ -31,6 +31,33 @@ back under the floor. It was added after finding 23 declarations that used the
 saturated pair as text — including the Tickets status chips (3.34:1) and
 `.error` / `.save-err` / `.num-err`, which is to say the error messages.
 
+**The same sweep now reads panel JS**, which is where the rule was actually
+being broken. The original scanned `app.css` and `help-panel.css`; its regex
+would have matched the JS offenders verbatim, but inline styles built from
+template literals were simply out of scope — and that is where most of this
+dashboard's colour decisions are made. Fifteen sites were using the saturated
+tier as words: `config-moderation`'s Danger Zone eyebrow (11px uppercase, the
+worst case for the split), `live-log`'s ERROR and CRITICAL lines at 4.37:1,
+`gender-admin`'s save status, `system-stats`' backup rows, `table.js`, and
+four tiles.
+
+The JS half is **strict by default**: any saturated token written in JS is an
+offender unless its line declares a fill (`background`, `border`, `fill`,
+`stroke`, …). A first draft enumerated the shapes a colour can take instead —
+a literal `color:`, an assignment to `.style.color`, a local holding
+`"var(--red)"` — and missed `live-log.js` completely, because its map is a
+multi-line object literal reached through a destructured loop variable.
+Enumerating how a value can travel is a losing game; making the fill declare
+itself is not.
+
+Five declarations reach a fill from somewhere other than their own line — a
+colour map read later as `background:${…}`, or a helper whose return value is.
+Those are listed in `_INDIRECT_FILLS` with a reason each, and a second test
+fails if an exemption stops naming a real fill, so an exemption can't rot into
+a hole. Where the fill was an inline argument with nothing to name
+(`channel-health`'s mini-bar), it was hoisted to a named constant rather than
+given a special case.
+
 ## Every `var(--x)` must name a token that exists
 
 An undeclared custom property fails silently in both directions.

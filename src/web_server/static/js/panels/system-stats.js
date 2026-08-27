@@ -49,7 +49,9 @@ function fmtAge(seconds) {
 // off-device copy covers the disk dying. A green local row next to a stale
 // off-device one is the state worth being able to see at a glance.
 function backupRow(label, age, ok, detail) {
-  const color = ok ? "var(--green)" : "var(--red)";
+  // The words OK / Stale, so the text tier. pctColor above stays saturated:
+  // its value is a bar fill.
+  const color = ok ? "var(--green-text)" : "var(--red-text)";
   return `<tr>
     <td style="white-space:nowrap">${label}</td>
     <td style="color:${color};white-space:nowrap">${ok ? "OK" : "Stale"}</td>
