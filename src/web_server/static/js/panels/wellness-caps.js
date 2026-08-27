@@ -2,6 +2,10 @@ import { wGet, wPost, wPut, wDelete, esc, showStatus } from "../wellness-helpers
 import { toast, confirmDialog } from "../ui.js";
 import { guardForm, mountAsync } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
+import {
+  renderChartLegend, renderChartTable,
+  CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID,
+} from "../charts.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading your activity caps…")}</div>`;
@@ -121,9 +125,12 @@ export function mount(container) {
         </div>
       </div>
 
+      <div class="chart-caption" data-histo-caption></div>
       <div class="w-histo-chart-wrap">
         <canvas data-histo-canvas></canvas>
       </div>
+      <div data-histo-legend></div>
+      <div data-histo-chart-table></div>
 
       <div class="w-histo-sliders" data-slider-row style="--bucket-count:${nBuckets}">
         ${sliderValues.map((v, i) => `
@@ -189,7 +196,7 @@ export function mount(container) {
           {
             label: "Avg messages",
             data: [...bucketAvgs],
-            backgroundColor: "#E6B84C",
+            backgroundColor: CHART_BAR,
             barPercentage: 0.85,
             categoryPercentage: 0.9,
             order: 2,
@@ -198,8 +205,8 @@ export function mount(container) {
             label: "Cap Limit",
             data: [...sliderValues],
             type: "line",
-            borderColor: "#B36A92",
-            backgroundColor: "#B36A9233",
+            borderColor: CHART_ACCENT,
+            backgroundColor: CHART_ACCENT + "33",
             borderWidth: 2,
             pointRadius: 5,
             pointHoverRadius: 8,
@@ -213,15 +220,45 @@ export function mount(container) {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          tooltip: { backgroundColor: "#18191c", borderColor: "#3f4147", borderWidth: 1 },
-          legend: { position: "bottom", labels: { color: "#dbdee1" } },
+          // Drawn in HTML instead: the caption sibling above names the chart,
+          // and renderChartLegend below covers the two datasets (bars +
+          // line). Both share this one y-axis — there is no second "y1" scale.
+          title: { display: false },
+          legend: { display: false },
+          tooltip: { backgroundColor: "#18191c", borderColor: CHART_GRID, borderWidth: 1 },
         },
         scales: {
-          x: { grid: { color: "#3f4147" }, ticks: { color: "#dbdee1", maxRotation: 45, minRotation: 0 } },
-          y: { grid: { color: "#3f4147" }, ticks: { color: "#dbdee1", precision: 0 }, beginAtZero: true },
+          x: { grid: { color: CHART_GRID }, ticks: { color: CHART_TEXT, maxRotation: 45, minRotation: 0 } },
+          y: { grid: { color: CHART_GRID }, ticks: { color: CHART_TEXT, precision: 0 }, beginAtZero: true },
         },
       },
     });
+
+    // ── Caption / legend / table ─────────────────────────────────
+    // Two real series (observed averages + the cap being set), so per the
+    // "none for one" rule this earns a legend, not just a caption.
+    const captionEl = container.querySelector("[data-histo-caption]");
+    const legendEl = container.querySelector("[data-histo-legend]");
+    const tableEl = container.querySelector("[data-histo-chart-table]");
+    captionEl.textContent = currentMode === "daily"
+      ? `Average messages by hour of day — last ${histo.days_covered} days`
+      : `Average messages by day of week — last ${histo.days_covered} days`;
+    const legendHandle = renderChartLegend(legendEl, chart);
+    // Sliders and drag both mutate sliderValues/chart data directly (not
+    // through load()), so the legend totals and table need their own refresh
+    // hook rather than relying on the next full reload.
+    function refreshChartExtras() {
+      legendHandle.refresh();
+      renderChartTable(tableEl, {
+        labels,
+        datasets: [
+          { label: "Avg messages", data: bucketAvgs },
+          { label: "Cap Limit", data: sliderValues },
+        ],
+        indexLabel: currentMode === "daily" ? "Hour" : "Day",
+      });
+    }
+    refreshChartExtras();
 
     // ── Drag cap-limit points on the chart ─────────────────────
     let dragIdx = -1;
@@ -263,6 +300,7 @@ export function mount(container) {
         if (slider) slider.value = val;
         const valLabel = container.querySelector(`[data-val-idx="${dragIdx}"]`);
         if (valLabel) valLabel.textContent = val;
+        refreshChartExtras();
       } else {
         canvas.style.cursor = getPointIndex(e) >= 0 ? "grab" : "default";
       }
@@ -295,6 +333,7 @@ export function mount(container) {
       if (slider) slider.value = val;
       const valLabel = container.querySelector(`[data-val-idx="${dragIdx}"]`);
       if (valLabel) valLabel.textContent = val;
+      refreshChartExtras();
     }, { passive: false });
     canvas.addEventListener("touchend", () => { dragIdx = -1; });
 
@@ -323,6 +362,7 @@ export function mount(container) {
         container.querySelector(`[data-val-idx="${idx}"]`).textContent = val;
         chart.data.datasets[1].data[idx] = val;
         chart.update("none");
+        refreshChartExtras();
       });
     });
 
@@ -372,6 +412,7 @@ export function mount(container) {
       });
       chart.data.datasets[1].data = [...sliderValues];
       chart.update("none");
+      refreshChartExtras();
     });
 
     // ── Legacy flat caps: save/delete/add ─────────────────────────

@@ -1,6 +1,9 @@
 import { api } from "../api.js";
 import { withLoading, rangePicker } from "../report-helpers.js";
-import { makeBarChart, makeDoughnutChart, CHART_BAR, CHART_ACCENT, ROLE_COLORS } from "../charts.js";
+import {
+  makeBarChart, makeDoughnutChart, renderPieLegend, renderChartTable,
+  CHART_BAR, CHART_ACCENT, ROLE_COLORS,
+} from "../charts.js";
 import { renderSortableTable } from "../table.js";
 import { renderError } from "../states.js";
 
@@ -22,10 +25,23 @@ export function mountLeaderboard(container, initialParams) {
       </div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div class="chart-wrap" style="flex:2;min-width:300px;"><canvas data-chart-levels></canvas></div>
-        <div class="chart-wrap" style="flex:1;min-width:200px;"><canvas data-chart-sources></canvas></div>
+        <div style="flex:2;min-width:300px;display:flex;flex-direction:column;">
+          <div class="chart-caption" data-caption-levels></div>
+          <div class="chart-wrap"><canvas data-chart-levels></canvas></div>
+          <div data-chart-table-levels></div>
+        </div>
+        <div style="flex:1;min-width:200px;display:flex;flex-direction:column;">
+          <div class="chart-caption" data-caption-sources></div>
+          <div class="chart-wrap"><canvas data-chart-sources></canvas></div>
+          <div data-legend-sources></div>
+          <div data-chart-table-sources></div>
+        </div>
       </div>
-      <div class="chart-wrap" style="margin-top:12px;min-height:220px;"><canvas data-chart-histogram></canvas></div>
+      <div style="margin-top:12px;display:flex;flex-direction:column;">
+        <div class="chart-caption" data-caption-histogram></div>
+        <div class="chart-wrap" style="min-height:220px;"><canvas data-chart-histogram></canvas></div>
+        <div data-chart-table-histogram></div>
+      </div>
       <div data-table-wrap style="margin-top:12px; max-height:400px; overflow-y:auto;"></div>
     </div>
   `;
@@ -41,6 +57,13 @@ export function mountLeaderboard(container, initialParams) {
   container.querySelector('[data-slot="range"]').replaceWith(rangeCtl);
   const statsEl = container.querySelector("[data-stats]");
   const tableWrap = container.querySelector("[data-table-wrap]");
+  const levelsCaptionEl = container.querySelector("[data-caption-levels]");
+  const levelsTableEl = container.querySelector("[data-chart-table-levels]");
+  const sourcesCaptionEl = container.querySelector("[data-caption-sources]");
+  const sourcesLegendEl = container.querySelector("[data-legend-sources]");
+  const sourcesTableEl = container.querySelector("[data-chart-table-sources]");
+  const histCaptionEl = container.querySelector("[data-caption-histogram]");
+  const histTableEl = container.querySelector("[data-chart-table-histogram]");
   let chartLevels = null;
   let chartSources = null;
   let chartHistogram = null;
@@ -68,29 +91,59 @@ export function mountLeaderboard(container, initialParams) {
         : "all time";
       statsEl.textContent = `${data.total_users} member${data.total_users === 1 ? "" : "s"} tracked · ${label}`;
 
-      // Level distribution
+      // Level distribution — one series, so per the "none for one" rule it
+      // gets a caption and a table but no legend (the caption already names it).
       const levelWrap = container.querySelector("[data-chart-levels]").parentElement;
       if (data.level_distribution.length) {
         levelWrap.innerHTML = '<canvas data-chart-levels></canvas>';
+        const levelsTitle = "Level Distribution";
+        const levelLabels = data.level_distribution.map((b) => `Lv ${b.level}`);
+        const levelCounts = data.level_distribution.map((b) => b.count);
         chartLevels = makeBarChart(container.querySelector("[data-chart-levels]"), {
-          labels: data.level_distribution.map((b) => `Lv ${b.level}`),
-          data: data.level_distribution.map((b) => b.count),
-          title: "Level Distribution",
+          labels: levelLabels,
+          data: levelCounts,
+          title: levelsTitle,
           yLabel: "Members",
           color: CHART_BAR,
         });
+        levelsCaptionEl.textContent = levelsTitle;
+        renderChartTable(levelsTableEl, {
+          labels: levelLabels,
+          datasets: [{ label: "Members", data: levelCounts }],
+          indexLabel: "Level",
+        });
+      } else {
+        levelsCaptionEl.textContent = "";
+        levelsTableEl.replaceChildren();
       }
 
-      // Source breakdown
+      // Source breakdown — a doughnut: caption always, legend + table once
+      // there's more than one slice to distinguish (a single slice is just a
+      // full circle, so a legend would repeat the caption for no reason).
       const srcWrap = container.querySelector("[data-chart-sources]").parentElement;
       const srcLabels = Object.keys(data.source_totals);
       if (srcLabels.length) {
         srcWrap.innerHTML = '<canvas data-chart-sources></canvas>';
+        const sourcesTitle = "XP by Source";
+        const srcDisplayLabels = srcLabels.map((s) => s.replace("_", " "));
+        const srcData = srcLabels.map((s) => data.source_totals[s]);
         chartSources = makeDoughnutChart(container.querySelector("[data-chart-sources]"), {
-          labels: srcLabels.map((s) => s.replace("_", " ")),
-          data: srcLabels.map((s) => data.source_totals[s]),
-          title: "XP by Source",
+          labels: srcDisplayLabels,
+          data: srcData,
+          title: sourcesTitle,
         });
+        sourcesCaptionEl.textContent = sourcesTitle;
+        sourcesLegendEl.replaceChildren();
+        if (srcLabels.length > 1) renderPieLegend(sourcesLegendEl, chartSources);
+        renderChartTable(sourcesTableEl, {
+          labels: srcDisplayLabels,
+          datasets: [{ label: "XP", data: srcData }],
+          indexLabel: "Source",
+        });
+      } else {
+        sourcesCaptionEl.textContent = "";
+        sourcesLegendEl.replaceChildren();
+        sourcesTableEl.replaceChildren();
       }
 
       // XP histogram – 10 buckets each spanning 10% of the range
@@ -114,14 +167,25 @@ export function mountLeaderboard(container, initialParams) {
         });
         const histWrap = container.querySelector("[data-chart-histogram]").parentElement;
         histWrap.innerHTML = '<canvas data-chart-histogram></canvas>';
+        const histTitle = "XP Distribution";
         chartHistogram = makeBarChart(container.querySelector("[data-chart-histogram]"), {
           labels: histLabels,
           data: buckets,
-          title: "XP Distribution",
+          title: histTitle,
           xLabel: "XP Range",
           yLabel: "Members",
           color: CHART_ACCENT,
         });
+        // One series here too — caption + table, no legend.
+        histCaptionEl.textContent = histTitle;
+        renderChartTable(histTableEl, {
+          labels: histLabels,
+          datasets: [{ label: "Members", data: buckets }],
+          indexLabel: "XP Range",
+        });
+      } else {
+        histCaptionEl.textContent = "";
+        histTableEl.replaceChildren();
       }
 
       if (data.leaderboard.length) {
@@ -175,9 +239,29 @@ export function mountLeaderboard(container, initialParams) {
       }
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector("[data-chart-levels]").parentElement.innerHTML = renderError(
+      // A failed fetch throws before this function's own destroy calls run, so
+      // all three chart instances from the last successful load are still
+      // alive here. Only the levels wrap used to be replaced with an error —
+      // the other two kept showing a stale, now-untitled chart image (their
+      // captions were cleared but the canvas underneath was not), which read
+      // as more broken than a plain error message. Destroy and replace all
+      // three, the same way, so the failure state is consistent everywhere.
+      if (chartLevels) { chartLevels.destroy(); chartLevels = null; }
+      if (chartSources) { chartSources.destroy(); chartSources = null; }
+      if (chartHistogram) { chartHistogram.destroy(); chartHistogram = null; }
+      const errMsg = renderError(
         `Couldn't load the XP leaderboard — ${err.message}. Change the time period to try again.`
       );
+      container.querySelector("[data-chart-levels]").parentElement.innerHTML = errMsg;
+      container.querySelector("[data-chart-sources]").parentElement.innerHTML = errMsg;
+      container.querySelector("[data-chart-histogram]").parentElement.innerHTML = errMsg;
+      levelsCaptionEl.textContent = "";
+      levelsTableEl.replaceChildren();
+      sourcesCaptionEl.textContent = "";
+      sourcesLegendEl.replaceChildren();
+      sourcesTableEl.replaceChildren();
+      histCaptionEl.textContent = "";
+      histTableEl.replaceChildren();
       tableWrap.innerHTML = "";
     }
   }

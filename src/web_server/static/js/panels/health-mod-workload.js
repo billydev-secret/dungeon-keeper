@@ -1,6 +1,14 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
-import { makeHorizontalBarChart, makeDoughnutChart, ROLE_COLORS } from "../charts.js";
+import {
+  makeHorizontalBarChart, makeDoughnutChart, renderPieLegend, renderChartTable, seriesColor,
+} from "../charts.js";
+
+// Chart title text, shown as the HTML caption above each chart (charts.js no
+// longer draws these on the canvas) and still passed to the builder calls
+// below — harmless there, but kept as one source of truth for both.
+const MOD_CHART_TITLE = "Activity per Moderator (7d)";
+const TYPE_CHART_TITLE = "Action Types (7d)";
 
 
 export function mount(container) {
@@ -81,11 +89,16 @@ export function mount(container) {
       <div class="home-grid" style="margin-top:14px;">
         <div class="home-card">
           <div class="home-card-label">Activity per Moderator</div>
+          <div class="chart-caption" data-caption="mod"></div>
           <div class="chart-wrap" style="min-height:280px"><canvas id="mod-bar-chart"></canvas></div>
+          <div data-chart-table="mod"></div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Action Type Breakdown</div>
+          <div class="chart-caption" data-caption="type"></div>
           <div class="chart-wrap" style="height:280px"><canvas id="action-type-chart"></canvas></div>
+          <div data-legend="type"></div>
+          <div data-chart-table="type"></div>
         </div>
       </div>
 
@@ -111,28 +124,53 @@ export function mount(container) {
       </div>
     `;
 
-    // Mod actions horizontal bar chart
+    // Mod actions horizontal bar chart. One series (Activity per moderator) —
+    // per the "none for one" rule this gets a caption and a table, no legend;
+    // the per-bar rainbow coloring is unchanged from before this pass.
     const modCanvas = panel.querySelector("#mod-bar-chart");
     if (modCanvas && d.mod_actions && d.mod_actions.length) {
-      charts.push(makeHorizontalBarChart(modCanvas, {
-        labels: d.mod_actions.map(m => m.user_name || m.user_id),
+      const modLabels = d.mod_actions.map(m => m.user_name || m.user_id);
+      const modChart = makeHorizontalBarChart(modCanvas, {
+        labels: modLabels,
         data: d.mod_actions.map(m => m.count),
-        title: "Activity per Moderator (7d)",
+        title: MOD_CHART_TITLE,
         xLabel: "Activity",
-        colors: d.mod_actions.map((_, i) => ROLE_COLORS[i % ROLE_COLORS.length]),
-      }));
+        colors: d.mod_actions.map((_, i) => seriesColor(i)),
+      });
+      charts.push(modChart);
+
+      const modCaptionEl = panel.querySelector('[data-caption="mod"]');
+      if (modCaptionEl) modCaptionEl.textContent = MOD_CHART_TITLE;
+      renderChartTable(panel.querySelector('[data-chart-table="mod"]'), {
+        labels: modLabels,
+        datasets: [{ label: "Activity", data: modChart.data.datasets[0].data }],
+        indexLabel: "Moderator",
+      });
     }
 
-    // Action type doughnut
+    // Action type doughnut. Multiple slices — caption, pie legend, and table.
     const typeCanvas = panel.querySelector("#action-type-chart");
     if (typeCanvas && d.action_types && d.action_types.length) {
       const top8 = d.action_types.slice(0, 8);
-      charts.push(makeDoughnutChart(typeCanvas, {
+      const typeChart = makeDoughnutChart(typeCanvas, {
         labels: top8.map(a => a.action),
         data: top8.map(a => a.count),
-        title: "Action Types (7d)",
-        colors: top8.map((_, i) => ROLE_COLORS[i % ROLE_COLORS.length]),
-      }));
+        title: TYPE_CHART_TITLE,
+        // seriesColor, not a local modulo — SERIES_OVERFLOW past 6 slices
+        // instead of two action types silently sharing a colour.
+        colors: top8.map((_, i) => seriesColor(i)),
+      });
+      charts.push(typeChart);
+
+      const typeCaptionEl = panel.querySelector('[data-caption="type"]');
+      if (typeCaptionEl) typeCaptionEl.textContent = TYPE_CHART_TITLE;
+      const typeLegendEl = panel.querySelector('[data-legend="type"]');
+      if (typeLegendEl) renderPieLegend(typeLegendEl, typeChart);
+      renderChartTable(panel.querySelector('[data-chart-table="type"]'), {
+        labels: top8.map(a => a.action),
+        datasets: [{ label: "Count", data: typeChart.data.datasets[0].data }],
+        indexLabel: "Action",
+      });
     }
   }
 

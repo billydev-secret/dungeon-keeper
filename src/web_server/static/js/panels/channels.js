@@ -1,7 +1,10 @@
 import { api, esc } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
 import { renderEmpty, renderError } from "../states.js";
-import { makeHorizontalBarChart, makeBarChart, makeDoughnutChart } from "../charts.js";
+import {
+  makeHorizontalBarChart, makeBarChart, makeDoughnutChart,
+  renderPieLegend, renderChartTable,
+} from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
 function scoreColor(score) {
@@ -47,7 +50,9 @@ export function mount(container, initialParams) {
           <select data-control="metric" style="max-width:100%;">${metricOptions}</select>
         </label>
       </div>
-      <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div class="chart-caption" data-compare-caption></div>
+      <div class="chart-wrap" data-compare-wrap><canvas data-chart></canvas></div>
+      <div data-compare-table></div>
       <div data-table-wrap style="margin-top:12px; max-height:400px; overflow-y:auto;"></div>
     </div>
   `;
@@ -127,11 +132,16 @@ export function mount(container, initialParams) {
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">Status Breakdown</div>
+          <div class="chart-caption" data-status-caption></div>
           <div class="chart-wrap" style="height:260px"><canvas data-status-doughnut></canvas></div>
+          <div data-status-legend></div>
+          <div data-status-table></div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Score Distribution</div>
+          <div class="chart-caption" data-dist-caption></div>
           <div class="chart-wrap" style="height:260px"><canvas data-score-dist></canvas></div>
+          <div data-dist-table></div>
         </div>
       </div>
 
@@ -153,33 +163,74 @@ export function mount(container, initialParams) {
 
     const statusCanvas = healthEl.querySelector("[data-status-doughnut]");
     if (statusCanvas) {
-      charts.push(makeDoughnutChart(statusCanvas, {
-        labels: ["Healthy", "Flagged", "Dormant", "Archive"],
-        data: [
-          d.active_count - d.flagged_count,
-          d.flagged_count,
-          d.dormant_count,
-          d.archive_count || 0,
-        ],
-        title: "Channel Status",
+      const statusTitle = "Channel Status";
+      const statusLabels = ["Healthy", "Flagged", "Dormant", "Archive"];
+      const statusData = [
+        d.active_count - d.flagged_count,
+        d.flagged_count,
+        d.dormant_count,
+        d.archive_count || 0,
+      ];
+      const statusChart = makeDoughnutChart(statusCanvas, {
+        labels: statusLabels,
+        data: statusData,
+        title: statusTitle,
         colors: ["#7F8F3A", "#E6B84C", "#949ba4", "#9E3B2E"],
-      }));
+      });
+      charts.push(statusChart);
+
+      // The caption lives in HTML (see activity.js) rather than on the
+      // canvas, so it wears the page's type and is readable/selectable.
+      const statusCaptionEl = healthEl.querySelector("[data-status-caption]");
+      if (statusCaptionEl) statusCaptionEl.textContent = statusTitle;
+
+      // 4 slices — a legend earns its place (2+ series/slices).
+      const statusLegendEl = healthEl.querySelector("[data-status-legend]");
+      if (statusLegendEl) renderPieLegend(statusLegendEl, statusChart);
+
+      const statusTableEl = healthEl.querySelector("[data-status-table]");
+      if (statusTableEl) {
+        renderChartTable(statusTableEl, {
+          labels: statusLabels,
+          datasets: [{ label: "Channels", data: statusData }],
+          indexLabel: "Status",
+        });
+      }
     }
 
     const distCanvas = healthEl.querySelector("[data-score-dist]");
+    const distCaptionEl = healthEl.querySelector("[data-dist-caption]");
+    const distTableEl = healthEl.querySelector("[data-dist-table]");
     if (distCanvas && scores.length) {
       const buckets = [0, 0, 0, 0, 0]; // 0-20, 20-40, 40-60, 60-80, 80-100
       for (const s of scores) {
         const idx = Math.min(4, Math.floor(s / 20));
         buckets[idx]++;
       }
-      charts.push(makeBarChart(distCanvas, {
-        labels: ["0–20", "20–40", "40–60", "60–80", "80–100"],
+      const distTitle = "Score Distribution";
+      const distLabels = ["0–20", "20–40", "40–60", "60–80", "80–100"];
+      const distChart = makeBarChart(distCanvas, {
+        labels: distLabels,
         data: buckets,
-        title: "Score Distribution",
+        title: distTitle,
         yLabel: "Channels",
         color: ["#9E3B2E", "#B88A2C", "#E6B84C", "#7F8F3A", "#7F8F3A"],
-      }));
+      });
+      charts.push(distChart);
+
+      if (distCaptionEl) distCaptionEl.textContent = distTitle;
+      // One series (bucketed counts) — no legend; the caption already names
+      // it, per "none for one".
+      if (distTableEl) {
+        renderChartTable(distTableEl, {
+          labels: distLabels,
+          datasets: [{ label: "Channels", data: buckets }],
+          indexLabel: "Score range",
+        });
+      }
+    } else {
+      if (distCaptionEl) distCaptionEl.textContent = "";
+      if (distTableEl) distTableEl.replaceChildren();
     }
   }
 
@@ -189,6 +240,11 @@ export function mount(container, initialParams) {
   const daysEl   = rangeEl.querySelector("select");
   const metricEl = container.querySelector('[data-control="metric"]');
   const tableWrap = container.querySelector("[data-table-wrap]");
+  // Queried once, outside the .chart-wrap innerHTML-reset path below, so they
+  // survive every destroy/recreate of the canvas — same pattern as
+  // activity.js's captionEl/tableEl.
+  const compareCaptionEl = container.querySelector("[data-compare-caption]");
+  const compareTableEl = container.querySelector("[data-compare-table]");
 
   async function refreshCompare() {
     const days   = parseInt(daysEl.value) || 1;
@@ -198,7 +254,15 @@ export function mount(container, initialParams) {
     const qs = new URLSearchParams({ days, metric });
     history.replaceState(null, "", `#/channels?${qs}`);
 
-    const wrap = container.querySelector(".chart-wrap");
+    // [data-compare-wrap], not a bare .chart-wrap class lookup: the health
+    // section above (loadHealth()) injects two chart-wraps of its own
+    // (Status Breakdown, Score Distribution) earlier in the DOM once it
+    // finishes loading. A bare class match returns the FIRST .chart-wrap in
+    // document order, so after that section loads, every subsequent
+    // refreshCompare() (the user changes Days or Metric) was overwriting the
+    // Status Breakdown doughnut's wrap instead of this chart's own — pinned
+    // by tests/web/test_chart_conventions.py.
+    const wrap = container.querySelector("[data-compare-wrap]");
     try {
       const data = await withLoading(wrap, api("/api/reports/channel-comparison", { days }));
       if (compareChart) { compareChart.destroy(); compareChart = null; }
@@ -213,15 +277,28 @@ export function mount(container, initialParams) {
       if (!channels.length) {
         wrap.innerHTML = `<div class="empty">No channel activity in this window. Pick a longer range, or check that Dungeon Keeper can read your busy channels.</div>`;
         tableWrap.innerHTML = "";
+        compareCaptionEl.textContent = "";
+        compareTableEl.replaceChildren();
         return;
       }
 
       wrap.innerHTML = '<canvas data-chart></canvas>';
+      const compareTitle = `${metricDef.label} by Channel (last ${days} days)`;
       compareChart = makeHorizontalBarChart(container.querySelector("[data-chart]"), {
         labels: channels.map((c) => c.channel_name || c.channel_id),
         data:   channels.map((c) => c[metric] ?? 0),
-        title:  `${metricDef.label} by Channel (last ${days} days)`,
+        title:  compareTitle,
         xLabel: metricDef.label,
+      });
+
+      // Drawn in HTML rather than on the canvas — see activity.js. One series
+      // (one metric, one bar per channel) needs no legend: the caption above
+      // already names it.
+      compareCaptionEl.textContent = compareTitle;
+      renderChartTable(compareTableEl, {
+        labels: channels.map((c) => c.channel_name || c.channel_id),
+        datasets: [{ label: metricDef.label, data: channels.map((c) => c[metric] ?? 0) }],
+        indexLabel: "Channel",
       });
 
       renderSortableTable(tableWrap, {
@@ -253,8 +330,10 @@ export function mount(container, initialParams) {
         emptyMsg: "No channel activity in this window.",
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load the channel comparison — try again. (${esc(err.message)})</div>`;
+      container.querySelector("[data-compare-wrap]").innerHTML = `<div class="error">Couldn’t load the channel comparison — try again. (${esc(err.message)})</div>`;
       tableWrap.innerHTML = "";
+      compareCaptionEl.textContent = "";
+      compareTableEl.replaceChildren();
     }
   }
 

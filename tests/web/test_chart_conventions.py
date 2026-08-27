@@ -98,3 +98,51 @@ def test_chart_text_uses_the_dashboard_typeface():
     assert "Public Sans" in m.group(1), (
         "charts are back on a system font while the page around them is not"
     )
+
+
+# ── found by an audit of the chart fan-out, worth pinning ──────────────────
+
+
+def test_no_panel_cycles_role_colors_by_hand():
+    """`ROLE_COLORS[i % ROLE_COLORS.length]` recreates, at the call site, the
+    exact cycling bug charts.js's own builders were fixed to never do.
+
+    Found twice independently in the same fan-out (health-mod-workload.js's
+    action-type doughnut, health-mod-engagement.js's two reach/messages bar
+    charts) — each colours an unbounded, server-supplied list by index modulo
+    6, so item 7 silently gets item 1's colour. `seriesColor(i)` is the
+    already-exported fix: past the palette's length it folds to
+    SERIES_OVERFLOW instead of repeating a hue.
+    """
+    offenders = []
+    for path in sorted(_PANELS.glob("*.js")):
+        src = _code(path)
+        if re.search(r"ROLE_COLORS\[[^\]]*%\s*ROLE_COLORS\.length\]", src):
+            offenders.append(path.name)
+    assert not offenders, (
+        f"{offenders} index into ROLE_COLORS with a hand-rolled modulo — use "
+        f"seriesColor(i) instead, which folds to SERIES_OVERFLOW past the "
+        f"palette's length rather than silently repeating a hue"
+    )
+
+
+def test_channels_compare_chart_has_its_own_scoped_host():
+    """Regression for a real bug an audit of the fan-out caught.
+
+    channels.js renders the health section's two chart-wraps (Status
+    Breakdown, Score Distribution) BEFORE the Compare Channels chart in the
+    DOM. `refreshCompare()` used to find its own chart via a bare
+    `container.querySelector(".chart-wrap")` / `"[data-chart]"` — a class
+    match returns the FIRST element in document order, so once the health
+    section finished loading, every subsequent refreshCompare() (the user
+    changes Days or Metric) overwrote the Status Breakdown doughnut's wrap
+    instead of the comparison chart's own. The fix is a unique attribute on
+    the comparison chart's wrap specifically; this pins that it stays unique
+    and that the ambiguous lookups don't come back.
+    """
+    src = _code(_PANELS / "channels.js")
+    assert 'data-compare-wrap' in src, "the comparison chart's wrap lost its unique attribute"
+    assert 'querySelector(".chart-wrap")' not in src, (
+        "channels.js is back to a bare .chart-wrap lookup, which is ambiguous "
+        "once the health section's own chart-wraps are in the DOM"
+    )

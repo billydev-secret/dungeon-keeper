@@ -1,7 +1,14 @@
 import { api, esc } from "../api.js";
-import { makeHorizontalBarChart, ROLE_COLORS } from "../charts.js";
+import { makeHorizontalBarChart, renderChartTable, seriesColor } from "../charts.js";
 import { renderEmpty, renderError } from "../states.js";
 import { rangePicker } from "../report-helpers.js";
+
+// Titles are declared once and reused for both the chart builder's `title`
+// option (now ignored by charts.js, kept for backward compatibility — see
+// makeHorizontalBarChart) and the HTML `.chart-caption` that actually renders
+// them, so the two can never drift apart.
+const REACH_CHART_TITLE = "Unique Members Reached";
+const MSGS_CHART_TITLE = "Public Messages";
 
 export function mount(container, initialParams = {}) {
   container.innerHTML = `
@@ -119,11 +126,15 @@ export function mount(container, initialParams = {}) {
       <div class="home-grid" style="margin-top:14px;">
         <div class="home-card">
           <div class="home-card-label">Unique Members Reached</div>
+          <div class="chart-caption">${esc(REACH_CHART_TITLE)}</div>
           <div class="chart-wrap" style="min-height:260px"><canvas id="eng-reach-chart"></canvas></div>
+          <div data-chart-table="reach"></div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Public Messages &amp; Channel Breadth</div>
+          <div class="chart-caption">${esc(MSGS_CHART_TITLE)}</div>
           <div class="chart-wrap" style="min-height:260px"><canvas id="eng-msgs-chart"></canvas></div>
+          <div data-chart-table="msgs"></div>
         </div>
       </div>
 
@@ -154,26 +165,47 @@ export function mount(container, initialParams = {}) {
     `;
 
     const reachCanvas = bodyEl.querySelector("#eng-reach-chart");
+    const reachTableEl = bodyEl.querySelector('[data-chart-table="reach"]');
     if (reachCanvas && d.mods?.length) {
+      const reachLabels = d.mods.map(m => m.user_name || m.user_id);
+      const reachData = d.mods.map(m => m.unique_reach);
       charts.push(makeHorizontalBarChart(reachCanvas, {
-        labels: d.mods.map(m => m.user_name || m.user_id),
-        data: d.mods.map(m => m.unique_reach),
-        title: "Unique Members Reached",
+        labels: reachLabels,
+        data: reachData,
+        title: REACH_CHART_TITLE,
         xLabel: "Members",
-        colors: d.mods.map((_, i) => ROLE_COLORS[i % ROLE_COLORS.length]),
+        // seriesColor, not a local modulo — past 6 moderators this folds to the
+        // shared neutral overflow instead of silently repeating a hue.
+        colors: d.mods.map((_, i) => seriesColor(i)),
       }));
+      // Single series — the caption above already names it, so no legend
+      // (see "none for one" in the chart-restyle rules). Still needs a table:
+      // a tooltip must never be the only way to read a value.
+      renderChartTable(reachTableEl, {
+        labels: reachLabels,
+        datasets: [{ label: "Unique Reach", data: reachData }],
+        indexLabel: "Moderator",
+      });
     }
 
     const msgsCanvas = bodyEl.querySelector("#eng-msgs-chart");
+    const msgsTableEl = bodyEl.querySelector('[data-chart-table="msgs"]');
     if (msgsCanvas && d.mods?.length) {
       const sorted = [...d.mods].sort((a, b) => b.public_messages - a.public_messages);
+      const msgsLabels = sorted.map(m => m.user_name || m.user_id);
+      const msgsData = sorted.map(m => m.public_messages);
       charts.push(makeHorizontalBarChart(msgsCanvas, {
-        labels: sorted.map(m => m.user_name || m.user_id),
-        data: sorted.map(m => m.public_messages),
-        title: "Public Messages",
+        labels: msgsLabels,
+        data: msgsData,
+        title: MSGS_CHART_TITLE,
         xLabel: "Messages",
-        colors: sorted.map((_, i) => ROLE_COLORS[i % ROLE_COLORS.length]),
+        colors: sorted.map((_, i) => seriesColor(i)),
       }));
+      renderChartTable(msgsTableEl, {
+        labels: msgsLabels,
+        datasets: [{ label: "Public Messages", data: msgsData }],
+        indexLabel: "Moderator",
+      });
     }
   }
 

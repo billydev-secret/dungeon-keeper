@@ -1,6 +1,6 @@
 import { api, esc } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
-import { makeBarChart } from "../charts.js";
+import { makeBarChart, renderChartTable } from "../charts.js";
 
 export function mount(container, initialParams) {
   container.innerHTML = `
@@ -15,7 +15,9 @@ export function mount(container, initialParams) {
         </label>
       </div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
+      <div class="chart-caption" data-caption></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div data-chart-table></div>
       <div data-table-wrap style="margin-top:12px; max-height:600px; overflow-y:auto;"></div>
     </div>
   `;
@@ -25,6 +27,8 @@ export function mount(container, initialParams) {
   const daysEl = rangeEl.querySelector("select");
   const activeEl = container.querySelector('[data-control="active_days"]');
   const statsEl = container.querySelector("[data-stats]");
+  const captionEl = container.querySelector("[data-caption]");
+  const chartTableEl = container.querySelector("[data-chart-table]");
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chart = null;
   let sortKey = "invite_count";
@@ -143,16 +147,31 @@ export function mount(container, initialParams) {
       const inviters = data.inviters.slice(0, 20);
       if (!inviters.length) {
         wrap.innerHTML = `<div class="empty">No invites recorded in this window. Widen the range to see older invites.</div>`;
+        captionEl.textContent = "";
+        chartTableEl.replaceChildren();
         currentData = [];
         renderTable();
         return;
       }
       wrap.innerHTML = '<canvas data-chart></canvas>';
+      const chartTitle = "Invites by User";
       chart = makeBarChart(container.querySelector("[data-chart]"), {
         labels: inviters.map(i => i.inviter_name || i.inviter_id),
         data: inviters.map(i => i.invite_count),
-        title: "Invites by User",
+        title: chartTitle,
         yLabel: "Invites",
+      });
+
+      // The caption lives in HTML so it wears the page's type rather than
+      // whatever the canvas was handed. Single series: the caption already
+      // names it, so no legend earns its place here ("none for one") — but
+      // the plotted values still get a real table, since a tooltip must
+      // never be the only way to read one.
+      captionEl.textContent = chartTitle;
+      renderChartTable(chartTableEl, {
+        labels: inviters.map(i => i.inviter_name || i.inviter_id),
+        datasets: [{ label: "Invites", data: inviters.map(i => i.invite_count) }],
+        indexLabel: "Inviter",
       });
 
       currentData = data.inviters;
@@ -161,6 +180,8 @@ export function mount(container, initialParams) {
     } catch (err) {
       statsEl.textContent = "";
       container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load invite effectiveness — try again. (${esc(err.message)})</div>`;
+      captionEl.textContent = "";
+      chartTableEl.replaceChildren();
       currentData = [];
       renderTable();
     }

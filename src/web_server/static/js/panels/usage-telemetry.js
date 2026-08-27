@@ -7,7 +7,7 @@ import { api, esc, fmtTs } from "../api.js";
 import { withLoading, rangePicker, syncHash } from "../report-helpers.js";
 import { renderSortableTable } from "../table.js";
 import { renderEmpty, renderError } from "../states.js";
-import { makeLineChart, makeBarChart } from "../charts.js";
+import { makeLineChart, makeBarChart, renderChartLegend, renderChartTable } from "../charts.js";
 import { allPageIds } from "../nav-registry.js";
 
 const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`);
@@ -81,8 +81,14 @@ export function mount(container, initialParams) {
       <div data-panels></div>
 
       <h3 class="section-label">Over time</h3>
+      <div class="chart-caption" data-daily-caption></div>
       <div class="chart-wrap"><canvas data-daily></canvas></div>
+      <div data-daily-legend></div>
+      <div data-daily-table></div>
+
+      <div class="chart-caption" data-hours-caption></div>
       <div class="chart-wrap"><canvas data-hours></canvas></div>
+      <div data-hours-table></div>
 
       <h3 class="section-label">Busiest members</h3>
       <div data-top-users></div>
@@ -100,7 +106,9 @@ export function mount(container, initialParams) {
   // Markup is static after mount, so resolve the slots once rather than on
   // every range change.
   const el = Object.fromEntries(
-    ["stats", "unused", "commands", "panels", "top-users", "dash-users", "daily", "hours"]
+    ["stats", "unused", "commands", "panels", "top-users", "dash-users",
+      "daily", "daily-caption", "daily-legend", "daily-table",
+      "hours", "hours-caption", "hours-table"]
       .map((k) => [k, container.querySelector(`[data-${k}]`)]),
   );
   const panelEl = container.querySelector(".panel");
@@ -156,23 +164,51 @@ export function mount(container, initialParams) {
         "Nobody recorded in this range yet.");
 
       destroyCharts();
+      const dailyLabels = data.daily_commands.map((p) => p.day);
+      const dailyTitle = "Daily usage";
       dailyChart = makeLineChart(el.daily, {
-        labels: data.daily_commands.map((p) => p.day),
+        labels: dailyLabels,
         // makeLineChart reads `counts`, not `data`.
         series: [
           { label: "Commands", counts: data.daily_commands.map((p) => p.count) },
           { label: "Panel opens", counts: data.daily_panels.map((p) => p.count) },
         ],
-        title: "Daily usage",
+        title: dailyTitle,
       });
+      // The caption lives in HTML so it wears the page's type and can be
+      // selected/read aloud — see charts.js's note on why title/legend are no
+      // longer drawn on the canvas.
+      el["daily-caption"].textContent = dailyTitle;
+      // Two series (Commands, Panel opens) earn a legend; one series would not.
+      el["daily-legend"].replaceChildren();
+      renderChartLegend(el["daily-legend"], dailyChart);
+      renderChartTable(el["daily-table"], {
+        labels: dailyLabels,
+        datasets: dailyChart.data.datasets.map((d) => ({ label: d.label, data: d.data })),
+        indexLabel: "Day",
+      });
+
+      const hoursTitle = "Commands by hour of day";
       hoursChart = makeBarChart(el.hours, {
         labels: HOUR_LABELS,
         data: data.hours,
-        title: "Commands by hour of day",
+        title: hoursTitle,
         yLabel: "Commands",
+      });
+      el["hours-caption"].textContent = hoursTitle;
+      // A single series needs no legend — the caption already names it.
+      renderChartTable(el["hours-table"], {
+        labels: HOUR_LABELS,
+        datasets: [{ label: "Commands", data: data.hours }],
+        indexLabel: "Hour",
       });
     } catch (err) {
       el.stats.innerHTML = renderError(err);
+      el["daily-caption"].textContent = "";
+      el["daily-legend"].replaceChildren();
+      el["daily-table"].replaceChildren();
+      el["hours-caption"].textContent = "";
+      el["hours-table"].replaceChildren();
     }
   }
 

@@ -1,7 +1,11 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
 import { mountBotToggle } from "../report-helpers.js";
-import { makeLineChart, makeHorizontalBarChart, makeDoughnutChart } from "../charts.js";
+import {
+  makeLineChart, makeHorizontalBarChart, makeDoughnutChart,
+  renderChartLegend, renderPieLegend, renderChartTable,
+  CHART_BAR, ROLE_COLORS, seriesColor,
+} from "../charts.js";
 
 
 export function mount(container) {
@@ -69,76 +73,159 @@ export function mount(container) {
       <div class="home-grid">
         <div class="home-card home-card-wide">
           <div class="home-card-label">Gini Over Time</div>
+          <div class="chart-caption" data-caption="hist"></div>
           <div class="chart-wrap" style="height:260px"><canvas id="gini-history-chart"></canvas></div>
+          <div data-chart-table="hist"></div>
         </div>
       </div>
 
       <div class="home-grid">
         <div class="home-card home-card-wide">
           <div class="home-card-label">Lorenz Curve</div>
+          <div class="chart-caption" data-caption="lorenz"></div>
           <div class="chart-wrap" style="height:320px"><canvas id="lorenz-chart"></canvas></div>
+          <div data-legend="lorenz"></div>
+          <div data-chart-table="lorenz"></div>
         </div>
       </div>
 
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">Participation Tiers</div>
+          <div class="chart-caption" data-caption="tier"></div>
           <div class="chart-wrap" style="height:260px"><canvas id="tier-chart"></canvas></div>
+          <div data-legend="tier"></div>
+          <div data-chart-table="tier"></div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Per-Channel Gini</div>
+          <div class="chart-caption" data-caption="ch-gini"></div>
           <div class="chart-wrap" style="min-height:260px"><canvas id="ch-gini-chart"></canvas></div>
+          <div data-chart-table="ch-gini"></div>
         </div>
       </div>
     `;
 
-    // Gini over time
+    const captionHist   = panel.querySelector('[data-caption="hist"]');
+    const tableHist      = panel.querySelector('[data-chart-table="hist"]');
+    const captionLorenz = panel.querySelector('[data-caption="lorenz"]');
+    const legendLorenz  = panel.querySelector('[data-legend="lorenz"]');
+    const tableLorenz    = panel.querySelector('[data-chart-table="lorenz"]');
+    const captionTier   = panel.querySelector('[data-caption="tier"]');
+    const legendTier    = panel.querySelector('[data-legend="tier"]');
+    const tableTier      = panel.querySelector('[data-chart-table="tier"]');
+    const captionChGini = panel.querySelector('[data-caption="ch-gini"]');
+    const tableChGini    = panel.querySelector('[data-chart-table="ch-gini"]');
+
+    // Gini over time — one series ("Gini"): caption + table, no legend (the
+    // caption already names the one line on the chart).
     const histCanvas = panel.querySelector("#gini-history-chart");
     if (histCanvas && d.gini_history?.length) {
+      const histTitle = "Weekly Gini coefficient (12 weeks)";
+      const histLabels = d.gini_history.map(p => p.label);
+      const histValues = d.gini_history.map(p => p.gini);
       charts.push(makeLineChart(histCanvas, {
-        labels: d.gini_history.map(p => p.label),
+        labels: histLabels,
         series: [
-          { label: "Gini", counts: d.gini_history.map(p => p.gini), color: "#E6B84C" },
+          { label: "Gini", counts: histValues, color: CHART_BAR },
         ],
-        title: "Weekly Gini coefficient (12 weeks)",
+        title: histTitle,
       }));
+      captionHist.textContent = histTitle;
+      renderChartTable(tableHist, {
+        labels: histLabels,
+        datasets: [{ label: "Gini", data: histValues }],
+        indexLabel: "Week",
+      });
     }
 
-    // Lorenz curve
+    // Lorenz curve — two series (Equality, Actual): caption + legend + table.
     const lorenzCanvas = panel.querySelector("#lorenz-chart");
     if (lorenzCanvas && d.lorenz) {
+      const lorenzTitle = "Lorenz Curve (cumulative messages vs population)";
       const labels = d.lorenz.map(p => p.x + "%");
-      charts.push(makeLineChart(lorenzCanvas, {
+      const equality = d.lorenz.map(p => p.x);
+      const actual = d.lorenz.map(p => p.y);
+      const lorenzChart = makeLineChart(lorenzCanvas, {
         labels,
         series: [
-          { label: "Equality", counts: d.lorenz.map(p => p.x), color: "#949ba4" },
-          { label: "Actual", counts: d.lorenz.map(p => p.y), color: "#E6B84C" },
+          { label: "Equality", counts: equality, color: "#949ba4" },
+          { label: "Actual", counts: actual, color: CHART_BAR },
         ],
-        title: "Lorenz Curve (cumulative messages vs population)",
-      }));
+        title: lorenzTitle,
+      });
+      charts.push(lorenzChart);
+      captionLorenz.textContent = lorenzTitle;
+      legendLorenz.replaceChildren();
+      renderChartLegend(legendLorenz, lorenzChart);
+      renderChartTable(tableLorenz, {
+        labels,
+        datasets: [
+          { label: "Equality", data: equality },
+          { label: "Actual", data: actual },
+        ],
+        indexLabel: "% of members",
+      });
     }
 
-    // Tier doughnut
+    // Tier doughnut — five slices (within the ~6-7 legibility guidance):
+    // caption + pie legend + table.
     const tierCanvas = panel.querySelector("#tier-chart");
     if (tierCanvas) {
-      charts.push(makeDoughnutChart(tierCanvas, {
-        labels: ["Lurker (0)", "Light (1-5/wk)", "Moderate (6-20)", "Active (21-50)", "Power (50+)"],
-        data: [tiers.lurker || 0, tiers.light || 0, tiers.moderate || 0, tiers.active || 0, tiers.power || 0],
-        title: "Participation Tiers",
-        colors: ["#949ba4", "#B88A2C", "#E6B84C", "#7F8F3A", "#B36A92"],
-      }));
+      const tierTitle = "Participation Tiers";
+      const tierLabels = ["Lurker (0)", "Light (1-5/wk)", "Moderate (6-20)", "Active (21-50)", "Power (50+)"];
+      const tierValues = [tiers.lurker || 0, tiers.light || 0, tiers.moderate || 0, tiers.active || 0, tiers.power || 0];
+      const tierChart = makeDoughnutChart(tierCanvas, {
+        labels: tierLabels,
+        data: tierValues,
+        title: tierTitle,
+        // seriesColor(0..4), not a hand-mixed array: three of these five slots were
+        // still the old, unvalidated hex literals, and one of them (#7F8F3A,
+        // retired moss) sat directly next to the new CHART_BAR amber — the
+        // exact pair the palette migration was meant to separate, recreated
+        // by half-migrating this one array.
+        colors: tierLabels.map((_, i) => seriesColor(i)),
+      });
+      charts.push(tierChart);
+      captionTier.textContent = tierTitle;
+      legendTier.replaceChildren();
+      renderPieLegend(legendTier, tierChart);
+      renderChartTable(tableTier, {
+        labels: tierLabels,
+        datasets: [{ label: "Members", data: tierValues }],
+        indexLabel: "Tier",
+      });
     }
 
-    // Per-channel Gini
+    // Per-channel Gini — one series (one bar per channel, colored by a fixed
+    // good/warning/critical threshold ramp rather than per-series identity):
+    // caption + table, no legend.
     const chCanvas = panel.querySelector("#ch-gini-chart");
     if (chCanvas && d.per_channel) {
+      const chTitle = "Gini by Channel";
+      const chLabels = d.per_channel.map(c => "#" + (c.channel_name || c.channel_id));
+      const chValues = d.per_channel.map(c => c.gini);
       charts.push(makeHorizontalBarChart(chCanvas, {
-        labels: d.per_channel.map(c => "#" + (c.channel_name || c.channel_id)),
-        data: d.per_channel.map(c => c.gini),
-        title: "Gini by Channel",
+        labels: chLabels,
+        data: chValues,
+        title: chTitle,
         xLabel: "Gini coefficient",
-        colors: d.per_channel.map(c => c.gini > 0.85 ? "#9E3B2E" : c.gini > 0.7 ? "#E6B84C" : "#7F8F3A"),
+        // A genuine 3-step severity ramp (bad/mid/good), built from three ALREADY
+        // validated ROLE_COLORS members rather than new literals — wine reads as
+        // a muted red without colliding with anything else in the set, teal
+        // reads as a clear "good". (Reusing #9E3B2E/#7F8F3A here, the exact
+        // retired hexes, measured ΔE 1.7 under protanopia against the new
+        // CHART_BAR — worse than the pair the whole palette migration fixed,
+        // because a validated new hue had been placed next to an unvalidated
+        // old one.)
+        colors: d.per_channel.map(c => c.gini > 0.85 ? ROLE_COLORS[5] : c.gini > 0.7 ? CHART_BAR : ROLE_COLORS[2]),
       }));
+      captionChGini.textContent = chTitle;
+      renderChartTable(tableChGini, {
+        labels: chLabels,
+        datasets: [{ label: "Gini coefficient", data: chValues }],
+        indexLabel: "Channel",
+      });
     }
   }
 
