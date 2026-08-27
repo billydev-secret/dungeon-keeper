@@ -329,13 +329,13 @@ function renderCommunity(container, quests) {
       ? `<div class="field-hint">⚙️ auto-tracking (${esc(q.trigger_kind)}) — counter moves from member activity; the biweekly scheduler sizes the target and settles the 40/70/100% tiers${q.active ? "" : " · waiting in rotation"}</div>`
       : `<div class="field-row" style="align-items:flex-end;">
         <div class="field"><label>Set progress</label>
-          <input type="number" min="0" step="1" data-cprogress="${q.id}" value="${q.community_current || 0}" style="max-width:120px;" /></div>
+          <input type="number" min="0" step="1" aria-label="Set progress" data-cprogress="${q.id}" value="${q.community_current || 0}" style="max-width:120px;" /></div>
         <div class="field"><button class="btn" data-cprogress-save="${q.id}">Save</button></div>
         <div class="field"><button class="btn btn-primary" data-csettle="${q.id}">Settle Payout</button></div>
         <span class="save-status" data-cstatus="${q.id}"></span>
       </div>`;
     return `
-    <div class="community-goal" data-cgoal="${q.id}" style="margin:10px 0; padding:8px 0; border-top:1px solid var(--border);">
+    <div class="community-goal" data-cgoal="${q.id}" style="margin:10px 0; padding:8px 0; border-top:1px solid var(--rule);">
       <strong>${esc(q.title)}</strong>
       <div class="field-hint">${stateBits}</div>
       ${controls}

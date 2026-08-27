@@ -561,11 +561,18 @@ def test_games_config_clears_the_audit_channel_with_a_delete(page):
 
 # ── The Gini panel that rendered nothing but its empty state ─────────────
 
-# compute_gini returns `tiers` as an object keyed by tier name. The panel
-# guarded on `(d.tiers || []).length`, which is `undefined` on an object, so
-# the guard was always true.
+# The panel guarded on `(d.tiers || []).length`. `tiers` is an object keyed by
+# tier name, so `.length` is undefined and the guard was always true — the
+# panel showed nothing but its empty state from 2026-07-23, over a server with
+# 41k messages, and raised no console error to give it away.
+#
+# Fixed on main independently and better: `posters` is the count of distinct
+# authors in the window, which is exactly what the empty state claims, where a
+# sum over the tiers only approximated it. Compared against 0 rather than
+# falsy, so a payload cached before the field existed still renders.
 _GINI_BODY = {
     "gini": 0.62,
+    "posters": 53,
     "badge": "healthy",
     "tiers": {"lurker": 4, "light": 30, "moderate": 12, "active": 5, "power": 2},
     "lorenz": [[0, 0], [50, 20], [100, 100]],
@@ -589,11 +596,12 @@ def test_gini_renders_its_data_instead_of_the_empty_state(page):
     assert "0.62" in html, "the headline Gini figure never rendered"
 
 
-def test_gini_still_shows_the_empty_state_when_every_tier_is_zero(page):
+def test_gini_still_shows_the_empty_state_when_nobody_posted(page):
     """The guard has to keep working — the fix is a real emptiness test, not
     its removal."""
-    body = {**_GINI_BODY, "tiers": {"lurker": 0, "light": 0, "moderate": 0,
-                                    "active": 0, "power": 0}}
+    body = {**_GINI_BODY, "posters": 0,
+            "tiers": {"lurker": 0, "light": 0, "moderate": 0,
+                      "active": 0, "power": 0}}
     _mount(page, "/static/js/panels/health-gini.js",
            {"/api/health/gini": {"body": body}})
     assert "No messages in the last 30 days" in page.inner_html("#host")

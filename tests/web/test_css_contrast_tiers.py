@@ -82,8 +82,8 @@ _FILL_CONTEXT = re.compile(
 _INDIRECT_FILLS = {
     ("tiles/tile-helpers.js", "BADGE_COLORS"):
         "badgeHTML renders it as background: on .health-tile-badge",
-    ("tiles/composite-score.js", "color"):
-        "used as background: on .health-dim-fill",
+    ("panels/connection-graph.js", "BADGE_COLORS"):
+        "renderScorecard uses it as background: with an explicit dark ink",
     ("tiles/channel-health.js", "BAR_FILL"):
         "passed as the bar-fill colour option to miniBarHTML",
     ("panels/channels.js", "STATUS_COLORS"):

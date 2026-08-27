@@ -35,7 +35,10 @@ _PANELS = _JS / "panels"
 
 # The seven that shared the copied reload block, byte for byte.
 RELOADABLE = [
-    "health-composite-score.js", "health-heatmap.js", "health-dau-mau.js",
+    # health-composite-score.js was here until main dropped the Health Score
+    # page entirely (e6c06624) — the blend moved for six reasons at once and
+    # nobody acted on the number.
+    "health-heatmap.js", "health-dau-mau.js",
     "health-sentiment.js", "health-cohort-retention.js", "health-gini.js",
     "health-newcomer-funnel.js",
 ]

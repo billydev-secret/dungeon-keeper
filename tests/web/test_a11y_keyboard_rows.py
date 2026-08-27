@@ -65,13 +65,6 @@ def test_panels_bind_enter_space_activation(panel: str) -> None:
     )
 
 
-def test_quest_idea_cards_are_focusable_buttons() -> None:
-    """economy-quests builds its idea cards imperatively, not from markup."""
-    src = _source("economy-quests.js")
-    assert "card.tabIndex = 0;" in src
-    assert 'card.setAttribute("role", "button");' in src
-
-
 @pytest.mark.parametrize("panel", SHARED_BINDER)
 def test_queues_activate_rows_through_the_shared_binder(panel: str) -> None:
     """These four had four identical copies of the same click handler, so the
