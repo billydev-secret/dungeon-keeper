@@ -22,6 +22,7 @@ from bot_modules.services.moderation import (
     create_jail,
     create_ticket,
     create_warning,
+    delete_warning,
     write_audit,
 )
 
@@ -787,6 +788,193 @@ def test_warnings_active_only_excludes_revoked(open_client, fake_ctx):
     body = open_client.get("/api/moderation/warnings?active_only=true").json()
     assert all(not w["revoked"] for w in body["warnings"])
     assert body["active_count"] == len(body["warnings"])
+
+
+# ── Warnings: revoke / delete from the dashboard ─────────────────────
+#
+# The Warnings panel's two buttons. Revoke is the ordinary correction and
+# keeps the row; delete is the admin-only escape hatch for a warning that
+# should never have existed, so it gets the gate and guild-scoping tests.
+
+
+def _audit_rows(db_path, action):
+    with open_db(db_path) as conn:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM audit_log WHERE action = ? ORDER BY id", (action,)
+            ).fetchall()
+        ]
+
+
+def _mod_only_client(fake_ctx):
+    """A signed-in moderator who is NOT an admin (MANAGE_MESSAGES only)."""
+    from fastapi.testclient import TestClient
+
+    from web_server.auth import SESSION_COOKIE, DiscordOAuthAuth
+    from web_server.server import create_app
+
+    auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
+    client = TestClient(create_app(fake_ctx, auth=auth), raise_server_exceptions=False)
+    client.cookies.set(
+        SESSION_COOKIE,
+        auth.create_session_cookie(
+            user_id=7,
+            username="mod",
+            access_token="token",
+            permission_bits=0x2000,  # MANAGE_MESSAGES → moderator, not admin
+            guild_id=fake_ctx.guild_id,
+            guilds=[{"id": fake_ctx.guild_id, "name": "Test Guild", "icon": None}],
+        ),
+    )
+    return client
+
+
+def test_warning_revoke_marks_row_and_writes_audit(open_client, fake_ctx):
+    warn_id = _seed_warning(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=1001)
+
+    resp = open_client.post(
+        f"/api/moderation/warnings/{warn_id}/revoke", json={"reason": "issued in error"}
+    )
+    assert resp.status_code == 200
+    assert "0 active warning(s) remain" in resp.json()["message"]
+
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM warnings WHERE id = ?", (warn_id,)
+        ).fetchone()
+    # Revoked, not gone — the record is the whole point of a soft delete.
+    assert row is not None
+    assert row["revoked"] == 1
+    assert row["revoke_reason"] == "issued in error"
+
+    audit = _audit_rows(fake_ctx.db_path, "warning_revoke")
+    assert len(audit) == 1
+    assert audit[0]["target_id"] == 1001
+    assert json.loads(audit[0]["extra"])["reason"] == "issued in error"
+
+
+def test_warning_revoke_accepts_a_blank_reason(open_client, fake_ctx):
+    """The panel's prompt is optional, so an empty reason must still revoke."""
+    warn_id = _seed_warning(fake_ctx.db_path, guild_id=fake_ctx.guild_id)
+    resp = open_client.post(f"/api/moderation/warnings/{warn_id}/revoke", json={})
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert conn.execute(
+            "SELECT revoked FROM warnings WHERE id = ?", (warn_id,)
+        ).fetchone()["revoked"] == 1
+
+
+def test_warning_revoke_404_when_missing(open_client):
+    assert (
+        open_client.post("/api/moderation/warnings/9999/revoke", json={}).status_code
+        == 404
+    )
+
+
+def test_warning_revoke_409_when_already_revoked(open_client, fake_ctx):
+    """The panel hides Revoke on a revoked warning; the server refuses anyway."""
+    warn_id = _seed_warning(fake_ctx.db_path, guild_id=fake_ctx.guild_id)
+    assert (
+        open_client.post(
+            f"/api/moderation/warnings/{warn_id}/revoke", json={}
+        ).status_code
+        == 200
+    )
+    assert (
+        open_client.post(
+            f"/api/moderation/warnings/{warn_id}/revoke", json={}
+        ).status_code
+        == 409
+    )
+    # One revocation, one audit row — the refused call must not log a second.
+    assert len(_audit_rows(fake_ctx.db_path, "warning_revoke")) == 1
+
+
+def test_warning_revoke_does_not_reach_another_guild(open_client, fake_ctx):
+    """Warning ids are a global AUTOINCREMENT, so the id alone isn't a secret."""
+    other = _seed_warning(fake_ctx.db_path, guild_id=fake_ctx.guild_id + 1)
+    assert (
+        open_client.post(
+            f"/api/moderation/warnings/{other}/revoke", json={}
+        ).status_code
+        == 404
+    )
+    with open_db(fake_ctx.db_path) as conn:
+        assert conn.execute(
+            "SELECT revoked FROM warnings WHERE id = ?", (other,)
+        ).fetchone()["revoked"] == 0
+
+
+def test_warning_delete_removes_row_and_keeps_it_in_the_audit(open_client, fake_ctx):
+    warn_id = _seed_warning(fake_ctx.db_path, guild_id=fake_ctx.guild_id, user_id=1001)
+
+    resp = open_client.delete(f"/api/moderation/warnings/{warn_id}")
+    assert resp.status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        assert (
+            conn.execute(
+                "SELECT * FROM warnings WHERE id = ?", (warn_id,)
+            ).fetchone()
+            is None
+        )
+
+    # The row is gone but the deletion isn't a silent gap: the audit entry
+    # carries what it held, which is what the data register promises.
+    audit = _audit_rows(fake_ctx.db_path, "warning_delete")
+    assert len(audit) == 1
+    assert audit[0]["target_id"] == 1001
+    extra = json.loads(audit[0]["extra"])
+    assert extra["warning_id"] == warn_id
+    assert extra["reason"] == "test warning"
+    assert extra["was_revoked"] is False
+
+
+def test_warning_delete_404_when_missing(open_client):
+    assert open_client.delete("/api/moderation/warnings/9999").status_code == 404
+
+
+def test_warning_delete_does_not_reach_another_guild(open_client, fake_ctx):
+    other = _seed_warning(fake_ctx.db_path, guild_id=fake_ctx.guild_id + 1)
+    assert open_client.delete(f"/api/moderation/warnings/{other}").status_code == 404
+    with open_db(fake_ctx.db_path) as conn:
+        assert (
+            conn.execute("SELECT id FROM warnings WHERE id = ?", (other,)).fetchone()
+            is not None
+        )
+
+
+def test_warning_delete_forbidden_for_a_moderator(fake_ctx):
+    """Deleting is admin-only. Hiding the button is cosmetic; this is the gate."""
+    warn_id = _seed_warning(fake_ctx.db_path, guild_id=fake_ctx.guild_id)
+    client = _mod_only_client(fake_ctx)
+    try:
+        assert client.delete(f"/api/moderation/warnings/{warn_id}").status_code == 403
+        # And revoke, which is moderator-level, still works for the same caller.
+        assert (
+            client.post(
+                f"/api/moderation/warnings/{warn_id}/revoke", json={}
+            ).status_code
+            == 200
+        )
+    finally:
+        client.close()
+    with open_db(fake_ctx.db_path) as conn:
+        assert (
+            conn.execute("SELECT id FROM warnings WHERE id = ?", (warn_id,)).fetchone()
+            is not None
+        )
+
+
+def test_delete_warning_service_is_guild_scoped(fake_ctx):
+    warn_id = _seed_warning(fake_ctx.db_path, guild_id=fake_ctx.guild_id)
+    with open_db(fake_ctx.db_path) as conn:
+        assert delete_warning(conn, fake_ctx.guild_id + 1, warn_id) is None
+        row = delete_warning(conn, fake_ctx.guild_id, warn_id)
+        assert row is not None
+        assert row["reason"] == "test warning"
+        assert delete_warning(conn, fake_ctx.guild_id, warn_id) is None
 
 
 # ── Policy tickets ───────────────────────────────────────────────────

@@ -1,6 +1,16 @@
-import { api, esc } from "../api.js";
+import { api, apiPost, apiDelete, esc } from "../api.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { fmtTs } from "../audit-helpers.js";
+import { toast, promptDialog, confirmDialog } from "../ui.js";
+
+// Read straight off the session blob the way mod-tickets.js does, rather than
+// importing config-helpers.js — this panel needs one boolean, not the config
+// machinery. Enforcement is the server's: delete is behind require_perms
+// ({"admin"}), so hiding the button only spares a moderator a guaranteed 403.
+function viewerIsAdmin() {
+  const perms = window.__dk_user?.perms;
+  return !!(perms && typeof perms.has === "function" && perms.has("admin"));
+}
 
 function fmtAge(ts) {
   const s = Math.round(Date.now() / 1000 - ts);
@@ -65,6 +75,31 @@ function renderDetail(w) {
     </div>
   ` : "";
 
+function renderActions(w) {
+  // A revoked warning has no Revoke button rather than a disabled one: the
+  // endpoint 409s on a second revoke, and the Revocation block right above
+  // already says it happened. Delete stays — a wrongly-issued warning is
+  // still wrong after it's been revoked.
+  const revokeBtn = w.revoked
+    ? ""
+    : `<button class="act-btn primary" data-action="revoke">Revoke</button>`;
+  const deleteBtn = viewerIsAdmin()
+    ? `<button class="act-btn danger" data-action="delete">Delete</button>`
+    : "";
+  if (!revokeBtn && !deleteBtn) return "";
+  return `
+    <div class="td-act-groups">
+      <div class="td-act-group">
+        <div class="section-label">This warning</div>
+        <div class="td-actions">
+          ${revokeBtn}
+          ${deleteBtn}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
   return `
     <div class="td-head">
       <div class="td-crumb">#W-${esc(w.id)} &nbsp;·&nbsp; issued ${esc(fmtAge(w.created_at))} ago</div>
@@ -81,6 +116,7 @@ function renderDetail(w) {
       <div class="td-section">Warning</div>
       <div style="font-size:14px;color:var(--ink);line-height:1.5;white-space:pre-wrap;word-break:break-word;padding:4px 8px 8px">${esc(reasonText)}</div>
       ${revokeSection}
+      ${renderActions(w)}
     </div>
   `;
 }
@@ -168,6 +204,56 @@ export function mount(container) {
     if (!row) return;
     state.activeId = Number(row.dataset.warnId);
     render();
+  });
+
+  // Runs one warning action. Returns a success message, or undefined if the
+  // moderator cancelled (promptDialog/confirmDialog resolve null/false).
+  async function runAction(action, w) {
+    if (action === "revoke") {
+      const reason = await promptDialog("Reason for revoking? (optional)", {
+        title: `Revoke warning #W-${w.id}`, confirmLabel: "Revoke",
+      });
+      if (reason === null) return;
+      const res = await apiPost(`/api/moderation/warnings/${encodeURIComponent(w.id)}/revoke`, { reason });
+      return res.message || "Warning revoked";
+    }
+    if (action === "delete") {
+      const who = w.user_name || w.user_id || "this member";
+      const ok = await confirmDialog(
+        `Delete warning #W-${w.id} for ${who}? This erases it permanently — revoking keeps the record instead.`,
+        { title: "Delete Warning", confirmLabel: "Delete", danger: true },
+      );
+      if (!ok) return;
+      const res = await apiDelete(`/api/moderation/warnings/${encodeURIComponent(w.id)}`);
+      return res.message || "Warning deleted";
+    }
+    throw new Error(`Unknown action: ${action}`);
+  }
+
+  detailEl.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".act-btn");
+    if (!btn || btn.disabled) return;
+    const action = btn.dataset.action;
+    if (!action) return;
+    const w = state.warnings.find((x) => x.id === state.activeId);
+    if (!w) return;
+
+    btn.disabled = true;
+    try {
+      const msg = await runAction(action, w);
+      if (msg) {
+        toast(msg);
+        // A deleted warning is gone from the list, so let render() pick the
+        // next one rather than hunting for an id that no longer exists.
+        if (action === "delete") state.activeId = null;
+        await refresh();
+      }
+    } catch (err) {
+      console.error(`Warning action "${action}" failed:`, err);
+      toast(err.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   refresh();

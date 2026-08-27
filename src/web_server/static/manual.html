@@ -1983,6 +1983,18 @@
       reasons, and the issuing mod. The old <code>/warnings</code> command was removed; the
       dashboard page is the reference.</p>
 
+    <p class="note">That page can also <em>act</em> on a warning, so you don't have to copy an ID
+      back into Discord. Pick a warning from the list and the buttons sit under its details:
+      <strong>Revoke</strong> (any mod) asks for an optional reason, then clears the warning the
+      same way <code>/revokewarn</code> does — it stays in the member's history, marked Revoked
+      with your name on it, and stops counting toward the threshold. A warning that's already
+      revoked has no Revoke button, because there's nothing left to revoke.
+      <strong>Delete</strong> is admin-only and asks you to confirm first: it erases the warning
+      outright, so it vanishes from the member's history entirely. Reach for it only when the
+      warning should never have existed — the wrong member, or a test row. For an ordinary
+      change of mind, revoke; that's what keeps the paper trail. Either way the action is
+      recorded in the audit log with who did it.</p>
+
     <p class="note">Working a ticket happens on the dashboard under
       <strong>Moderation &rarr; Tickets</strong>. The buttons under an open ticket are split into
       two groups, because they do two different things: <strong>This ticket</strong> (Claim, Close,

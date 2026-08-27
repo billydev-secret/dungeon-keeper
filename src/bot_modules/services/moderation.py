@@ -674,6 +674,33 @@ def revoke_warning(
     return cur.rowcount > 0
 
 
+def delete_warning(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    warning_id: int,
+) -> WarningRow | None:
+    """Erase a warning outright, returning the row that was removed.
+
+    Revoking is the ordinary correction: it keeps the paper trail and only
+    stops the warning counting. This is the escape hatch for a warning that
+    should never have existed at all (wrong member, test row) - so it takes
+    the guild_id too and returns what it deleted, letting the caller record
+    the removed content in the audit log. Returns ``None`` if there was no
+    such warning in this guild.
+    """
+    row = conn.execute(
+        "SELECT * FROM warnings WHERE id = ? AND guild_id = ?",
+        (warning_id, guild_id),
+    ).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "DELETE FROM warnings WHERE id = ? AND guild_id = ?",
+        (warning_id, guild_id),
+    )
+    return dict(row)  # type: ignore[return-value]
+
+
 # ---------------------------------------------------------------------------
 # Audit log
 # ---------------------------------------------------------------------------
