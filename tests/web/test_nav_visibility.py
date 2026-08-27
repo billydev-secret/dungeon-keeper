@@ -353,6 +353,39 @@ def _open_palette(page):
     page.wait_for_selector(".dk-palette", timeout=5_000)
 
 
+def _palette_settled(page, timeout=10_000):
+    """Wait until the result list stops changing, not merely until it appears.
+
+    The palette re-renders as the filter resolves and resets the highlight to
+    the first option each time. A test that pressed ArrowDown on the first
+    paint raced that reset: the keypress moved the selection to option 2 and
+    the re-render put it straight back, so the assertion saw opt-0 twice and
+    the test failed roughly one run in three — for everybody, on any commit
+    that touched a dashboard panel.
+
+    Polls on animation frames and requires three identical readings of both
+    the option ids and the active one, which is settled without a fixed sleep.
+    """
+    page.wait_for_function(
+        """
+        () => {
+          const opts = [...document.querySelectorAll('.dk-palette-option')];
+          const active = document.querySelector('.dk-palette-option.active');
+          if (opts.length < 2 || !active) { window.__dkPaletteKey = null; return false; }
+          const key = opts.map(o => o.id).join(',') + '|' + active.id;
+          if (window.__dkPaletteKey === key) {
+            window.__dkPaletteStable = (window.__dkPaletteStable || 0) + 1;
+          } else {
+            window.__dkPaletteKey = key;
+            window.__dkPaletteStable = 0;
+          }
+          return window.__dkPaletteStable >= 3;
+        }
+        """,
+        timeout=timeout,
+    )
+
+
 def _results(page) -> list[str]:
     return page.evaluate(
         "() => [...document.querySelectorAll('.dk-palette-option')]"
@@ -430,14 +463,20 @@ def test_palette_arrow_keys_move_the_selection(browser, dashboard):
     try:
         _open_palette(page)
         page.fill(".dk-palette-input", "config")
-        page.wait_for_function(
-            "() => document.querySelectorAll('.dk-palette-option').length > 1",
-            timeout=10_000,
-        )
+        _palette_settled(page)
         first = page.evaluate(
             "() => document.querySelector('.dk-palette-option.active').id"
         )
         page.keyboard.press("ArrowDown")
+        # Wait for the move rather than reading straight after the keypress —
+        # the assertion below should fail because the arrow key does nothing,
+        # never because the read landed a frame early.
+        page.wait_for_function(
+            "(prev) => { const a = document.querySelector('.dk-palette-option.active');"
+            " return a && a.id !== prev; }",
+            arg=first,
+            timeout=5_000,
+        )
         second = page.evaluate(
             "() => document.querySelector('.dk-palette-option.active').id"
         )
