@@ -446,6 +446,16 @@ export function clearCardDirty(card) {
   if (card) card.dataset.dkDirty = "";
 }
 
+/** Forget the edits tracked on `form`.
+ *
+ *  For a panel that destroys and rebuilds its own guarded node: wellness-caps
+ *  rewrites the histogram on every mode or lookback change, and the old node
+ *  would otherwise sit in the registry forever, reporting unsaved edits on an
+ *  element no longer in the document. */
+export function clearFormDirty(form) {
+  _dirtyForms.delete(form);
+}
+
 /** True when `form` — a container passed to guardForm — has unsaved edits.
  *
  *  For panels that rebuild themselves after an unrelated action (mahjong

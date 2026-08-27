@@ -489,6 +489,11 @@ function render(container, status, channels) {
 
   // ── Maintenance ──────────────────────────────────────────────────────
   const cardMaint = sectionCard(panel, "Maintenance");
+  // Guarded so its own showStatus attributes the save to this card. Without
+  // it, [data-maint-status] sits outside every guarded container and a
+  // successful Re-scan falls back to the page-wide clear, disarming the
+  // unsaved-edits warning on the settings form above.
+  guardForm(cardMaint);
   const maintRow = document.createElement("div");
   maintRow.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin:6px 0;";
   const rescanBtn = document.createElement("button");
@@ -523,14 +528,22 @@ function render(container, status, channels) {
       const pending = res && res.needs_confirmation;
       if (pending) {
         const n = Number(pending.would_remove) || 0;
-        const ok = window.confirm(
-          `Reconcile wants to delete ${n} track(s) from the Spotify playlist ` +
-          `that aren't in this window.\n\nIf this playlist has songs the bot ` +
-          `didn't add, they will be permanently removed. Check the playlist ` +
-          `id is the one the bot manages.\n\nDelete them?`,
+        const ok = await confirmDialog(
+          `${n} track${n === 1 ? "" : "s"} on the Spotify playlist ${n === 1 ? "is" : "are"} not in this window. `
+          + "Deleting them removes them from the real playlist for good — including any song "
+          + "the bot never added, if this playlist existed before you pointed the bot at it. "
+          + "Check the playlist id under Watch is the one the bot manages.",
+          {
+            title: `Delete ${n} track${n === 1 ? "" : "s"} from Spotify?`,
+            confirmLabel: `Delete ${n}`,
+            danger: true,
+          },
         );
         if (!ok) {
-          showStatus(maintStatus, true, `Left ${n} unrecognised track(s) alone.`);
+          // Not a success, and not a no-op: the additions ran before this
+          // prompt appeared. A toast says what landed without clearing the
+          // unsaved-edits flag on the settings form above.
+          toast(`Added ${res.added || 0}; left ${n} unrecognised track${n === 1 ? "" : "s"} alone.`);
           return;
         }
         rescanBtn.disabled = reconcileBtn.disabled = false;

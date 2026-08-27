@@ -1,6 +1,6 @@
 import { wGet, wPost, wPut, wDelete, esc, showStatus } from "../wellness-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
-import { guardForm, mountAsync } from "../config-helpers.js";
+import { clearFormDirty, guardForm, mountAsync } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import {
   renderChartLegend, renderChartTable,
@@ -11,6 +11,9 @@ export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading your activity caps…")}</div>`;
 
   let chart = null;
+  // The guarded histogram node. Held so it can be dropped from the dirty
+  // registry before load() destroys it — see clearFormDirty.
+  let histoForm = null;
   // One observer for the panel's lifetime, not one per load(). load() re-runs
   // on every mode/lookback change and after every save; each run used to build
   // a fresh ResizeObserver and never disconnect the previous one, so they piled
@@ -87,6 +90,9 @@ export function mount(container) {
     const maxAvg = Math.max(...bucketAvgs, 1);
     const sliderMax = Math.max(Math.ceil(maxAvg * 3), 10);
 
+    // About to destroy the guarded node; forget it first or the registry keeps
+    // a detached element and reports unsaved edits on a form that is gone.
+    if (histoForm) { clearFormDirty(histoForm); histoForm = null; }
     container.querySelector(".panel").innerHTML = `
       <header>
         <h2>Activity Caps</h2>
@@ -125,6 +131,7 @@ export function mount(container) {
         </div>
       </div>
 
+      <div data-histo-form>
       <div class="chart-caption" data-histo-caption></div>
       <div class="w-histo-chart-wrap">
         <canvas data-histo-canvas></canvas>
@@ -148,6 +155,7 @@ export function mount(container) {
         <button class="btn btn-primary" data-save-histo>Save Caps</button>
         <button class="btn btn-ghost" data-reset-histo>Reset to My Averages</button>
         <span data-histo-status></span>
+      </div>
       </div>
 
       <details class="form-section w-histo-legacy">
@@ -262,6 +270,10 @@ export function mount(container) {
 
     // ── Drag cap-limit points on the chart ─────────────────────
     let dragIdx = -1;
+    // A canvas drag fires neither `input` nor `change`, so without this the
+    // most direct way to set a cap left no trace for the unsaved-edits guard.
+    const markDirty = () =>
+      canvas.dispatchEvent(new CustomEvent("dk:change", { bubbles: true }));
 
     function getPointIndex(e) {
       const rect = canvas.getBoundingClientRect();
@@ -307,10 +319,10 @@ export function mount(container) {
     });
 
     canvas.addEventListener("mouseup", () => {
-      if (dragIdx >= 0) { dragIdx = -1; canvas.style.cursor = "default"; }
+      if (dragIdx >= 0) { dragIdx = -1; canvas.style.cursor = "default"; markDirty(); }
     });
     canvas.addEventListener("mouseleave", () => {
-      if (dragIdx >= 0) { dragIdx = -1; canvas.style.cursor = "default"; }
+      if (dragIdx >= 0) { dragIdx = -1; canvas.style.cursor = "default"; markDirty(); }
     });
 
     // Touch support for mobile
@@ -335,7 +347,10 @@ export function mount(container) {
       if (valLabel) valLabel.textContent = val;
       refreshChartExtras();
     }, { passive: false });
-    canvas.addEventListener("touchend", () => { dragIdx = -1; });
+    canvas.addEventListener("touchend", () => {
+      if (dragIdx >= 0) markDirty();
+      dragIdx = -1;
+    });
 
     // ── Align slider row with chart area ─────────────────────────
     alignSliders = () => {
@@ -354,6 +369,11 @@ export function mount(container) {
     resizeObserver.observe(canvas.parentElement);
 
     // ── Slider interaction ───────────────────────────────────────
+    // The sliders' native `input` is tracked for free once this is guarded,
+    // and [data-histo-status] is inside the wrapper, so a save clears this form
+    // and only this form.
+    histoForm = guardForm(container.querySelector("[data-histo-form]"));
+
     container.querySelectorAll("[data-slider-idx]").forEach(slider => {
       slider.addEventListener("input", () => {
         const idx = parseInt(slider.dataset.sliderIdx);

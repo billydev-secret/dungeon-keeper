@@ -169,3 +169,91 @@ def test_is_form_dirty_reads_the_same_registry_guard_form_writes() -> None:
     src = _src(_JS / "config-helpers.js")
     assert "export function isFormDirty(form)" in src
     assert "return _dirtyForms.has(form);" in src
+
+
+# ── controls that changed state without telling anyone ──────────────────
+
+
+def test_wellness_caps_guards_its_primary_control() -> None:
+    """guardForm was attached only to the Add Manual Cap form, inside a
+    collapsed <details> at the bottom. The panel's actual control — 24 sliders
+    and a drag-a-point-on-the-chart interaction — sat outside every guarded
+    container, so setting every cap and navigating away discarded the lot with
+    no prompt."""
+    src = _src(_PANELS / "wellness-caps.js")
+    assert "data-histo-form" in src, "the histogram is not wrapped"
+    assert 'guardForm(container.querySelector("[data-histo-form]"))' in src
+
+
+def test_wellness_caps_drops_the_guarded_node_before_destroying_it() -> None:
+    """load() rewrites the histogram on every mode or lookback change. Without
+    this the registry keeps a detached element and reports unsaved edits on a
+    form that is no longer in the document."""
+    src = _src(_PANELS / "wellness-caps.js")
+    assert "clearFormDirty(histoForm)" in src
+    rebuild = src.index('container.querySelector(".panel").innerHTML = `')
+    assert src.index("clearFormDirty(histoForm)") < rebuild, (
+        "the node is forgotten after it is destroyed, which is too late"
+    )
+
+
+def test_a_canvas_drag_marks_the_form_dirty() -> None:
+    """Dragging a cap point fires neither input nor change, so the most direct
+    way to set a cap was invisible to the guard. dk:change is the repo's own
+    answer — filter-select already dispatches it for the same reason."""
+    src = _src(_PANELS / "wellness-caps.js")
+    assert 'new CustomEvent("dk:change", { bubbles: true })' in src
+    # Every way a drag can end, or the guard is armed only sometimes.
+    for ending in ("mouseup", "mouseleave", "touchend"):
+        block = src.split(f'canvas.addEventListener("{ending}"', 1)[1].split("});", 1)[0]
+        assert "markDirty()" in block, f"a drag ending on {ending} leaves no trace"
+
+
+def test_config_roles_announces_a_permission_change() -> None:
+    """Add and remove are button clicks that mutate a JS array, and a click
+    fires nothing guardForm listens for. Remove was untracked outright; add was
+    tracked only by accident, because the picker beside it happens to dispatch
+    dk:change — so the bug looked half-present."""
+    src = _src(_PANELS / "config-roles.js")
+    block = src.split("function refreshPermList", 1)[1].split("\n  }", 1)[0]
+    assert 'dispatchEvent(new CustomEvent("dk:change"' in block, (
+        "the permission list still changes silently"
+    )
+
+
+def test_the_quote_border_panel_does_not_invent_an_empty_state() -> None:
+    """_quote_border_meta returns 200 with exists:false when no border is set,
+    so a rejection is always a real failure. Swallowing it rendered "No custom
+    border yet — quote cards use the bundled Golden Poppy frame", a confident
+    claim about configuration that a 500 or a timeout makes false."""
+    src = _src(_PANELS / "config-quote-border.js")
+    assert "fall through to the empty state" not in src
+    assert 'const meta = await api("/api/config/quote-border");' in src
+
+
+def test_the_playlist_bulk_delete_uses_the_house_dialog() -> None:
+    """It is the most destructive control on the page — an irreversible write
+    to a real Spotify playlist, including songs the bot never added."""
+    src = _src(_PANELS / "music-playlist.js")
+    assert "window.confirm" not in src
+    assert "await confirmDialog(" in src
+    # Cancelling is not a no-op: the additions already ran. Reporting success
+    # would also clear every guarded form on the page.
+    cancel = src.split("if (!ok) {", 1)[1].split("}", 1)[0]
+    assert "toast(" in cancel and "showStatus" not in cancel
+
+
+def test_the_playlist_maintenance_card_is_guarded() -> None:
+    """Its status element sits outside every other guarded container, so a
+    successful Re-scan fell back to the page-wide clear and disarmed the
+    unsaved-edits warning on the settings form above it."""
+    src = _src(_PANELS / "music-playlist.js")
+    assert "guardForm(cardMaint)" in src
+
+
+def test_intake_report_does_not_send_admins_to_a_page_that_does_not_exist() -> None:
+    """It said "enable them under Config → Intake Cards". There is no such
+    page: app.js has one intake route, and the switch is on this same page."""
+    src = _src(_PANELS / "intake-report.js")
+    assert "Config → Intake Cards" not in src
+    assert "Card Settings" in src
