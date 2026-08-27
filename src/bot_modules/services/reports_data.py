@@ -13,13 +13,17 @@ import sqlite3
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Literal, TypedDict
 
 from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.services.channel_rollup import ChannelResolver, build_resolver
 from bot_modules.services.activity_graphs import (
+    MIN_BAND_PERIODS,
+    OverlayPeriod,
     Resolution,
+    query_activity_overlay,
     query_dropoff_profiles,
     query_message_activity,
     query_message_histogram,
@@ -40,6 +44,22 @@ _WINDOW_LABELS: dict[str, str] = {
     "month": "Last 12 Months",
     "hour_of_day": "By Hour of Day",
     "day_of_week": "By Day of Week",
+}
+
+# The two overlay views are not timeline resolutions — they share the Activity
+# route but bucket by position *inside* a period. Kept as a separate alias so
+# ``Resolution`` keeps meaning "something _BUCKET_BUILDERS can build".
+ActivityResolution = Resolution | Literal["day_overlay", "week_overlay"]
+
+_OVERLAY_PERIODS: dict[str, OverlayPeriod] = {
+    "day_overlay": "day",
+    "week_overlay": "week",
+}
+
+_OVERLAY_NOUNS: dict[str, tuple[str, str]] = {
+    # resolution -> (what the bold line is, the unit the band counts in)
+    "day_overlay": ("Today", "Days"),
+    "week_overlay": ("This Week", "Weeks"),
 }
 
 _DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -489,27 +509,53 @@ class ActivityData(TypedDict):
     window_label: str
     mode: str
     labels: list[str]
-    counts: list[float]
+    # ``None`` only on the overlay views, where the current period has not been
+    # lived through yet past the hour we are in. A covariant Sequence so the
+    # timeline branches can still hand over a plain list[float].
+    counts: Sequence[float | None]
     member_counts: list[int]
     show_members: bool
     y_label: str
     tz_label: str
+    x_label: str
     series: list[ActivitySeries]
+    # Overlay views only; empty elsewhere, and empty on an overlay whose sample
+    # was too thin to summarise (see MIN_BAND_PERIODS).
+    band_low: list[float]
+    band_mid: list[float]
+    band_high: list[float]
+    periods_sampled: int
 
 
 def get_activity_data(
     conn: sqlite3.Connection,
     guild_id: int,
-    resolution: Resolution,
+    resolution: ActivityResolution,
     utc_offset_hours: float,
     mode: Literal["messages", "xp"] = "messages",
     user_id: int | None = None,
     channel_id: int | None = None,
     exclude_user_ids: set[int] | None = None,
     exclude_channel_ids: set[int] | None = None,
+    compare_periods: int = 12,
 ) -> ActivityData:
     tz_label = f"UTC{utc_offset_hours:+g}" if utc_offset_hours else "UTC"
     show_members = user_id is None
+
+    if resolution in ("day_overlay", "week_overlay"):
+        return _get_overlay_data(
+            conn,
+            guild_id,
+            resolution,
+            utc_offset_hours,
+            tz_label,
+            mode=mode,
+            compare_periods=compare_periods,
+            user_id=user_id,
+            channel_id=channel_id,
+            exclude_user_ids=exclude_user_ids,
+            exclude_channel_ids=exclude_channel_ids,
+        )
 
     series: list[ActivitySeries] = []
     if mode == "xp":
@@ -597,9 +643,85 @@ def get_activity_data(
         "show_members": show_members,
         "y_label": y_label,
         "tz_label": tz_label,
+        "x_label": "Period",
         "series": series,
+        "band_low": [],
+        "band_mid": [],
+        "band_high": [],
+        "periods_sampled": 0,
     }
     return result
+
+
+def _get_overlay_data(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: str,
+    utc_offset_hours: float,
+    tz_label: str,
+    *,
+    mode: Literal["messages", "xp"],
+    compare_periods: int,
+    user_id: int | None,
+    channel_id: int | None,
+    exclude_user_ids: set[int] | None,
+    exclude_channel_ids: set[int] | None,
+) -> ActivityData:
+    """The current day/week drawn against a band over the last N of them.
+
+    Deliberately returns no ``series`` and no ``member_counts``: the series
+    axis is now "now versus history", so an XP source breakdown would need a
+    third dimension, and a per-hour distinct-member count over a partial period
+    against a band of medians is not a number worth drawing.
+    """
+    period = _OVERLAY_PERIODS[resolution]
+    subject, unit = _OVERLAY_NOUNS[resolution]
+
+    result_ov = query_activity_overlay(
+        conn,
+        guild_id,
+        period,
+        mode=mode,
+        compare_periods=compare_periods,
+        user_id=user_id,
+        channel_id=channel_id,
+        exclude_user_ids=exclude_user_ids,
+        exclude_channel_ids=exclude_channel_ids,
+        utc_offset_hours=utc_offset_hours,
+    )
+
+    if result_ov.has_band:
+        window_label = f"{subject} vs Last {result_ov.periods_sampled} {unit}"
+    elif result_ov.periods_sampled:
+        # Some history, but too little to summarise honestly. Parenthetical
+        # rather than a dash: the caption already joins on one.
+        window_label = (
+            f"{subject} (needs {MIN_BAND_PERIODS} past {unit.lower()} to "
+            f"compare, has {result_ov.periods_sampled})"
+        )
+    else:
+        window_label = f"{subject} (no past {unit.lower()} to compare against yet)"
+
+    if result_ov.clamped and result_ov.periods_requested > result_ov.periods_sampled:
+        window_label = xp_histogram_window_label(window_label)
+
+    return {
+        "resolution": resolution,
+        "window_label": window_label,
+        "mode": mode,
+        "labels": result_ov.labels,
+        "counts": result_ov.current,
+        "member_counts": [],
+        "show_members": False,
+        "y_label": "XP Earned" if mode == "xp" else "Messages",
+        "tz_label": tz_label,
+        "x_label": "Hour of day" if period == "day" else "Hour of week",
+        "series": [],
+        "band_low": result_ov.band_low,
+        "band_mid": result_ov.band_mid,
+        "band_high": result_ov.band_high,
+        "periods_sampled": result_ov.periods_sampled,
+    }
 
 
 # ---------------------------------------------------------------------------

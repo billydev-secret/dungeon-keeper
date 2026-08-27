@@ -8,10 +8,12 @@ computation endpoints get a smoke-only test (200 + valid JSON).
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 
 import pytest
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.services.activity_graphs import overlay_period_start
 from web_server.deps import invalidate_report_cache
 
 
@@ -69,6 +71,70 @@ def test_activity_shape(open_client):
     assert "labels" in data
     assert "counts" in data
     assert "resolution" in data
+
+
+@pytest.mark.parametrize(
+    "resolution,points,x_label",
+    [
+        ("day_overlay", 24, "Hour of day"),
+        ("week_overlay", 168, "Hour of week"),
+    ],
+)
+def test_activity_overlay_shape(open_client, resolution, points, x_label):
+    invalidate_report_cache()
+    resp = open_client.get(
+        f"/api/reports/activity?resolution={resolution}&mode=messages"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["labels"]) == points
+    assert len(data["counts"]) == points
+    assert data["x_label"] == x_label
+    # The overlay drops both — the series axis is now "now vs history".
+    assert data["series"] == []
+    assert data["show_members"] is False
+
+
+def _seed_overlay_history(db_path, guild_id, weeks):
+    """One message and one XP event per week, `weeks` weeks back."""
+    start = overlay_period_start(datetime.now(timezone.utc), 0.0, "week")
+    with open_db(db_path) as conn:
+        for back in range(1, weeks + 1):
+            ts = start - back * 7 * 86400 + 1800
+            conn.execute(
+                "INSERT OR REPLACE INTO processed_messages (guild_id, message_id,"
+                " channel_id, user_id, created_at, processed_at) VALUES (?,?,?,?,?,?)",
+                (guild_id, 900000 + back, 55, 3001, ts, ts),
+            )
+            conn.execute(
+                "INSERT INTO xp_events (guild_id, user_id, source, amount, created_at)"
+                " VALUES (?,?,?,?,?)",
+                (guild_id, 3001, "text", 5.0, ts),
+            )
+        conn.commit()
+
+
+@pytest.mark.parametrize(
+    "mode,expected_sampled",
+    [
+        # 90 days of raw XP retention is 12 whole weeks; messages read the
+        # whole archive, so the same request reaches all 20 weeks seeded.
+        ("xp", 12),
+        ("messages", 20),
+    ],
+)
+def test_activity_overlay_clamps_compare_periods_by_mode(
+    open_client, fake_ctx, mode, expected_sampled
+):
+    """The panel greys out 26 weeks in XP mode; the route is what enforces it."""
+    invalidate_report_cache()
+    _seed_overlay_history(fake_ctx.db_path, fake_ctx.guild_id, weeks=20)
+    resp = open_client.get(
+        f"/api/reports/activity?resolution=week_overlay&mode={mode}"
+        "&compare_periods=26&include_bots=true"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["periods_sampled"] == expected_sampled
 
 
 # ── quality-score ─────────────────────────────────────────────────────

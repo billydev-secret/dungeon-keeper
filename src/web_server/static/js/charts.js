@@ -487,6 +487,11 @@ export function renderChartLegend(host, chart) {
     host.className = "chart-legend";
     host.replaceChildren();
     chart.data.datasets.forEach((ds, i) => {
+      // A dataset can opt out of the legend entirely. Bands are drawn as a
+      // *pair* of line datasets with a fill between them, and only one of the
+      // pair should speak for the band — the other is scaffolding, and a
+      // legend entry for it would invite toggling half a band off.
+      if (ds.skipLegend) return;
       const visible = chart.isDatasetVisible(i);
       const btn = document.createElement("button");
       btn.type = "button";
@@ -507,10 +512,18 @@ export function renderChartLegend(host, chart) {
       label.textContent = ds.label || `Series ${i + 1}`;
       btn.appendChild(label);
 
-      const value = document.createElement("span");
-      value.className = "chart-legend__value";
-      value.textContent = _fmt(total(ds));
-      btn.appendChild(value);
+      // Summing a dataset is right for a count and wrong for a percentile —
+      // and on a partial period, right for both and comparable for neither.
+      // `legendValue` states the number that actually compares; an explicit
+      // null says this series has no meaningful total and shows none.
+      if (ds.legendValue !== null) {
+        const value = document.createElement("span");
+        value.className = "chart-legend__value";
+        value.textContent = _fmt(
+          Number.isFinite(ds.legendValue) ? ds.legendValue : total(ds)
+        );
+        btn.appendChild(value);
+      }
 
       btn.addEventListener("click", () => {
         chart.setDatasetVisibility(i, !chart.isDatasetVisible(i));

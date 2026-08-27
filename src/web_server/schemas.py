@@ -187,12 +187,21 @@ class ActivityResponse(BaseModel):
     window_label: str
     mode: str
     labels: list[str]
-    counts: list[float]
+    # Nullable on the overlay views: the current period stops at the hour we
+    # are in rather than flooring the rest of the period to zero.
+    counts: list[float | None]
     member_counts: list[int]
     show_members: bool
     y_label: str
     tz_label: str
+    x_label: str = "Period"
     series: list[ActivitySeriesSchema] = []
+    # Overlay views only — the p25/p50/p75 envelope the current period is read
+    # against, empty when the sample was too thin to summarise.
+    band_low: list[float] = []
+    band_mid: list[float] = []
+    band_high: list[float] = []
+    periods_sampled: int = 0
 
 
 # ── Invite effectiveness ───────────────────────────────────────────────

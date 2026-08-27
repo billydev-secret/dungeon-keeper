@@ -16,6 +16,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.activity_graphs import (
     DropoffProfile,
     _append_exclusions,
+    _percentile,
     _BUCKET_BUILDERS,
     _day_buckets,
     _DOW_LABELS,
@@ -25,6 +26,10 @@ from bot_modules.services.activity_graphs import (
     _strftime_expr,
     _week_buckets,
     _WINDOW_LABELS,
+    overlay_labels,
+    overlay_period_cap,
+    overlay_period_start,
+    query_activity_overlay,
     query_dropoff_profiles,
     query_greeter_response_times,
     query_message_activity,
@@ -795,3 +800,194 @@ def test_query_xp_activity_with_breakdown_returns_empty_on_no_data(db_conn):
     assert totals == [0.0] * 30
     assert members == [0] * 30
     assert by_src == {}
+
+
+# ── Period overlay (this day/week vs a band of the last N) ────────────
+
+_WEEK = 7 * 86400
+
+
+def test_overlay_period_start_anchors_to_local_midnight():
+    """The anchor is guild-local, not UTC — the off-by-one-timezone bug."""
+    # Thu 2026-08-27 03:00 UTC is Wed 2026-08-26 20:00 at UTC-7, so "today"
+    # began Wed 00:00 local (= Wed 07:00 UTC) and the week began the Sunday
+    # before that (Sun 2026-08-23 00:00 local = Sun 07:00 UTC).
+    now = datetime(2026, 8, 27, 3, 0, tzinfo=timezone.utc)
+    assert overlay_period_start(now, -7, "day") == datetime(
+        2026, 8, 26, 7, 0, tzinfo=timezone.utc
+    ).timestamp()
+    assert overlay_period_start(now, -7, "week") == datetime(
+        2026, 8, 23, 7, 0, tzinfo=timezone.utc
+    ).timestamp()
+
+
+def test_overlay_period_start_utc_is_plain_midnight():
+    now = datetime(2026, 8, 27, 3, 0, tzinfo=timezone.utc)
+    assert overlay_period_start(now, 0, "day") == datetime(
+        2026, 8, 27, tzinfo=timezone.utc
+    ).timestamp()
+    assert overlay_period_start(now, 0, "week") == datetime(
+        2026, 8, 23, tzinfo=timezone.utc
+    ).timestamp()
+
+
+def test_overlay_labels_shapes():
+    assert overlay_labels("day") == _HOD_LABELS
+    week = overlay_labels("week")
+    assert len(week) == 168
+    assert week[0] == "Sun 12am"
+    assert week[167] == "Sat 11pm"
+
+
+@pytest.mark.parametrize(
+    "q,expected",
+    [(0.25, 1.75), (0.5, 2.5), (0.75, 3.25)],
+)
+def test_percentile_interpolates(q, expected):
+    assert _percentile([4.0, 1.0, 3.0, 2.0], q) == expected
+
+
+def test_percentile_edges():
+    assert _percentile([], 0.5) == 0.0
+    assert _percentile([7.0], 0.5) == 7.0
+
+
+@pytest.mark.parametrize(
+    "period,mode,expected",
+    [
+        ("week", "messages", 26),
+        # 90 days of raw retention is 12 whole weeks, which is why the panel
+        # offers 26 weeks in messages mode only.
+        ("week", "xp", 12),
+        ("day", "messages", 90),
+        ("day", "xp", 90),
+    ],
+)
+def test_overlay_period_cap(period, mode, expected):
+    assert overlay_period_cap(period, mode) == expected
+
+
+def _seed_weeks(conn, tz, counts_by_week, hour_of_week=0):
+    """Seed `counts_by_week[k]` messages at `hour_of_week` of the week k back."""
+    start = overlay_period_start(datetime.now(timezone.utc), tz, "week")
+    mid = 1
+    rows = []
+    for weeks_back, count in counts_by_week.items():
+        ts = start - weeks_back * _WEEK + hour_of_week * 3600 + 1800
+        for _ in range(count):
+            rows.append((mid, 100, 7, ts))
+            mid += 1
+    _seed_processed(conn, rows=rows)
+    return start
+
+
+def test_overlay_buckets_by_local_hour_of_week(db_conn):
+    """23:30 local on a Saturday is hour-of-week 167, at a negative offset."""
+    _seed_weeks(db_conn, -7.0, {1: 1, 2: 1, 3: 1}, hour_of_week=167)
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="messages", compare_periods=4, utc_offset_hours=-7.0
+    )
+    assert res.periods_sampled == 3
+    assert res.band_mid[167] == 1.0
+    assert res.band_mid[0] == 0.0
+    assert res.labels[167] == "Sat 11pm"
+
+
+def test_overlay_band_is_percentiles_over_sampled_weeks(db_conn):
+    _seed_weeks(db_conn, 0.0, {1: 4, 2: 3, 3: 2, 4: 1})
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="messages", compare_periods=4, utc_offset_hours=0.0
+    )
+    assert res.periods_sampled == 4
+    # Interpolated p25/p50/p75 of 1,2,3,4 — see test_percentile_interpolates
+    # for the exact values; the query rounds to 1dp like every other total here.
+    assert res.band_low[0] == 1.8
+    assert res.band_mid[0] == 2.5
+    assert res.band_high[0] == 3.2
+
+
+def test_overlay_skips_weeks_with_no_data_at_all(db_conn):
+    """Weeks before the archive starts must not be counted as zeros.
+
+    Asking for 8 weeks when only 4 exist has to sample the 4 — counting the
+    other 4 as rows of zeros would drag the median to 1.5 for a reason that is
+    an artefact of when logging started, not a fact about the server.
+    """
+    _seed_weeks(db_conn, 0.0, {1: 4, 2: 3, 3: 2, 4: 1})
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="messages", compare_periods=8, utc_offset_hours=0.0
+    )
+    assert res.periods_sampled == 4
+    assert res.band_mid[0] == 2.5
+
+
+def test_overlay_suppresses_band_below_minimum_sample(db_conn):
+    _seed_weeks(db_conn, 0.0, {1: 4, 2: 3})
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="messages", compare_periods=4, utc_offset_hours=0.0
+    )
+    assert res.periods_sampled == 2
+    assert res.has_band is False
+    assert res.band_mid == []
+
+
+def test_overlay_current_period_stops_at_the_hour_we_are_in(db_conn):
+    """Unlived hours are None, never 0 — a zero would draw a cliff."""
+    now = datetime.now(timezone.utc)
+    start = overlay_period_start(now, 0.0, "day")
+    expected_lived = int((now.timestamp() - start) // 3600) + 1
+
+    res = query_activity_overlay(
+        db_conn, 10, "day", mode="messages", compare_periods=7, utc_offset_hours=0.0
+    )
+    assert len(res.current) == 24
+    lived = sum(1 for c in res.current if c is not None)
+    # +-1 rather than equality only because the hour can roll between the two
+    # clock reads above; the shape assertion below is the real check.
+    assert abs(lived - expected_lived) <= 1
+    assert all(c is None for c in res.current[lived:])
+
+
+def test_overlay_xp_never_unions_the_daily_rollup(db_conn, monkeypatch):
+    """xp_daily has no hour-of-day, so the overlay must clamp instead.
+
+    A rolled-up row is stamped at its UTC day's midnight; unioning it would
+    invent a spike in one hour bucket and a trough across the other 23.
+    """
+    from bot_modules.services import xp_rollup_service
+
+    now = datetime.now(timezone.utc)
+    start = overlay_period_start(now, 0.0, "week")
+    boundary_ts = start - 2 * _WEEK
+    monkeypatch.setattr(
+        xp_rollup_service,
+        "read_boundary",
+        lambda conn, **kw: (xp_rollup_service.utc_day(boundary_ts), boundary_ts),
+    )
+
+    # A fat rollup row well below the boundary, inside the *requested* window.
+    db_conn.execute(
+        "INSERT INTO xp_daily (guild_id, user_id, source, channel_id, day, xp,"
+        " events, first_at, last_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (10, 7, "text", 100, xp_rollup_service.utc_day(start - 5 * _WEEK),
+         9999.0, 1, start - 5 * _WEEK, start - 5 * _WEEK),
+    )
+    _seed_xp(db_conn, rows=[(7, "text", 5.0, start - _WEEK + 1800)])
+
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="xp", compare_periods=12, utc_offset_hours=0.0
+    )
+
+    assert res.clamped is True
+    # Only the raw event inside the clamped window survives; the 9999 does not
+    # appear anywhere in the band.
+    assert res.periods_requested == 12
+    assert max(res.band_mid, default=0.0) < 9999.0
+    assert 9999.0 not in res.band_mid
+
+
+def test_overlay_unclamped_when_no_rollup_boundary(db_conn):
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="xp", compare_periods=12, utc_offset_hours=0.0
+    )
+    assert res.clamped is False

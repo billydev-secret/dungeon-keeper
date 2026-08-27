@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
 from bot_modules.core.db_utils import get_tz_offset_hours
-from bot_modules.services import reports_data
+from bot_modules.services import activity_graphs, reports_data
 from bot_modules.services.channel_rollup import build_resolver, guild_channel_ids
 from bot_modules.services import usage_telemetry_service as usage_telemetry
 from bot_modules.services.member_quality_score import (
@@ -397,19 +397,30 @@ async def greeter_response(
 async def activity(
     request: Request,
     resolution: Literal[
-        "hour", "day", "week", "month", "hour_of_day", "day_of_week"
+        "hour", "day", "week", "month", "hour_of_day", "day_of_week",
+        "day_overlay", "week_overlay",
     ] = "day",
     mode: Literal["messages", "xp"] = "xp",
     user_id: str | None = None,
     channel_id: str | None = None,
     exclude_channel_ids: str | None = None,
     include_bots: bool = False,
+    compare_periods: int = 12,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     uid = int(user_id) if user_id else None
     cid = int(channel_id) if channel_id else None
+
+    # The panel greys out the options a mode cannot reach, but that is a
+    # courtesy to the reader — the enforcement is here, so a hand-built URL
+    # gets a shortened window rather than a silently truncated band.
+    if resolution in ("day_overlay", "week_overlay"):
+        period = "day" if resolution == "day_overlay" else "week"
+        compare_periods = max(
+            1, min(compare_periods, activity_graphs.overlay_period_cap(period, mode))
+        )
 
     excluded_channels: set[int] = set()
     if exclude_channel_ids:
@@ -445,6 +456,7 @@ async def activity(
                 channel_id=cid,
                 exclude_user_ids=excluded_users or None,
                 exclude_channel_ids=excluded_channels or None,
+                compare_periods=compare_periods,
             )
 
     return await cached_run_query(
@@ -457,6 +469,7 @@ async def activity(
             "channel_id": channel_id,
             "exclude_channel_ids": ",".join(str(c) for c in sorted(excluded_channels)),
             "include_bots": include_bots,
+            "compare_periods": compare_periods,
         },
         _q,
     )
