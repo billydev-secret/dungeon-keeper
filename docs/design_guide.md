@@ -232,7 +232,20 @@ use them:
   are not.
 - **Unsaved-edit tracking is per guarded form**, not per page. `guardForm`
   registers the container and `showStatus` clears only the form its status
-  element sits in. It used to be one module-global boolean that any success
+  element sits in. `isFormDirty(form)` asks the same registry, which is how a
+  panel that rebuilds itself after an unrelated action decides whether it may
+  — mahjong remounts after a card upload and would otherwise throw away
+  half-typed House Rules. **Do not report a held rebuild through
+  `showStatus(el, true, …)`**: if that element sits inside the guarded form —
+  mahjong's `[data-status]` does — it clears the very dirt that held the
+  rebuild, so the next action goes through and takes the edits with it. Use a
+  toast.
+- **An optimistic write owns its rollback.** A list mutated and re-rendered
+  before the PUT has to be put back when the PUT fails, or the screen shows
+  state the server never accepted. Pen Pals' separations did not, and that is
+  the keep-them-apart list. Never write a failure message into an empty-state
+  element either: shop-approvals did, and one failed fetch replaced the real
+  empty copy for the rest of the session. It used to be one module-global boolean that any success
   cleared, so on the fourteen panels guarding two to four forms, saving one —
   or any unrelated action reporting success — silently disarmed the warning
   protecting half-typed values in the rest.

@@ -446,6 +446,15 @@ export function clearCardDirty(card) {
   if (card) card.dataset.dkDirty = "";
 }
 
+/** True when `form` — a container passed to guardForm — has unsaved edits.
+ *
+ *  For panels that rebuild themselves after an unrelated action (mahjong
+ *  remounts the whole page after a card upload or Set Active) and would
+ *  otherwise throw away whatever is half-typed elsewhere on it. */
+export function isFormDirty(form) {
+  return _dirtyForms.has(form);
+}
+
 /** True when a tracked card other than `except` still holds unsaved edits. */
 export function hasDirtySibling(root, except = null) {
   return Array.from(root.querySelectorAll("[data-dk-card]")).some(

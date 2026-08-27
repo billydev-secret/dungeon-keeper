@@ -8,11 +8,13 @@
 import { api, apiPost, apiPut } from "../api.js";
 import {
   guardForm,
+  isFormDirty,
   loadMembers,
   memberNameLookup,
   mountAsync,
   showStatus,
 } from "../config-helpers.js";
+import { toast } from "../ui.js";
 import { renderSortableTable } from "../table.js";
 
 const esc = (s) => String(s ?? "")
@@ -396,7 +398,19 @@ export function mount(container) {
       return new Date(v * 1000).toLocaleString();
     }
 
+    // Rebuilding the page throws away anything half-typed in House Rules, and
+    // a card upload or a Set Active is not a reason to lose it. The form is
+    // guarded, so ask whether it is dirty before standing on it.
     function remount() {
+      if (isFormDirty(form)) {
+        // Deliberately a toast, not showStatus: [data-status] lives INSIDE
+        // [data-form], and showStatus(el, true, …) clears the dirty flag for
+        // whichever guarded form its element sits in. Reporting this through it
+        // would disarm the very state that produced the message, so the next
+        // upload would remount and take the edits with it.
+        toast("Saved. The page didn't refresh — you have unsaved House Rules edits.");
+        return Promise.resolve();
+      }
       return mount(container);
     }
   }, { errorMsg: "Couldn’t load the Meadow Mahjong settings." });

@@ -23,6 +23,7 @@
 import { api, apiPost, esc } from "../api.js";
 import { mountAsync, showStatus, loadMembers } from "../config-helpers.js";
 import { promptDialog, toast } from "../ui.js";
+import { renderError } from "../states.js";
 import { economyOffBanner } from "./economy-shop-shared.js";
 
 export function mount(container) {
@@ -195,8 +196,11 @@ function wireShopOrders(container) {
       listEl.innerHTML = rows.map(orderRow).join("");
       emptyEl.style.display = rows.length ? "none" : "block";
     } catch {
-      emptyEl.textContent = "Couldn’t load the orders.";
-      emptyEl.style.display = "block";
+      // Into its own element: writing this into emptyEl replaced the real
+      // empty-state copy for the rest of the session, so a later successful
+      // fetch with nothing waiting still read "Couldn't load the orders."
+      listEl.innerHTML = renderError("Couldn’t load the orders.");
+      emptyEl.style.display = "none";
     }
   }
 

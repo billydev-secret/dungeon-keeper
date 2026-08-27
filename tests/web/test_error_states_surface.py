@@ -112,3 +112,60 @@ def test_a_guild_switch_drops_the_tracked_forms() -> None:
     src = _src(_JS / "config-helpers.js")
     reset = src.split("export function resetMetaCaches()", 1)[1].split("\n}", 1)[0]
     assert "_dirtyForms.clear()" in reset
+
+
+# ── optimistic writes that outlive their own failure ────────────────────
+
+
+def test_a_failed_separation_write_is_rolled_back() -> None:
+    """Pen Pals mutates the separations list and re-renders before the PUT, so
+    the row appears at once. `persistSeps` reported a failure and left it
+    there — and this is the keep-them-apart list, so a separation on screen
+    that the server never stored is the one failure this page must not have."""
+    src = _src(_PANELS / "pen-pals-settings.js")
+    assert "const persistSeps = async (undo)" in src, "no rollback is passed in"
+    assert "undo();" in src and "renderSeps();" in src
+    # Both mutation sites have to supply one, or the rollback is decorative.
+    assert src.count("await persistSeps(() =>") == 2, (
+        "a caller mutates the list without supplying its undo"
+    )
+    assert "await persistSeps();" not in src
+
+
+def test_a_failed_order_fetch_does_not_eat_the_empty_state() -> None:
+    """The failure message was written into the empty-state element itself, so
+    once a fetch failed, every later successful fetch with nothing waiting
+    still read "Couldn't load the orders."."""
+    src = _src(_PANELS / "shop-approvals.js")
+    assert 'emptyEl.textContent = "Couldn’t load the orders."' not in src
+    assert "listEl.innerHTML = renderError(" in src
+
+
+def test_mahjong_holds_its_rebuild_while_house_rules_is_dirty() -> None:
+    """A card upload or Set Active remounts the whole panel, which throws away
+    anything half-typed in House Rules."""
+    src = _src(_PANELS / "mahjong.js")
+    assert "isFormDirty(form)" in src, "the rebuild still runs unconditionally"
+    assert "isFormDirty," in src, "isFormDirty is used but not imported"
+
+
+def test_mahjong_does_not_report_that_through_show_status() -> None:
+    """[data-status] lives inside [data-form], and showStatus(el, true, …)
+    clears the dirty flag for whichever guarded form its element sits in.
+    Reporting the held rebuild through it would disarm the very state that
+    produced the message, so the next upload would remount and take the edits
+    with it. This is a real interaction between two fixes, not a style point."""
+    src = _src(_PANELS / "mahjong.js")
+    guard = src.split("function remount()", 1)[1].split("\n    }", 1)[0]
+    # The comment explaining the choice names showStatus, so read code only.
+    code = "\n".join(
+        ln for ln in guard.splitlines() if not ln.lstrip().startswith("//")
+    )
+    assert "toast(" in code, "the held-rebuild notice must not go through showStatus"
+    assert "showStatus(" not in code
+
+
+def test_is_form_dirty_reads_the_same_registry_guard_form_writes() -> None:
+    src = _src(_JS / "config-helpers.js")
+    assert "export function isFormDirty(form)" in src
+    assert "return _dirtyForms.has(form);" in src
