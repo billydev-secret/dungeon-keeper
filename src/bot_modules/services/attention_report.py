@@ -6,15 +6,41 @@ sustained, lopsided attention at another (the "target") who does not reciprocate
 
 Design constraints, taken directly from the research memo (docs/… / artifact):
 
-  * A flag is NOT a verdict. We gate candidates on a volume floor plus a high
-    asymmetry cut, then expose the *underlying evidence* (which signals fired,
-    over what window) rather than a single black-box score — a bare number
-    acquires authority it hasn't earned (the COMPAS anchoring failure mode).
+  * A flag is NOT a verdict. We gate candidates, then expose the *underlying
+    evidence* (which signals fired, over what window) rather than a single
+    black-box score — a bare number acquires authority it hasn't earned (the
+    COMPAS anchoring failure mode).
   * Volume alone is not diagnostic: mutual friends are high-volume too. The
-    separators are direction (asymmetry), fixation (concentration), and — the
-    strongest single cue — escalation *after* the target stops responding.
+    separators are direction, fixation (concentration), and — the strongest
+    single cue — escalation *after* the target stops responding.
   * Gender-neutral: the report never uses or infers gender. It surfaces the
     shape of lopsided attention; the human decides what it means.
+
+The gate (rebuilt 2026-08-26). Three things changed, each measured against 30
+days of live data on both servers this bot runs on:
+
+  1. **The gate reads approach, not combined volume.** It used to demand 15
+     combined weighted events from *both* directions before reading the ratio,
+     and then a pair-local asymmetry of 0.85. Those two demands pull opposite
+     ways: sustained one-sided pursuit is low-volume and unanswered, so the
+     floor excluded exactly the region the report is for. Among pairs clearing
+     that floor the 99th percentile of asymmetry was 0.75 — the cut sat above
+     the entire empirical distribution, and the one pair server-wide that
+     passed both was a false positive. The floor is now on ``approach_out``:
+     replies, mentions and voice-follows, the acts that ask for a response.
+  2. **Reciprocation is judged against the target's own habit.** ``asymmetry``
+     is pair-local, so a member who posts a lot and rarely answers reads as
+     "non-reciprocating" toward everyone who engages them — a fact about the
+     target, not about any initiator. ``reciprocation_shortfall`` compares what
+     this initiator got back against what the same target gives their *other*
+     partners. Asymmetry survives as evidence, not as a gate.
+  3. **Concentration is a gate, not a footnote.** A pair holding 2% of an
+     initiator's outbound attention across 87 distinct targets is evidence
+     *against* fixation. It used to produce a caution and surface anyway.
+
+Reactions stay in the evidence and out of the gate: 30 unanswered reactions
+cleared the old floor by themselves, and an unanswered reaction is far weaker
+evidence than an unanswered reply.
 
 Directed signals unioned here (each stores actor → target):
   * replies + mentions  → user_interactions_log   (weight WEIGHT_TEXT)
@@ -40,18 +66,39 @@ WEIGHT_REACTION = 0.5
 WEIGHT_VOICE_FOLLOW = 2.0
 
 WINDOW_DAYS = 30
-# Combined weighted events (both directions) a pair must clear before its ratio
-# is read at all — so two people who interacted once don't register as "100%
-# one-sided" (memo §1.1).
-VOLUME_FLOOR = 15.0
-# asym = w(A→B) / [w(A→B)+w(B→A)]; 0.5 balanced, →1 one person initiates all.
-ASYM_CUT = 0.85
+
+# ── The gate ────────────────────────────────────────────────────────────────
+# Weighted initiator→target events that *ask for a response* — replies,
+# mentions, voice-follows. Reactions are deliberately absent (see module
+# docstring). 4.0 is four unanswered replies, or two voice-follows. On prod
+# that yields 4 candidates on the main guild and 6 on the second; at 5.0 the
+# main guild drops to 1, which reads as "nothing concerning here" — the false
+# assurance this report must not give.
+APPROACH_FLOOR = 4.0
+# How far below the target's own reciprocation habit this initiator falls.
+# 1.0 = the target gives this person nothing while giving others their usual.
+RECIPROCATION_SHORTFALL_CUT = 0.8
+# Share of everything the initiator directs at anyone that goes to this one
+# person. Below this the pair is one of many and fixation has no support.
+CONCENTRATION_FLOOR = 0.05
+# With no other partner to compare a target against, assume reciprocation
+# should roughly match the approach. Neutral: it neither excuses nor accuses.
+NEUTRAL_RECIPROCATION_RATE = 1.0
+# A target who gives back far more than they receive shouldn't make every
+# partner look neglected; cap the expectation.
+MAX_RECIPROCATION_RATE = 3.0
+
+# ── Evidence (annotation only, never gating) ────────────────────────────────
 # Below this many distinct targets, "fixation" has a benign reading (a quiet
 # user with one friend), so we annotate rather than trumpet it (memo §1.3).
 MIN_DISTINCT_TARGETS = 5
-# Escalation-after-silence compares the initiator's contact rate in equal
-# windows before and after the target's last reciprocal action (memo §1.5).
+# Escalation-after-silence compares the initiator's contact rate in windows of
+# EQUAL length before and after the target's last reciprocal action (memo
+# §1.5). Capped at this many days, and shortened to whatever has actually
+# elapsed since — an "after" of 3 days against a "before" of 14 is not a trend.
 ESCALATION_HALF_DAYS = 14
+# Under this much elapsed time the after-window is noise; report nothing.
+MIN_ESCALATION_SPAN_DAYS = 3
 # Legible burst descriptor: most initiator→target events in any window this wide.
 BURST_WINDOW_SECONDS = 600
 
@@ -69,8 +116,17 @@ class AttentionCandidate:
     voice_follow_out: int  # voice-follows initiator→target
     weight_out: float  # combined weighted initiator→target
     weight_back: float  # combined weighted target→initiator
+    approach_out: float  # weighted text + voice-follows only — what the gate reads
 
-    asymmetry: float  # w_out / (w_out + w_back), in [0,1]
+    asymmetry: float  # w_out / (w_out + w_back), in [0,1]. Evidence, not a gate.
+    # What the target gives back per unit received, across their OTHER partners
+    # — the base rate the pair is judged against. NEUTRAL_RECIPROCATION_RATE
+    # when this initiator is the only partner they have.
+    target_reciprocation_rate: float
+    expected_back: float  # weight_out × target_reciprocation_rate
+    # 1 − weight_back/expected_back, clamped to [0,1]. 0 = this target treats
+    # the initiator exactly as they treat everyone else.
+    reciprocation_shortfall: float
     concentration: float  # share of initiator's total outbound going to target
     distinct_targets: int  # how many people the initiator engaged at all
     hhi: float  # Herfindahl index of initiator's outbound attention
@@ -141,6 +197,16 @@ def _weighted(counts: dict[str, int]) -> float:
     )
 
 
+def _approach(counts: dict[str, int]) -> float:
+    """Weighted events that ask for a response — reactions excluded.
+
+    A reply, a mention or turning up in someone's voice channel puts a claim on
+    the other person. A reaction doesn't, which is why it is evidence here and
+    never a reason a pair surfaces.
+    """
+    return counts["text"] * WEIGHT_TEXT + counts["voice"] * WEIGHT_VOICE_FOLLOW
+
+
 def _pair_event_timestamps(
     conn: sqlite3.Connection, guild_id: int, frm: int, to: int, since_ts: int
 ) -> list[int]:
@@ -192,20 +258,33 @@ def _max_burst(timestamps: list[int], window: int = BURST_WINDOW_SECONDS) -> int
 
 
 def _escalation(
-    out_ts: list[int], back_ts: list[int], half_days: int = ESCALATION_HALF_DAYS
+    out_ts: list[int],
+    back_ts: list[int],
+    now_ts: int,
+    half_days: int = ESCALATION_HALF_DAYS,
 ) -> float | None:
     """rate_after / rate_before around the target's last reciprocal action.
 
     >1 means the initiator contacted the target *more* after they last responded.
-    None when the target never reciprocated (caller reports that separately) or
-    there's nothing in the "before" window to compare against.
+    None when the target never reciprocated (caller reports that separately),
+    when too little time has passed since to mean anything, or when there's
+    nothing in the "before" window to compare against.
+
+    **Both windows are the same length.** This used to compare a fixed 14 days
+    of "before" against however much of 14 days had actually elapsed, so a
+    target who last replied three days ago had three days of contact counted
+    against fourteen — a ratio structurally pushed below 1, which then fired
+    "contact eased off, trend is cooling" as an artefact of recency. On prod,
+    three quarters of pairs with a computable escalation were in that state.
     """
     if not back_ts:
         return None
     pivot = max(back_ts)
-    half = half_days * 86400
-    before = sum(1 for t in out_ts if pivot - half <= t < pivot)
-    after = sum(1 for t in out_ts if pivot <= t < pivot + half)
+    span = min(half_days * 86400, now_ts - pivot)
+    if span < MIN_ESCALATION_SPAN_DAYS * 86400:
+        return None
+    before = sum(1 for t in out_ts if pivot - span <= t < pivot)
+    after = sum(1 for t in out_ts if pivot <= t < pivot + span)
     if before == 0:
         return None
     return after / before
@@ -217,17 +296,26 @@ def compute_one_sided_attention(
     *,
     window_days: int = WINDOW_DAYS,
     now_ts: int | None = None,
-    volume_floor: float = VOLUME_FLOOR,
-    asym_cut: float = ASYM_CUT,
+    approach_floor: float = APPROACH_FLOOR,
+    shortfall_cut: float = RECIPROCATION_SHORTFALL_CUT,
+    concentration_floor: float = CONCENTRATION_FLOOR,
     exclude_ids: set[int] | None = None,
     limit: int = 50,
 ) -> list[AttentionCandidate]:
     """Return flagged initiator→target pairs, most lopsided first.
 
-    Gating (memo §1.1): a pair surfaces only when combined weighted volume
-    clears `volume_floor` AND asymmetry ≥ `asym_cut`. Everything else is
-    attached as evidence/cautions for the moderator, not used to hide or rank
-    behind a hidden score.
+    A pair surfaces only when all three hold:
+
+      * ``approach_out >= approach_floor`` — enough acts that ask for a
+        response. Reactions don't count toward this.
+      * ``concentration >= concentration_floor`` — this person is a real share
+        of where the initiator's attention goes, not one of ninety.
+      * the target reciprocated nothing at all, **or**
+        ``reciprocation_shortfall >= shortfall_cut`` — they give this
+        initiator far less than they give their other partners.
+
+    Everything else is attached as evidence/cautions for the moderator, not
+    used to hide or rank behind a hidden score.
     """
     now_ts = now_ts if now_ts is not None else int(_time.time())
     since_ts = now_ts - window_days * 86400
@@ -240,6 +328,7 @@ def compute_one_sided_attention(
     # below, so a human's concentration/distinct-target evidence reflects only
     # their attention toward other people.
     out_total: dict[int, float] = {}
+    in_total: dict[int, float] = {}
     out_targets: dict[int, list[float]] = {}
     for (frm, to), counts in edges.items():
         if frm in exclude_ids or to in exclude_ids:
@@ -248,6 +337,7 @@ def compute_one_sided_attention(
         if w <= 0:
             continue
         out_total[frm] = out_total.get(frm, 0.0) + w
+        in_total[to] = in_total.get(to, 0.0) + w
         out_targets.setdefault(frm, []).append(w)
 
     candidates: list[AttentionCandidate] = []
@@ -256,22 +346,45 @@ def compute_one_sided_attention(
             continue
         w_out = _weighted(counts)
         w_back = _weighted(edges.get((to, frm), {"text": 0, "react": 0, "voice": 0}))
-        total = w_out + w_back
-        if total < volume_floor:
-            continue
-        asym = w_out / total if total > 0 else 0.0
-        if asym < asym_cut:
+        approach_out = _approach(counts)
+        if approach_out < approach_floor:
             continue
 
         a_total = out_total.get(frm, w_out) or w_out
         concentration = w_out / a_total if a_total > 0 else 0.0
+        if concentration < concentration_floor:
+            continue
+
+        # Base rate, leave-one-out: how does this target treat their *other*
+        # partners? Including this pair would make it self-referential — a
+        # target whose only partner is this initiator would always look like
+        # they reciprocate exactly as expected, however little they give.
+        recv_other = in_total.get(to, 0.0) - w_out
+        give_other = out_total.get(to, 0.0) - w_back
+        rate = (
+            give_other / recv_other if recv_other > 0 else NEUTRAL_RECIPROCATION_RATE
+        )
+        rate = max(0.0, min(MAX_RECIPROCATION_RATE, rate))
+        expected_back = w_out * rate
+        shortfall = (
+            max(0.0, min(1.0, 1.0 - w_back / expected_back))
+            if expected_back > 0
+            else (0.0 if w_back > 0 else 1.0)
+        )
+        # Two routes in: nothing came back at all, or far less came back than
+        # this target gives everyone else.
+        if w_back > 0 and shortfall < shortfall_cut:
+            continue
+
+        total = w_out + w_back
+        asym = w_out / total if total > 0 else 0.0
         targets = out_targets.get(frm, [w_out])
         distinct = len(targets)
         hhi = sum((t / a_total) ** 2 for t in targets) if a_total > 0 else 1.0
 
         out_ts = _pair_event_timestamps(conn, guild_id, frm, to, since_ts)
         back_ts = _pair_event_timestamps(conn, guild_id, to, frm, since_ts)
-        escalation = _escalation(out_ts, back_ts)
+        escalation = _escalation(out_ts, back_ts, now_ts)
         burst = _burstiness(out_ts)
         max_burst = _max_burst(out_ts)
 
@@ -283,7 +396,11 @@ def compute_one_sided_attention(
             voice_follow_out=counts["voice"],
             weight_out=w_out,
             weight_back=w_back,
+            approach_out=approach_out,
             asymmetry=asym,
+            target_reciprocation_rate=rate,
+            expected_back=expected_back,
+            reciprocation_shortfall=shortfall,
             concentration=concentration,
             distinct_targets=distinct,
             hhi=hhi,
@@ -295,15 +412,16 @@ def compute_one_sided_attention(
         _annotate(cand)
         candidates.append(cand)
 
-    # Transparent ordering (NOT a hidden score): most lopsided & voluminous
-    # first, with escalation and never-reciprocated pairs pulled up because the
-    # memo names them the strongest cues.
+    # Transparent ordering (NOT a hidden score): unanswered first, then
+    # escalating, then by how far below the target's own habit the
+    # reciprocation falls, then by how much was directed at them. The memo
+    # names silence and escalation the strongest cues.
     candidates.sort(
         key=lambda c: (
             not c.ever_reciprocated,
             (c.escalation or 0) > 1.0,
-            c.asymmetry,
-            c.weight_out,
+            c.reciprocation_shortfall,
+            c.approach_out,
         ),
         reverse=True,
     )
@@ -315,8 +433,21 @@ def _annotate(c: AttentionCandidate) -> None:
     c.reasons.append(f"{round(c.asymmetry * 100)}% one-directional")
     if not c.ever_reciprocated:
         c.reasons.append("target never responded in-window")
-    elif c.escalation is not None and c.escalation > 1.0:
-        c.reasons.append(f"contact rose {c.escalation:.1f}× after they went quiet")
+    else:
+        if c.escalation is not None and c.escalation > 1.0:
+            c.reasons.append(f"contact rose {c.escalation:.1f}× after they went quiet")
+        # The base-rate comparison, said in words: "they do answer people, just
+        # not this one". Only worth showing when there IS another partner to
+        # have compared against — otherwise the rate is the neutral prior and
+        # this would dress up an assumption as a measurement.
+        if (
+            c.target_reciprocation_rate != NEUTRAL_RECIPROCATION_RATE
+            and c.reciprocation_shortfall >= RECIPROCATION_SHORTFALL_CUT
+        ):
+            c.reasons.append(
+                f"{round(c.reciprocation_shortfall * 100)}% less back than this "
+                "target gives their other partners"
+            )
     if c.concentration >= 0.4 and c.distinct_targets >= MIN_DISTINCT_TARGETS:
         c.reasons.append(
             f"{round(c.concentration * 100)}% of their attention on this one person"
@@ -334,3 +465,20 @@ def _annotate(c: AttentionCandidate) -> None:
         c.cautions.append("contact eased off after last response — trend is cooling")
     if c.voice_follow_out == 0 and c.react_out > c.text_out:
         c.cautions.append("mostly reactions — can read as ordinary support")
+    # The floor is deliberately low so quiet, unanswered pursuit can surface at
+    # all. Say when a candidate is sitting on it rather than letting four
+    # events read like forty.
+    if c.approach_out <= APPROACH_FLOOR:
+        c.cautions.append(
+            f"only {_approach_events(c)} approaches — thin evidence either way"
+        )
+    if c.target_reciprocation_rate == NEUTRAL_RECIPROCATION_RATE and c.ever_reciprocated:
+        c.cautions.append(
+            "no other partners to compare the target against — reciprocation is "
+            "judged against a neutral assumption, not their habits"
+        )
+
+
+def _approach_events(c: AttentionCandidate) -> int:
+    """Raw count behind ``approach_out`` — for copy that says "4 approaches"."""
+    return c.text_out + c.voice_follow_out

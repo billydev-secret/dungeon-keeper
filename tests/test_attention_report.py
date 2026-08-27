@@ -1,7 +1,11 @@
 """Tests for bot_modules.services.attention_report.
 
-Exercises the gating (volume floor + asymmetry), the concentration/HHI math,
-escalation-after-silence, burstiness, and the evidence/caution annotations.
+Exercises the gating (approach floor, base-rate-normalised reciprocation,
+concentration), the escalation window, burstiness, and the evidence/caution
+annotations.
+
+The three cases marked *defect* below are the ones the 2026-08-26 rebuild
+exists for; each fails against the gate as it shipped.
 """
 
 from __future__ import annotations
@@ -10,7 +14,9 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.attention_report import (
-    ASYM_CUT,
+    APPROACH_FLOOR,
+    CONCENTRATION_FLOOR,
+    RECIPROCATION_SHORTFALL_CUT,
     compute_one_sided_attention,
 )
 from tests.db_template import migrated_db
@@ -112,20 +118,96 @@ def test_balanced_pair_is_not_flagged(db):
     assert _find(cands, 2, 1) is None
 
 
-def test_below_volume_floor_is_not_flagged(db):
-    # Fully one-sided but only 5 events — under the floor of 15.
+def test_a_quiet_unanswered_approach_is_flagged(db):
+    """*Defect:* the shipped gates were anti-correlated.
+
+    Sustained one-sided pursuit is low-volume and unanswered, but the report
+    demanded 15 combined weighted events *before* reading the ratio — which
+    excluded exactly that region. Measured on 30 days of prod, one pair
+    server-wide had zero reciprocation and out-weight ≥ 8. Five unanswered
+    approaches is thin evidence, but it is the shape the report is for, and
+    thin evidence with its counts on show is what a moderator is being asked
+    to judge.
+    """
     for i in range(5):
+        _text(db, 1, 2, NOW - i * 3600)
+    cands = compute_one_sided_attention(db, GUILD, now_ts=NOW)
+    c = _find(cands, 1, 2)
+    assert c is not None
+    assert c.approach_out == pytest.approx(5.0)
+    assert c.ever_reciprocated is False
+
+
+def test_a_lone_approach_is_still_below_the_floor(db):
+    """Two people who interacted twice are not a report."""
+    for i in range(3):
+        _text(db, 1, 2, NOW - i * 3600)
+    assert _find(compute_one_sided_attention(db, GUILD, now_ts=NOW), 1, 2) is None
+
+
+def test_reciprocation_in_line_with_the_approach_is_not_flagged(db):
+    # 16 out, 5 back, and the target has no other partner to compare against,
+    # so the neutral prior applies: shortfall 0.69, under the cut.
+    for i in range(16):
+        _text(db, 1, 2, NOW - i * 3600)
+    for i in range(5):
+        _text(db, 2, 1, NOW - i * 3600 - 30)
+    cands = compute_one_sided_attention(db, GUILD, now_ts=NOW)
+    assert _find(cands, 1, 2) is None
+
+
+def test_reciprocation_is_judged_against_the_targets_own_habit(db):
+    """*Defect:* asymmetry was measured pair-locally, with no base rate.
+
+    Someone who posts a lot and rarely reacts back reads as "non-reciprocating"
+    toward everybody who engages them — which is a fact about the target's
+    habits, not about any initiator's behaviour. Target 2 below answers every
+    one of their four partners at the same 10% rate. That is who they are, and
+    none of those four pairs is a finding; the shipped gate flagged all of them
+    (asymmetry 0.91, comfortably over both thresholds).
+    """
+    for initiator in (1, 3, 4, 5):
+        for i in range(20):
+            _text(db, initiator, 2, NOW - i * 3600 - initiator)
+        for i in range(2):  # 10% back, to everyone alike
+            _text(db, 2, initiator, NOW - i * 3600 - 30 - initiator)
+    # Same volume, same target, no reciprocation at all — this one IS a finding.
+    for i in range(20):
+        _text(db, 6, 2, NOW - i * 3600 - 6)
+
+    cands = compute_one_sided_attention(db, GUILD, now_ts=NOW)
+    assert _find(cands, 1, 2) is None
+    assert _find(cands, 3, 2) is None
+    unanswered = _find(cands, 6, 2)
+    assert unanswered is not None
+    assert unanswered.ever_reciprocated is False
+
+
+def test_attention_lost_in_a_wide_spread_is_not_flagged(db):
+    """Concentration is a gate now, not a footnote.
+
+    The single pair that cleared the shipped thresholds on the main guild had
+    2% concentration across 87 distinct targets — strong evidence *against*
+    fixation, which the report noted in a caution and surfaced anyway.
+    """
+    for other in range(3, 33):  # 30 other targets, 15 events each
+        for i in range(15):
+            _text(db, 1, other, NOW - i * 3600 - other)
+    for i in range(20):  # the "top" target still holds under 5% of the total
         _text(db, 1, 2, NOW - i * 3600)
     cands = compute_one_sided_attention(db, GUILD, now_ts=NOW)
     assert _find(cands, 1, 2) is None
 
 
-def test_asymmetry_just_below_cut_excluded(db):
-    # 16 out, 4 back → asym = 0.8 < 0.85 cut.
-    for i in range(16):
-        _text(db, 1, 2, NOW - i * 3600)
-    for i in range(4):
-        _text(db, 2, 1, NOW - i * 3600 - 30)
+def test_a_reaction_only_stream_does_not_clear_the_gate(db):
+    """Reacting is not conversation, so it cannot open a finding on its own.
+
+    30 unanswered reactions is 15 weighted events — the whole shipped floor —
+    yet an unanswered reaction is far weaker evidence than an unanswered reply.
+    Reactions stay in the evidence and out of the gate.
+    """
+    for i in range(30):
+        _react(db, 1, 2, NOW - i * 3600, mid=i)
     cands = compute_one_sided_attention(db, GUILD, now_ts=NOW)
     assert _find(cands, 1, 2) is None
 
@@ -210,5 +292,47 @@ def test_exclude_ids_filters_pairs(db):
     assert _find(cands, 1, 2) is None
 
 
-def test_asym_cut_constant_sanity():
-    assert 0.5 < ASYM_CUT < 1.0
+def test_escalation_windows_are_the_same_length(db):
+    """*Defect:* the before/after windows were never equal.
+
+    The pivot is the target's last reciprocal action and the "after" window was
+    a fixed 14 days no matter how much of it had actually elapsed. Here the
+    target went quiet 3 days ago and the initiator has kept up exactly the same
+    once-a-day rate since — 14 events before, 3 after. Against 14 days of
+    before, that reads as 0.21 and fires "contact eased off — trend is
+    cooling", which is an artefact of recency, not a trend. On prod, 75% of
+    pairs with a computable escalation had a truncated after-window and 762 of
+    4,093 cooling cautions flipped once both windows matched.
+    """
+    pivot = NOW - 3 * DAY
+    _text(db, 2, 1, pivot)  # the target's last reciprocal action
+    for i in range(14):
+        _text(db, 1, 2, pivot - (i + 1) * DAY)
+    for i in range(3):
+        _text(db, 1, 2, pivot + (i + 1) * DAY - 3600)
+
+    c = _find(compute_one_sided_attention(db, GUILD, now_ts=NOW), 1, 2)
+    assert c is not None
+    assert c.escalation == pytest.approx(1.0)
+    assert not any("eased off" in caution for caution in c.cautions)
+
+
+def test_escalation_needs_enough_elapsed_time_to_mean_anything(db):
+    """A few hours of "after" is noise; say nothing rather than something."""
+    pivot = NOW - 3600
+    _text(db, 2, 1, pivot)
+    for i in range(10):
+        _text(db, 1, 2, pivot - (i + 1) * DAY)
+    _text(db, 1, 2, pivot + 60)
+
+    c = _find(compute_one_sided_attention(db, GUILD, now_ts=NOW), 1, 2)
+    assert c is not None
+    assert c.escalation is None
+
+
+def test_gate_constants_are_sane():
+    # An approach floor below 2 would flag a single reply; a concentration
+    # floor at 0 would put the gate back where it was.
+    assert APPROACH_FLOOR >= 2.0
+    assert 0.0 < CONCENTRATION_FLOOR < 1.0
+    assert 0.5 < RECIPROCATION_SHORTFALL_CUT <= 1.0

@@ -156,7 +156,7 @@ The 8×8 cross-cluster matrix overflowed a phone by 96px and now scrolls in its
 own box — caught by a new populated-data layout scenario, since the plain sweep
 only ever sees this panel's empty state.
 
-## Stage 6 — ☐ Rebuild the one-sided attention gate
+## Stage 6 — ☑ Rebuild the one-sided attention gate
 
 **DECIDED: rebuild — not retune, not retire.**
 
@@ -223,5 +223,31 @@ by someone else — sanity-check any new threshold against both rather than tuni
 to one server's shape. Show Billy the before/after numbers for any threshold
 before committing to it.
 
-Complex + a safety surface: investigate, bring numbers and open questions back
-before building.
+**Shipped.** The gate now reads `approach_out` (replies + mentions + 2×
+voice-follows; reactions are evidence, never a reason a pair surfaces) against
+a floor of 4.0, requires `concentration >= 0.05`, and admits a pair only when
+the target returned nothing at all or `reciprocation_shortfall >= 0.8` — how far
+below the target's *own* leave-one-out reciprocation habit this initiator falls.
+`_escalation` now uses windows of equal length and returns `None` under three
+days elapsed.
+
+Before → after on live data, both servers, same 30-day window:
+
+| | main | second guild ("nut") | third guild |
+|---|---|---|---|
+| shipped gate | 1 (a verified false positive) | 6 | 1 |
+| rebuilt gate | 4 | 7 | 0 |
+
+The 2%-concentration / 87-target pair the review called a false positive is
+killed by the concentration floor at every setting tried. Billy picked the
+approach floor of 4.0 over 5.0 (main 1 / nut 3) — a handful on each live server,
+erring toward a look rather than a miss on a safety surface. The nut count came
+in at 7 rather than the 6 quoted at decision time: the probe carried an
+80%-reaction-share cap that the shipped module drops, because a pair with five
+unanswered replies should not be hidden by the reaction count sitting beside
+them. It carries a "mostly reactions" caution instead.
+
+Escalation-window impact, measured: **75%** of main-guild pairs with a
+computable escalation had a truncated after-window, and **762 of 4,093**
+"contact eased off — trend is cooling" cautions were pure recency artefacts
+that flip once the windows match.

@@ -281,7 +281,14 @@ class AttentionCandidateSchema(BaseModel):
     voice_follow_out: int
     weight_out: float
     weight_back: float
+    approach_out: float = 0.0
     asymmetry: float
+    # How much the target gives back per unit received across their OTHER
+    # partners, and how far short of that this initiator falls. 1.0 for the
+    # rate means "no other partner to compare against", not "generous".
+    target_reciprocation_rate: float = 1.0
+    expected_back: float = 0.0
+    reciprocation_shortfall: float = 0.0
     concentration: float
     distinct_targets: int
     escalation: float | None = None

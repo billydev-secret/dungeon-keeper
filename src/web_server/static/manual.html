@@ -2143,9 +2143,16 @@
     <h3 id="one-sided-attention">One-Sided Attention <span class="perm perm-mod">Mod</span></h3>
     <p>A moderator-review report (dashboard sidebar → <strong>Reports → People → One-Sided Attention</strong>) that surfaces member <em>pairs</em> where one person keeps directing attention at another who isn't returning it. It's built to help you notice fixation or unwanted pursuit early — the shape of "A keeps showing up around B; B never seeks A out" — that's easy to miss message-by-message.</p>
 
-    <p>It looks at three kinds of directed attention over a window you pick (default 30 days): <strong>replies &amp; mentions</strong>, <strong>reactions</strong>, and <strong>voice-follows</strong> (joining a voice channel someone is already sitting in). A pair only shows up once there's enough back-and-forth volume to be meaningful <em>and</em> the attention is strongly one-directional — so two people who talked once, or a pair of mutual friends, won't clutter the list.</p>
+    <p>It looks at three kinds of directed attention over a window you pick (default 30 days): <strong>replies &amp; mentions</strong>, <strong>reactions</strong>, and <strong>voice-follows</strong> (joining a voice channel someone is already sitting in). Three things all have to be true before a pair appears:</p>
+    <ul>
+      <li><strong>Enough approaches.</strong> Replies, mentions and voice-follows count — the things that ask someone for a response. <em>Reactions do not count toward this</em>: reacting isn't conversation, so an unanswered reaction says far less than an unanswered reply. Reactions still show up in the evidence.</li>
+      <li><strong>It's really this person.</strong> The pair has to be a real share of everywhere the initiator's attention goes. Someone who engages ninety people, one of whom answers less than the rest, isn't fixated on anybody.</li>
+      <li><strong>The other person answers <em>them</em> less than they answer everyone else</strong> — or doesn't answer at all. This is the part that stops the report blaming people for someone else's habits: a member who rarely replies to anybody would otherwise look like they were freezing out every single person who talks to them.</li>
+    </ul>
 
-    <p>Each flagged pair is presented as plain-language <strong>evidence chips</strong> — how one-sided it is, whether the other person ever responded, whether contact <em>increased</em> after they went quiet, how much of the initiator's attention is aimed at this one person, times they followed them into voice, and any rapid bursts. Where a reading has an innocent explanation, the report says so itself (a small friend circle, contact that's cooling off, or mostly-reactions that just read as ordinary support).</p>
+    <p>Each flagged pair is presented as plain-language <strong>evidence chips</strong> — how one-sided it is, whether the other person ever responded, how far below their usual they answered this one person, whether contact <em>increased</em> after they went quiet, how much of the initiator's attention is aimed at them, times they followed them into voice, and any rapid bursts. Where a reading has an innocent explanation, the report says so itself (a small friend circle, contact that's cooling off, mostly-reactions that read as ordinary support, or simply too few approaches to tell either way).</p>
+
+    <p>The bar is set low on purpose, so expect a short list with some thin cases on it rather than a permanently empty one. An empty report reads as "nothing concerning here", and that's a promise a report can only keep if it's capable of firing in the first place.</p>
 
     <div class="callout callout-warn">
       <span class="callout-icon">⚠️</span>
