@@ -56,30 +56,58 @@ def current_utc_day(now: float | None = None) -> str:
     return _utc_day(time.time() if now is None else now)
 
 
-def rollup_day(conn: sqlite3.Connection, day: str) -> int:
-    """Rebuild every ``xp_daily`` bucket for one UTC day, across all guilds.
+def rollup_span(conn: sqlite3.Connection, first_day: str, last_day: str) -> int:
+    """Rebuild every ``xp_daily`` bucket from ``first_day`` to ``last_day``.
 
-    Returns the number of buckets written. Deletes the day first so a rebuild
-    after events were themselves deleted (an erasure run, say) shrinks the
-    rollup instead of leaving a stale total behind.
+    Inclusive at both ends, all guilds, in **one** pass over ``xp_events``.
+    Returns the number of buckets written.
+
+    Doing a span rather than a day at a time is not an optimisation detail, it
+    is the difference between a backfill that finishes and one that does not.
+    ``xp_events`` has no index on ``created_at`` alone — the only one that
+    could serve a bare time range is ``(guild_id, created_at)``, and a rollup
+    covering every guild has no ``guild_id`` predicate to lead with — so a
+    per-day range scans the whole table. Over ~440 days of prod history that is
+    ~540M row reads and the better part of an hour; grouping the day out of
+    ``created_at`` instead makes it one scan. Measured on a snapshot of the
+    live 965MB DB: 50+ minutes per-day, 24s as a span.
+
+    Days inside the span with no events simply produce no rows, so a caller may
+    pass a span containing gaps. Rebuilding a day that was already correct is
+    the same operation as building it for the first time — see the module
+    docstring on idempotence-by-rebuild.
     """
-    start, end = _day_bounds(day)
+    start, _ = _day_bounds(first_day)
+    _, end = _day_bounds(last_day)
 
-    conn.execute("DELETE FROM xp_daily WHERE day = ?", (day,))
+    conn.execute(
+        "DELETE FROM xp_daily WHERE day >= ? AND day <= ?", (first_day, last_day)
+    )
     cur = conn.execute(
         """
         INSERT INTO xp_daily
             (guild_id, user_id, source, channel_id, day,
              xp, events, first_at, last_at)
-        SELECT guild_id, user_id, source, channel_id, ?,
+        SELECT guild_id, user_id, source, channel_id,
+               date(created_at, 'unixepoch') AS d,
                SUM(amount), COUNT(*), MIN(created_at), MAX(created_at)
         FROM xp_events
         WHERE created_at >= ? AND created_at < ?
-        GROUP BY guild_id, user_id, source, channel_id
+        GROUP BY guild_id, user_id, source, channel_id, d
         """,
-        (day, start, end),
+        (start, end),
     )
     return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+
+def rollup_day(conn: sqlite3.Connection, day: str) -> int:
+    """Rebuild every ``xp_daily`` bucket for one UTC day, across all guilds.
+
+    A one-day :func:`rollup_span`. Deleting the day first is what lets a
+    rebuild after the underlying events were themselves deleted (an erasure
+    run, say) *shrink* the rollup rather than leave a stale total behind.
+    """
+    return rollup_span(conn, day, day)
 
 
 def days_with_events(
@@ -130,15 +158,18 @@ def rollup_pending_days(
     if limit is not None:
         pending = pending[:limit]
 
-    buckets = 0
-    for day in pending:
-        buckets += rollup_day(conn, day)
-    if pending:
-        log.info(
-            "xp rollup: %d day(s) → %d bucket(s) (%s … %s)",
-            len(pending), buckets, pending[0], pending[-1],
-        )
-        recompute_watermark(conn)
+    if not pending:
+        return 0, 0
+
+    # One span covering the pending days, not one query each. Days in the gaps
+    # are rebuilt too, which is free (they are already correct, and rebuilding
+    # is the same operation) and avoids ~440 full scans of xp_events.
+    buckets = rollup_span(conn, pending[0], pending[-1])
+    log.info(
+        "xp rollup: %d day(s) → %d bucket(s) (%s … %s)",
+        len(pending), buckets, pending[0], pending[-1],
+    )
+    recompute_watermark(conn)
     return len(pending), buckets
 
 
@@ -159,9 +190,7 @@ def refresh_recent_days(
     targets = [
         _utc_day(today_start - i * _SECONDS_PER_DAY) for i in range(1, days + 1)
     ]
-    buckets = 0
-    for day in targets:
-        buckets += rollup_day(conn, day)
+    buckets = rollup_span(conn, targets[-1], targets[0])
     recompute_watermark(conn)
     return len(targets), buckets
 
@@ -383,19 +412,22 @@ def prune_raw_events(
     # Guard 4: the days actually about to lose their raw rows must be rolled.
     # Checked over the guild's own days — a guild whose history is entirely
     # inside the boundary has nothing to prove and nothing to delete.
+    # DISTINCT first, then one probe per day: the correlated form ran the
+    # subquery once per *row*, which on the busy guild is half a million
+    # probes to answer a question about ~440 days.
     unrolled = conn.execute(
         """
-        SELECT DISTINCT date(e.created_at, 'unixepoch') AS d
-        FROM xp_events e
-        WHERE e.guild_id = ? AND e.created_at < ?
-          AND NOT EXISTS (
-              SELECT 1 FROM xp_daily r
-              WHERE r.guild_id = e.guild_id
-                AND r.day = date(e.created_at, 'unixepoch')
-          )
+        SELECT d FROM (
+            SELECT DISTINCT date(created_at, 'unixepoch') AS d
+            FROM xp_events
+            WHERE guild_id = ? AND created_at < ?
+        )
+        WHERE NOT EXISTS (
+            SELECT 1 FROM xp_daily r WHERE r.guild_id = ? AND r.day = d
+        )
         LIMIT 1
         """,
-        (guild_id, boundary_ts),
+        (guild_id, boundary_ts, guild_id),
     ).fetchone()
     if unrolled is not None:
         raise PruneRefused(f"day {unrolled[0]} has raw events but no rollup")

@@ -51,3 +51,10 @@ ON xp_daily (guild_id, source, day, user_id);
 -- The inactive report's access path: last activity per member per channel.
 CREATE INDEX IF NOT EXISTS idx_xp_daily_channel
 ON xp_daily (guild_id, channel_id, day);
+
+-- xp_daily is rewritten a span at a time, and a rebuild deletes the span
+-- first. Without this the DELETE scans the whole rollup on every pass — which
+-- is O(n^2) across a backfill, since the table it scans is the one being
+-- filled. Neither index above can serve it: both lead with guild_id.
+CREATE INDEX IF NOT EXISTS idx_xp_daily_day
+ON xp_daily (day);

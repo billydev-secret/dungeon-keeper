@@ -391,6 +391,20 @@ count of rows ready to be summarised. That count comes from
 `prunable_row_count`, which returns 0 whenever a real prune would refuse,
 so the panel never advertises rows the guards would not release.
 
+**Measured on the live database, 2026-08-27.** Both sides `VACUUM`ed so the
+comparison does not credit pre-existing free space:
+
+| | rows | `xp_events` + its 3 indexes | + `xp_daily` + its 3 | whole file |
+|---|---|---|---|---|
+| before | 1,228,347 | 198.0 MB | — | 905.5 MB |
+| after | 604,165 | 100.4 MB | 121.1 MB | 834.6 MB |
+| | **−51%** | **−49%** | **−39% net** | **−70.9 MB** |
+
+Close to the design's ~43%-of-rows estimate, on a table that has grown 20%
+since it was written. The backfill is 201 days → 113,632 buckets in **4.2s**,
+and the rollup is exactly equal to raw on both totals it can be checked
+against: 1,226,742 events and 576,092.87 XP.
+
 **Verification.** `scripts/verify_xp_retention.py` does on a snapshot of
 the real database what the tests do on synthetic rows: roll up, snapshot
 every unioning reader for every guild, run the actual `prune_raw_events`,
@@ -400,6 +414,12 @@ turning the dial on; a plain `cp` of the live WAL file reads as malformed,
 and the copy wants ~1GB, so it goes on `/home` rather than a tmpfs scratch
 dir. The script refuses to open `dungeonkeeper.db` itself, and its module
 docstring carries the exact snapshot recipe.
+
+Run against the live data on 2026-08-27 it pruned 624,162 rows across 7
+guilds and reported **all 856 reader outputs identical** — every per-source
+leaderboard and distribution, the top-25 members' standings and XP-by-source,
+the 360-day graphs and their per-source breakdowns, time-to-level, the
+existence gate, and the last-activity map for the busiest channels.
 
 **Stage 4 — GDPR. ✅ Done with Stage 1 (and extended in Stage 3).** `xp_daily` is per-user data, so
 it joined `purge_user_data` with the rest of the XP family and got its

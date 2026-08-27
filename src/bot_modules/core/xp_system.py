@@ -479,6 +479,12 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        CREATE INDEX IF NOT EXISTS idx_xp_daily_day
+        ON xp_daily (day)
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS xp_rollup_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             rolled_through_day TEXT,

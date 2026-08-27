@@ -231,6 +231,55 @@ def test_rollup_stats_reports_missing_days(sync_db_path):
     assert now  # the fixture timestamp is only here to date the scenario
 
 
+def test_a_span_matches_rolling_each_day_separately(sync_db_path):
+    """The span rewrite is a performance fix and must be nothing else.
+
+    Rolling a range in one pass has to produce byte-for-byte what rolling each
+    day did, including the days in the gaps that have no events at all.
+    """
+    days = ["2026-03-01", "2026-03-02", "2026-03-05"]  # 03-03/04 are empty
+    with open_db(sync_db_path) as conn:
+        for day in days:
+            _event(conn, day=day, amount=2.0)
+            _event(conn, day=day, user=USER_B, source="voice", amount=1.0)
+
+        def _rows():
+            # sqlite3.Row does not compare by value, and neither path promises
+            # an order — normalise both before asserting they are the same set.
+            return sorted(tuple(r) for r in _buckets(conn))
+
+        for day in days:
+            rollup.rollup_day(conn, day)
+        per_day = _rows()
+
+        conn.execute("DELETE FROM xp_daily")
+        rollup.rollup_span(conn, "2026-03-01", "2026-03-05")
+        as_span = _rows()
+
+    assert as_span == per_day
+    assert len(as_span) == 6  # two members x three days, no phantom empty days
+
+
+def test_a_span_rebuild_drops_buckets_whose_events_are_gone(sync_db_path):
+    """Delete-then-insert over the whole span, not just the days with rows.
+
+    If the span's DELETE were scoped to days that still have events, an erased
+    member's last day in a channel would keep a stale bucket forever — the
+    rollup would outlive the data it summarises.
+    """
+    with open_db(sync_db_path) as conn:
+        _event(conn, day="2026-03-01", amount=2.0)
+        _event(conn, day="2026-03-02", amount=2.0)
+        rollup.rollup_span(conn, "2026-03-01", "2026-03-02")
+        assert len(_buckets(conn)) == 2
+
+        conn.execute("DELETE FROM xp_events WHERE created_at < ?", (_ts("2026-03-02"),))
+        rollup.rollup_span(conn, "2026-03-01", "2026-03-02")
+        rows = _buckets(conn)
+
+    assert [r["day"] for r in rows] == ["2026-03-02"]
+
+
 def test_rollup_stats_does_not_call_today_a_missing_day(sync_db_path):
     """Today is never rolled on purpose, so it must not read as a gap.
 
