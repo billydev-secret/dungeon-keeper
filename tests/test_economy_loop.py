@@ -330,6 +330,18 @@ def _set_progress(db_path, qid, current, target) -> None:
 
 
 def _add_activity(db_path, user_id, guild_id=GUILD, when=None) -> None:
+    """Seed member_activity so the member counts as a 30-day active.
+
+    Default ``when`` to NOW and leave it there unless a test is specifically
+    about the activity window. The settlement path reads the population
+    through ``active_member_ids``, which measures ``days`` back from
+    ``time.time()`` — the real clock, not the fabricated ``now_ts`` a roll is
+    driven with. Three month-roll tests used to seed 2026-07-28 to look like
+    "active during the July they simulate"; that read as active only while
+    real time sat within 30 days of it, and they went red for good on
+    2026-08-27 when the cutoff crossed it, paying the top-contributor bonus
+    with no tier payouts behind it (15 instead of 75).
+    """
     when = time.time() if when is None else when
     with open_db(db_path) as conn:
         conn.execute(
@@ -1424,7 +1436,7 @@ def test_month_roll_settles_and_rotates_monthly(db):
     bot = _Bot([_Guild(GUILD, {USER: _Member()})])
     qa = _mk_monthly_kind(db, title="July msgs", kind="message_sent")
     qb = _mk_monthly_kind(db, title="Aug replies", kind="reply_sent")
-    _add_activity(db, USER, when=_ts("2026-07-28"))
+    _add_activity(db, USER)  # 30d-active is measured against the real clock
 
     _roll(bot, db, _ts("2026-07-10"))  # first sight: marks only, no month roll
 
@@ -1460,7 +1472,7 @@ def test_same_month_day_roll_does_not_settle_monthly(db):
     _enable(db)
     bot = _Bot([_Guild(GUILD, {USER: _Member()})])
     qa = _mk_monthly_kind(db, title="July msgs", kind="message_sent")
-    _add_activity(db, USER, when=_ts("2026-07-28"))
+    _add_activity(db, USER)  # 30d-active is measured against the real clock
 
     _roll(bot, db, _ts("2026-07-10"))
     _roll_beats(bot, db, _ts("2026-07-11"))  # bootstrap July goal
@@ -1481,7 +1493,7 @@ def test_month_roll_settlement_exactly_once_on_crash_replay(db):
     _enable(db)
     bot = _Bot([_Guild(GUILD, {USER: _Member()})])
     _mk_monthly_kind(db, title="July msgs", kind="message_sent")
-    _add_activity(db, USER, when=_ts("2026-07-28"))
+    _add_activity(db, USER)  # 30d-active is measured against the real clock
     _roll(bot, db, _ts("2026-07-10"))
     _roll_beats(bot, db, _ts("2026-07-11"))
     for i in range(7):
