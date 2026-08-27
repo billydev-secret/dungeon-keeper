@@ -679,6 +679,228 @@ def query_xp_histogram_with_breakdown(
 
 
 # ---------------------------------------------------------------------------
+# Period overlay (this day/week against a band of the last N)
+# ---------------------------------------------------------------------------
+#
+# See docs/plans/weekly-activity-comparison.md. Unlike every resolution above,
+# the x-axis here is a position *inside* a period rather than a timeline: the
+# current period is drawn against a p25-p75 envelope over the last N complete
+# ones, so "is this week up or down, and when" is one glance.
+
+OverlayPeriod = Literal["day", "week"]
+
+_OVERLAY_PERIOD_SECS: dict[str, int] = {"day": 86400, "week": _WEEK_SECS}
+
+# Below this many *sampled* periods a percentile band is not a summary of
+# anything - the p25 and p75 of two weeks are just the two weeks. The current
+# period still draws; the band is suppressed and the caller says so.
+MIN_BAND_PERIODS = 3
+
+# The furthest back each overlay will look, before the mode's own reach is
+# applied. Not a data limit — a legibility one: a band over more periods than
+# this stops changing shape, and the request gets slower for nothing.
+OVERLAY_MAX_PERIODS: dict[str, int] = {"day": 90, "week": 26}
+
+
+def overlay_period_cap(period: OverlayPeriod, mode: str) -> int:
+    """Largest N this period and mode can answer honestly.
+
+    XP is bounded by raw retention because the overlay cannot union the daily
+    rollup (see :func:`query_activity_overlay`). Deliberately derived from the
+    retention *policy* rather than from what ``xp_events`` happens to hold
+    today: prod has not run the pruner yet, so a cap measured off the live
+    table would silently shrink the first time it does.
+    """
+    hard = OVERLAY_MAX_PERIODS[period]
+    if mode != "xp":
+        return hard
+    period_days = _OVERLAY_PERIOD_SECS[period] // 86400
+    return max(1, min(hard, XP_HISTOGRAM_WINDOW_DAYS // period_days))
+
+
+def overlay_period_start(
+    now: datetime, utc_offset_hours: float, period: OverlayPeriod
+) -> float:
+    """UTC epoch of the start of the guild-local day/week containing *now*.
+
+    The anchor is a *local* midnight (and for ``week``, a local Sunday
+    midnight), which is what makes the rest of the overlay code free of
+    timezone arithmetic: once the window starts on a local period boundary,
+    ``created_at - since_ts`` measures elapsed time from that boundary, so both
+    the period index and the hour within the period fall straight out of it. An
+    off-by-one-timezone bucket is the classic bug in this shape of query, and
+    this is where it is prevented.
+    """
+    offset = timedelta(hours=utc_offset_hours)
+    local_now = now + offset
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "week":
+        # _DOW_LABELS is Sunday-first, so the week is too.
+        local_start -= timedelta(days=(local_now.weekday() + 1) % 7)
+    return (local_start - offset).timestamp()
+
+
+def overlay_labels(period: OverlayPeriod) -> list[str]:
+    """One label per hour of the period - 24 for a day, 168 for a week."""
+    if period == "day":
+        return list(_HOD_LABELS)
+    return [f"{dow} {hod}" for dow in _DOW_LABELS for hod in _HOD_LABELS]
+
+
+def _percentile(values: list[float], q: float) -> float:
+    """Linear-interpolated percentile of *values* (unsorted), q in 0..1."""
+    if not values:
+        return 0.0
+    vals = sorted(values)
+    if len(vals) == 1:
+        return float(vals[0])
+    pos = (len(vals) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(vals) - 1)
+    return float(vals[lo] + (vals[hi] - vals[lo]) * (pos - lo))
+
+
+@dataclass
+class OverlayResult:
+    """The current period's curve plus the band it is read against."""
+
+    labels: list[str]
+    #: The period in progress. ``None`` past the current hour - see below.
+    current: list[float | None]
+    band_low: list[float]   # p25 over the sampled periods
+    band_mid: list[float]   # p50
+    band_high: list[float]  # p75
+    periods_requested: int
+    periods_sampled: int
+    #: True when the window was shortened to stay inside XP raw retention.
+    clamped: bool
+
+    @property
+    def has_band(self) -> bool:
+        return len(self.band_mid) > 0
+
+
+def query_activity_overlay(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    period: OverlayPeriod,
+    *,
+    mode: Literal["messages", "xp"] = "messages",
+    compare_periods: int = 12,
+    user_id: int | None = None,
+    channel_id: int | None = None,
+    exclude_user_ids: set[int] | None = None,
+    exclude_channel_ids: set[int] | None = None,
+    utc_offset_hours: float = 0,
+) -> OverlayResult:
+    """Current day/week against a percentile band over the last N.
+
+    ``mode="xp"`` reads **raw** ``xp_events`` only and never unions the daily
+    rollup the way :func:`_xp_row_source` does for the timeline resolutions.
+    ``xp_daily`` stamps each synthetic row at its UTC day's midnight, which
+    carries no hour-of-day information at all: every pre-boundary row would
+    land in a single hour bucket, inventing a spike at midnight and a trough
+    across the other 23 hours. Worse, a guild at a negative offset (the main
+    guild runs UTC-7) has that UTC midnight fall at 17:00 the *previous* local
+    day, so the invented spike lands on the wrong weekday too.
+
+    So the window is clamped to the retention boundary instead, exactly as the
+    hour-of-day/day-of-week XP histograms already are, and ``clamped`` says it
+    happened so the caption can be honest rather than quietly short.
+    """
+    period_secs = _OVERLAY_PERIOD_SECS[period]
+    n_buckets = period_secs // 3600
+    now = datetime.now(timezone.utc)
+    current_start = overlay_period_start(now, utc_offset_hours, period)
+
+    periods = max(1, int(compare_periods))
+    since_ts = current_start - periods * period_secs
+
+    clamped = False
+    if mode == "xp":
+        boundary = xp_rollup_service.read_boundary(conn)
+        if boundary is not None:
+            _, boundary_ts = boundary
+            if since_ts < boundary_ts:
+                periods = max(0, int((current_start - boundary_ts) // period_secs))
+                since_ts = current_start - periods * period_secs
+                clamped = True
+
+    since_i = int(since_ts)
+    elapsed = f"(CAST(created_at AS INTEGER) - {since_i})"
+    idx_expr = f"CAST({elapsed} / {period_secs} AS INTEGER)"
+    hour_expr = f"CAST(({elapsed} % {period_secs}) / 3600 AS INTEGER)"
+
+    params: list[object] = [guild_id, since_ts]
+    where = "guild_id = ? AND created_at >= ?"
+    if user_id is not None:
+        where += " AND user_id = ?"
+        params.append(user_id)
+    if channel_id is not None:
+        where += " AND channel_id = ?"
+        params.append(channel_id)
+    where = _append_exclusions(where, params, exclude_user_ids, exclude_channel_ids)
+
+    if mode == "xp":
+        table, value_expr = "xp_events", "COALESCE(SUM(amount), 0)"
+    else:
+        table, value_expr = "processed_messages", "COUNT(*)"
+
+    rows = conn.execute(
+        f"""
+        SELECT {idx_expr} AS pidx, {hour_expr} AS hidx, {value_expr} AS total
+        FROM {table}
+        WHERE {where}
+        GROUP BY pidx, hidx
+        """,
+        params,
+    ).fetchall()
+
+    # Row `periods` is the period in progress; 0..periods-1 are the history.
+    grid = [[0.0] * n_buckets for _ in range(periods + 1)]
+    for pidx, hidx, total in rows:
+        pi, hi = int(pidx), int(hidx)
+        if 0 <= pi <= periods and 0 <= hi < n_buckets:
+            grid[pi][hi] = float(total)
+
+    # The current period is partial. Past the hour we are actually in, the
+    # buckets are unlived rather than empty - zero-filling them would draw a
+    # cliff to the floor and read as a collapse in activity, so they are None
+    # and Chart.js leaves them unplotted.
+    now_hour = int((now.timestamp() - current_start) // 3600)
+    current: list[float | None] = [
+        round(grid[periods][h], 1) if h <= now_hour else None
+        for h in range(n_buckets)
+    ]
+
+    # A period with no rows at all predates the archive; counting it as a row
+    # of zeros would drag the band toward the floor for a reason that is an
+    # artefact of when logging started, not a fact about the server.
+    sampled = [grid[i] for i in range(periods) if sum(grid[i]) > 0]
+
+    band_low: list[float] = []
+    band_mid: list[float] = []
+    band_high: list[float] = []
+    if len(sampled) >= MIN_BAND_PERIODS:
+        for h in range(n_buckets):
+            column = [wk[h] for wk in sampled]
+            band_low.append(round(_percentile(column, 0.25), 1))
+            band_mid.append(round(_percentile(column, 0.50), 1))
+            band_high.append(round(_percentile(column, 0.75), 1))
+
+    return OverlayResult(
+        labels=overlay_labels(period),
+        current=current,
+        band_low=band_low,
+        band_mid=band_mid,
+        band_high=band_high,
+        periods_requested=max(1, int(compare_periods)),
+        periods_sampled=len(sampled),
+        clamped=clamped,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Message-rate drop analysis
 # ---------------------------------------------------------------------------
 

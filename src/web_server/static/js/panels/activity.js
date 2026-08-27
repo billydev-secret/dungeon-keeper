@@ -16,7 +16,41 @@ const RESOLUTIONS = [
   { value: "month",       label: "Monthly (12mo)" },
   { value: "hour_of_day", label: "By Hour of Day" },
   { value: "day_of_week", label: "By Day of Week" },
+  { value: "day_overlay",  label: "Today vs Recent Days" },
+  { value: "week_overlay", label: "This Week vs Recent Weeks" },
 ];
+
+// The overlay views: the current period drawn against a p25-p75 band over the
+// last N. `cap` mirrors activity_graphs.overlay_period_cap() — the server
+// clamps regardless, this is only so the reader can see *why* an option is
+// unavailable instead of silently getting a shorter window than they picked.
+const OVERLAY = {
+  day_overlay: {
+    unit: "days",
+    presets: [7, 14, 28, 90],
+    fallback: 28,
+    caps: { messages: 90, xp: 90 },
+  },
+  week_overlay: {
+    unit: "weeks",
+    presets: [4, 6, 8, 12, 26],
+    fallback: 12,
+    caps: { messages: 26, xp: 12 },
+  },
+};
+
+const isOverlay = (res) => Object.prototype.hasOwnProperty.call(OVERLAY, res);
+
+// Two identities, not N: collapsing history into one envelope means this chart
+// never needs a twelve-step ramp. Amber is the subject, teal the comparison —
+// validated as a categorical pair against CHART_SURFACE (all six checks pass,
+// worst adjacent dE 13.9 protan / 19.2 normal, both >= 3:1 on the surface).
+// A neutral-grey band was rejected: it fails the chroma floor and would have
+// read as a gridline rather than as data.
+const OVERLAY_NOW  = CHART_BAR;      // ROLE_COLORS[0], amber
+const OVERLAY_PAST = ROLE_COLORS[2]; // teal
+// Dashed median + solid current, so identity never rests on colour alone.
+const OVERLAY_BAND_FILL = OVERLAY_PAST + "26";
 
 const MODES = [
   { value: "messages", label: "Messages" },
@@ -71,6 +105,9 @@ export function mount(container, initialParams) {
             ${MODES.map((m) => `<option value="${m.value}">${m.label}</option>`).join("")}
           </select>
         </label>
+        <label data-field="compare" hidden>Compare to
+          <select data-control="compare"></select>
+        </label>
         <span class="ctrl-field">Member<span data-slot="user"></span></span>
         <span class="ctrl-field">Channel<span data-slot="channel"></span></span>
         <span class="ctrl-field">Exclude Channels<span data-slot="exclude"></span></span>
@@ -94,6 +131,34 @@ export function mount(container, initialParams) {
   const resEl  = container.querySelector('[data-control="resolution"]');
   const modeEl = container.querySelector('[data-control="mode"]');
   const includeBotsEl = container.querySelector('[data-control="include-bots"]');
+  const compareEl = container.querySelector('[data-control="compare"]');
+  const compareField = container.querySelector('[data-field="compare"]');
+
+  // Rebuild the window picker for the current period, greying out the windows
+  // this mode cannot reach. XP is capped by raw retention because the overlay
+  // cannot read hour-of-day out of the daily rollup; messages read the whole
+  // archive, so only the longest XP window is ever unavailable.
+  function syncCompareControl() {
+    const cfg = OVERLAY[resEl.value];
+    compareField.hidden = !cfg;
+    if (!cfg) return;
+
+    const cap = cfg.caps[modeEl.value] ?? Infinity;
+    const previous = Number(compareEl.value) || cfg.fallback;
+    compareEl.replaceChildren();
+    for (const n of cfg.presets) {
+      const opt = document.createElement("option");
+      opt.value = String(n);
+      opt.textContent = `Last ${n} ${cfg.unit}`;
+      if (n > cap) {
+        opt.disabled = true;
+        opt.textContent += " — messages only";
+      }
+      compareEl.appendChild(opt);
+    }
+    const wanted = previous <= cap ? previous : cfg.fallback;
+    compareEl.value = String(Math.min(wanted, cap));
+  }
 
   resEl.value  = initialParams.resolution || "day";
   modeEl.value = initialParams.mode || "xp";
@@ -183,6 +248,9 @@ export function mount(container, initialParams) {
       resolution: resEl.value,
       mode: modeEl.value,
     };
+    // Deliberately not deep-linked: the window is a per-look question, not
+    // part of the view's identity, and it defaults fresh every time.
+    if (isOverlay(resEl.value)) params.compare_periods = compareEl.value;
     if (userFS.getValue()) params.user_id = userFS.getValue();
     if (chanFS.getValue()) params.channel_id = chanFS.getValue();
     if (excludedIds().length) params.exclude_channel_ids = excludedIds().join(",");
@@ -203,7 +271,13 @@ export function mount(container, initialParams) {
       if (chart) { chart.destroy(); chart = null; }
       if (slider) { slider.destroy(); slider = null; }
 
-      if (!data.labels.length || !data.counts.some((c) => c > 0)) {
+      // An overlay is worth drawing even when the current period is still
+      // empty — at 00:30 on a Sunday the band IS the answer. It is only empty
+      // when neither the period nor its history has anything in it.
+      const overlay = isOverlay(data.resolution);
+      const hasCurrent = data.counts.some((c) => c > 0);
+      const hasBand = overlay && (data.band_mid || []).some((c) => c > 0);
+      if (!data.labels.length || !(hasCurrent || hasBand)) {
         wrap.innerHTML = renderEmpty(
           `No ${data.mode} activity in this window. Try a wider resolution, clear the member or channel filter, or un-exclude a channel.`
         );
@@ -212,6 +286,11 @@ export function mount(container, initialParams) {
         legendEl.replaceChildren();
         tableEl.replaceChildren();
         membersWrap.hidden = true;
+        return;
+      }
+
+      if (overlay) {
+        renderOverlay(data, wrap);
         return;
       }
 
@@ -287,8 +366,60 @@ export function mount(container, initialParams) {
     }
   }
 
-  for (const el of [resEl, modeEl, includeBotsEl]) el.addEventListener("change", refresh);
+  // The band view. No slider (the x-axis is a position inside a period, not a
+  // timeline), no members sub-chart, no XP source breakdown — see
+  // docs/plans/weekly-activity-comparison.md for why each is dropped.
+  function renderOverlay(data, wrap) {
+    if (membersChart) { membersChart.destroy(); membersChart = null; }
+    membersWrap.hidden = true;
+    sliderWrap.innerHTML = "";
 
+    wrap.innerHTML = '<canvas data-chart></canvas>';
+    const canvas = container.querySelector("[data-chart]");
+
+    const isWeek = data.resolution === "week_overlay";
+    const subject = isWeek ? "This week" : "Today";
+    const typical = isWeek ? "Typical week" : "Typical day";
+
+    const hasBand = (data.band_mid || []).length > 0;
+    const lived = data.counts.filter((c) => c !== null && c !== undefined).length;
+    const sum = (arr) => arr.reduce((a, v) => a + (Number.isFinite(v) ? v : 0), 0);
+    const currentTotal = sum(data.counts);
+    // Like for like: a typical period measured to the SAME point, not its full
+    // total. Comparing a Wednesday against a whole week is the misread this
+    // chart exists to prevent, so the number beside the median is truncated
+    // to the hours actually lived through.
+    const typicalToDate = hasBand ? sum(data.band_mid.slice(0, lived)) : 0;
+
+    captionEl.textContent = `${data.y_label} — ${data.window_label} (${data.tz_label})`;
+
+    chart = _makeOverlayChart(canvas, data, {
+      subject, typical, isWeek, currentTotal, typicalToDate,
+    });
+
+    legendEl.replaceChildren();
+    renderChartLegend(legendEl, chart);
+
+    renderChartTable(tableEl, {
+      labels: data.labels,
+      datasets: [
+        { label: `${subject} so far`, data: data.counts },
+        ...(hasBand ? [
+          { label: `${typical} (median)`, data: data.band_mid },
+          { label: `${typical} (p25)`, data: data.band_low },
+          { label: `${typical} (p75)`, data: data.band_high },
+        ] : []),
+      ],
+      indexLabel: data.x_label || "Hour",
+    });
+  }
+
+  for (const el of [resEl, modeEl, includeBotsEl]) {
+    el.addEventListener("change", () => { syncCompareControl(); refresh(); });
+  }
+  compareEl.addEventListener("change", refresh);
+
+  syncCompareControl();
   (async () => { await loadDropdowns(); await refresh(); })();
 
   return {
@@ -428,6 +559,132 @@ function _makeMembersChart(canvas, labels, counts) {
       scales: {
         x: { ticks: { color: CHART_TEXT, maxRotation: 45 }, grid: { color: CHART_GRID } },
         y: { ticks: { color: CHART_TEXT, precision: 0 }, grid: { color: CHART_GRID }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+
+/**
+ * The band chart: this period against a p25–p75 envelope over the last N.
+ *
+ * The envelope is a *pair* of line datasets with a fill between them, which is
+ * how Chart.js draws a band. Only the upper one carries the legend entry — the
+ * lower is scaffolding and opts out via `skipLegend`, so nobody can toggle off
+ * half a band and be left with a stray line.
+ *
+ * Draw order matters: the band goes in first so the two lines sit on top of it
+ * rather than under a translucent wash.
+ */
+function _makeOverlayChart(
+  canvas, data, { subject, typical, isWeek, currentTotal, typicalToDate }
+) {
+  const hasBand = (data.band_mid || []).length > 0;
+
+  const datasets = [];
+  if (hasBand) {
+    datasets.push({
+      label: `${typical} (p25–p75)`,
+      data: data.band_high,
+      borderColor: "transparent",
+      backgroundColor: OVERLAY_BAND_FILL,
+      borderWidth: 0,
+      pointRadius: 0,
+      pointHitRadius: 0,
+      fill: "+1",
+      tension: 0.2,
+      // A spread is not a quantity you can add up.
+      legendValue: null,
+      order: 3,
+    });
+    datasets.push({
+      label: `${typical} p25`,
+      data: data.band_low,
+      borderColor: "transparent",
+      backgroundColor: "transparent",
+      borderWidth: 0,
+      pointRadius: 0,
+      pointHitRadius: 0,
+      fill: false,
+      tension: 0.2,
+      skipLegend: true,
+      order: 3,
+    });
+    datasets.push({
+      label: `${typical} (median)`,
+      data: data.band_mid,
+      borderColor: OVERLAY_PAST,
+      backgroundColor: "transparent",
+      // Dashed, so the two lines stay distinguishable without colour.
+      borderDash: [6, 4],
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      tension: 0.2,
+      legendValue: typicalToDate,
+      order: 2,
+    });
+  }
+  datasets.push({
+    label: `${subject} so far`,
+    data: data.counts,
+    borderColor: OVERLAY_NOW,
+    backgroundColor: "transparent",
+    borderWidth: 2,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    tension: 0.2,
+    // The current period stops at the hour we are in. Never bridge the gap —
+    // a line drawn across unlived hours is a claim about the future.
+    spanGaps: false,
+    legendValue: currentTotal,
+    order: 1,
+  });
+
+  return new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { labels: data.labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        // Both drawn in HTML by the caller — see the caption and legend hosts.
+        title: { display: false },
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            // 168 ticks cannot all be shown, so the tooltip is where the exact
+            // hour lives.
+            title: (items) => data.labels[items[0].dataIndex] || "",
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: CHART_TEXT,
+            maxRotation: 0,
+            autoSkip: false,
+            // A tick per day across a week, every third hour across a day —
+            // 168 labels would be a grey smear.
+            callback(value, index) {
+              if (isWeek) {
+                return index % 24 === 0
+                  ? (data.labels[index] || "").split(" ")[0]
+                  : "";
+              }
+              return index % 3 === 0 ? data.labels[index] : "";
+            },
+          },
+          grid: { color: CHART_GRID },
+        },
+        y: {
+          ticks: { color: CHART_TEXT },
+          grid: { color: CHART_GRID },
+          beginAtZero: true,
+          title: { display: true, text: data.y_label, color: CHART_TEXT },
+        },
       },
     },
   });

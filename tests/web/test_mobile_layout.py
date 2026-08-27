@@ -756,3 +756,25 @@ def test_connection_graph_populated_fits_on_phone(dashboard, browser):
         "/api/reports/interaction-graph stub shape drift?"
     )
     _assert_fits(res, "Connection Graph with data")
+
+
+def test_activity_overlay_fits_on_phone(dashboard, browser):
+    """Switch the Activity panel to the week overlay.
+
+    The overlay adds a fourth control to an already-full row and swaps the
+    chart for a 168-point band, and a plain page load never reaches it — the
+    view only exists once the Resolution dropdown is changed.
+    """
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        _goto_panel(page, f"{dashboard.base}/#/activity")
+        page.wait_for_selector('[data-control="resolution"]', timeout=15_000)
+        page.select_option('[data-control="resolution"]', "week_overlay")
+        # The Compare-to picker is revealed by the resolution change.
+        page.wait_for_selector('[data-field="compare"]:not([hidden])', timeout=15_000)
+        _settle(page)
+        res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+    finally:
+        context.close()
+    _assert_fits(res, "Activity week overlay")
