@@ -17,10 +17,10 @@ from bot_modules.economy.quests import POOL_CAP
 from bot_modules.services.color_palette import (
     IMAGE_EXTS,
     get_guild_swatch_dir,
-    post_or_update_palette_panel,
     resolve_swatch_directory,
     swatch_file_info,
     sync_palette,
+    take_down_palette_panel,
 )
 from bot_modules.services.economy_color_catalog_service import (
     color_in_use,
@@ -54,12 +54,7 @@ from bot_modules.services.economy_service import (
 from bot_modules.services import economy_shop_items_service as shop_items_svc
 from web_server.auth import AuthenticatedUser
 from web_server.helpers import resolve_names
-from web_server.routes.panel_posting import (
-    ChannelIdBody,
-    guild_or_503,
-    require_post_permissions,
-    text_channel_or_400,
-)
+from web_server.routes.panel_posting import guild_or_503
 from web_server.deps import (
     get_active_guild_id,
     get_ctx,
@@ -688,27 +683,25 @@ async def sync_color_catalog(
     return await run_query(_q)
 
 
-@router.post("/economy/color-catalog/post-panel")
-async def post_color_panel(
+@router.post("/economy/color-catalog/remove-panel")
+async def remove_color_panel(
     request: Request,
-    body: ChannelIdBody,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    """Re-post the palette showroom in the chosen channel."""
+    """Delete the old channel showroom, now that the shop shows the swatches.
+
+    There is no posting counterpart any more: `/bank shop` builds the gallery on
+    demand, so a channel full of permanent swatch posts is a thing to clean up
+    rather than to maintain. Deleting nothing is a success, not a 400 — an admin
+    pressing this on a server that never posted a showroom has got the outcome
+    they asked for.
+    """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
     guild = guild_or_503(ctx, guild_id)
-    channel = text_channel_or_400(guild, body.channel_id)
-    # Attachments, not embeds — each colour posts as an image file.
-    require_post_permissions(
-        guild, channel, "view_channel", "send_messages", "attach_files"
-    )
-
-    msgs = await post_or_update_palette_panel(ctx.db_path, guild, channel)
-    if not msgs:
-        raise HTTPException(400, "No rentable colors in the palette.")
-    return {"ok": True, "message_count": len(msgs)}
+    deleted = await take_down_palette_panel(ctx.db_path, guild)
+    return {"ok": True, "deleted": deleted}
 
 
 # ── managed swatch uploads (per-guild folder) ───────────────────────────

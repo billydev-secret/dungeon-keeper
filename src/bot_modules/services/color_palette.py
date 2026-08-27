@@ -3,15 +3,17 @@
 The Discord surface for ``econ_color_catalog`` (DB layer:
 ``economy_color_catalog_service``). Three things live here:
 
-* **The showroom panel.** One message per colour — the swatch image plus a
-  button — posted to a channel by an admin. It is the only place the gradients
-  can actually be *seen*, which is why it survived the move to the shop: a
-  select menu can name a colour but not show it.
-* **The picker button** (``PaletteColorButton``). Pressing a swatch wears that
-  colour, if the member is entitled to the ``role_preset`` perk. It does not
-  charge: buying happens in ``/bank shop``, where the price and the member's
-  balance are on screen. A public button that silently debits a wallet is a
-  worse trade than one extra step.
+* **The showroom gallery** (``showroom_page``). A select menu can name a colour
+  but not show it, so the shop's palette picker sends the swatches themselves:
+  one embed per colour carrying its art as an attachment, ten to a page. Until
+  2026-08-26 this was a channel of permanent image posts an admin had to
+  maintain; it is now built on demand inside ``/bank shop`` and nothing but the
+  take-down is left of the channel version.
+* **The picker button** (``PaletteColorButton``). Pressing a swatch on one of
+  those old channel panels wears that colour, if the member is entitled to the
+  ``role_preset`` perk. It does not charge: buying happens in ``/bank shop``,
+  where the price and the member's balance are on screen. Kept registered so a
+  showroom nobody has taken down yet still works.
 * **The swatch sync.** Filenames of the form ``ColorName_HEX1_HEX2.ext`` are the
   authoring flow — drop art in, get a palette — and stay the source of truth for
   each colour's name, gradient pair and display order.
@@ -37,6 +39,8 @@ import logging
 import os
 import re
 import sqlite3
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -243,102 +247,214 @@ async def wear_palette_color(
 
 
 # ---------------------------------------------------------------------------
-# Showroom panel
+# Showroom gallery — the swatches, shown inside the shop
 # ---------------------------------------------------------------------------
+
+#: Discord caps a message at ten embeds *and* ten attachments, and the showroom
+#: spends one of each per colour, so a page is exactly ten swatches.
+PALETTE_PAGE_SIZE = 10
+
+#: How many bytes of swatch art one page may carry. A single upload may be 8 MB
+#: (the dashboard's cap) and ten of those would be rejected by Discord as one
+#: message, so art stops being attached once the page is this full and the
+#: remaining colours fall back to their rendered fade, which costs a kilobyte.
+_PAGE_ATTACH_BUDGET = 7 * 1024 * 1024
+
+#: Size of the gradient rendered when a colour's art can't be attached.
+_FADE_SIZE = (512, 128)
 
 
 def _safe_filename(name: str, ext: str) -> str:
-    """Sanitise a name into a Discord-safe attachment filename."""
+    """Sanitise a name into a Discord-safe attachment filename.
+
+    The name is half of an ``attachment://`` reference, so anything Discord
+    would reject there breaks the embed that points at it.
+    """
     clean = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
     return f"{clean}{ext}"
 
 
-def _make_color_file(row: sqlite3.Row) -> discord.File | None:
-    """Return a discord.File for a colour's swatch image, or None."""
-    image_path = str(row["image_path"])
-    if not image_path:
+@dataclass(frozen=True)
+class ShowroomPage:
+    """One page of the shop's swatch gallery, ready to send.
+
+    ``embeds`` and ``attachments`` are parallel: each embed's image points at
+    ``attachment://<filename>`` of the same index. The caller wraps the bytes in
+    ``discord.File`` — a File consumes its buffer when sent, so the page holds
+    raw bytes and every send (including a page flip) builds its own.
+    """
+
+    page: int
+    page_count: int
+    embeds: list[discord.Embed]
+    attachments: list[tuple[str, bytes]]
+
+
+def palette_page_count(total: int, page_size: int = PALETTE_PAGE_SIZE) -> int:
+    """How many gallery pages ``total`` colours fill (always at least one)."""
+    if total <= 0:
+        return 1
+    return -(-total // page_size)
+
+
+def render_gradient_png(
+    hex1: str, hex2: str, size: tuple[int, int] = _FADE_SIZE
+) -> bytes:
+    """Render a colour's two hex codes as a horizontal fade, as PNG bytes.
+
+    The stand-in for a swatch whose art is missing. Production's palette rows
+    still point at an assets folder that moved, so without this the gallery
+    would show eleven colours and no colour — and the fade is the thing being
+    sold, so drawing it from the hexes is a truthful picture rather than a
+    placeholder.
+    """
+    from PIL import Image  # noqa: PLC0415
+
+    width, height = size
+    width = max(2, width)
+    r1, g1, b1 = (int(hex1[i : i + 2], 16) for i in (0, 2, 4))
+    r2, g2, b2 = (int(hex2[i : i + 2], 16) for i in (0, 2, 4))
+    span = width - 1
+    row = [
+        (
+            round(r1 + (r2 - r1) * x / span),
+            round(g1 + (g2 - g1) * x / span),
+            round(b1 + (b2 - b1) * x / span),
+        )
+        for x in range(width)
+    ]
+    strip = Image.new("RGB", (width, 1))
+    strip.putdata(row)
+    buf = io.BytesIO()
+    strip.resize((width, max(1, height))).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _read_swatch(image_path: str) -> bytes | None:
+    """The colour's art from disk, or None when it isn't there to read."""
+    if not image_path or not os.path.isfile(image_path):
         return None
-    if not os.path.isfile(image_path):
-        log.warning("Palette color %r image not found: %s", row["key"], image_path)
+    try:
+        with open(image_path, "rb") as fp:
+            return fp.read()
+    except OSError:
+        log.warning("Palette swatch unreadable: %s", image_path)
         return None
-    ext = os.path.splitext(image_path)[1] or ".png"
-    filename = _safe_filename(str(row["key"]), ext)
-    with open(image_path, "rb") as fp:
-        data = fp.read()
-    return discord.File(io.BytesIO(data), filename=filename)
 
 
-async def post_or_update_palette_panel(
-    db_path: Path,
-    guild: discord.Guild,
-    channel: discord.TextChannel,
-) -> list[discord.Message]:
-    """Post one message per palette colour (swatch + button). Returns the messages.
+def _accent(hex1: str) -> discord.Color:
+    """A swatch embed's stripe is the colour it is selling — semantic, not brand."""
+    try:
+        return discord.Color(int(hex1, 16))
+    except (TypeError, ValueError):
+        return discord.Color.default()
 
-    Only rentable colours are shown — a disabled colour or one whose swatch
-    filename never parsed has nothing to sell.
+
+def showroom_page(
+    colors: Sequence[Mapping],
+    page: int,
+    *,
+    currency_emoji: str,
+    page_size: int = PALETTE_PAGE_SIZE,
+) -> ShowroomPage:
+    """Build one page of the swatch gallery: an embed + an image per colour.
+
+    Reads files and renders fallbacks, so callers run it off the event loop.
+    ``page`` is clamped into range rather than rejected — a member paging a
+    gallery that shrank under them gets the nearest page, not an error.
+    """
+    page_count = palette_page_count(len(colors), page_size)
+    page = max(0, min(page, page_count - 1))
+    rows = list(colors[page * page_size : (page + 1) * page_size])
+
+    embeds: list[discord.Embed] = []
+    attachments: list[tuple[str, bytes]] = []
+    seen: set[str] = set()
+    spent = 0
+    for index, row in enumerate(rows):
+        art = _read_swatch(str(row["image_path"] or ""))
+        if art is not None and spent + len(art) > _PAGE_ATTACH_BUDGET:
+            art = None
+        if art is None:
+            data = render_gradient_png(str(row["hex1"]), str(row["hex2"]))
+            ext = ".png"
+        else:
+            data = art
+            ext = os.path.splitext(str(row["image_path"]))[1].lower() or ".png"
+        filename = _safe_filename(str(row["key"]), ext)
+        if filename in seen:
+            # Two keys can sanitise to the same name ("a b" and "a-b"), and two
+            # attachments sharing one filename would leave both embeds pointing
+            # at whichever Discord kept.
+            filename = _safe_filename(f"{row['key']}_{index}", ext)
+        seen.add(filename)
+        spent += len(data)
+
+        embed = discord.Embed(
+            title=str(row["name"]),
+            description=f"{currency_emoji} **{int(row['price']):,}** / week",
+            color=_accent(str(row["hex1"])),
+        )
+        embed.set_image(url=f"attachment://{filename}")
+        embeds.append(embed)
+        attachments.append((filename, data))
+
+    return ShowroomPage(page, page_count, embeds, attachments)
+
+
+async def take_down_palette_panel(db_path: Path, guild: discord.Guild) -> int:
+    """Delete the showroom messages this guild still has sitting in a channel.
+
+    The showroom moved inside `/bank shop`, so a channel of permanent swatch
+    posts is no longer how anyone browses. This clears the ones already posted
+    and forgets them; buttons on any panel that isn't taken down keep working,
+    because ``PaletteColorButton`` is still registered. Returns how many
+    messages went.
     """
     with open_db(db_path) as conn:
-        colors = list_catalog(conn, guild.id, rentable_only=True)
-
-    if not colors:
-        return []
-
-    # Delete old panel messages — bulk-delete per channel (≤100 at a time) so a
-    # large panel doesn't burn through the per-channel DELETE bucket and 429.
-    with open_db(db_path) as conn:
-        old_refs = get_panel_refs(conn, guild.id)
+        refs = get_panel_refs(conn, guild.id)
     by_channel: dict[int, list[int]] = {}
-    for ch_id, msg_id in old_refs:
+    for ch_id, msg_id in refs:
         by_channel.setdefault(ch_id, []).append(msg_id)
+
+    deleted = 0
     for ch_id, msg_ids in by_channel.items():
-        old_ch = guild.get_channel(ch_id)
-        if not isinstance(old_ch, discord.TextChannel):
+        channel = guild.get_channel(ch_id)
+        if not isinstance(channel, discord.TextChannel):
             continue
-        partials = [old_ch.get_partial_message(mid) for mid in msg_ids]
+        partials = [channel.get_partial_message(mid) for mid in msg_ids]
+        # Bulk-delete in ≤100 chunks so a large showroom doesn't burn through
+        # the per-channel DELETE bucket and 429.
         for i in range(0, len(partials), 100):
             chunk = partials[i : i + 100]
             try:
-                await old_ch.delete_messages(chunk)
+                await channel.delete_messages(chunk)
             except (discord.NotFound, discord.HTTPException, discord.ClientException):
-                # Bulk delete rejects messages >14 days old; fall back per-message.
+                # Bulk delete rejects messages over 14 days old — and every
+                # showroom worth taking down is older than that.
                 for pm in chunk:
                     try:
                         await pm.delete()
-                    except (discord.NotFound, discord.HTTPException):
+                    except discord.NotFound:
+                        deleted += 1  # already gone is the outcome we wanted
+                    except discord.HTTPException:
                         pass
+                    else:
+                        deleted += 1
+            else:
+                deleted += len(chunk)
 
-    header = await channel.send(
-        "**The color palette** — rent **Palette Color** from `/bank shop`, "
-        "then press one to wear it. Switch as often as you like."
-    )
-
-    messages: list[discord.Message] = [header]
-    for i, row in enumerate(colors):
-        if i > 0:
-            spacer = await channel.send("​")  # zero-width space as visual gap
-            messages.append(spacer)
-
-        view = discord.ui.View(timeout=None)
-        btn: discord.ui.Button[discord.ui.View] = discord.ui.Button(
-            label=str(row["name"]),
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"booster_role:{row['key']}",
-        )
-        view.add_item(btn)
-
-        file = _make_color_file(row)
-        kwargs: dict = {"view": view}
-        if file is not None:
-            kwargs["file"] = file
-        messages.append(await channel.send(**kwargs))
-
+    # Forget the refs whatever happened: a message we can no longer reach (its
+    # channel deleted, say) is not coming back, and keeping the row would make
+    # every future take-down report work it isn't doing.
     with open_db(db_path) as conn:
-        replace_panel_refs(
-            conn, guild.id, [(channel.id, m.id) for m in messages]
+        replace_panel_refs(conn, guild.id, [])
+    if refs:
+        log.info(
+            "Took down %d of %d palette showroom messages in %s",
+            deleted, len(refs), guild.id,
         )
-    log.info("Posted %d palette panel messages in #%s", len(messages), channel.name)
-    return messages
+    return deleted
 
 
 # ---------------------------------------------------------------------------

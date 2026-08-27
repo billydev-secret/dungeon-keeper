@@ -21,7 +21,8 @@ Two modules:
   `econ_color_catalog`, modelled on `economy_icon_catalog_service` (migration
   077).
 - `src/bot_modules/services/color_palette.py` — the Discord surface: the
-  showroom panel, its picker button, and the swatch sync.
+  showroom gallery the shop sends, the legacy panel's picker button, and the
+  swatch sync.
 
 ## Buying and wearing
 
@@ -48,8 +49,8 @@ the viewer is renting the perk*. A palette can empty out under a live rental (it
 last color disabled, or its swatch deleted), and hiding the row then would bill
 someone weekly for a perk with no row, no price and no ✅ anywhere in the shop.
 
-**In the showroom** (the in-channel panel): pressing a swatch calls
-`color_palette.wear_palette_color`, which is also what the shop picker's
+**On a legacy channel panel** (one nobody has taken down yet): pressing a swatch
+calls `color_palette.wear_palette_color`, which is also what the shop picker's
 switch path amounts to. It **never charges** — a public button that debits a
 wallet on a press would be a trap — so it requires an existing entitlement
 (rental, gift or staff comp) and otherwise replies with that color's price and a
@@ -109,8 +110,8 @@ positioned **above** the `#### Cosmetics` anchor the legacy roles sit under
 overlays their old one, and if that rental lapses the personal role is deleted
 and the original color shows through again rather than leaving them bare.
 
-They cannot *switch* for free: the showroom button requires an entitlement, so
-changing color means renting like everyone else.
+They cannot *switch* for free: the legacy panel's button requires an
+entitlement, so changing color means renting like everyone else.
 
 Two guards keep the promise:
 
@@ -152,20 +153,51 @@ A color is **rentable** only with both hexes present and `enabled = 1`. A row
 whose filename never parsed still exists (dropping it would make the palette
 silently short) but is never offered, and the dashboard flags it for a re-sync.
 
-## Showroom panel
+## Showroom gallery (in the shop)
 
-`post_or_update_palette_panel` (Economy → Sinks → **Post Panel**) deletes the
-previously posted messages (bulk-delete in ≤100 chunks per channel, per-message
-fallback for >14-day-old messages), then posts a header plus one message per
-**rentable** color — the swatch image with a single button — with zero-width-space
-spacers between. Message ids are saved to `econ_color_panel_messages` for the
-next repost's cleanup. Posting with nothing rentable is a 400.
+The showroom exists because a select menu can name a color but not show it. Since
+2026-08-26 it is built **inside `/bank shop`** rather than posted into a channel:
+the Palette button opens an ephemeral message carrying one embed per color —
+title, price, and the swatch itself as an attachment — over the picker that rents
+one.
 
-The showroom exists because a select menu can name a color but not show it; the
-art is the only place the gradients can actually be seen.
+`showroom_page(colors, page, *, currency_emoji)` builds a page and is pure enough
+to test without Discord: it returns embeds plus `(filename, bytes)` attachments,
+parallel by index, which `economy_cog._palette_files` wraps in `discord.File` for
+each send (a File is consumed when sent, so a page flip re-wraps rather than
+re-uses). It reads files and renders images, so callers run it in a thread.
 
-Buttons are `PaletteColorButton`, a `discord.ui.DynamicItem` whose custom-id
-template is **still `booster_role:(?P<key>.+)`**, registered at startup via
+- **A page is ten colors** (`PALETTE_PAGE_SIZE`) — Discord's per-message ceiling
+  on both embeds and attachments. A larger palette gets ◀ / ▶ buttons and a
+  disabled `n / m` counter; the select lists exactly the page on screen, so names
+  and swatches can never disagree and the old "showing the first 25" trim is gone.
+- **The embed stripe is the color's own `hex1`** — semantic, the thing being sold,
+  so it is not under the `resolve_accent_color` contract.
+- **Missing art renders the fade.** `render_gradient_png(hex1, hex2)` draws the
+  gradient from the two hex codes whenever the file isn't on disk. Production's
+  rows point at an assets folder that moved, so without this the gallery would
+  show a column of colors and no color.
+- **A page has an attachment budget** (`_PAGE_ATTACH_BUDGET`, 7 MB). Uploads are
+  capped at 8 MB each and ten of those would be rejected as one message, so once
+  the budget is spent the remaining colors show their rendered fade instead.
+- `page` is **clamped**, not rejected: a gallery left open while the palette
+  shrank flips to the nearest page.
+
+### The channel showroom it replaced
+
+`take_down_palette_panel(db_path, guild)` (Economy → Sinks → **Delete Old
+Showroom**) deletes whatever messages `econ_color_panel_messages` still records —
+bulk-delete in ≤100 chunks per channel, per-message fallback for the >14-day-old
+ones every real showroom now is — and clears the refs whatever happened, since a
+message in a deleted channel is not coming back. Deleting nothing is a success.
+There is **no posting counterpart**: `POST /economy/color-catalog/post-panel` and
+`post_or_update_palette_panel` were removed with the move, and a test asserts the
+route is gone (the surviving `/color-catalog/{color_id}` routes answer 405 for
+that path, so it is asserted against the route table, not a status code).
+
+Buttons on a panel nobody has taken down still work. They are
+`PaletteColorButton`, a `discord.ui.DynamicItem` whose custom-id template is
+**still `booster_role:(?P<key>.+)`**, registered at startup via
 `bot.add_dynamic_items(PaletteColorButton)` in `src/dungeonkeeper/__main__.py`.
 The legacy prefix is deliberate: panels posted before migration 159 carry those
 ids, and re-templating would have silently broken every button already sitting in
@@ -184,14 +216,12 @@ routes in `src/web_server/routes/economy.py`, all `require_perms({"admin"})`:
 | `PATCH /api/economy/color-catalog/{id}` | Rename / re-price / enable-disable / reorder. |
 | `DELETE /api/economy/color-catalog/{id}` | Delete — **409** while a live rental points at it. |
 | `POST /api/economy/color-catalog/sync` | Run the swatch sync. |
-| `POST /api/economy/color-catalog/post-panel` | Repost the showroom. |
+| `POST /api/economy/color-catalog/remove-panel` | Delete the old channel showroom's messages. |
 | `GET/POST/DELETE /api/economy/color-catalog/swatches[/{filename}]` | Managed uploads: list / upload (8 MB cap, sanitized filenames, image extensions only) / delete. |
 
-The panel-posting guards (`routes/panel_posting.py`) refuse up front when the bot
-lacks View Channel / Send Messages / **Attach Files** — the showroom sends image
-attachments and no embeds, and the poster deletes the old panel before its
-unguarded sends, so a missing permission would otherwise leave the guild with no
-showroom and a repost that fails the same way.
+The take-down keeps only `guild_or_503` from `routes/panel_posting.py`; the
+permission precheck went with the posting route, because nothing is posted into a
+channel any more.
 
 There is no `config-booster-roles` panel any more; it and its five
 `/api/config/booster-roles/*` routes were removed in the same change.
@@ -220,7 +250,9 @@ on disk under `swatches/<guild_id>/`.
   bringing your own two colors is `role_gradient`, a separate product.
 - **No editing a gradient by hand** — the hexes come from the swatch filename, so
   editing them in the dashboard would desync the color from its art.
-- **No buying from the showroom** — the panel applies, the shop sells.
-- **No automatic panel refresh** after a sync or a color edit; reposting is an
-  explicit admin action.
+- **No buying from a legacy channel panel** — those buttons apply, the shop
+  sells. In the shop's own gallery the two are the same act, because the price
+  and the balance are on screen.
+- **No channel showroom** — it is built on demand in `/bank shop`, so a sync or a
+  color edit needs no repost and no server spends a channel on swatches.
 - **No slash-command surface at all.**
