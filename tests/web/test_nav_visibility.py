@@ -415,7 +415,7 @@ def test_palette_opens_on_ctrl_k_and_closes_on_escape(browser, dashboard):
         page.click("#panel-root")  # focus somewhere outside the palette
         _open_palette(page)
         assert page.evaluate("() => document.activeElement.className") == "dk-palette-input"
-        page.keyboard.press("Escape")
+        page.press(".dk-palette-input", "Escape")
         page.wait_for_selector(".dk-palette", state="detached", timeout=5_000)
         # Focus is returned rather than dropped on <body>.
         assert page.evaluate("() => document.activeElement !== document.body")
@@ -451,7 +451,7 @@ def test_palette_lists_section_and_label_and_opens_with_the_keyboard(browser, da
             "     ?.includes('Jails')",
             timeout=10_000,
         )
-        page.keyboard.press("Enter")
+        page.press(".dk-palette-input", "Enter")
         page.wait_for_function("() => location.hash.startsWith('#/mod-jails')", timeout=5_000)
         assert page.query_selector(".dk-palette") is None
     finally:
@@ -467,7 +467,14 @@ def test_palette_arrow_keys_move_the_selection(browser, dashboard):
         first = page.evaluate(
             "() => document.querySelector('.dk-palette-option.active').id"
         )
-        page.keyboard.press("ArrowDown")
+        # page.press(selector, …) focuses first, then sends the key. The bare
+        # keyboard.press sends to whatever happens to hold focus, and the
+        # palette binds its keydown on the palette element — so a key dispatched
+        # while focus has drifted to <body> targets body, never bubbles to the
+        # palette, and is simply lost. Under a parallel browser run that is what
+        # kept happening, which the first fix here turned from a wrong answer
+        # into an honest five-second timeout without curing it.
+        page.press(".dk-palette-input", "ArrowDown")
         # Wait for the move rather than reading straight after the keypress —
         # the assertion below should fail because the arrow key does nothing,
         # never because the read landed a frame early.

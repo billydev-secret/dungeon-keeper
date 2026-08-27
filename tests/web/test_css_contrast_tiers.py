@@ -290,3 +290,69 @@ def test_the_confirm_dialogs_button_stays_solid_and_clears_aa():
     assert ratio >= 4.5, (
         f"white on {m.group(1)} is {ratio:.2f}:1, under AA for 12.5px text"
     )
+
+
+# ── the activity heatmap's quantized ramp ───────────────────────────────
+#
+# A continuous alpha ramp of gold over the card crosses a band of mid
+# luminance where neither house ink clears 4.5:1 — the best any pairing
+# achieves at the crossover is 3.85:1. Five buckets straddle that band.
+
+
+def _heat_stops() -> list[float]:
+    src = (_JS / "panels" / "health-heatmap.js").read_text(encoding="utf-8")
+    m = re.search(r"const HEAT_STOPS = \[([^\]]+)\]", src)
+    assert m, "HEAT_STOPS is gone; the heatmap is back on a continuous ramp"
+    return [float(x) for x in m.group(1).split(",")]
+
+
+def _over(fg, alpha, bg):
+    return tuple(fg[i] * alpha + bg[i] * (1 - alpha) for i in range(3))
+
+
+_GOLD, _CARD = (230, 184, 76), (43, 45, 49)
+_BRIGHT, _RAIL = _rgb("#f2f3f5"), _rgb("#1e1f22")
+
+
+def test_every_heatmap_bucket_can_carry_readable_text():
+    """The server-wide grid prints its counts inside the cells, and they are
+    the only non-hover way to read a value on the panel."""
+    for alpha in _heat_stops():
+        cell = _over(_GOLD, alpha, _CARD)
+        best = max(_contrast(_BRIGHT, cell), _contrast(_RAIL, cell))
+        assert best >= 4.5, (
+            f"alpha {alpha}: best ink reaches only {best:.2f}:1"
+        )
+
+
+def test_neighbouring_heatmap_buckets_are_distinguishable():
+    """A scale nobody can read as a scale is not an improvement on a ramp
+    nobody can read text on. The stops were searched to keep this even: a
+    ramp picked purely for text contrast reaches 5.26:1 on text but collapses
+    its top three buckets to 1.28:1 of each other."""
+    stops = _heat_stops()
+    cells = [_over(_GOLD, a, _CARD) for a in stops]
+    weakest = min(_contrast(cells[i], cells[i + 1]) for i in range(len(cells) - 1))
+    assert weakest >= 1.5, f"weakest step between buckets is {weakest:.2f}:1"
+
+
+def test_the_heatmap_ships_a_scale():
+    """Quantizing only helps if a bucket can be read back as a number."""
+    src = (_JS / "panels" / "health-heatmap.js").read_text(encoding="utf-8")
+    assert "function heatLegendHTML" in src, "the legend builder is gone"
+    # Defining it is not shipping it: assert the grid actually calls it, which
+    # the first version of this test did not — deleting the call left the
+    # function in the file and the test green.
+    grid = src.split("function heatmapGridHTML", 1)[1].split("\nfunction ", 1)[0]
+    assert "heatLegendHTML(" in grid, "the grid never renders the legend"
+    css = (_STATIC / "app.css").read_text(encoding="utf-8")
+    assert ".hm-key-swatch" in css, "the legend has no styles"
+
+
+def test_an_empty_cell_is_never_rounded_into_a_bucket():
+    """Bucket 0 means nothing happened. Folding a real value into it would
+    make an hour with one message look identical to an hour with none."""
+    src = (_JS / "panels" / "health-heatmap.js").read_text(encoding="utf-8")
+    body = src.split("function heatBucket", 1)[1].split("\n}", 1)[0]
+    assert "if (!value) return 0;" in body
+    assert "Math.max(1," in body, "a non-zero value can fall into bucket 0"

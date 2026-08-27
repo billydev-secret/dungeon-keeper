@@ -2842,6 +2842,27 @@ textarea.field-input { resize: vertical; }
   height: 28px;
   font-variant-numeric: tabular-nums;
 }
+/* The heatmap's scale. The grid quantizes into five buckets, which is only
+   readable with something to decode a bucket against — the panel had no legend
+   at all before. */
+.hm-key {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-top: var(--s-3);
+  font-size: var(--t-1);
+  color: var(--ink-mute);
+}
+.hm-key-label { text-transform: uppercase; letter-spacing: 0.04em; }
+.hm-key-item { display: inline-flex; align-items: center; gap: var(--s-1); }
+.hm-key-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+}
+
 .hm-cell-sm {
   min-width: 16px;
   height: 18px;

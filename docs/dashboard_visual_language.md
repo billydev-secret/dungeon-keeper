@@ -129,6 +129,34 @@ which is which — Tickets splits **This ticket** (state) from **This member**
 display name inside such a label wears `.td-act-who`, which cancels the
 uppercase: an eyebrow is uppercase, a name someone chose is not.
 
+## Sequential ramps are quantized, because continuous ones cannot carry text
+
+The activity heatmap paints each cell as gold over the card at an alpha set by
+its value, and prints the count inside the cell. A **continuous** ramp cannot
+do both: it necessarily passes through a band of mid luminance where neither
+`--ink-bright` nor `--bg-rail` reaches 4.5:1, and the best any ink pairing
+achieves at the crossover is **3.85:1**. No swap inside the Discord greys
+escapes it — `--bg-floor` gets 4.11, pure black 4.35, and only pure white on
+pure black clears it at 4.58.
+
+Five buckets straddle the band instead of walking through it. The stops —
+`0.04, 0.25, 0.46, 0.69, 0.96` — were **searched, not chosen**: they maximise
+the weakest step between neighbouring buckets subject to every bucket's better
+ink clearing AA. That matters because the obvious ramp, optimised for text
+alone, reaches 5.26:1 on text and then collapses its top three buckets to
+1.28:1 of each other — trading a contrast problem for an encoding one. The
+shipped stops give 1.59:1 between every pair, evenly, so the scale reads as a
+scale.
+
+Quantizing only helps if a bucket can be read back as a number, and this panel
+had **no legend at all**. It has one now. Bucket 0 means nothing happened and
+is never a rounding of something that did — an hour with one message must not
+look like an hour with none.
+
+The arithmetic is pinned in `tests/web/test_css_contrast_tiers.py`, including
+the neighbour separation, so retuning a stop for looks cannot quietly undo
+either half.
+
 ## Anything you can click, you can reach with a keyboard
 
 Three shapes on this dashboard were mouse-only, each because a plain `<div>` or
