@@ -30,7 +30,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [anon_audit_spec.md](anon_audit_spec.md) | Anonymous Features Audit: DB-backed trail for the anonymous games (AMA, FFA, Hot Takes, Fantasies, Clapback, WYR, Compliment) **and Confessions** — admin panel, configurable retention (default 90 days, `0` = forever), shared guild-wide. Stores no content by design; joins `messages`. Whisper/Guess keep their own trails |
 | [auto_react_spec.md](auto_react_spec.md) | Auto React (listener-only image auto-reactions; dashboard/API-configured) |
 | [bios_cog_spec.md](bios_cog_spec.md) | Bios cog (profiles, wizard) |
-| [color_palette_spec.md](color_palette_spec.md) | Curated gradient colors rented from the perk shop (`role_preset`): swatch-synced catalog, per-color pricing, showroom panel, and the grandfathered booster roles |
+| [color_palette_spec.md](color_palette_spec.md) | Curated gradient colors rented from the perk shop (`role_preset`): swatch-synced catalog, per-color pricing, the in-shop swatch gallery, and the grandfathered booster roles |
 | [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration, announcement message format |
 | [bump_tracker_spec.md](bump_tracker_spec.md) | Bump Tracker (`/bump log`/`status`, multi-site cooldown reminders); dashboard panel shipped 2026-07-23 — before that the routes existed with no UI and live guilds were configured by hand |
 | [clapback_spec.md](clapback_spec.md) | Clapback head-to-head comedy game: bracketing rules (3-player round-robin, fewest-byes-first rotation, duplicate-answer avoidance) and scoring (vote %, CLAPBACK bonus, bye = the round's average). Complements the suite-wide `games_system_spec.md` |

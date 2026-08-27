@@ -25,8 +25,7 @@
  */
 import { api, apiPost, apiPut, apiDelete, request, esc } from "../api.js";
 import {
-  showStatus, guardForm, mountAsync, loadChannels, loadRoles,
-  mountChannelPicker,
+  showStatus, guardForm, mountAsync, loadRoles,
 } from "../config-helpers.js";
 import { confirmDialog, toast } from "../ui.js";
 import { DEFAULT_MAX, economyOffBanner } from "./economy-shop-shared.js";
@@ -55,15 +54,14 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading the shop…</div></div>`;
 
   return mountAsync(container, async () => {
-    const [cfg, icons, colors, channels] = await Promise.all([
+    const [cfg, icons, colors] = await Promise.all([
       api("/api/economy/config"),
       api("/api/economy/icon-catalog").catch(() => []),
       api("/api/economy/color-catalog").catch(() => []),
-      loadChannels().catch(() => []),
     ]);
     render(container, cfg);
     wireOnSale(container, cfg);
-    wirePalette(container, colors, channels);
+    wirePalette(container, colors);
     wireCatalog(container, icons);
     wireShopItems(container);
   }, { errorMsg: "Couldn’t load the shop catalogs." });
@@ -210,21 +208,17 @@ function render(container, cfg) {
         </div>
 
         <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
-          <div class="section-label">Showroom Panel</div>
+          <div class="section-label">Old Showroom Channel</div>
           <div class="field-hint" style="margin-bottom:10px;">
-            Posts one message per color so members can actually see the gradients, each
-            with a button that wears it. Pressing a button needs the Palette Color perk —
-            it never charges anyone, so nobody buys by accident. The messages posted last
-            time are <strong>deleted</strong> first, so post again after changing colors.
+            Members now browse the swatches inside <code>/bank shop</code> — the picker shows
+            every gradient as a picture, so no channel has to hold them. If this server still
+            has the old showroom sitting in a channel, this deletes those messages. Nothing
+            else changes: the colors, their prices and anyone renting one are untouched.
           </div>
-          <form class="form" data-repost-form>
-            <div class="field">
-              <label>Channel</label>
-              <span data-picker="panel_channel_id"></span>
-            </div>
+          <form class="form" data-takedown-form>
             <div style="display:flex;gap:8px;align-items:center;">
-              <button type="submit" class="btn btn-primary" data-repost-btn>Post Panel</button>
-              <span data-repost-status></span>
+              <button type="submit" class="btn btn-danger" data-takedown-btn>Delete Old Showroom</button>
+              <span data-takedown-status></span>
             </div>
           </form>
         </div>
@@ -418,7 +412,7 @@ function colorRow(color) {
 }
 
 
-function wirePalette(container, colors, channels) {
+function wirePalette(container, colors) {
   const listEl = container.querySelector("[data-palette]");
   const emptyEl = container.querySelector("[data-palette-empty]");
 
@@ -610,37 +604,31 @@ function wirePalette(container, colors, channels) {
     }
   });
 
-  // ── showroom panel ──
-  const repostForm = container.querySelector("[data-repost-form]");
-  const repostBtn = container.querySelector("[data-repost-btn]");
-  const repostStatus = container.querySelector("[data-repost-status]");
-  const repostPicker = mountChannelPicker(
-    repostForm.querySelector('[data-picker="panel_channel_id"]'),
-    channels, "0",
-    { emptyValue: "0", emptyLabel: "(pick a channel)", label: "Channel" },
-  );
-  guardForm(repostForm);
-  repostForm.addEventListener("submit", async (e) => {
+  // ── the old showroom channel, on its way out ──
+  const takedownForm = container.querySelector("[data-takedown-form]");
+  const takedownBtn = container.querySelector("[data-takedown-btn]");
+  const takedownStatus = container.querySelector("[data-takedown-status]");
+  guardForm(takedownForm);
+  takedownForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const channelId = repostPicker.getValue() || "0";
-    if (channelId === "0") {
-      showStatus(repostStatus, false, "Pick a channel first.");
-      return;
-    }
     const ok = await confirmDialog(
-      "Post the showroom? The panel posted last time is deleted first, so its buttons stop working.",
-      { title: "Post Showroom Panel", danger: true, confirmLabel: "Post Panel" },
+      "Delete the showroom messages this server posted in a channel? "
+      + "Members browse the colors in /bank shop instead — nothing else changes.",
+      { title: "Delete Old Showroom", danger: true, confirmLabel: "Delete Messages" },
     );
     if (!ok) return;
-    repostBtn.disabled = true;
+    takedownBtn.disabled = true;
     try {
-      const data = await apiPost("/api/economy/color-catalog/post-panel", { channel_id: channelId });
-      const n = data.message_count || 0;
-      showStatus(repostStatus, true, `Posted ${n} message${n === 1 ? "" : "s"}`);
+      const data = await apiPost("/api/economy/color-catalog/remove-panel");
+      const n = data.deleted || 0;
+      showStatus(
+        takedownStatus, true,
+        n ? `Deleted ${n} message${n === 1 ? "" : "s"}` : "Nothing left to delete",
+      );
     } catch (err) {
-      showStatus(repostStatus, false, err.message);
+      showStatus(takedownStatus, false, err.message);
     } finally {
-      repostBtn.disabled = false;
+      takedownBtn.disabled = false;
     }
   });
 }

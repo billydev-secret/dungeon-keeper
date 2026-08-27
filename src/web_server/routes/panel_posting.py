@@ -5,7 +5,9 @@ order — the bot is online and in the guild, the target really is a text channe
 here, and the bot may post *the kind of message this panel sends*. They lived
 private in ``routes/config.py`` until the colour palette's admin moved to
 ``routes/economy.py`` and needed them too; a second copy would have been a
-second thing to keep in step with the first.
+second thing to keep in step with the first. The palette has since stopped
+posting a panel at all — its showroom is built inside ``/bank shop`` — and
+``routes/economy.py`` keeps only ``guild_or_503`` for the take-down.
 """
 
 from __future__ import annotations
@@ -77,11 +79,10 @@ def require_post_permissions(guild, channel, *required: str) -> None:
     that fails the same way. A 400 naming the missing permission is also simply
     actionable — the admin can go and fix it.
 
-    The flags differ per panel and must be passed explicitly: the DM perms
-    panel sends an embed, while the colour-palette showroom sends image
-    *attachments* and no embed. Checking the wrong set is worse than not
-    checking, because it both rejects channels that would have worked and waves
-    through the one failure this exists to prevent.
+    The flags differ per panel and must be passed explicitly — an embed panel
+    needs Embed Links, an image panel needs Attach Files. Checking the wrong set
+    is worse than not checking, because it both rejects channels that would have
+    worked and waves through the one failure this exists to prevent.
     """
     perms = channel.permissions_for(guild.me)
     missing = [

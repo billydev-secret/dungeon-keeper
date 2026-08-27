@@ -128,6 +128,11 @@ from bot_modules.services.economy_quests_service import (
     load_member_quest_board,
     reroll_quote,
 )
+from bot_modules.services.color_palette import (
+    PALETTE_PAGE_SIZE,
+    ShowroomPage,
+    showroom_page,
+)
 from bot_modules.services.economy_color_catalog_service import (
     catalog_price_range as color_price_range,
 )
@@ -658,9 +663,6 @@ _CFG_MODALS = {
 # tells the member the list was trimmed.
 _ICON_SELECT_LIMIT = 24
 
-# The palette picker has no Custom slot, so it gets Discord's full 25.
-_COLOR_SELECT_LIMIT = 25
-
 #: Discord's own ceiling on select options. A guild past this many items has a
 #: curation problem, not a shop problem.
 _STORE_SELECT_LIMIT = 25
@@ -736,12 +738,27 @@ class _IconCatalogView(_MemberScopedView):
         self.add_item(_IconCatalogSelect(cog, settings, guild, icons))
 
 
+def _palette_files(page: ShowroomPage) -> list[discord.File]:
+    """Wrap a built gallery page's swatch bytes for one send.
+
+    Fresh objects every time: a ``discord.File``'s buffer is consumed on send,
+    so the page holds bytes and each send (or page flip) gets its own files.
+    """
+    return [
+        discord.File(io.BytesIO(data), filename=name)
+        for name, data in page.attachments
+    ]
+
+
 class _ColorPaletteSelect(discord.ui.Select):
     """A picker of curated palette colours; choosing one rents or switches to it.
 
     Unlike the icon picker there is no bring-your-own slot: picking your own two
     colours is a different product (``role_gradient``), which the shop lists on
-    its own row.
+    its own row. The options are exactly the colours shown on the current
+    gallery page, so the names in the menu and the swatches above it can never
+    disagree — and a palette larger than a select's 25 slots pages instead of
+    being silently trimmed.
     """
 
     def __init__(
@@ -764,7 +781,7 @@ class _ColorPaletteSelect(discord.ui.Select):
                         f"{settings.currency_emoji} {int(c['price']):,} / week"
                     )[:100],
                 )
-                for c in colors[:_COLOR_SELECT_LIMIT]
+                for c in colors
             ],
         )
         self.cog = cog
@@ -778,7 +795,11 @@ class _ColorPaletteSelect(discord.ui.Select):
 
 
 class _ColorPaletteView(_MemberScopedView):
-    """Ephemeral palette picker, scoped to the member who opened the shop."""
+    """The shop's swatch gallery: a page of colours you can see, and pick.
+
+    Scoped to the member who opened the shop, and longer-lived than the other
+    pickers because browsing art is slower than reading a list.
+    """
 
     def __init__(
         self,
@@ -787,9 +808,50 @@ class _ColorPaletteView(_MemberScopedView):
         guild: discord.Guild,
         user_id: int,
         colors: list[dict],
+        *,
+        page: int = 0,
+        page_count: int = 1,
     ) -> None:
-        super().__init__(user_id)
-        self.add_item(_ColorPaletteSelect(cog, settings, guild, colors))
+        super().__init__(user_id, timeout=300)
+        self.cog = cog
+        self.settings = settings
+        self.guild = guild
+        self.colors = colors
+        self.page = page
+        self.page_count = page_count
+        self.rebuild()
+
+    def rebuild(self) -> None:
+        """Re-lay the select and the pager for whatever page is showing now."""
+        self.clear_items()
+        start = self.page * PALETTE_PAGE_SIZE
+        shown = self.colors[start : start + PALETTE_PAGE_SIZE]
+        self.add_item(_ColorPaletteSelect(self.cog, self.settings, self.guild, shown))
+        if self.page_count <= 1:
+            return
+        prev = discord.ui.Button(
+            label="◀", style=discord.ButtonStyle.secondary, disabled=self.page == 0
+        )
+        prev.callback = self._flip(self.page - 1)
+        counter = discord.ui.Button(
+            label=f"{self.page + 1} / {self.page_count}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+        )
+        nxt = discord.ui.Button(
+            label="▶",
+            style=discord.ButtonStyle.secondary,
+            disabled=self.page >= self.page_count - 1,
+        )
+        nxt.callback = self._flip(self.page + 1)
+        for item in (prev, counter, nxt):
+            self.add_item(item)
+
+    def _flip(self, page: int):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await self.cog.show_palette_page(interaction, self, page)
+
+        return _cb
 
 
 def _item_bought_text(
@@ -2852,13 +2914,25 @@ class EconomyCog(commands.Cog):
             ephemeral=True,
         )
 
+    #: The line above the swatches, on the first page and on every flip.
+    _PALETTE_INTRO = (
+        "Pick a color to rent — each is billed weekly, and you can switch any time:"
+    )
+
     async def open_color_palette(
         self,
         interaction: discord.Interaction,
         settings: EconSettings,
         guild: discord.Guild,
     ) -> None:
-        """Show the curated colour picker (rent a colour, or switch the rented one)."""
+        """Open the swatch showroom: the gradients themselves, and a picker.
+
+        This is the whole showroom now — it used to be a channel of permanent
+        image posts, because a select menu can name a colour but not show it.
+        The art rides along as attachments on an ephemeral message instead, so
+        the gradients are seen where they are bought and no server has to spend
+        a channel on them.
+        """
         if not await self._palette_gate_ok(interaction, guild.id):
             return
         colors = await asyncio.to_thread(self._load_palette, guild.id)
@@ -2867,16 +2941,45 @@ class EconomyCog(commands.Cog):
                 "❌ No rentable colors are set up here yet.", ephemeral=True
             )
             return
-        note = ""
-        if len(colors) > _COLOR_SELECT_LIMIT:
-            note = f"\n_Showing the first {_COLOR_SELECT_LIMIT} colors._"
+        # File reads and gradient rendering — off the event loop, like the load.
+        page = await asyncio.to_thread(
+            showroom_page, colors, 0, currency_emoji=settings.currency_emoji
+        )
         await interaction.response.send_message(
-            "Pick a color to rent — each is billed weekly, and you can switch "
-            f"any time:{note}",
+            self._PALETTE_INTRO,
+            embeds=page.embeds,
+            files=_palette_files(page),
             view=_ColorPaletteView(
-                self, settings, guild, interaction.user.id, colors
+                self, settings, guild, interaction.user.id, colors,
+                page=page.page, page_count=page.page_count,
             ),
             ephemeral=True,
+        )
+
+    async def show_palette_page(
+        self,
+        interaction: discord.Interaction,
+        view: _ColorPaletteView,
+        page: int,
+    ) -> None:
+        """Flip the open gallery to another page, in place.
+
+        The swatches are re-uploaded rather than kept around: a ``discord.File``
+        is spent when it is sent, and holding ten images per page in memory for
+        every open shop costs more than reading them again.
+        """
+        built = await asyncio.to_thread(
+            showroom_page, view.colors, page,
+            currency_emoji=view.settings.currency_emoji,
+        )
+        view.page = built.page
+        view.page_count = built.page_count
+        view.rebuild()
+        await interaction.response.edit_message(
+            content=self._PALETTE_INTRO,
+            embeds=built.embeds,
+            attachments=_palette_files(built),
+            view=view,
         )
 
     async def open_store(
@@ -3797,20 +3900,24 @@ class EconomyCog(commands.Cog):
             ]
 
     def _load_palette(self, guild_id: int) -> list[dict]:
-        """Rentable palette colours, as plain dicts for the picker view.
+        """Rentable palette colours, as plain dicts for the gallery.
 
         ``price`` resolves the per-colour override against the flat perk price
         here, so the select's descriptions quote what the member will actually be
-        charged rather than a raw 0.
+        charged rather than a raw 0. ``key`` and ``image_path`` are what the
+        swatch gallery draws from — the art if it is on disk, the two hexes if
+        it is not.
         """
         with self.bot.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             return [
                 {
                     "id": int(r["id"]),
+                    "key": r["key"],
                     "name": r["name"],
                     "hex1": r["hex1"],
                     "hex2": r["hex2"],
+                    "image_path": r["image_path"],
                     "price": int(r["price"]) or settings.price_role_preset,
                 }
                 for r in list_color_catalog(conn, guild_id, rentable_only=True)

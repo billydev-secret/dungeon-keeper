@@ -527,3 +527,218 @@ def test_sync_names_a_present_but_unoffered_colour(db):
 
     assert (added, disabled, removed) == ([], [], [])
     assert still_disabled == ["firefly"]
+
+
+# ── the showroom, now built inside the shop ────────────────────────────
+#
+# It used to be a channel of permanent image posts, because a select menu can
+# name a colour but not show it. `showroom_page` builds the same thing on
+# demand — one embed per colour with its art attached — so these cover what the
+# member actually ends up looking at, and what happens when the art is missing.
+
+from bot_modules.services.color_palette import (  # noqa: E402
+    PALETTE_PAGE_SIZE,
+    palette_page_count,
+    render_gradient_png,
+    showroom_page,
+    take_down_palette_panel,
+)
+
+import io  # noqa: E402
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _color(index: int, *, image_path: str = "", price: int = 100) -> dict:
+    return {
+        "id": index,
+        "key": f"color_{index}",
+        "name": f"Color {index}",
+        "hex1": "F0A830",
+        "hex2": "8842C8",
+        "image_path": image_path,
+        "price": price,
+    }
+
+
+@pytest.mark.parametrize(
+    ("total", "want"),
+    [(0, 1), (1, 1), (10, 1), (11, 2), (20, 2), (21, 3)],
+)
+def test_palette_page_count(total, want):
+    assert palette_page_count(total) == want
+
+
+def test_showroom_page_shows_every_colour_with_its_own_swatch(tmp_path):
+    art = tmp_path / "one.png"
+    art.write_bytes(b"real art bytes")
+    colors = [_color(1, image_path=str(art)), _color(2, image_path=str(art))]
+
+    page = showroom_page(colors, 0, currency_emoji="🪙")
+
+    assert [e.title for e in page.embeds] == ["Color 1", "Color 2"]
+    # Each embed points at its OWN attachment: two embeds sharing a filename
+    # would leave one of them showing the other's colour.
+    names = [name for name, _data in page.attachments]
+    assert len(set(names)) == 2
+    assert [e.image.url for e in page.embeds] == [f"attachment://{n}" for n in names]
+    assert all(data == b"real art bytes" for _n, data in page.attachments)
+
+
+def test_showroom_page_quotes_the_price_and_wears_the_colour(tmp_path):
+    """The embed stripe is the colour being sold — the one place a hex is semantic."""
+    page = showroom_page([_color(1, price=250)], 0, currency_emoji="🪙")
+
+    assert "🪙 **250** / week" == page.embeds[0].description
+    assert page.embeds[0].color.value == 0xF0A830
+
+
+def test_showroom_page_renders_the_fade_when_the_art_is_missing():
+    """Production's rows point at an assets folder that moved.
+
+    Without the fallback the gallery would show a column of colours and no
+    colour at all, which is the entire point of the showroom.
+    """
+    page = showroom_page([_color(1, image_path="/nope/gone.png")], 0, currency_emoji="🪙")
+
+    name, data = page.attachments[0]
+    assert name.endswith(".png")
+    assert data.startswith(PNG_MAGIC)
+    assert page.embeds[0].image.url == f"attachment://{name}"
+
+
+def test_render_gradient_png_runs_between_the_two_hexes():
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(render_gradient_png("FF0000", "0000FF"))).convert("RGB")
+
+    assert img.getpixel((0, 0)) == (255, 0, 0)
+    assert img.getpixel((img.width - 1, 0)) == (0, 0, 255)
+
+
+def test_showroom_page_paginates_at_discords_ceiling(tmp_path):
+    """Ten embeds and ten attachments is the per-message limit, so ten is a page."""
+    colors = [_color(i) for i in range(23)]
+
+    first = showroom_page(colors, 0, currency_emoji="🪙")
+    last = showroom_page(colors, 2, currency_emoji="🪙")
+
+    assert first.page_count == last.page_count == 3
+    assert len(first.embeds) == PALETTE_PAGE_SIZE == len(first.attachments)
+    assert [e.title for e in last.embeds] == ["Color 20", "Color 21", "Color 22"]
+
+
+def test_showroom_page_clamps_a_page_that_no_longer_exists():
+    """A palette that shrank under an open gallery hands back the nearest page."""
+    page = showroom_page([_color(1)], 9, currency_emoji="🪙")
+
+    assert page.page == 0
+    assert [e.title for e in page.embeds] == ["Color 1"]
+
+    assert showroom_page([_color(1)], -4, currency_emoji="🪙").page == 0
+
+
+def test_showroom_page_falls_back_to_the_fade_when_the_art_is_too_heavy(tmp_path):
+    """Ten 8 MB uploads would be rejected as one message, taking the page with them."""
+    heavy = tmp_path / "heavy.png"
+    heavy.write_bytes(b"x" * (3 * 1024 * 1024))
+    colors = [_color(i, image_path=str(heavy)) for i in range(4)]
+
+    page = showroom_page(colors, 0, currency_emoji="🪙")
+
+    payloads = [data for _n, data in page.attachments]
+    assert payloads[0] == payloads[1] == b"x" * (3 * 1024 * 1024)
+    # Budget spent — the rest still show their gradient rather than nothing.
+    assert all(p.startswith(PNG_MAGIC) for p in payloads[2:])
+    assert sum(len(p) for p in payloads) < 10 * 1024 * 1024
+
+
+def test_showroom_page_of_an_empty_palette_is_empty_not_an_error():
+    page = showroom_page([], 0, currency_emoji="🪙")
+
+    assert (page.page, page.page_count) == (0, 1)
+    assert page.embeds == [] and page.attachments == []
+
+
+# ── taking the old channel showroom down ───────────────────────────────
+
+
+def _panel_channel(guild_id: int = GUILD):
+    """A guild whose one channel records what got bulk-deleted."""
+    import discord
+
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.name = "colors"
+    channel.get_partial_message = MagicMock(side_effect=lambda mid: f"msg{mid}")
+    channel.delete_messages = AsyncMock()
+
+    guild = MagicMock()
+    guild.id = guild_id
+    guild.get_channel = MagicMock(return_value=channel)
+    return guild, channel
+
+
+def _seed_panel_refs(db, refs):
+    from bot_modules.services.color_palette import replace_panel_refs
+
+    with open_db(db) as conn:
+        replace_panel_refs(conn, GUILD, refs)
+
+
+def _panel_refs(db):
+    from bot_modules.services.color_palette import get_panel_refs
+
+    with open_db(db) as conn:
+        return get_panel_refs(conn, GUILD)
+
+
+def test_take_down_deletes_the_posted_messages_and_forgets_them(db):
+    _seed_panel_refs(db, [(500, 1), (500, 2), (500, 3)])
+    guild, channel = _panel_channel()
+
+    deleted = asyncio.run(take_down_palette_panel(db, guild))
+
+    assert deleted == 3
+    channel.delete_messages.assert_awaited_once_with(["msg1", "msg2", "msg3"])
+    assert _panel_refs(db) == []
+
+
+def test_take_down_falls_back_per_message_for_old_posts(db):
+    """Bulk delete rejects anything over 14 days — every showroom worth removing."""
+    import discord
+
+    _seed_panel_refs(db, [(500, 1), (500, 2)])
+    guild, channel = _panel_channel()
+    channel.delete_messages = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "old"))
+    deleted_ids: list[str] = []
+
+    def _partial(mid):
+        partial = MagicMock()
+        partial.delete = AsyncMock(side_effect=lambda: deleted_ids.append(mid))
+        return partial
+
+    channel.get_partial_message = MagicMock(side_effect=_partial)
+
+    deleted = asyncio.run(take_down_palette_panel(db, guild))
+
+    assert deleted == 2
+    assert deleted_ids == [1, 2]
+    assert _panel_refs(db) == []
+
+
+def test_take_down_forgets_a_channel_it_can_no_longer_reach(db):
+    """A deleted channel's messages are not coming back — keeping the rows would
+    make every later take-down report work it isn't doing."""
+    _seed_panel_refs(db, [(500, 1)])
+    guild, _channel = _panel_channel()
+    guild.get_channel = MagicMock(return_value=None)
+
+    assert asyncio.run(take_down_palette_panel(db, guild)) == 0
+    assert _panel_refs(db) == []
+
+
+def test_take_down_with_nothing_posted_is_a_no_op(db):
+    guild, channel = _panel_channel()
+
+    assert asyncio.run(take_down_palette_panel(db, guild)) == 0
+    channel.delete_messages.assert_not_awaited()
