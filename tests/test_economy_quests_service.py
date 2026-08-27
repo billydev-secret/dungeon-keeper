@@ -18,6 +18,7 @@ import pytest
 
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.economy.logic import local_day_for
+from bot_modules.economy import quests as quests_rules
 from bot_modules.economy.quests import (
     ANON_KINDS,
     POOL_CAP,
@@ -3693,9 +3694,22 @@ def test_completing_dailies_advances_the_weekly_meta_quest(db):
         # The third completion crossed the target: the weekly paid itself.
         # (Two active kinds switch the ⚡ spotlight on, doubling whichever
         # kind the week's hash picked — fold it into the expectation.)
+        #
+        # Which week's pick, though: the ⚡ doubling is resolved at CREDIT
+        # time against the wall clock (see the comment on the multiplier in
+        # `_credit_quest_reward`), while the progress above is keyed to the
+        # period the fabricated `local_day` falls in. Those are the same week
+        # in production and different weeks here, because these days are
+        # backdated to W29. Asking "2026-W29" for the spotlight made this test
+        # a time bomb: it only passed while the clock sat in a week whose hash
+        # happened to pick the same kind as W29's, and it went red for good
+        # once real time moved on. Ask the week the credit actually used.
         from bot_modules.services.economy_quests_service import spotlight_kind
 
-        spot = spotlight_kind(conn, GUILD, "2026-W29")
+        credit_week = quests_rules.iso_week_for(
+            local_day_for(time.time(), get_tz_offset_hours(conn, GUILD))
+        )
+        spot = spotlight_kind(conn, GUILD, credit_week)
         daily_pay = 20 if spot == "voice_session" else 10
         weekly_pay = 80 if spot == "daily_complete" else 40
         assert get_balance(conn, GUILD, USER) == 3 * daily_pay + weekly_pay
