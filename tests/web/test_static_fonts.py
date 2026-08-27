@@ -127,3 +127,51 @@ def test_every_page_declaring_a_face_can_actually_use_it():
             f"reaches it — either use it or drop the download. Naming it in a "
             f":root token does not count."
         )
+
+
+# ── native control chrome ───────────────────────────────────────────────────
+
+
+def test_every_page_declares_its_colour_scheme():
+    """`color-scheme` is the only lever over browser-painted control chrome.
+
+    Number-input spinners, checkbox and radio glyphs, scrollbars, date pickers
+    and the default focus ring are drawn by the browser, not by our CSS — no
+    background/color rule reaches them. Without the declaration a dark page
+    gets light-mode chrome: the visible symptom was a near-white spinner block
+    inside every one of ~125 dark number inputs.
+
+    Each surface needs its own, because they do not share a stylesheet:
+    index.html loads app.css, login.html has its own <style>, and manual.html
+    is a genuinely light page whose declaration is `light`, not an oversight.
+    """
+    expected = {
+        "app.css": "dark",       # index.html gets it from here
+        "login.html": "dark",    # own stylesheet, never loads app.css
+        "manual.html": "light",  # long-form docs, deliberately light
+    }
+    for name, scheme in expected.items():
+        text = (_STATIC / name).read_text(encoding="utf-8")
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        assert re.search(rf"color-scheme:\s*{scheme}\b", text), (
+            f"{name} does not declare color-scheme: {scheme} — its native "
+            f"controls will be painted for the wrong theme"
+        )
+
+
+def test_no_retired_ink_mute_survives_in_a_data_uri():
+    """--ink-mute was lightened from #80848e to clear WCAG AA at 4.5:1.
+
+    Two select-chevron SVGs had the old value baked inside a url()-encoded
+    data URI, so all 117 selects kept the failing grey through the very
+    contrast pass that produced the new one. A hex inside an encoded SVG
+    inside a CSS url() is invisible to an ordinary search for hard-coded
+    colours, which is exactly why it survived.
+    """
+    for name in ("app.css", "help-panel.css"):
+        text = (_STATIC / name).read_text(encoding="utf-8")
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        assert "80848e" not in text.lower(), (
+            f"{name} still carries the retired --ink-mute (#80848e), which "
+            f"measures 3.4-4.4:1 against the surfaces it is used on"
+        )
