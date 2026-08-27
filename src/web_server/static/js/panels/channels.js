@@ -7,17 +7,19 @@ import {
 } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
+// Score is printed as table text, so these are the text-safe steps, not the
+// saturated fills of the same hues.
 function scoreColor(score) {
-  if (score >= 75) return "var(--green)";
+  if (score >= 75) return "var(--green-text)";
   if (score >= 50) return "var(--yellow)";
-  return "var(--red)";
+  return "var(--red-text)";
 }
 
 const STATUS_COLORS = {
   healthy: "var(--green)",
   flagged: "var(--yellow)",
   dormant: "var(--ink-dim)",
-  archive: "var(--red)",
+  archive: "var(--red-text)",
 };
 
 const METRICS = [
@@ -316,12 +318,12 @@ export function mount(container, initialParams) {
           // the color a fixed literal (see table.js ESCAPING).
           { key: "avg_sentiment", label: "Sentiment", html: true, format: (v) => {
             if (v == null) return "—";
-            const color = v > 0.05 ? "#7F8F3A" : v < -0.05 ? "#9E3B2E" : "#dbdee1";
+            const color = v > 0.05 ? "var(--green-text)" : v < -0.05 ? "var(--red-text)" : "var(--ink)";
             return `<span style="color:${color}">${v.toFixed(3)}</span>`;
           }},
           { key: "trend_pct",     label: "Trend",     html: true, format: (v) => {
             if (v == null) return "—";
-            const color = v > 0 ? "#7F8F3A" : v < 0 ? "#9E3B2E" : "#dbdee1";
+            const color = v > 0 ? "var(--green-text)" : v < 0 ? "var(--red-text)" : "var(--ink)";
             return `<span style="color:${color}">${v > 0 ? "+" : ""}${Number(v)}%</span>`;
           }},
         ],

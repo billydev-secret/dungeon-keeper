@@ -77,7 +77,7 @@ export function mount(container, initialParams) {
       : `they returned nothing at all in this window`;
 
     return `
-      <div style="border:1px solid var(--rule,#3a3d44);border-radius:8px;padding:12px 14px;margin-bottom:10px;background:var(--surface-2,#2b2d31);">
+      <div style="border:1px solid var(--rule,#3a3d44);border-radius:8px;padding:12px 14px;margin-bottom:10px;background:var(--bg-card);">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;">
           <div style="font-size:14px;">
             <strong>${who(c.from_id, c.from_name)}</strong>

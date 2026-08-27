@@ -57,7 +57,7 @@ export function mount(container) {
             )}
           </section>
 
-          <section class="form" style="margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--border,#333)">
+          <section class="form" style="margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--rule)">
             <div class="section-label">Add a watch</div>
             <div class="field">
               <label>Channel</label>

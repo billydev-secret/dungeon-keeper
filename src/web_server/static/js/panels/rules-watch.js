@@ -233,22 +233,22 @@ export function mountQueue(container, initialParams = {}) {
 
     <style>
       .rw-layout { display:flex; gap:16px; min-height:400px; }
-      .rw-list { flex:0 0 340px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; }
+      .rw-list { flex:0 0 340px; overflow-y:auto; border:1px solid var(--rule); border-radius:6px; }
       .rw-detail-pane { flex:1; overflow-y:auto; }
       .rw-row { display:grid; grid-template-columns:90px 80px 50px 100px 1fr; gap:6px;
-                align-items:center; padding:8px 10px; cursor:pointer; border-bottom:1px solid var(--border); font-size:13px; }
-      .rw-row:hover, .rw-row.active { background:var(--hover-bg, rgba(255,255,255,.05)); }
+                align-items:center; padding:8px 10px; cursor:pointer; border-bottom:1px solid var(--rule); font-size:13px; }
+      .rw-row:hover, .rw-row.active { background:var(--hover); }
       .rw-row__score { font-weight:600; }
-      .rw-row__ts { color:var(--dim, #888); font-size:12px; }
+      .rw-row__ts { color:var(--ink-mute); font-size:12px; }
       .rw-detail { padding:12px; }
       .rw-detail__header { display:flex; gap:8px; align-items:center; margin-bottom:12px; font-weight:600; }
       .rw-meta { display:grid; grid-template-columns:80px 1fr; gap:4px 8px; font-size:13px; margin-bottom:12px; }
-      .rw-meta dt { color:var(--dim, #888); }
+      .rw-meta dt { color:var(--ink-mute); }
       .rw-signals { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:12px; }
-      .sig-chip { font-size:11px; padding:2px 6px; border-radius:10px; background:var(--surface2, #3a3d42); }
-      .sig-chip--hi { background:var(--danger-dim, #6b2b2b); color:#f99; }
-      .rw-section__title { font-size:12px; color:var(--dim, #888); margin-bottom:4px; }
-      .rw-window { font-size:12px; background:var(--surface2, #2a2d32); padding:10px; border-radius:4px;
+      .sig-chip { font-size:11px; padding:2px 6px; border-radius:10px; background:var(--bg-input); }
+      .sig-chip--hi { background:var(--red-soft); color:var(--red-text); }
+      .rw-section__title { font-size:12px; color:var(--ink-mute); margin-bottom:4px; }
+      .rw-window { font-size:12px; background:var(--bg-input); padding:10px; border-radius:4px;
                    white-space:pre-wrap; word-break:break-word; max-height:300px; overflow-y:auto; }
       .rw-window__line { padding:1px 4px; border-radius:3px; }
       .rw-window__line--flag { background:var(--red-soft, #4a1f1f); box-shadow:inset 3px 0 0 var(--red, #e06666);
@@ -260,26 +260,26 @@ export function mountQueue(container, initialParams = {}) {
          shouldn't join. Wraps so the hint drops under the field on narrow
          viewports instead of pushing the layout sideways. */
       .rw-correction { display:flex; flex-wrap:wrap; align-items:center; gap:8px;
-                       margin-top:12px; font-size:12px; color:var(--dim, #888); }
+                       margin-top:12px; font-size:12px; color:var(--ink-mute); }
       .rw-correction input { width:80px; padding:4px 6px; font-size:13px;
-                             border:1px solid var(--border); border-radius:4px;
-                             background:var(--surface2, #3a3d42); color:inherit; }
+                             border:1px solid var(--rule); border-radius:4px;
+                             background:var(--bg-input); color:inherit; }
       .rw-correction__hint { flex:1 1 auto; min-width:0; }
       .rw-stats__tables { display:flex; gap:16px; margin-top:16px; }
       .rw-table { border-collapse:collapse; font-size:13px; }
-      .rw-table th, .rw-table td { padding:4px 12px; border:1px solid var(--border); }
+      .rw-table th, .rw-table td { padding:4px 12px; border:1px solid var(--rule); }
       .rw-pending-toggle { font-size:13px; display:flex; align-items:center; gap:6px; margin-bottom:8px; }
-      .rw-ledger-note { font-size:13px; color:var(--dim, #888); border-left:3px solid var(--border);
+      .rw-ledger-note { font-size:13px; color:var(--ink-mute); border-left:3px solid var(--rule);
                         padding:8px 12px; margin-bottom:14px; line-height:1.5; }
       .rw-ledger-tbl { border-collapse:collapse; font-size:13px; width:100%; }
-      .rw-ledger-tbl th { text-align:left; font-weight:600; color:var(--dim, #888); font-size:12px;
-                          padding:6px 10px; border-bottom:1px solid var(--border); }
-      .rw-ledger-tbl td { padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+      .rw-ledger-tbl th { text-align:left; font-weight:600; color:var(--ink-mute); font-size:12px;
+                          padding:6px 10px; border-bottom:1px solid var(--rule); }
+      .rw-ledger-tbl td { padding:8px 10px; border-bottom:1px solid var(--rule); vertical-align:top; }
       .rw-ledger-tbl tr:last-child td { border-bottom:none; }
-      .rw-ledger__excerpt { color:var(--fg, #ddd); word-break:break-word; }
+      .rw-ledger__excerpt { color:var(--ink); word-break:break-word; }
       .rw-ledger__match { display:inline-block; font-size:11px; padding:1px 6px; border-radius:3px;
-                          background:var(--surface2, #3a3d42); margin-top:4px; }
-      .rw-ledger-repeats { border:1px solid var(--border); border-radius:6px; padding:10px 12px;
+                          background:var(--bg-input); margin-top:4px; }
+      .rw-ledger-repeats { border:1px solid var(--rule); border-radius:6px; padding:10px 12px;
                            margin-bottom:14px; font-size:13px; }
       .rw-ledger-repeats h4 { margin:0 0 6px; font-size:13px; }
       .rw-ledger-scroll { overflow-x:auto; }
@@ -287,7 +287,7 @@ export function mountQueue(container, initialParams = {}) {
         .rw-ledger-tbl { font-size:12px; }
         .rw-ledger-tbl th:nth-child(3), .rw-ledger-tbl td:nth-child(3) { display:none; }
       }
-      .badge-ok { background:#1e4620; color:#7ecb7f; }
+      .badge-ok { background:#1e4620; color:var(--green-text); }
       .rw-back { display:none; }
 
       @media (max-width: 700px) {

@@ -2463,6 +2463,10 @@ textarea.field-input { resize: vertical; }
   content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
   border-radius: 50%; background: var(--ink-dim); transition: .2s;
 }
+.w-toggle input:focus-visible + .w-toggle-track {
+  outline: 2px solid var(--gold-solid);
+  outline-offset: 2px;
+}
 .w-toggle input:checked + .w-toggle-track { background: var(--green); }
 .w-toggle input:checked + .w-toggle-track::after { transform: translateX(16px); background: #fff; }
 
@@ -2563,8 +2567,8 @@ textarea.field-input { resize: vertical; }
 }
 
 .w-histo-slider-val {
-  font-size: 10px;
-  color: #B36A92;
+  font-size: var(--t-1);
+  color: var(--plum);
   font-weight: 600;
   min-width: 20px;
   text-align: center;
@@ -2681,17 +2685,20 @@ textarea.field-input { resize: vertical; }
   letter-spacing: 0.04em;
   padding: var(--s-0) var(--s-2);
   border-radius: 4px;
+  /* Callers set a saturated status fill inline. Inheriting --ink onto one puts
+     light grey on gold at 1.40:1; the rail black clears AA on every fill the
+     status tables hand us. */
+  color: var(--bg-rail);
 }
-.badge-excellent { background: rgba(127,143,58,0.2); color: #7F8F3A; }
-.badge-healthy   { background: rgba(127,143,58,0.15); color: #7F8F3A; }
+.badge-excellent,
+.badge-healthy,
+.badge-clear     { background: var(--green-soft); color: var(--green-text); }
 .badge-needs_work,
-.badge-needs-work { background: rgba(230,184,76,0.2); color: #E6B84C; }
-.badge-critical  { background: rgba(158,59,46,0.2); color: #9E3B2E; }
-.badge-warning   { background: rgba(230,184,76,0.2); color: #E6B84C; }
-.badge-clear     { background: rgba(127,143,58,0.15); color: #7F8F3A; }
-.badge-active    { background: rgba(158,59,46,0.2); color: #9E3B2E; }
+.badge-needs-work { background: var(--gold-soft); color: var(--yellow); }
+.badge-critical,
+.badge-active    { background: var(--red-soft); color: var(--red-text); }
 .badge-no_data,
-.badge-no-data   { background: rgba(148,155,164,0.15); color: #949ba4; }
+.badge-no-data   { background: var(--rule-soft); color: var(--ink-dim); }
 
 /* Mini bar chart (tile helpers) */
 .health-mini-bar-row {
@@ -2847,6 +2854,10 @@ textarea.field-input { resize: vertical; }
 .funnel-bar-full {
   height: 32px;
   background: var(--gold-solid);
+  /* The count is printed inside the fill; inherited --ink lands on gold at
+     1.37:1, so the bar carries its own dark ink. */
+  color: var(--bg-rail);
+  font-weight: 600;
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -3447,6 +3458,15 @@ textarea.field-input { resize: vertical; }
 .t-chip.claimed { background: var(--gold-soft); color: var(--gold-solid); }
 .t-chip.resolved { background: var(--green-soft); color: var(--green-text); }
 .t-chip.closed { background: var(--rule-soft); color: var(--ink-dim); }
+
+/* QA tracker verdicts. Same kit as the ticket chips; these used to build
+   `background:<hex>22;color:<hex>` from one table, which put the fill hue on
+   its own tint — passed/failed/archived all landed under 4.5:1. */
+.t-chip.passed   { background: var(--green-soft); color: var(--green-text); }
+.t-chip.failed   { background: var(--red-soft); color: var(--red-text); }
+.t-chip.blocked  { background: var(--gold-soft); color: var(--yellow); }
+.t-chip.pending,
+.t-chip.archived { background: var(--rule-soft); color: var(--ink-dim); }
 
 .ticket-detail {
   background: var(--bg-card);
@@ -4740,7 +4760,7 @@ fieldset.field {
   align-items: flex-start;
   justify-content: space-between;
   padding: var(--s-3) 0;
-  border-bottom: 1px solid var(--border, #333);
+  border-bottom: 1px solid var(--rule);
 }
 .panel-row:last-child { border-bottom: 0; }
 .panel-row__main { flex: 1 1 260px; min-width: 0; }
@@ -4757,11 +4777,11 @@ fieldset.field {
 /* External-tracking sample dump: raw bot output, so it must not be reflowed.
    Each block scrolls inside its own box rather than widening the page. */
 .ge-sample { display: flex; flex-direction: column; gap: var(--s-3); }
-.ge-sample__row { border: 1px solid var(--border, #333); border-radius: 6px; padding: 8px; }
+.ge-sample__row { border: 1px solid var(--rule); border-radius: 6px; padding: 8px; }
 .ge-sample__row pre {
   margin: var(--s-1) 0 0;
   padding: var(--s-2);
-  background: var(--surface2, #3a3d42);
+  background: var(--bg-input);
   border-radius: 4px;
   overflow-x: auto;
   white-space: pre-wrap;

@@ -360,10 +360,10 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         const totalPages = data.total_pages || 1;
         const count = data.total || 0;
         if (totalPages <= 1) {
-          pag.innerHTML = '<span style="font-size:12px;color:var(--ink-muted);">' + count + " question" + (count !== 1 ? "s" : "") + "</span>";
+          pag.innerHTML = '<span style="font-size:12px;color:var(--ink-mute);">' + count + " question" + (count !== 1 ? "s" : "") + "</span>";
           return;
         }
-        let pagHtml = '<span style="font-size:12px;color:var(--ink-muted);margin-right:4px;">' + count + " questions</span>";
+        let pagHtml = '<span style="font-size:12px;color:var(--ink-mute);margin-right:4px;">' + count + " questions</span>";
         if (currentPage > 1) pagHtml += '<button class="btn" data-page="' + (currentPage - 1) + '" style="padding:2px 8px;font-size:12px;">&#8249;</button>';
         pagHtml += '<span style="font-size:12px;padding:0 4px;">Page ' + currentPage + " / " + totalPages + "</span>";
         if (currentPage < totalPages) pagHtml += '<button class="btn" data-page="' + (currentPage + 1) + '" style="padding:2px 8px;font-size:12px;">&#8250;</button>';
@@ -508,7 +508,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         el.innerHTML = '<table style="width:100%;border-collapse:collapse;" class="data-table">' +
           '<thead><tr><th style="width:28px;"><input type="checkbox" data-ctrl="pool-select-all" aria-label="Select every question on this page" /></th><th style="width:160px;">Tags</th><th>Question</th><th style="width:50px;"></th></tr></thead>' +
           "<tbody>" + rows + "</tbody></table>" +
-          '<div style="font-size:12px;color:var(--ink-muted);margin-top:6px;">' + data.total + " question" + (data.total !== 1 ? "s" : "") + " in the pool" + note + "</div>";
+          '<div style="font-size:12px;color:var(--ink-mute);margin-top:6px;">' + data.total + " question" + (data.total !== 1 ? "s" : "") + " in the pool" + note + "</div>";
         el.querySelector('[data-ctrl="pool-select-all"]').addEventListener("change", (e) => {
           el.querySelectorAll("[data-pool-check]").forEach(c => { c.checked = e.target.checked; });
         });

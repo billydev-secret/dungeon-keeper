@@ -12,20 +12,15 @@ import {
   mountRolePicker, mountChannelPicker,
 } from "../config-helpers.js";
 
-// Semantic status colors — mirror the Discord card (cards.py STATUS_COLORS).
-const STATUS_COLORS = {
-  pending:  "#95A5A6",
-  passed:   "#2ECC71",
-  failed:   "#E74C3C",
-  blocked:  "#E67E22",
-  archived: "#7F8C8D",
-};
-
 const VERDICT_EMOJI = { pass: "✅", fail: "❌", blocked: "🚧" };
 
+// The chips draw from the shared kit. They used to build
+// `background:<hex>22; color:<hex>` from one hex table, which set each hue on
+// its own tint — passed, failed and archived all landed under 4.5:1.
+const CHIP_CLASS = { passed: "passed", failed: "failed", blocked: "blocked", archived: "archived" };
+
 function statusChip(status) {
-  const c = STATUS_COLORS[status] || STATUS_COLORS.pending;
-  return `<span class="t-chip" style="background:${c}22;color:${c}">${esc(status)}</span>`;
+  return `<span class="t-chip ${CHIP_CLASS[status] || "pending"}">${esc(status)}</span>`;
 }
 
 function fmtWhen(iso) {

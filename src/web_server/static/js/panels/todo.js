@@ -95,7 +95,7 @@ function renderDetail(t, completing) {
   const sourceBlock = t.source_message_url
     ? `<div class="td-section">Source</div>
        <div style="padding:4px 8px 8px;font-size:14px;">
-         <a href="${esc(t.source_message_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent, #5af);word-break:break-all">Jump to message ↗</a>
+         <a href="${esc(t.source_message_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--gold-solid);word-break:break-all">Jump to message ↗</a>
        </div>`
     : "";
   return `
@@ -392,7 +392,7 @@ export function mount(container, initialParams = {}) {
       ?? String(board.channel_id || "0");
     const where = board.posted && board.jump_url
       ? `Posted — <a href="${esc(board.jump_url)}" target="_blank" rel="noopener noreferrer"
-           style="color:var(--accent,#5af)">${esc(card.jumpLabel)}</a>`
+           style="color:var(--gold-solid)">${esc(card.jumpLabel)}</a>`
       : "Not posted yet.";
     // Shown to moderators as well as admins: a mod who cannot move the board
     // is exactly the person who needs to know why they have nowhere to tick a

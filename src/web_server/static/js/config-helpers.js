@@ -71,8 +71,7 @@ export function metaLoadFailed() { return _metaFailed.size > 0; }
  */
 export function renderMetaWarning() {
   if (!metaLoadFailed()) return "";
-  return '<div class="meta-warning" role="alert" '
-    + 'style="color:var(--red);font-size:13px;margin:0 0 12px;">'
+  return '<div class="meta-warning" role="alert">'
     + "Channel and role lists failed to load. Your saved settings are kept, "
     + "but reload the page before changing channel or role fields.</div>";
 }

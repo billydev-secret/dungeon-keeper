@@ -31,6 +31,42 @@ back under the floor. It was added after finding 23 declarations that used the
 saturated pair as text — including the Tickets status chips (3.34:1) and
 `.error` / `.save-err` / `.num-err`, which is to say the error messages.
 
+## Every `var(--x)` must name a token that exists
+
+An undeclared custom property fails silently in both directions.
+`color: var(--danger)` with no `--danger` is an invalid declaration the browser
+drops, so the element inherits whatever was above it; `color: var(--danger,
+#e55)` is worse, because it always renders the literal and therefore looks
+deliberate while ignoring the theme entirely. Neither raises a console error,
+so panel-load health passes them too.
+
+A sweep found **64 such uses across 19 names**: `--border` (29 uses in 12
+files) resolving to a hardcoded `#333` that measures 1.00:1 against `--bg`,
+`--ink-muted` — a typo for `--ink-mute` — inside the shell ~10 game panels
+render through, and `--danger`, `--warn`, `--ok`, `--surface`, `--fg`,
+`--muted`, `--dim` and `--font-mono` shadowing tokens that already existed
+under the house names.
+
+`tests/web/test_css_token_hygiene.py` fails on any reference to a token `:root`
+does not declare. It reads **panel JS as well as the stylesheets**, because
+that is where this concentrates: an inline style built in a template literal is
+invisible to a CSS linter. Same gap let the saturated/`-text` rule above hold
+in `app.css` and break in JS.
+
+Status colour follows the same two-tier split as red and green:
+
+| job | use |
+|---|---|
+| text on a page surface | `--red-text` `--green-text` `--yellow` `--ink-dim` |
+| a tint behind that text | `--red-soft` `--green-soft` `--gold-soft` `--rule-soft` |
+| a **saturated** fill | `--red` `--green` `--yellow` — and then the text on it is `--bg-rail`, never inherited |
+
+Panels used to hand-roll this per file, which is how the health badges shipped
+`#9E3B2E` on its own 20% tint at **1.84:1**, the QA chips built
+`background:<hex>22; color:<hex>` from one table (three of five under 4.5:1),
+and the funnel bar printed its count in `--ink` on solid gold at **1.37:1**.
+Reach for `.badge-*` and `.t-chip.*` before inventing a colour.
+
 ## Buttons: one filled primary, and never a destructive one
 
 `.act-btn` is the shared button, used by Tickets, Jails, Todo, Announcements,

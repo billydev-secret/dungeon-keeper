@@ -85,7 +85,7 @@ export function mount(container, initialParams) {
         ? invitees.map(i => `
             <tr class="invitee-row">
               <td colspan="2" style="padding-left:2rem">${esc(i.invitee_name || i.invitee_id)}</td>
-              <td colspan="3" style="color:${i.active ? "var(--color-success, #57f287)" : "var(--ink-mute)"}">
+              <td colspan="3" style="color:${i.active ? "var(--green-text)" : "var(--ink-mute)"}">
                 ${i.active ? "Active" : "Inactive"}
               </td>
             </tr>`).join("")

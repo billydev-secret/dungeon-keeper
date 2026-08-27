@@ -55,7 +55,7 @@ function buildAskBox() {
   const box = document.createElement("div");
   box.className = "dk-help-ask";
   box.style.cssText =
-    "margin:12px 0 4px;padding:12px;border:1px solid var(--rule);border-radius:var(--r-sm);background:var(--surface,transparent);";
+    "margin:12px 0 4px;padding:12px;border:1px solid var(--rule);border-radius:var(--r-sm);background:var(--bg-card);";
 
   const form = document.createElement("form");
   form.style.cssText = "display:flex;gap:8px;align-items:center;";
@@ -83,7 +83,7 @@ function buildAskBox() {
   answer.className = "dk-help-answer";
   answer.hidden = true;
   answer.style.cssText =
-    "margin-top:10px;padding:10px 12px;border-radius:var(--r-sm);background:var(--code-bg,rgba(127,127,127,0.08));line-height:1.55;white-space:normal;";
+    "margin-top:10px;padding:10px 12px;border-radius:var(--r-sm);background:var(--bg-input);line-height:1.55;white-space:normal;";
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();

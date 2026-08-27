@@ -207,7 +207,7 @@ export function mount(container) {
     const style = currentStyle();
     const opts = state.menu.options.filter((o) => o.label || o.role_id !== "0");
 
-    const bar = /^#?[0-9a-fA-F]{6}$/.test(accent) ? (accent[0] === "#" ? accent : "#" + accent) : "var(--accent, #E6B84C)";
+    const bar = /^#?[0-9a-fA-F]{6}$/.test(accent) ? (accent[0] === "#" ? accent : "#" + accent) : "var(--gold-solid)";
     const thumbHtml = /^https?:/i.test(thumb)
       ? `<img class="rm-thumb" src="${esc(thumb)}" alt="" loading="lazy">` : "";
     let components = "";

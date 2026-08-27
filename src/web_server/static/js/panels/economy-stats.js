@@ -233,7 +233,7 @@ async function refreshLive(container) {
         <div style="margin:8px 0;">
           <strong>${esc(c.title)}</strong>
           <span class="field-hint" style="margin-left:8px;">${esc(c.kind_label)}</span>
-          <div style="background:var(--border); border-radius:6px; height:14px; margin:6px 0; overflow:hidden; max-width:480px;">
+          <div style="background:var(--rule); border-radius:6px; height:14px; margin:6px 0; overflow:hidden; max-width:480px;">
             <div style="width:${Math.min(100, c.pct)}%; height:100%; background:${CHART_BAR};"></div>
           </div>
           <div class="field-hint">

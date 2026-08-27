@@ -32,7 +32,7 @@ const PLACEHOLDERS = [
 ];
 
 function chipsHtml(targetName) {
-  const chipStyle = "cursor:pointer; border:1px solid var(--rule, #444); background:var(--rule-soft, rgba(255,255,255,0.05)); font-family:var(--font-mono, monospace); font-size:12px; padding:3px 10px; border-radius:999px;";
+  const chipStyle = "cursor:pointer; border:1px solid var(--rule, #444); background:var(--rule-soft, rgba(255,255,255,0.05)); font-family:var(--mono); font-size:12px; padding:3px 10px; border-radius:999px;";
   const chips = PLACEHOLDERS.map((p) => `
     <button type="button" class="chip placeholder-chip" data-insert="${esc(p.token)}" data-target="${esc(targetName)}" title="${esc(p.description)}" style="${chipStyle}">
       ${esc(p.token)}

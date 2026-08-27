@@ -98,8 +98,8 @@ export function mount(container, initialParams) {
         { key: "msgs_prev", label: "Previous" },
         { key: "msgs_recent", label: "Recent" },
         // html: colored numbers, no user-supplied text (see table.js ESCAPING).
-        { key: "drop_pct", label: "Raw Drop %", html: true, format: (v) => `<span style="color:#9E3B2E">${v}%</span>` },
-        { key: "normalized_drop_pct", label: "Normalized Drop %", html: true, format: (v) => `<span style="color:#9E3B2E">${v}%</span>` },
+        { key: "drop_pct", label: "Raw Drop %", html: true, format: (v) => `<span style="color:var(--red-text)">${v}%</span>` },
+        { key: "normalized_drop_pct", label: "Normalized Drop %", html: true, format: (v) => `<span style="color:var(--red-text)">${v}%</span>` },
         { key: "days_active_prev", label: "Active Days (Previous)" },
         { key: "days_active_recent", label: "Active Days (Recent)" },
         { key: "last_seen_ts", label: "Last Seen", format: (v) => fmtDate(v) },

@@ -28,8 +28,8 @@ function modelsWidget(models) {
       <code style="min-width:5.5rem">${esc(m.name)}</code>
       <span class="vt-model-state">${
         m.cached
-          ? `<span style="color:var(--ok,#3a3)">✓ Downloaded</span>`
-          : `<span style="color:var(--warn,#c80)">Not downloaded</span>`
+          ? `<span style="color:var(--green-text)">✓ Downloaded</span>`
+          : `<span style="color:var(--yellow)">Not downloaded</span>`
       }</span>
       <span style="flex:1"></span>
       <button type="button" class="btn btn-sm vt-dl-btn"
@@ -57,7 +57,7 @@ export function mount(container) {
     const vt = config.voice_transcription || {};
 
     const unavailable = vt.available === false
-      ? `<div class="field-hint" style="color:var(--warn,#c80)">
+      ? `<div class="field-hint" style="color:var(--yellow)">
            The faster-whisper package is not installed on the machine running
            Dungeon Keeper, so nothing is transcribed even with this turned on.
            Ask whoever hosts the bot to install it and restart.
@@ -134,17 +134,17 @@ export function mount(container) {
       btn?.addEventListener("click", async () => {
         btn.disabled = true;
         const prev = state.innerHTML;
-        state.innerHTML = `<span style="color:var(--muted,#888)">Downloading…</span>`;
+        state.innerHTML = `<span style="color:var(--ink-mute)">Downloading…</span>`;
         try {
           const res = await apiPost("/api/config/voice-transcription/download", { model_name: modelName });
           if (res.cached) {
-            state.innerHTML = `<span style="color:var(--ok,#3a3)">✓ Downloaded</span>`;
+            state.innerHTML = `<span style="color:var(--green-text)">✓ Downloaded</span>`;
           } else {
             state.innerHTML = prev;
             btn.disabled = false;
           }
         } catch (err) {
-          state.innerHTML = `<span style="color:var(--warn,#c80)">${esc(err.message || "Download failed")}</span>`;
+          state.innerHTML = `<span style="color:var(--yellow)">${esc(err.message || "Download failed")}</span>`;
           btn.disabled = false;
         }
       });

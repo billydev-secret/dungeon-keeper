@@ -350,7 +350,7 @@ async function refreshList(root) {
     const statusTag = paused ? '<span class="tag">Paused</span>'
       : done ? `<span class="tag">${esc(r.status)}</span>` : "";
     return `
-      <div class="card" data-id="${r.id}" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;margin-bottom:8px;border:1px solid var(--border,#333);border-radius:8px;">
+      <div class="card" data-id="${r.id}" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;margin-bottom:8px;border:1px solid var(--rule);border-radius:8px;">
         <div style="min-width:0;">
           <div style="font-weight:600;">${esc(r.game_icon)} ${esc(r.game_name)} ${statusTag}</div>
           <div class="field-hint" style="margin:2px 0 0;">

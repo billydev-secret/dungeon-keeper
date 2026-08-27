@@ -173,7 +173,7 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
           <div class="field-row">
             <div class="field"><label for="q-reward">Reward (coins)</label>
               <input type="number" name="reward" id="q-reward" required min="0" max="1000000" step="1" value="10" style="max-width:120px;" />
-              <div class="field-hint" data-reward-hint style="color:#d9a441;"></div></div>
+              <div class="field-hint" data-reward-hint style="color:var(--gold-solid);"></div></div>
             <div class="field"><label for="q-reward-xp">Bonus XP</label>
               <input type="number" name="reward_xp" id="q-reward-xp" required min="0" max="1000000" step="1" value="0" style="max-width:120px;" />
               <div class="field-hint">Leveling XP paid alongside the coins. The booster
@@ -240,7 +240,7 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
               "do this many times this period" — with a progress bar on the member's quest
               card. <strong>Weekly and monthly quests must be counted</strong> (2 or more):
               they show progress across the period, only dailies are one-shot.</div>
-            <div class="field-hint" data-target-hint style="color:var(--warn,#b9770e);"></div></div>
+            <div class="field-hint" data-target-hint style="color:var(--yellow);"></div></div>
 
           <div class="field">
             <label style="display:flex; gap:6px; align-items:center;">

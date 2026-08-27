@@ -322,7 +322,7 @@ export function mountSettings(container) {
         return;
       }
       sepList.innerHTML = separations.map((s, i) => `
-        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:6px 10px;border:1px solid var(--rule);border-radius:6px;">
           <span>${esc(memberName(s.user_a))} <span style="opacity:.6;" aria-label="never matched with">⊘</span> ${esc(memberName(s.user_b))}</span>
           <button type="button" class="btn btn-small" data-remove-sep="${i}">Remove</button>
         </div>

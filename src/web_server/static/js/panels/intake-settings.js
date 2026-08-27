@@ -190,7 +190,7 @@ export function mountSettings(container) {
       blocksHost.innerHTML = blocks
         .map(
           (b, i) => `
-        <div data-block-row style="border:1px solid var(--border, #444); border-radius:6px; padding:8px; margin-bottom:8px;">
+        <div data-block-row style="border:1px solid var(--rule); border-radius:6px; padding:8px; margin-bottom:8px;">
           <div class="row wrap" style="gap:6px; margin-bottom:6px;">
             <select data-block-kind style="min-width:10rem;">
               <option value="text" ${b.kind !== "questions" ? "selected" : ""}>Text section</option>
