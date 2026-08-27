@@ -14,7 +14,8 @@ Spec: `games_system_spec.md` (corrected 2026-07-15, Reference).
   consent-gating to Roadmap; the scaffolding outlived the plan. Action:
   `rmdir` the directory now (trivial), drop the table in the next
   migration that touches games (don't burn a migration number on it
-  alone; migration-collision hazard per memory).
+  alone; migration-collision hazard per memory). — **done: directory in
+  `49a02867`, table in migration 184.**
 - **A2 — `xp_reaction_awards` (40,879 rows) is missing from
   `purge_user_data`** while its siblings (`member_xp`, `xp_events`,
   `voice_sessions`) are purged. Clear oversight, one-line fix in the

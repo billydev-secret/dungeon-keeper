@@ -85,9 +85,10 @@ sweeps + loose-ends audit; per-bundle findings in the sibling
     quotes-are-audited line in manual.html; journald line in
     DEPLOYMENT.md; keep ollama prompt-log debug-only (comment).~~ —
     **shipped `49a02867` (dir + GC) and `bf02ce1f` (the four doc/comment
-    touches)**. **Still open:** the orphan `games_consent` table + guess
-    reuse columns still want dropping in the next games migration, and
-    the intake purge decision is still unmade.
+    touches)** and **migration 184** (the orphan `games_consent` table +
+    the four `guess_rounds` reuse columns, with the vestigial repo/model
+    plumbing that still named them). **Still open:** the intake purge
+    decision, which is a policy call, not a code change.
 
 ### Loose ends still awaiting Ben (from `2026-08-05-loose-ends.md`)
 

@@ -108,7 +108,7 @@ Since 2026-08-06 the prompt runs on the shared `core.sticky.StickyPanel` rather 
 - **Cross-guild stats / global leaderboards.**
 - **Image moderation beyond the built-in detector.** No age verification — Discord ToS and the consent role are the gate.
 - **Alt-account collusion detection.**
-- **Round reuse / throwback rounds.** Earlier drafts had a reuse system; it's been removed.
+- **Round reuse / throwback rounds.** Earlier drafts had a reuse system; it's been removed. Its four columns on `guess_rounds` (`allow_reuse`, `is_reuse`, `original_round_id`, `reuse_blocked`) outlived it as write-only ballast and were dropped in migration 184, along with the dataclass fields, the insert parameters and `get_reusable_rounds`, which had no caller outside its own tests. Note that `idx_guess_rounds_reuse` keeps the old name but has indexed `(guild_id, submitter_id, image_hash)` since migration 020 — it is the duplicate-image guard and is unrelated.
 - **Web crop override UI.**
 
 ## Configuration

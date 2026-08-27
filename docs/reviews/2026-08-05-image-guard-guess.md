@@ -17,7 +17,8 @@ Prod: 355 rounds (24 open, 4 confessions), guess_cache 5 MB / 4 originals.
 - **A1 (guess)** — dead reuse columns: `allow_reuse`, `is_reuse`,
   `original_round_id`, `reuse_blocked` persist in `guess_rounds` though the
   reuse feature was removed (spec non-goals). Harmless; fold into a future
-  migration, don't burn one on it.
+  migration, don't burn one on it. — **done, migration 184** (folded in with
+  the `games_consent` drop).
 - **A2 (guess)** — stale `original_path` rows: pre-rename rows still point
   at `veil_cache/orig/*.jpg` which no longer exists. Solve-time deletion
   no-ops on missing files (fine), but any future "purge originals" tooling

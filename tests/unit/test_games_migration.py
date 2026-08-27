@@ -5,7 +5,6 @@ from __future__ import annotations
 from bot_modules.core.db_utils import open_db
 
 EXPECTED_TABLES = [
-    "games_consent",
     "games_allowed_channels",
     "games_active_games",
     "games_question_bank",
@@ -33,6 +32,20 @@ def test_all_games_tables_exist(sync_db_path):
         }
     for table in EXPECTED_TABLES:
         assert table in existing, f"Missing table: {table}"
+
+
+def test_games_consent_is_dropped(sync_db_path):
+    """The per-user Truth-or-Dare consent flag gated nothing and is gone (184).
+
+    019 created it, the commands and module that would have read it were
+    deleted, and no code has named it since. A table holding member data that
+    nothing reads is data nobody is accounting for — it must stay dropped.
+    """
+    with open_db(sync_db_path) as conn:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='games_consent'"
+        ).fetchone()
+    assert row is None
 
 
 def test_legitlibs_blank_axes_has_all_pos_values(sync_db_path):

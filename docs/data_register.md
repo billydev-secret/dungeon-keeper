@@ -71,7 +71,7 @@ exempts deletion, not disclosure.
 | rules_events, rules_labels | Rules watch | 240-char content excerpts + matched phrase; mod-verdict training labels | preserve as evidence + **180d sweep for dismissed events** (`49a02867`, `rules_watch/ledger.py:442`) | **NO** — deliberate evidentiary preserve | LAN llama-server only | G1 closed; excerpt escapes storage-level dial — document |
 | nsfw_classifications, nsfw_detections, nsfw_blocks | Image Guard | body-part tags (**age-gated + spoiler-required channels** — widened 2026-08-15, see below), block records w/ author_id | indefinite (deliberate, spec'd) | **DECIDED — preserve**; revisit TTL on nsfw_detections in 6mo | — (all inference local) | observe mode ON in prod; log channels 0. ⚠️ scope widened — owner-decided, see note |
 | guess_consents | Guess | consent evidence: when, and which disclosure version | kept through optout (`withdrawn_at` stamped); cleared by full erasure | YES — `privacy_service.py` simple-table list | — | Art 7(1) evidence, migration 154 |
-| guess_rounds (+confession_text), guess_guesses, guess_audit_log, guess_cache/ files | Guess | intimate images on disk until solve; anon confession text + submitter id | originals of unsolved rounds: **90d age-out** (`775d903d`); rows themselves indefinite | **STILL NO** — no `guess_*` table is in `purge_user_data` (grepped 2026-08-06) | — (local) | consent view + `/guess optout` shipped `775d903d` (U1/G1/G2 closed). **Open:** purge coverage, and the confession-text TTL that was only ever a "consider" |
+| guess_rounds (+confession_text), guess_guesses, guess_audit_log, guess_cache/ files | Guess | intimate images on disk until solve; anon confession text + submitter id | originals of unsolved rounds: **90d age-out** (`775d903d`); rows themselves indefinite | **STILL NO** — no `guess_*` table is in `purge_user_data` (grepped 2026-08-06) | — (local) | consent view + `/guess optout` shipped `775d903d` (U1/G1/G2 closed). **Open:** purge coverage, and the confession-text TTL that was only ever a "consider". Four columns fewer since migration 184: `allow_reuse`, `is_reuse`, `original_round_id`, `reuse_blocked` were the cut round-reuse feature's ballast (all 408 prod rounds held 0/0/NULL/0), so a round now records nothing about being replayed |
 | casino_* (bets, daily, weekly, member_stats, hands incl. **mines**, **rounds**) | Casino | wagering history (behavioral) | indefinite | YES — folded into `econ_purge_user` (`6ac71558`); the five `*_rounds` tables added there with migration 158, when a round stopped belonging to the channel and started naming the player who opened it, and `casino_mines_hands` with migration 164 (2026-08-16) — the hand-maintained list is why a new per-member casino table is invisible to erasure until someone adds it. `casino_pools_rounds` stays out: the daily market has no owner, and its per-member data is all in `casino_pools_bets` | — | money code = repo's best |
 | risky_active_rounds, risky_round_rolls | Risky Rolls | who opened a round, who rolled and what they rolled, and the resolved seats (`highest_user`, `lowest_user`, `second_*`) | deleted on round close; an abandoned round lives until `/risky reset_state` or the 120-min auto-close | **YES — purge** (2026-08-20, `privacy_service.py` Risky Rolls step). Dice in a party game: nothing reads a closed round back and no Art 17(3) ground holds one. Rows go whole, and `risky_round_rolls` is deleted by resolved `game_id` first because the purge's connection makes no `PRAGMA foreign_keys` promise — the FK cascade the feature's own store relies on cannot be assumed here | — | Seat columns are all in `SUBJECT_ID_COLUMNS`, so export sees them ✓. `reroll_user_ids` survives in the schema but nothing can write it (`c53cb754`) |
 | risky_pending_questions | Risky Rolls | the round's winner, the second questioner on a 1, and CSV lists of participants / tied players / who has already asked | 7 days, swept on bot startup (migration 173) | **YES — purge** (2026-08-20). Same grounds as the rounds above; the CSV columns are matched by exact membership (`',' \|\| col \|\| ','` against `',id,'`), not a bare `LIKE '%id%'`, which would also match 1234 for 123 | — | All four CSV columns are in `LIST_VALUED_MEMBER_COLUMNS`, so the export discloses the blind spot ✓. Was **indefinite** until migration 173 (2026-08-20) gave the table a `created_at` and the 7-day sweep the posted questions already had — 58 rows had accumulated in prod against 2 live rounds. Pre-migration rows carry a NULL age and are swept on the first startup after deploy: a NULL predates the column, so it predates the release |
@@ -104,6 +104,31 @@ The tagger's scope changed from "Discord-age-gated channels" to "age-gated **or*
 **Decision.** Taken by the server owner on 2026-08-15, against two rejected alternatives: tag-without-persisting (preserves "never stored", loses the data needed to tune the floor) and age-gated-only (preserves the structural guarantee, leaves the bug live in 10 channels).
 
 **Erasure/export unchanged.** Neither table has an `author_id`; authorship joins through `messages`, so the existing `purge_user_data` behaviour and the preserve decision above are unaffected. Retention is still indefinite, and the 6-month TTL review on `nsfw_detections` now matters more, since the table covers more channels than when that review was scheduled.
+
+### Note — `games_consent` dropped, 2026-08-26
+
+Migration 184 drops `games_consent` (from migration 019): `user_id`,
+`tod_consent`, `updated_at` — a per-user Truth-or-Dare consent flag.
+
+**It was never in this register.** That is the finding, not a footnote: a table
+keyed on `user_id` existed in production for two months without a retention
+decision, a purge decision or a lawful basis recorded here. It held one row,
+written 2026-06-13. Nothing ever read it — the `/consent` command family and the
+`games_consent` module were deleted (`49a02867`), and the 2026-07-15 spec
+correction moved per-user game consent to Roadmap
+(`games_system_spec.md` §Consent system). The flag gated nothing.
+
+**Why dropping is the right disposal.** There is no Art 17(3) ground to keep a
+consent record for a gate that never ran — as evidence it proves only that one
+member pressed a button whose answer was never consulted. Erasure was also
+already broken for it in both directions: no purge helper named the table, so a
+member's erasure left the row standing, while the export's generic `user_id`
+sweep would have disclosed it. Dropping the table closes both.
+
+**Lesson for the next one.** This is the case CLAUDE.md's "new table holding
+per-user data ⇒ a row in `docs/data_register.md`" rule exists to prevent, seen
+from the far end: the table outlived the feature, and the register — not the
+code — was where its absence should have been visible.
 
 ## Cross-cutting questions each bundle must answer
 

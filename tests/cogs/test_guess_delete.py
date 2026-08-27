@@ -37,8 +37,7 @@ def _make_round(*, submitter_id: int = SUBMITTER_ID, original_path: str = "") ->
         answer_id=submitter_id, channel_id=GUESS_CHANNEL_ID, message_id=12345,
         crop_path="", crop_url="", original_path=original_path,
         difficulty="medium", candidate_count=1, reroll_count=0,
-        allow_reuse=False, is_reuse=False, original_round_id=None,
-        reuse_blocked=False, created_at=1000.0, solved_at=None, solver_id=None,
+        created_at=1000.0, solved_at=None, solver_id=None,
         guesses_to_solve=None, unique_guessers_to_solve=None,
         answer_optout=False, deleted_at=None,
     )

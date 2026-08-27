@@ -66,10 +66,6 @@ class GuessRound:
     difficulty: str
     candidate_count: int
     reroll_count: int
-    allow_reuse: bool
-    is_reuse: bool
-    original_round_id: int | None
-    reuse_blocked: bool
     created_at: float
     solved_at: float | None
     solver_id: int | None
