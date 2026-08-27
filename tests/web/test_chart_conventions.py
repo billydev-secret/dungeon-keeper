@@ -146,3 +146,56 @@ def test_channels_compare_chart_has_its_own_scoped_host():
         "channels.js is back to a bare .chart-wrap lookup, which is ambiguous "
         "once the health section's own chart-wraps are in the DOM"
     )
+
+
+# ── the dashboard tiles, which are not chart panels and so were never swept ──
+
+
+def test_sparkline_helper_accepts_css_custom_properties():
+    """`sparklineSVG` must apply colour through `style`, not an SVG attribute.
+
+    Two separate reasons, both of which broke a real caller:
+
+    * `stroke="var(--yellow)"` is meaningless — CSS custom properties resolve
+      in CSS, not in an SVG presentation attribute.
+    * the area fill was `fill="${color}22"`, string-concatenating hex alpha,
+      which produces `var(--yellow)22` for any non-hex value. `fill-opacity`
+      does the same job for both.
+
+    Callers legitimately pass semantic tokens (a red sparkline for flagged
+    NSFW volume, an amber one over the Gini threshold), so this has to hold.
+    """
+    src = _code(_JS / "tiles" / "tile-helpers.js")
+    block = re.search(r"function sparklineSVG\([\s\S]*?\n\}", src)
+    assert block, "sparklineSVG is gone from tile-helpers.js"
+    body = block.group(0)
+    assert 'fill="${color}' not in body, (
+        "the area fill is back to an SVG fill attribute with concatenated hex "
+        "alpha — it breaks for every var(--token) caller"
+    )
+    assert 'stroke="${color}"' not in body, (
+        "stroke is back to an SVG presentation attribute, which cannot resolve "
+        "a CSS custom property"
+    )
+    assert "fill-opacity" in body, "the fill-opacity replacement for hex alpha is gone"
+
+
+def test_the_emotion_bar_is_actually_styled():
+    """Regression for a tile that rendered nothing at all.
+
+    js/tiles/sentiment.js writes `.emotion-bar` / `.emotion-bar-seg`, and
+    neither had a single CSS rule. The segments carry only an inline
+    `width: N%`, so with no height they collapsed and the bar measured 0px —
+    the Sentiment & Tone tile shipped its emotion breakdown invisible.
+    """
+    css = (_JS.parent / "app.css").read_text(encoding="utf-8")
+    bar = re.search(r"\.emotion-bar \{([^}]*)\}", css)
+    seg = re.search(r"\.emotion-bar-seg \{([^}]*)\}", css)
+    assert bar, ".emotion-bar has no CSS rule — its segments collapse to zero height"
+    assert seg, ".emotion-bar-seg has no CSS rule"
+    assert "height" in bar.group(1), ".emotion-bar sets no height, so it renders as nothing"
+    assert "gap" in bar.group(1), (
+        "the 2px segment gap is gone — five categorical slots from this palette "
+        "cannot all clear the CVD target (every 5-of-6 subset lands at ΔE 6.2-6.4), "
+        "so the separation is required, not decorative"
+    )

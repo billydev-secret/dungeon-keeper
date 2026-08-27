@@ -4892,3 +4892,29 @@ fieldset.field {
   color: var(--ink-dim);
   padding: var(--s-1) 0 var(--s-2);
 }
+
+/* ── Sentiment tile: the emotion breakdown bar ────────────────────────
+   `.emotion-bar` / `.emotion-bar-seg` are written by js/tiles/sentiment.js
+   and had NO styling at all. The segments carry only an inline `width: N%`,
+   so with no height they collapsed and the whole bar measured 0px — the tile
+   has been rendering its emotion breakdown as nothing at all.
+
+   The 2px gap is the same secondary encoding the stacked charts use, and it
+   is required rather than decorative here: five categorical slots out of this
+   palette cannot all clear the CVD target — every 5-of-6 subset lands at
+   ΔE 6.2-6.4, inside the band that is legal only WITH separation. A tooltip
+   is not a substitute; it is not visible.
+   ─────────────────────────────────────────────────────────────────────── */
+.emotion-bar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  margin: var(--s-2) 0;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.emotion-bar-seg {
+  height: 100%;
+  min-width: 2px;
+  border-radius: 1px;
+}

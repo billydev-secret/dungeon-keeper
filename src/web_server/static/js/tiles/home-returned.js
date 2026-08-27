@@ -10,7 +10,7 @@ export function renderTile(el, d) {
     ? d.returned_users.map((u) => `
         <div class="home-rank-row">
           <span class="home-rank-name">${esc(u.user_name || u.user_id)}</span>
-          <span class="home-rank-val" style="color:#7F8F3A;">after ${fmtGap(u.gap_hours)}</span>
+          <span class="home-rank-val" style="color:var(--green-text);">after ${fmtGap(u.gap_hours)}</span>
         </div>
       `).join("")
     : '<div class="home-dim">No returning users right now</div>';

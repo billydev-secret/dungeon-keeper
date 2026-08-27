@@ -1,4 +1,5 @@
 import { badgeHTML, esc, fmtAgo } from "./tile-helpers.js";
+import { seriesColor, SERIES_OVERFLOW } from "../charts.js";
 
 export function renderTile(el, data, names) {
   const chNames = names ? names.channels || {} : {};
@@ -10,8 +11,15 @@ export function renderTile(el, data, names) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([name, pct]) => {
-      const colors = { joy: "#7F8F3A", playful: "#E6B84C", neutral: "#949ba4", frustration: "#B36A92", anger: "#9E3B2E" };
-      return `<div class="emotion-bar-seg" style="width:${pct}%;background:${colors[name] || "#949ba4"}" title="${name}: ${pct}%"></div>`;
+      // Five named emotions is a CATEGORICAL set, not a severity ramp — these
+      // are different things, not degrees of one thing — so they take fixed
+      // slots from the validated palette. They were five retired-palette
+      // literals, including the amber/moss pair that measured ΔE 1.8 under
+      // protanopia; joy and playful sat directly adjacent in this bar.
+      const EMOTION_SLOT = { joy: 1, playful: 0, neutral: 3, frustration: 4, anger: 5 };
+      const slot = EMOTION_SLOT[name];
+      const color = slot === undefined ? SERIES_OVERFLOW : seriesColor(slot);
+      return `<div class="emotion-bar-seg" style="width:${pct}%;background:${color}" title="${name}: ${pct}%"></div>`;
     }).join("");
 
   // Outlier messages (1σ above/below baseline)
