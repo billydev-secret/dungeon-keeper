@@ -653,6 +653,18 @@ def test_no_casino_card_leaves_a_raw_discord_reference(label, build):
     assert "Player7" in text, f"{label} never rendered the resolved name"
 
 
+#: The house tagline every casino card used to end on. Billy asked for it gone
+#: on 2026-08-27; this keeps it from creeping back one builder at a time.
+_TAGLINE = "Play for fun, not for rent."
+
+
+@pytest.mark.parametrize(
+    ("label", "build"), _NAME_CASES, ids=[c[0] for c in _NAME_CASES]
+)
+def test_no_casino_card_carries_the_house_tagline(label, build):
+    assert _TAGLINE not in _seen(build(_named)), f"{label} still signs off with the tagline"
+
+
 def test_ticker_line_names_the_player():
     assert "Player7" in casino_embeds.ticker_line(
         7, "slots", 50, 500, name_fn=_named
@@ -713,14 +725,13 @@ def test_every_casino_render_site_passes_a_resolver():
 
 def _result_card() -> discord.Embed:
     """Stand-in for whatever the player already holds, with the two things
-    the broadcast must carry over: the copy and a result field."""
+    the broadcast must carry over: the description and a result field."""
     embed = discord.Embed(
         title="🎡 Roulette — no more bets!",
         description="The ball lands on 🔴 **7**.",
         color=COLOR_GREEN,
     )
     embed.add_field(name="Winners", value="Nelli — 💎 1,200 gems", inline=False)
-    embed.set_footer(text="Play for fun, not for rent.")
     return embed
 
 

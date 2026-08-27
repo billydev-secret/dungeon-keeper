@@ -48,7 +48,6 @@ def casino_title(casino_name: str = DEFAULT_CASINO_NAME) -> str:
 
 # Kept for callers with no guild handy; the per-guild name is the norm.
 CASINO_TITLE = casino_title()
-_FOOTER = "Play for fun, not for rent."
 
 _GAME_LINES = {
     "coinflip": (
@@ -237,7 +236,6 @@ def build_hub_embed(
             f"{econ.currency_plural} staked per player"
         )
     embed.add_field(name="House rules", value=" · ".join(limits), inline=False)
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -399,7 +397,6 @@ def build_help_embed(
             ),
             inline=False,
         )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -432,7 +429,6 @@ def build_coinflip_embed(
         description=_with_streak(desc, econ, streak),
         color=COLOR_GREEN if won else COLOR_RED,
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -492,7 +488,6 @@ def build_slots_embed(
     embed = discord.Embed(
         title=title, description=_with_streak(desc, econ, streak), color=color
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -510,7 +505,6 @@ def build_jackpot_celebration(
         ),
         color=COLOR_GOLD,
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -566,7 +560,6 @@ def build_big_win_broadcast(
             value=field.value or "​",
             inline=bool(field.inline),
         )
-    embed.set_footer(text=_FOOTER)
     return BigWinBroadcast(embed, tier.ping)
 
 
@@ -585,7 +578,6 @@ def build_coinflip_spin_embed(
         ),
         color=_accent(accent),
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -608,7 +600,6 @@ def build_slots_spin_embed(
         ),
         color=_accent(accent),
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -639,7 +630,6 @@ def build_blackjack_reveal_embed(
         value=_hand_line(dealer_first_two) + "\n*The dealer turns the hole card…*",
         inline=False,
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -654,7 +644,6 @@ def build_roulette_bounce_embed(
         description=f"The ball dances across the wheel… {frames} …",
         color=_accent(accent),
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -722,7 +711,6 @@ def build_blackjack_embed(
         if outcome != "refunded":
             line = _with_streak(line, econ, streak)
         embed.add_field(name="Result", value=line, inline=False)
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -770,7 +758,6 @@ def build_roulette_round_embed(
         color=_accent(accent),
     )
     _add_bets_field(embed, econ, bets, name_fn=name_fn)
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -805,7 +792,6 @@ def build_roulette_result_embed(
     _add_result_fields(
         embed, econ, winners, losers_total, pot_after, name_fn=name_fn
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -848,7 +834,6 @@ def build_derby_round_embed(
     )
     embed.add_field(name="The field", value=_odds_board() + "\n​", inline=False)
     _add_bets_field(embed, econ, bets, name_fn=name_fn)
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -870,7 +855,6 @@ def build_derby_race_embed(
         description=_track_lines(positions),
         color=_accent(accent),
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -901,7 +885,6 @@ def build_derby_result_embed(
         embed, econ, winners, losers_total, pot_after,
         keep_name="The meadow keeps", name_fn=name_fn,
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -946,7 +929,6 @@ def build_baccarat_round_embed(
         color=_accent(accent),
     )
     _add_bets_field(embed, econ, bets, name_fn=name_fn)
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -966,7 +948,6 @@ def build_baccarat_deal_embed(
         ),
         color=_accent(accent),
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1019,7 +1000,6 @@ def build_baccarat_result_embed(
         embed, econ, paid, losers_total, pot_after,
         paid_name="Winners" if won else "Pushed", name_fn=name_fn,
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1055,7 +1035,6 @@ def build_dice_round_embed(
         color=_accent(accent),
     )
     _add_bets_field(embed, econ, bets, name_fn=name_fn)
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1068,7 +1047,6 @@ def build_dice_tumble_embed(
         description="The dice tumble across the felt… 🎲 🎲 🎲 …",
         color=_accent(accent),
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1105,7 +1083,6 @@ def build_dice_result_embed(
     _add_result_fields(
         embed, econ, winners, losers_total, pot_after, name_fn=name_fn
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1141,7 +1118,6 @@ def build_keno_round_embed(
         color=_accent(accent),
     )
     _add_bets_field(embed, econ, bets, name_fn=name_fn)
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1154,7 +1130,6 @@ def build_keno_tumble_embed(
         description="The hopper churns… numbers rattling into the chute…",
         color=_accent(accent),
     )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1210,7 +1185,6 @@ def build_keno_result_embed(
             value="\n".join(logic.cap_lines(lines, limit=1022)) + "\n​",
             inline=False,
         )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1295,7 +1269,6 @@ def build_war_embed(
         if outcome != "refunded":
             line = _with_streak(line, econ, streak)
         embed.add_field(name="Result", value=line, inline=False)
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1340,7 +1313,6 @@ def build_my_stats_embed(
             ),
             inline=False,
         )
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1437,7 +1409,6 @@ def build_pools_panel_embed(
         inline=False,
     )
     embed.set_image(url=f"attachment://{pools_charts.LIVE_FILENAME}")
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1500,7 +1471,6 @@ def build_pools_result_embed(
         )
     if chart:
         embed.set_image(url=f"attachment://{pools_charts.INSTRUMENT_FILENAME}")
-    embed.set_footer(text=_FOOTER)
     return embed
 
 
@@ -1533,7 +1503,7 @@ def build_pools_void_embed(
             f"**{refunded:,}** staked has been refunded in full.\n​"
         ),
         color=_accent(accent),
-    ).set_footer(text=_FOOTER)
+    )
 
 
 # ── mines ──────────────────────────────────────────────────────────────
@@ -1648,5 +1618,4 @@ def build_mines_embed(
         if step.outcome != "refunded":
             line = _with_streak(line, econ, step.streak)
         embed.add_field(name="Result", value=line, inline=False)
-    embed.set_footer(text=_FOOTER)
     return embed
