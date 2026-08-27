@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import TYPE_CHECKING, Literal
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
+from bot_modules.services import xp_rollup_service
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
 from bot_modules.core.xp_system import (
@@ -29,6 +31,18 @@ from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
+
+log = logging.getLogger(__name__)
+
+# Days rolled up per pass. The first run after this ships has ~180 days of
+# history to cover; capping the pass keeps that one write from being long
+# enough to matter, and the loop catches up over the following days.
+_ROLLUP_DAYS_PER_PASS = 40
+
+# Raw rows deleted per guild per pass once retention is on. The busy
+# guild has ~500k to clear on the first run; nibbling keeps that off the
+# write lock that XP awards need, at the cost of taking a few days.
+_PRUNE_ROWS_PER_PASS = xp_rollup_service.PRUNE_CHUNK
 
 
 async def _collect_backfill_channels(
@@ -176,6 +190,96 @@ class XpCog(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         super().__init__()
+
+    async def cog_load(self) -> None:
+        self._xp_rollup_loop.start()
+
+    async def cog_unload(self) -> None:
+        self._xp_rollup_loop.cancel()
+
+    # ── Daily xp_events → xp_daily rollup, then retention ────────────
+
+    @tasks.loop(hours=24)
+    async def _xp_rollup_loop(self) -> None:
+        """Aggregate complete days of xp_events into xp_daily, then prune.
+
+        Stages 1 and 3 of docs/plans/xp-events-retention-and-rollup.md. Order
+        is the interlock and is not negotiable: the rollup runs first, and the
+        prune only ever deletes days the rollup has already covered — it
+        refuses outright if it cannot prove that. A guild that has not opted
+        in is skipped, which is every guild until an admin turns retention on.
+        """
+        try:
+            def _roll() -> tuple[int, int, int]:
+                with self.bot.ctx.open_db() as conn:
+                    days, buckets = xp_rollup_service.rollup_pending_days(
+                        conn, limit=_ROLLUP_DAYS_PER_PASS
+                    )
+                    # Late-arriving events are real (voice XP lands when a
+                    # session ends), so the newest complete days are rebuilt
+                    # every pass rather than trusted from their first roll.
+                    _, refreshed = xp_rollup_service.refresh_recent_days(conn)
+                    return days, buckets, refreshed
+
+            days, buckets, refreshed = await asyncio.to_thread(_roll)
+            if days or refreshed:
+                log.info(
+                    "XP rollup: %d new day(s) → %d bucket(s); %d refreshed",
+                    days, buckets, refreshed,
+                )
+        except Exception:
+            log.exception("XP daily rollup failed")
+            # A failed rollup must not be followed by a prune. The prune has
+            # its own guards and would refuse anyway, but not attempting it is
+            # the clearer statement.
+            return
+
+        try:
+            await self._prune_xp_events()
+        except Exception:
+            log.exception("XP retention prune failed")
+
+    async def _prune_xp_events(self) -> None:
+        """Delete raw events the rollup covers, for guilds that opted in."""
+        def _prune() -> tuple[int, bool]:
+            total = 0
+            with self.bot.ctx.open_db() as conn:
+                for guild in self.bot.guilds:
+                    try:
+                        total += xp_rollup_service.prune_raw_events(
+                            conn, guild.id, limit=_PRUNE_ROWS_PER_PASS
+                        )
+                    except xp_rollup_service.PruneRefused as exc:
+                        # Only worth a line for a guild that actually asked for
+                        # retention; every other guild "refuses" every pass.
+                        if xp_rollup_service.retention_enabled(conn, guild.id):
+                            log.warning(
+                                "XP retention skipped for %s: %s", guild.id, exc
+                            )
+            return total, total > 0
+
+        deleted, any_deleted = await asyncio.to_thread(_prune)
+        if not any_deleted:
+            return
+        log.info("XP retention: pruned %d raw event(s)", deleted)
+
+        # Deleting rows returns pages to SQLite's freelist; it does not shrink
+        # the file, and in WAL mode the deletions sit in the -wal until a
+        # checkpoint moves them. The first prune is ~500k rows, so force the
+        # checkpoint rather than waiting for the automatic one — see the
+        # erasure runbook's note on the same trap.
+        def _checkpoint() -> None:
+            with self.bot.ctx.open_db() as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+        try:
+            await asyncio.to_thread(_checkpoint)
+        except Exception:
+            log.exception("WAL checkpoint after the XP prune failed")
+
+    @_xp_rollup_loop.before_loop
+    async def _before_xp_rollup(self) -> None:
+        await self.bot.wait_until_ready()
 
     @app_commands.command(
         name="xp_leaderboards",

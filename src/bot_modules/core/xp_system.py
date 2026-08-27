@@ -7,6 +7,8 @@ import statistics
 import time
 from dataclasses import dataclass
 
+from bot_modules.services import xp_rollup_service
+
 URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 CUSTOM_EMOJI_RE = re.compile(r"<a?:[A-Za-z0-9_]+:\d+>$")
 COLLAPSE_WHITESPACE_RE = re.compile(r"\s+")
@@ -442,6 +444,59 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_xp_events_channel
         ON xp_events (guild_id, channel_id, created_at)
         """
+    )
+    # The daily rollup and its watermark (migrations 186/187). Mirrored here
+    # for the same reason xp_events is: the readers below union xp_daily, and
+    # a DB bootstrapped through this function rather than the migration chain
+    # would fault on the first leaderboard query.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS xp_daily (
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            channel_id INTEGER,
+            day TEXT NOT NULL,
+            xp REAL NOT NULL,
+            events INTEGER NOT NULL,
+            first_at REAL NOT NULL,
+            last_at REAL NOT NULL,
+            PRIMARY KEY (guild_id, user_id, source, channel_id, day)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_xp_daily_lookup
+        ON xp_daily (guild_id, source, day, user_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_xp_daily_channel
+        ON xp_daily (guild_id, channel_id, day)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_xp_daily_day
+        ON xp_daily (day)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS xp_rollup_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            rolled_through_day TEXT,
+            first_gap_day TEXT,
+            updated_at REAL NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO xp_rollup_state"
+        " (id, rolled_through_day, first_gap_day, updated_at)"
+        " VALUES (1, NULL, NULL, 0)"
     )
     conn.execute(
         """
@@ -972,6 +1027,65 @@ def completed_voice_intervals(
     return max(0, completed - session.awarded_intervals)
 
 
+def _user_totals_query(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    source: str,
+    since_ts: float | None,
+) -> tuple[str, list[object]]:
+    """SQL yielding one ``(user_id, xp)`` row per member, for one source.
+
+    The three leaderboard readers all want exactly this and differ only in
+    what they do with it, so the union with ``xp_daily`` lives here once
+    rather than three times.
+
+    Below the retention boundary raw events may be gone (Stage 3 of
+    docs/plans/xp-events-retention-and-rollup.md), so the rollup answers for
+    those days and raw answers from the boundary forward. The arms split on
+    the same instant, so they cannot overlap and cannot leave a gap: summing
+    them is exact for an all-time window. For a windowed one whose cutoff
+    lands mid-day *below* the boundary the rollup contributes that whole day
+    — the bounded skew accepted in the plan (owner decision 2026-08-06).
+    Windows inside the boundary never read the rollup at all.
+    """
+    boundary = xp_rollup_service.read_boundary(conn)
+
+    if boundary is None:
+        params: list[object] = [guild_id, source]
+        where = "guild_id = ? AND source = ?"
+        if since_ts is not None:
+            where += " AND created_at >= ?"
+            params.append(since_ts)
+        return (
+            f"SELECT user_id, SUM(amount) AS xp FROM xp_events WHERE {where}"
+            " GROUP BY user_id",
+            params,
+        )
+
+    boundary_day, boundary_ts = boundary
+
+    raw_where = "guild_id = ? AND source = ? AND created_at >= ?"
+    raw_params: list[object] = [guild_id, source, max(since_ts or 0.0, boundary_ts)]
+
+    agg_where = "guild_id = ? AND source = ? AND day < ?"
+    agg_params: list[object] = [guild_id, source, boundary_day]
+    if since_ts is not None:
+        agg_where += " AND day >= ?"
+        agg_params.append(xp_rollup_service.utc_day(since_ts))
+
+    return (
+        f"""
+        SELECT user_id, SUM(xp) AS xp FROM (
+            SELECT user_id, amount AS xp FROM xp_events WHERE {raw_where}
+            UNION ALL
+            SELECT user_id, xp        FROM xp_daily  WHERE {agg_where}
+        )
+        GROUP BY user_id
+        """,
+        [*raw_params, *agg_params],
+    )
+
+
 def get_xp_leaderboard(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -980,22 +1094,12 @@ def get_xp_leaderboard(
     since_ts: float | None = None,
     limit: int = 5,
 ) -> list[LeaderboardEntry]:
-    params: list[object] = [guild_id, source]
-    where_clause = "guild_id = ? AND source = ?"
-    if since_ts is not None:
-        where_clause += " AND created_at >= ?"
-        params.append(since_ts)
-    params.append(limit)
-
-    query = """
-        SELECT user_id, ROUND(SUM(amount), 2) AS xp
-        FROM xp_events
-        WHERE {}
-        GROUP BY user_id
-        ORDER BY xp DESC, user_id ASC
-        LIMIT ?
-        """.format(where_clause)
-    rows = conn.execute(query, params).fetchall()
+    inner, params = _user_totals_query(conn, guild_id, source, since_ts)
+    rows = conn.execute(
+        f"SELECT user_id, ROUND(xp, 2) AS xp FROM ({inner})"
+        " ORDER BY xp DESC, user_id ASC LIMIT ?",
+        [*params, limit],
+    ).fetchall()
 
     return [
         LeaderboardEntry(
@@ -1013,19 +1117,8 @@ def get_xp_distribution_stats(
     *,
     since_ts: float | None = None,
 ) -> XpDistributionStats:
-    params: list[object] = [guild_id, source]
-    where_clause = "guild_id = ? AND source = ?"
-    if since_ts is not None:
-        where_clause += " AND created_at >= ?"
-        params.append(since_ts)
-
-    query = """
-        SELECT ROUND(SUM(amount), 2) AS xp
-        FROM xp_events
-        WHERE {}
-        GROUP BY user_id
-        """.format(where_clause)
-    rows = conn.execute(query, params).fetchall()
+    inner, params = _user_totals_query(conn, guild_id, source, since_ts)
+    rows = conn.execute(f"SELECT ROUND(xp, 2) AS xp FROM ({inner})", params).fetchall()
     values = [float(row["xp"]) for row in rows]
     if not values:
         return XpDistributionStats(member_count=0, median_xp=0.0, stddev_xp=0.0)
@@ -1045,20 +1138,12 @@ def get_user_xp_standing(
     *,
     since_ts: float | None = None,
 ) -> UserXpStanding:
-    params: list[object] = [guild_id, source]
-    where_clause = "guild_id = ? AND source = ?"
-    if since_ts is not None:
-        where_clause += " AND created_at >= ?"
-        params.append(since_ts)
-
-    query = """
-        SELECT user_id, ROUND(SUM(amount), 2) AS xp
-        FROM xp_events
-        WHERE {}
-        GROUP BY user_id
-        ORDER BY xp DESC, user_id ASC
-        """.format(where_clause)
-    rows = conn.execute(query, params).fetchall()
+    inner, params = _user_totals_query(conn, guild_id, source, since_ts)
+    rows = conn.execute(
+        f"SELECT user_id, ROUND(xp, 2) AS xp FROM ({inner})"
+        " ORDER BY xp DESC, user_id ASC",
+        params,
+    ).fetchall()
 
     for idx, row in enumerate(rows, start=1):
         if int(row["user_id"]) == user_id:
@@ -1075,7 +1160,58 @@ def get_user_xp_standing(
     )
 
 
+def get_user_xp_by_source(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> dict[str, float]:
+    """One member's all-time XP split by source (reconciles with member_xp).
+
+    Unions the rollup, so the mod profile still shows a long-standing
+    member's full history once raw events past the retention boundary are
+    pruned. Lifted out of jail_cog, where it was inline SQL.
+
+    Rounded to 2dp like every sibling reader. The rounding is not cosmetic
+    here: summing a day's events into a bucket and then summing buckets
+    associates the additions differently than summing every event at once,
+    so the two paths can disagree in the last bits of a float (observed on
+    prod: 13589.63 vs 13589.630000000001). Two decimals is the precision XP
+    is displayed at anyway, and it makes the union exactly equal to the raw
+    read instead of almost equal.
+    """
+    boundary = xp_rollup_service.read_boundary(conn)
+
+    if boundary is None:
+        rows = conn.execute(
+            "SELECT source, ROUND(SUM(amount), 2) FROM xp_events"
+            " WHERE guild_id = ? AND user_id = ? GROUP BY source",
+            (guild_id, user_id),
+        ).fetchall()
+        return {str(r[0]): float(r[1]) for r in rows}
+
+    boundary_day, boundary_ts = boundary
+    rows = conn.execute(
+        """
+        SELECT source, ROUND(SUM(xp), 2) FROM (
+            SELECT source, amount AS xp FROM xp_events
+             WHERE guild_id = ? AND user_id = ? AND created_at >= ?
+            UNION ALL
+            SELECT source, xp FROM xp_daily
+             WHERE guild_id = ? AND user_id = ? AND day < ?
+        )
+        GROUP BY source
+        """,
+        (guild_id, user_id, boundary_ts, guild_id, user_id, boundary_day),
+    ).fetchall()
+    return {str(r[0]): float(r[1]) for r in rows}
+
+
 def has_any_xp_events(conn: sqlite3.Connection, guild_id: int) -> bool:
+    """Whether this guild has any XP history at all.
+
+    Checks the rollup too. Once Stage 3 prunes, a guild whose activity is
+    entirely older than the retention boundary still *has* a history, and
+    `/xp` must not fall through to "No XP recorded yet" — which would be the
+    one wrong answer this gate can give.
+    """
     row = conn.execute(
         """
         SELECT 1
@@ -1084,6 +1220,11 @@ def has_any_xp_events(conn: sqlite3.Connection, guild_id: int) -> bool:
         LIMIT 1
         """,
         (guild_id,),
+    ).fetchone()
+    if row is not None:
+        return True
+    row = conn.execute(
+        "SELECT 1 FROM xp_daily WHERE guild_id = ? LIMIT 1", (guild_id,)
     ).fetchone()
     return row is not None
 
@@ -1102,6 +1243,13 @@ def has_any_member_xp(conn: sqlite3.Connection, guild_id: int) -> bool:
 
 
 def count_xp_events(conn: sqlite3.Connection, guild_id: int) -> int:
+    """Raw event rows currently stored for a guild.
+
+    Not "events ever earned": once retention (Stage 3 of
+    docs/plans/xp-events-retention-and-rollup.md) is on, rows past the horizon
+    are summarised into ``xp_daily`` and deleted. The only caller is a debug
+    log line, which is worded to match.
+    """
     row = conn.execute(
         """
         SELECT COUNT(*)
@@ -1111,6 +1259,55 @@ def count_xp_events(conn: sqlite3.Connection, guild_id: int) -> int:
         (guild_id,),
     ).fetchone()
     return int(row[0]) if row else 0
+
+
+def _ordered_events_source(
+    conn: sqlite3.Connection, guild_id: int
+) -> tuple[str, str, list[object]]:
+    """Row sources for the one reader that needs events in order.
+
+    Returns ``(events_sql, first_at_sql, params)``. ``events_sql`` yields
+    ``(user_id, created_at, amount)`` for the whole of a guild's history —
+    raw events from the retention boundary forward, and one row per
+    (user, day) below it carrying that day's total at the day's UTC midnight.
+    ``first_at_sql`` yields ``(user_id, first_at)`` candidates, taken from the
+    rollup's stored ``first_at`` rather than from the synthetic midnight so a
+    member's first-ever event keeps its real timestamp.
+
+    Both take the same ``params``, so a caller that uses each once passes the
+    list twice. Falls back to plain ``xp_events`` whenever the rollup is not
+    readable or there is nothing below the boundary.
+    """
+    boundary = xp_rollup_service.read_boundary(conn)
+    if boundary is None:
+        return (
+            "SELECT user_id, created_at, amount FROM xp_events WHERE guild_id = ?",
+            "SELECT user_id, created_at AS first_at FROM xp_events WHERE guild_id = ?",
+            [guild_id],
+        )
+    boundary_day, boundary_ts = boundary
+    events_sql = """
+        SELECT user_id, created_at, amount
+        FROM xp_events
+        WHERE guild_id = ? AND created_at >= ?
+        UNION ALL
+        SELECT user_id,
+               CAST(strftime('%s', day) AS REAL) AS created_at,
+               SUM(xp) AS amount
+        FROM xp_daily
+        WHERE guild_id = ? AND day < ?
+        GROUP BY user_id, day
+    """
+    first_sql = """
+        SELECT user_id, created_at AS first_at
+        FROM xp_events
+        WHERE guild_id = ? AND created_at >= ?
+        UNION ALL
+        SELECT user_id, first_at
+        FROM xp_daily
+        WHERE guild_id = ? AND day < ?
+    """
+    return events_sql, first_sql, [guild_id, boundary_ts, guild_id, boundary_day]
 
 
 def get_time_to_level_details(
@@ -1127,8 +1324,23 @@ def get_time_to_level_details(
     """
     xp_threshold = xp_required_for_level(target_level, settings)
 
+    # Stage 2b of docs/plans/xp-events-retention-and-rollup.md. This is the one
+    # reader that needs event *ordering*, not sums — a running total per member
+    # and the moment it crosses the threshold. Below the retention boundary the
+    # events themselves may be gone, so each rolled-up day contributes a single
+    # synthetic event carrying that day's total, stamped at its UTC midnight.
+    # The crossing then resolves to the day it happened in rather than the
+    # second, which the route can afford: it reports mean/median/stddev/mode in
+    # *days*. Inside the boundary every event is still individually present, so
+    # a recent crossing is as exact as it ever was.
+    #
+    # `first_at` is not taken from the synthetic timestamps: xp_daily keeps the
+    # real MIN(created_at) of each bucket, so a member's first-ever event keeps
+    # its true time and "seconds to level" is not inflated by up to a day.
+    events_src, first_src, src_params = _ordered_events_source(conn, guild_id)
+
     since_clause = ""
-    params: list[object] = [guild_id, guild_id, xp_threshold]
+    params: list[object] = [*src_params, *src_params, xp_threshold]
     if since_ts is not None:
         since_clause = " AND lr.reached_at >= ?"
         params.append(since_ts)
@@ -1143,13 +1355,11 @@ def get_time_to_level_details(
                     PARTITION BY user_id ORDER BY created_at
                     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                 ) AS cumulative_xp
-            FROM xp_events
-            WHERE guild_id = ?
+            FROM ({events_src})
         ),
         first_event AS (
-            SELECT user_id, MIN(created_at) AS first_at
-            FROM xp_events
-            WHERE guild_id = ?
+            SELECT user_id, MIN(first_at) AS first_at
+            FROM ({first_src})
             GROUP BY user_id
         ),
         level_reached AS (
@@ -1198,6 +1408,20 @@ def get_oldest_xp_event_timestamp(
         WHERE {}
         """.format(where_clause)
     row = conn.execute(query, params).fetchone()
-    if not row or row[0] is None:
-        return None
-    return float(row[0])
+    oldest = None if not row or row[0] is None else float(row[0])
+
+    # The rollup reaches further back than raw does once Stage 3 prunes, and
+    # xp_daily.first_at is the real event timestamp, not the bucket's midnight
+    # — so the answer stays exact rather than becoming "the oldest row we kept".
+    if xp_rollup_service.read_boundary(conn) is not None:
+        # where_clause is guild_id plus an optional source filter — both are
+        # columns of xp_daily too, so it transfers verbatim.
+        agg_row = conn.execute(
+            "SELECT MIN(first_at) FROM xp_daily WHERE {}".format(where_clause),
+            params,
+        ).fetchone()
+        if agg_row and agg_row[0] is not None:
+            rolled = float(agg_row[0])
+            oldest = rolled if oldest is None else min(oldest, rolled)
+
+    return oldest

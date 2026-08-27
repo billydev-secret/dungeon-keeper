@@ -26,6 +26,7 @@ from bot_modules.services.activity_graphs import (
     query_nsfw_gender_activity,
     query_xp_activity_with_breakdown,
     query_xp_histogram_with_breakdown,
+    xp_histogram_window_label,
 )
 
 # ---------------------------------------------------------------------------
@@ -579,9 +580,16 @@ def get_activity_data(
             counts = [float(c) for c in msg_counts]
         y_label = "Messages"
 
+    # The XP histograms are windowed rather than all-time (the daily rollup
+    # cannot answer hour-of-day), so the chart title has to say so — the
+    # message histograms next to them still read the full archive.
+    window_label = _WINDOW_LABELS.get(resolution, resolution)
+    if mode == "xp" and resolution in ("hour_of_day", "day_of_week"):
+        window_label = xp_histogram_window_label(window_label)
+
     result: ActivityData = {
         "resolution": resolution,
-        "window_label": _WINDOW_LABELS.get(resolution, resolution),
+        "window_label": window_label,
         "mode": mode,
         "labels": labels,
         "counts": counts,

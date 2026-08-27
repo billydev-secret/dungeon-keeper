@@ -90,6 +90,7 @@ from bot_modules.services.moderation import (
     write_audit,
 )
 from bot_modules.core.db_utils import get_config_value, get_tz_offset_hours
+from bot_modules.core.xp_system import get_user_xp_by_source
 from bot_modules.services.activity_graphs import (
     query_message_activity,
     query_xp_activity_with_breakdown,
@@ -1748,13 +1749,7 @@ class JailCog(commands.Cog):
                 ).fetchone()
 
                 # All-time XP split by source (reconciles with total_xp above).
-                xp_by_source = dict(
-                    conn.execute(
-                        "SELECT source, SUM(amount) FROM xp_events "
-                        "WHERE guild_id = ? AND user_id = ? GROUP BY source",
-                        (guild.id, user.id),
-                    ).fetchall()
-                )
+                xp_by_source = get_user_xp_by_source(conn, guild.id, user.id)
 
                 watcher_count = conn.execute(
                     "SELECT COUNT(*) FROM watched_users WHERE guild_id = ? AND watched_user_id = ?",

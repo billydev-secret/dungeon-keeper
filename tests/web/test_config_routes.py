@@ -276,6 +276,53 @@ def test_update_xp_coefficient(authed_client, fake_ctx):
     assert float(val) == 0.75
 
 
+def test_xp_retention_is_off_until_it_is_switched_on(authed_client, fake_ctx):
+    """The dial that lets a million rows of member data be deleted.
+
+    Its default has to be off, and it has to survive the round trip — a dial
+    that reads back as off after being saved is indistinguishable from one
+    nobody ever set, and this is not a knob to be wrong about quietly.
+    """
+    from bot_modules.services import xp_rollup_service
+
+    section = authed_client.get("/api/config").json()["xp"]
+    assert section["xp_retention_enabled"] == "0"
+    assert section["xp_retention_days"] == xp_rollup_service.RAW_RETENTION_DAYS
+    assert section["xp_retention_prunable"] == 0
+
+    assert authed_client.put(
+        "/api/config/xp", json={"xp_retention_enabled": "1"}
+    ).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert xp_rollup_service.retention_enabled(conn, fake_ctx.guild_id) is True
+    assert authed_client.get("/api/config").json()["xp"]["xp_retention_enabled"] == "1"
+
+    assert authed_client.put(
+        "/api/config/xp", json={"xp_retention_enabled": "0"}
+    ).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert xp_rollup_service.retention_enabled(conn, fake_ctx.guild_id) is False
+
+
+def test_xp_retention_stores_only_one_or_zero(authed_client, fake_ctx):
+    """Anything the reader wouldn't recognise is normalised, not stored raw.
+
+    retention_enabled() treats an unrecognised value as off, so persisting the
+    caller's spelling would let a deliberate opt-in look like a silent failure.
+    """
+    from bot_modules.core.db_utils import get_config_value
+    from bot_modules.services import xp_rollup_service
+
+    assert authed_client.put(
+        "/api/config/xp", json={"xp_retention_enabled": "yes please"}
+    ).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        stored = get_config_value(
+            conn, xp_rollup_service.RETENTION_CONFIG_KEY, "0", fake_ctx.guild_id
+        )
+    assert stored == "0"
+
+
 def test_update_xp_rejects_zero_voice_interval(authed_client, fake_ctx):
     # A 0-second interval divides by zero in completed_voice_intervals and
     # would kill voice XP guild-wide — the model must reject it (422).
