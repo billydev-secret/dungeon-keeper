@@ -86,6 +86,8 @@ from bot_modules.economy.perk_actions import (
     feature_gate_ok,
     revoke_role_perks,
 )
+from bot_modules.economy.quest_views import refresh_signoff_board
+from bot_modules.economy.signoff_notice import announce_signoff_outcome
 from bot_modules.economy.register import (
     RegisterEntry,
     build_register_embed,
@@ -180,12 +182,18 @@ def _seconds_until_next_hour() -> float:
 
 @dataclass(frozen=True)
 class ExpiredClaimNotice:
-    """One expired sign-off claim to DM after the expiry transaction commits."""
+    """One expired sign-off claim, announced after the transaction commits.
+
+    ``trigger_kind`` rides along because the register suppresses outcomes for
+    privacy-sensitive quests (see ``register.suppress_signoff_notice``) and the
+    sweep must not have to re-read the quest to find that out.
+    """
 
     guild_id: int
     user_id: int
     quest_id: int
     quest_title: str
+    trigger_kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -961,12 +969,12 @@ async def _send_community_beats(
 def run_claim_expiry(
     conn: sqlite3.Connection, now_ts: float
 ) -> list[ExpiredClaimNotice]:
-    """Expire stale pending sign-off claims and collect their DM notices.
+    """Expire stale pending sign-off claims and collect their notices.
 
     ``expire_stale_claims`` transitions each row out of 'pending' as it returns
-    it (atomic UPDATE ... RETURNING), so a claimant is only ever notified once.
+    it (atomic UPDATE ... RETURNING), so an expiry is only ever announced once.
     Runs against the whole DB (not one guild) — each notice carries its own
-    guild_id for the after-commit DM.
+    guild_id for the after-commit post.
     """
     notices: list[ExpiredClaimNotice] = []
     for claim in expire_stale_claims(conn, now_ts):
@@ -979,6 +987,7 @@ def run_claim_expiry(
                 user_id=int(claim["user_id"]),
                 quest_id=int(claim["quest_id"]),
                 quest_title=title,
+                trigger_kind=str(quest["trigger_kind"]) if quest is not None else "",
             )
         )
     return notices
@@ -1836,24 +1845,37 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         log.exception("Economy loop: claim-expiry sweep failed.")
         notices = []
 
+    # An expiry is the third sign-off outcome, and like the other two it is
+    # announced in the register channel rather than DMed. The board it was
+    # listed on is repainted once per guild, not once per claim.
     for notice in notices:
         try:
-            await notify_member(
+            await announce_signoff_outcome(
                 bot,
                 db_path,
                 notice.guild_id,
-                notice.user_id,
-                content=(
-                    f"Your claim on **{notice.quest_title}** expired — "
-                    "you can re-claim it."
-                ),
+                state="expired",
+                user_id=notice.user_id,
+                quest_title=notice.quest_title,
+                trigger_kind=notice.trigger_kind,
             )
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception(
-                "Economy loop: failed to DM expired claim to user %s.",
+                "Economy loop: failed to announce an expired claim for user %s.",
                 notice.user_id,
+            )
+    for guild_id in {n.guild_id for n in notices}:
+        try:
+            await refresh_signoff_board(bot, guild_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Economy loop: failed to repaint the todo board for %s after "
+                "an expiry sweep.",
+                guild_id,
             )
 
     for guild in list(bot.guilds):

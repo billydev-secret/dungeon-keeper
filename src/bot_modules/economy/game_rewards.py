@@ -21,14 +21,13 @@ from typing import TYPE_CHECKING, Any
 
 import discord
 
-from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import (
     get_tz_offset_hours,
     open_db,
     open_db_immediate,
 )
 from bot_modules.economy.logic import cat_catch_payout, local_day_bounds, local_day_for
-from bot_modules.economy.quest_views import post_signoff_card
+from bot_modules.economy.quest_views import refresh_signoff_board
 from bot_modules.services.economy_quests_service import (
     fire_trigger_quests,
     source_enabled,
@@ -619,8 +618,8 @@ async def _fire_triggers(
 
     Like the participation faucet, paid claims make no channel noise (a game
     ending with a dozen "quest complete" embeds would drown the recap) — the
-    wallet ledger and /quests state carry the news. Sign-off claims do post
-    the bank-channel card, since a manager has to be able to act on them.
+    wallet ledger and /quests state carry the news. Sign-off claims do repaint
+    the mods' todo board, since a manager has to be able to act on them.
     """
     db_path = bot.ctx.db_path
 
@@ -646,21 +645,11 @@ async def _fire_triggers(
 
     results = await asyncio.to_thread(_fire)
 
-    for uid, outcome in results:
-        if outcome.state != "pending":
-            continue
-        member = guild.get_member(uid)
-        if member is None:
-            continue
-        try:
-            accent = await safe_resolve_accent(db_path, guild, default=DEFAULT_ACCENT_COLOR, log_label="game rewards")
-            await post_signoff_card(
-                bot, bot.ctx, guild, settings, accent, int(outcome.claim_id), member
-            )
-        except Exception:
-            log.exception(
-                "sign-off card failed for claim %s (%s)", outcome.claim_id, trigger_kind
-            )
+    # One repaint for the batch, not one per claim: a game can fire the same
+    # sign-off quest for every player at once, and the board shows all of them
+    # after a single edit.
+    if any(outcome.state == "pending" for _uid, outcome in results):
+        await refresh_signoff_board(bot, guild.id)
 
 
 # ── Winner extraction ─────────────────────────────────────────────────────────

@@ -65,7 +65,7 @@ from bot_modules.economy.quest_views import (
     QuestClaimView,
     QuestDenyButton,
     can_manage_economy,
-    post_signoff_card,
+    refresh_signoff_board,
 )
 from bot_modules.economy.bounty_views import (
     BountyAwardButton,
@@ -4024,8 +4024,8 @@ class EconomyCog(commands.Cog):
         """Auto-claim trigger-word quests when a member says the phrase.
 
         The message is the verification: an instant quest pays on the spot
-        (reply + ✅), a sign-off quest files the pending claim and posts the
-        bank-channel card. Repeats inside the period fall out silently via
+        (reply + ✅), a sign-off quest files the pending claim and puts it on
+        the mods' todo board. Repeats inside the period fall out silently via
         ``claim_trigger_word``'s ValueError.
 
         The compiled-pattern index is TTL-cached here because this fires for
@@ -4119,13 +4119,9 @@ class EconomyCog(commands.Cog):
         if outcome.state == "paid":
             reaction = "✅"
         else:
-            # Sign-off trigger quest: the phrase files the claim; a manager
-            # still approves the payout from the bank-channel card.
-            accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
-            await post_signoff_card(
-                self.bot, self.bot.ctx, guild, settings, accent,
-                int(outcome.claim_id), member,
-            )
+            # Sign-off trigger quest: the phrase files the claim; a mod still
+            # approves the payout from the todo board's sign-off section.
+            await refresh_signoff_board(self.bot, guild.id)
             reaction = "📝"
 
         try:

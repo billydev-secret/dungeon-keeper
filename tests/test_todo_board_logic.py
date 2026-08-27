@@ -10,14 +10,17 @@ from bot_modules.todo.board_logic import (
     CHORE_OPEN,
     EMPTY_BODY,
     EMPTY_CHORES,
+    EMPTY_SIGNOFFS,
     MAX_BOARD_ROWS,
     MAX_CHORE_ROWS,
+    MAX_SIGNOFF_ROWS,
     ORDER_MARKER,
     RECURRING_MARKER,
     STREAK_MARKER,
     CHORE_HEADING,
     EMPTY_BOARD,
     MIN_TASK_ROWS,
+    SIGNOFF_HEADING,
     TASK_HEADING,
     board_content_signature,
     board_signature,
@@ -32,6 +35,8 @@ from bot_modules.todo.board_logic import (
     render_board_footer,
     render_footer,
     render_rows,
+    render_signoff_rows,
+    signoff_signature,
     task_row_budget,
     tickable_chores,
 )
@@ -711,3 +716,172 @@ def test_becoming_an_order_repaints_the_board():
     assert board_signature([_order(1, "Deliver X")]) != board_signature(
         [_row(1, "Deliver X")]
     )
+
+
+# ── quest sign-offs on the board ──────────────────────────────────────
+
+
+def _claim(claim_id: int, quest="Post a selfie", *, who="Alex", reward=500):
+    return {
+        "id": claim_id,
+        "user_id": 500 + claim_id,
+        "quest_title": quest,
+        "reward": reward,
+        "criteria": "Do the thing",
+        "claimant_name": who,
+    }
+
+
+def test_a_signoff_row_names_the_member_the_quest_and_the_reward():
+    body = render_signoff_rows([_claim(1)], currency_emoji="🪙")
+    assert "**Alex**" in body
+    assert "Post a selfie" in body
+    assert "🪙 500" in body
+
+
+def test_a_signoff_row_carries_no_id():
+    """The ids on this board belong to todos. A claim id printed the same way
+    invites the wrong `#14` being ticked off the list below it."""
+    assert "#" not in render_signoff_rows([_claim(14)])
+
+
+def test_a_signoff_reward_is_thousands_separated():
+    assert "🪙 12,500" in render_signoff_rows([_claim(1, reward=12500)])
+
+
+def test_the_guilds_own_currency_emoji_is_used():
+    assert "💎 500" in render_signoff_rows([_claim(1)], currency_emoji="💎")
+
+
+def test_a_claimant_who_left_is_never_a_raw_id():
+    body = render_signoff_rows([_claim(1, who="")])
+    assert "someone" in body
+    assert "501" not in body
+
+
+def test_a_long_quest_title_is_clipped():
+    body = render_signoff_rows([_claim(1, "x" * 200)])
+    assert "…" in body
+    assert len(body) < 120
+
+
+def test_signoffs_keep_their_given_order():
+    body = render_signoff_rows([_claim(1, "First"), _claim(2, "Second")])
+    assert body.index("First") < body.index("Second")
+
+
+def test_signoff_overflow_defers_to_the_dashboard():
+    rows = [_claim(n, f"Quest {n}") for n in range(MAX_SIGNOFF_ROWS + 3)]
+    body = render_signoff_rows(rows, total=len(rows))
+    assert body.count("\n") == MAX_SIGNOFF_ROWS + 1  # rows + the overflow note
+    assert "**3** more" in body
+
+
+def test_no_signoffs_reads_as_clear():
+    assert render_signoff_rows([]) == EMPTY_SIGNOFFS
+    assert render_signoff_rows([_claim(1)], limit=0) == EMPTY_SIGNOFFS
+
+
+# ── the sign-off section on the combined board ────────────────────────
+
+
+def test_signoffs_lead_the_board():
+    """Somebody is waiting on the mods for these; the other two sections are
+    the server's own work."""
+    body = render_board(
+        [_chore(1, "QOTD")], [_row(1, "fix the bot")], signoff_rows=[_claim(1)]
+    )
+    assert body.index(SIGNOFF_HEADING) < body.index(CHORE_HEADING)
+    assert body.index(CHORE_HEADING) < body.index(TASK_HEADING)
+
+
+def test_the_signoff_section_is_omitted_when_empty():
+    body = render_board([], [_row(1, "fix the bot")])
+    assert SIGNOFF_HEADING not in body
+    assert body.startswith(TASK_HEADING)
+
+
+def test_signoffs_alone_still_render_a_board():
+    body = render_board([], [], signoff_rows=[_claim(1)])
+    assert SIGNOFF_HEADING in body
+    assert body != EMPTY_BOARD
+
+
+def test_signoffs_never_starve_the_task_list():
+    """A backlog of claims must not push the tasks off the board — the same
+    floor the chores are held to."""
+    claims = [_claim(n) for n in range(MAX_SIGNOFF_ROWS + 5)]
+    chores = [_chore(n, f"Chore {n}", todo_id=n) for n in range(MAX_CHORE_ROWS)]
+    tasks = [_row(n, f"Task {n}") for n in range(MAX_BOARD_ROWS)]
+    body = render_board(chores, tasks, signoff_rows=claims)
+    for n in range(MIN_TASK_ROWS):
+        assert f"Task {n}" in body
+
+
+def test_the_signoff_section_takes_a_bounded_slice():
+    claims = [_claim(n, f"Quest {n}") for n in range(MAX_SIGNOFF_ROWS + 4)]
+    body = render_board([], [], signoff_rows=claims, signoff_total=len(claims))
+    assert f"Quest {MAX_SIGNOFF_ROWS}" not in body
+    assert "**4** more" in body
+
+
+def test_the_footer_counts_waiting_signoffs():
+    assert "1 sign-off waiting" in render_board_footer([], 3, 1)
+    assert "2 sign-offs waiting" in render_board_footer([], 3, 2)
+
+
+def test_the_footer_drops_the_signoff_half_when_none_wait():
+    assert "sign-off" not in render_board_footer([], 3, 0)
+
+
+def test_the_footer_still_reports_the_other_sections():
+    footer = render_board_footer([_chore(1, "QOTD")], 3, 1)
+    assert "1 sign-off waiting" in footer
+    assert "chores done" in footer
+    assert "3 tasks" in footer
+
+
+# ── the sign-off signature ────────────────────────────────────────────
+
+
+def test_a_new_claim_repaints_the_board():
+    before = board_content_signature([], [], 0, signoff_rows=[], signoff_total=0)
+    after = board_content_signature(
+        [], [], 0, signoff_rows=[_claim(1)], signoff_total=1
+    )
+    assert before != after
+
+
+def test_a_resolved_claim_repaints_the_board():
+    before = board_content_signature(
+        [], [], 0, signoff_rows=[_claim(1), _claim(2)], signoff_total=2
+    )
+    after = board_content_signature(
+        [], [], 0, signoff_rows=[_claim(1)], signoff_total=1
+    )
+    assert before != after
+
+
+def test_a_renamed_claimant_repaints_the_board():
+    assert signoff_signature([_claim(1, who="Alex")]) != signoff_signature(
+        [_claim(1, who="Alexandra")]
+    )
+
+
+def test_the_signoff_signature_is_hashable():
+    assert isinstance(hash(board_content_signature([], [], 0, signoff_rows=[_claim(1)])), int)
+
+
+def test_the_signoff_signature_ignores_the_unrendered_sentinel_row():
+    """The cog fetches one row past the window to detect overflow; a change to
+    that invisible row is not a reason to spend an API call."""
+    rows = [_claim(n) for n in range(MAX_SIGNOFF_ROWS + 1)]
+    other = rows[:-1] + [_claim(99, "Something else entirely")]
+    assert signoff_signature(rows, MAX_SIGNOFF_ROWS + 1) == signoff_signature(
+        other, MAX_SIGNOFF_ROWS + 1
+    )
+
+
+def test_a_claim_below_the_window_still_moves_the_footer():
+    rows = [_claim(n) for n in range(MAX_SIGNOFF_ROWS)]
+    assert signoff_signature(rows, 6) != signoff_signature(rows, 7)

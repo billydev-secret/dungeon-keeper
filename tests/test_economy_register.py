@@ -16,11 +16,16 @@ from bot_modules.economy.register import (
     TRANSFER_COLOUR,
     _KIND_DISPLAY,
     RegisterEntry,
+    SIGNOFF_DENIED_COLOUR,
+    SIGNOFF_EXPIRED_COLOUR,
     build_register_embed,
+    build_signoff_notice_embed,
     collect_register_entries,
     kind_display,
     render_memo,
+    suppress_signoff_notice,
 )
+from bot_modules.economy.signoff_notice import announce_signoff_outcome
 from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services.economy_loop import (
     register_tick,
@@ -971,3 +976,152 @@ def test_casino_refunds_post_while_stakes_and_payouts_skip(db):
         entries = collect_register_entries(conn, GUILD_ID, 0, 10)
 
     assert [e.kind for e in entries] == ["casino_refund"]
+
+
+# ── sign-off outcomes ──────────────────────────────────────────────────
+#
+# Denials and expiries move no currency, so they never reach the drain above.
+# They are posted by hand, and the register is the *only* place a member is
+# told: the bank-channel card is gone and nothing DMs.
+
+
+def test_a_denial_says_what_happened_and_why():
+    embed = build_signoff_notice_embed(
+        "denied", member_name="Alex", quest_title="Post a selfie",
+        deny_reason="no screenshot attached",
+    )
+    assert embed.author.name == "Alex"
+    assert "Post a selfie" in (embed.description or "")
+    assert "no screenshot attached" in (embed.description or "")
+    assert embed.colour == SIGNOFF_DENIED_COLOUR
+
+
+def test_a_denial_without_a_reason_still_reads():
+    embed = build_signoff_notice_embed(
+        "denied", member_name="Alex", quest_title="Post a selfie"
+    )
+    assert "denied" in (embed.description or "").lower()
+    assert ">" not in (embed.description or "")  # no empty blockquote
+
+
+def test_an_expiry_is_not_dressed_as_a_decision():
+    """Nobody denied it — it timed out — so it gets neither the denial's red
+    nor its reason line."""
+    embed = build_signoff_notice_embed(
+        "expired", member_name="Alex", quest_title="Post a selfie"
+    )
+    assert embed.colour == SIGNOFF_EXPIRED_COLOUR
+    assert "expired" in (embed.description or "").lower()
+
+
+def test_a_notice_carries_no_balance_footer():
+    """Nothing moved; a wallet total beside a denial would imply it did."""
+    embed = build_signoff_notice_embed(
+        "denied", member_name="Alex", quest_title="Q", deny_reason="no"
+    )
+    assert embed.footer.text is None
+
+
+def test_a_member_who_left_is_never_a_raw_id():
+    embed = build_signoff_notice_embed("expired", member_name="", quest_title="Q")
+    assert embed.author.name == "someone"
+
+
+@pytest.mark.parametrize("kind", sorted(quest_logic.ANON_KINDS))
+def test_privacy_suppressed_quests_never_reach_the_feed(kind):
+    """The same rule the payout drain applies: "X's claim for *Send a Whisper*
+    was denied" names the whisperer exactly as the payout would have."""
+    assert suppress_signoff_notice(kind) is True
+
+
+def test_an_ordinary_quest_is_not_suppressed():
+    assert suppress_signoff_notice("photo_post") is False
+    assert suppress_signoff_notice("") is False
+    assert suppress_signoff_notice(None) is False
+
+
+@pytest.mark.asyncio
+async def test_announcing_a_denial_posts_to_the_register(db):
+    with open_db(db) as conn:
+        _enable(conn)
+    channel = _channel()
+    guild = _guild_with_channel(channel)
+
+    posted = await announce_signoff_outcome(
+        _bot(guild), db, GUILD_ID,
+        state="denied", user_id=USER_ID, quest_title="Post a selfie",
+        deny_reason="too blurry",
+    )
+
+    assert posted is True
+    embed = channel.send.await_args.kwargs["embed"]
+    assert "too blurry" in (embed.description or "")
+
+
+@pytest.mark.asyncio
+async def test_a_suppressed_quest_announces_nowhere(db):
+    """Deliberately silent — see docs/economy_spec.md. The member still sees
+    the claim reopen on their own quest board."""
+    with open_db(db) as conn:
+        _enable(conn)
+    channel = _channel()
+
+    posted = await announce_signoff_outcome(
+        _bot(_guild_with_channel(channel)), db, GUILD_ID,
+        state="denied", user_id=USER_ID, quest_title="Send a Whisper",
+        trigger_kind="whisper", deny_reason="nope",
+    )
+
+    assert posted is False
+    channel.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_guild_with_no_register_channel_announces_nowhere(db):
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD_ID, {"enabled": True, "register_channel_id": 0})
+    channel = _channel()
+
+    posted = await announce_signoff_outcome(
+        _bot(_guild_with_channel(channel)), db, GUILD_ID,
+        state="denied", user_id=USER_ID, quest_title="Q", deny_reason="no",
+    )
+
+    assert posted is False
+    channel.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_approval_is_never_announced_by_hand(db):
+    """It credits ledger kind "quest" and the drain posts it; a second post
+    here would double-report the same payout."""
+    with open_db(db) as conn:
+        _enable(conn)
+    channel = _channel()
+
+    posted = await announce_signoff_outcome(
+        _bot(_guild_with_channel(channel)), db, GUILD_ID,
+        state="paid", user_id=USER_ID, quest_title="Q",
+    )
+
+    assert posted is False
+    channel.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_forbidden_register_channel_is_not_fatal(db):
+    """The resolution is already committed and the member already paid — a
+    permissions problem must never surface as a failed sign-off."""
+    with open_db(db) as conn:
+        _enable(conn)
+    channel = _channel()
+    channel.send = AsyncMock(
+        side_effect=discord.Forbidden(MagicMock(status=403), "nope")
+    )
+
+    posted = await announce_signoff_outcome(
+        _bot(_guild_with_channel(channel)), db, GUILD_ID,
+        state="expired", user_id=USER_ID, quest_title="Q",
+    )
+
+    assert posted is False

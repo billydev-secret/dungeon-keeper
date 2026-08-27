@@ -12,6 +12,12 @@ from discord.ext import commands
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
 from bot_modules.core.sticky import PanelContent, StickyPanel
+from bot_modules.economy.quest_views import open_signoff_picker
+from bot_modules.services.economy_quests_service import (
+    pending_signoff_count,
+    pending_signoff_rows,
+)
+from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.todo_recurring_service import (
     chore_board_rows,
     due_recurring,
@@ -30,6 +36,7 @@ from bot_modules.services.todo_service import (
 )
 from bot_modules.todo.board_logic import (
     MAX_BOARD_ROWS,
+    MAX_SIGNOFF_ROWS,
     board_content_signature,
     complete_option_label,
     completable_options,
@@ -227,6 +234,27 @@ class TodoBoardView(discord.ui.View):
             "What did you finish?", view=view, ephemeral=True
         )
 
+    @discord.ui.button(
+        label="Sign-Offs",
+        emoji="✍️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="todo_board_signoffs",
+    )
+    async def _signoffs(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        """Review the quest claims waiting on a mod.
+
+        Deliberately *not* behind ``_require_mod``: approving pays real
+        currency, so the economy's own manager gate applies, and it lives with
+        the rest of the sign-off flow in ``economy/quest_views.py`` — this
+        button is only the door onto the board.
+        """
+        if _resolve_cog(interaction) is None:
+            await _unavailable(interaction)
+            return
+        await open_signoff_picker(interaction)
+
 
 def _resolve_cog(interaction: discord.Interaction) -> "TodoCog | None":
     """Resolve the cog at click time — the board outlives cog reloads."""
@@ -356,8 +384,26 @@ class TodoCog(commands.Cog):
             else:
                 clear_board(conn, guild_id)
 
-    def _read_rows(self, guild_id: int) -> tuple[list[dict], list[dict], int]:
+    def _read_rows(self, guild_id: int) -> dict:
         with self.bot.ctx.open_db() as conn:
+            # Pending sign-offs are read straight from the claims table rather
+            # than mirrored into todos: nothing to keep in sync, and the
+            # Complete button can never offer one (a claim is approved, not
+            # ticked off). One row past the visible window, same sentinel
+            # trick the task list uses, plus the true total for the footer.
+            signoffs = [
+                dict(r)
+                for r in pending_signoff_rows(
+                    conn, guild_id, limit=MAX_SIGNOFF_ROWS + 1
+                )
+            ]
+            # Both only matter when something is waiting: a guild with no
+            # claims — the normal state, and every guild with the economy off
+            # — pays nothing for the section it isn't rendering.
+            signoff_total = pending_signoff_count(conn, guild_id) if signoffs else 0
+            currency_emoji = (
+                load_econ_settings(conn, guild_id).currency_emoji if signoffs else ""
+            )
             chores = [
                 dict(r) for r in chore_board_rows(conn, guild_id, limit=_CHORE_FETCH)
             ]
@@ -372,27 +418,52 @@ class TodoCog(commands.Cog):
                 )
             ]
             total = pending_count(conn, guild_id, exclude_chores=True)
-        return chores, rows, total
+        return {
+            "signoffs": signoffs,
+            "signoff_total": signoff_total,
+            "currency_emoji": currency_emoji,
+            "chores": chores,
+            "rows": rows,
+            "total": total,
+        }
 
     async def build_panel(self, guild: discord.Guild) -> PanelContent:
-        chores, rows, total = await asyncio.to_thread(self._read_rows, guild.id)
+        data = await asyncio.to_thread(self._read_rows, guild.id)
+        chores, rows = data["chores"], data["rows"]
+        signoffs, total = data["signoffs"], data["total"]
+        signoff_total = data["signoff_total"]
         for chore in chores:
             chore["completed_by_name"] = self._display_name(
                 guild, chore.get("completed_by")
             )
         for row in rows:
             row["buyer_name"] = self._display_name(guild, row.get("buyer_id"))
+        for claim in signoffs:
+            claim["claimant_name"] = self._display_name(guild, claim.get("user_id"))
         accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="todo")
         embed = discord.Embed(
             title="📋 Server Todo",
-            description=render_board(chores, rows, task_total=total),
+            description=render_board(
+                chores,
+                rows,
+                signoff_rows=signoffs,
+                signoff_total=signoff_total,
+                currency_emoji=data["currency_emoji"],
+                task_total=total,
+            ),
             color=accent,
         )
-        embed.set_footer(text=render_board_footer(chores, total))
+        embed.set_footer(text=render_board_footer(chores, total, signoff_total))
         return PanelContent(
             embed=embed,
             view=TodoBoardView(),
-            signature=board_content_signature(chores, rows, total),
+            signature=board_content_signature(
+                chores,
+                rows,
+                total,
+                signoff_rows=signoffs,
+                signoff_total=signoff_total,
+            ),
         )
 
     def _display_name(self, guild: discord.Guild, user_id) -> str:

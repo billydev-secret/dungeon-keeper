@@ -230,8 +230,8 @@ def _check_trigger_config(
     (month-end tier settlement is automatic), and never take trigger words.
 
     The privacy-suppressed kinds (:data:`quests.ANON_KINDS`) additionally
-    forbid sign-off: a sign-off claim posts a bank-channel card naming the
-    claimant, which is timing-correlatable against whatever the kind was
+    forbid sign-off: a sign-off claim names the claimant on the mods' todo
+    board, which is timing-correlatable against whatever the kind was
     keeping quiet — exactly the exposure the silent auto-claim and the
     register-feed suppression exist to avoid. For ``guess_post`` that card
     would name the answer to a live round.
@@ -270,7 +270,7 @@ def _check_trigger_config(
     if trigger_kind in quests.ANON_KINDS and signoff:
         raise ValueError(
             f"{trigger_kind} quests cannot require sign-off "
-            "(the bank-channel card would deanonymize the member)"
+            "(the pending claim would deanonymize the member)"
         )
 
 
@@ -1875,8 +1875,9 @@ def fire_trigger_inline(
     when the economy is off), derives the guild-local day, and fires inside
     a savepoint. Never raises, and a failure rolls back only the quest work —
     economy trouble must not break or dirty the host module's transaction.
-    Sign-off claims filed here get no bank-channel card (no bot object); they
-    still surface in the Bank Manager pending-claims table.
+    Sign-off claims filed here get no board repaint (no bot object); they
+    still surface in the Bank Manager pending-claims table, and on the board
+    at its next repaint.
     """
     try:
         settings = load_econ_settings(conn, guild_id)
@@ -2541,6 +2542,48 @@ def deny_history(
         """,
         (quest_id, user_id),
     ).fetchall()
+
+
+def pending_signoff_rows(
+    conn: sqlite3.Connection, guild_id: int, limit: int = 25
+) -> list[sqlite3.Row]:
+    """Pending sign-off claims for a guild, longest-waiting first.
+
+    What the todo board's sign-off section renders and what its Sign-Offs
+    button offers, so both read one query and can never disagree about what is
+    outstanding. Oldest-first for the same reason the task list is: position
+    says who has waited longest, and the mod works down from the top.
+
+    Joined to the quest rather than resolved per row — the section needs the
+    title and the reward, and the button's detail view needs the criteria on
+    top of that, which is the whole point of asking a human.
+    """
+    return conn.execute(
+        """
+        SELECT c.id, c.user_id, c.quest_id, c.period, c.created_at,
+               q.title AS quest_title, q.reward, q.criteria, q.trigger_kind
+        FROM econ_quest_claims c
+        JOIN econ_quests q ON q.id = c.quest_id
+        WHERE c.guild_id = ? AND c.state = 'pending'
+        ORDER BY c.created_at ASC, c.id ASC
+        LIMIT ?
+        """,
+        (guild_id, limit),
+    ).fetchall()
+
+
+def pending_signoff_count(conn: sqlite3.Connection, guild_id: int) -> int:
+    """How many claims are waiting on a mod overall.
+
+    The board reads a bounded slice, so the count it reports in the footer
+    can't be inferred from the rows it rendered.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM econ_quest_claims "
+        "WHERE guild_id = ? AND state = 'pending'",
+        (guild_id,),
+    ).fetchone()
+    return int(row["n"]) if row is not None else 0
 
 
 # ── community quests ──────────────────────────────────────────────────

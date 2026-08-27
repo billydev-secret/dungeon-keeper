@@ -165,6 +165,10 @@ STREAK_MIN = 2
 
 EMPTY_CHORES = "No recurring chores set up yet — add them on the dashboard. ✨"
 
+#: The section is omitted entirely when empty (see ``render_board``), so this
+#: is only ever reached by a caller rendering the section on its own.
+EMPTY_SIGNOFFS = "No quest sign-offs waiting. ✨"
+
 
 def chore_state(row: Mapping[str, Any]) -> str:
     """``'done' | 'missed' | 'open'`` for one chore's **latest** instance.
@@ -350,6 +354,91 @@ def chore_signature(
     return (shown, len(rows))
 
 
+# ── The sign-off queue ──────────────────────────────────────────────────────
+#
+# Pending quest sign-offs: a member has claimed a quest that needs a human to
+# say yes, and their payout is sitting on that decision until one does. These
+# are **not** todo rows — they live in ``econ_quest_claims`` and are read from
+# there at render time — so the Complete button never offers one and there is
+# no mirrored row to keep in sync with the claim it stands for.
+#
+# They lead the board because they are the only section where somebody else is
+# waiting on the mods rather than the other way round.
+
+#: A bounded slice, like the chores: the queue is normally 0-2 deep, and a
+#: backlog must not push the chores and tasks off the board.
+MAX_SIGNOFF_ROWS = 5
+
+#: Fallback when the guild has set no currency emoji.
+DEFAULT_CURRENCY_EMOJI = "🪙"
+
+
+def render_signoff_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = MAX_SIGNOFF_ROWS,
+    currency_emoji: str = DEFAULT_CURRENCY_EMOJI,
+    total: int | None = None,
+) -> str:
+    """The sign-off section: who is waiting, on what, for how much.
+
+    ``rows`` are pending claims oldest-first (see
+    ``economy_quests_service.pending_signoff_rows``), each carrying a
+    ``claimant_name`` the cog resolved — the board never prints a raw id, and a
+    member who has left simply shows as "someone".
+
+    No id is shown. A mod acts on these through the Sign-Offs button, which
+    carries the claim id in its own select, and printing ``#14`` beside a task
+    list whose ``#14`` is a different row entirely invites the wrong one being
+    ticked. The reward *is* shown: it is the size of the decision, and it is
+    the one thing a mod can't infer from the quest title.
+    """
+    if not rows:
+        return EMPTY_SIGNOFFS
+
+    total = len(rows) if total is None else total
+    shown = rows[:limit]
+    if not shown:  # limit <= 0
+        return EMPTY_SIGNOFFS
+
+    emoji = currency_emoji or DEFAULT_CURRENCY_EMOJI
+    lines: list[str] = []
+    for row in shown:
+        who = _flatten(row.get("claimant_name") or "") or "someone"
+        title = _clip(_flatten(row["quest_title"]), TASK_CLIP)
+        reward = int(row.get("reward") or 0)
+        lines.append(f"**{who}** — {title} · {emoji} {reward:,}")
+
+    hidden = total - len(shown)
+    if hidden > 0:
+        lines.append(f"\n…and **{hidden}** more on the dashboard.")
+    return "\n".join(lines)
+
+
+def signoff_signature(
+    rows: Iterable[Mapping[str, Any]],
+    total: int | None = None,
+    *,
+    limit: int = MAX_SIGNOFF_ROWS,
+) -> tuple:
+    """A fingerprint of what the sign-off section *shows*.
+
+    Same rule as the other two: only what is rendered, and no timestamp — the
+    section carries no age, so nothing here ticks over on its own.
+    """
+    rows = list(rows)
+    shown = tuple(
+        (
+            row["id"],
+            _flatten(row["quest_title"]),
+            int(row.get("reward") or 0),
+            _flatten(row.get("claimant_name") or ""),
+        )
+        for row in rows[:limit]
+    )
+    return (shown, len(shown) if total is None else total)
+
+
 # ── The combined board ──────────────────────────────────────────────────────
 #
 # Migration 180 merged the two boards back into one. The renderers above stay
@@ -358,6 +447,7 @@ def chore_signature(
 # and a mod reads both without the server having to spend two channels on the
 # question. See the migration for why the split was undone.
 
+SIGNOFF_HEADING = "✍️ **Quest sign-offs**"
 CHORE_HEADING = "🔁 **Today's chores**"
 TASK_HEADING = "📋 **Tasks**"
 
@@ -373,30 +463,54 @@ MIN_TASK_ROWS = 3
 EMPTY_BOARD = "Nothing pending and no chores yet — all clear. ✨"
 
 
-def task_row_budget(chores_shown: int, *, limit: int = MAX_BOARD_ROWS) -> int:
-    """How many task rows fit under the chores, never fewer than MIN_TASK_ROWS."""
-    return max(MIN_TASK_ROWS, limit - chores_shown)
+def task_row_budget(
+    chores_shown: int, *, signoffs_shown: int = 0, limit: int = MAX_BOARD_ROWS
+) -> int:
+    """How many task rows fit under the sections above, never fewer than
+    MIN_TASK_ROWS."""
+    return max(MIN_TASK_ROWS, limit - chores_shown - signoffs_shown)
 
 
 def render_board(
     chore_rows: Sequence[Mapping[str, Any]],
     task_rows: Sequence[Mapping[str, Any]],
     *,
+    signoff_rows: Sequence[Mapping[str, Any]] = (),
+    signoff_total: int | None = None,
+    currency_emoji: str = DEFAULT_CURRENCY_EMOJI,
     task_total: int | None = None,
     limit: int = MAX_BOARD_ROWS,
 ) -> str:
-    """The whole board body: the chore scoreboard, then the task list.
+    """The whole board body: sign-offs, the chore scoreboard, then the tasks.
 
     Each section is omitted when it has nothing in it, rather than rendering a
     heading over an empty-state sentence — two "nothing here" lines stacked on
-    one board reads as broken. When *both* are empty the board says so once.
+    one board reads as broken. When *all* are empty the board says so once.
+
+    Sign-offs lead because they are the only section where a member is waiting
+    on the mods: a pending claim is somebody's payout held up, where a chore or
+    a task is only the server's own work. They also take their slice off the
+    top of the row budget for that reason, and — being normally 0-2 deep — cost
+    the sections below almost nothing to sit above them.
 
     ``task_rows`` must already exclude chore-spawned rows (see
     ``todo_service.pending_todos(exclude_chores=True)``): the chore section
     shows those, with more state than a task line can carry.
     """
     sections: list[str] = []
+    signoffs_shown = min(len(signoff_rows), MAX_SIGNOFF_ROWS)
     chores_shown = min(len(chore_rows), MAX_CHORE_ROWS)
+    if signoff_rows:
+        sections.append(
+            SIGNOFF_HEADING
+            + "\n"
+            + render_signoff_rows(
+                signoff_rows,
+                limit=MAX_SIGNOFF_ROWS,
+                currency_emoji=currency_emoji,
+                total=signoff_total,
+            )
+        )
     if chore_rows:
         sections.append(
             CHORE_HEADING + "\n" + render_chore_rows(chore_rows, limit=MAX_CHORE_ROWS)
@@ -408,7 +522,9 @@ def render_board(
             + render_rows(
                 task_rows,
                 total=task_total,
-                limit=task_row_budget(chores_shown, limit=limit),
+                limit=task_row_budget(
+                    chores_shown, signoffs_shown=signoffs_shown, limit=limit
+                ),
             )
         )
     if not sections:
@@ -417,16 +533,22 @@ def render_board(
 
 
 def render_board_footer(
-    chore_rows: Sequence[Mapping[str, Any]], task_total: int
+    chore_rows: Sequence[Mapping[str, Any]],
+    task_total: int,
+    signoff_total: int = 0,
 ) -> str:
-    """``2 of 3 chores done · 25 tasks · updates automatically``.
+    """``1 sign-off waiting · 2 of 3 chores done · 25 tasks · updates
+    automatically``.
 
-    Both halves, because the board now answers both questions and a footer that
-    reported only one would silently contradict the section it left out. The
-    chore half is dropped entirely in a guild with no chores configured, rather
-    than reading "0 of 0 chores done".
+    Every section the board is showing, because a footer that reported only one
+    would silently contradict the sections it left out. A half is dropped
+    entirely when its section is — a guild with no chores configured reads
+    neither "0 of 0 chores done" nor "0 sign-offs waiting".
     """
     parts: list[str] = []
+    if signoff_total:
+        noun = "sign-off" if signoff_total == 1 else "sign-offs"
+        parts.append(f"{signoff_total} {noun} waiting")
     if chore_rows:
         done = sum(1 for row in chore_rows if chore_state(row) == "done")
         parts.append(f"{done} of {len(chore_rows)} chores done")
@@ -441,19 +563,27 @@ def board_content_signature(
     task_rows: Sequence[Mapping[str, Any]],
     task_total: int | None = None,
     *,
+    signoff_rows: Sequence[Mapping[str, Any]] = (),
+    signoff_total: int | None = None,
     limit: int = MAX_BOARD_ROWS,
 ) -> tuple:
     """A fingerprint of the whole board, for the refresh loop's skip check.
 
-    Just the two section fingerprints side by side — each already excludes the
-    relative timestamps that re-render client-side, so a board whose only
-    change is "2h" becoming "3h" still costs no API call.
+    The section fingerprints side by side — each already excludes the relative
+    timestamps that re-render client-side, so a board whose only change is "2h"
+    becoming "3h" still costs no API call.
     """
+    signoffs_shown = min(len(signoff_rows), MAX_SIGNOFF_ROWS)
     chores_shown = min(len(chore_rows), MAX_CHORE_ROWS)
     return (
+        signoff_signature(signoff_rows, signoff_total, limit=MAX_SIGNOFF_ROWS),
         chore_signature(chore_rows, limit=MAX_CHORE_ROWS),
         board_signature(
-            task_rows, task_total, limit=task_row_budget(chores_shown, limit=limit)
+            task_rows,
+            task_total,
+            limit=task_row_budget(
+                chores_shown, signoffs_shown=signoffs_shown, limit=limit
+            ),
         ),
     )
 

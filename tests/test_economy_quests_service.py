@@ -53,6 +53,8 @@ from bot_modules.services.economy_quests_service import (
     get_progress,
     get_quest,
     list_income_sources,
+    pending_signoff_count,
+    pending_signoff_rows,
     list_kind_triggered_quests,
     list_quests,
     set_income_source,
@@ -502,6 +504,73 @@ def test_set_claim_card_records_ids(db):
         ).fetchone()
         assert row["card_channel_id"] == 777
         assert row["card_message_id"] == 888
+
+
+# ── what the todo board reads ─────────────────────────────────────────
+
+
+def test_pending_signoffs_are_oldest_first_with_the_quest_joined(db):
+    """The board's section and its Sign-Offs button read this one query, so it
+    carries everything either needs: the title and reward for the row, the
+    criteria for the detail view, and the trigger kind for the privacy rule
+    that decides whether an outcome may be posted publicly."""
+    with open_db(db) as conn:
+        first = _make(conn, qtype="weekly", reward=50, signoff=1, title="Waited")
+        second = _make(conn, qtype="weekly", reward=70, signoff=1, title="Newer")
+        old = claim_quest(
+            conn, SETTINGS, GUILD, first, USER, period="2026-W28", booster=False
+        )
+        claim_quest(
+            conn, SETTINGS, GUILD, second, 601, period="2026-W28", booster=False
+        )
+        conn.execute(
+            "UPDATE econ_quest_claims SET created_at = created_at - 9999 WHERE id = ?",
+            (old.claim_id,),
+        )
+
+        rows = pending_signoff_rows(conn, GUILD)
+        assert [r["quest_title"] for r in rows] == ["Waited", "Newer"]
+        assert rows[0]["reward"] == 50
+        assert rows[0]["user_id"] == USER
+        assert rows[0]["criteria"] == "do the thing"
+        assert "trigger_kind" in rows[0].keys()
+
+
+def test_pending_signoffs_exclude_resolved_claims(db):
+    with open_db(db) as conn:
+        qid = _make(conn, qtype="weekly", signoff=1)
+        out = claim_quest(
+            conn, SETTINGS, GUILD, qid, USER, period="2026-W28", booster=False
+        )
+        assert len(pending_signoff_rows(conn, GUILD)) == 1
+        resolve_claim(
+            conn, SETTINGS, out.claim_id, approve=True, resolver_id=1, booster=False
+        )
+        assert pending_signoff_rows(conn, GUILD) == []
+
+
+def test_pending_signoffs_are_scoped_to_the_guild(db):
+    """Two guilds share the claims table and each has its own board."""
+    with open_db(db) as conn:
+        mine = _make(conn, qtype="weekly", signoff=1)
+        claim_quest(
+            conn, SETTINGS, GUILD, mine, USER, period="2026-W28", booster=False
+        )
+        assert pending_signoff_rows(conn, GUILD + 1) == []
+        assert pending_signoff_count(conn, GUILD + 1) == 0
+
+
+def test_pending_signoff_count_sees_past_the_boards_window(db):
+    """The board fetches a screenful; the footer's number must not be capped
+    by what it happened to fetch."""
+    with open_db(db) as conn:
+        for n in range(4):
+            qid = _make(conn, qtype="weekly", signoff=1, title=f"Q{n}")
+            claim_quest(
+                conn, SETTINGS, GUILD, qid, USER, period="2026-W28", booster=False
+            )
+        assert len(pending_signoff_rows(conn, GUILD, limit=2)) == 2
+        assert pending_signoff_count(conn, GUILD) == 4
 
 
 # ── expiry ────────────────────────────────────────────────────────────

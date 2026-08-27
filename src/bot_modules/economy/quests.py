@@ -295,8 +295,9 @@ CHANNEL_SHARE_KINDS = frozenset({"message_sent", "reply_sent", "media_post"})
 #     names in the beat sheet (even the owner DM: it's written to be pasted
 #     publicly);
 #   * the register feed drops these payouts entirely (economy/register.py);
-#   * sign-off is refused at config time, since a sign-off card names the
-#     claimant in the bank channel (_check_trigger_config).
+#   * sign-off is refused at config time, since a pending claim names the
+#     claimant on the mods' todo board and its outcome would be announced in
+#     the register (_check_trigger_config).
 #
 # Two distinct harms live here, and both are covered:
 #
