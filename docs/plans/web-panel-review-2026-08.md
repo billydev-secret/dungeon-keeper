@@ -116,7 +116,7 @@ feature exists and that the server passed on it; the un-dismiss surface is a
 Suggested Setup card on the AI Assistant page, which the tile's `nav:` already
 pointed at while showing no suggestions at all.
 
-## Stage 5 — ☐ Bring back the social network visualizer
+## Stage 5 — ☑ Bring back the social network visualizer
 
 It was **Connection Graph** — a force-directed canvas, 1,186 lines — deleted
 2026-07-27 in `5b4cd71d` with the rationale "same endpoint as Interactions".
@@ -145,7 +145,16 @@ the dead control rather than shipping a disabled one. Give it a browser layout
 scenario (`scripts/mobile_layout_scan.py`) — a 1,186-line canvas panel with a
 control strip is what the mobile gate exists for.
 
-Complex: investigate, bring the approach and open questions back before building.
+**Shipped as a full restore minus the dead Edge Type control.** The canvas keeps
+the dark chart surface every other chart uses but takes its colours from
+`charts.js` instead of a private copy; every surrounding HTML piece moved to
+theme tokens. Cluster colour folds into `SERIES_OVERFLOW` past the sixth slot
+rather than inventing hues — both live guilds find eight clusters and the two
+past the sixth hold two members each. Bridge users render through `table.js`;
+the cluster table stays hand-rolled because each row toggles the graph filter.
+The 8×8 cross-cluster matrix overflowed a phone by 96px and now scrolls in its
+own box — caught by a new populated-data layout scenario, since the plain sweep
+only ever sees this panel's empty state.
 
 ## Stage 6 — ☐ Rebuild the one-sided attention gate
 

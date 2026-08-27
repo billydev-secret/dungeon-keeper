@@ -1206,6 +1206,14 @@ textarea.field-input { resize: vertical; }
   min-width: 160px;
 }
 
+/* Connection Graph's control strip carries nine controls. The shared
+   .controls floor of 160px would put every one of them on its own row at
+   phone width; these are all two- or three-digit numbers, so they get a
+   narrower floor and the strip stays a few rows instead of nine. */
+.graph-controls input[type="number"] { min-width: 0; width: 90px; }
+.graph-controls select { min-width: 0; }
+.graph-controls .ctrl-field { display: flex; flex-direction: column; gap: var(--s-1); font-size: var(--t-2); color: var(--ink-dim); }
+
 .chart-wrap {
   background: var(--bg-alt);
   border-radius: 6px;
