@@ -1,6 +1,6 @@
 import { api, esc, fmtTs } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
-import { makeBarChart } from "../charts.js";
+import { makeBarChart, renderChartTable } from "../charts.js";
 
 // The endpoint hands back pre-formatted UTC strings ("2026-07-01 12:00").
 // Re-stamp them as UTC so fmtTs can render them in the reader's own timezone,
@@ -19,7 +19,9 @@ export function mount(container, initialParams) {
       </header>
       <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
+      <div class="chart-caption" data-caption></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div data-chart-table></div>
       <div data-members style="margin-top:16px;"></div>
     </div>
   `;
@@ -28,6 +30,8 @@ export function mount(container, initialParams) {
   container.querySelector(".controls").appendChild(rangeEl);
   const daysEl = rangeEl.querySelector("select");
   const statsEl = container.querySelector("[data-stats]");
+  const captionEl = container.querySelector("[data-caption]");
+  const tableEl = container.querySelector("[data-chart-table]");
   const membersEl = container.querySelector("[data-members]");
   let chart = null;
 
@@ -50,16 +54,28 @@ export function mount(container, initialParams) {
       const wrap = container.querySelector(".chart-wrap");
       if (!data.histogram.length || data.count === 0) {
         wrap.innerHTML = `<div class="empty">Nobody reached level 5 in this window. Pick a longer range, or switch to All time.</div>`;
+        captionEl.textContent = "";
+        tableEl.replaceChildren();
         membersEl.innerHTML = "";
         return;
       }
       wrap.innerHTML = "<canvas data-chart></canvas>";
+      const title = `Time to Reach Level 5 — ${data.window_label}`;
       chart = makeBarChart(container.querySelector("[data-chart]"), {
         labels: data.histogram.map((b) => b.label),
         data: data.histogram.map((b) => b.count),
-        title: `Time to Reach Level 5 — ${data.window_label}`,
+        title,
         xLabel: "Days",
         yLabel: "Members",
+      });
+
+      // A single-series bar chart needs no legend — the caption already names
+      // it — but still gets a table so a value never lives in a tooltip alone.
+      captionEl.textContent = title;
+      renderChartTable(tableEl, {
+        labels: data.histogram.map((b) => b.label),
+        datasets: [{ label: "Members", data: data.histogram.map((b) => b.count) }],
+        indexLabel: "Days",
       });
 
       if (data.members && data.members.length) {
@@ -79,6 +95,8 @@ export function mount(container, initialParams) {
       }
     } catch (err) {
       statsEl.textContent = "";
+      captionEl.textContent = "";
+      tableEl.replaceChildren();
       membersEl.innerHTML = "";
       container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load time-to-level-5 — try again. (${esc(err.message)})</div>`;
     }

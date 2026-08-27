@@ -1,8 +1,13 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
 import { mountBotToggle } from "../report-helpers.js";
+import { renderChartTable, seriesColor, CHART_BAR, CHART_TEXT, CHART_GRID } from "../charts.js";
 
-const DIM_COLORS = ["#E6B84C", "#B88A2C", "#7F8F3A", "#B36A92", "#9E3B2E", "#949ba4"];
+/** Expand a "#rrggbb" literal to an rgba() string at the given alpha. */
+function withAlpha(hex, alpha) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
 
 export function mount(container) {
   let includeBots = false;
@@ -22,7 +27,7 @@ export function mount(container) {
 
     const dims = d.dimensions || [];
     const dimBars = dims.map((dim, i) => {
-      const color = DIM_COLORS[i % DIM_COLORS.length];
+      const color = seriesColor(i);
       const badge = dim.score >= 80 ? "excellent" : dim.score >= 60 ? "healthy" : dim.score >= 40 ? "needs_work" : "critical";
       return `<div class="health-dim-row">
         <span class="health-dim-name">${dim.name} <span class="home-dim">(${dim.weight}%)</span></span>
@@ -74,7 +79,9 @@ export function mount(container) {
 
       <div class="home-card home-card-wide" style="margin-top:14px;">
         <div class="home-card-label">Health Radar</div>
+        <div class="chart-caption">Score out of 100 on each dimension, most recent snapshot</div>
         <div class="chart-wrap" style="height:360px;display:flex;justify-content:center"><canvas id="health-radar"></canvas></div>
+        <div data-chart-table></div>
       </div>
 
       ${recCards ? `
@@ -94,10 +101,12 @@ export function mount(container) {
           datasets: [{
             label: "Score",
             data: dims.map(d => d.score),
-            backgroundColor: "rgba(230,184,76,0.2)",
-            borderColor: "#E6B84C",
+            backgroundColor: withAlpha(CHART_BAR, 0.2),
+            borderColor: CHART_BAR,
             borderWidth: 2,
-            pointBackgroundColor: dims.map((_, i) => DIM_COLORS[i % DIM_COLORS.length]),
+            // seriesColor, not a local modulo — past 6 dimensions this folds to the
+            // shared neutral overflow instead of silently repeating a hue.
+            pointBackgroundColor: dims.map((_, i) => seriesColor(i)),
             pointRadius: 5,
           }],
         },
@@ -110,20 +119,31 @@ export function mount(container) {
               max: 100,
               ticks: {
                 stepSize: 20,
-                color: "#949ba4",
+                color: CHART_TEXT,
                 backdropColor: "transparent",
               },
-              grid: { color: "rgba(148,155,164,0.15)" },
-              angleLines: { color: "rgba(148,155,164,0.15)" },
-              pointLabels: { color: "#d4d9de", font: { size: 13 } },
+              grid: { color: CHART_GRID },
+              angleLines: { color: CHART_GRID },
+              pointLabels: { color: CHART_TEXT, font: { size: 13 } },
             },
           },
           plugins: {
+            // A single "Score" dataset across several dimensions — one shared
+            // radial scale, not a dual-axis chart. The caption above already
+            // names it, so per "none for one" this needs no legend; the table
+            // below carries the precise values a radar is notoriously hard to
+            // eyeball.
             legend: { display: false },
           },
         },
       });
       charts.push(chart);
+
+      renderChartTable(panel.querySelector("[data-chart-table]"), {
+        labels: dims.map(dim => dim.name),
+        datasets: [{ label: "Score", data: dims.map(dim => dim.score) }],
+        indexLabel: "Dimension",
+      });
     }
   }
 

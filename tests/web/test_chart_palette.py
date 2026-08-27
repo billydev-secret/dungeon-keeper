@@ -187,6 +187,55 @@ def test_low_contrast_slots_are_declared_so_relief_is_not_forgotten():
 # ── the rule that made the old palette worse than it had to be ──────────────
 
 
+def _token(name: str) -> str:
+    src = _CHARTS.read_text(encoding="utf-8")
+    m = re.search(rf'export const {name}\s*=\s*"(#[0-9A-Fa-f]{{6}})"', src)
+    assert m, f"{name} is gone from charts.js"
+    return m.group(1)
+
+
+# ── CHART_BAR / CHART_ACCENT: the single-series defaults, checked separately
+# from ROLE_COLORS because it is exactly the gap that let them go unvalidated
+# once already — the palette migration fixed ROLE_COLORS/GENDER_COLORS and
+# missed these two, which sat at their old "poppy gold"/"warm mauve" values
+# (including activity.js's own members line) until an audit of a LATER,
+# unrelated fan-out happened to notice. ─────────────────────────────────────
+
+
+def test_chart_bar_and_accent_are_on_the_current_palette():
+    """They should be ROLE_COLORS members, not a third, parallel colour pick.
+
+    Reusing ROLE_COLORS[i] means these two can never drift out of validation
+    independently of the categorical set — there is only one place left to
+    check.
+    """
+    palette = _palette()
+    for name in ("CHART_BAR", "CHART_ACCENT"):
+        value = _token(name)
+        assert value in palette, (
+            f"{name} = {value!r} is not a ROLE_COLORS member — it can drift "
+            f"out of validation on its own, the way it already did once"
+        )
+
+
+def test_chart_bar_and_accent_pass_the_same_checks_as_the_rest():
+    for name in ("CHART_BAR", "CHART_ACCENT"):
+        value = _token(name)
+        L, C = _oklch(value)
+        assert BAND[0] <= L <= BAND[1], f"{name} L={L:.3f} outside {BAND}"
+        assert C >= CHROMA_FLOOR, f"{name} C={C:.3f} below {CHROMA_FLOOR}"
+
+
+def test_chart_bar_and_accent_separate_from_each_other():
+    """They appear adjacent (e.g. a bar plus an overlay line on one chart)."""
+    bar, accent = _token("CHART_BAR"), _token("CHART_ACCENT")
+    for kind in ("protan", "deutan"):
+        d = _delta_e(bar, accent, kind)
+        assert d >= CVD_FLOOR, f"CHART_BAR vs CHART_ACCENT under {kind}: ΔE {d:.1f}"
+    normal = _delta_e(bar, accent)
+    assert normal >= NORMAL_FLOOR, f"CHART_BAR vs CHART_ACCENT: ΔE {normal:.1f} (normal)"
+
+
 def test_the_palette_is_not_cycled():
     """`ROLE_COLORS[i % length]` silently gives series 7 series 1's identity."""
     src = _CHARTS.read_text(encoding="utf-8")

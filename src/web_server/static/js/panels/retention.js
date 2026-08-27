@@ -1,6 +1,6 @@
 import { api, esc } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
-import { makeBarChart } from "../charts.js";
+import { makeBarChart, renderChartTable } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
 export function mount(container, initialParams) {
@@ -20,7 +20,9 @@ export function mount(container, initialParams) {
         </label>
       </div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
+      <div class="chart-caption" data-caption></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div data-chart-table></div>
       <div data-table-wrap style="margin-top:12px; max-height:400px; overflow-y:auto;"></div>
     </div>
   `;
@@ -31,6 +33,8 @@ export function mount(container, initialParams) {
   const minEl = container.querySelector('[data-control="min_previous"]');
   const normalizeEl = container.querySelector('[data-control="normalize"]');
   const statsEl = container.querySelector("[data-stats]");
+  const captionEl = container.querySelector("[data-caption]");
+  const chartTableEl = container.querySelector("[data-chart-table]");
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chart = null;
   let cachedData = null;
@@ -56,10 +60,13 @@ export function mount(container, initialParams) {
 
     const sorted = [...data.entries].sort((a, b) => b[dropKey] - a[dropKey]);
 
+    const title = normalize ? "Normalized Activity Drop %" : "Activity Drop %";
     const wrap = container.querySelector(".chart-wrap");
     const entries = sorted.slice(0, 20);
     if (!entries.length) {
       wrap.innerHTML = `<div class="empty">Nobody slowed down in this window — that is good news. Shorten the period, or lower the minimum-messages bar, to widen the search.</div>`;
+      captionEl.textContent = "";
+      chartTableEl.replaceChildren();
       tableWrap.innerHTML = "";
       return;
     }
@@ -67,9 +74,22 @@ export function mount(container, initialParams) {
     chart = makeBarChart(container.querySelector("[data-chart]"), {
       labels: entries.map((e) => e.user_name || e.user_id),
       data: entries.map((e) => e[dropKey]),
-      title: normalize ? "Normalized Activity Drop %" : "Activity Drop %",
+      title,
       yLabel: "Drop %",
       color: "#9E3B2E",
+    });
+
+    // The caption lives in HTML — see activity.js. One series (this chart is
+    // always a single "drop %" bar per member), so no legend: the caption
+    // already names it.
+    captionEl.textContent = title;
+    // Scoped to exactly what's plotted (top 20 by drop), unlike the full
+    // sortable table below which lists every qualifying member with more
+    // columns — a tooltip must never be the only way to read a bar's value.
+    renderChartTable(chartTableEl, {
+      labels: entries.map((e) => e.user_name || e.user_id),
+      datasets: [{ label: "Drop %", data: entries.map((e) => e[dropKey]) }],
+      indexLabel: "Member",
     });
 
     renderSortableTable(tableWrap, {
@@ -106,6 +126,8 @@ export function mount(container, initialParams) {
     } catch (err) {
       statsEl.textContent = "";
       container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load activity drops — try again. (${esc(err.message)})</div>`;
+      captionEl.textContent = "";
+      chartTableEl.replaceChildren();
       tableWrap.innerHTML = "";
     }
   }

@@ -50,8 +50,16 @@ export const GENDER_COLORS = {
   unknown:   "#6b7076",
 };
 
-export const CHART_BAR    = "#E6B84C";
-export const CHART_ACCENT = "#B36A92";
+// Both of these were missed in the ROLE_COLORS/GENDER_COLORS migration and sat
+// at their old, unvalidated values (poppy gold, warm mauve) until an audit of
+// the panels that use them caught it — including activity.js's own members
+// line, which had shipped ONE commit earlier still on the old mauve.
+// Reusing ROLE_COLORS[0]/[4] rather than picking two more new hex values: it
+// keeps "the brand default bar colour" and "the brand default line colour" as
+// the SAME concept as "categorical series 1 and 5", not a third, parallel
+// pair of hand-picked colours that could drift out of validation again.
+export const CHART_BAR    = "#B58030"; // ROLE_COLORS[0], amber
+export const CHART_ACCENT = "#9D79C3"; // ROLE_COLORS[4], orchid
 export const CHART_TEXT   = "#dbdee1";
 export const CHART_GRID   = "#3f4147";
 // --bg-alt: the card a chart sits on. Painted between stacked segments to
@@ -160,7 +168,7 @@ function merge(base, overrides) {
 
 // ── Multi-line (role growth) ────────────────────────────────────────────
 
-export function makeLineChart(canvas, { labels, series, title }) {
+export function makeLineChart(canvas, { labels, series, title: _title }) {
   const datasets = series.map((s, i) => ({
     label: s.role || s.gender || s.label,
     data: s.counts,
@@ -180,8 +188,13 @@ export function makeLineChart(canvas, { labels, series, title }) {
     options: merge(COMMON_OPTIONS, {
       interaction: { mode: "index", intersect: false },
       plugins: {
-        title: title ? { display: true, text: title, color: TEXT, font: { size: 14 } } : { display: false },
-        legend: { position: "bottom", labels: { color: TEXT } },
+        // Both drawn in HTML by the caller instead: canvas text cannot use the
+        // page's type, is unselectable, and does not exist for a screen
+        // reader. See .chart-caption + renderChartLegend (both used by
+        // activity.js) — every multi-series chart from this file should pair
+        // with them, not rely on the canvas to speak for itself.
+        title: { display: false },
+        legend: { display: false },
       },
     }),
   });
@@ -192,7 +205,7 @@ export function makeLineChart(canvas, { labels, series, title }) {
 
 // ── Bar chart (simple) ──────────────────────────────────────────────────
 
-export function makeBarChart(canvas, { labels, data, title, xLabel, yLabel, color }) {
+export function makeBarChart(canvas, { labels, data, title: _title, xLabel, yLabel, color }) {
   const chart = new Chart(canvas, {
     type: "bar",
     data: {
@@ -207,7 +220,11 @@ export function makeBarChart(canvas, { labels, data, title, xLabel, yLabel, colo
     },
     options: merge(COMMON_OPTIONS, {
       plugins: {
-        title: title ? { display: true, text: title, color: TEXT, font: { size: 14 } } : { display: false },
+        // In HTML by the caller — see the note on makeLineChart above. A
+        // single series needs no legend (the caption already names it), which
+        // is why this was already `display: false`; the title moves out for
+        // the same accessibility reason, not because it needed a legend too.
+        title: { display: false },
         legend: { display: false },
       },
       scales: {
@@ -223,12 +240,19 @@ export function makeBarChart(canvas, { labels, data, title, xLabel, yLabel, colo
 
 // ── Stacked bar (nsfw-gender bar mode) ──────────────────────────────────
 
-export function makeStackedBarChart(canvas, { labels, series, title }) {
+// `title` kept in the signature — panels still pass it for their own HTML
+// caption — but charts.js no longer draws it, hence the underscore.
+export function makeStackedBarChart(canvas, { labels, series, title: _title }) {
   const datasets = series.map((s) => ({
     label: s.gender,
     data: s.counts,
-    backgroundColor: s.color || GENDER_COLORS[s.gender] || "#949ba4",
-    borderWidth: 0,
+    backgroundColor: s.color || GENDER_COLORS[s.gender] || SERIES_OVERFLOW,
+    // A 2px gap in the surface colour between stacked segments, matching
+    // activity.js. Without it two adjacent segments in a weak-CVD pair share a
+    // hard edge with nothing separating them.
+    borderColor: CHART_SURFACE,
+    borderWidth: { top: 2 },
+    borderSkipped: false,
   }));
 
   const chart = new Chart(canvas, {
@@ -237,8 +261,9 @@ export function makeStackedBarChart(canvas, { labels, series, title }) {
     options: merge(COMMON_OPTIONS, {
       interaction: { mode: "index", intersect: false },
       plugins: {
-        title: title ? { display: true, text: title, color: TEXT, font: { size: 14 } } : { display: false },
-        legend: { position: "bottom", labels: { color: TEXT } },
+        // In HTML by the caller — see the note on makeLineChart.
+        title: { display: false },
+        legend: { display: false },
       },
       scales: {
         x: { stacked: true, grid: { color: GRID }, ticks: { color: TEXT, maxRotation: 45 } },
@@ -253,7 +278,7 @@ export function makeStackedBarChart(canvas, { labels, series, title }) {
 
 // ── Horizontal bar chart ────────────────────────────────────────────
 
-export function makeHorizontalBarChart(canvas, { labels, data, title, xLabel, yLabel, color, colors }) {
+export function makeHorizontalBarChart(canvas, { labels, data, title: _title, xLabel, yLabel, color, colors }) {
   // Size canvas so each bar gets at least 28px
   const minHeight = Math.max(200, labels.length * 28 + 60);
   canvas.parentElement.style.minHeight = `${minHeight}px`;
@@ -273,7 +298,8 @@ export function makeHorizontalBarChart(canvas, { labels, data, title, xLabel, yL
     options: merge(COMMON_OPTIONS, {
       indexAxis: "y",
       plugins: {
-        title: title ? { display: true, text: title, color: TEXT, font: { size: 14 } } : { display: false },
+        // In HTML by the caller — see the note on makeLineChart.
+        title: { display: false },
         legend: { display: false },
       },
       scales: {
@@ -289,7 +315,12 @@ export function makeHorizontalBarChart(canvas, { labels, data, title, xLabel, yL
 
 // ── Doughnut chart ─────────────────────────────────────────────────
 
-export function makeDoughnutChart(canvas, { labels, data, title, colors }) {
+export function makeDoughnutChart(canvas, { labels, data, title: _title, colors }) {
+  // A part-to-whole chart reads at a glance only up to ~6 segments; past that,
+  // adjacent classes blur regardless of palette. Not enforced here (the caller
+  // knows its own data), but it is why this stays a doughnut rather than
+  // growing legend entries indefinitely — a 7-slice-plus report wants a table,
+  // or renderPieLegend's "Other" fold, not a bigger wheel.
   return new Chart(canvas, {
     type: "doughnut",
     data: {
@@ -297,7 +328,9 @@ export function makeDoughnutChart(canvas, { labels, data, title, colors }) {
       datasets: [{
         data,
         backgroundColor: colors || ROLE_COLORS,
-        borderColor: "#2b2d31",
+        // The 2px gap between slices, in the surface colour rather than a
+        // literal — see CHART_SURFACE.
+        borderColor: CHART_SURFACE,
         borderWidth: 2,
       }],
     },
@@ -305,8 +338,11 @@ export function makeDoughnutChart(canvas, { labels, data, title, colors }) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: title ? { display: true, text: title, color: TEXT, font: { size: 14 } } : { display: false },
-        legend: { position: "bottom", labels: { color: TEXT } },
+        // In HTML by the caller, via renderPieLegend — renderChartLegend
+        // reads chart.data.DATASETS (one bar/line per series); a doughnut has
+        // ONE dataset and many LABELS, so it needs its own legend function.
+        title: { display: false },
+        legend: { display: false },
         tooltip: { backgroundColor: "#18191c", borderColor: GRID, borderWidth: 1 },
       },
     },
@@ -316,7 +352,11 @@ export function makeDoughnutChart(canvas, { labels, data, title, colors }) {
 
 // ── Floating bar / candlestick (message cadence) ────────────────────────
 
-export function makeCandlestickChart(canvas, { buckets, title, noZoom: _noZoom }) {
+/**
+ * `title` is accepted for backward compatibility but no longer drawn on the
+ * canvas — callers should show it as an HTML `.chart-caption` instead.
+ */
+export function makeCandlestickChart(canvas, { buckets, title: _title, noZoom: _noZoom }) {
   // Chart.js "floating bars": data as [low, high] pairs.
   // We draw the body (p20 → p80) as a thick bar, the wick (min → max) as a
   // thin bar behind it, and mark the median with a line annotation.
@@ -362,8 +402,15 @@ export function makeCandlestickChart(canvas, { buckets, title, noZoom: _noZoom }
     options: merge(COMMON_OPTIONS, {
       interaction: { mode: "index", intersect: false },
       plugins: {
-        title: title ? { display: true, text: title, color: TEXT, font: { size: 14 } } : { display: false },
-        legend: { position: "bottom", labels: { color: TEXT } },
+        // In HTML by the caller, via renderChartLegend — Min-Max/P20-P80/
+        // Median are three real datasets a reader may want to toggle, unlike
+        // a doughnut's internal drawing primitives.
+        //
+        // (No panel currently calls makeCandlestickChart — it is exported and
+        // unused. Fixed for consistency with the rest of this file anyway,
+        // since a future caller inherits whatever is here.)
+        title: { display: false },
+        legend: { display: false },
         tooltip: {
           backgroundColor: "#18191c", borderColor: GRID, borderWidth: 1,
           callbacks: {
@@ -467,6 +514,66 @@ export function renderChartLegend(host, chart) {
 
       btn.addEventListener("click", () => {
         chart.setDatasetVisibility(i, !chart.isDatasetVisible(i));
+        chart.update();
+        paint();
+      });
+      host.appendChild(btn);
+    });
+  }
+
+  paint();
+  return { refresh: paint };
+}
+
+/**
+ * The doughnut/pie counterpart to renderChartLegend.
+ *
+ * A pie has ONE dataset whose `data[i]` values share ONE label array and ONE
+ * `backgroundColor` array — there is no per-series dataset to iterate, so
+ * renderChartLegend's approach (one entry per `chart.data.datasets[i]`) reads
+ * a single, meaningless "Series 1" entry for a doughnut. Toggling a slice also
+ * uses a different Chart.js API: `toggleDataVisibility(index)` at the CHART
+ * level, not `setDatasetVisibility` at the dataset level.
+ *
+ * Each entry shows its share of the total, since "38%" is what a pie is for —
+ * a bare count would make the reader do the division themselves.
+ */
+export function renderPieLegend(host, chart) {
+  if (!host) return { refresh() {} };
+  const ds = chart.data.datasets[0] || {};
+  const colors = Array.isArray(ds.backgroundColor) ? ds.backgroundColor : [];
+  const total = (ds.data || []).reduce((a, v) => a + (Number.isFinite(v) ? v : 0), 0);
+
+  function paint() {
+    host.className = "chart-legend";
+    host.replaceChildren();
+    (chart.data.labels || []).forEach((label, i) => {
+      const visible = chart.getDataVisibility(i);
+      const value = ds.data ? ds.data[i] : null;
+      const pct = total > 0 && Number.isFinite(value) ? Math.round((value / total) * 100) : null;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chart-legend__item";
+      btn.setAttribute("aria-pressed", String(visible));
+
+      const swatch = document.createElement("span");
+      swatch.className = "chart-legend__swatch";
+      swatch.style.background = colors[i] || SERIES_OVERFLOW;
+      btn.appendChild(swatch);
+
+      const lbl = document.createElement("span");
+      lbl.className = "chart-legend__label";
+      lbl.textContent = label;
+      btn.appendChild(lbl);
+
+      const val = document.createElement("span");
+      val.className = "chart-legend__value";
+      val.textContent = pct === null ? _fmt(value) : `${_fmt(value)} (${pct}%)`;
+      btn.appendChild(val);
+
+      btn.addEventListener("click", () => {
+        chart.toggleDataVisibility(i);
         chart.update();
         paint();
       });

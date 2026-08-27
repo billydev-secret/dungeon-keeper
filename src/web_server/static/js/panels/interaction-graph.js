@@ -1,6 +1,6 @@
 import { api, esc } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
-import { makeHorizontalBarChart } from "../charts.js";
+import { makeHorizontalBarChart, renderChartTable } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
 export function mount(container, initialParams) {
@@ -11,7 +11,9 @@ export function mount(container, initialParams) {
         <div class="subtitle">Who talks to whom — top pairs and most connected members</div>
       </header>
       <div class="controls"></div>
+      <div class="chart-caption" data-caption></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div data-chart-table></div>
       <div data-pairs style="margin-top:12px; max-height:350px; overflow-y:auto;"></div>
       <div data-nodes style="margin-top:12px; max-height:350px; overflow-y:auto;"></div>
     </div>
@@ -22,6 +24,8 @@ export function mount(container, initialParams) {
   const daysEl = rangeEl.querySelector("select");
   let pairsWrap = container.querySelector("[data-pairs]");
   const nodesWrap = container.querySelector("[data-nodes]");
+  const captionEl = container.querySelector("[data-caption]");
+  const tableEl = container.querySelector("[data-chart-table]");
   let chart = null;
 
   // Inject focus-user selector into controls
@@ -43,12 +47,31 @@ export function mount(container, initialParams) {
     const wrap = container.querySelector(".chart-wrap");
     if (chart) { chart.destroy(); chart = null; }
     wrap.innerHTML = '<canvas data-chart></canvas>';
-    if (!pairs.length) return;
+    if (!pairs.length) {
+      captionEl.textContent = "";
+      tableEl.replaceChildren();
+      return;
+    }
+    const hasShare = pairs[0].pct_share !== undefined;
+    const title = hasShare ? "Share of interactions (%)" : "Top Interaction Pairs";
+    const xLabel = hasShare ? "% of total" : "Interactions";
+    const labels = pairs.map((p) => p.pair_name || `${p.from_name || p.from_id} ↔ ${p.to_name || p.to_id}`);
+    const values = pairs.map((p) => hasShare ? p.pct_share : p.weight);
     chart = makeHorizontalBarChart(container.querySelector("[data-chart]"), {
-      labels: pairs.map((p) => p.pair_name || `${p.from_name || p.from_id} ↔ ${p.to_name || p.to_id}`),
-      data: pairs.map((p) => p.pct_share !== undefined ? p.pct_share : p.weight),
-      title: pairs[0].pct_share !== undefined ? "Share of interactions (%)" : "Top Interaction Pairs",
-      xLabel: pairs[0].pct_share !== undefined ? "% of total" : "Interactions",
+      labels,
+      data: values,
+      title,
+      xLabel,
+    });
+
+    // The caption carries the title as real, selectable HTML text — canvas
+    // titles are gone repo-wide. One series (this chart never plots more than
+    // one), so no legend: the caption already names it.
+    captionEl.textContent = title;
+    renderChartTable(tableEl, {
+      labels,
+      datasets: [{ label: xLabel, data: values }],
+      indexLabel: "Pair",
     });
   }
 
@@ -112,6 +135,8 @@ export function mount(container, initialParams) {
       if (!data.top_pairs.length) {
         if (chart) { chart.destroy(); chart = null; }
         wrap.innerHTML = `<div class="empty">No replies or mentions recorded in this window. Widen the range, or run Config › Admin Backfill › Interaction Graph to fill in history from before Dungeon Keeper started tracking.</div>`;
+        captionEl.textContent = "";
+        tableEl.replaceChildren();
         pairsWrap.innerHTML = "";
         nodesWrap.innerHTML = "";
         return;
@@ -151,6 +176,8 @@ export function mount(container, initialParams) {
       });
     } catch (err) {
       container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load the interaction graph — try again. (${esc(err.message)})</div>`;
+      captionEl.textContent = "";
+      tableEl.replaceChildren();
       pairsWrap.innerHTML = "";
       nodesWrap.innerHTML = "";
     }

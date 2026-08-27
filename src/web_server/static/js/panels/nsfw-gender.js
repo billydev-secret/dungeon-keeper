@@ -1,6 +1,6 @@
 import { api, esc } from "../api.js";
 import { withLoading } from "../report-helpers.js";
-import { makeStackedBarChart, makeLineChart } from "../charts.js";
+import { makeStackedBarChart, makeLineChart, renderChartLegend, renderChartTable } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 
 const RESOLUTIONS = [
@@ -36,7 +36,10 @@ export function mount(container, initialParams) {
           Media Only
         </label>
       </div>
+      <div class="chart-caption" data-caption></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div data-legend></div>
+      <div data-chart-table></div>
       <div data-slider-wrap></div>
     </div>
   `;
@@ -53,6 +56,9 @@ export function mount(container, initialParams) {
   let chart = null;
   let slider = null;
   const sliderWrap = container.querySelector("[data-slider-wrap]");
+  const captionEl  = container.querySelector("[data-caption]");
+  const legendEl   = container.querySelector("[data-legend]");
+  const tableEl    = container.querySelector("[data-chart-table]");
 
   async function loadChannels() {
     try {
@@ -94,6 +100,9 @@ export function mount(container, initialParams) {
       if (!data.series.length) {
         wrap.innerHTML = `<div class="empty">No NSFW posting recorded in this window. Widen the resolution, or clear the Media Only filter.</div>`;
         sliderWrap.innerHTML = "";
+        captionEl.textContent = "";
+        legendEl.replaceChildren();
+        tableEl.replaceChildren();
         return;
       }
       const title = `NSFW by Gender — ${data.window_label}`;
@@ -108,12 +117,34 @@ export function mount(container, initialParams) {
         } else {
           chart = makeStackedBarChart(canvas, { labels: slicedLabels, series: slicedSeries, title });
         }
+
+        // The caption lives in HTML so it wears the page's type and stays
+        // selectable/screen-reader visible; canvas-drawn text was neither.
+        captionEl.textContent = title;
+
+        // "None for one": a lone series is already named by the caption, so a
+        // legend would just repeat it. Both display modes are multi-dataset
+        // charts (one dataset per gender), so renderChartLegend — not the
+        // doughnut/pie form — is the right shape here.
+        legendEl.replaceChildren();
+        if (slicedSeries.length >= 2) renderChartLegend(legendEl, chart);
+
+        // A tooltip must never be the only way to read a value.
+        renderChartTable(tableEl, {
+          labels: slicedLabels,
+          datasets: chart.data.datasets.map((d) => ({ label: d.label, data: d.data })),
+          indexLabel: { day: "Day", week: "Week", month: "Month" }[resEl.value] || "Period",
+        });
       }
       renderChart(0, data.labels.length - 1);
       sliderWrap.innerHTML = "";
       slider = mountTimeSlider(sliderWrap, { totalPoints: data.labels.length, labels: data.labels, onChange: renderChart });
     } catch (err) {
       container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load NSFW activity by gender — try again. (${esc(err.message)})</div>`;
+      sliderWrap.innerHTML = "";
+      captionEl.textContent = "";
+      legendEl.replaceChildren();
+      tableEl.replaceChildren();
     }
   }
 

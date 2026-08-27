@@ -190,6 +190,88 @@ visual identity and everything else stays quiet.
   current section and `aria-current="page"` the active item, because width and
   gold are both invisible to a screen reader.
 
+## Charts
+
+`static/js/charts.js` is the one Chart.js surface for the dashboard — every
+report under **Reports**, plus a handful of panels elsewhere. It shares the
+rules above, not a separate style.
+
+**One y-axis, always.** A dual-axis chart — two independent y-scales on one
+plot — is the single most common charting mistake: where a line sits relative
+to the bars becomes an artefact of autoscaling, not a fact about the data.
+Activity used to plot XP on the left axis and Unique Members on the right;
+"members tracked XP" or "they diverged" were stories the chart invented, not
+things it measured. Members is its own chart now, sharing Activity's x-axis.
+`tests/web/test_chart_conventions.py::test_no_chart_uses_a_second_y_axis`
+fails the build on a `y1` scale anywhere in the tree.
+
+**The categorical palette is computed, not chosen.** `ROLE_COLORS` in
+charts.js is validated against the dark chart surface (`CHART_SURFACE`,
+`#2b2d31`) on five checks — lightness band, chroma floor, colour-vision-
+deficiency separation under the Machado-Oliveira-Fernandes model, a
+normal-vision floor, and contrast — the same method as the categorical UI
+palette described above, because it is the same underlying rule: an all-warm
+set cannot separate six series, full stop. `tests/web/test_chart_palette.py`
+re-runs the checks in CI; its numbers are cross-checked against the reference
+validator (`skills/dataviz/scripts/validate_palette.js`) figure for figure.
+
+`CHART_BAR` and `CHART_ACCENT` (the single-series defaults) are `ROLE_COLORS`
+members, not a separate hand-picked pair — that split is exactly what let them
+drift out of validation once already: they sat at the old, unvalidated gold
+and mauve for one full commit, including Activity's own members line, until
+an unrelated audit noticed. One palette, checked in one place.
+
+**`seriesColor(i)`, never `ROLE_COLORS[i % ROLE_COLORS.length]`.** A modulo at
+the call site recreates the exact cycling bug the shared builders were fixed
+to never do — item 7 silently gets item 1's hue. `seriesColor` folds past the
+palette's length to `SERIES_OVERFLOW`, a neutral, instead. Found twice in one
+fan-out (two different panels, each colouring an unbounded server-supplied
+list by hand) and pinned by
+`test_chart_conventions.py::test_no_panel_cycles_role_colors_by_hand`.
+
+**Canvas draws the plot; HTML draws everything you'd want to select, resize,
+or have read aloud.** Chart.js's own title and legend are canvas text: they
+cannot use the page's type, cannot be selected, and do not exist for a screen
+reader. Every builder in charts.js ships with `title: {display:false}` and
+`legend: {display:false}` — the caller renders a `.chart-caption` div and,
+for two-or-more series, calls one of:
+
+- `renderChartLegend(host, chart)` — multi-*dataset* charts (line, bar,
+  stacked bar, candlestick): one entry per `chart.data.datasets[i]`, click to
+  toggle, that series' running total shown beside its name.
+- `renderPieLegend(host, chart)` — doughnut/pie charts specifically. These are
+  structurally different (one dataset, many labels, one colour per slice), so
+  `renderChartLegend` would paint a single meaningless "Series 1" entry
+  reading the wrong colour field; `renderPieLegend` shows each slice's share
+  of the total and toggles via `chart.toggleDataVisibility(i)`.
+
+A single-series chart gets a caption and no legend — "none for one," the
+caption already names it. Every chart, single- or multi-series, still gets
+`renderChartTable(host, {labels, datasets, indexLabel})`: a "Show the numbers"
+disclosure holding every plotted value as a real `<table>`. Not a nicety —
+three of the six `ROLE_COLORS` slots sit under 3:1 contrast against the
+surface, which the palette test permits only where visible labels or a table
+supply the relief.
+
+**Stacked segments and doughnut slices carry a 2px gap**, painted in
+`CHART_SURFACE` rather than a border, so two adjacent colours never share a
+hard edge. It is the secondary encoding the palette's weakest pairs (ΔE 6–8
+under CVD) are validated *with*, not decoration — removing it would silently
+invalidate them.
+
+**A per-bar colour is either categorical or semantic, and only one of those
+is this file's problem.** `seriesColor(i)` for an unordered list of *things*
+(channels, moderators, XP sources). A fixed, small, named ramp — good/warning/
+critical — for a *state* a value can be in, reused from already-validated
+`ROLE_COLORS` members rather than invented fresh each time a panel needs one
+(health-gini's per-channel participation tier does this: wine for the worst
+tier, `CHART_BAR` for the middle, teal for the best). Genuinely bad: an
+unbounded per-bar rank colouring past the palette's length, and a value-ramp
+painted onto nominal categories that aren't ordered at all — both read as
+"more entries this table has ever seen" rather than anything about the data,
+and both are still present in a few older per-panel colour choices that
+predate this pass (see Known-unresolved).
+
 ## Known-unresolved
 
 - **The collapsed rail cannot identify a page.** Collapsed to 56px the label is
@@ -199,9 +281,16 @@ visual identity and everything else stays quiet.
   set can fix this: there are ~176 pages and ten sections. The real fix is for
   the collapsed rail to show *sections* and expand on click, which is a change
   to how navigation behaves and wants a decision, not a patch.
-- **Charts are untouched.** The Reports section renders through Chart.js
-  (`static/js/charts.js`) and its palette, grid, axis and tooltip styling
-  predate this pass.
+- **A handful of older per-panel colours are unvalidated single semantic
+  picks, deliberately left alone.** channels.js's 5-bucket score-distribution
+  ramp, health-sentiment's positive/negative bar colouring, retention's
+  activity-drop red, and voice-activity's hour-of-day accent all still use
+  pre-migration hex literals. Each is a single deliberate colour choice for
+  one meaning, not a multi-series set needing CVD separation from its
+  neighbours, so they were judged lower-risk than the categorical drift this
+  pass did fix (which produced two measurable collisions — see the Charts
+  section above). Worth a pass of their own if the dashboard ever gets a
+  proper reserved status palette; today each panel picks its own.
 - **Dark-only.** There is no `prefers-color-scheme` rule in `app.css` and a
   light theme is not planned. With the token system in place it would be a
   contained job rather than a rewrite.

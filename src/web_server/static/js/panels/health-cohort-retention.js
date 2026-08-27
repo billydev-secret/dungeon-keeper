@@ -1,7 +1,7 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
 import { mountBotToggle } from "../report-helpers.js";
-import { makeLineChart, ROLE_COLORS } from "../charts.js";
+import { makeLineChart, renderChartLegend, renderChartTable } from "../charts.js";
 
 
 export function mount(container) {
@@ -75,7 +75,10 @@ export function mount(container) {
 
       <div class="home-card home-card-wide" style="margin-top:14px;">
         <div class="home-card-label">Retention Curves by Cohort</div>
+        <div class="chart-caption" data-caption></div>
         <div class="chart-wrap" style="height:320px"><canvas id="retention-curves"></canvas></div>
+        <div data-legend></div>
+        <div data-chart-table></div>
       </div>
 
       <div class="home-card home-card-wide" style="margin-top:14px;">
@@ -89,17 +92,43 @@ export function mount(container) {
       </div>
     `;
 
-    // Multi-line retention curves
+    // Multi-line retention curves — up to 6 cohorts, one line each.
     const curvesCanvas = panel.querySelector("#retention-curves");
+    const curvesCaptionEl = panel.querySelector("[data-caption]");
+    const curvesLegendEl  = panel.querySelector("[data-legend]");
+    const curvesTableEl   = panel.querySelector("[data-chart-table]");
     if (curvesCanvas && d.cohorts && d.cohorts.length) {
-      const labels = ["Join", "D1", "D7", "D14", "D30", "D60", "D90"];
+      const checkpointLabels = ["Join", "D1", "D7", "D14", "D30", "D60", "D90"];
       const nullToNull = v => (v === null || v === undefined) ? null : v;
-      const series = d.cohorts.slice(-6).map((c, i) => ({
+      // No explicit `color:` here — makeLineChart already falls back to
+      // seriesColor(i) per series, which is the same palette this modulo was
+      // reimplementing, minus the bug: slice(-6) happens to match
+      // ROLE_COLORS.length today, but the moment either number changes this
+      // would start silently repeating a hue instead of folding to the
+      // shared overflow neutral.
+      const series = d.cohorts.slice(-6).map((c) => ({
         label: c.label,
         counts: [100, nullToNull(c.d1), nullToNull(c.d7), nullToNull(c.d14), nullToNull(c.d30), nullToNull(c.d60), nullToNull(c.d90)],
-        color: ROLE_COLORS[i % ROLE_COLORS.length],
       }));
-      charts.push(makeLineChart(curvesCanvas, { labels, series, title: "Retention by Weekly Cohort" }));
+      const title = "Retention by Weekly Cohort";
+      const curvesChart = makeLineChart(curvesCanvas, { labels: checkpointLabels, series, title });
+      charts.push(curvesChart);
+
+      // The caption lives in HTML so it wears the page's type and is
+      // selectable/readable, rather than living only inside the canvas.
+      curvesCaptionEl.textContent = title;
+
+      // A legend earns its place once there's more than one cohort line to
+      // tell apart; with a single cohort the caption already names it.
+      curvesLegendEl.replaceChildren();
+      if (series.length > 1) renderChartLegend(curvesLegendEl, curvesChart);
+
+      // Tooltips enhance; they must never be the only way to read a value.
+      renderChartTable(curvesTableEl, {
+        labels: checkpointLabels,
+        datasets: series.map(s => ({ label: s.label, data: s.counts })),
+        indexLabel: "Checkpoint",
+      });
     }
   }
 

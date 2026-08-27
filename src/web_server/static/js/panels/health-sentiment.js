@@ -1,7 +1,7 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
 import { mountBotToggle } from "../report-helpers.js";
-import { makeLineChart, makeHorizontalBarChart } from "../charts.js";
+import { makeLineChart, makeHorizontalBarChart, renderChartTable, CHART_BAR } from "../charts.js";
 
 
 function fmtTime(ts) {
@@ -103,13 +103,17 @@ export function mount(container) {
 
       <div class="home-card home-card-wide" style="margin-top:14px;">
         <div class="home-card-label">30-Day Sentiment Trend</div>
+        <div class="chart-caption" data-caption="trend"></div>
         <div class="chart-wrap" style="height:280px"><canvas id="sentiment-trend"></canvas></div>
+        <div data-chart-table="trend"></div>
       </div>
 
       <div class="home-grid" style="margin-top:14px;">
         <div class="home-card">
           <div class="home-card-label">Per-Channel Sentiment</div>
+          <div class="chart-caption" data-caption="channel"></div>
           <div class="chart-wrap" style="min-height:280px"><canvas id="ch-sentiment"></canvas></div>
+          <div data-chart-table="channel"></div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Negative Spike Log</div>
@@ -138,26 +142,61 @@ export function mount(container) {
 
     // Trend chart
     const trendCanvas = panel.querySelector("#sentiment-trend");
+    const trendCaptionEl = panel.querySelector('[data-caption="trend"]');
+    const trendTableEl = panel.querySelector('[data-chart-table="trend"]');
     if (trendCanvas && d.sparkline) {
       const labels = d.sparkline.map((_, i) => i === d.sparkline.length - 1 ? "today" : `${d.sparkline.length - 1 - i}d`);
+      const trendTitle = "Daily Average Sentiment";
       charts.push(makeLineChart(trendCanvas, {
         labels,
-        series: [{ label: "Avg Sentiment", counts: d.sparkline, color: "#E6B84C" }],
-        title: "Daily Average Sentiment",
+        series: [{ label: "Avg Sentiment", counts: d.sparkline, color: CHART_BAR }],
+        title: trendTitle,
       }));
+      // The caption lives in HTML so it wears the page's type and is
+      // selectable/screen-readable, unlike canvas-drawn text.
+      if (trendCaptionEl) trendCaptionEl.textContent = trendTitle;
+      // One series: the caption above already names it, so no legend ("none
+      // for one" — see renderChartLegend's doc comment in charts.js). A
+      // tooltip must never be the only way to read a value, hence the table.
+      renderChartTable(trendTableEl, {
+        labels,
+        datasets: [{ label: "Avg Sentiment", data: d.sparkline }],
+        indexLabel: "Day",
+      });
+    } else if (trendCaptionEl) {
+      trendCaptionEl.textContent = "";
+      if (trendTableEl) trendTableEl.replaceChildren();
     }
 
     // Per-channel sentiment
     const chCanvas = panel.querySelector("#ch-sentiment");
+    const chCaptionEl = panel.querySelector('[data-caption="channel"]');
+    const chTableEl = panel.querySelector('[data-chart-table="channel"]');
     if (chCanvas && d.per_channel) {
       const sorted = [...d.per_channel].sort((a, b) => b.avg_sentiment - a.avg_sentiment).slice(0, 15);
+      const chTitle = "Sentiment by Channel";
+      const chLabels = sorted.map(c => "#" + (c.channel_name || c.channel_id));
+      const chData = sorted.map(c => c.avg_sentiment);
       charts.push(makeHorizontalBarChart(chCanvas, {
-        labels: sorted.map(c => "#" + (c.channel_name || c.channel_id)),
-        data: sorted.map(c => c.avg_sentiment),
-        title: "Sentiment by Channel",
+        labels: chLabels,
+        data: chData,
+        title: chTitle,
         xLabel: "Avg Sentiment",
+        // Two fixed hues keyed by the value's sign (positive/negative) — a
+        // semantic status color, not a per-bar rank/value ramp — see notes.
         colors: sorted.map(c => c.avg_sentiment >= 0 ? "#7F8F3A" : "#9E3B2E"),
       }));
+      if (chCaptionEl) chCaptionEl.textContent = chTitle;
+      // One dataset — the per-bar colors above are a semantic overlay on a
+      // single series, not separate series — so no legend, same as above.
+      renderChartTable(chTableEl, {
+        labels: chLabels,
+        datasets: [{ label: "Avg Sentiment", data: chData }],
+        indexLabel: "Channel",
+      });
+    } else if (chCaptionEl) {
+      chCaptionEl.textContent = "";
+      if (chTableEl) chTableEl.replaceChildren();
     }
   }
 

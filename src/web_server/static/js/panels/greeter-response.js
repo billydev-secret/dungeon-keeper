@@ -1,6 +1,6 @@
 import { api, esc, fmtTs, fmtAge } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
-import { makeBarChart } from "../charts.js";
+import { makeBarChart, renderChartTable } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
 export function mount(container, initialParams) {
@@ -12,7 +12,9 @@ export function mount(container, initialParams) {
       </header>
       <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
+      <div class="chart-caption" data-caption></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div data-chart-table></div>
       <div data-table-wrap style="margin-top:12px; max-height:350px; overflow-y:auto;"></div>
     </div>
   `;
@@ -21,6 +23,8 @@ export function mount(container, initialParams) {
   container.querySelector(".controls").appendChild(rangeEl);
   const daysEl = rangeEl.querySelector("select");
   const statsEl = container.querySelector("[data-stats]");
+  const captionEl = container.querySelector("[data-caption]");
+  const chartTableEl = container.querySelector("[data-chart-table]");
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chart = null;
 
@@ -74,22 +78,39 @@ export function mount(container, initialParams) {
       const wrap = container.querySelector(".chart-wrap");
       if (!data.histogram.length || data.count === 0) {
         wrap.innerHTML = `<div class="empty">Nobody was greeted in this window. New members are still listed below if they joined.</div>`;
+        captionEl.textContent = "";
+        chartTableEl.replaceChildren();
         renderTable(data.entries || []);
         return;
       }
 
       wrap.innerHTML = '<canvas data-chart></canvas>';
+      const title = `Greeter Response Time — ${data.window_label}`;
+      // The caption lives in HTML so it wears the page's type rather than
+      // whatever the canvas was handed, and can be selected and read aloud.
+      captionEl.textContent = title;
       chart = makeBarChart(container.querySelector("[data-chart]"), {
         labels: data.histogram.map((b) => b.label),
         data: data.histogram.map((b) => b.count),
-        title: `Greeter Response Time — ${data.window_label}`,
+        title,
         yLabel: "Joins",
+      });
+
+      // One series (the wait-time histogram): the caption already names it,
+      // so no legend — but a tooltip must never be the only way to read a
+      // value, hence the table.
+      renderChartTable(chartTableEl, {
+        labels: data.histogram.map((b) => b.label),
+        datasets: [{ label: "Joins", data: data.histogram.map((b) => b.count) }],
+        indexLabel: "Wait time",
       });
 
       renderTable(data.entries || []);
     } catch (err) {
       statsEl.textContent = "";
       container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load greeter response times — try again. (${esc(err.message)})</div>`;
+      captionEl.textContent = "";
+      chartTableEl.replaceChildren();
       tableWrap.innerHTML = "";
     }
   }

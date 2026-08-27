@@ -1,7 +1,7 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
 import { mountBotToggle } from "../report-helpers.js";
-import { makeLineChart, makeBarChart } from "../charts.js";
+import { makeLineChart, makeBarChart, renderChartTable, CHART_BAR } from "../charts.js";
 
 
 export function mount(container) {
@@ -71,37 +71,60 @@ export function mount(container) {
       <div class="home-grid">
         <div class="home-card home-card-wide">
           <div class="home-card-label">30-Day DAU Trend</div>
+          <div class="chart-caption" data-caption="dau-trend"></div>
           <div class="chart-wrap" style="height:280px"><canvas id="dau-trend-chart"></canvas></div>
+          <div data-chart-table="dau-trend"></div>
         </div>
       </div>
 
       <div class="home-grid">
         <div class="home-card home-card-wide">
           <div class="home-card-label">Average DAU by Day of Week</div>
+          <div class="chart-caption" data-caption="dow"></div>
           <div class="chart-wrap" style="height:240px"><canvas id="dow-chart"></canvas></div>
+          <div data-chart-table="dow"></div>
         </div>
       </div>
     `;
 
-    // DAU trend chart
+    // DAU trend chart. One series (DAU) — the caption already names it, so
+    // per the "none for one" rule this gets a caption + table, no legend.
     const trendCanvas = panel.querySelector("#dau-trend-chart");
     if (trendCanvas && d.sparkline) {
       const labels = d.sparkline.map((_, i) => i === d.sparkline.length - 1 ? "today" : `${d.sparkline.length - 1 - i}d`);
+      const trendTitle = "Daily Active Users (30 days)";
       charts.push(makeLineChart(trendCanvas, {
         labels,
-        series: [{ label: "DAU", counts: d.sparkline, color: "#E6B84C" }],
-        title: "Daily Active Users (30 days)",
+        // CHART_BAR (not a literal "#E6B84C") — same gold, from the shared
+        // chart palette rather than a locally duplicated hex.
+        series: [{ label: "DAU", counts: d.sparkline, color: CHART_BAR }],
+        title: trendTitle,
       }));
+      panel.querySelector('[data-caption="dau-trend"]').textContent = trendTitle;
+      renderChartTable(panel.querySelector('[data-chart-table="dau-trend"]'), {
+        labels,
+        datasets: [{ label: "DAU", data: d.sparkline }],
+        indexLabel: "Day",
+      });
     }
 
-    // Day-of-week chart
+    // Day-of-week chart. Also one series — caption + table, no legend.
     const dowCanvas = panel.querySelector("#dow-chart");
     if (dowCanvas && d.day_of_week) {
+      const dowLabels = d.day_of_week.map(row => row.day);
+      const dowData = d.day_of_week.map(row => row.avg_dau);
+      const dowTitle = "Avg DAU by Weekday";
       charts.push(makeBarChart(dowCanvas, {
-        labels: d.day_of_week.map(d => d.day),
-        data: d.day_of_week.map(d => d.avg_dau),
-        title: "Avg DAU by Weekday",
+        labels: dowLabels,
+        data: dowData,
+        title: dowTitle,
       }));
+      panel.querySelector('[data-caption="dow"]').textContent = dowTitle;
+      renderChartTable(panel.querySelector('[data-chart-table="dow"]'), {
+        labels: dowLabels,
+        datasets: [{ label: "Avg DAU", data: dowData }],
+        indexLabel: "Day of week",
+      });
     }
   }
 
