@@ -634,3 +634,72 @@ def test_an_explicit_label_still_wins_over_the_derived_one(page):
       }
     """)
     assert name == "Explicit"
+
+
+# ── One dirty bit per form, not per page ────────────────────────────────
+
+
+_TWO_FORMS = """
+  async () => {
+    const h = await import('/static/js/config-helpers.js');
+    window.__dkDirtyReset();
+    document.body.innerHTML =
+      '<form id="a"><input name="x"><span id="sa"></span></form>' +
+      '<form id="b"><input name="y"><span id="sb"></span></form>';
+    const a = h.guardForm(document.getElementById('a'));
+    const b = h.guardForm(document.getElementById('b'));
+    // Type in both, so both hold unsaved edits.
+    for (const f of [a, b]) {
+      f.querySelector('input').value = 'edited';
+      f.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const bothDirty = window.__dkDirty();
+    // Save only form A.
+    h.showStatus(document.getElementById('sa'), true, 'Saved');
+    return { bothDirty, stillDirty: window.__dkDirty() };
+  }
+"""
+
+
+def test_saving_one_form_leaves_a_sibling_forms_warning_armed(page):
+    """Fails against the pre-fix helper: `_dirty` was one module global that any
+    successful save cleared, so form B's unsaved edits stopped being guarded."""
+    r = page.evaluate(_TWO_FORMS)
+    assert r["bothDirty"] is True, "editing two guarded forms did not mark the page dirty"
+    assert r["stillDirty"] is True, (
+        "saving form A disarmed the unsaved-edits warning protecting form B"
+    )
+
+
+def test_saving_the_last_dirty_form_does_clear_the_warning(page):
+    """The flag must still clear, or every navigation prompts forever."""
+    cleared = page.evaluate("""
+      async () => {
+        const h = await import('/static/js/config-helpers.js');
+        window.__dkDirtyReset();
+        document.body.innerHTML = '<form id="a"><input name="x"><span id="sa"></span></form>';
+        const a = h.guardForm(document.getElementById('a'));
+        a.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
+        h.showStatus(document.getElementById('sa'), true, 'Saved');
+        return window.__dkDirty();
+      }
+    """)
+    assert cleared is False
+
+
+def test_a_status_element_outside_any_guarded_form_still_clears_everything(page):
+    """The fallback: with nothing to attribute the save to, keep the old
+    page-wide clear rather than leave a panel permanently claiming edits."""
+    cleared = page.evaluate("""
+      async () => {
+        const h = await import('/static/js/config-helpers.js');
+        window.__dkDirtyReset();
+        document.body.innerHTML =
+          '<form id="a"><input name="x"></form><span id="loose"></span>';
+        const a = h.guardForm(document.getElementById('a'));
+        a.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
+        h.showStatus(document.getElementById('loose'), true, 'Saved');
+        return window.__dkDirty();
+      }
+    """)
+    assert cleared is False

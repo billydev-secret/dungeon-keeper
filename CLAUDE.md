@@ -214,6 +214,10 @@ SQLite-backed. Tests in `tests/`.
 - **Shared dashboard widgets are safe by default**: `table.js` escapes every
   cell (a column opts into markup with `html: true` and then owns its own
   escaping), and config panels mount through `mountAsync` so a failed first
-  fetch renders an error with a retry, never a permanent spinner. Guild-scoped
+  fetch renders an error with a retry, never a permanent spinner — the loader
+  must **let its rejection reach it**, since an inner catch that returns
+  normally makes the retry unreachable. A refreshing report panel uses
+  `mountReloadable` so every pass is guarded, not just the first, and
+  unsaved-edit tracking is per guarded form, not per page. Guild-scoped
   caches in `config-helpers.js` must be cleared in `resetMetaCaches()` — a test
   hard-fails if a new one isn't.

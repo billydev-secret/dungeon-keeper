@@ -21,13 +21,18 @@ let _roles = null;
 //     user confirms discarding, and on every panel mount).
 //   - A successful save shown via showStatus(el, true, …) clears the flag.
 //   - A beforeunload handler (wired once, below) warns when dirty.
-let _dirty = false;
+// Tracked per guarded container rather than as one page-level boolean. It was
+// a single flag that ANY successful save cleared, so on the fourteen panels
+// that guard two to four forms, saving one form — or any unrelated action that
+// reported success, a toggle, an upload, posting a panel — silently disarmed
+// the unsaved-edits warning protecting half-typed values in all the others.
+const _dirtyForms = new Set();
 
-window.__dkDirty = () => _dirty;
-window.__dkDirtyReset = () => { _dirty = false; };
+window.__dkDirty = () => _dirtyForms.size > 0;
+window.__dkDirtyReset = () => { _dirtyForms.clear(); };
 
 window.addEventListener("beforeunload", (e) => {
-  if (!_dirty) return;
+  if (!_dirtyForms.size) return;
   e.preventDefault();
   e.returnValue = ""; // legacy browsers need a non-null returnValue
 });
@@ -46,8 +51,11 @@ export function guardForm(form) {
     // claiming unsaved edits on the way out. The widget announces genuine value
     // changes with a bubbling `dk:change` instead — see filter-select.js.
     if (e?.target?.classList?.contains("filter-select-input")) return;
-    _dirty = true;
+    _dirtyForms.add(form);
   };
+  // Marks the container as one showStatus can find from a status element
+  // inside it, so a save clears its own form and leaves its siblings alone.
+  form.dataset.dkGuard = "1";
   form.addEventListener("input", mark);
   form.addEventListener("change", mark);
   form.addEventListener("dk:change", mark);
@@ -298,6 +306,12 @@ export function resetMetaCaches() {
   _memberSearches.clear();
   _membersById.clear();
   _metaFailed.clear();
+  // Not a meta cache, but it shares the property that matters here: it holds
+  // form elements, and a guild switch tears every panel down and rebuilds it
+  // from the new guild's config. Left alone, the set would retain detached
+  // nodes and report unsaved edits on forms that no longer exist. The switch
+  // path already ran confirmLeaveDirty() before reaching this point.
+  _dirtyForms.clear();
 }
 
 // ── Async panel mount wrapper (F1) ─────────────────────────────────────
@@ -757,7 +771,15 @@ export async function saveSection(section, body) {
 }
 
 export function showStatus(el, ok, msg) {
-  if (ok) _dirty = false; // a successful save clears the unsaved-edits flag
+  if (ok) {
+    // Clear the form this status element belongs to. When it sits outside any
+    // guarded container there is nothing to attribute the save to, so fall
+    // back to the old page-wide clear rather than leave a panel permanently
+    // claiming unsaved edits.
+    const owner = el.closest?.("[data-dk-guard]");
+    if (owner) _dirtyForms.delete(owner);
+    else _dirtyForms.clear();
+  }
   el.className = `save-status ${ok ? "save-ok" : "save-err"}`;
   el.textContent = msg || (ok ? "Saved" : "Error");
   // Errors linger longer than successes, but both clear — a stale "Error"

@@ -1,25 +1,22 @@
 import { wGet, wPost, wDelete, esc, showStatus, enfLabel } from "../wellness-helpers.js";
 import { confirmDialog, toast } from "../ui.js";
 import { guardForm, mountAsync } from "../config-helpers.js";
-import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { renderLoading, renderEmpty } from "../states.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading wellness settings…")}</div>`;
 
   return mountAsync(container, async () => {
-    let dash, defaults, users, exempt;
-    try {
-      [dash, defaults, users, exempt] = await Promise.all([
-        wGet("/api/wellness/admin/dashboard"),
-        wGet("/api/wellness/admin/defaults"),
-        wGet("/api/wellness/admin/users"),
-        wGet("/api/wellness/admin/exempt"),
-      ]);
-    } catch (e) {
-      container.querySelector(".panel").innerHTML =
-        renderError(`Couldn’t load the wellness admin panel — try again. (${e.message})`);
-      return;
-    }
+    // Let the rejection reach mountAsync: it draws the error state *and* a
+    // working Try again button. Catching it here rendered a dead-end error
+    // and made this panel's own errorMsg unreachable. wellness-caps.js
+    // documents the same reasoning where it rethrows on first load.
+    const [dash, defaults, users, exempt] = await Promise.all([
+      wGet("/api/wellness/admin/dashboard"),
+      wGet("/api/wellness/admin/defaults"),
+      wGet("/api/wellness/admin/users"),
+      wGet("/api/wellness/admin/exempt"),
+    ]);
 
     // Overview cards
     const overviewHTML = `

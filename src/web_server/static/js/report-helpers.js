@@ -1,6 +1,6 @@
 // Shared helpers for the analytics report panels (js/panels/*.js).
 //
-// Three exports:
+// Chief exports:
 //   rangePicker() — builds the day-range <select> control shown in a panel's
 //                   `.controls` row.
 //   withLoading() — wraps an in-flight request so the target element shows the
@@ -174,6 +174,41 @@ export function mountBotToggle(container, checked, onChange) {
  * @param {number|null} lastLoadedAt  Date.now() of the last successful load
  * @param {boolean} loadFailed        the last attempt errored
  */
+/**
+ * Wire a report panel's load / decorate / refresh cycle so that **every** pass
+ * has error handling, not just the first one.
+ *
+ * Seven health panels had this shape copied byte-for-byte:
+ *
+ *     function reload() { return load().then(decorate); }
+ *     reload().catch(err => { … render an error … });
+ *
+ * Only the initial call was guarded. The Show Bots toggle called `reload()`
+ * bare, and `load()` rejects before it touches innerHTML — so a failed refetch
+ * left the previous figures on screen with the checkbox already flipped and
+ * nothing said. The user reads bot-excluded numbers under a ticked "include
+ * bots", which is worse than an error, because it looks like an answer.
+ *
+ * `describe` completes the sentence "Couldn't load ___".
+ * Returns `reload`, so a panel's own controls can call it and get the same
+ * handling. `decorate` may call the returned function; it is only invoked
+ * after the binding is assigned.
+ */
+export function mountReloadable(container, { load, decorate, describe, renderError }) {
+  function reload() {
+    return load().then(decorate).catch((err) => {
+      const panel = container.querySelector(".panel");
+      if (panel) {
+        panel.innerHTML = renderError(
+          `Couldn't load ${describe} — ${err.message}. Reload the page to try again.`
+        );
+      }
+    });
+  }
+  reload();
+  return reload;
+}
+
 export function updatedStampText(lastLoadedAt, loadFailed = false) {
   if (loadFailed) return "Last refresh failed";
   if (!lastLoadedAt) return "Loading…";

@@ -1,6 +1,6 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
-import { mountBotToggle } from "../report-helpers.js";
+import { mountBotToggle, mountReloadable } from "../report-helpers.js";
 import { makeLineChart, renderChartLegend, renderChartTable } from "../charts.js";
 
 
@@ -141,14 +141,9 @@ export function mount(container) {
     });
   }
 
-  function reload() {
-    return load().then(decorate);
-  }
-
-  reload().catch(err => {
-    container.querySelector(".panel").innerHTML = renderError(
-      `Couldn't load retention — ${err.message}. Reload the page to try again.`
-    );
+  // Every pass is guarded, not just the first — see mountReloadable.
+  const reload = mountReloadable(container, {
+    load, decorate, renderError, describe: "retention",
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

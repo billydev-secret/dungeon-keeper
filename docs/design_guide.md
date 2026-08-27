@@ -218,7 +218,24 @@ use them:
   `html: true` and then owns its own escaping — that opt-in is the whole
   security boundary.
 - **Config panels mount through `mountAsync`**, so a failed first fetch
-  renders an error with a retry instead of a permanent spinner.
+  renders an error with a retry instead of a permanent spinner. **Let the
+  rejection reach it.** Five panels wrapped their loader's own fetch in a
+  try/catch that rendered a bare error and returned *normally*, so
+  `renderFailure` — the error *plus a working Try again button* — could never
+  run, and the `errorMsg` they declared was dead code. `wellness-caps.js` is
+  the model for a panel that also refreshes: rethrow on first load, render in
+  place afterwards.
+- **A report panel that refreshes uses `mountReloadable`** (`report-helpers.js`),
+  which puts the catch on *every* pass. Seven health panels guarded only the
+  first load, so a failed refetch left the previous figures up under a Show
+  Bots toggle that had already flipped — numbers that look like an answer and
+  are not.
+- **Unsaved-edit tracking is per guarded form**, not per page. `guardForm`
+  registers the container and `showStatus` clears only the form its status
+  element sits in. It used to be one module-global boolean that any success
+  cleared, so on the fourteen panels guarding two to four forms, saving one —
+  or any unrelated action reporting success — silently disarmed the warning
+  protecting half-typed values in the rest.
 - **A new guild-scoped cache in `config-helpers.js` must be cleared in
   `resetMetaCaches()`** — a test hard-fails if it isn't, because a stale cache
   survives a guild switch and shows one server's members inside another.

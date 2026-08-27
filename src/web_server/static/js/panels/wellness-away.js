@@ -1,17 +1,16 @@
 import { wGet, wPost, esc, showStatus } from "../wellness-helpers.js";
 import { guardForm, mountAsync } from "../config-helpers.js";
-import { renderLoading, renderError } from "../states.js";
+import { renderLoading } from "../states.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading your away message…")}</div>`;
 
   return mountAsync(container, async () => {
-    let d;
-    try { d = await wGet("/api/wellness/away"); } catch (e) {
-      container.querySelector(".panel").innerHTML =
-        renderError(`Couldn’t load your away settings — try again. (${e.message})`);
-      return;
-    }
+    // Let the rejection reach mountAsync: it draws the error state *and* a
+    // working Try again button. Catching it here rendered a dead-end error
+    // and made this panel's own errorMsg unreachable. wellness-caps.js
+    // documents the same reasoning where it rethrows on first load.
+    const d = await wGet("/api/wellness/away");
 
     if (!d.opted_in) {
       container.querySelector(".panel").innerHTML = `
