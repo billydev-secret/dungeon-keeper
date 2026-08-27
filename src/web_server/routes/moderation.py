@@ -20,7 +20,7 @@ from bot_modules.services.moderation import (
     get_active_warning_count,
     get_transcript,
     parse_duration,
-    NOT_VOICE_CONTROL,
+    IS_MODERATION_ACTION,
     release_jail,
     reopen_ticket,
     revoke_warning,
@@ -108,7 +108,7 @@ async def moderation_stats(
                 ),
                 "recent_actions": r(
                     "SELECT COUNT(*) FROM audit_log WHERE guild_id = ? AND created_at >= ?"
-                    + NOT_VOICE_CONTROL,
+                    + IS_MODERATION_ACTION,
                     guild_id,
                     one_week_ago,
                 ),
@@ -1176,10 +1176,10 @@ async def audit_log(
             if action:
                 clauses.append("action = ?")
                 params.append(action)
-            # This page is the moderation log, so Voice Control's self-service
-            # churn is not part of it. Applied to the count as well as the
-            # rows, or the total would describe a different set than the page.
-            where = " AND ".join(clauses) + NOT_VOICE_CONTROL
+            # This page is the moderation log and shows only moderation.
+            # Applied to the count as well as the rows, or the total would
+            # describe a different set than the page.
+            where = " AND ".join(clauses) + IS_MODERATION_ACTION
 
             cache_key = (guild_id, action)
             now = _t.monotonic()
@@ -1205,7 +1205,7 @@ async def audit_log(
                     r[0]
                     for r in conn.execute(
                         "SELECT action FROM audit_log WHERE guild_id = ?"
-                        + NOT_VOICE_CONTROL
+                        + IS_MODERATION_ACTION
                         + " GROUP BY action ORDER BY COUNT(*) DESC",
                         (guild_id,),
                     ).fetchall()

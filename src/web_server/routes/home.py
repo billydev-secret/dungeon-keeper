@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.services.channel_rollup import build_resolver, guild_channel_ids
-from bot_modules.services.moderation import NOT_VOICE_CONTROL
+from bot_modules.services.moderation import IS_MODERATION_ACTION
 from bot_modules.services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
@@ -404,16 +404,16 @@ async def home_data(
             # Recent mod actions
             actions_list: list[dict] = []
             if _need("mod_actions"):
-                # Without the exclusion this list was five voice channels
-                # being created and deleted, which is what "recent mod actions"
-                # showed on the home page.
+                # The tile says "Recent mod actions", so it shows moderation.
+                # Reading the log raw made it five voice channels being created
+                # and deleted, which is what audit_log is mostly made of.
                 recent_actions = conn.execute(
                     """
                     SELECT action, actor_id, target_id, created_at
                     FROM audit_log
                     WHERE guild_id = ?
                     """
-                    + NOT_VOICE_CONTROL
+                    + IS_MODERATION_ACTION
                     + """
                     ORDER BY created_at DESC LIMIT 5
                     """,

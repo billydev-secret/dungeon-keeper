@@ -15,9 +15,8 @@ const ACTION_LABELS = {
   warning_revoke: "Warning Revoke",
   channel_pull: "Pull to Channel",
   channel_remove: "Remove from Channel",
-  inactive_apply: "Marked Inactive",
-  inactive_reactivate: "Reactivated",
-  onboarding_roles_added: "Onboarding Roles Added",
+  ticket_warn: "Ticket Warning",
+  ticket_note: "Ticket Note",
 };
 
 const ACTION_COLORS = {
@@ -59,8 +58,8 @@ function fillActionOptions(container, actions) {
 export function mount(container) {
   return auditPanel(container, {
     title: "Moderation Audit Log",
-    subtitle: "Jails, warnings, tickets and other actions taken on members",
-    empty: "No moderation actions match these filters. Jails, warnings, and ticket activity land here as moderators use them.",
+    subtitle: "Jails, warnings, tickets and channel moves — what moderators did to members",
+    empty: "No moderation actions match these filters. Jails, warnings, ticket activity and channel moves land here as moderators use them.",
     filters: [
       {
         name: "action",

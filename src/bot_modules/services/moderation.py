@@ -720,6 +720,23 @@ def delete_warning(
 # moderation. Note `_` is a LIKE wildcard, hence the ESCAPE.
 NOT_VOICE_CONTROL = " AND action NOT LIKE 'vm\\_%' ESCAPE '\\'"
 
+# What the moderation surfaces show: something a moderator did to a member or a
+# channel. Four families, prefix-matched so a new ticket_* or jail_* action
+# appears without anyone remembering to extend a list — the hand-kept list in
+# the panel is precisely what drifted, and six of its twelve entries named
+# strings the bot never writes.
+#
+# Everything else audit_log holds — Voice Control, Survivor season admin,
+# policy votes, role-menu edits, inactivity sweeps — is deliberately out. Note
+# the consequence: audit_log has no other reader that lists rows, so those
+# actions are recorded and not shown anywhere. That is the accepted trade for a
+# page that means what its name says.
+MODERATION_ACTION_PREFIXES = ("jail_", "ticket_", "warning_", "channel_")
+IS_MODERATION_ACTION = " AND (" + " OR ".join(
+    f"action LIKE '{p.replace('_', chr(92) + '_')}%' ESCAPE '{chr(92)}'"
+    for p in MODERATION_ACTION_PREFIXES
+) + ")"
+
 
 def write_audit(
     conn: sqlite3.Connection,
