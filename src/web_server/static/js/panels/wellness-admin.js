@@ -126,26 +126,36 @@ export function mount(container) {
       } catch (err) { showStatus(dStatus, false, `Couldn’t save — ${err.message}`); }
     });
 
-    // Pause/Resume handlers
-    container.querySelectorAll("[data-pause-uid]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        try {
-          await wPost(`/api/wellness/admin/users/${btn.dataset.pauseUid}/pause`, { minutes: 60 });
-          btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="chip chip-warning">Paused</span>';
-          btn.textContent = "Paused";
-          btn.disabled = true;
-        } catch (e) { toast(`Couldn’t pause that member — ${e.message}`, "error"); }
-      });
-    });
-    container.querySelectorAll("[data-resume-uid]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        try {
-          await wPost(`/api/wellness/admin/users/${btn.dataset.resumeUid}/resume`, {});
-          btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="chip chip-success">Active</span>';
-          btn.textContent = "Resumed";
-          btn.disabled = true;
-        } catch (e) { toast(`Couldn’t resume that member — ${e.message}`, "error"); }
-      });
+    // Pause/Resume. Delegated, because a button flips to the opposite action
+    // after it fires: a listener bound to the element would keep running the
+    // action the button no longer offers. Before this, acting on a row left a
+    // disabled "Paused"/"Resumed" label and no way to undo without a reload.
+    container.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-pause-uid], [data-resume-uid]");
+      if (!btn || btn.disabled) return;
+      const pausing = "pauseUid" in btn.dataset;
+      const uid = pausing ? btn.dataset.pauseUid : btn.dataset.resumeUid;
+      const statusCell = btn.closest("tr").querySelector("td:nth-child(4)");
+      btn.disabled = true;
+      try {
+        if (pausing) {
+          await wPost(`/api/wellness/admin/users/${uid}/pause`, { minutes: 60 });
+          statusCell.innerHTML = '<span class="chip chip-warning">Paused</span>';
+          delete btn.dataset.pauseUid;
+          btn.dataset.resumeUid = uid;
+          btn.textContent = "Resume";
+        } else {
+          await wPost(`/api/wellness/admin/users/${uid}/resume`, {});
+          statusCell.innerHTML = '<span class="chip chip-success">Active</span>';
+          delete btn.dataset.resumeUid;
+          btn.dataset.pauseUid = uid;
+          btn.textContent = "Pause 60 Minutes";
+        }
+      } catch (err) {
+        toast(`Couldn’t ${pausing ? "pause" : "resume"} that member — ${err.message}`, "error");
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     // Exempt remove

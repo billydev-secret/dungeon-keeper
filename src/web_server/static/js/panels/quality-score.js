@@ -71,6 +71,10 @@ function makeBreakdownChart(canvas, entries, _title) {
   });
 }
 
+// `initialParams` is the parsed window.location.hash (see app.js parseHash),
+// so every value in it is attacker-controlled through a link. Anything from it
+// that reaches markup is coerced — these are number inputs, so parseInt is both
+// the guard and the correct read.
 export function mount(container, initialParams) {
   container.innerHTML = `
     <div class="panel">
@@ -91,7 +95,7 @@ export function mount(container, initialParams) {
           </select>
         </label>
         <label>Minimum Active Days
-          <input type="number" data-control="min_days" min="1" max="90" value="${initialParams.min_days || 7}" />
+          <input type="number" data-control="min_days" min="1" max="90" value="${parseInt(initialParams.min_days) || 7}" />
         </label>
         <label>Status
           <select data-control="status">

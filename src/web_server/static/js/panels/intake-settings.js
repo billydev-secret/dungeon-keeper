@@ -51,8 +51,8 @@ export function mountSettings(container) {
             <div class="field-hint">When on, each join posts a card (pinging the greeter role) and the legacy bare arrival ping is replaced. Off = join behavior is unchanged.</div>
           </div>
           <div class="field">
-            <label>Card channel</label>
-            <select name="channel_id">${channelSelect(channels, c.channel_id)}</select>
+            <label for="intakesettin-channel-id">Card channel</label>
+            <select name="channel_id" id="intakesettin-channel-id">${channelSelect(channels, c.channel_id)}</select>
             <div class="field-hint">Where cards post. Leave on (none) to use the greeter chat channel from Welcome &amp; Leave.</div>
           </div>
           <div class="field">
@@ -60,18 +60,18 @@ export function mountSettings(container) {
             <div class="field-hint">${greetChannelHint}</div>
           </div>
           <div class="field">
-            <label>Verified role</label>
-            <select name="verified_role_id">${roleSelect(roles, c.verified_role_id || "0")}</select>
+            <label for="intakesettin-verified-role-id">Verified role</label>
+            <select name="verified_role_id" id="intakesettin-verified-role-id">${roleSelect(roles, c.verified_role_id || "0")}</select>
             <div class="field-hint">The role your verification bot (e.g. Double Counter) <strong>grants</strong> when someone passes. Gaining it ticks a “verification passed” step. Removal of the unverified role from Welcome &amp; Leave still counts too, so guilds using either shape are covered — but if your verifier only grants, this must be set or that step can never tick.</div>
           </div>
           <div class="field">
-            <label>Completion code</label>
-            <input type="text" name="completion_code" value="${esc(c.completion_code)}" maxlength="80" placeholder="e.g. DK-7734" />
+            <label for="intakesettin-completion-code">Completion code</label>
+            <input type="text" name="completion_code" value="${esc(c.completion_code)}" maxlength="80" placeholder="e.g. DK-7734" / id="intakesettin-completion-code">
             <div class="field-hint">When a greeter or mod posts a message containing this code and @mentioning (or replying to) the newcomer — any channel — their card <strong>completes</strong>, and any unticked steps are marked skipped. Put it in your ending welcome message. Empty = off. For ticking one step rather than closing the card, use a per-step code below.</div>
           </div>
           <div class="field">
-            <label>Stale nudge after (hours)</label>
-            <input type="number" name="stale_hours" min="1" max="720" value="${Number(c.stale_hours) || 24}" />
+            <label for="intakesettin-stale-hours">Stale nudge after (hours)</label>
+            <input type="number" name="stale_hours" min="1" max="720" value="${Number(c.stale_hours) || 24}" / id="intakesettin-stale-hours">
             <div class="field-hint">A card with no progress for this long gets one greeter-role nudge reply. Any ticked step resets the clock; a card is never nudged twice.</div>
           </div>
           <div class="field">
@@ -89,8 +89,8 @@ export function mountSettings(container) {
         <div class="field-hint" style="margin-bottom:12px;">The #welcome-procedure content, bot-synced — edit here, the channel updates itself. Questions render one message each for one-tap copy-paste.</div>
         <form class="form" data-ref-form>
           <div class="field">
-            <label>Reference channel</label>
-            <select name="ref_channel_id">${channelSelect(channels, c.reference_channel_id || "0")}</select>
+            <label for="intakesettin-ref-channel-id">Reference channel</label>
+            <select name="ref_channel_id" id="intakesettin-ref-channel-id">${channelSelect(channels, c.reference_channel_id || "0")}</select>
             <div class="field-hint">The channel the bot maintains (e.g. #welcome-procedure). The bot only ever touches its own tracked messages — consider locking the channel to bot-posts once adopted.</div>
           </div>
           <div class="field">

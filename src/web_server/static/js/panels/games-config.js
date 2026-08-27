@@ -1,4 +1,5 @@
 import { api, apiPost, esc } from "../api.js";
+import { TIER_LABELS, TIER_EMOJI } from "./games-panel-shared.js";
 import {
   loadChannels as loadChannelMeta,
   loadRoles as loadRoleMeta,
@@ -110,7 +111,8 @@ export function mount(container) {
           return;
         }
         const tierOptions = (selected) => [1, 2, 3, 4].map((t) =>
-          `<option value="${t}" ${t === selected ? "selected" : ""}>${t}</option>`
+          `<option value="${t}" ${t === selected ? "selected" : ""}>`
+          + `${TIER_EMOJI[t]} ${TIER_LABELS[t]}</option>`
         ).join("");
 
         let rows = "";
@@ -120,7 +122,7 @@ export function mount(container) {
             <td>${esc(channelName(guildChannels, ch.channel_id))}</td>
             <td style="font-size:12px;">${esc(added)}</td>
             <td>
-              <select data-ctrl="legitlibs-max-tier" data-cid="${esc(ch.channel_id)}" style="width:64px;"
+              <select data-ctrl="legitlibs-max-tier" data-cid="${esc(ch.channel_id)}" style="min-width:130px;"
                       aria-label="Highest LegitLibs heat tier allowed in this channel">
                 ${tierOptions(ch.legitlibs_max_tier)}
               </select>

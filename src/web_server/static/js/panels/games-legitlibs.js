@@ -2,11 +2,12 @@ import { api, apiPost, esc } from "../api.js";
 import { apiPut, apiDelete, showStatus, guardForm } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { toast, confirmDialog } from "../ui.js";
+// The heat tiers are shared with games-config, which sets the same ceiling
+// per channel and used to render it as a bare 1/2/3/4.
+import { TIER_LABELS, TIER_EMOJI } from "./games-panel-shared.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
-const TIER_LABELS = { 1: "Flirty", 2: "Spicy", 3: "Filthy", 4: "Unhinged" };
-const TIER_EMOJI  = { 1: "\u{1F338}", 2: "\u{1F336}️", 3: "\u{1F525}", 4: "\u{1F480}" };
 const TIER_CHIP   = { 1: "chip-success", 2: "chip-warning", 3: "chip-danger", 4: "chip-danger" };
 const TIER_COLOR  = { 1: "#3ba55d", 2: "#e3a12f", 3: "#ed4245", 4: "#b73ba5" };
 const STATUS_CHIP = { published: "chip-success", draft: "chip-neutral", archived: "chip-neutral" };

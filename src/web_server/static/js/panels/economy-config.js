@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import {
   apiPut,
   showStatus,
@@ -247,11 +247,11 @@ function render(container, cfg, channels, roles, members) {
         <div class="field-row">
           <div class="field">
             <label for="ec-cur-name">Currency Name (one)</label>
-            <input type="text" name="currency_name" id="ec-cur-name" value="${cfg.currency_name}" maxlength="32" placeholder="e.g. coin" />
+            <input type="text" name="currency_name" id="ec-cur-name" value="${esc(cfg.currency_name)}" maxlength="32" placeholder="e.g. coin" />
           </div>
           <div class="field">
             <label for="ec-cur-plural">Currency Name (many)</label>
-            <input type="text" name="currency_plural" id="ec-cur-plural" value="${cfg.currency_plural}" maxlength="32" placeholder="e.g. coins" />
+            <input type="text" name="currency_plural" id="ec-cur-plural" value="${esc(cfg.currency_plural)}" maxlength="32" placeholder="e.g. coins" />
           </div>
         </div>
         <div class="field-hint" style="margin-top:-6px;">These two names appear in every
@@ -259,20 +259,20 @@ function render(container, cfg, channels, roles, members) {
         <div class="field-row">
           <div class="field">
             <label for="ec-cur-emoji">Currency Emoji</label>
-            <input type="text" name="currency_emoji" id="ec-cur-emoji" value="${cfg.currency_emoji}" maxlength="64" />
+            <input type="text" name="currency_emoji" id="ec-cur-emoji" value="${esc(cfg.currency_emoji)}" maxlength="64" />
             <div class="field-hint">Shown next to every amount. A standard emoji or one
               of this server's custom emojis.</div>
           </div>
           <div class="field">
             <label for="ec-wallet">Wallet Name</label>
-            <input type="text" name="wallet_name" id="ec-wallet" value="${cfg.wallet_name}" maxlength="32" placeholder="e.g. wallet" />
+            <input type="text" name="wallet_name" id="ec-wallet" value="${esc(cfg.wallet_name)}" maxlength="32" placeholder="e.g. wallet" />
             <div class="field-hint">What members' balance is called — "wallet", "purse",
               "vault", whatever suits your server.</div>
           </div>
         </div>
         <div class="field">
           <label for="ec-icon-url">Currency Icon Address</label>
-          <input type="text" name="currency_icon_url" id="ec-icon-url" value="${cfg.currency_icon_url}" maxlength="512" placeholder="https://example.com/coin.png" />
+          <input type="text" name="currency_icon_url" id="ec-icon-url" value="${esc(cfg.currency_icon_url)}" maxlength="512" placeholder="https://example.com/coin.png" />
           <div class="field-hint">A full web address (starting with https://) of a small
             image used as the thumbnail on economy cards. Leave empty for no image. An
             address that stops working leaves those cards without a picture.</div>

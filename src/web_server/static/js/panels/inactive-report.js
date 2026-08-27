@@ -70,6 +70,11 @@ export function mount(container, initialParams) {
     if (metaLoadFailed()) {
       statusEl.className = "error";
       statusEl.textContent = "Couldn't load the role/channel lists — reload the page to try again.";
+      // Clear the spinner too: returning here used to leave "Loading members…"
+      // running forever under a one-line error somewhere else on the page.
+      tableWrap.innerHTML = renderError(
+        "The member list can't be filtered until the role and channel lists load."
+      );
       return;
     }
     refresh();

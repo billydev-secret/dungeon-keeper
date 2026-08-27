@@ -29,7 +29,7 @@ function heatmapGridHTML(grid, { label = null, showValues = false, compact = fal
       const alpha = Math.max(intensity, 0.04);
       const bg = `rgba(230,184,76,${alpha.toFixed(2)})`;
       const text = showValues && v > 0 ? Math.round(v) : "";
-      const textColor = intensity > 0.6 ? "var(--bg)" : "var(--ink-dim)";
+      const textColor = cellInk(alpha);
       html += `<td class="${cellClass}" style="background:${bg};color:${textColor}" title="${DOW[d]} ${h}:00 — ${v} msgs/hr">${text}</td>`;
     }
     html += '</tr>';
@@ -166,6 +166,28 @@ function dowBarChartHTML(grid) {
   }
   html += '</div>';
   return html;
+}
+
+// Relative luminance of the gold ramp composited over the card, and the ink
+// that sits furthest from it. The switch used to be a hand-picked intensity
+// threshold, which left the whole middle of the ramp under AA.
+const _GOLD = [230, 184, 76];
+const _CARD = [43, 45, 49];
+
+function _lum(rgb) {
+  const [r, g, b] = rgb.map((c) => {
+    c /= 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function cellInk(alpha) {
+  const bg = _lum(_GOLD.map((c, i) => c * alpha + _CARD[i] * (1 - alpha)));
+  // The exact crossover, where both inks score the same against the cell:
+  // sqrt((L_bright + .05)(L_rail + .05)) - .05, with --ink-bright at 0.896
+  // and --bg-rail at 0.014. Above it the dark ink wins, below it the light.
+  return bg < 0.1955 ? "var(--ink-bright)" : "var(--bg-rail)";
 }
 
 export function mount(container) {

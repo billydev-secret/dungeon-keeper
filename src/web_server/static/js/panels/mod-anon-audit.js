@@ -1,4 +1,5 @@
 import { api, apiPut } from "../api.js";
+import { confirmDialog } from "../ui.js";
 import { auditPanel, badge, el, jumpAnchor, tsColumn } from "../audit-helpers.js";
 
 const RETENTION_OPTIONS = [
@@ -45,16 +46,39 @@ function buildRetentionControl() {
   const wrap = el("label", null, "Keep for ", sel, " ", status);
 
   api("/api/moderation/anon-audit/retention")
-    .then((d) => { sel.value = String(d.retention_days); })
+    .then((d) => { sel.value = String(d.retention_days); current = d.retention_days; })
     .catch((err) => { status.textContent = err.message; });
 
+  // The value the control held before this change, so a shortening can be
+  // recognised and rolled back if the admin declines.
+  let current = null;
+
   sel.addEventListener("change", async () => {
+    const next = Number(sel.value);
+    // 0 disables purging entirely, so picking it is always a lengthening.
+    // Everything else is a shortening if the window shrinks, or if it was
+    // previously "keep forever".
+    const shortening = next !== 0 && current !== null
+      && (current === 0 || next < current);
+    if (shortening) {
+      const ok = await confirmDialog(
+        "The next scheduled cleanup will permanently delete every entry older "
+        + "than that. This cannot be undone.",
+        {
+          title: `Shorten the anonymous report log to ${next} days?`,
+          confirmLabel: "Shorten",
+          danger: true,
+        },
+      );
+      if (!ok) { sel.value = String(current); return; }
+    }
     status.textContent = "Saving…";
     try {
       const d = await apiPut("/api/moderation/anon-audit/retention", {
         retention_days: Number(sel.value),
       });
       sel.value = String(d.retention_days);
+      current = d.retention_days;
       status.textContent = d.retention_days === 0 ? "Purging disabled" : "Saved";
     } catch (err) {
       status.textContent = err.message;

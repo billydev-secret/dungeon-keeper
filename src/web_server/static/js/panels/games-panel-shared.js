@@ -6,6 +6,12 @@ import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
+// LegitLibs heat tiers. Shared because two panels set the same ceiling:
+// games-legitlibs (per template) and games-config (per channel). The latter
+// used to render them as bare numbers.
+export const TIER_LABELS = { 1: "Flirty", 2: "Spicy", 3: "Filthy", 4: "Unhinged" };
+export const TIER_EMOJI  = { 1: "\u{1F338}", 2: "\u{1F336}\uFE0F", 3: "\u{1F525}", 4: "\u{1F480}" };
+
 // hasStatus=false drops the Enabled/options section for features that manage
 // their own enable switch outside games_game_config (e.g. Pen Pals config).
 /**
@@ -116,7 +122,19 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         if (opt.type === "bool") options[opt.key] = el.checked;
         else if (opt.type === "text") options[opt.key] = el.value.trim();
         else if (opt.type === "role") options[opt.key] = el.value === "0" ? "" : el.value;
-        else options[opt.key] = parseInt(el.value, 10) || 0;
+        else {
+          const lo = opt.min ?? 0, hi = opt.max ?? 9999;
+          const n = parseInt(el.value, 10);
+          if (!Number.isFinite(n)) {
+            showStatus(st, false, `${opt.label} needs a number between ${lo} and ${hi}.`);
+            return;
+          }
+          if (n < lo || n > hi) {
+            showStatus(st, false, `${opt.label} must be between ${lo} and ${hi}.`);
+            return;
+          }
+          options[opt.key] = n;
+        }
       }
       try {
         await apiPut("/api/games/config/games/" + encodeURIComponent(gameType), { enabled: ctrl("enabled").checked, options });
@@ -178,9 +196,15 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         chip.className = "ll-tag bank-chip";
         chip.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
         chip.appendChild(document.createTextNode(tag));
-        const x = document.createElement("span");
+        // A real button: a <span> with a click listener has no role, no tab
+        // stop and no accessible name, so these chips could not be removed
+        // from a keyboard and a screen reader announced the glyph alone.
+        const x = document.createElement("button");
+        x.type = "button";
         x.textContent = "×";
-        x.style.cssText = "cursor:pointer;font-weight:700;";
+        x.setAttribute("aria-label", `Remove ${tag}`);
+        x.style.cssText = "cursor:pointer;font-weight:700;background:none;"
+          + "border:0;color:inherit;font:inherit;padding:0;line-height:1;";
         x.addEventListener("click", () => { tags.splice(i, 1); render(); notify(); });
         chip.appendChild(x);
         wrap.insertBefore(chip, input);

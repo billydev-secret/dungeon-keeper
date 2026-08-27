@@ -134,7 +134,33 @@ The global `:focus-visible` rule means all three get the gold ring for free —
 `--blurple` was 2.74:1, under the 3:1 floor WCAG 1.4.11 sets for a focus
 indicator, which is why the ring is gold everywhere.
 
-`tests/web/test_a11y_keyboard_rows.py` holds the line on all of it.
+`tests/web/test_a11y_keyboard_rows.py` holds the line on all of it — plus the
+one clickable **table row** (policy tickets), which keeps its implicit `row`
+role rather than taking `role="button"`: overriding it would cost the
+row/column semantics a screen-reader user navigates a table by.
+
+A visible label only names a control when it is paired with it. `field()` does
+that by id, but only for fields built imperatively; five panels build the same
+`.field` markup as a template literal, so 26 controls had a label contributing
+nothing. Fifteen are paired by id now, and the eleven that live in **repeated
+row editors** — which have no stable id to pair against — carry `aria-label`
+instead. `tests/web/test_panel_contracts.py` accepts either and rejects
+neither.
+
+That file also holds two contracts that fail silently in the same way:
+
+- **A class in a `class="btn …"` attribute must exist**, in a stylesheet or in
+  a panel's injected `<style>` block. `chat-revive` shipped `btn small`,
+  `btn small danger` and `btn primary` — ten controls including a delete — and
+  survivor and pen-pals-settings reached for `.btn-small` where the kit spells
+  it `.btn-sm`. A class that no rule defines styles nothing and says nothing.
+- **`mod-audit`'s action keys must be strings the bot actually writes.** Six of
+  twelve were short forms nobody wrote, so the Jail, Unjail, Warning, Warning
+  Revoke, Pull and Remove filters each matched zero rows over a log holding
+  plenty of each, and every such row rendered its raw key as its own label.
+  The test scrapes `action="…"` keyword arguments out of the bot, not any
+  quoted token — the looser version passes with the bug still in place, which
+  is how the first draft of it was caught.
 
 ## Two typefaces, both self-hosted
 

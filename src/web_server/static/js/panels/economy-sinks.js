@@ -343,11 +343,11 @@ function iconRow(icon) {
                   background:repeating-conic-gradient(#808080 0% 25%, #a0a0a0 0% 50%) 50% / 12px 12px" />
       <div class="field" style="margin:0;">
         <label>Name</label>
-        <input type="text" data-name maxlength="64" value="${esc(icon.name)}" style="max-width:200px;" />
+        <input type="text" data-name maxlength="64" value="${esc(icon.name)}" style="max-width:200px;" aria-label="Name" />
       </div>
       <div class="field" style="margin:0;">
         <label>Price Per Week</label>
-        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${icon.price}" style="max-width:120px;" />
+        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${icon.price}" style="max-width:120px;" aria-label="Price Per Week" />
       </div>
       <label style="display:flex;gap:6px;align-items:center;">
         <input type="checkbox" data-enabled${enabledAttr} /> Offer in the shop
@@ -391,11 +391,11 @@ function colorRow(color) {
       ${swatch}
       <div class="field" style="margin:0;">
         <label>Name</label>
-        <input type="text" data-name maxlength="64" value="${esc(color.name)}" style="max-width:200px;" />
+        <input type="text" data-name maxlength="64" value="${esc(color.name)}" style="max-width:200px;" aria-label="Name" />
       </div>
       <div class="field" style="margin:0;">
         <label>Price Per Week</label>
-        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${color.price}" style="max-width:120px;" />
+        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${color.price}" style="max-width:120px;" aria-label="Price Per Week" />
         <div class="field-hint">0 uses the Palette Color price above.</div>
       </div>
       <label style="display:flex;gap:6px;align-items:center;">
@@ -788,26 +788,26 @@ function itemRow(item, roleName) {
          style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
       <div class="field" style="margin:0;">
         <label>Name</label>
-        <input type="text" data-name maxlength="60" value="${esc(item.name)}" style="max-width:180px;" />
+        <input type="text" data-name maxlength="60" value="${esc(item.name)}" style="max-width:180px;" aria-label="Name" />
       </div>
       <div class="field" style="margin:0;">
         <label>Short Note</label>
-        <input type="text" data-blurb maxlength="40" value="${esc(item.blurb || "")}" style="max-width:160px;" />
+        <input type="text" data-blurb maxlength="40" value="${esc(item.blurb || "")}" style="max-width:160px;" aria-label="Short Note" />
       </div>
       <div class="field" style="margin:0;">
         <label>Price</label>
-        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${item.price}" style="max-width:110px;" />
+        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${item.price}" style="max-width:110px;" aria-label="Price" />
       </div>
       <div class="field" style="margin:0;">
         <label>Stock</label>
         <input type="number" data-stock min="0" step="1" placeholder="∞"
-               value="${item.stock === null || item.stock === undefined ? "" : item.stock}" style="max-width:90px;" />
+               value="${item.stock === null || item.stock === undefined ? "" : item.stock}" style="max-width:90px;" aria-label="Stock" />
         <div class="field-hint">${esc(itemStockLabel(item))}</div>
       </div>
       <div class="field" style="margin:0;">
         <label>Max Each</label>
         <input type="number" data-limit min="1" step="1" placeholder="∞"
-               value="${item.per_member_limit === null || item.per_member_limit === undefined ? "" : item.per_member_limit}" style="max-width:90px;" />
+               value="${item.per_member_limit === null || item.per_member_limit === undefined ? "" : item.per_member_limit}" style="max-width:90px;" aria-label="Max Each" />
       </div>
       <span class="badge">${esc(ITEM_KINDS[item.kind] || item.kind)}</span>
       <span class="badge">${esc(ITEM_BILLING[item.billing] || item.billing)}</span>

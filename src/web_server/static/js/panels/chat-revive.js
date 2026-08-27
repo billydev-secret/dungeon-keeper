@@ -155,7 +155,7 @@ function renderSettings(container, overview) {
       </label>
     </div>
     <div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-      <button class="btn primary" data-save-settings>Save Settings</button>
+      <button class="btn btn-primary" data-save-settings>Save Settings</button>
       <span class="field-hint">${overview.bank_size} question${overview.bank_size === 1 ? "" : "s"} in the bank${overview.bank_size === 0 ? " — turning Chat Revive on seeds a starter pack for you" : ""}.</span>
       <span style="flex:1"></span>
       <label class="field-hint" style="display:inline-flex;align-items:center;gap:6px;">Post the opt-in button in
@@ -214,10 +214,10 @@ function channelRow(c) {
       <td><input data-c="rest_hours" type="number" min="1" max="72" step="0.5" aria-label="Hours of rest after a revive in ${esc(chanName(c.channel_id))}" title="How long this channel is left alone after a revive." value="${c.rest_hours}" style="width:60px"></td>
       <td><input data-c="fire_multiplier" type="number" min="0.5" max="3" step="0.5" value="${c.fire_multiplier}" aria-label="Patience multiplier for ${esc(chanName(c.channel_id))}" title="Multiplies this channel's learned quiet-gap. 1.0 uses the channel's own typical lull; higher numbers wait longer before posting." style="width:60px"></td>
       <td style="white-space:nowrap;">
-        <button class="btn small" data-act="save">Save</button>
-        <button class="btn small" data-act="check" title="Explain whether a revive would fire here right now">Check</button>
-        <button class="btn small" data-act="fire" title="Post a revive here immediately">Fire Now</button>
-        <button class="btn small danger" data-act="remove">Remove</button>
+        <button class="btn btn-sm" data-act="save">Save</button>
+        <button class="btn btn-sm" data-act="check" title="Explain whether a revive would fire here right now">Check</button>
+        <button class="btn btn-sm" data-act="fire" title="Post a revive here immediately">Fire Now</button>
+        <button class="btn btn-sm btn-danger" data-act="remove">Remove</button>
       </td>
     </tr>`;
 }
@@ -358,7 +358,7 @@ async function renderBank(container) {
               <td>${esc(q.category)}${q.nsfw ? " 🔞" : ""}${q.active ? "" : " <span class='field-hint'>(retired)</span>"}</td>
               <td>${esc(q.text)}</td>
               <td>${q.use_count}</td>
-              <td>${q.active ? `<button class="btn small danger" data-retire="${q.id}">Retire</button>` : ""}</td>
+              <td>${q.active ? `<button class="btn btn-sm btn-danger" data-retire="${q.id}">Retire</button>` : ""}</td>
             </tr>`).join("") || `<tr><td colspan="5" class="empty">No questions match this filter. Clear the category filter, or add one below.</td></tr>`}
         </tbody>
       </table>

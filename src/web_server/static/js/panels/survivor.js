@@ -120,15 +120,15 @@ function renderSimulatorCard(zone, refresh) {
       <div class="field mt-8">
         <label>Settle Kicked Games</label>
         <div class="row-8" style="flex-wrap:wrap;">
-          <button type="button" class="btn btn-small" data-sim-settle="chalk">Favorites Win</button>
-          <button type="button" class="btn btn-small" data-sim-settle="random">Random</button>
-          <button type="button" class="btn btn-small" data-sim-settle="upset">Upsets</button>
+          <button type="button" class="btn btn-sm" data-sim-settle="chalk">Favorites Win</button>
+          <button type="button" class="btn btn-sm" data-sim-settle="random">Random</button>
+          <button type="button" class="btn btn-sm" data-sim-settle="upset">Upsets</button>
         </div>
       </div>
       <div class="field mt-8">
         <label>Advance the Week</label>
         <div class="row-8" style="flex-wrap:wrap;">
-          <button type="button" class="btn btn-small" data-tasks-btn>▶ Run Weekly Tasks</button>
+          <button type="button" class="btn btn-sm" data-tasks-btn>▶ Run Weekly Tasks</button>
           <span data-status></span>
         </div>
       </div>
@@ -220,7 +220,7 @@ async function renderWeekCard(zone) {
     // parser accepts any string ESPN serves, so the buttons must not be
     // the one unescaped column.
     const btn = (outcome, label) =>
-      `<button type="button" class="btn btn-small" data-settle="${esc(g.game_id)}"
+      `<button type="button" class="btn btn-sm" data-settle="${esc(g.game_id)}"
         data-outcome="${esc(outcome)}">${esc(label)}</button>`;
     return `
       <tr>
@@ -626,11 +626,11 @@ async function renderRosterCard(zone, players) {
         <td>${p.strikes_used}</td>
         <td style="white-space:nowrap;">
           ${dead
-        ? `<button type="button" class="btn btn-small"
+        ? `<button type="button" class="btn btn-sm"
               data-revive="${p.user_id}">Revive</button>`
         : `wk <input type="number" min="1" max="18" value="1"
               data-week="${p.user_id}" style="width:56px;" />
-            <button type="button" class="btn btn-small btn-danger"
+            <button type="button" class="btn btn-sm btn-danger"
               data-eliminate="${p.user_id}">Eliminate</button>`}
         </td>
       </tr>`;

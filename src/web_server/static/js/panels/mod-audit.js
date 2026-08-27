@@ -1,25 +1,32 @@
 import { api } from "../api.js";
 import { auditPanel, badge, tsColumn } from "../audit-helpers.js";
 
+// These keys must match what the bot writes into audit_log verbatim — an
+// unknown action falls through to rendering its raw key, and its filter option
+// matches nothing at all. Six of them used to be short forms nobody wrote
+// (`jail` for `jail_create`, `warn` for `warning_issue`, `pull` for
+// `channel_pull`), so the Jail, Unjail, Warning, Warning Revoke, Pull and
+// Remove filters each returned zero rows over a log that had plenty.
 const ACTION_LABELS = {
-  jail:         "Jail",
-  unjail:       "Unjail",
-  ticket_open:  "Ticket Open",
-  ticket_close: "Ticket Close",
-  ticket_reopen: "Ticket Reopen",
-  ticket_delete: "Ticket Delete",
-  ticket_claim: "Ticket Claim",
+  jail_create:     "Jail",
+  jail_release:    "Unjail",
+  ticket_open:     "Ticket Open",
+  ticket_close:    "Ticket Close",
+  ticket_reopen:   "Ticket Reopen",
+  ticket_delete:   "Ticket Delete",
+  ticket_dismiss:  "Ticket Dismiss",
+  ticket_claim:    "Ticket Claim",
   ticket_escalate: "Ticket Escalate",
-  warn:         "Warning",
-  warn_revoke:  "Warning Revoke",
-  pull:         "Pull to Channel",
-  remove:       "Remove from Channel",
+  warning_issue:   "Warning",
+  warning_revoke:  "Warning Revoke",
+  channel_pull:    "Pull to Channel",
+  channel_remove:  "Remove from Channel",
 };
 
 const ACTION_COLORS = {
-  jail: "badge-danger",
-  unjail: "badge-success",
-  warn: "badge-warning",
+  jail_create: "badge-danger",
+  jail_release: "badge-success",
+  warning_issue: "badge-warning",
   ticket_open: "badge-info",
   ticket_close: "badge-dim",
 };

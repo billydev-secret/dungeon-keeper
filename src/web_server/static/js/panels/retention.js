@@ -3,6 +3,10 @@ import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart, renderChartTable } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
+// `initialParams` is the parsed window.location.hash (see app.js parseHash),
+// so every value in it is attacker-controlled through a link. Anything from it
+// that reaches markup is coerced — these are number inputs, so parseInt is both
+// the guard and the correct read.
 export function mount(container, initialParams) {
   container.innerHTML = `
     <div class="panel">
@@ -12,7 +16,7 @@ export function mount(container, initialParams) {
       </header>
       <div class="controls">
         <label>Minimum Previous Messages
-          <input type="number" data-control="min_previous" min="1" max="100" value="${initialParams.min_previous || 5}" />
+          <input type="number" data-control="min_previous" min="1" max="100" value="${parseInt(initialParams.min_previous) || 5}" />
         </label>
         <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
           <input type="checkbox" data-control="normalize" />

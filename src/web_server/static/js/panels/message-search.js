@@ -502,10 +502,10 @@ export function mount(container) {
 
   function renderContext(box, data, hitId) {
     const older = data.has_older
-      ? `<button class="btn btn-sm msg-ctx-more" data-load="older">Load older</button>`
+      ? `<button class="btn btn-sm" data-load="older">Load older</button>`
       : "";
     const newer = data.has_newer
-      ? `<button class="btn btn-sm msg-ctx-more" data-load="newer">Load newer</button>`
+      ? `<button class="btn btn-sm" data-load="newer">Load newer</button>`
       : "";
     box.innerHTML = `
       <div class="msg-ctx-end">${older}</div>

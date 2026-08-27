@@ -52,11 +52,11 @@ function render(container, members) {
           <div class="field-row">
             <div class="field"><label>Member</label>
               <span data-picker="grant-member"></span></div>
-            <div class="field"><label>Amount</label>
-              <input type="number" name="amount" min="1" step="1" value="1" style="max-width:120px;" /></div>
+            <div class="field"><label for="economybankm-amount">Amount</label>
+              <input type="number" name="amount" min="1" step="1" value="1" style="max-width:120px;" / id="economybankm-amount"></div>
           </div>
-          <div class="field"><label>Reason</label>
-            <input type="text" name="reason" maxlength="300" /></div>
+          <div class="field"><label for="economybankm-reason">Reason</label>
+            <input type="text" name="reason" maxlength="300" / id="economybankm-reason"></div>
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="btn btn-primary">Grant</button>
             <span data-status-grant></span>
@@ -70,11 +70,11 @@ function render(container, members) {
           <div class="field-row">
             <div class="field"><label>Member</label>
               <span data-picker="remove-member"></span></div>
-            <div class="field"><label>Amount</label>
-              <input type="number" name="amount" min="1" step="1" value="1" style="max-width:120px;" /></div>
+            <div class="field"><label for="economybankm-amount">Amount</label>
+              <input type="number" name="amount" min="1" step="1" value="1" style="max-width:120px;" / id="economybankm-amount"></div>
           </div>
-          <div class="field"><label>Reason</label>
-            <input type="text" name="reason" maxlength="300" /></div>
+          <div class="field"><label for="economybankm-reason">Reason</label>
+            <input type="text" name="reason" maxlength="300" / id="economybankm-reason"></div>
           <div class="field-hint">Takes exactly the amount typed — no booster bonus.
             Removing more than they hold empties the wallet; balances never go negative.</div>
           <div style="display:flex; gap:8px; align-items:center;">
@@ -95,7 +95,7 @@ function render(container, members) {
           <div class="field"><label>Member filter</label>
             <span data-picker="ledger-member"></span></div>
           <div class="field"><label>Kind filter</label>
-            <input type="text" data-ledger-kind list="dk-ledger-kinds" placeholder="(all)" style="max-width:180px;" />
+            <input type="text" data-ledger-kind list="dk-ledger-kinds" placeholder="(all)" style="max-width:180px;" aria-label="Kind filter" />
             <datalist id="dk-ledger-kinds">${LEDGER_KINDS.map((k) => `<option value="${k}"></option>`).join("")}</datalist></div>
           <div class="field" style="align-self:flex-end;">
             <button class="btn" data-ledger-refresh>Apply</button></div>

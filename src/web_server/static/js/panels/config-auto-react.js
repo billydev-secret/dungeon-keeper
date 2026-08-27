@@ -47,7 +47,7 @@ function ruleCard(rule, channels, idx) {
       </div>
       <div class="field">
         <label for="${uid}-emojis">Emoji</label>
-        <input type="text" name="emojis" id="${uid}-emojis" value="${emojiValue}"
+        <input type="text" name="emojis" id="${uid}-emojis" value="${esc(emojiValue)}"
                placeholder="🔥, 💎, 👑" />
         <div class="field-hint">Comma-separated. Unicode emoji, or custom emoji in
           full <code>&lt;:name:id&gt;</code> form. The bot adds all of them to every

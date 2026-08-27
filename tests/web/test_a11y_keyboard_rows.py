@@ -117,3 +117,15 @@ def test_qa_row_exposes_expanded_state() -> None:
     """The QA board row is a disclosure — screen readers need aria-expanded."""
     src = _source("qa-tracker.js")
     assert "aria-expanded=" in src
+
+
+def test_policy_ticket_rows_are_focusable_without_losing_row_semantics() -> None:
+    """Unlike the four div-based queues, this is a real <tr>. Overriding its
+    implicit `row` role with role="button" would cost the row/column semantics
+    a screen-reader user navigates the table by, so it gets focus and
+    Enter/Space and keeps the role it already had."""
+    src = _source("mod-policy-tickets.js")
+    assert 'class="clickable-row" tabindex="0"' in src, "row is not focusable"
+    assert 'role="button"' not in src, "a <tr> must keep its row role"
+    assert 'addEventListener("keydown"' in src
+    assert 'e.key !== "Enter" && e.key !== " "' in src
