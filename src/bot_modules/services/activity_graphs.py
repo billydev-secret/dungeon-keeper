@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
+from bot_modules.services import xp_rollup_service
 
 # The unit runs with ProtectHome=read-only, so matplotlib cannot write its
 # default config dir (~/.config/matplotlib): it warns and falls back to a fresh
@@ -216,6 +217,21 @@ _BUCKET_BUILDERS = {
     "month": _month_buckets,
 }
 
+# The XP hour-of-day / day-of-week histograms were unbounded all-time reads
+# of xp_events. A *daily* rollup cannot answer "what hour was this" at all, and
+# answers "what weekday" only approximately once a guild's UTC offset moves the
+# day boundary — so unlike the bucketed graphs these two cannot union the
+# rollup. They are therefore windowed to the same horizon raw events are kept
+# for: past that point the honest answer is "we no longer store the hour".
+# Stage 2b of docs/plans/xp-events-retention-and-rollup.md records the call.
+XP_HISTOGRAM_WINDOW_DAYS = xp_rollup_service.RAW_RETENTION_DAYS
+
+
+def xp_histogram_window_label(base: str) -> str:
+    """`base` plus the window the XP histograms are now limited to."""
+    return f"{base} (last {XP_HISTOGRAM_WINDOW_DAYS} days)"
+
+
 _WINDOW_LABELS = {
     "hour": "Last 24 Hours",
     "day": "Last 30 Days",
@@ -246,6 +262,55 @@ def _append_exclusions(
         where += f" AND (channel_id IS NULL OR channel_id NOT IN ({ph}))"
         params.extend(exclude_channel_ids)
     return where
+
+
+
+def _xp_row_source(
+    conn: sqlite3.Connection, since_ts: float
+) -> tuple[str, list[object]]:
+    """FROM-clause source for XP graphs, unioning the rollup below the boundary.
+
+    Stage 2b of docs/plans/xp-events-retention-and-rollup.md. Returns a SQL
+    fragment with ``xp_events``' column names (``guild_id``, ``user_id``,
+    ``source``, ``channel_id``, ``created_at``, ``amount``) and the leading
+    parameters it needs, so a caller substitutes it for ``xp_events`` and
+    prepends the params — every filter, exclusion and bucket expression then
+    works unchanged.
+
+    Below the retention boundary raw events may be gone, so ``xp_daily``
+    answers for those days: one synthetic row per (user, source, channel, day)
+    stamped at that UTC day's midnight. That is the accepted fidelity cost
+    (option (a) in the plan) — a rolled-up day whose midnight falls on the far
+    side of a rolling bucket edge is attributed whole to one bucket, so a
+    360-day ``month`` graph can misplace up to a day of XP at each edge, and a
+    member active only on such a day counts toward one bucket's
+    ``COUNT(DISTINCT user_id)`` rather than both. Everything from the boundary
+    forward is raw and exact, which is every bucket of the hour/day/week views.
+
+    Returns plain ``xp_events`` when the rollup is not readable (nothing pruned
+    yet, or the backfill is incomplete) or when the whole window sits inside
+    the boundary — in both cases raw alone is complete *and* exact.
+    """
+    boundary = xp_rollup_service.read_boundary(conn)
+    if boundary is None:
+        return "xp_events", []
+    boundary_day, boundary_ts = boundary
+    if since_ts >= boundary_ts:
+        return "xp_events", []
+    return (
+        """(
+            SELECT guild_id, user_id, source, channel_id, created_at, amount
+            FROM xp_events
+            WHERE created_at >= ?
+            UNION ALL
+            SELECT guild_id, user_id, source, channel_id,
+                   CAST(strftime('%s', day) AS REAL) AS created_at,
+                   xp AS amount
+            FROM xp_daily
+            WHERE day < ? AND day >= ?
+        )""",
+        [boundary_ts, boundary_day, xp_rollup_service.utc_day(since_ts)],
+    )
 
 
 def query_message_activity(
@@ -385,7 +450,8 @@ def query_xp_activity(
         resolution, since_ts=since_ts, utc_offset_secs=offset_secs
     )
 
-    params: list[object] = [guild_id, since_ts]
+    src, params = _xp_row_source(conn, since_ts)
+    params = [*params, guild_id, since_ts]
     where = "guild_id = ? AND created_at >= ?"
     if user_id is not None:
         where += " AND user_id = ?"
@@ -401,7 +467,7 @@ def query_xp_activity(
             {bucket_expr} AS bucket,
             COALESCE(SUM(amount), 0) AS xp_total,
             COUNT(DISTINCT user_id) AS member_count
-        FROM xp_events
+        FROM {src}
         WHERE {where}
         GROUP BY bucket
         """,
@@ -445,8 +511,10 @@ def query_xp_histogram(
         labels = _DOW_LABELS
         n = 7
 
-    params: list[object] = [guild_id]
-    where = "guild_id = ?"
+    # Windowed, not all-time: see XP_HISTOGRAM_WINDOW_DAYS.
+    since_ts = datetime.now(timezone.utc).timestamp() - XP_HISTOGRAM_WINDOW_DAYS * 86400
+    params: list[object] = [guild_id, since_ts]
+    where = "guild_id = ? AND created_at >= ?"
     if user_id is not None:
         where += " AND user_id = ?"
         params.append(user_id)
@@ -493,7 +561,8 @@ def query_xp_activity_with_breakdown(
         resolution, since_ts=since_ts, utc_offset_secs=offset_secs
     )
 
-    params: list[object] = [guild_id, since_ts]
+    src, params = _xp_row_source(conn, since_ts)
+    params = [*params, guild_id, since_ts]
     where = "guild_id = ? AND created_at >= ?"
     if user_id is not None:
         where += " AND user_id = ?"
@@ -507,7 +576,7 @@ def query_xp_activity_with_breakdown(
         f"""
         SELECT {bucket_expr} AS bucket,
                COUNT(DISTINCT user_id) AS member_count
-        FROM xp_events
+        FROM {src}
         WHERE {where}
         GROUP BY bucket
         """,
@@ -518,7 +587,7 @@ def query_xp_activity_with_breakdown(
         f"""
         SELECT {bucket_expr} AS bucket, source,
                COALESCE(SUM(amount), 0) AS xp_total
-        FROM xp_events
+        FROM {src}
         WHERE {where}
         GROUP BY bucket, source
         """,
@@ -571,8 +640,10 @@ def query_xp_histogram_with_breakdown(
         labels = _DOW_LABELS
         n = 7
 
-    params: list[object] = [guild_id]
-    where = "guild_id = ?"
+    # Windowed, not all-time: see XP_HISTOGRAM_WINDOW_DAYS.
+    since_ts = datetime.now(timezone.utc).timestamp() - XP_HISTOGRAM_WINDOW_DAYS * 86400
+    params: list[object] = [guild_id, since_ts]
+    where = "guild_id = ? AND created_at >= ?"
     if user_id is not None:
         where += " AND user_id = ?"
         params.append(user_id)

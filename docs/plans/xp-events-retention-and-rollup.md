@@ -56,9 +56,15 @@ bug in the leaderboard rather than a retention decision.
 
 ### Safe — windowed at or under 90 days
 
-- `activity_graphs.query_xp_activity` / `query_xp_histogram` (+ the
-  `_with_breakdown` pair) at `hour` (24h), `day` (30d) and `week` (12w =
-  84d) resolutions.
+- `activity_graphs.query_xp_activity` (+ `_with_breakdown`) at `hour`
+  (24h), `day` (30d) and `week` (12w = 84d) resolutions.
+
+  > **Correction, 2026-08-26 (Stage 2b).** `query_xp_histogram` and
+  > `query_xp_histogram_with_breakdown` were listed here and do **not**
+  > belong: their `WHERE` is `guild_id = ?` and nothing else, so the
+  > hour-of-day and day-of-week XP graphs are unbounded all-time reads.
+  > That makes seven broken readers, not six — and it is the one a rollup
+  > cannot fix, because a *daily* bucket has no hour in it. See Stage 2b.
 - `xp_cog` `/xp` leaderboard at the `hour` / `day` / `week` / `month`
   timescales — all pass `since_ts` ≤ 30 days.
 - `reports_data.get_xp_leaderboard_data(days=N)` for the windowed case.
@@ -236,7 +242,7 @@ arm too, so decide whether it earns one before writing it.
 ## Stages
 
 **Stage 1 — the rollup, additive and inert. ✅ Built 2026-08-06.**
-Migration 184 creates `xp_daily`; `services/xp_rollup_service.py` rebuilds
+Migration 186 creates `xp_daily`; `services/xp_rollup_service.py` rebuilds
 a day's buckets from raw events idempotently (delete-then-insert, never
 increment — which is what makes a re-run, a backfill and a post-bug
 repair the same operation, and what stops NULL-channel buckets
@@ -269,7 +275,7 @@ yesterday — would push a 7-day leaderboard through the rollup and hand it
 day-granularity skew for a window whose raw events are all still present.
 The rollup is only worth reading where raw may be *missing*.
 
-Migration 185 stores the rollup's coverage, and it stores **two** facts
+Migration 187 stores the rollup's coverage, and it stores **two** facts
 because they answer different questions: `rolled_through_day` (end of the
 contiguous rolled prefix — Stage 3's interlock, never delete past it) and
 `first_gap_day` (oldest day with events and no rollup — what the readers
@@ -297,12 +303,60 @@ once. `get_user_xp_by_source` was the one reader not rounding to 2dp
 (inherited from the inline `jail_cog` query it replaced); rounding it
 like its siblings makes the paths exactly equal rather than almost equal.
 
-**Stage 2b — the bucketed readers.** Not built. `activity_graphs`' four
-XP queries at `month` resolution (the 360-day reach), and
-`get_time_to_level_details`. Both need bucket arithmetic against the
-rollup rather than a plain sum, and time-to-level needs its cumulative
-crossing resolved to a day. This is where the accepted skew actually
-lands.
+**Stage 2b — the bucketed readers. ✅ Built 2026-08-26.** The readers
+that ask for a *shape* rather than a sum, and the stage where the
+fidelity cost actually lands.
+
+`query_xp_activity` and `query_xp_activity_with_breakdown` union through
+one helper, `_xp_row_source`, which returns a SQL fragment carrying
+`xp_events`' own column names — raw rows from the boundary forward,
+`UNION ALL` one synthetic row per (user, source, channel, day) below it,
+stamped at that day's UTC midnight. Because the columns match, every
+existing filter, the exclusion lists and the bucket expression keep
+working untouched; the diff is a `FROM xp_events` becoming `FROM {src}`
+and two params moving to the front. Hour/day/week windows sit entirely
+inside the boundary, so the helper hands them plain `xp_events` and they
+stay exact.
+
+That is where **option (a)** is cashed in. A rolled-up day is attributed
+whole to whichever rolling bucket its midnight lands in, so a 360-day
+`month` bucket can be off by up to a day's XP at each edge, and — a
+detail the design section got wrong — `COUNT(DISTINCT user_id)` is exact
+only in *total*, not per bucket: a member active on just a straddling day
+counts toward one of the two buckets rather than both. Nothing is ever
+lost or double-counted, which is the property the tests pin.
+
+`get_time_to_level_details` gets its own source, `_ordered_events_source`,
+because it needs ordering rather than sums: below the boundary each day
+becomes a single synthetic event carrying the day's total, so the running
+sum crosses the level threshold on the right *day*. The route reports
+mean/median/stddev/mode in days, so that is no loss. `first_at` is
+deliberately **not** read from those synthetic midnights — `xp_daily`
+stores the real `MIN(created_at)` per bucket, and using the midnight
+instead would inflate a pruned member's time-to-level by up to a day.
+`get_oldest_xp_event_timestamp` (no production callers, but a truthful
+answer is four lines) gained the same `MIN(first_at)` arm.
+
+**The histograms could not be unioned, and were windowed instead.** A
+daily rollup has no hour in it, so `hour_of_day` is unanswerable from
+`xp_daily` outright; `day_of_week` is answerable only approximately, since
+a guild's UTC offset moves the day boundary and would smear each rolled
+day across two weekdays. The choice was a second all-time hour-of-day
+rollup table — a new per-user store, a second register row, and
+accumulate-don't-rebuild semantics that give up the idempotence the rest
+of this design is built on — or accepting that the honest answer past the
+horizon is "we no longer store the hour". Both XP histograms are now
+bounded by `XP_HISTOGRAM_WINDOW_DAYS` (= `RAW_RETENTION_DAYS`), and
+`get_activity_data` appends "(last 90 days)" to the chart title for the
+XP mode only, so the narrowing is stated rather than silent. The message
+histograms beside them read `processed_messages` and are unchanged.
+
+This is a **visible change before anything is pruned**: TGM has ~6 months
+of events, so its XP hour-of-day graph now reflects the last quarter
+rather than the lifetime. That is the intended reading of the graph
+anyway — "when is this server awake *now*" — but it is a product call, not
+a mechanical one, and it is the one thing in this plan a reader might
+want reverted.
 
 **Stage 3 — retention.** Only now does anything delete: raw rows older
 than the boundary, swept from the existing XP loop, with the rollup
@@ -313,7 +367,7 @@ reworded so "XP event rows" is not mistaken for "XP events ever".
 
 **Stage 4 — GDPR. ✅ Done with Stage 1.** `xp_daily` is per-user data, so
 it joined `purge_user_data` with the rest of the XP family and got its
-register row in `../reviews/2026-08-05-gdpr-register.md` in the same
+register row in `../data_register.md` in the same
 commit that created it — rather than becoming the exact thing the
 register exists to catch, a new per-user table nobody decided about. A
 test asserts the purge covers it.

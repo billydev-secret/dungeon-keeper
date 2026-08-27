@@ -1,4 +1,4 @@
--- 185_xp_rollup_watermark.sql
+-- 187_xp_rollup_watermark.sql
 -- Stage 2 of docs/plans/xp-events-retention-and-rollup.md.
 --
 -- The readers that union xp_daily with raw xp_events need a partition point:

@@ -144,7 +144,7 @@ def purge_user_data(
         "usage_events",
         "known_users",
         "xp_events",
-        # The daily aggregate of xp_events (migration 184). Purged with its
+        # The daily aggregate of xp_events (migration 186). Purged with its
         # source rather than preserved: it is the same per-member XP, only
         # summed, so leaving it would keep an erased member's activity
         # readable through the readers that will union it

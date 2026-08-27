@@ -1,4 +1,4 @@
--- 184_xp_daily_rollup.sql
+-- 186_xp_daily_rollup.sql
 -- Stage 1 of docs/plans/xp-events-retention-and-rollup.md.
 --
 -- xp_events is the largest table in the DB (1.02M rows, ~145MB with its two

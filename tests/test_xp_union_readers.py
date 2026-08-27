@@ -36,8 +36,11 @@ USER_B = 22
 USER_C = 33
 CHAN = 555
 
-# "Now" for every scenario, so day arithmetic is stable.
-NOW = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc).timestamp()
+# "Now" for every scenario. It has to track real time rather than being pinned
+# to a date: the readers call read_boundary() with no `now`, so a fixed NOW
+# drifts away from the boundary they actually use and the scenarios quietly
+# stop straddling it — a test that rots on the calendar rather than on a bug.
+NOW = datetime.now(timezone.utc).timestamp()
 
 
 def _days_ago(n: int, hour: int = 12) -> float:
