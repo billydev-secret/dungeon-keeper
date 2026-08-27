@@ -1237,6 +1237,13 @@ def has_any_member_xp(conn: sqlite3.Connection, guild_id: int) -> bool:
 
 
 def count_xp_events(conn: sqlite3.Connection, guild_id: int) -> int:
+    """Raw event rows currently stored for a guild.
+
+    Not "events ever earned": once retention (Stage 3 of
+    docs/plans/xp-events-retention-and-rollup.md) is on, rows past the horizon
+    are summarised into ``xp_daily`` and deleted. The only caller is a debug
+    log line, which is worded to match.
+    """
     row = conn.execute(
         """
         SELECT COUNT(*)

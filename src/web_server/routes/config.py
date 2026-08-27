@@ -35,6 +35,7 @@ from bot_modules.core.db_utils import (
 from bot_modules.services import intake_reference_service as intake_ref
 from bot_modules.services import intake_service as intake_svc
 from bot_modules.services import pools_metrics
+from bot_modules.services import xp_rollup_service
 from bot_modules.services.message_store import (
     SUPPORTED_STORAGE_LEVELS,
     STORAGE_LEVEL_NONE,
@@ -1187,6 +1188,15 @@ def _xp_section(conn, guild_id: int) -> dict:
             "level_up_log_channel_id": _id_str(conn, "xp_level_up_log_channel_id", guild_id),
             "xp_grant_allowed_user_ids": _id_str_list(conn, "xp_grant_allowed_user_ids", guild_id),
             "xp_excluded_channel_ids": _id_str_list(conn, "xp_excluded_channel_ids", guild_id),
+            # Event retention (Stage 3 of the xp_events rollup plan). The count
+            # is the dry run: how many raw rows a prune would delete right now,
+            # and 0 whenever a prune would refuse — so the panel never promises
+            # more than would actually go.
+            "xp_retention_enabled": _str_val(
+                conn, xp_rollup_service.RETENTION_CONFIG_KEY, "0", guild_id=guild_id
+            ),
+            "xp_retention_days": xp_rollup_service.RAW_RETENTION_DAYS,
+            "xp_retention_prunable": xp_rollup_service.prunable_row_count(conn, guild_id),
             # Algorithm coefficients (loaded with defaults)
             **_xp_coefficients(conn, guild_id),
         }
@@ -1894,6 +1904,8 @@ class XpConfigUpdate(BaseModel):
     voice_min_humans: int | None = None
     manual_grant_xp: float | None = None
     level_curve_factor: float | None = None
+    # "1" turns event retention on for this guild; anything else is off.
+    xp_retention_enabled: str | None = None
 
 
 _XP_ID_FIELDS = {
@@ -1929,6 +1941,18 @@ async def update_xp(
                     conn,
                     "xp_excluded_channel_ids",
                     body.xp_excluded_channel_ids,
+                    guild_id,
+                )
+
+            if body.xp_retention_enabled is not None:
+                # Normalised to "1"/"0" here rather than trusting the caller's
+                # spelling: retention_enabled() is the only reader and a value
+                # it does not recognise reads as off, which would make a
+                # deliberate opt-in look like it silently failed.
+                set_config_value(
+                    conn,
+                    xp_rollup_service.RETENTION_CONFIG_KEY,
+                    "1" if body.xp_retention_enabled.strip() == "1" else "0",
                     guild_id,
                 )
 

@@ -231,6 +231,21 @@ def test_rollup_stats_reports_missing_days(sync_db_path):
     assert now  # the fixture timestamp is only here to date the scenario
 
 
+def test_rollup_stats_does_not_call_today_a_missing_day(sync_db_path):
+    """Today is never rolled on purpose, so it must not read as a gap.
+
+    Otherwise every backfill and every daily pass reports one missing day
+    forever, and the list stops meaning anything.
+    """
+    today = rollup.current_utc_day()
+    with open_db(sync_db_path) as conn:
+        _event(conn, day=today)
+        stats = rollup.rollup_stats(conn)
+
+    assert stats["days_missing"] == []
+    assert stats["raw_events"] == 1
+
+
 def test_xp_daily_is_purged_with_the_member(sync_db_path):
     """A new per-user table joins purge_user_data — the exact decision the
     2026-08 GDPR register exists to force."""

@@ -588,8 +588,12 @@ class EventsCog(commands.Cog):
                             channel_name=ch_name,
                             ts=now_ts,
                         )
+                    # Rows currently *stored*, not events ever earned: raw
+                    # events past the retention horizon are summarised into
+                    # xp_daily and dropped (retention Stage 3), so this number
+                    # stops tracking lifetime activity once pruning starts.
                     log.debug(
-                        "XP event rows for guild %s: %s",
+                        "XP event rows currently stored for guild %s: %s",
                         _guild_log,
                         count_xp_events(conn, _guild_id),
                     )

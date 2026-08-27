@@ -196,6 +196,23 @@ export function mountSettings(container) {
             </div>
           </div>
 
+          <div class="card">
+            <div class="section-label">Event Retention</div>
+            <div class="field">
+              <label><input type="checkbox" name="xp_retention_enabled" id="xp-retention"${xp.xp_retention_enabled === "1" ? " checked" : ""} /> Summarise XP older than ${xp.xp_retention_days} days</label>
+              <div class="field-hint">
+                Off by default. When on, XP events older than ${xp.xp_retention_days} days are replaced by a
+                daily per-member total and the individual events are deleted, a batch a day.
+                Leaderboards, the 12-month graphs, the mod profile and the inactive report all
+                read the daily totals, so their numbers don't change &mdash; but the
+                <em>By Hour of Day</em> XP graph only covers the last ${xp.xp_retention_days} days either way,
+                and individual old events are gone for good. Turning this back off stops
+                further deletion; it does not restore anything already summarised.
+              </div>
+              <div class="field-hint"><strong>${(xp.xp_retention_prunable ?? 0).toLocaleString()}</strong> event${xp.xp_retention_prunable === 1 ? "" : "s"} are ready to be summarised right now.${xp.xp_retention_prunable ? "" : " (Nothing is ready &mdash; either everything is recent, or the daily totals haven't finished building yet.)"}</div>
+            </div>
+          </div>
+
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="btn btn-primary">Save</button>
             <span data-status></span>
@@ -264,6 +281,7 @@ export function mountSettings(container) {
           level_up_log_channel_id: levelUpLog.getValue(),
           xp_grant_allowed_user_ids: grantUsers.getValues(),
           xp_excluded_channel_ids: excludedChannels.getValues(),
+          xp_retention_enabled: form.querySelector("#xp-retention").checked ? "1" : "0",
           // Algorithm coefficients
           ...nums,
           ...lists,

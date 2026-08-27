@@ -358,14 +358,48 @@ anyway — "when is this server awake *now*" — but it is a product call, not
 a mechanical one, and it is the one thing in this plan a reader might
 want reverted.
 
-**Stage 3 — retention.** Only now does anything delete: raw rows older
-than the boundary, swept from the existing XP loop, with the rollup
-proven to cover them. A `PRAGMA wal_checkpoint(TRUNCATE)` after the first
-big prune (the erasure runbook's note applies — 526k deletions will not
-shrink the file on their own), and the `count_xp_events` debug line
-reworded so "XP event rows" is not mistaken for "XP events ever".
+**Stage 3 — retention. ✅ Built 2026-08-26, ships off.**
+`prune_raw_events` deletes raw rows below the boundary from the existing
+XP loop, immediately after the rollup pass in the same 24h tick — the
+order *is* the interlock.
 
-**Stage 4 — GDPR. ✅ Done with Stage 1.** `xp_daily` is per-user data, so
+Four guards, each failing closed, because there is no undo:
+
+1. The guild opted in. `xp_retention_enabled` is off by default and is
+   **per guild**, which is possible only because the union is correct
+   whether or not a guild has been pruned (the raw arm is filtered to the
+   boundary either way). So it can be turned on for one guild, watched,
+   and rolled out — rather than one switch emptying the table everywhere.
+2. `read_boundary` is non-`None`: no day below the boundary is unrolled.
+3. The contiguous watermark reaches the oldest day about to lose its raw
+   rows. This is a *different* question from (2) — a rollup that never ran
+   has no gap either.
+4. Every day in the guild's own prunable range has rollup rows, checked
+   against the range rather than trusted from the watermark.
+
+Then it deletes oldest-first, `PRUNE_CHUNK` (20k) rows per guild per
+pass, so the busy guild's first ~500k is spread over days instead of held
+in one write that stalls XP awards — and a half-finished prune leaves a
+contiguous tail rather than holes. `PRAGMA wal_checkpoint(TRUNCATE)`
+follows any pass that actually deleted (the erasure runbook's note
+applies: deletions sit in the `-wal` and do not shrink the file on their
+own). The `count_xp_events` debug line now says "rows currently stored".
+
+The dial lives on **XP settings → Event Retention**, per CLAUDE.md — with
+the horizon, a plain-language description of what is lost, and a dry-run
+count of rows ready to be summarised. That count comes from
+`prunable_row_count`, which returns 0 whenever a real prune would refuse,
+so the panel never advertises rows the guards would not release.
+
+**Verification.** `scripts/verify_xp_retention.py` does on a snapshot of
+the real database what the tests do on synthetic rows: roll up, snapshot
+every unioning reader for every guild, run the actual `prune_raw_events`,
+snapshot again, and diff. Exit 1 on any disagreement, naming the reader,
+guild and key. Run it against a fresh `export_prod_snapshot.py` before
+turning the dial on; a plain `cp` of the live WAL file reads as
+malformed. It refuses to open `dungeonkeeper.db` itself.
+
+**Stage 4 — GDPR. ✅ Done with Stage 1 (and extended in Stage 3).** `xp_daily` is per-user data, so
 it joined `purge_user_data` with the rest of the XP family and got its
 register row in `../data_register.md` in the same
 commit that created it — rather than becoming the exact thing the

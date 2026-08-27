@@ -63,20 +63,20 @@ sweeps + loose-ends audit; per-bundle findings in the sibling
 
 8. ~~Perk-renewal notice DM, at least on price change (economy A2).~~ —
    **shipped `49a02867`** (`BillingResult.previous_price`).
-9. `xp_events` 90-day retention + rollup (dbperf P1 — 1M rows, largest
-   table). **Deferred with design note (2026-08-06):** xp_system has
-   unbounded all-time readers (leaderboards by source), so deletion needs
-   a rollup table the readers union — its own pass, not a quick sweep.
-   **Still open** — prod re-counted 2026-08-06: 1,022,853 rows, still the
-   largest table (next is `messages` at 635,625). The pass is now scoped in
-   `docs/plans/xp-events-retention-and-rollup.md` (design only, nothing
-   built). It found **six** all-time readers, not one: the by-source
-   leaderboards, the 360-day activity graphs, time-to-level, the mod
-   profile's XP split, the `/xp` existence gate, and — the one most
-   opposed to retention — the inactive report's "last active in this
-   channel", which is an unfiltered `MAX(created_at)`. Saving is smaller
-   than the sweep estimated (~43% of rows, ~145 MB → ~85 MB, not half the
-   table) and there is one fidelity decision for Ben in the plan.
+9. ~~`xp_events` 90-day retention + rollup (dbperf P1 — 1M rows, largest
+   table).~~ — **shipped 2026-08-26**, four stages on branch
+   `xp-events-retention`, plan in
+   `docs/plans/xp-events-retention-and-rollup.md`. An `xp_daily` rollup
+   the all-time readers union, so pruning changes what is stored and not
+   what anyone sees. The deferral's "leaderboards by source" undercounted:
+   there were **seven** readers reaching past any usable window, including
+   the inactive report's unfiltered `MAX(created_at)` and — found while
+   building, not while designing — the XP hour-of-day histogram, which has
+   no time filter at all and which a *daily* rollup cannot answer, so it
+   was windowed to the horizon instead. Deletion **ships off** behind a
+   per-guild dial and four fail-closed guards, with
+   `scripts/verify_xp_retention.py` to re-prove the no-op on a prod
+   snapshot before it is turned on.
 10. ~~`rules_events`: dismissed-event 180d sweep + spec preserve lines
     (ai-mod G1/G2).~~ — **shipped `49a02867`**
     (`rules_watch/ledger.py:442` `purge_old_dismissed_events`).

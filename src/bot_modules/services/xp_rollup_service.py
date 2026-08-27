@@ -255,9 +255,17 @@ def read_boundary(
     return boundary_day, start
 
 
-def rollup_stats(conn: sqlite3.Connection) -> dict[str, object]:
-    """Coverage summary, for the log line and for eyeballing a backfill."""
-    raw_days = set(days_with_events(conn))
+def rollup_stats(
+    conn: sqlite3.Connection, *, now: float | None = None
+) -> dict[str, object]:
+    """Coverage summary, for the log line and for eyeballing a backfill.
+
+    ``days_missing`` excludes the current UTC day. Today is *deliberately*
+    never rolled up — a still-growing bucket would freeze a partial total — so
+    listing it as missing is a false alarm on every single run, and an operator
+    reading a backfill's output needs the list to mean "something is wrong".
+    """
+    raw_days = set(days_with_events(conn, before=current_utc_day(now)))
     done = rolled_up_days(conn)
     row = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(events), 0), COALESCE(SUM(xp), 0.0) FROM xp_daily"
@@ -272,3 +280,157 @@ def rollup_stats(conn: sqlite3.Connection) -> dict[str, object]:
         "days_rolled_up": len(done),
         "days_missing": sorted(raw_days - done),
     }
+
+
+# ── Stage 3: retention ──────────────────────────────────────────────────
+#
+# Deleting a million rows of member activity is not a sweep like the others in
+# the 2026-08 review, and the guards below are the reason. Every one of them
+# fails *closed* — a prune that cannot prove the rollup covers what it is about
+# to delete does nothing at all, because the raw events are the only copy and
+# there is no undo.
+
+# The config key that turns retention on for a guild. Off by default and
+# deliberately per-guild: the rollup and the unioning readers are correct
+# whether or not a guild has been pruned (the raw arm is filtered to the
+# boundary either way), so this can be enabled on one guild, watched, and then
+# rolled out — rather than being one switch that empties the table everywhere.
+RETENTION_CONFIG_KEY = "xp_retention_enabled"
+
+# Rows deleted per pass. The first prune on the busy guild has ~500k rows to
+# clear; doing it in one statement would hold a write lock long enough to stall
+# XP writes, so the loop nibbles and catches up over a few days.
+PRUNE_CHUNK = 20_000
+
+
+def retention_enabled(conn: sqlite3.Connection, guild_id: int) -> bool:
+    row = conn.execute(
+        "SELECT value FROM config WHERE key = ? AND guild_id = ?",
+        (RETENTION_CONFIG_KEY, guild_id),
+    ).fetchone()
+    return bool(row) and str(row[0]).strip() in ("1", "true", "True", "on", "yes")
+
+
+def prunable_row_count(
+    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+) -> int:
+    """How many raw rows a prune would delete for this guild, right now.
+
+    The dry run. Answers the dashboard's "N events ready to be summarised"
+    without touching anything, and returns 0 whenever a real prune would
+    refuse — so the number shown is never larger than the number that would go.
+    """
+    boundary = read_boundary(conn, now=now)
+    if boundary is None:
+        return 0
+    _, boundary_ts = boundary
+    row = conn.execute(
+        "SELECT COUNT(*) FROM xp_events WHERE guild_id = ? AND created_at < ?",
+        (guild_id, boundary_ts),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+class PruneRefused(Exception):
+    """A guard said no. Carries the reason so the log line is useful."""
+
+
+def prune_raw_events(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    limit: int = PRUNE_CHUNK,
+) -> int:
+    """Delete raw ``xp_events`` the rollup already covers. Returns rows deleted.
+
+    Stage 3 of docs/plans/xp-events-retention-and-rollup.md — the only code in
+    this feature that destroys anything. Raises ``PruneRefused`` rather than
+    deleting a partial or unverified range.
+
+    The guards, in the order they run:
+
+    1. **The guild has opted in.** ``RETENTION_CONFIG_KEY`` is off by default.
+    2. **The rollup is readable at all.** ``read_boundary`` returns ``None``
+       while any day below the boundary is unrolled — mid-backfill, or after a
+       hole — and that is exactly when deleting would lose XP the readers can
+       no longer find.
+    3. **The contiguous watermark reaches the boundary.** ``read_boundary``
+       checks for a *gap*; this checks that the rolled prefix actually extends
+       to the last day being deleted. A rollup that has never run has no gap
+       either, and the two questions differ.
+    4. **Every day in the range being deleted has rollup rows**, checked
+       against the range itself rather than trusting the watermark. Days with
+       no events at all are fine — a day is only required to be present in
+       ``xp_daily`` if it is present in ``xp_events``.
+
+    Only then does it delete, oldest first, at most ``limit`` rows — so a first
+    pass over half a million rows is spread across days instead of held in one
+    write. Nothing is deleted at or above the boundary, ever.
+    """
+    if not retention_enabled(conn, guild_id):
+        raise PruneRefused("retention is not enabled for this guild")
+
+    boundary = read_boundary(conn, now=now)
+    if boundary is None:
+        raise PruneRefused("the rollup does not cover everything below the boundary")
+    boundary_day, boundary_ts = boundary
+
+    watermark = get_watermark(conn)
+    if watermark is None:
+        raise PruneRefused("the rollup has never completed a day")
+
+    # Guard 4: the days actually about to lose their raw rows must be rolled.
+    # Checked over the guild's own days — a guild whose history is entirely
+    # inside the boundary has nothing to prove and nothing to delete.
+    unrolled = conn.execute(
+        """
+        SELECT DISTINCT date(e.created_at, 'unixepoch') AS d
+        FROM xp_events e
+        WHERE e.guild_id = ? AND e.created_at < ?
+          AND NOT EXISTS (
+              SELECT 1 FROM xp_daily r
+              WHERE r.guild_id = e.guild_id
+                AND r.day = date(e.created_at, 'unixepoch')
+          )
+        LIMIT 1
+        """,
+        (guild_id, boundary_ts),
+    ).fetchone()
+    if unrolled is not None:
+        raise PruneRefused(f"day {unrolled[0]} has raw events but no rollup")
+
+    # Guard 3, last because it is the cheapest to get wrong: the watermark is
+    # the end of the contiguous rolled prefix, so requiring it to reach the day
+    # before the boundary is what stops a hole further back being stepped over.
+    oldest = conn.execute(
+        "SELECT MIN(date(created_at, 'unixepoch')) FROM xp_events"
+        " WHERE guild_id = ? AND created_at < ?",
+        (guild_id, boundary_ts),
+    ).fetchone()
+    if oldest is None or oldest[0] is None:
+        return 0
+    if watermark < str(oldest[0]):
+        raise PruneRefused(
+            f"watermark {watermark} is behind the oldest prunable day {oldest[0]}"
+        )
+
+    cur = conn.execute(
+        """
+        DELETE FROM xp_events
+        WHERE rowid IN (
+            SELECT rowid FROM xp_events
+            WHERE guild_id = ? AND created_at < ?
+            ORDER BY created_at
+            LIMIT ?
+        )
+        """,
+        (guild_id, boundary_ts, limit),
+    )
+    deleted = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    if deleted:
+        log.info(
+            "xp retention: pruned %d raw event(s) below %s for guild %d",
+            deleted, boundary_day, guild_id,
+        )
+    return deleted
