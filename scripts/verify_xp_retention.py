@@ -7,11 +7,23 @@ behaviour on synthetic data; this pins it on **the actual history**, which is
 the only place a real gap in the rollup, an odd NULL channel or a float that
 sums differently in two orders will show up.
 
-It works on a **copy**, never the live file. Take one with the sqlite3 backup
-API — a plain ``cp`` of a WAL database reads as malformed::
+It works on a **copy**, never the live file, and it refuses to open
+``dungeonkeeper.db``. Take the copy with the sqlite3 **backup API** — a plain
+``cp`` of a live WAL database reads as malformed, and the snapshot wants ~1GB,
+so put it on ``/home`` and not in a tmpfs scratch dir::
 
-    python scripts/export_prod_snapshot.py --out /home/ben/snap.db
-    python scripts/verify_xp_retention.py --db /home/ben/snap.db
+    python - <<'PY'
+    import sqlite3
+    src = sqlite3.connect("file:dungeonkeeper.db?mode=ro", uri=True)
+    dst = sqlite3.connect("/home/ben/xp-snap.db")
+    src.backup(dst); dst.close(); src.close()
+    PY
+    python -c "import sys; sys.path.insert(0,'src'); \
+      from migrations import apply_migrations_sync; \
+      apply_migrations_sync('/home/ben/xp-snap.db')"
+    python scripts/verify_xp_retention.py --db /home/ben/xp-snap.db
+
+(The migration step is only needed while ``xp_daily`` has not reached prod yet.)
 
 What it does, in order:
 
@@ -181,8 +193,8 @@ def main() -> int:
         return 2
     if path.resolve() == (PROJECT_ROOT / "dungeonkeeper.db").resolve():
         print(
-            "refusing to run against the live database — take a snapshot first "
-            "(scripts/export_prod_snapshot.py)",
+            "refusing to run against the live database — take a backup-API "
+            "snapshot first (recipe in this script's docstring)",
             file=sys.stderr,
         )
         return 2

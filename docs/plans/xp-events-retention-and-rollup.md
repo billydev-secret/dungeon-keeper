@@ -395,9 +395,11 @@ so the panel never advertises rows the guards would not release.
 the real database what the tests do on synthetic rows: roll up, snapshot
 every unioning reader for every guild, run the actual `prune_raw_events`,
 snapshot again, and diff. Exit 1 on any disagreement, naming the reader,
-guild and key. Run it against a fresh `export_prod_snapshot.py` before
-turning the dial on; a plain `cp` of the live WAL file reads as
-malformed. It refuses to open `dungeonkeeper.db` itself.
+guild and key. Run it against a fresh backup-API snapshot before
+turning the dial on; a plain `cp` of the live WAL file reads as malformed,
+and the copy wants ~1GB, so it goes on `/home` rather than a tmpfs scratch
+dir. The script refuses to open `dungeonkeeper.db` itself, and its module
+docstring carries the exact snapshot recipe.
 
 **Stage 4 — GDPR. ✅ Done with Stage 1 (and extended in Stage 3).** `xp_daily` is per-user data, so
 it joined `purge_user_data` with the rest of the XP family and got its
