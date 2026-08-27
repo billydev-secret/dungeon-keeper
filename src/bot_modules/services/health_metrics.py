@@ -15,6 +15,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 
 from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
+from bot_modules.services.moderation import NOT_VOICE_CONTROL
 from bot_modules.services.channel_rollup import ChannelResolver, build_resolver
 
 # ---------------------------------------------------------------------------
@@ -1293,7 +1294,10 @@ def compute_mod_workload(
 
     # Voice Control actions are self-service (a mod using their own voice
     # channel), not moderation work — excluded from workload everywhere below.
-    _not_vm = " AND action NOT LIKE 'vm_%'"
+    # The shared predicate, so the audit page and this report agree on what
+    # counts as moderation. (The local copy used a bare `_`, which is a LIKE
+    # wildcard; the shared one escapes it.)
+    _not_vm = NOT_VOICE_CONTROL
 
     # Total actions (7d) — mod-only when mod_ids provided
     total_actions = conn.execute(

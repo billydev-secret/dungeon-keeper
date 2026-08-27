@@ -393,6 +393,25 @@ def test_home_recent_actions_returns_latest_audit_rows(authed_client, fake_ctx):
     assert actions[0]["target_id"] == "43"
 
 
+def test_home_recent_actions_excludes_voice_control(authed_client, fake_ctx):
+    """The home tile says "Recent mod actions" and read the audit log raw. On
+    the main guild four fifths of that table is Voice Control's own lifecycle,
+    so the five newest rows were almost always five voice channels being
+    created and deleted — not moderation, and not what the tile claims."""
+    for i, action in enumerate(["vm_channel_create", "vm_channel_delete",
+                                "vm_channel_rename", "vm_claim", "vm_invite"]):
+        _seed_audit(fake_ctx.db_path, guild_id=fake_ctx.guild_id, action=action,
+                    actor_id=1, target_id=None, created_at=200 + i)
+    _seed_audit(fake_ctx.db_path, guild_id=fake_ctx.guild_id, action="warning_issue",
+                actor_id=1, target_id=43, created_at=100)
+
+    body = authed_client.get("/api/home?fields=mod_actions").json()
+    actions = [a["action"] for a in body["recent_actions"]]
+    assert actions == ["warning_issue"], (
+        "the tile is showing voice-channel churn as moderation"
+    )
+
+
 # ── Voice channel presence (live guild) ───────────────────────────────
 
 

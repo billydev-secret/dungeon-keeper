@@ -77,7 +77,10 @@ function buildControl(filter) {
     const label = el("label", null, cb, ` ${filter.label}`);
     return { node: label, read: (params) => { if (cb.checked) params[filter.name] = "true"; }, input: cb };
   }
-  const sel = el("select");
+  // Named so a panel can address its own filter — mod-audit fills the Action
+  // list from the vocabulary the server reports, and `.controls select` would
+  // be a positional guess among several selects (see mod-anon-audit's note).
+  const sel = el("select", { name: filter.name });
   for (const opt of filter.options || []) {
     sel.append(mkOpt(opt.value, opt.label, false));
   }

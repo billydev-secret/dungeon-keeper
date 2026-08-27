@@ -706,6 +706,21 @@ def delete_warning(
 # ---------------------------------------------------------------------------
 
 
+# Voice Control writes its whole lifecycle into audit_log — every channel a
+# member creates, renames, locks or leaves behind. That is self-service: a
+# member managing their own voice channel, not a moderator acting on somebody.
+# It is also the overwhelming majority of the table: 1,316 of the main guild's
+# 1,602 rows, 82.1% (79.8% of the 1,650 across all guilds — the two scopes give
+# different percentages, so say which). Counting it as moderation buries the
+# rows that are, and inflates the 7-day "recent actions" stat 7.5x: 105 down to
+# 14 once it is excluded, or 6 if you count only jails, warnings and tickets.
+#
+# health_metrics already excluded it from workload with this predicate; this is
+# that same rule, in one place, for every surface that reads the log as
+# moderation. Note `_` is a LIKE wildcard, hence the ESCAPE.
+NOT_VOICE_CONTROL = " AND action NOT LIKE 'vm\\_%' ESCAPE '\\'"
+
+
 def write_audit(
     conn: sqlite3.Connection,
     *,

@@ -587,6 +587,10 @@ class AuditEntrySchema(BaseModel):
 class AuditLogResponse(BaseModel):
     total: int
     entries: list[AuditEntrySchema]
+    # The distinct actions this guild's log actually contains, so the Action
+    # filter offers exactly those. It used to be a hand-kept list in the panel,
+    # six of whose twelve entries named strings the bot never writes.
+    actions: list[str] = []
 
 
 class DMAuditEntry(BaseModel):

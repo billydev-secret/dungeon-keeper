@@ -257,3 +257,32 @@ def test_pause_and_resume_leave_a_way_back():
     assert 'btn.dataset.resumeUid = uid' in src, "pausing does not offer Resume"
     assert 'btn.dataset.pauseUid = uid' in src, "resuming does not offer Pause"
     assert 'btn.textContent = "Paused"' not in src, "the dead-end label is back"
+
+
+# ── the audit panel names actions it has never heard of ─────────────────
+
+
+def test_mod_audit_labels_unknown_actions_humanely():
+    """The action vocabulary now comes from the server, so the panel will meet
+    keys nobody added a label for — every survivor_*, policy_* and role_menu.*
+    action, and anything the bot starts writing tomorrow. Dumping the raw key
+    is what it used to do for six of its own twelve entries."""
+    src = (_PANELS / "mod-audit.js").read_text(encoding="utf-8")
+    assert "function prettyAction" in src
+    assert "ACTION_LABELS[key] || prettyAction(key)" in src, (
+        "the fallback is not wired into the lookup"
+    )
+    # Rows and the filter must label the same way, or they disagree.
+    assert src.count("actionLabel(") >= 3
+
+
+def test_mod_audit_fills_its_filter_from_the_server():
+    """A hand-kept option list is what drifted from the bot in the first place:
+    it could only ever name actions somebody remembered to add, and six of the
+    twelve it named were strings the bot never writes."""
+    src = (_PANELS / "mod-audit.js").read_text(encoding="utf-8")
+    assert "fillActionOptions(container, data.actions)" in src
+    assert 'select[name="action"]' in src, "reaching the filter by position again"
+    # The static list must be just the placeholder now.
+    block = src.split("filters: [", 1)[1].split("],", 1)[0]
+    assert block.count("value:") == 1, "the hand-kept options are back"
