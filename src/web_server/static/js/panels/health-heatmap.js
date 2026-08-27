@@ -1,6 +1,6 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
-import { mountBotToggle } from "../report-helpers.js";
+import { mountBotToggle, mountReloadable } from "../report-helpers.js";
 
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -25,16 +25,19 @@ function heatmapGridHTML(grid, { label = null, showValues = false, compact = fal
     html += `<tr><td class="hm-day">${DOW[d]}</td>`;
     for (let h = 0; h < 24; h++) {
       const v = grid[d][h];
-      const intensity = v / maxVal;
-      const alpha = Math.max(intensity, 0.04);
-      const bg = `rgba(230,184,76,${alpha.toFixed(2)})`;
+      const alpha = HEAT_STOPS[heatBucket(v, maxVal)];
+      const bg = `rgba(230,184,76,${alpha})`;
       const text = showValues && v > 0 ? Math.round(v) : "";
-      const textColor = intensity > 0.6 ? "var(--bg)" : "var(--ink-dim)";
+      const textColor = cellInk(alpha);
       html += `<td class="${cellClass}" style="background:${bg};color:${textColor}" title="${DOW[d]} ${h}:00 — ${v} msgs/hr">${text}</td>`;
     }
     html += '</tr>';
   }
-  html += '</tbody></table></div>';
+  html += '</tbody></table>';
+  // Quantizing buys legible numbers, but a bucket only means something with a
+  // scale to read it against — and this panel never had one.
+  html += heatLegendHTML(maxVal);
+  html += '</div>';
   return html;
 }
 
@@ -168,6 +171,60 @@ function dowBarChartHTML(grid) {
   return html;
 }
 
+// A continuous alpha ramp of gold over the card has to cross a band of mid
+// luminance where NEITHER house ink clears 4.5:1 against it — the best any
+// pairing achieves at the crossover is 3.85:1, which is what the previous fix
+// reached. Five buckets straddle that band instead of walking through it.
+//
+// The stops were searched, not chosen: they maximise the weakest step between
+// neighbouring buckets (1.59:1, and evenly spaced, so the scale reads as a
+// scale) subject to every bucket's better ink clearing 4.5:1. The obvious
+// alternative — stops picked purely for text contrast — reaches 5.26:1 on text
+// but collapses the top three buckets to 1.28:1 of each other, which trades a
+// contrast problem for an encoding one.
+const HEAT_STOPS = [0.04, 0.25, 0.46, 0.69, 0.96];
+
+const _GOLD = [230, 184, 76];
+const _CARD = [43, 45, 49];
+
+function _lum(rgb) {
+  const [r, g, b] = rgb.map((c) => {
+    c /= 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** Which bucket a cell falls in. 0 is "nothing happened", never a rounding of it. */
+function heatBucket(value, maxVal) {
+  if (!value) return 0;
+  const step = Math.ceil((value / maxVal) * (HEAT_STOPS.length - 1));
+  return Math.min(HEAT_STOPS.length - 1, Math.max(1, step));
+}
+
+// The ink whose luminance sits furthest from the cell's. The crossover is
+// where both score the same: sqrt((L_bright + .05)(L_rail + .05)) - .05, with
+// --ink-bright at 0.896 and --bg-rail at 0.014.
+function cellInk(alpha) {
+  const bg = _lum(_GOLD.map((c, i) => c * alpha + _CARD[i] * (1 - alpha)));
+  return bg < 0.1955 ? "var(--ink-bright)" : "var(--bg-rail)";
+}
+
+/** The scale, so a bucket can be read back as a number of messages. */
+function heatLegendHTML(maxVal) {
+  const per = maxVal / (HEAT_STOPS.length - 1);
+  const swatches = HEAT_STOPS.map((alpha, i) => {
+    const label = i === 0
+      ? "none"
+      : `${Math.round(per * (i - 1)) + (i === 1 ? 1 : 0)}–${Math.round(per * i)}`;
+    return `<span class="hm-key-item">`
+      + `<span class="hm-key-swatch" style="background:rgba(230,184,76,${alpha})"></span>`
+      + `${esc(label)}</span>`;
+  }).join("");
+  return `<div class="hm-key" role="img" aria-label="Colour scale: darker is fewer messages per hour, gold is more">`
+    + `<span class="hm-key-label">msgs/hr</span>${swatches}</div>`;
+}
+
 export function mount(container) {
   let includeBots = false;
   container.innerHTML = '<div class="panel"><div class="panel-loading">Loading heatmap…</div></div>';
@@ -261,14 +318,9 @@ export function mount(container) {
     });
   }
 
-  function reload() {
-    return load().then(decorate);
-  }
-
-  reload().catch(err => {
-    container.querySelector(".panel").innerHTML = renderError(
-      `Couldn't load the activity heatmap — ${err.message}. Reload the page to try again.`
-    );
+  // Every pass is guarded, not just the first — see mountReloadable.
+  const reload = mountReloadable(container, {
+    load, decorate, renderError, describe: "the activity heatmap",
   });
 
   return { unmount() {} };

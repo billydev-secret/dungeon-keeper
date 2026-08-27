@@ -226,12 +226,12 @@ export function mount(container) {
           await apiPost("/api/gender/set", { user_id: userId, gender });
           if (rec) { rec.gender = gender; rec.set_at = Date.now() / 1000; }
           statusEl.textContent = "✓ Saved";
-          statusEl.style.color = "var(--green)";
+          statusEl.style.color = "var(--green-text)";
         } catch (err) {
           if (rec) rec.gender = prev;
           sel.value = prev;
           statusEl.textContent = `Couldn’t save — ${err.message}`;
-          statusEl.style.color = "var(--red)";
+          statusEl.style.color = "var(--red-text)";
         } finally {
           sel.disabled = false;
         }

@@ -1,5 +1,6 @@
 // Shared helpers for tile renderers.
 import { esc } from "../api.js";
+import { CHART_BAR } from "../charts.js";
 export { esc };
 
 const BADGE_COLORS = {
@@ -19,7 +20,17 @@ export function badgeHTML(badge) {
   return `<span class="health-tile-badge" style="background:${color}">${label}</span>`;
 }
 
-export function sparklineSVG(data, { width = 180, height = 32, color = "#E6B84C" } = {}) {
+// Colour goes through `style`, never an SVG presentation attribute, so a
+// caller may pass a CSS custom property — `var(--yellow)` is meaningless
+// in `stroke="..."` but works in `style="stroke:..."`. The area fill used
+// to be `fill="${color}22"`, string-concatenating hex alpha, which broke
+// outright for any non-hex value; fill-opacity does the same job for both.
+//
+// CHART_BAR, not a literal: this is the default single-series colour, which
+// is exactly what CHART_BAR means. It was the pre-migration gold, so every
+// sparkline that does not override it was drawing in a retired hue beside
+// charts using the current one.
+export function sparklineSVG(data, { width = 180, height = 32, color = CHART_BAR } = {}) {
   if (!data || !data.length) return "";
   const max = Math.max(...data, 1);
   const step = width / (data.length - 1 || 1);
@@ -27,8 +38,8 @@ export function sparklineSVG(data, { width = 180, height = 32, color = "#E6B84C"
   const fill = [...points, `${width},${height}`, `0,${height}`].join(" ");
   return `
     <svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" style="display:block;">
-      <polygon points="${fill}" fill="${color}22" stroke="none"/>
-      <polyline points="${points.join(" ")}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>
+      <polygon points="${fill}" style="fill:${color};fill-opacity:0.13" stroke="none"/>
+      <polyline points="${points.join(" ")}" style="fill:none;stroke:${color}" stroke-width="1.5" stroke-linejoin="round"/>
     </svg>
   `;
 }

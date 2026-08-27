@@ -48,13 +48,13 @@ export function mount(container) {
             <div class="field-hint">Everyone selected gets the direct message when a greeting goes unanswered. Add as many as you like; leave it empty and nothing is sent.</div>
           </div>
           <div class="field">
-            <label>Extra Greeting Words</label>
-            <input type="text" name="extra_words" placeholder="henlo, good yawn, o7" />
+            <label for="configgreeti-extra-words">Extra Greeting Words</label>
+            <input type="text" name="extra_words" placeholder="henlo, good yawn, o7" / id="configgreeti-extra-words">
             <div class="field-hint">Comma-separated server-specific greetings — in-jokes the built-in list can't know. Each is matched at the start of a message, case-insensitive. Leave empty for the built-ins only.</div>
           </div>
           <div class="field">
-            <label>Unanswered Window (minutes)</label>
-            <input type="number" name="window_minutes" min="1" max="180" value="${g.window_minutes}" required />
+            <label for="configgreeti-window-minutes">Unanswered Window (minutes)</label>
+            <input type="number" name="window_minutes" min="1" max="180" value="${g.window_minutes}" required / id="configgreeti-window-minutes">
             <div class="field-hint">How long to wait for a reply or @mention before flagging the greeting as unanswered.</div>
           </div>
           <div style="display:flex; gap:8px; align-items:center;">

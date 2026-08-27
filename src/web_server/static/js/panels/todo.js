@@ -3,7 +3,7 @@ import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { syncHash } from "../report-helpers.js";
 import { guardForm, loadChannels, mountAsync, mountChannelPicker, showStatus } from "../config-helpers.js";
-import { confirmDialog, toast } from "../ui.js";
+import { confirmDialog, toast, bindRowActivation } from "../ui.js";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -39,7 +39,8 @@ function renderList(todos, activeId, filter) {
           ? '<span class="t-chip closed" style="margin-left:4px">Missed</span>'
           : '<span class="t-chip open" style="margin-left:4px">Pending</span>';
       return `
-      <div class="ticket-item ${esc(cls)}" data-todo-id="${esc(t.id)}">
+      <div class="ticket-item ${esc(cls)}" data-todo-id="${esc(t.id)}"
+           tabindex="0" role="button" aria-current="${t.id === activeId ? "true" : "false"}">
         <div class="pri"></div>
         <div class="body">
           <div class="subj">${esc(preview)}</div>
@@ -95,7 +96,7 @@ function renderDetail(t, completing) {
   const sourceBlock = t.source_message_url
     ? `<div class="td-section">Source</div>
        <div style="padding:4px 8px 8px;font-size:14px;">
-         <a href="${esc(t.source_message_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent, #5af);word-break:break-all">Jump to message ↗</a>
+         <a href="${esc(t.source_message_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--gold-solid);word-break:break-all">Jump to message ↗</a>
        </div>`
     : "";
   return `
@@ -392,7 +393,7 @@ export function mount(container, initialParams = {}) {
       ?? String(board.channel_id || "0");
     const where = board.posted && board.jump_url
       ? `Posted — <a href="${esc(board.jump_url)}" target="_blank" rel="noopener noreferrer"
-           style="color:var(--accent,#5af)">${esc(card.jumpLabel)}</a>`
+           style="color:var(--gold-solid)">${esc(card.jumpLabel)}</a>`
       : "Not posted yet.";
     // Shown to moderators as well as admins: a mod who cannot move the board
     // is exactly the person who needs to know why they have nowhere to tick a
@@ -675,9 +676,7 @@ export function mount(container, initialParams = {}) {
     render();
   });
 
-  listEl.addEventListener("click", (e) => {
-    const row = e.target.closest(".ticket-item");
-    if (!row) return;
+  bindRowActivation(listEl, ".ticket-item", (row) => {
     state.activeId = Number(row.dataset.todoId);
     render();
   });

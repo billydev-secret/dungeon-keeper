@@ -27,9 +27,9 @@ const COMPONENT_COLORS = {
 // chosen deliberately as a status colour — it and its two siblings want a
 // contrast check against CHART_SURFACE before anyone treats them as settled.
 function scoreColor(s) {
-  if (s >= 0.6) return "#7F8F3A";
-  if (s >= 0.35) return "#E6B84C";
-  return "#9E3B2E";
+  if (s >= 0.6) return "var(--green-text)";
+  if (s >= 0.35) return "var(--yellow)";
+  return "var(--red-text)";
 }
 
 function makeBreakdownChart(canvas, entries, _title) {
@@ -71,6 +71,10 @@ function makeBreakdownChart(canvas, entries, _title) {
   });
 }
 
+// `initialParams` is the parsed window.location.hash (see app.js parseHash),
+// so every value in it is attacker-controlled through a link. Anything from it
+// that reaches markup is coerced — these are number inputs, so parseInt is both
+// the guard and the correct read.
 export function mount(container, initialParams) {
   container.innerHTML = `
     <div class="panel">
@@ -91,7 +95,7 @@ export function mount(container, initialParams) {
           </select>
         </label>
         <label>Minimum Active Days
-          <input type="number" data-control="min_days" min="1" max="90" value="${initialParams.min_days || 7}" />
+          <input type="number" data-control="min_days" min="1" max="90" value="${parseInt(initialParams.min_days) || 7}" />
         </label>
         <label>Status
           <select data-control="status">

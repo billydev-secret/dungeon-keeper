@@ -12,6 +12,7 @@
  * the feature exists to prevent.
  */
 import { api, apiPost, apiDelete, esc, fmtTs } from "../api.js";
+import { initClampCells } from "../clamp-cell.js";
 import {
   loadChannels, loadRoles, loadMembers, memberNameLookup,
   mountChannelPicker, mountRolePicker, mountMemberPicker,
@@ -92,6 +93,9 @@ function renderTable(el, rows, { headers, rowFn, empty }) {
         <tbody>${rows.map(rowFn).join("")}</tbody>
       </table>
     </div>`;
+  // The Reason column had no title at all, so its text was unreadable past
+  // one line by any means.
+  initClampCells(el);
 }
 
 export function mount(container) {

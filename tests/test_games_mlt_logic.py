@@ -24,13 +24,14 @@ from bot_modules.games_mlt.logic import (
     MAX_PLAYERS,
     MIN_PLAYERS,
     add_player,
-    lobby_is_full,
     apply_vote,
     bump_crowns,
     can_start,
+    clamp_player_limits,
     encode_round_votes,
     find_round_winners,
     is_eligible_voter,
+    lobby_is_full,
     pop_next_prompt,
     queue_prompt,
     remove_player,
@@ -676,3 +677,32 @@ def test_lobby_embed_renders_the_start_countdown():
 def test_lobby_embed_omits_the_countdown_when_none_was_set():
     embed = build_join_embed("Alice", [])
     assert all(f.name != "⏰ Starting" for f in embed.fields)
+
+
+# ── lobby limits (the dashboard dials, finally enforced) ────────────────
+
+
+def test_clamp_player_limits_never_exceeds_the_select_cap():
+    """MAX_PLAYERS exists because the per-round vote is a Discord Select and a
+    bigger lobby would 400 the round message. The dashboard dial used to offer
+    up to 200, so a stored value has to be clamped rather than trusted."""
+    assert clamp_player_limits(3, 200) == (3, 25)
+
+
+def test_clamp_player_limits_raises_a_ceiling_below_its_floor():
+    assert clamp_player_limits(8, 4) == (8, 8)
+
+
+def test_clamp_player_limits_treats_zero_as_unset():
+    """0 meant "no limit" on the old dial. There is no no-limit here."""
+    assert clamp_player_limits(0, 0) == (MIN_PLAYERS, MAX_PLAYERS)
+
+
+def test_add_player_respects_a_configured_ceiling():
+    """The join handler's guard is not the only thing holding the line — the
+    logic layer enforces it too, so a caller that forgets the guard cannot
+    overfill the lobby."""
+    players = [1, 2, 3]
+    assert add_player(players, 4, 3) is False
+    assert players == [1, 2, 3]
+    assert add_player(players, 4, 4) is True

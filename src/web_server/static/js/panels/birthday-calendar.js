@@ -23,8 +23,8 @@ function fmtDaysUntil(n) {
 }
 
 function badgeColor(n) {
-  if (n === 0) return "#c0392b";
-  if (n <= 7)  return "#d4a020";
+  if (n === 0) return "var(--red-text)";
+  if (n <= 7)  return "var(--yellow)";
   return "var(--ink-dim)";
 }
 
@@ -124,14 +124,14 @@ export function mountCalendar(container) {
     const tbody = document.createElement("tbody");
     for (const [i, entry] of entries.entries()) {
       const tr = document.createElement("tr");
-      tr.style.cssText = `border-bottom:1px solid var(--rule); background:${i % 2 === 0 ? "transparent" : "var(--bg-subtle, rgba(0,0,0,.03))"};`;
+      tr.style.cssText = `border-bottom:1px solid var(--rule); background:${i % 2 === 0 ? "transparent" : "var(--rule-soft)"};`;
 
       // Member cell — avatar initial + name
       const nameTd = el("td", "padding:10px;");
       const nameWrap = el("div", "display:flex; align-items:center; gap:10px;");
       const initial = el(
         "span",
-        "display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:var(--accent-dim,#5865f2);color:#fff;font-weight:700;font-size:13px;flex-shrink:0;",
+        "display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:var(--blurple);color:#fff;font-weight:700;font-size:13px;flex-shrink:0;",
         (entry.name || "?")[0].toUpperCase(),
       );
       const nameSpan = el("span", "font-weight:500;", entry.name);

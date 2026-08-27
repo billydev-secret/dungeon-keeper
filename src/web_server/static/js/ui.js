@@ -77,6 +77,32 @@ function _mountModal(overlay, box, { initialFocus, onEscape }) {
   };
 }
 
+/** Make a list of click-only rows operable: Enter and Space activate the row
+ *  under focus, exactly as a click does.
+ *
+ *  Tickets, Jails, Warnings and Todo each render a queue of `.ticket-item`
+ *  divs whose only affordance was a delegated click handler, so a keyboard-only
+ *  moderator could tab past a row but never select it — and with the detail
+ *  pane driven entirely by that selection, the whole right-hand half of the
+ *  moderation surface was unreachable. The rows carry `tabindex="0"` and
+ *  `role="button"`; this supplies the activation half.
+ *
+ *  Pass the container, the row selector, and what to do with the row. */
+export function bindRowActivation(listEl, selector, onActivate) {
+  const pick = (e) => e.target.closest(selector);
+  listEl.addEventListener("click", (e) => {
+    const row = pick(e);
+    if (row) onActivate(row);
+  });
+  listEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = pick(e);
+    if (!row) return;
+    e.preventDefault();   // Space would scroll the queue
+    onActivate(row);
+  });
+}
+
 export function confirmDialog(message, opts = {}) {
   const { title, danger = false, confirmLabel = "Confirm" } = opts;
   return new Promise(resolve => {

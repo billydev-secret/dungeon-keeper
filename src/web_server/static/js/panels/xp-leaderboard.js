@@ -2,7 +2,7 @@ import { api } from "../api.js";
 import { withLoading, rangePicker } from "../report-helpers.js";
 import {
   makeBarChart, makeDoughnutChart, renderPieLegend, renderChartTable,
-  CHART_BAR, CHART_ACCENT, ROLE_COLORS,
+  CHART_BAR, CHART_ACCENT,
 } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 import { renderError } from "../states.js";
@@ -216,7 +216,9 @@ export function mountLeaderboard(container, initialParams) {
             // html: colored ± figure, no user-supplied text (table.js ESCAPING).
             { key: "_diff", label: "vs Median", html: true, format: (v) => {
               const s = v >= 0 ? "+" + fmtXp(v) : "\u2212" + fmtXp(Math.abs(v));
-              const color = v >= 0 ? ROLE_COLORS[2] : ROLE_COLORS[3];
+              // Table text, not a mark: the chart palette is fitted against the chart
+              // surface and drops to 2.31:1 as type here.
+              const color = v >= 0 ? "var(--green-text)" : "var(--red-text)";
               return `<span style="color:${color}">${s}</span>`;
             }},
             { key: "text_xp", label: "Text", format: (v) => fmtXp(v) },

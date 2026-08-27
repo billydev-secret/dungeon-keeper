@@ -97,7 +97,7 @@ export function mount(container) {
           </div>
 
           <div class="card" style="border-color: var(--red);">
-            <div class="section-label" style="color: var(--red);">Danger Zone — Message Content Storage</div>
+            <div class="section-label" style="color: var(--red-text);">Danger Zone — Message Content Storage</div>
             <div class="field">
               <label for="mod-storage-level">Message Content Storage</label>
               <select name="message_storage_level" id="mod-storage-level">

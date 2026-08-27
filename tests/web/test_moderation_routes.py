@@ -143,8 +143,9 @@ def test_stats_counts_seeded_state(open_client, fake_ctx):
     _seed_ticket(fake_ctx.db_path, guild_id=fake_ctx.guild_id)
     _seed_warning(fake_ctx.db_path, guild_id=fake_ctx.guild_id)
     with open_db(fake_ctx.db_path) as conn:
+        # recent_actions counts moderation only, so this has to be one.
         write_audit(
-            conn, guild_id=fake_ctx.guild_id, action="x", actor_id=1,
+            conn, guild_id=fake_ctx.guild_id, action="warning_issue", actor_id=1,
         )
 
     body = open_client.get("/api/moderation/stats").json()
@@ -1052,36 +1053,143 @@ def test_transcript_returns_stored_content(open_client, fake_ctx):
 # ── Audit log endpoints ──────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _clear_audit_cache():
+    """The endpoint memoises totals and the action vocabulary for 60s, keyed by
+    guild — and every test here runs as guild 123. Without this, one test's
+    seeded rows answer the next one's request."""
+    from web_server.routes.moderation import _AUDIT_TOTAL_CACHE, _AUDIT_VOCAB_CACHE
+
+    _AUDIT_TOTAL_CACHE.clear()
+    _AUDIT_VOCAB_CACHE.clear()
+    yield
+    _AUDIT_TOTAL_CACHE.clear()
+    _AUDIT_VOCAB_CACHE.clear()
+
+
+def test_audit_log_shows_only_moderation(open_client, fake_ctx):
+    """The page is titled the moderation log, so it holds four families:
+    jails, tickets, warnings and channel moves. Read raw it was 1,602 rows on
+    the main guild against 204 that are moderation — 1,316 of them Voice
+    Control writing its own lifecycle, plus survivor season admin, policy
+    votes, role-menu edits and inactivity sweeps."""
+    with open_db(fake_ctx.db_path) as conn:
+        for action in ("vm_channel_create", "survivor_season_create",
+                       "policy_open", "role_menu.create", "inactive_apply"):
+            write_audit(conn, guild_id=fake_ctx.guild_id, action=action, actor_id=1)
+        for action in ("jail_create", "ticket_open", "warning_issue", "channel_pull"):
+            write_audit(conn, guild_id=fake_ctx.guild_id, action=action, actor_id=1)
+
+    body = open_client.get("/api/moderation/audit").json()
+    assert sorted(e["action"] for e in body["entries"]) == [
+        "channel_pull", "jail_create", "ticket_open", "warning_issue",
+    ]
+    # The count has to describe the same set as the rows, or the page says it
+    # is showing 4 of 9.
+    assert body["total"] == 4
+
+
+def test_audit_log_admits_a_new_action_in_a_moderation_family(open_client, fake_ctx):
+    """Prefix-matched on purpose. A hand-kept allow-list is what drifted in the
+    first place — six of the panel's twelve entries named strings the bot never
+    writes — so a ticket_* action added tomorrow shows up without anyone
+    remembering to extend a list."""
+    with open_db(fake_ctx.db_path) as conn:
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="ticket_invented_tomorrow", actor_id=1)
+
+    body = open_client.get("/api/moderation/audit").json()
+    assert [e["action"] for e in body["entries"]] == ["ticket_invented_tomorrow"]
+
+
+def test_audit_log_prefixes_do_not_match_a_lookalike(open_client, fake_ctx):
+    """`_` is a LIKE wildcard, so an unescaped `jail_%` would also match
+    `jailX…`. The ESCAPE is what keeps the families exact."""
+    with open_db(fake_ctx.db_path) as conn:
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="jailbreak_game", actor_id=1)
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="channelsurf", actor_id=1)
+
+    body = open_client.get("/api/moderation/audit").json()
+    assert body["entries"] == [], "a lookalike action leaked into the moderation log"
+
+
+def test_audit_log_reports_the_vocabulary_it_holds(open_client, fake_ctx):
+    """The Action filter is built from this. It used to be a hand-kept list in
+    the panel, six of whose twelve entries named strings the bot never writes —
+    so Jail, Unjail, Warning, Warning Revoke, Pull and Remove each matched
+    nothing at all."""
+    with open_db(fake_ctx.db_path) as conn:
+        for _ in range(3):
+            write_audit(conn, guild_id=fake_ctx.guild_id, action="ticket_open", actor_id=1)
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="warning_issue", actor_id=1)
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="vm_channel_create", actor_id=1)
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="survivor_season_create", actor_id=1)
+
+    body = open_client.get("/api/moderation/audit").json()
+    assert "vm_channel_create" not in body["actions"]
+    assert "survivor_season_create" not in body["actions"], (
+        "the filter offers an action the page will not show"
+    )
+    # Commonest first, so the useful filters are at the top of the list.
+    assert body["actions"] == ["ticket_open", "warning_issue"]
+
+
+def test_audit_vocabulary_is_not_narrowed_by_the_active_filter(open_client, fake_ctx):
+    """Picking an action must not reduce the dropdown to that one action."""
+    with open_db(fake_ctx.db_path) as conn:
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="ticket_open", actor_id=1)
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="jail_create", actor_id=1)
+
+    body = open_client.get("/api/moderation/audit?action=jail_create").json()
+    assert body["total"] == 1
+    assert sorted(body["actions"]) == ["jail_create", "ticket_open"]
+
+
+def test_recent_actions_stat_counts_only_moderation(open_client, fake_ctx):
+    """The same conflation on the same page: the Moderation summary's "recent
+    actions" counted voice-channel churn and season admin as moderator work.
+    Measured on the main guild, 105 rows in seven days against 14 non-voice and
+    6 that are actually moderation."""
+    with open_db(fake_ctx.db_path) as conn:
+        for action in ("vm_channel_create", "vm_channel_delete",
+                       "survivor_tasks_run", "inactive_apply"):
+            write_audit(conn, guild_id=fake_ctx.guild_id, action=action, actor_id=1)
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="warning_issue", actor_id=1)
+
+    body = open_client.get("/api/moderation/stats").json()
+    assert body["recent_actions"] == 1
+
+
+
 def test_audit_log_returns_entries_newest_first(open_client, fake_ctx):
     with open_db(fake_ctx.db_path) as conn:
         for i in range(3):
             write_audit(
-                conn, guild_id=fake_ctx.guild_id, action=f"act_{i}", actor_id=1,
+                conn, guild_id=fake_ctx.guild_id, action=f"ticket_act_{i}", actor_id=1,
                 extra={"i": i},
             )
             time.sleep(0.001)
 
     body = open_client.get("/api/moderation/audit").json()
     actions = [e["action"] for e in body["entries"]]
-    assert actions == ["act_2", "act_1", "act_0"]
+    assert actions == ["ticket_act_2", "ticket_act_1", "ticket_act_0"]
     assert body["total"] == 3
 
 
 def test_audit_log_filter_by_action(open_client, fake_ctx):
     with open_db(fake_ctx.db_path) as conn:
-        write_audit(conn, guild_id=fake_ctx.guild_id, action="warn", actor_id=1)
-        write_audit(conn, guild_id=fake_ctx.guild_id, action="jail", actor_id=1)
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="warning_issue", actor_id=1)
+        write_audit(conn, guild_id=fake_ctx.guild_id, action="jail_create", actor_id=1)
 
-    body = open_client.get("/api/moderation/audit?action=jail").json()
+    body = open_client.get("/api/moderation/audit?action=jail_create").json()
     assert body["total"] == 1
-    assert body["entries"][0]["action"] == "jail"
+    assert body["entries"][0]["action"] == "jail_create"
 
 
 def test_audit_log_caps_limit_at_200(open_client, fake_ctx):
     """Requesting a huge limit returns at most 200 rows."""
     with open_db(fake_ctx.db_path) as conn:
         for i in range(5):
-            write_audit(conn, guild_id=fake_ctx.guild_id, action="x", actor_id=1)
+            write_audit(conn, guild_id=fake_ctx.guild_id, action="ticket_open", actor_id=1)
 
     body = open_client.get("/api/moderation/audit?limit=10000").json()
     # We only seeded 5 rows so this can't actually exceed; the assertion is
@@ -1092,7 +1200,7 @@ def test_audit_log_caps_limit_at_200(open_client, fake_ctx):
 def test_audit_log_decodes_extra_json(open_client, fake_ctx):
     with open_db(fake_ctx.db_path) as conn:
         write_audit(
-            conn, guild_id=fake_ctx.guild_id, action="custom", actor_id=1,
+            conn, guild_id=fake_ctx.guild_id, action="ticket_note", actor_id=1,
             extra={"ticket_id": 99, "reason": "spam"},
         )
     body = open_client.get("/api/moderation/audit").json()

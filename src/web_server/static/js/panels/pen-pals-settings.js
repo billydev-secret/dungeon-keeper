@@ -322,9 +322,9 @@ export function mountSettings(container) {
         return;
       }
       sepList.innerHTML = separations.map((s, i) => `
-        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:6px 10px;border:1px solid var(--rule);border-radius:6px;">
           <span>${esc(memberName(s.user_a))} <span style="opacity:.6;" aria-label="never matched with">⊘</span> ${esc(memberName(s.user_b))}</span>
-          <button type="button" class="btn btn-small" data-remove-sep="${i}">Remove</button>
+          <button type="button" class="btn btn-sm" data-remove-sep="${i}">Remove</button>
         </div>
       `).join("");
     };
@@ -333,12 +333,18 @@ export function mountSettings(container) {
       (x.user_a === y.user_a && x.user_b === y.user_b) ||
       (x.user_a === y.user_b && x.user_b === y.user_a);
 
-    const persistSeps = async () => {
+    // The list is updated optimistically so the row appears at once. If the
+    // write fails it has to go back: this is the keep-them-apart list, and a
+    // separation on screen that the server never stored is the one failure
+    // this page must not have.
+    const persistSeps = async (undo) => {
       try {
         await apiPut("/api/config/pen-pals/separations", { separations });
         showStatus(sepStatus, true, "Saved");
       } catch (err) {
-        showStatus(sepStatus, false, err.message);
+        undo();
+        renderSeps();
+        showStatus(sepStatus, false, `${err.message} — not saved.`);
       }
     };
 
@@ -362,7 +368,10 @@ export function mountSettings(container) {
       renderSeps();
       pickerA.setValue("0");
       pickerB.setValue("0");
-      await persistSeps();
+      await persistSeps(() => {
+        const i = separations.findIndex((s) => samePair(s, pair));
+        if (i !== -1) separations.splice(i, 1);
+      });
     });
 
     sepList.addEventListener("click", async (e) => {
@@ -379,7 +388,7 @@ export function mountSettings(container) {
       if (!ok) return;
       separations.splice(idx, 1);
       renderSeps();
-      await persistSeps();
+      await persistSeps(() => { separations.splice(idx, 0, pair); });
     });
 
     renderSeps();

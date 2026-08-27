@@ -7,7 +7,7 @@ export function renderTile(el, data) {
       ${badgeHTML(data.badge)}
     </div>
     <div class="health-tile-metric">${data.gini}</div>
-    <div class="health-tile-sparkline">${sparklineSVG(data.sparkline, { color: data.gini > 0.7 ? "#E6B84C" : "#7F8F3A" })}</div>
+    <div class="health-tile-sparkline">${sparklineSVG(data.sparkline, { color: data.gini > 0.7 ? "var(--yellow)" : "var(--green-text)" })}</div>
     <div class="health-tile-companions">
       <span>Top 5% share: <b>${data.top5_share}%</b></span>
     </div>

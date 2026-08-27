@@ -1,4 +1,5 @@
 import { api, esc, fmtTs, fmtAge } from "../api.js";
+import { initClampCells } from "../clamp-cell.js";
 import { showTranscript } from "../transcript-modal.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
@@ -127,7 +128,7 @@ export function mountTickets(container) {
           : fmtAge(Date.now() / 1000 - t.created_at) + " ago";
 
       return `
-        <tr class="clickable-row" data-record-type="policy_ticket" data-record-id="${t.id}">
+        <tr class="clickable-row" tabindex="0" data-record-type="policy_ticket" data-record-id="${t.id}">
           <td>${badge}</td>
           <td>#${t.id}</td>
           <td class="user-cell">${esc(t.creator_name || t.creator_id)}</td>
@@ -148,9 +149,21 @@ export function mountTickets(container) {
         <tbody>${rows}</tbody>
       </table>
     `;
-    tableWrap.querySelector("tbody")?.addEventListener("click", (e) => {
+    const openRow = (e) => {
       const row = e.target.closest("tr.clickable-row");
       if (row) showTranscript(row.dataset.recordType, row.dataset.recordId);
+    };
+    // Title and Description both clamp here. The expander stops propagation,
+    // so reading a cell does not also fire the row click below and open the
+    // transcript modal over the table you were reading.
+    initClampCells(tableWrap);
+    const tbody = tableWrap.querySelector("tbody");
+    tbody?.addEventListener("click", openRow);
+    tbody?.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (!e.target.closest("tr.clickable-row")) return;
+      e.preventDefault();
+      openRow(e);
     });
   }
 

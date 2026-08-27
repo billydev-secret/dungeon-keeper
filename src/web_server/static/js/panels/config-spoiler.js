@@ -62,8 +62,8 @@ export function mount(container) {
           <div class="card">
             <div class="section-label">Nudity in SFW Channels</div>
             <div class="field">
-              <label>Mode</label>
-              <select data-field="sfw_mode">${modeOptions}</select>
+              <label for="configspoile-sfw-mode">Mode</label>
+              <select data-field="sfw_mode" id="configspoile-sfw-mode">${modeOptions}</select>
               <div class="field-hint" data-mode-hint></div>
             </div>
             <div class="field">
@@ -84,22 +84,22 @@ export function mount(container) {
           <div class="card">
             <div class="section-label">Detection Tuning</div>
             <div class="field">
-              <label>Confidence Threshold</label>
-              <input type="number" data-field="threshold" min="0.05" max="1" step="0.05" value="${n.threshold}">
+              <label for="configspoile-threshold">Confidence Threshold</label>
+              <input type="number" data-field="threshold" min="0.05" max="1" step="0.05" value="${n.threshold}" id="configspoile-threshold">
               <div class="field-hint">How likely an image must be to be explicit before
                 the bot treats it as such, from 0 to 1. Used for spoiler checks and for
                 tip eligibility. Lower catches more and misjudges more.</div>
             </div>
             <div class="field">
-              <label>SFW Removal Threshold</label>
-              <input type="number" data-field="sfw_threshold" min="0.05" max="1" step="0.05" value="${n.sfw_threshold}">
+              <label for="configspoile-sfw-threshold">SFW Removal Threshold</label>
+              <input type="number" data-field="sfw_threshold" min="0.05" max="1" step="0.05" value="${n.sfw_threshold}" id="configspoile-sfw-threshold">
               <div class="field-hint">A separate, stricter bar for actually deleting
                 someone's image in a SFW channel — being wrong there costs a member
                 their photo, so it should demand more certainty than the setting above.</div>
             </div>
             <div class="field">
-              <label>Bare Chest Sensitivity</label>
-              <input type="number" data-field="chest_floor" min="0.05" max="1" step="0.05" value="${n.chest_floor}">
+              <label for="configspoile-chest-floor">Bare Chest Sensitivity</label>
+              <input type="number" data-field="chest_floor" min="0.05" max="1" step="0.05" value="${n.chest_floor}" id="configspoile-chest-floor">
               <div class="field-hint">In spoiler channels, a bare chest of any gender
                 always needs a spoiler, whatever the thresholds above say — the model
                 rates male and female chests differently, and this rule overrides that.

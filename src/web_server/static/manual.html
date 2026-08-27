@@ -34,6 +34,12 @@
     --accent:     #57F287;
     --warn:       #FEE75C;
     --danger:     #ED4245;
+    /* This page is deliberately light — it is long-form documentation,
+       read at length. Declared explicitly so its native controls (the
+       guide search box) are painted to match, rather than left to the
+       browser default. The same content rendered inside the dashboard's
+       Help panel is dark, styled by help-panel.css. */
+    color-scheme: light;
     --bg:         #ffffff;
     --surface:    #f6f8fa;
     --border:     #d0d7de;
@@ -569,7 +575,7 @@
     <table>
       <thead><tr><th>Command</th><th>Game &amp; flow</th></tr></thead>
       <tbody>
-        <tr><td><code>/games play wyr</code></td><td><strong>Would You Rather</strong> — vote 🅰️/🅱️ on either/or scenarios; players can queue their own questions mid-game</td></tr>
+        <tr><td><code>/games play wyr</code></td><td><strong>Would You Rather</strong> — vote 🅰️/🅱️ on either/or scenarios; players can queue their own questions mid-game. Tallies are anonymous while a round runs; the host or any mod can press <strong>👀 Reveal Voters</strong> to name who picked which side, and every reveal is recorded in the <a href="/#/anon-audit">Anonymous Features Audit</a></td></tr>
         <tr><td><code>/games play nhie</code></td><td><strong>Never Have I Ever</strong> — vote Guilty 😈 or Innocent 😇; run out of lives and you're eliminated</td></tr>
         <tr><td><code>/games play mlt</code></td><td><strong>Most Likely To</strong> — vote which player fits the prompt; crowns tally across rounds</td></tr>
         <tr><td><code>/games play mfk</code></td><td><strong>Marry, Fornicate, Kiss</strong> — each player sorts 3 random members from the pool (custom labels supported)</td></tr>
@@ -1783,6 +1789,7 @@
       <div class="callout-body">
         <strong>The mod desk lives on the <a href="/">web dashboard</a></strong>
         <p>Beyond the commands below, the dashboard is where review work happens: ticket, jail, and warning review with transcripts, message search, a live server log, and the audit feeds (DMs, whispers, confessions, quotes, Guess rounds, and <a href="/#/anon-audit">Anonymous Features</a> — who is really behind each anonymous submission in the party games).</p>
+        <p>The <a href="/#/mod-audit">Audit Log</a> is the record of what moderators did to members: jails and releases, warnings issued and revoked, ticket activity, and pulls into or removals from a channel. Nothing else is in it. Voice Control in particular is not — a member creating, renaming or abandoning their own voice channel is self-service, and it is by far the busiest thing the bot records, so including it buried everything a moderator actually needed to see.</p>
         <p><strong>Message Search</strong> opens with just a regex box and a <em>+ Filter</em> button. Filters are added one at a time from that menu — author, channel, mentions, reply-to, emotion, sentiment range, length, attachments, reactions, dates, deleted state, show-bots, sort — and each becomes a small chip showing its value that you can remove with its ✕. Only the filters you are using take up space.</p>
         <p><strong>Click a result to read around it.</strong> The hit expands in place into a scrollable box showing the stored messages before and after it in the same channel, with the hit highlighted, and <em>Load older</em> / <em>Load newer</em> at the ends. Opening another result closes the first. This reads the server's own archive rather than Discord, so it still works for messages Discord no longer has — and unlike search it includes bot messages, because leaving them out would misrepresent the conversation.</p>
         <p><strong>Deleted messages stay searchable</strong>, badged <em>deleted</em> (or <em>auto-deleted</em> when an auto-delete rule removed them), with the time in the tooltip. The <em>Deleted</em> filter narrows to only those, or only live ones, or one source. Every message that still exists on Discord gets an ↗ link that opens it there; a deleted message doesn't, since the link would land on nothing.</p>

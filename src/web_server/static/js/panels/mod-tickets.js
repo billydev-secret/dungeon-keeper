@@ -1,6 +1,6 @@
 import { api, apiPost, esc, fmtTs, fmtAge } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
-import { toast, promptDialog, confirmDialog } from "../ui.js";
+import { toast, promptDialog, confirmDialog, bindRowActivation } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { syncHash, updatedStampText } from "../report-helpers.js";
@@ -122,7 +122,8 @@ function renderList(tickets, activeId, searching) {
       ? '<span class="t-chip" style="background:var(--gold-soft);color:var(--gold-solid)">Escalated</span>'
       : "";
     return `
-      <div class="ticket-item ${cls}" data-ticket-id="${esc(t.id)}">
+      <div class="ticket-item ${cls}" data-ticket-id="${esc(t.id)}"
+           tabindex="0" role="button" aria-current="${t.id === activeId ? "true" : "false"}">
         <div class="pri"></div>
         <div class="body">
           <div class="subj">${esc(ticketSubject(t))}</div>
@@ -651,9 +652,7 @@ export function mount(container, initialParams = {}) {
     }
   });
 
-  listEl.addEventListener("click", (e) => {
-    const row = e.target.closest(".ticket-item");
-    if (!row) return;
+  bindRowActivation(listEl, ".ticket-item", (row) => {
     state.activeId = Number(row.dataset.ticketId);
     render();
   });

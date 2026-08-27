@@ -218,7 +218,37 @@ use them:
   `html: true` and then owns its own escaping — that opt-in is the whole
   security boundary.
 - **Config panels mount through `mountAsync`**, so a failed first fetch
-  renders an error with a retry instead of a permanent spinner.
+  renders an error with a retry instead of a permanent spinner. **Let the
+  rejection reach it.** Five panels wrapped their loader's own fetch in a
+  try/catch that rendered a bare error and returned *normally*, so
+  `renderFailure` — the error *plus a working Try again button* — could never
+  run, and the `errorMsg` they declared was dead code. `wellness-caps.js` is
+  the model for a panel that also refreshes: rethrow on first load, render in
+  place afterwards.
+- **A report panel that refreshes uses `mountReloadable`** (`report-helpers.js`),
+  which puts the catch on *every* pass. Seven health panels guarded only the
+  first load, so a failed refetch left the previous figures up under a Show
+  Bots toggle that had already flipped — numbers that look like an answer and
+  are not.
+- **Unsaved-edit tracking is per guarded form**, not per page. `guardForm`
+  registers the container and `showStatus` clears only the form its status
+  element sits in. `isFormDirty(form)` asks the same registry, which is how a
+  panel that rebuilds itself after an unrelated action decides whether it may
+  — mahjong remounts after a card upload and would otherwise throw away
+  half-typed House Rules. **Do not report a held rebuild through
+  `showStatus(el, true, …)`**: if that element sits inside the guarded form —
+  mahjong's `[data-status]` does — it clears the very dirt that held the
+  rebuild, so the next action goes through and takes the edits with it. Use a
+  toast.
+- **An optimistic write owns its rollback.** A list mutated and re-rendered
+  before the PUT has to be put back when the PUT fails, or the screen shows
+  state the server never accepted. Pen Pals' separations did not, and that is
+  the keep-them-apart list. Never write a failure message into an empty-state
+  element either: shop-approvals did, and one failed fetch replaced the real
+  empty copy for the rest of the session. It used to be one module-global boolean that any success
+  cleared, so on the fourteen panels guarding two to four forms, saving one —
+  or any unrelated action reporting success — silently disarmed the warning
+  protecting half-typed values in the rest.
 - **A new guild-scoped cache in `config-helpers.js` must be cleared in
   `resetMetaCaches()`** — a test hard-fails if it isn't, because a stale cache
   survives a guild switch and shows one server's members inside another.

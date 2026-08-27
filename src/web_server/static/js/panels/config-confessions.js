@@ -355,7 +355,7 @@ export function mount(container) {
       "Posts the Confess button members press to write a confession. Posting it again moves it: the old button stops working.",
     ));
     const pbPicker = mountChannelPicker(
-      pbSlot, channels, String(c.dest_channel_id || "0"),
+      pbSlot, channels, String(c.launcher_channel_id || "0"),
       { emptyValue: "0", emptyLabel: "(pick a channel)", label: "Post the Button In" },
     );
 

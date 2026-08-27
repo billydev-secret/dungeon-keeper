@@ -103,7 +103,7 @@ export function mount(container) {
           </div>
         </form>
 
-        <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
+        <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--rule)">
           <h3 style="margin:0 0 0.25rem">Support Access</h3>
           <div class="field-hint" style="margin-bottom:1rem">Lets the Dungeon Keeper
             developer open this server's dashboard to troubleshoot a problem or help
@@ -119,7 +119,7 @@ export function mount(container) {
           </div>
         </section>
 
-        <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
+        <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--rule)">
           <h3 style="margin:0 0 0.25rem">Integrations</h3>
           <div class="field-hint" style="margin-bottom:1rem">Authorize Spotify so the
             music player can read private playlists. This opens Spotify's own consent

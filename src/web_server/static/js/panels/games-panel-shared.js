@@ -6,6 +6,12 @@ import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
+// LegitLibs heat tiers. Shared because two panels set the same ceiling:
+// games-legitlibs (per template) and games-config (per channel). The latter
+// used to render them as bare numbers.
+export const TIER_LABELS = { 1: "Flirty", 2: "Spicy", 3: "Filthy", 4: "Unhinged" };
+export const TIER_EMOJI  = { 1: "\u{1F338}", 2: "\u{1F336}\uFE0F", 3: "\u{1F525}", 4: "\u{1F480}" };
+
 // hasStatus=false drops the Enabled/options section for features that manage
 // their own enable switch outside games_game_config (e.g. Pen Pals config).
 /**
@@ -116,7 +122,19 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         if (opt.type === "bool") options[opt.key] = el.checked;
         else if (opt.type === "text") options[opt.key] = el.value.trim();
         else if (opt.type === "role") options[opt.key] = el.value === "0" ? "" : el.value;
-        else options[opt.key] = parseInt(el.value, 10) || 0;
+        else {
+          const lo = opt.min ?? 0, hi = opt.max ?? 9999;
+          const n = parseInt(el.value, 10);
+          if (!Number.isFinite(n)) {
+            showStatus(st, false, `${opt.label} needs a number between ${lo} and ${hi}.`);
+            return;
+          }
+          if (n < lo || n > hi) {
+            showStatus(st, false, `${opt.label} must be between ${lo} and ${hi}.`);
+            return;
+          }
+          options[opt.key] = n;
+        }
       }
       try {
         await apiPut("/api/games/config/games/" + encodeURIComponent(gameType), { enabled: ctrl("enabled").checked, options });
@@ -178,9 +196,15 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         chip.className = "ll-tag bank-chip";
         chip.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
         chip.appendChild(document.createTextNode(tag));
-        const x = document.createElement("span");
+        // A real button: a <span> with a click listener has no role, no tab
+        // stop and no accessible name, so these chips could not be removed
+        // from a keyboard and a screen reader announced the glyph alone.
+        const x = document.createElement("button");
+        x.type = "button";
         x.textContent = "×";
-        x.style.cssText = "cursor:pointer;font-weight:700;";
+        x.setAttribute("aria-label", `Remove ${tag}`);
+        x.style.cssText = "cursor:pointer;font-weight:700;background:none;"
+          + "border:0;color:inherit;font:inherit;padding:0;line-height:1;";
         x.addEventListener("click", () => { tags.splice(i, 1); render(); notify(); });
         chip.appendChild(x);
         wrap.insertBefore(chip, input);
@@ -360,10 +384,10 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         const totalPages = data.total_pages || 1;
         const count = data.total || 0;
         if (totalPages <= 1) {
-          pag.innerHTML = '<span style="font-size:12px;color:var(--ink-muted);">' + count + " question" + (count !== 1 ? "s" : "") + "</span>";
+          pag.innerHTML = '<span style="font-size:12px;color:var(--ink-mute);">' + count + " question" + (count !== 1 ? "s" : "") + "</span>";
           return;
         }
-        let pagHtml = '<span style="font-size:12px;color:var(--ink-muted);margin-right:4px;">' + count + " questions</span>";
+        let pagHtml = '<span style="font-size:12px;color:var(--ink-mute);margin-right:4px;">' + count + " questions</span>";
         if (currentPage > 1) pagHtml += '<button class="btn" data-page="' + (currentPage - 1) + '" style="padding:2px 8px;font-size:12px;">&#8249;</button>';
         pagHtml += '<span style="font-size:12px;padding:0 4px;">Page ' + currentPage + " / " + totalPages + "</span>";
         if (currentPage < totalPages) pagHtml += '<button class="btn" data-page="' + (currentPage + 1) + '" style="padding:2px 8px;font-size:12px;">&#8250;</button>';
@@ -508,7 +532,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         el.innerHTML = '<table style="width:100%;border-collapse:collapse;" class="data-table">' +
           '<thead><tr><th style="width:28px;"><input type="checkbox" data-ctrl="pool-select-all" aria-label="Select every question on this page" /></th><th style="width:160px;">Tags</th><th>Question</th><th style="width:50px;"></th></tr></thead>' +
           "<tbody>" + rows + "</tbody></table>" +
-          '<div style="font-size:12px;color:var(--ink-muted);margin-top:6px;">' + data.total + " question" + (data.total !== 1 ? "s" : "") + " in the pool" + note + "</div>";
+          '<div style="font-size:12px;color:var(--ink-mute);margin-top:6px;">' + data.total + " question" + (data.total !== 1 ? "s" : "") + " in the pool" + note + "</div>";
         el.querySelector('[data-ctrl="pool-select-all"]').addEventListener("change", (e) => {
           el.querySelectorAll("[data-pool-check]").forEach(c => { c.checked = e.target.checked; });
         });

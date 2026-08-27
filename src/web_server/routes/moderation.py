@@ -20,6 +20,7 @@ from bot_modules.services.moderation import (
     get_active_warning_count,
     get_transcript,
     parse_duration,
+    IS_MODERATION_ACTION,
     release_jail,
     reopen_ticket,
     revoke_warning,
@@ -106,7 +107,8 @@ async def moderation_stats(
                     "SELECT COUNT(*) FROM warnings WHERE guild_id = ?", guild_id
                 ),
                 "recent_actions": r(
-                    "SELECT COUNT(*) FROM audit_log WHERE guild_id = ? AND created_at >= ?",
+                    "SELECT COUNT(*) FROM audit_log WHERE guild_id = ? AND created_at >= ?"
+                    + IS_MODERATION_ACTION,
                     guild_id,
                     one_week_ago,
                 ),
@@ -1146,6 +1148,9 @@ async def transcript(
 # Cache audit_log COUNT(*) per (guild_id, action) for 60s — the table grows
 # constantly and the panel polls; recomputing total on every poll is wasteful.
 _AUDIT_TOTAL_CACHE: dict[tuple[int, str | None], tuple[float, int]] = {}
+# The distinct actions a guild's log holds, for the Action filter. Its own
+# cache because it is a different type from the totals above, on the same TTL.
+_AUDIT_VOCAB_CACHE: dict[int, tuple[float, list[str]]] = {}
 _AUDIT_TOTAL_TTL = 60.0
 
 
@@ -1171,7 +1176,10 @@ async def audit_log(
             if action:
                 clauses.append("action = ?")
                 params.append(action)
-            where = " AND ".join(clauses)
+            # This page is the moderation log and shows only moderation.
+            # Applied to the count as well as the rows, or the total would
+            # describe a different set than the page.
+            where = " AND ".join(clauses) + IS_MODERATION_ACTION
 
             cache_key = (guild_id, action)
             now = _t.monotonic()
@@ -1184,6 +1192,25 @@ async def audit_log(
                     params,
                 ).fetchone()[0]
                 _AUDIT_TOTAL_CACHE[cache_key] = (now, total)
+
+            # The vocabulary actually present, for the Action filter. Keyed by
+            # guild alone so picking an action doesn't narrow the dropdown to
+            # itself, and cached on the same TTL as the total — it is a GROUP
+            # BY over the guild's whole log.
+            cached_vocab = _AUDIT_VOCAB_CACHE.get(guild_id)
+            if cached_vocab and now - cached_vocab[0] < _AUDIT_TOTAL_TTL:
+                actions = cached_vocab[1]
+            else:
+                actions = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT action FROM audit_log WHERE guild_id = ?"
+                        + IS_MODERATION_ACTION
+                        + " GROUP BY action ORDER BY COUNT(*) DESC",
+                        (guild_id,),
+                    ).fetchall()
+                ]
+                _AUDIT_VOCAB_CACHE[guild_id] = (now, actions)
 
             rows = conn.execute(
                 f"SELECT * FROM audit_log WHERE {where} ORDER BY created_at DESC LIMIT ?",
@@ -1201,7 +1228,7 @@ async def audit_log(
                         "created_at": r["created_at"],
                     }
                 )
-            return {"total": total, "entries": entries}
+            return {"total": total, "entries": entries, "actions": actions}
 
     result = await run_query(_q)
     await _resolve_names(

@@ -171,7 +171,7 @@ function render(container, cfg) {
           No colors yet. Upload swatch images below and press Sync Palette.
         </div>
 
-        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--rule);">
           <div class="section-label">Swatch Images</div>
           <div class="field-hint" style="margin-bottom:10px;">
             One image per color, named <code>ColorName_HEX1_HEX2.png</code> — for example
@@ -192,7 +192,7 @@ function render(container, cfg) {
           </form>
         </div>
 
-        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--rule);">
           <div class="section-label">Sync Palette From Swatches</div>
           <div class="field-hint" style="margin-bottom:10px;">
             Makes the palette match the images above: new files become new colors, and
@@ -207,7 +207,7 @@ function render(container, cfg) {
           </form>
         </div>
 
-        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--rule);">
           <div class="section-label">Old Showroom Channel</div>
           <div class="field-hint" style="margin-bottom:10px;">
             Members now browse the swatches inside <code>/bank shop</code> — the picker shows
@@ -241,7 +241,7 @@ function render(container, cfg) {
           No icons in the catalog yet. Add one below and members will see it in the shop.
         </div>
 
-        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--rule);">
           <div class="section-label">Add an Icon</div>
           <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
             <div class="field">
@@ -282,7 +282,7 @@ function render(container, cfg) {
           Nothing in the store yet. Add something below and it appears in the shop.
         </div>
 
-        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
+        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--rule);">
           <div class="section-label">Add an Item</div>
           <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
             <div class="field">
@@ -343,11 +343,11 @@ function iconRow(icon) {
                   background:repeating-conic-gradient(#808080 0% 25%, #a0a0a0 0% 50%) 50% / 12px 12px" />
       <div class="field" style="margin:0;">
         <label>Name</label>
-        <input type="text" data-name maxlength="64" value="${esc(icon.name)}" style="max-width:200px;" />
+        <input type="text" data-name maxlength="64" value="${esc(icon.name)}" style="max-width:200px;" aria-label="Name" />
       </div>
       <div class="field" style="margin:0;">
         <label>Price Per Week</label>
-        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${icon.price}" style="max-width:120px;" />
+        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${icon.price}" style="max-width:120px;" aria-label="Price Per Week" />
       </div>
       <label style="display:flex;gap:6px;align-items:center;">
         <input type="checkbox" data-enabled${enabledAttr} /> Offer in the shop
@@ -372,7 +372,7 @@ function colorRow(color) {
   // blank chip and an editable price that does nothing.
   const brokenBadge = color.rentable
     ? ""
-    : `<span class="badge" style="background:var(--danger,#e55);"
+    : `<span class="badge badge-danger"
          title="No gradient could be read from this color's file name — re-upload it as ColorName_HEX1_HEX2 and sync">Needs a re-sync</span>`;
   // The real swatch art, over the gradient it encodes: the art can carry texture
   // the two hex codes don't, and the gradient behind it still reads if the file
@@ -384,18 +384,18 @@ function colorRow(color) {
     <img src="/api/economy/color-catalog/${color.id}/image?t=${bust}" alt=""
          width="48" height="48"
          style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex:none;
-                border:1px solid var(--border,#333);background:${fallback};" />`;
+                border:1px solid var(--rule);background:${fallback};" />`;
   return `
     <div class="card" data-color-id="${color.id}"
          style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
       ${swatch}
       <div class="field" style="margin:0;">
         <label>Name</label>
-        <input type="text" data-name maxlength="64" value="${esc(color.name)}" style="max-width:200px;" />
+        <input type="text" data-name maxlength="64" value="${esc(color.name)}" style="max-width:200px;" aria-label="Name" />
       </div>
       <div class="field" style="margin:0;">
         <label>Price Per Week</label>
-        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${color.price}" style="max-width:120px;" />
+        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${color.price}" style="max-width:120px;" aria-label="Price Per Week" />
         <div class="field-hint">0 uses the Palette Color price above.</div>
       </div>
       <label style="display:flex;gap:6px;align-items:center;">
@@ -492,13 +492,13 @@ function wirePalette(container, colors) {
     } else {
       swatchList.innerHTML = files.map((f) => {
         const chip = f.valid
-          ? `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:linear-gradient(135deg,#${esc(f.hex1)},#${esc(f.hex2)});flex:none;"></span>`
-          : `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:repeating-linear-gradient(45deg,#555,#555 4px,#333 4px,#333 8px);flex:none;"></span>`;
+          ? `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--rule);background:linear-gradient(135deg,#${esc(f.hex1)},#${esc(f.hex2)});flex:none;"></span>`
+          : `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--rule);background:repeating-linear-gradient(45deg,#555,#555 4px,#333 4px,#333 8px);flex:none;"></span>`;
         const meta = f.valid
           ? `<span>${esc(f.label)}</span>`
-          : `<span style="color:var(--danger,#e55)">⚠ Skipped when syncing — rename it to ColorName_HEX1_HEX2 plus its extension.</span>`;
+          : `<span style="color:var(--red-text)">⚠ Skipped when syncing — rename it to ColorName_HEX1_HEX2 plus its extension.</span>`;
         return `
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--border,#2a2a2a);">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--rule);">
             ${chip}
             <span style="flex:none;font-family:monospace;opacity:.85;">${esc(f.name)}</span>
             ${meta}
@@ -775,7 +775,7 @@ function itemRow(item, roleName) {
   // A role item whose role has since been deleted can still be bought, and the
   // grant would silently do nothing — say so where the admin is looking.
   const brokenRole = item.kind === "role" && item.role_id && !roleName
-    ? `<span class="badge" style="background:var(--danger,#e55);"
+    ? `<span class="badge badge-danger"
          title="This role no longer exists, so buying the item would grant nothing">Role is gone</span>`
     : "";
   const roleChip = item.kind === "role" && roleName
@@ -788,26 +788,26 @@ function itemRow(item, roleName) {
          style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
       <div class="field" style="margin:0;">
         <label>Name</label>
-        <input type="text" data-name maxlength="60" value="${esc(item.name)}" style="max-width:180px;" />
+        <input type="text" data-name maxlength="60" value="${esc(item.name)}" style="max-width:180px;" aria-label="Name" />
       </div>
       <div class="field" style="margin:0;">
         <label>Short Note</label>
-        <input type="text" data-blurb maxlength="40" value="${esc(item.blurb || "")}" style="max-width:160px;" />
+        <input type="text" data-blurb maxlength="40" value="${esc(item.blurb || "")}" style="max-width:160px;" aria-label="Short Note" />
       </div>
       <div class="field" style="margin:0;">
         <label>Price</label>
-        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${item.price}" style="max-width:110px;" />
+        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${item.price}" style="max-width:110px;" aria-label="Price" />
       </div>
       <div class="field" style="margin:0;">
         <label>Stock</label>
         <input type="number" data-stock min="0" step="1" placeholder="∞"
-               value="${item.stock === null || item.stock === undefined ? "" : item.stock}" style="max-width:90px;" />
+               value="${item.stock === null || item.stock === undefined ? "" : item.stock}" style="max-width:90px;" aria-label="Stock" />
         <div class="field-hint">${esc(itemStockLabel(item))}</div>
       </div>
       <div class="field" style="margin:0;">
         <label>Max Each</label>
         <input type="number" data-limit min="1" step="1" placeholder="∞"
-               value="${item.per_member_limit === null || item.per_member_limit === undefined ? "" : item.per_member_limit}" style="max-width:90px;" />
+               value="${item.per_member_limit === null || item.per_member_limit === undefined ? "" : item.per_member_limit}" style="max-width:90px;" aria-label="Max Each" />
       </div>
       <span class="badge">${esc(ITEM_KINDS[item.kind] || item.kind)}</span>
       <span class="badge">${esc(ITEM_BILLING[item.billing] || item.billing)}</span>

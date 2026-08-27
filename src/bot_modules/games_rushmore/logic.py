@@ -293,6 +293,41 @@ def compute_recap_stats(
     return stats
 
 
+# The draft has a join phase, so unlike the timer knobs these are real gates.
+# The ceiling is 25 because the vote is a Discord ``Select``, which hard-caps
+# at 25 options — the same reason games_mlt.logic caps its lobby there. Before
+# this the Join button had no cap and the vote roster was sliced at 25, so
+# player 26 drafted a full board and then could not be voted for.
+MIN_PLAYERS = 3
+MAX_PLAYERS = 25
+
+
+def lobby_is_full(players: list[int], max_players: int = MAX_PLAYERS) -> bool:
+    """Return ``True`` when the lobby has reached ``max_players``."""
+    return len(players) >= max_players
+
+
+def can_start(players: list[int], min_players: int = MIN_PLAYERS) -> bool:
+    """Return ``True`` when there are enough players to start the draft."""
+    return len(players) >= min_players
+
+
+def clamp_player_limits(min_players: int, max_players: int) -> tuple[int, int]:
+    """Clamp the dashboard's player limits into what the draft can actually run.
+
+    The floor is at least 2 (a one-player draft is not a game) and the ceiling
+    never exceeds :data:`MAX_PLAYERS`, whatever the dashboard stored — a server
+    that saved 200 before this dial was bounded must not produce a lobby the
+    vote message cannot render. A ceiling below the floor is raised to meet it,
+    so the pair can never describe a lobby nobody can start.
+    """
+    min_players = max(2, min(int(min_players or MIN_PLAYERS), MAX_PLAYERS))
+    max_players = max(2, min(int(max_players or MAX_PLAYERS), MAX_PLAYERS))
+    if max_players < min_players:
+        max_players = min_players
+    return min_players, max_players
+
+
 def clamp_settings(timer: int, vote_timer: int) -> tuple[int, int]:
     """Clamp the slash-command timer inputs into the allowed ranges.
 

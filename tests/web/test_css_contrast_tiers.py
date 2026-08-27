@@ -27,6 +27,7 @@ import pytest
 
 _STATIC = Path(__file__).resolve().parents[2] / "src" / "web_server" / "static"
 _SHEETS = [_STATIC / "app.css", _STATIC / "help-panel.css"]
+_JS = _STATIC / "js"
 
 # Not preceded by a hyphen or word char — that exemption is what lets
 # `border-left-color: var(--red)` stay saturated, which is correct: a 4px
@@ -49,6 +50,123 @@ def test_no_saturated_red_or_green_as_text(sheet):
         "saturated red/green used as a text colour — use --red-text / "
         "--green-text (see :root in app.css):\n" + "\n".join(offenders)
     )
+
+
+# ── the same rule, in the place it was actually broken ──────────────────────
+#
+# The sweep above scans stylesheets. Its regex would have matched the JS
+# offenders verbatim; panel JS was simply out of scope. So the rule held in
+# app.css and broke in inline styles built from template literals — which is
+# where most of this dashboard's colour decisions are actually made.
+#
+# This one is strict by default: **any** saturated token written in JS is an
+# offender unless the line says it is a fill. A first draft matched only the
+# obvious shapes — a literal `color:`, an assignment to `.style.color`, and a
+# local holding "var(--red)" — and missed live-log.js entirely, because its
+# saturated red sits in a multi-line object literal and reaches the DOM through
+# a destructured loop variable. Enumerating the ways a value can travel is a
+# losing game; requiring the fill to declare itself is not.
+
+_JS_TOKEN = re.compile(r"var\(--(red|green)\)")
+
+# Properties that legitimately take the saturated tier. A line carrying one of
+# these is a fill, and fills are exactly what the saturated tokens are for.
+_FILL_CONTEXT = re.compile(
+    r"background|border(?!-radius)|\bfill\b|stroke|box-shadow|accent-color|outline"
+)
+
+# Declarations whose values reach a fill somewhere other than their own line —
+# a colour map read later as `background:${…}`, or a helper whose return value
+# is. Keyed by (file, declaration name); every entry needs a reason, and
+# test_the_indirect_fill_exemptions_are_real checks each still reaches a fill.
+_INDIRECT_FILLS = {
+    ("tiles/tile-helpers.js", "BADGE_COLORS"):
+        "badgeHTML renders it as background: on .health-tile-badge",
+    ("panels/connection-graph.js", "BADGE_COLORS"):
+        "renderScorecard uses it as background: with an explicit dark ink",
+    ("tiles/channel-health.js", "BAR_FILL"):
+        "passed as the bar-fill colour option to miniBarHTML",
+    ("panels/channels.js", "STATUS_COLORS"):
+        "rendered as background: on .health-tile-badge",
+    ("panels/system-stats.js", "pctColor"):
+        "its return feeds pctBar, which renders it as background:",
+}
+
+
+def _exempt_ranges(rel: str, src: str) -> list[range]:
+    """Line ranges covered by this file's exempted declarations."""
+    out = []
+    lines = src.splitlines()
+    for (f, name), _why in _INDIRECT_FILLS.items():
+        if f != rel:
+            continue
+        for i, line in enumerate(lines):
+            if not re.search(r"\b(?:const|let|var|function)\s+" + re.escape(name) + r"\b", line):
+                continue
+            # Single-line declaration, or a braced block: walk to its close.
+            depth = line.count("{") - line.count("}")
+            j = i
+            while depth > 0 and j + 1 < len(lines):
+                j += 1
+                depth += lines[j].count("{") - lines[j].count("}")
+            out.append(range(i + 1, j + 2))
+    return out
+
+
+def _js_files():
+    return sorted(
+        p for p in _JS.rglob("*.js")
+        if "vendor" not in p.parts and "node_modules" not in p.parts
+    )
+
+
+def test_no_saturated_red_or_green_as_text_in_panel_js():
+    offenders = []
+    for path in _js_files():
+        rel = path.relative_to(_JS).as_posix()
+        src = path.read_text(encoding="utf-8")
+        exempt = _exempt_ranges(rel, src)
+        for i, line in enumerate(src.splitlines(), 1):
+            if not _JS_TOKEN.search(line):
+                continue
+            if _FILL_CONTEXT.search(line):
+                continue
+            if any(i in r for r in exempt):
+                continue
+            offenders.append(f"{rel}:{i}: {line.strip()[:95]}")
+    assert not offenders, (
+        "saturated red/green in panel JS outside a fill context — use "
+        "--red-text / --green-text for anything that renders as words. If it "
+        "really is a fill, say so on the line (background/border/fill/stroke) "
+        "or add its declaration to _INDIRECT_FILLS with a reason:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_the_indirect_fill_exemptions_are_real():
+    """An exemption that no longer names a fill has become a hole."""
+    for (rel, name), why in _INDIRECT_FILLS.items():
+        src = (_JS / rel).read_text(encoding="utf-8")
+        assert re.search(r"\b(?:const|let|var|function)\s+" + re.escape(name) + r"\b", src), (
+            f"{rel}: `{name}` is gone; drop the exemption"
+        )
+        assert re.search(r"(background|fill|stroke)", src), (
+            f"{rel}: nothing in this file is a fill any more ({why})"
+        )
+
+
+def test_the_js_sweep_can_see_the_shapes_it_claims_to():
+    """Guard the guard, against the shapes that actually occurred."""
+    assert _JS_TOKEN.search('`<span style="color:var(--red)">x</span>`')
+    assert _JS_TOKEN.search('el.style.color = "var(--green)";')
+    assert _JS_TOKEN.search('const c = ok ? "var(--green)" : "var(--red)";')
+    assert _JS_TOKEN.search('  "ERROR": "var(--red)",')   # the one the first draft missed
+    # ...and a fill declares itself on its own line.
+    assert _FILL_CONTEXT.search('`<div style="border-color: var(--red)">`')
+    assert _FILL_CONTEXT.search('`<div style="background:var(--green)">`')
+    assert not _FILL_CONTEXT.search('`<span style="color:var(--red)">`')
+    # border-radius must not read as a fill context on its own.
+    assert not _FILL_CONTEXT.search('border-radius:4px;color:var(--red)')
 
 
 # ── the arithmetic behind the rule ──────────────────────────────────────────
@@ -131,3 +249,110 @@ def test_saturated_tier_would_still_fail_ie_the_rule_is_load_bearing():
         "--red now clears AA as text, so the two-tier split no longer earns "
         "its keep — re-check whether --red-text is still needed"
     )
+
+
+# ── the destructive-button rule ─────────────────────────────────────────
+#
+# docs/dashboard_visual_language.md: "A destructive action is never the filled
+# one." `.act-btn.danger` honoured it; `.btn-danger` — the other button kit,
+# and the one with 33 uses against that kit's two — was a solid `--red` fill
+# with white text, which is both the loudest control on the page and 3.77:1.
+#
+# The one exception the rule names is a confirm dialog, where a decision is
+# actually being taken. That is why the solid treatment is scoped to
+# `.confirm-box` rather than deleted.
+
+
+def _rule_body(css: str, selector: str) -> str:
+    m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    assert m, f"{selector} not found in app.css"
+    return m.group(1)
+
+
+def test_the_in_page_destructive_button_is_outlined():
+    css = _strip_comments((_STATIC / "app.css").read_text(encoding="utf-8"))
+    body = _rule_body(css, ".btn-danger")
+    assert "background: transparent" in body, (
+        "in-page .btn-danger is a filled button — see the destructive-action "
+        "rule in docs/dashboard_visual_language.md"
+    )
+    assert "var(--red-text)" in body, "outlined danger uses the --red-text tier"
+
+
+def test_the_confirm_dialogs_button_stays_solid_and_clears_aa():
+    css = _strip_comments((_STATIC / "app.css").read_text(encoding="utf-8"))
+    body = _rule_body(css, ".confirm-box .btn-danger")
+    m = re.search(r"background:\s*(#[0-9a-fA-F]{6})", body)
+    assert m, "the confirm dialog's danger button has no solid fill"
+    assert "color: #fff" in body
+    # .btn is var(--t-2) — 12.5px, so this is normal text at the 4.5:1 floor.
+    ratio = _contrast(_rgb("#ffffff"), _rgb(m.group(1)))
+    assert ratio >= 4.5, (
+        f"white on {m.group(1)} is {ratio:.2f}:1, under AA for 12.5px text"
+    )
+
+
+# ── the activity heatmap's quantized ramp ───────────────────────────────
+#
+# A continuous alpha ramp of gold over the card crosses a band of mid
+# luminance where neither house ink clears 4.5:1 — the best any pairing
+# achieves at the crossover is 3.85:1. Five buckets straddle that band.
+
+
+def _heat_stops() -> list[float]:
+    src = (_JS / "panels" / "health-heatmap.js").read_text(encoding="utf-8")
+    m = re.search(r"const HEAT_STOPS = \[([^\]]+)\]", src)
+    assert m, "HEAT_STOPS is gone; the heatmap is back on a continuous ramp"
+    return [float(x) for x in m.group(1).split(",")]
+
+
+def _over(fg, alpha, bg):
+    return tuple(fg[i] * alpha + bg[i] * (1 - alpha) for i in range(3))
+
+
+_GOLD, _CARD = (230, 184, 76), (43, 45, 49)
+_BRIGHT, _RAIL = _rgb("#f2f3f5"), _rgb("#1e1f22")
+
+
+def test_every_heatmap_bucket_can_carry_readable_text():
+    """The server-wide grid prints its counts inside the cells, and they are
+    the only non-hover way to read a value on the panel."""
+    for alpha in _heat_stops():
+        cell = _over(_GOLD, alpha, _CARD)
+        best = max(_contrast(_BRIGHT, cell), _contrast(_RAIL, cell))
+        assert best >= 4.5, (
+            f"alpha {alpha}: best ink reaches only {best:.2f}:1"
+        )
+
+
+def test_neighbouring_heatmap_buckets_are_distinguishable():
+    """A scale nobody can read as a scale is not an improvement on a ramp
+    nobody can read text on. The stops were searched to keep this even: a
+    ramp picked purely for text contrast reaches 5.26:1 on text but collapses
+    its top three buckets to 1.28:1 of each other."""
+    stops = _heat_stops()
+    cells = [_over(_GOLD, a, _CARD) for a in stops]
+    weakest = min(_contrast(cells[i], cells[i + 1]) for i in range(len(cells) - 1))
+    assert weakest >= 1.5, f"weakest step between buckets is {weakest:.2f}:1"
+
+
+def test_the_heatmap_ships_a_scale():
+    """Quantizing only helps if a bucket can be read back as a number."""
+    src = (_JS / "panels" / "health-heatmap.js").read_text(encoding="utf-8")
+    assert "function heatLegendHTML" in src, "the legend builder is gone"
+    # Defining it is not shipping it: assert the grid actually calls it, which
+    # the first version of this test did not — deleting the call left the
+    # function in the file and the test green.
+    grid = src.split("function heatmapGridHTML", 1)[1].split("\nfunction ", 1)[0]
+    assert "heatLegendHTML(" in grid, "the grid never renders the legend"
+    css = (_STATIC / "app.css").read_text(encoding="utf-8")
+    assert ".hm-key-swatch" in css, "the legend has no styles"
+
+
+def test_an_empty_cell_is_never_rounded_into_a_bucket():
+    """Bucket 0 means nothing happened. Folding a real value into it would
+    make an hour with one message look identical to an hour with none."""
+    src = (_JS / "panels" / "health-heatmap.js").read_text(encoding="utf-8")
+    body = src.split("function heatBucket", 1)[1].split("\n}", 1)[0]
+    assert "if (!value) return 0;" in body
+    assert "Math.max(1," in body, "a non-zero value can fall into bucket 0"

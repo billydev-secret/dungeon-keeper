@@ -169,7 +169,8 @@ export function mount(container) {
         ${roleSelectHtml(opt, idx)}
         ${variable}
         <label class="rm-elevated" title="Allow a role with elevated permissions. Logged loudly.">
-          <input type="checkbox" data-opt="${idx}" data-field="elevated" ${opt.elevated ? "checked" : ""}>⚠
+          <input type="checkbox" data-opt="${idx}" data-field="elevated" ${opt.elevated ? "checked" : ""}
+                 aria-label="Allow a role with elevated permissions">⚠
         </label>
         <button class="doc-x" data-remove-opt="${idx}" title="Remove choice">✕</button>
       </div>`;
@@ -207,7 +208,7 @@ export function mount(container) {
     const style = currentStyle();
     const opts = state.menu.options.filter((o) => o.label || o.role_id !== "0");
 
-    const bar = /^#?[0-9a-fA-F]{6}$/.test(accent) ? (accent[0] === "#" ? accent : "#" + accent) : "var(--accent, #E6B84C)";
+    const bar = /^#?[0-9a-fA-F]{6}$/.test(accent) ? (accent[0] === "#" ? accent : "#" + accent) : "var(--gold-solid)";
     const thumbHtml = /^https?:/i.test(thumb)
       ? `<img class="rm-thumb" src="${esc(thumb)}" alt="" loading="lazy">` : "";
     let components = "";

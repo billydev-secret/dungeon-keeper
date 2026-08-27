@@ -21,13 +21,18 @@ let _roles = null;
 //     user confirms discarding, and on every panel mount).
 //   - A successful save shown via showStatus(el, true, …) clears the flag.
 //   - A beforeunload handler (wired once, below) warns when dirty.
-let _dirty = false;
+// Tracked per guarded container rather than as one page-level boolean. It was
+// a single flag that ANY successful save cleared, so on the fourteen panels
+// that guard two to four forms, saving one form — or any unrelated action that
+// reported success, a toggle, an upload, posting a panel — silently disarmed
+// the unsaved-edits warning protecting half-typed values in all the others.
+const _dirtyForms = new Set();
 
-window.__dkDirty = () => _dirty;
-window.__dkDirtyReset = () => { _dirty = false; };
+window.__dkDirty = () => _dirtyForms.size > 0;
+window.__dkDirtyReset = () => { _dirtyForms.clear(); };
 
 window.addEventListener("beforeunload", (e) => {
-  if (!_dirty) return;
+  if (!_dirtyForms.size) return;
   e.preventDefault();
   e.returnValue = ""; // legacy browsers need a non-null returnValue
 });
@@ -46,8 +51,11 @@ export function guardForm(form) {
     // claiming unsaved edits on the way out. The widget announces genuine value
     // changes with a bubbling `dk:change` instead — see filter-select.js.
     if (e?.target?.classList?.contains("filter-select-input")) return;
-    _dirty = true;
+    _dirtyForms.add(form);
   };
+  // Marks the container as one showStatus can find from a status element
+  // inside it, so a save clears its own form and leaves its siblings alone.
+  form.dataset.dkGuard = "1";
   form.addEventListener("input", mark);
   form.addEventListener("change", mark);
   form.addEventListener("dk:change", mark);
@@ -71,8 +79,7 @@ export function metaLoadFailed() { return _metaFailed.size > 0; }
  */
 export function renderMetaWarning() {
   if (!metaLoadFailed()) return "";
-  return '<div class="meta-warning" role="alert" '
-    + 'style="color:var(--red);font-size:13px;margin:0 0 12px;">'
+  return '<div class="meta-warning" role="alert">'
     + "Channel and role lists failed to load. Your saved settings are kept, "
     + "but reload the page before changing channel or role fields.</div>";
 }
@@ -299,6 +306,12 @@ export function resetMetaCaches() {
   _memberSearches.clear();
   _membersById.clear();
   _metaFailed.clear();
+  // Not a meta cache, but it shares the property that matters here: it holds
+  // form elements, and a guild switch tears every panel down and rebuilds it
+  // from the new guild's config. Left alone, the set would retain detached
+  // nodes and report unsaved edits on forms that no longer exist. The switch
+  // path already ran confirmLeaveDirty() before reaching this point.
+  _dirtyForms.clear();
 }
 
 // ── Async panel mount wrapper (F1) ─────────────────────────────────────
@@ -433,6 +446,25 @@ export function clearCardDirty(card) {
   if (card) card.dataset.dkDirty = "";
 }
 
+/** Forget the edits tracked on `form`.
+ *
+ *  For a panel that destroys and rebuilds its own guarded node: wellness-caps
+ *  rewrites the histogram on every mode or lookback change, and the old node
+ *  would otherwise sit in the registry forever, reporting unsaved edits on an
+ *  element no longer in the document. */
+export function clearFormDirty(form) {
+  _dirtyForms.delete(form);
+}
+
+/** True when `form` — a container passed to guardForm — has unsaved edits.
+ *
+ *  For panels that rebuild themselves after an unrelated action (mahjong
+ *  remounts the whole page after a card upload or Set Active) and would
+ *  otherwise throw away whatever is half-typed elsewhere on it. */
+export function isFormDirty(form) {
+  return _dirtyForms.has(form);
+}
+
 /** True when a tracked card other than `except` still holds unsaved edits. */
 export function hasDirtySibling(root, except = null) {
   return Array.from(root.querySelectorAll("[data-dk-card]")).some(
@@ -555,7 +587,20 @@ function _normalizeIds(values) {
 // Pass `label` with the visible field label to give the search input an
 // accessible name (aria-label) — otherwise every picker announces only its
 // placeholder. Applies to every mount* helper below.
+// A picker's slot is *replaced* by the widget, so `field()` can never pair the
+// visible <label> with it by id the way it does for a real input — and a
+// caller who forgets `label` ships a combobox whose only accessible name is
+// "Type to filter…". Read the label off the field the slot is sitting in
+// instead, so the default is a named control and `label` is the override.
+function _withDerivedLabel(slotEl, opts) {
+  if (opts.label) return opts;
+  const lbl = slotEl.closest?.(".field, .ctrl-field")?.querySelector("label");
+  const text = lbl ? lbl.textContent.trim().replace(/\s+/g, " ") : "";
+  return text ? { ...opts, label: text } : opts;
+}
+
 export function mountPicker(slotEl, options, value, opts = {}) {
+  opts = _withDerivedLabel(slotEl, opts);
   const fs = filterSelect(opts.placeholder || "Type to filter…", options, opts);
   fs.setValue(value);
   slotEl.replaceWith(fs.el);
@@ -564,6 +609,7 @@ export function mountPicker(slotEl, options, value, opts = {}) {
 
 // Mount a multi-value chip picker, replacing `slotEl`.
 export function mountMultiPicker(slotEl, options, values, opts = {}) {
+  opts = _withDerivedLabel(slotEl, opts);
   const fs = multiFilterSelect(opts.placeholder || "Type to filter…", options, opts);
   fs.setValues(_normalizeIds(values));
   slotEl.replaceWith(fs.el);
@@ -744,7 +790,15 @@ export async function saveSection(section, body) {
 }
 
 export function showStatus(el, ok, msg) {
-  if (ok) _dirty = false; // a successful save clears the unsaved-edits flag
+  if (ok) {
+    // Clear the form this status element belongs to. When it sits outside any
+    // guarded container there is nothing to attribute the save to, so fall
+    // back to the old page-wide clear rather than leave a panel permanently
+    // claiming unsaved edits.
+    const owner = el.closest?.("[data-dk-guard]");
+    if (owner) _dirtyForms.delete(owner);
+    else _dirtyForms.clear();
+  }
   el.className = `save-status ${ok ? "save-ok" : "save-err"}`;
   el.textContent = msg || (ok ? "Saved" : "Error");
   // Errors linger longer than successes, but both clear — a stale "Error"

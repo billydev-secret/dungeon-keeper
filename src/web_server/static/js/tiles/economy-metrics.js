@@ -44,8 +44,8 @@ export function renderTile(el, data) {
     const curNet = minted - burned;
     const prevNet = (prev.minted || 0) - (prev.burned || 0);
     const t = `title="net mint vs last week"`;
-    if (curNet > prevNet) wowArrow = `<span ${t} style="color:var(--green)">▲</span>`;
-    else if (curNet < prevNet) wowArrow = `<span ${t} style="color:var(--red)">▼</span>`;
+    if (curNet > prevNet) wowArrow = `<span ${t} style="color:var(--green-text)">▲</span>`;
+    else if (curNet < prevNet) wowArrow = `<span ${t} style="color:var(--red-text)">▼</span>`;
     else wowArrow = `<span ${t} class="home-dim">▬</span>`;
   }
 

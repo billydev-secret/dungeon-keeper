@@ -44,7 +44,10 @@ export function mountQueue(container, initialParams) {
       const data = await withLoading(openWrap, api("/api/reports/intake-report", { days }));
 
       if (!data.enabled) {
-        statsEl.textContent = "Intake cards are disabled — enable them under Config → Intake Cards.";
+        statsEl.textContent =
+          "Intake cards aren't running — nobody gets a card when they join. "
+          + "Switch them on in Card Settings, below; they also stay off until a "
+          + "card channel is set there (or a greeter chat channel in Welcome & Leave).";
       } else {
         const c = data.counts || {};
         const parts = [

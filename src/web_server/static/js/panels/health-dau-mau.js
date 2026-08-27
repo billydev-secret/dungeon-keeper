@@ -1,6 +1,6 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
-import { mountBotToggle } from "../report-helpers.js";
+import { mountBotToggle, mountReloadable } from "../report-helpers.js";
 import { makeLineChart, makeBarChart, renderChartTable, CHART_BAR } from "../charts.js";
 
 
@@ -22,7 +22,7 @@ export function mount(container) {
 
     const compParts = [];
     if (d.composition) {
-      compParts.push(`<span style="color:var(--green)">${d.composition.returning} returning</span>`);
+      compParts.push(`<span style="color:var(--green-text)">${d.composition.returning} returning</span>`);
       compParts.push(`<span style="color:var(--yellow)">${d.composition.reactivated} reactivated</span>`);
       compParts.push(`<span style="color:var(--plum)">${d.composition.new} new</span>`);
     }
@@ -137,14 +137,9 @@ export function mount(container) {
     });
   }
 
-  function reload() {
-    return load().then(decorate);
-  }
-
-  reload().catch(err => {
-    container.querySelector(".panel").innerHTML = renderError(
-      `Couldn't load DAU/MAU stickiness — ${err.message}. Reload the page to try again.`
-    );
+  // Every pass is guarded, not just the first — see mountReloadable.
+  const reload = mountReloadable(container, {
+    load, decorate, renderError, describe: "DAU/MAU stickiness",
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

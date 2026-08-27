@@ -22,7 +22,7 @@ function stat(value, caption) {
 function bar(fraction) {
   return el("div", {
     style:
-      "height:8px; border-radius:4px; background:var(--accent, var(--gold-solid));" +
+      "height:8px; border-radius:4px; background:var(--gold-solid);" +
       `width:${Math.max(2, Math.round(fraction * 100))}%;`,
   });
 }

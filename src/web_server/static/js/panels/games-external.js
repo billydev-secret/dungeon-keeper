@@ -22,19 +22,16 @@ export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading external tracking…")}</div>`;
 
   return mountAsync(container, async () => {
-    let data, channels, bots;
-    try {
-      [data, channels, bots] = await Promise.all([
-        api("/api/games-external"),
-        loadChannels(),
-        loadBots(),
-      ]);
-    } catch (err) {
-      container.querySelector(".panel").innerHTML = renderError(
-        `Couldn't load external tracking — ${err.message}. Reload the page to try again.`
-      );
-      return;
-    }
+    // Let the rejection reach mountAsync: it draws the error state *and* a
+    // working Try again button. Catching it here rendered a dead-end error
+    // and made this panel's own errorMsg unreachable. wellness-caps.js
+    // documents the same reasoning where it rethrows on first load.
+    // `data` is reassigned by the Re-scan path further down, so this is a let.
+    let [data, channels, bots] = await Promise.all([
+      api("/api/games-external"),
+      loadChannels(),
+      loadBots(),
+    ]);
 
     function render() {
       container.innerHTML = `
@@ -57,7 +54,7 @@ export function mount(container) {
             )}
           </section>
 
-          <section class="form" style="margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--border,#333)">
+          <section class="form" style="margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--rule)">
             <div class="section-label">Add a watch</div>
             <div class="field">
               <label>Channel</label>

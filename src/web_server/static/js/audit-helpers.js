@@ -77,7 +77,10 @@ function buildControl(filter) {
     const label = el("label", null, cb, ` ${filter.label}`);
     return { node: label, read: (params) => { if (cb.checked) params[filter.name] = "true"; }, input: cb };
   }
-  const sel = el("select");
+  // Named so a panel can address its own filter — mod-audit fills the Action
+  // list from the vocabulary the server reports, and `.controls select` would
+  // be a positional guess among several selects (see mod-anon-audit's note).
+  const sel = el("select", { name: filter.name });
   for (const opt of filter.options || []) {
     sel.append(mkOpt(opt.value, opt.label, false));
   }
@@ -123,6 +126,8 @@ function buildTable(rows, total, columns) {
 //   columns: [{ label, render(e), className?, title?(e) }],
 //   fetch: async (params) => ({ rows, total? }),
 // }
+import { initClampCells } from "./clamp-cell.js";
+
 export function auditPanel(container, config) {
   container.replaceChildren();
 
@@ -145,6 +150,9 @@ export function auditPanel(container, config) {
         return;
       }
       tableWrap.replaceChildren(buildTable(rows, total, config.columns));
+      // After insertion: the expander decides whether a cell is actually cut,
+      // and scrollHeight only means anything once the row is laid out.
+      initClampCells(tableWrap);
     } catch (err) {
       tableWrap.replaceChildren(el("div", { className: "error" }, err.message));
     }

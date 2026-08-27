@@ -1,17 +1,16 @@
 import { wGet, esc } from "../wellness-helpers.js";
-import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { renderLoading, renderEmpty } from "../states.js";
 import { mountAsync } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading your weekly reports…")}</div>`;
 
   return mountAsync(container, async () => {
-    let d;
-    try { d = await wGet("/api/wellness/history"); } catch (e) {
-      container.querySelector(".panel").innerHTML =
-        renderError(`Couldn’t load your weekly reports — try again. (${e.message})`);
-      return;
-    }
+    // Let the rejection reach mountAsync: it draws the error state *and* a
+    // working Try again button. Catching it here rendered a dead-end error
+    // and made this panel's own errorMsg unreachable. wellness-caps.js
+    // documents the same reasoning where it rethrows on first load.
+    const d = await wGet("/api/wellness/history");
 
     if (!d.reports.length) {
       container.querySelector(".panel").innerHTML = `

@@ -383,14 +383,33 @@ def test_home_social_butterflies_excludes_bots(authed_client, fake_ctx):
 
 def test_home_recent_actions_returns_latest_audit_rows(authed_client, fake_ctx):
     """recent_actions is part of the mod_actions group (admin-only)."""
-    _seed_audit(fake_ctx.db_path, guild_id=fake_ctx.guild_id, action="jail", actor_id=1, target_id=42, created_at=100)
-    _seed_audit(fake_ctx.db_path, guild_id=fake_ctx.guild_id, action="warn", actor_id=1, target_id=43, created_at=200)
+    _seed_audit(fake_ctx.db_path, guild_id=fake_ctx.guild_id, action="jail_create", actor_id=1, target_id=42, created_at=100)
+    _seed_audit(fake_ctx.db_path, guild_id=fake_ctx.guild_id, action="warning_issue", actor_id=1, target_id=43, created_at=200)
 
     body = authed_client.get("/api/home?fields=mod_actions").json()
     actions = body["recent_actions"]
     assert len(actions) == 2
-    assert actions[0]["action"] == "warn"  # newest first
+    assert actions[0]["action"] == "warning_issue"  # newest first
     assert actions[0]["target_id"] == "43"
+
+
+def test_home_recent_actions_shows_only_moderation(authed_client, fake_ctx):
+    """The home tile says "Recent mod actions" and read the audit log raw. On
+    the main guild 1,398 of 1,602 rows are something else — mostly Voice
+    Control's own lifecycle — so the five newest were almost always five voice
+    channels being created and deleted, which is not what the tile claims."""
+    for i, action in enumerate(["vm_channel_create", "vm_channel_delete",
+                                "survivor_tasks_run", "policy_open", "role_menu.create"]):
+        _seed_audit(fake_ctx.db_path, guild_id=fake_ctx.guild_id, action=action,
+                    actor_id=1, target_id=None, created_at=200 + i)
+    _seed_audit(fake_ctx.db_path, guild_id=fake_ctx.guild_id, action="warning_issue",
+                actor_id=1, target_id=43, created_at=100)
+
+    body = authed_client.get("/api/home?fields=mod_actions").json()
+    actions = [a["action"] for a in body["recent_actions"]]
+    assert actions == ["warning_issue"], (
+        "the tile is showing non-moderation rows as moderation"
+    )
 
 
 # ── Voice channel presence (live guild) ───────────────────────────────

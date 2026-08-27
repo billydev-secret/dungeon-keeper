@@ -1,25 +1,22 @@
 import { wGet, wPost, wDelete, esc, showStatus, enfLabel } from "../wellness-helpers.js";
 import { confirmDialog, toast } from "../ui.js";
 import { guardForm, mountAsync } from "../config-helpers.js";
-import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { renderLoading, renderEmpty } from "../states.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading wellness settings…")}</div>`;
 
   return mountAsync(container, async () => {
-    let dash, defaults, users, exempt;
-    try {
-      [dash, defaults, users, exempt] = await Promise.all([
-        wGet("/api/wellness/admin/dashboard"),
-        wGet("/api/wellness/admin/defaults"),
-        wGet("/api/wellness/admin/users"),
-        wGet("/api/wellness/admin/exempt"),
-      ]);
-    } catch (e) {
-      container.querySelector(".panel").innerHTML =
-        renderError(`Couldn’t load the wellness admin panel — try again. (${e.message})`);
-      return;
-    }
+    // Let the rejection reach mountAsync: it draws the error state *and* a
+    // working Try again button. Catching it here rendered a dead-end error
+    // and made this panel's own errorMsg unreachable. wellness-caps.js
+    // documents the same reasoning where it rethrows on first load.
+    const [dash, defaults, users, exempt] = await Promise.all([
+      wGet("/api/wellness/admin/dashboard"),
+      wGet("/api/wellness/admin/defaults"),
+      wGet("/api/wellness/admin/users"),
+      wGet("/api/wellness/admin/exempt"),
+    ]);
 
     // Overview cards
     const overviewHTML = `
@@ -129,26 +126,36 @@ export function mount(container) {
       } catch (err) { showStatus(dStatus, false, `Couldn’t save — ${err.message}`); }
     });
 
-    // Pause/Resume handlers
-    container.querySelectorAll("[data-pause-uid]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        try {
-          await wPost(`/api/wellness/admin/users/${btn.dataset.pauseUid}/pause`, { minutes: 60 });
-          btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="chip chip-warning">Paused</span>';
-          btn.textContent = "Paused";
-          btn.disabled = true;
-        } catch (e) { toast(`Couldn’t pause that member — ${e.message}`, "error"); }
-      });
-    });
-    container.querySelectorAll("[data-resume-uid]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        try {
-          await wPost(`/api/wellness/admin/users/${btn.dataset.resumeUid}/resume`, {});
-          btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="chip chip-success">Active</span>';
-          btn.textContent = "Resumed";
-          btn.disabled = true;
-        } catch (e) { toast(`Couldn’t resume that member — ${e.message}`, "error"); }
-      });
+    // Pause/Resume. Delegated, because a button flips to the opposite action
+    // after it fires: a listener bound to the element would keep running the
+    // action the button no longer offers. Before this, acting on a row left a
+    // disabled "Paused"/"Resumed" label and no way to undo without a reload.
+    container.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-pause-uid], [data-resume-uid]");
+      if (!btn || btn.disabled) return;
+      const pausing = "pauseUid" in btn.dataset;
+      const uid = pausing ? btn.dataset.pauseUid : btn.dataset.resumeUid;
+      const statusCell = btn.closest("tr").querySelector("td:nth-child(4)");
+      btn.disabled = true;
+      try {
+        if (pausing) {
+          await wPost(`/api/wellness/admin/users/${uid}/pause`, { minutes: 60 });
+          statusCell.innerHTML = '<span class="chip chip-warning">Paused</span>';
+          delete btn.dataset.pauseUid;
+          btn.dataset.resumeUid = uid;
+          btn.textContent = "Resume";
+        } else {
+          await wPost(`/api/wellness/admin/users/${uid}/resume`, {});
+          statusCell.innerHTML = '<span class="chip chip-success">Active</span>';
+          delete btn.dataset.resumeUid;
+          btn.dataset.pauseUid = uid;
+          btn.textContent = "Pause 60 Minutes";
+        }
+      } catch (err) {
+        toast(`Couldn’t ${pausing ? "pause" : "resume"} that member — ${err.message}`, "error");
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     // Exempt remove

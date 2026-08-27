@@ -25,6 +25,10 @@
       src: url("/static/fonts/publicsans-var-latin.woff2") format("woff2");
     }
     :root {
+      /* This page has its own stylesheet and never loads app.css, so it
+         needs its own declaration — otherwise the browser paints the
+         scrollbar and focus ring light on a dark sign-in screen. */
+      color-scheme: dark;
       --sans: "Public Sans", "Noto Sans", "Helvetica Neue", helvetica, arial, sans-serif;
       --display: "Archivo", "Public Sans", "Helvetica Neue", helvetica, arial, sans-serif;
       --bg: #2b2d31;

@@ -3,6 +3,10 @@ import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart, renderChartTable } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
+// `initialParams` is the parsed window.location.hash (see app.js parseHash),
+// so every value in it is attacker-controlled through a link. Anything from it
+// that reaches markup is coerced — these are number inputs, so parseInt is both
+// the guard and the correct read.
 export function mount(container, initialParams) {
   container.innerHTML = `
     <div class="panel">
@@ -12,7 +16,7 @@ export function mount(container, initialParams) {
       </header>
       <div class="controls">
         <label>Minimum Previous Messages
-          <input type="number" data-control="min_previous" min="1" max="100" value="${initialParams.min_previous || 5}" />
+          <input type="number" data-control="min_previous" min="1" max="100" value="${parseInt(initialParams.min_previous) || 5}" />
         </label>
         <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
           <input type="checkbox" data-control="normalize" />
@@ -98,8 +102,8 @@ export function mount(container, initialParams) {
         { key: "msgs_prev", label: "Previous" },
         { key: "msgs_recent", label: "Recent" },
         // html: colored numbers, no user-supplied text (see table.js ESCAPING).
-        { key: "drop_pct", label: "Raw Drop %", html: true, format: (v) => `<span style="color:#9E3B2E">${v}%</span>` },
-        { key: "normalized_drop_pct", label: "Normalized Drop %", html: true, format: (v) => `<span style="color:#9E3B2E">${v}%</span>` },
+        { key: "drop_pct", label: "Raw Drop %", html: true, format: (v) => `<span style="color:var(--red-text)">${v}%</span>` },
+        { key: "normalized_drop_pct", label: "Normalized Drop %", html: true, format: (v) => `<span style="color:var(--red-text)">${v}%</span>` },
         { key: "days_active_prev", label: "Active Days (Previous)" },
         { key: "days_active_recent", label: "Active Days (Recent)" },
         { key: "last_seen_ts", label: "Last Seen", format: (v) => fmtDate(v) },

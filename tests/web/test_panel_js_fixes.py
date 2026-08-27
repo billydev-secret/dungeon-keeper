@@ -557,3 +557,303 @@ def test_games_config_clears_the_audit_channel_with_a_delete(page):
     assert out["puts"] == 0, "cleared audit channel was still PUT"
     assert "Pick a channel first" not in out["status"]
     assert "Cleared" in out["status"], out["status"]
+
+
+# ── The Gini panel that rendered nothing but its empty state ─────────────
+
+# The panel guarded on `(d.tiers || []).length`. `tiers` is an object keyed by
+# tier name, so `.length` is undefined and the guard was always true — the
+# panel showed nothing but its empty state from 2026-07-23, over a server with
+# 41k messages, and raised no console error to give it away.
+#
+# Fixed on main independently and better: `posters` is the count of distinct
+# authors in the window, which is exactly what the empty state claims, where a
+# sum over the tiers only approximated it. Compared against 0 rather than
+# falsy, so a payload cached before the field existed still renders.
+_GINI_BODY = {
+    "gini": 0.62,
+    "posters": 53,
+    "badge": "healthy",
+    "tiers": {"lurker": 4, "light": 30, "moderate": 12, "active": 5, "power": 2},
+    "lorenz": [[0, 0], [50, 20], [100, 100]],
+    "sparkline": [0.6, 0.61, 0.62, 0.62],
+    "gini_history": [],
+    "top_share": 41.0,
+    "median_msgs": 7,
+    "contributors": 53,
+}
+
+
+def test_gini_renders_its_data_instead_of_the_empty_state(page):
+    """Fails against the pre-fix panel, which showed the empty state for a
+    month with no console error to give it away."""
+    _mount(page, "/static/js/panels/health-gini.js",
+           {"/api/health/gini": {"body": _GINI_BODY}})
+    html = page.inner_html("#host")
+    assert "No messages in the last 30 days" not in html, (
+        "panel still short-circuits to its empty state with data present"
+    )
+    assert "0.62" in html, "the headline Gini figure never rendered"
+
+
+def test_gini_still_shows_the_empty_state_when_nobody_posted(page):
+    """The guard has to keep working — the fix is a real emptiness test, not
+    its removal."""
+    body = {**_GINI_BODY, "posters": 0,
+            "tiers": {"lurker": 0, "light": 0, "moderate": 0,
+                      "active": 0, "power": 0}}
+    _mount(page, "/static/js/panels/health-gini.js",
+           {"/api/health/gini": {"body": body}})
+    assert "No messages in the last 30 days" in page.inner_html("#host")
+
+
+# ── Comboboxes announce the field they sit in ────────────────────────────
+
+
+def test_a_picker_takes_its_name_from_the_field_it_sits_in(page):
+    """A picker's slot is replaced by the widget, so `field()` can never pair
+    the visible <label> with it by id. Callers that forgot `label` shipped a
+    combobox whose only accessible name was its placeholder."""
+    name = page.evaluate("""
+      async () => {
+        const h = await import('/static/js/config-helpers.js');
+        document.body.innerHTML = '<div id="host"></div>';
+        const slot = document.createElement('span');
+        const fieldEl = h.field('Starboard Channel', slot, 'where posts go');
+        document.getElementById('host').appendChild(fieldEl);
+        h.mountChannelPicker(slot, [], '0');
+        return document.querySelector('#host input[role="combobox"]')
+                 ?.getAttribute('aria-label');
+      }
+    """)
+    assert name == "Starboard Channel", f"combobox announced {name!r}"
+
+
+def test_an_explicit_label_still_wins_over_the_derived_one(page):
+    name = page.evaluate("""
+      async () => {
+        const h = await import('/static/js/config-helpers.js');
+        document.body.innerHTML = '<div id="host"></div>';
+        const slot = document.createElement('span');
+        document.getElementById('host').appendChild(h.field('Visible', slot));
+        h.mountChannelPicker(slot, [], '0', { label: 'Explicit' });
+        return document.querySelector('#host input[role="combobox"]')
+                 ?.getAttribute('aria-label');
+      }
+    """)
+    assert name == "Explicit"
+
+
+# ── One dirty bit per form, not per page ────────────────────────────────
+
+
+_TWO_FORMS = """
+  async () => {
+    const h = await import('/static/js/config-helpers.js');
+    window.__dkDirtyReset();
+    document.body.innerHTML =
+      '<form id="a"><input name="x"><span id="sa"></span></form>' +
+      '<form id="b"><input name="y"><span id="sb"></span></form>';
+    const a = h.guardForm(document.getElementById('a'));
+    const b = h.guardForm(document.getElementById('b'));
+    // Type in both, so both hold unsaved edits.
+    for (const f of [a, b]) {
+      f.querySelector('input').value = 'edited';
+      f.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const bothDirty = window.__dkDirty();
+    // Save only form A.
+    h.showStatus(document.getElementById('sa'), true, 'Saved');
+    return { bothDirty, stillDirty: window.__dkDirty() };
+  }
+"""
+
+
+def test_saving_one_form_leaves_a_sibling_forms_warning_armed(page):
+    """Fails against the pre-fix helper: `_dirty` was one module global that any
+    successful save cleared, so form B's unsaved edits stopped being guarded."""
+    r = page.evaluate(_TWO_FORMS)
+    assert r["bothDirty"] is True, "editing two guarded forms did not mark the page dirty"
+    assert r["stillDirty"] is True, (
+        "saving form A disarmed the unsaved-edits warning protecting form B"
+    )
+
+
+def test_saving_the_last_dirty_form_does_clear_the_warning(page):
+    """The flag must still clear, or every navigation prompts forever."""
+    cleared = page.evaluate("""
+      async () => {
+        const h = await import('/static/js/config-helpers.js');
+        window.__dkDirtyReset();
+        document.body.innerHTML = '<form id="a"><input name="x"><span id="sa"></span></form>';
+        const a = h.guardForm(document.getElementById('a'));
+        a.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
+        h.showStatus(document.getElementById('sa'), true, 'Saved');
+        return window.__dkDirty();
+      }
+    """)
+    assert cleared is False
+
+
+def test_a_status_element_outside_any_guarded_form_still_clears_everything(page):
+    """The fallback: with nothing to attribute the save to, keep the old
+    page-wide clear rather than leave a panel permanently claiming edits."""
+    cleared = page.evaluate("""
+      async () => {
+        const h = await import('/static/js/config-helpers.js');
+        window.__dkDirtyReset();
+        document.body.innerHTML =
+          '<form id="a"><input name="x"></form><span id="loose"></span>';
+        const a = h.guardForm(document.getElementById('a'));
+        a.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));
+        h.showStatus(document.getElementById('loose'), true, 'Saved');
+        return window.__dkDirty();
+      }
+    """)
+    assert cleared is False
+
+
+# ── audit cells are readable without a tooltip ──────────────────────────
+
+
+_LONG = "x" * 900
+
+
+def test_a_short_reason_needs_no_expander(page):
+    """Every reason, note, filename and details value in prod is under 85
+    characters, so three lines shows all of them outright. An expander on a
+    cell that is not cut would be noise."""
+    out = page.evaluate("""
+      async () => {
+        const { initClampCells } = await import('/static/js/clamp-cell.js');
+        document.body.innerHTML =
+          '<table class="data-table"><tbody><tr>' +
+          '<td class="reason-cell">spamming the same link in four channels</td>' +
+          '</tr></tbody></table>';
+        initClampCells(document.body);
+        const cell = document.querySelector('.reason-cell');
+        return {
+          wrapped: !!cell.querySelector('.clamp'),
+          hasButton: !!cell.querySelector('.clamp-more'),
+          text: cell.querySelector('.clamp').textContent,
+        };
+      }
+    """)
+    assert out["wrapped"] is True
+    assert out["hasButton"] is False, "an uncut cell should not offer More"
+    assert "four channels" in out["text"]
+
+
+def test_a_long_confession_expands_from_the_keyboard(page):
+    """The value the page exists to show was reachable only through a title
+    attribute — invisible to touch, unreachable by keyboard, not selectable.
+    A native button gets Enter and Space without a role or a keydown handler."""
+    out = page.evaluate("""
+      async (long) => {
+        const { initClampCells } = await import('/static/js/clamp-cell.js');
+        document.body.innerHTML =
+          '<table class="data-table"><tbody><tr>' +
+          '<td class="reason-cell">' + long + '</td></tr></tbody></table>';
+        initClampCells(document.body);
+        const cell = document.querySelector('.reason-cell');
+        const btn = cell.querySelector('.clamp-more');
+        if (!btn) return { hasButton: false };
+        const before = btn.getAttribute('aria-expanded');
+        btn.focus();
+        const focused = document.activeElement === btn;
+        btn.click();
+        return {
+          hasButton: true, before, focused,
+          after: btn.getAttribute('aria-expanded'),
+          open: cell.classList.contains('is-open'),
+          label: btn.textContent,
+          tag: btn.tagName,
+          fullTextPresent: cell.querySelector('.clamp').textContent.length,
+        };
+      }
+    """, _LONG)
+    assert out["hasButton"] is True, "a 900-character cell was not given an expander"
+    assert out["tag"] == "BUTTON", "must be a real button, for free Enter/Space"
+    assert out["focused"] is True
+    assert (out["before"], out["after"]) == ("false", "true")
+    assert out["open"] is True
+    assert out["label"] == "Less"
+    # The whole value is in the DOM, not a 120-character slice of it.
+    assert out["fullTextPresent"] == 900
+
+
+def test_the_expander_does_not_open_the_row_behind_it(page):
+    """mod-policy-tickets binds a delegated tbody click that opens the
+    transcript modal for anything inside the row. Without stopPropagation,
+    reading a cell launches a modal over the table you were reading."""
+    fired = page.evaluate("""
+      async (long) => {
+        const { initClampCells } = await import('/static/js/clamp-cell.js');
+        document.body.innerHTML =
+          '<table class="data-table"><tbody><tr class="clickable-row">' +
+          '<td class="reason-cell">' + long + '</td></tr></tbody></table>';
+        initClampCells(document.body);
+        let rowClicks = 0;
+        document.querySelector('tbody').addEventListener('click', () => { rowClicks++; });
+        document.querySelector('.clamp-more').click();
+        return rowClicks;
+      }
+    """, _LONG)
+    assert fired == 0, "expanding a cell also triggered the row's click handler"
+
+
+def test_reinitialising_after_a_rerender_does_not_double_wrap(page):
+    """auditPanel calls this on every refresh."""
+    depth = page.evaluate("""
+      async () => {
+        const { initClampCells } = await import('/static/js/clamp-cell.js');
+        document.body.innerHTML =
+          '<table class="data-table"><tbody><tr>' +
+          '<td class="reason-cell">a reason</td></tr></tbody></table>';
+        initClampCells(document.body);
+        initClampCells(document.body);
+        return document.querySelectorAll('.reason-cell .clamp').length;
+      }
+    """)
+    assert depth == 1
+
+
+def test_the_clamp_still_wraps_at_phone_width(browser, dashboard):
+    """app.css sets `.data-table { white-space: nowrap }` under 768px so wide
+    tables scroll sideways, and white-space inherits. Without an explicit
+    override on the clamp wrapper the three-line clamp collapses to one line
+    running off the side — worse than the tooltip it replaced.
+
+    Measured: 4 lines with the override, one sideways line without it. The
+    existing mobile layout scan does NOT catch this (it passes either way),
+    which is why the check lives here.
+    """
+    ctx = browser.new_context(viewport={"width": 390, "height": 700})
+    page = ctx.new_page()
+    try:
+        page.goto(f"{dashboard.base}/", wait_until="domcontentloaded")
+        result = page.evaluate("""
+          () => {
+            document.body.innerHTML =
+              '<table class="data-table"><tbody><tr><td class="reason-cell">' +
+              'the member kept reposting the same referral link '.repeat(6) +
+              '</td></tr></tbody></table>';
+            const td = document.querySelector('.reason-cell');
+            const clamp = document.createElement('div');
+            clamp.className = 'clamp';
+            while (td.firstChild) clamp.append(td.firstChild);
+            td.append(clamp);
+            const cs = getComputedStyle(clamp);
+            return {
+              whiteSpace: cs.whiteSpace,
+              runsSideways: clamp.scrollWidth > clamp.clientWidth + 1,
+            };
+          }
+        """)
+        assert result["whiteSpace"] == "normal", (
+            "the phone rule's nowrap reached the clamp; it will render one line"
+        )
+        assert result["runsSideways"] is False
+    finally:
+        ctx.close()
+

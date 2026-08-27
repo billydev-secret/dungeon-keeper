@@ -24,7 +24,7 @@ function renderList(docs, activeKey) {
 
 function renderPreview(embeds, accent) {
   if (!embeds || !embeds.length) return '<div class="empty" style="padding:16px">Nothing to preview.</div>';
-  const bar = accent && /^#?[0-9a-fA-F]{6}$/.test(accent) ? (accent[0] === "#" ? accent : "#" + accent) : "var(--accent, #E6B84C)";
+  const bar = accent && /^#?[0-9a-fA-F]{6}$/.test(accent) ? (accent[0] === "#" ? accent : "#" + accent) : "var(--gold-solid)";
   return embeds.map((e) => `
     <div class="dp-embed" style="border-left-color:${esc(bar)}">
       <div class="dp-desc">${mdToHtml(e.description)}</div>

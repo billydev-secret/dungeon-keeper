@@ -250,6 +250,12 @@ function render(container, grants, channels, roles) {
         <button type="button" class="tag-remove perm-remove" data-grant="${esc(name)}" data-idx="${i}" title="Remove ${esc(permLabel(p, roles))}">&times;</button>
       </span>`).join("");
     listEl.innerHTML = `<div class="tag-list">${tagsHTML}</div>`;
+    // Add and remove here are button clicks that mutate g._perms directly, and
+    // a click fires nothing guardForm listens for. Removing a permission was
+    // untracked outright; adding one was only tracked by accident, because the
+    // picker beside it happens to dispatch dk:change. Announce it properly so
+    // leaving with an unsaved permission change warns.
+    listEl.dispatchEvent(new CustomEvent("dk:change", { bubbles: true }));
   }
 
   // Save handlers

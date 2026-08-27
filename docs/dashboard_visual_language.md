@@ -31,6 +31,69 @@ back under the floor. It was added after finding 23 declarations that used the
 saturated pair as text — including the Tickets status chips (3.34:1) and
 `.error` / `.save-err` / `.num-err`, which is to say the error messages.
 
+**The same sweep now reads panel JS**, which is where the rule was actually
+being broken. The original scanned `app.css` and `help-panel.css`; its regex
+would have matched the JS offenders verbatim, but inline styles built from
+template literals were simply out of scope — and that is where most of this
+dashboard's colour decisions are made. Fifteen sites were using the saturated
+tier as words: `config-moderation`'s Danger Zone eyebrow (11px uppercase, the
+worst case for the split), `live-log`'s ERROR and CRITICAL lines at 4.37:1,
+`gender-admin`'s save status, `system-stats`' backup rows, `table.js`, and
+four tiles.
+
+The JS half is **strict by default**: any saturated token written in JS is an
+offender unless its line declares a fill (`background`, `border`, `fill`,
+`stroke`, …). A first draft enumerated the shapes a colour can take instead —
+a literal `color:`, an assignment to `.style.color`, a local holding
+`"var(--red)"` — and missed `live-log.js` completely, because its map is a
+multi-line object literal reached through a destructured loop variable.
+Enumerating how a value can travel is a losing game; making the fill declare
+itself is not.
+
+Five declarations reach a fill from somewhere other than their own line — a
+colour map read later as `background:${…}`, or a helper whose return value is.
+Those are listed in `_INDIRECT_FILLS` with a reason each, and a second test
+fails if an exemption stops naming a real fill, so an exemption can't rot into
+a hole. Where the fill was an inline argument with nothing to name
+(`channel-health`'s mini-bar), it was hoisted to a named constant rather than
+given a special case.
+
+## Every `var(--x)` must name a token that exists
+
+An undeclared custom property fails silently in both directions.
+`color: var(--danger)` with no `--danger` is an invalid declaration the browser
+drops, so the element inherits whatever was above it; `color: var(--danger,
+#e55)` is worse, because it always renders the literal and therefore looks
+deliberate while ignoring the theme entirely. Neither raises a console error,
+so panel-load health passes them too.
+
+A sweep found **64 such uses across 19 names**: `--border` (29 uses in 12
+files) resolving to a hardcoded `#333` that measures 1.00:1 against `--bg`,
+`--ink-muted` — a typo for `--ink-mute` — inside the shell ~10 game panels
+render through, and `--danger`, `--warn`, `--ok`, `--surface`, `--fg`,
+`--muted`, `--dim` and `--font-mono` shadowing tokens that already existed
+under the house names.
+
+`tests/web/test_css_token_hygiene.py` fails on any reference to a token `:root`
+does not declare. It reads **panel JS as well as the stylesheets**, because
+that is where this concentrates: an inline style built in a template literal is
+invisible to a CSS linter. Same gap let the saturated/`-text` rule above hold
+in `app.css` and break in JS.
+
+Status colour follows the same two-tier split as red and green:
+
+| job | use |
+|---|---|
+| text on a page surface | `--red-text` `--green-text` `--yellow` `--ink-dim` |
+| a tint behind that text | `--red-soft` `--green-soft` `--gold-soft` `--rule-soft` |
+| a **saturated** fill | `--red` `--green` `--yellow` — and then the text on it is `--bg-rail`, never inherited |
+
+Panels used to hand-roll this per file, which is how the health badges shipped
+`#9E3B2E` on its own 20% tint at **1.84:1**, the QA chips built
+`background:<hex>22; color:<hex>` from one table (three of five under 4.5:1),
+and the funnel bar printed its count in `--ink` on solid gold at **1.37:1**.
+Reach for `.badge-*` and `.t-chip.*` before inventing a colour.
+
 ## Buttons: one filled primary, and never a destructive one
 
 `.act-btn` is the shared button, used by Tickets, Jails, Todo, Announcements,
@@ -51,11 +114,108 @@ red fill, which made "jail this person" the loudest control on the page while
 you were still reading the queue. Solid-red styling belongs on the confirm
 dialog's button, where a decision is actually being taken.
 
+That rule reaches both button kits. `.btn-danger` — the `.btn` kit's
+destructive variant, and the far more used one, 33 call sites against
+`.act-btn.danger`'s two — was still a solid `--red` fill with white text, which
+is 3.77:1 as well as too loud. It is now outlined in the same `--red-text`
+tier, and the solid treatment is **scoped to `.confirm-box`**, which is the
+exception the rule already named. That button's fill is Discord's darker
+`#da373c`, because `--red` under white is under AA at `--btn`'s 12.5px.
+`tests/web/test_css_contrast_tiers.py` pins both halves.
+
 Where a pane's actions operate on more than one object, group them and say
 which is which — Tickets splits **This ticket** (state) from **This member**
 (a permanent moderation record), using the existing `.section-label`. A member's
 display name inside such a label wears `.td-act-who`, which cancels the
 uppercase: an eyebrow is uppercase, a name someone chose is not.
+
+## Sequential ramps are quantized, because continuous ones cannot carry text
+
+The activity heatmap paints each cell as gold over the card at an alpha set by
+its value, and prints the count inside the cell. A **continuous** ramp cannot
+do both: it necessarily passes through a band of mid luminance where neither
+`--ink-bright` nor `--bg-rail` reaches 4.5:1, and the best any ink pairing
+achieves at the crossover is **3.85:1**. No swap inside the Discord greys
+escapes it — `--bg-floor` gets 4.11, pure black 4.35, and only pure white on
+pure black clears it at 4.58.
+
+Five buckets straddle the band instead of walking through it. The stops —
+`0.04, 0.25, 0.46, 0.69, 0.96` — were **searched, not chosen**: they maximise
+the weakest step between neighbouring buckets subject to every bucket's better
+ink clearing AA. That matters because the obvious ramp, optimised for text
+alone, reaches 5.26:1 on text and then collapses its top three buckets to
+1.28:1 of each other — trading a contrast problem for an encoding one. The
+shipped stops give 1.59:1 between every pair, evenly, so the scale reads as a
+scale.
+
+Quantizing only helps if a bucket can be read back as a number, and this panel
+had **no legend at all**. It has one now. Bucket 0 means nothing happened and
+is never a rounding of something that did — an hour with one message must not
+look like an hour with none.
+
+The arithmetic is pinned in `tests/web/test_css_contrast_tiers.py`, including
+the neighbour separation, so retuning a stop for looks cannot quietly undo
+either half.
+
+## Anything you can click, you can reach with a keyboard
+
+Three shapes on this dashboard were mouse-only, each because a plain `<div>` or
+`<th>` was given a click listener and nothing else.
+
+**Queue rows.** Tickets, Jails, Warnings and Todo render a list of
+`.ticket-item` rows, and each drives its detail pane entirely from which row is
+selected — so a keyboard-only moderator could not reach the right-hand half of
+the moderation surface at all. The rows carry `tabindex="0"`, `role="button"`
+and `aria-current`, and activation comes from `bindRowActivation` in `ui.js`
+rather than a fifth copy of the same click/keydown pair. `.active` was
+colour-only; `aria-current` is what says "this one" out loud.
+
+**Sortable headers.** `renderSortableTable` backs 14 panels and emitted bare
+`<th data-sort>` with a delegated click. `aria-sort` appeared nowhere in the
+static tree, so the current sort was carried by a `::after` arrow alone.
+Headers are now focusable, answer Enter and Space, and declare
+`aria-sort="ascending|descending|none"`. Re-rendering replaces the table, so a
+keyboard sort restores focus to the header it was on — otherwise the user is
+dropped at the top of the document.
+
+**Comboboxes.** A picker's slot is *replaced* by the widget, so `field()` can
+never pair the visible `<label>` with it by id the way it does for a real
+input. `mountPicker` now reads the label off the enclosing `.field` /
+`.ctrl-field`, so a named control is the default and `label` is the override.
+Before that, a caller who forgot `label` shipped a combobox announcing only
+"Type to filter…".
+
+The global `:focus-visible` rule means all three get the gold ring for free —
+`--blurple` was 2.74:1, under the 3:1 floor WCAG 1.4.11 sets for a focus
+indicator, which is why the ring is gold everywhere.
+
+`tests/web/test_a11y_keyboard_rows.py` holds the line on all of it — plus the
+one clickable **table row** (policy tickets), which keeps its implicit `row`
+role rather than taking `role="button"`: overriding it would cost the
+row/column semantics a screen-reader user navigates a table by.
+
+A visible label only names a control when it is paired with it. `field()` does
+that by id, but only for fields built imperatively; five panels build the same
+`.field` markup as a template literal, so 26 controls had a label contributing
+nothing. Fifteen are paired by id now, and the eleven that live in **repeated
+row editors** — which have no stable id to pair against — carry `aria-label`
+instead. `tests/web/test_panel_contracts.py` accepts either and rejects
+neither.
+
+That file also holds two contracts that fail silently in the same way:
+
+- **A class in a `class="btn …"` attribute must exist**, in a stylesheet or in
+  a panel's injected `<style>` block. `chat-revive` shipped `btn small`,
+  `btn small danger` and `btn primary` — ten controls including a delete — and
+  survivor and pen-pals-settings reached for `.btn-small` where the kit spells
+  it `.btn-sm`. A class that no rule defines styles nothing and says nothing.
+- **`mod-audit`'s action keys must be strings the bot actually writes.** Six of
+  twelve were short forms nobody wrote, so the Jail, Unjail, Warning, Warning
+  Revoke, Pull and Remove filters each matched zero rows over a log holding
+  plenty of each, and every such row rendered its raw key as its own label.
+  The test scrapes `action="…"` keyword arguments out of the bot, not any
+  quoted token — the looser version passes with the bug still in place, which
+  is how the first draft of it was caught.
 
 ## Two typefaces, both self-hosted
 

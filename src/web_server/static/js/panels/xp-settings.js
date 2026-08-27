@@ -1,3 +1,4 @@
+import { esc } from "../api.js";
 import {
   loadConfig, loadChannels, loadRoles, loadMembers,
   mountChannelPicker, mountRolePicker, mountChannelMultiPicker, mountMemberMultiPicker,
@@ -134,12 +135,12 @@ export function mountSettings(container) {
             <div class="section-label">Rapid-Fire Slowdown</div>
             <div class="field">
               <label for="xp-cooldown_thresholds_seconds">Rapid-Fire Time Tiers (seconds)</label>
-              <input type="text" name="cooldown_thresholds_seconds" id="xp-cooldown_thresholds_seconds" required value="${xp.cooldown_thresholds_seconds}" style="max-width:220px;" />
+              <input type="text" name="cooldown_thresholds_seconds" id="xp-cooldown_thresholds_seconds" required value="${esc(xp.cooldown_thresholds_seconds)}" style="max-width:220px;" />
               <div class="field-hint">Three numbers, separated by commas, measured since the member's last message. Posting inside the first tier earns the least. Default 10,30,60.</div>
             </div>
             <div class="field">
               <label for="xp-cooldown_multipliers">Rapid-Fire Multipliers</label>
-              <input type="text" name="cooldown_multipliers" id="xp-cooldown_multipliers" required value="${xp.cooldown_multipliers}" style="max-width:220px;" />
+              <input type="text" name="cooldown_multipliers" id="xp-cooldown_multipliers" required value="${esc(xp.cooldown_multipliers)}" style="max-width:220px;" />
               <div class="field-hint">Three numbers, separated by commas, matching the tiers above. 0.35 means a message in that tier earns 35% of its normal XP. Default 0.35,0.6,0.85.</div>
             </div>
           </div>

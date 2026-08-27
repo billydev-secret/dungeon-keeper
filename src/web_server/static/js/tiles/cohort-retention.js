@@ -1,4 +1,5 @@
 import { badgeHTML } from "./tile-helpers.js";
+import { CHART_BAR } from "../charts.js";
 
 export function renderTile(el, data) {
   const fmt = v => (v === null || v === undefined) ? "—" : `${v}%`;
@@ -11,8 +12,8 @@ export function renderTile(el, data) {
     .filter(p => p.v !== null && p.v !== undefined);
   const pts = plotted.map(p => `${p.x},${h - (p.v / 100) * (h - 4) - 2}`);
   const svg = plotted.length >= 2 ? `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="display:block;">
-    <polyline points="${pts.join(" ")}" fill="none" stroke="#E6B84C" stroke-width="2" stroke-linejoin="round"/>
-    ${plotted.map(p => `<circle cx="${p.x}" cy="${h - (p.v / 100) * (h - 4) - 2}" r="3" fill="#E6B84C"/>`).join("")}
+    <polyline points="${pts.join(" ")}" fill="none" stroke="${CHART_BAR}" stroke-width="2" stroke-linejoin="round"/>
+    ${plotted.map(p => `<circle cx="${p.x}" cy="${h - (p.v / 100) * (h - 4) - 2}" r="3" fill="${CHART_BAR}"/>`).join("")}
   </svg>` : "";
 
   el.innerHTML = `

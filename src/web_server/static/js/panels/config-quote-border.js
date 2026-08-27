@@ -49,10 +49,10 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading quote tool…</div></div>`;
 
   return mountAsync(container, async () => {
-    let meta = { exists: false };
-    try {
-      meta = await api("/api/config/quote-border");
-    } catch (_) { /* fall through to the empty state */ }
+    // No try/catch on purpose: "no border set" is a 200 with exists:false,
+    // so a rejection here is a genuine failure and belongs to mountAsync,
+    // which draws it with a working Try again.
+    const meta = await api("/api/config/quote-border");
 
     container.innerHTML = `
       <div class="panel">

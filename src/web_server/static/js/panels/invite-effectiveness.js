@@ -2,6 +2,10 @@ import { api, esc } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart, renderChartTable } from "../charts.js";
 
+// `initialParams` is the parsed window.location.hash (see app.js parseHash),
+// so every value in it is attacker-controlled through a link. Anything from it
+// that reaches markup is coerced — these are number inputs, so parseInt is both
+// the guard and the correct read.
 export function mount(container, initialParams) {
   container.innerHTML = `
     <div class="panel">
@@ -11,7 +15,7 @@ export function mount(container, initialParams) {
       </header>
       <div class="controls">
         <label>Counts as Active Within (Days)
-          <input type="number" data-control="active_days" min="1" max="365" value="${initialParams.active_days || 30}" />
+          <input type="number" data-control="active_days" min="1" max="365" value="${parseInt(initialParams.active_days) || 30}" />
         </label>
       </div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
@@ -85,7 +89,7 @@ export function mount(container, initialParams) {
         ? invitees.map(i => `
             <tr class="invitee-row">
               <td colspan="2" style="padding-left:2rem">${esc(i.invitee_name || i.invitee_id)}</td>
-              <td colspan="3" style="color:${i.active ? "var(--color-success, #57f287)" : "var(--ink-mute)"}">
+              <td colspan="3" style="color:${i.active ? "var(--green-text)" : "var(--ink-mute)"}">
                 ${i.active ? "Active" : "Inactive"}
               </td>
             </tr>`).join("")

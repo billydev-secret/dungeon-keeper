@@ -117,6 +117,17 @@
   --s-5: 24px;
   --s-6: 32px;
   --s-7: 48px;
+  /* Tells the browser to render NATIVE control chrome in dark mode: the
+     up/down spinners on <input type="number">, checkbox and radio glyphs,
+     scrollbars, date pickers, and the focus ring's default colour.
+
+     Without this the page was dark but every native widget on it was drawn
+     with light-mode chrome — most visibly ~125 number-input spinner arrows
+     across 48 panels rendering as pale grey on a dark field. No amount of
+     `background`/`color` CSS fixes those; they are painted by the browser,
+     not by us, and `color-scheme` is the only switch. */
+  color-scheme: dark;
+
   --r-sm: 4px;
   --r:    8px;
   --sidebar-w:           240px;
@@ -752,13 +763,29 @@ a { text-decoration: none; }
   border-color: transparent;
   color: #1a1108;
 }
+/* A destructive action is never the filled one — see
+   docs/dashboard_visual_language.md. The outlined treatment matches
+   .act-btn.danger, which is the same rule in the other button kit. */
 .btn-danger {
-  background: var(--red);
+  background: transparent;
+  border-color: #f23f4359;
+  color: var(--red-text);
+}
+.btn-danger:hover {
+  background: var(--red-soft);
+  border-color: var(--red);
+  color: var(--red-text);
+}
+/* The exception the rule names: inside a confirm dialog a decision is actually
+   being taken, so that button is solid. --red under white text is 3.77:1, so
+   the fill is Discord's own darker danger red, which clears AA at 12.5px. */
+.confirm-box .btn-danger {
+  background: #da373c;
   border-color: transparent;
   color: #fff;
 }
-.btn-danger:hover {
-  background: #ff5256;
+.confirm-box .btn-danger:hover {
+  background: #c62828;
   border-color: transparent;
   color: #fff;
 }
@@ -1943,7 +1970,52 @@ textarea.field-input { resize: vertical; }
 .badge-dim     { background: var(--rule); color: var(--ink-dim); }
 
 .user-cell   { white-space: nowrap; }
-.reason-cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The audit tables' one substantive column — a moderation reason, a note, a
+   filename, a confession — used to be cut to a single 260px line with the rest
+   in a title= tooltip. A tooltip is invisible to touch, unreachable by
+   keyboard in most browsers, and not selectable, so on eight panels the value
+   the page exists to show was effectively unreadable; four of the ten columns
+   had no title at all.
+
+   Three lines clears every reason, note, filename and details value in prod
+   (all under 85 characters). The few that still overflow — confession content,
+   a policy description — get a real <button> from clamp-cell.js. */
+.reason-cell { max-width: 320px; }
+.reason-cell .clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  /* LOAD-BEARING. The phone rule further down sets .data-table white-space to
+     nowrap so wide tables scroll sideways, and white-space inherits. Without
+     this override the clamp collapses to one line running off the side at
+     390px — worse than the tooltip it replaced. Measured, not assumed: four
+     lines with it, one sideways line without.
+
+     The mobile layout scan does NOT catch this; it passes either way. The
+     guard is test_the_clamp_still_wraps_at_phone_width. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.reason-cell.is-open .clamp {
+  display: block;
+  /* A 969-character confession scrolls inside its own cell rather than growing
+     the row to twenty lines and losing the table. */
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.reason-cell .clamp-more {
+  background: none;
+  border: 0;
+  padding: var(--s-0) 0;
+  margin-top: var(--s-0);
+  font: inherit;
+  font-size: var(--t-1);
+  color: var(--gold-solid);
+  cursor: pointer;
+  text-decoration: underline;
+}
 
 /* ── LegitLibs template card strips ─────────────────────────────────── */
 
@@ -2452,6 +2524,10 @@ textarea.field-input { resize: vertical; }
   content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
   border-radius: 50%; background: var(--ink-dim); transition: .2s;
 }
+.w-toggle input:focus-visible + .w-toggle-track {
+  outline: 2px solid var(--gold-solid);
+  outline-offset: 2px;
+}
 .w-toggle input:checked + .w-toggle-track { background: var(--green); }
 .w-toggle input:checked + .w-toggle-track::after { transform: translateX(16px); background: #fff; }
 
@@ -2552,8 +2628,8 @@ textarea.field-input { resize: vertical; }
 }
 
 .w-histo-slider-val {
-  font-size: 10px;
-  color: #B36A92;
+  font-size: var(--t-1);
+  color: var(--plum);
   font-weight: 600;
   min-width: 20px;
   text-align: center;
@@ -2670,17 +2746,20 @@ textarea.field-input { resize: vertical; }
   letter-spacing: 0.04em;
   padding: var(--s-0) var(--s-2);
   border-radius: 4px;
+  /* Callers set a saturated status fill inline. Inheriting --ink onto one puts
+     light grey on gold at 1.40:1; the rail black clears AA on every fill the
+     status tables hand us. */
+  color: var(--bg-rail);
 }
-.badge-excellent { background: rgba(127,143,58,0.2); color: #7F8F3A; }
-.badge-healthy   { background: rgba(127,143,58,0.15); color: #7F8F3A; }
+.badge-excellent,
+.badge-healthy,
+.badge-clear     { background: var(--green-soft); color: var(--green-text); }
 .badge-needs_work,
-.badge-needs-work { background: rgba(230,184,76,0.2); color: #E6B84C; }
-.badge-critical  { background: rgba(158,59,46,0.2); color: #9E3B2E; }
-.badge-warning   { background: rgba(230,184,76,0.2); color: #E6B84C; }
-.badge-clear     { background: rgba(127,143,58,0.15); color: #7F8F3A; }
-.badge-active    { background: rgba(158,59,46,0.2); color: #9E3B2E; }
+.badge-needs-work { background: var(--gold-soft); color: var(--yellow); }
+.badge-critical,
+.badge-active    { background: var(--red-soft); color: var(--red-text); }
 .badge-no_data,
-.badge-no-data   { background: rgba(148,155,164,0.15); color: #949ba4; }
+.badge-no-data   { background: var(--rule-soft); color: var(--ink-dim); }
 
 /* Mini bar chart (tile helpers) */
 .health-mini-bar-row {
@@ -2763,6 +2842,27 @@ textarea.field-input { resize: vertical; }
   height: 28px;
   font-variant-numeric: tabular-nums;
 }
+/* The heatmap's scale. The grid quantizes into five buckets, which is only
+   readable with something to decode a bucket against — the panel had no legend
+   at all before. */
+.hm-key {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-top: var(--s-3);
+  font-size: var(--t-1);
+  color: var(--ink-mute);
+}
+.hm-key-label { text-transform: uppercase; letter-spacing: 0.04em; }
+.hm-key-item { display: inline-flex; align-items: center; gap: var(--s-1); }
+.hm-key-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+}
+
 .hm-cell-sm {
   min-width: 16px;
   height: 18px;
@@ -2836,6 +2936,10 @@ textarea.field-input { resize: vertical; }
 .funnel-bar-full {
   height: 32px;
   background: var(--gold-solid);
+  /* The count is printed inside the fill; inherited --ink lands on gold at
+     1.37:1, so the bar carries its own dark ink. */
+  color: var(--bg-rail);
+  font-weight: 600;
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -3437,6 +3541,15 @@ textarea.field-input { resize: vertical; }
 .t-chip.resolved { background: var(--green-soft); color: var(--green-text); }
 .t-chip.closed { background: var(--rule-soft); color: var(--ink-dim); }
 
+/* QA tracker verdicts. Same kit as the ticket chips; these used to build
+   `background:<hex>22;color:<hex>` from one table, which put the fill hue on
+   its own tint — passed/failed/archived all landed under 4.5:1. */
+.t-chip.passed   { background: var(--green-soft); color: var(--green-text); }
+.t-chip.failed   { background: var(--red-soft); color: var(--red-text); }
+.t-chip.blocked  { background: var(--gold-soft); color: var(--yellow); }
+.t-chip.pending,
+.t-chip.archived { background: var(--rule-soft); color: var(--ink-dim); }
+
 .ticket-detail {
   background: var(--bg-card);
   border-radius: var(--r);
@@ -3853,7 +3966,7 @@ select:not([multiple]) {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2380848e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23979ba3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 9px center;
   background-size: 11px;
@@ -3865,7 +3978,7 @@ select option { background: var(--bg-input); color: var(--ink); }
    grouped rule sets `background:` shorthand and out-specifies the chevron
    rule above — restore the arrow + clearance here at higher specificity. */
 .field > label > select:not([multiple]) {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2380848e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23979ba3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 9px center;
   background-size: 11px;
@@ -4729,7 +4842,7 @@ fieldset.field {
   align-items: flex-start;
   justify-content: space-between;
   padding: var(--s-3) 0;
-  border-bottom: 1px solid var(--border, #333);
+  border-bottom: 1px solid var(--rule);
 }
 .panel-row:last-child { border-bottom: 0; }
 .panel-row__main { flex: 1 1 260px; min-width: 0; }
@@ -4746,11 +4859,11 @@ fieldset.field {
 /* External-tracking sample dump: raw bot output, so it must not be reflowed.
    Each block scrolls inside its own box rather than widening the page. */
 .ge-sample { display: flex; flex-direction: column; gap: var(--s-3); }
-.ge-sample__row { border: 1px solid var(--border, #333); border-radius: 6px; padding: 8px; }
+.ge-sample__row { border: 1px solid var(--rule); border-radius: 6px; padding: 8px; }
 .ge-sample__row pre {
   margin: var(--s-1) 0 0;
   padding: var(--s-2);
-  background: var(--surface2, #3a3d42);
+  background: var(--bg-input);
   border-radius: 4px;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -4880,4 +4993,30 @@ fieldset.field {
   font-size: var(--t-2);
   color: var(--ink-dim);
   padding: var(--s-1) 0 var(--s-2);
+}
+
+/* ── Sentiment tile: the emotion breakdown bar ────────────────────────
+   `.emotion-bar` / `.emotion-bar-seg` are written by js/tiles/sentiment.js
+   and had NO styling at all. The segments carry only an inline `width: N%`,
+   so with no height they collapsed and the whole bar measured 0px — the tile
+   has been rendering its emotion breakdown as nothing at all.
+
+   The 2px gap is the same secondary encoding the stacked charts use, and it
+   is required rather than decorative here: five categorical slots out of this
+   palette cannot all clear the CVD target — every 5-of-6 subset lands at
+   ΔE 6.2-6.4, inside the band that is legal only WITH separation. A tooltip
+   is not a substitute; it is not visible.
+   ─────────────────────────────────────────────────────────────────────── */
+.emotion-bar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  margin: var(--s-2) 0;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.emotion-bar-seg {
+  height: 100%;
+  min-width: 2px;
+  border-radius: 1px;
 }

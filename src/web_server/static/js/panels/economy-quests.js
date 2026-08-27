@@ -173,7 +173,7 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
           <div class="field-row">
             <div class="field"><label for="q-reward">Reward (coins)</label>
               <input type="number" name="reward" id="q-reward" required min="0" max="1000000" step="1" value="10" style="max-width:120px;" />
-              <div class="field-hint" data-reward-hint style="color:#d9a441;"></div></div>
+              <div class="field-hint" data-reward-hint style="color:var(--gold-solid);"></div></div>
             <div class="field"><label for="q-reward-xp">Bonus XP</label>
               <input type="number" name="reward_xp" id="q-reward-xp" required min="0" max="1000000" step="1" value="0" style="max-width:120px;" />
               <div class="field-hint">Leveling XP paid alongside the coins. The booster
@@ -240,7 +240,7 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
               "do this many times this period" — with a progress bar on the member's quest
               card. <strong>Weekly and monthly quests must be counted</strong> (2 or more):
               they show progress across the period, only dailies are one-shot.</div>
-            <div class="field-hint" data-target-hint style="color:var(--warn,#b9770e);"></div></div>
+            <div class="field-hint" data-target-hint style="color:var(--yellow);"></div></div>
 
           <div class="field">
             <label style="display:flex; gap:6px; align-items:center;">
@@ -329,13 +329,13 @@ function renderCommunity(container, quests) {
       ? `<div class="field-hint">⚙️ auto-tracking (${esc(q.trigger_kind)}) — counter moves from member activity; the biweekly scheduler sizes the target and settles the 40/70/100% tiers${q.active ? "" : " · waiting in rotation"}</div>`
       : `<div class="field-row" style="align-items:flex-end;">
         <div class="field"><label>Set progress</label>
-          <input type="number" min="0" step="1" data-cprogress="${q.id}" value="${q.community_current || 0}" style="max-width:120px;" /></div>
+          <input type="number" min="0" step="1" aria-label="Set progress" data-cprogress="${q.id}" value="${q.community_current || 0}" style="max-width:120px;" /></div>
         <div class="field"><button class="btn" data-cprogress-save="${q.id}">Save</button></div>
         <div class="field"><button class="btn btn-primary" data-csettle="${q.id}">Settle Payout</button></div>
         <span class="save-status" data-cstatus="${q.id}"></span>
       </div>`;
     return `
-    <div class="community-goal" data-cgoal="${q.id}" style="margin:10px 0; padding:8px 0; border-top:1px solid var(--border);">
+    <div class="community-goal" data-cgoal="${q.id}" style="margin:10px 0; padding:8px 0; border-top:1px solid var(--rule);">
       <strong>${esc(q.title)}</strong>
       <div class="field-hint">${stateBits}</div>
       ${controls}

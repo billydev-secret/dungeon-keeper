@@ -1,5 +1,8 @@
 import { miniBarHTML } from "./tile-helpers.js";
 
+// The mini-bar's fill, not text — saturated is correct here.
+const BAR_FILL = "var(--green)";
+
 export function renderTile(el, data, names) {
   const bars = (data.top5 || []).map(ch => ({
     label: names.channels[ch.channel_id] ? "#" + names.channels[ch.channel_id] : "#" + ch.channel_id,
@@ -15,7 +18,7 @@ export function renderTile(el, data, names) {
       ${flagged}
     </div>
     <div class="health-tile-metric">${data.active_count} <span class="health-tile-unit">active</span></div>
-    ${miniBarHTML(bars, { maxVal: 100, color: "var(--green)" })}
+    ${miniBarHTML(bars, { maxVal: 100, color: BAR_FILL })}
     <div class="health-tile-companions">
       <span>${data.dormant_count} dormant</span>
       <span>${data.archive_count || 0} archive</span>
