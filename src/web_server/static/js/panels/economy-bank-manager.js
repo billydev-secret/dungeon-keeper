@@ -1,6 +1,7 @@
-// Economy — Operations. The day-to-day manager work: community-goal progress
-// & settlement, grants, perk rentals, and the ledger audit stream. Claim
-// sign-off lives on the Claims page, quest authoring on the Quests page.
+// Economy — Operations. The day-to-day manager work: grants, perk rentals,
+// and the ledger audit stream. Claim sign-off lives on the Claims page;
+// quest authoring and community-goal progress/settlement live on the Quests
+// page, where community goals are just quests with qtype = 'community'.
 // Gated by the economy manager role (or admin).
 import { api, apiPost, esc, fmtAge, fmtTs } from "../api.js";
 import {
@@ -8,7 +9,7 @@ import {
   mountMemberPicker,
   mountAsync,
 } from "../config-helpers.js";
-import { toast, confirmDialog } from "../ui.js";
+import { confirmDialog } from "../ui.js";
 
 // Common ledger kinds for the audit filter (free text still allowed).
 const LEDGER_KINDS = [
@@ -40,15 +41,10 @@ function render(container, members) {
     <div class="panel">
       <header>
         <h2>Operations</h2>
-        <div class="subtitle">Community goals, grants, rentals, and the ledger —
-          sign-off lives on <a href="#/economy-claims">Claims</a>, authoring on
-          <a href="#/economy-quests">Quests</a></div>
+        <div class="subtitle">Grants, rentals, and the ledger — sign-off lives on
+          <a href="#/economy-claims">Claims</a>, and quest authoring plus
+          community goals on <a href="#/economy-quests">Quests</a></div>
       </header>
-
-      <section class="card" data-sec="community" style="display:none;">
-        <div class="section-label">Community Goals</div>
-        <div data-community></div>
-      </section>
 
       <section class="card" data-sec="grant">
         <div class="section-label">Grant Currency</div>
@@ -111,7 +107,6 @@ function render(container, members) {
   wireGrant(container, members);
   wireRemove(container, members);
   wireLedger(container, members);
-  refreshCommunity(container, members);
   refreshRentals(container, members);
   refreshLedger(container, members);
 }
@@ -191,82 +186,6 @@ async function refreshRentals(container, members) {
         refreshRentals(container, members);
       } catch (err) {
         showStatus(status, false, err.message); // 409 when not live
-      }
-    });
-  });
-}
-
-// ── community goals ──────────────────────────────────────────────────
-
-async function refreshCommunity(container, members) {
-  const sec = container.querySelector("[data-sec='community']");
-  const host = sec.querySelector("[data-community]");
-  let quests;
-  try {
-    quests = (await api("/api/economy/quests")).quests;
-  } catch (err) {
-    sec.style.display = "";
-    host.innerHTML = `<div class="error">${esc(err.message)}</div>`;
-    return;
-  }
-  const community = quests.filter((q) => q.qtype === "community");
-  // The whole card hides when there are no community goals — an empty
-  // placeholder card was just noise.
-  sec.style.display = community.length ? "" : "none";
-  if (!community.length) {
-    host.innerHTML = "";
-    return;
-  }
-  const rows = community.map((q) => {
-    const stateBits = `${q.community_current || 0} / ${q.community_target ?? "—"} ${q.community_completed_at ? "· completed" : ""} ${q.community_settled_at ? "· settled" : ""}`;
-    // Auto-tracking weeklies (trigger_kind set) run themselves: member
-    // activity moves the counter and the scheduler pays the tiers — the
-    // manual controls would 422, so they aren't rendered.
-    const controls = q.trigger_kind
-      ? `<div class="field-hint">⚙️ auto-tracking (${esc(q.trigger_kind)}) — counter moves from member activity; the biweekly scheduler sizes the target and settles the 40/70/100% tiers${q.active ? "" : " · waiting in rotation"}</div>`
-      : `<div class="field-row" style="align-items:flex-end;">
-        <div class="field"><label>Set progress</label>
-          <input type="number" min="0" step="1" data-cprogress="${q.id}" value="${q.community_current || 0}" style="max-width:120px;" /></div>
-        <div class="field"><button class="btn" data-cprogress-save="${q.id}">Save</button></div>
-        <div class="field"><button class="btn btn-primary" data-csettle="${q.id}">Settle Payout</button></div>
-        <span class="save-status" data-cstatus="${q.id}"></span>
-      </div>`;
-    return `
-    <div class="community-goal" data-cgoal="${q.id}" style="margin:10px 0; padding:8px 0; border-top:1px solid var(--border);">
-      <strong>${esc(q.title)}</strong>
-      <div class="field-hint">${stateBits}</div>
-      ${controls}
-    </div>`;
-  }).join("");
-  host.innerHTML = rows;
-
-  host.querySelectorAll("[data-cprogress-save]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.cprogressSave;
-      const val = parseInt(host.querySelector(`[data-cprogress="${id}"]`).value, 10) || 0;
-      const status = host.querySelector(`[data-cstatus="${id}"]`);
-      try {
-        await apiPost(`/api/economy/quests/${id}/progress`, { current: val });
-        showStatus(status, true);
-        refreshCommunity(container, members);
-      } catch (err) {
-        showStatus(status, false, err.message);
-      }
-    });
-  });
-  host.querySelectorAll("[data-csettle]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.csettle;
-      const status = host.querySelector(`[data-cstatus="${id}"]`);
-      if (!(await confirmDialog("Settle this community quest now? Every active member is paid once; re-settling only pays members missed earlier.", { confirmLabel: "Settle" }))) return;
-      try {
-        const res = await apiPost(`/api/economy/quests/${id}/settle`, {});
-        showStatus(status, true, `Paid ${res.paid_count}`);
-        toast(`Paid ${res.paid_count} member(s)`, "success");
-        refreshCommunity(container, members);
-        refreshLedger(container, members);
-      } catch (err) {
-        showStatus(status, false, err.message);
       }
     });
   });

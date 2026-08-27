@@ -1,5 +1,12 @@
-import { api, esc } from "../api.js";
+import { api, apiPost, apiDelete, esc } from "../api.js";
 import { apiPut, showStatus, guardForm, mountAsync } from "../config-helpers.js";
+
+// Cheapest win first — mirrors advisor_gaps.STATUS_ORDER and the Home tile.
+const SUGG_STATUS = {
+  ready_but_off: { label: "Just switch on", cls: "sugg-ready" },
+  partial: { label: "Half set up", cls: "sugg-partial" },
+  unconfigured: { label: "Not set up", cls: "sugg-unset" },
+};
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
@@ -80,6 +87,16 @@ export function mount(container) {
             <span data-status></span>
           </div>
         </form>
+
+        <div class="card" data-sec="suggestions">
+          <div class="section-label">Suggested Setup</div>
+          <div class="field-hint" style="margin-bottom:8px;">
+            The features this server hasn't set up — the same list the Home page
+            tile shows, in full. Dismiss one and it stops being suggested to
+            everybody, permanently; restore it here to bring it back.
+          </div>
+          <div data-suggestions><div class="empty">Loading…</div></div>
+        </div>
       </div>
     `;
 
@@ -101,5 +118,70 @@ export function mount(container) {
         showStatus(status, false, err.message);
       }
     });
+
+    // Fired off after the settings render rather than awaited alongside them:
+    // this card is advisory, and a failure here must not take the page down.
+    refreshSuggestions(container);
   }, { errorMsg: "Couldn’t load the advisor settings." });
+}
+
+// ── suggested setup (manage view) ────────────────────────────────────
+//
+// The Home tile can dismiss but has no room to list what was dismissed, so the
+// way back lives here — the page that tile already links to. Dismissal is
+// guild-level: it records that the server passed on a feature, not that one
+// admin is tired of seeing it, so what's cleared here is cleared for everyone.
+
+async function refreshSuggestions(container) {
+  const host = container.querySelector("[data-suggestions]");
+  if (!host) return;
+  let rows;
+  try {
+    rows = (await api("/api/help/suggestions", { limit: 40, include_dismissed: "true" }))
+      .suggestions;
+  } catch (err) {
+    host.innerHTML = `<div class="error">Setup suggestions failed to load: ${esc(err.message)}</div>`;
+    return;
+  }
+  if (!rows.length) {
+    host.innerHTML = `<div class="empty">Everything I track is already set up. Nice.</div>`;
+    return;
+  }
+  host.innerHTML = rows.map((s) => {
+    const st = SUGG_STATUS[s.status] || SUGG_STATUS.unconfigured;
+    const needs = (s.missing || []).map((m) => m.label);
+    return `
+      <div class="sugg-manage-row${s.dismissed ? " sugg-dismissed" : ""}">
+        <div class="sugg-row">
+          <div class="sugg-head">
+            <span class="sugg-name">${esc(s.label)}</span>
+            <span class="sugg-badge ${st.cls}">${esc(st.label)}</span>
+            ${s.dismissed ? `<span class="sugg-badge sugg-unset">Dismissed</span>` : ""}
+          </div>
+          <div class="sugg-blurb">${esc(s.blurb)}</div>
+          ${needs.length ? `<div class="sugg-needs">Still needs: ${esc(needs.join(", "))}</div>` : ""}
+          <div class="sugg-panel">${esc(s.panel)}</div>
+        </div>
+        <button type="button" class="btn" data-sugg-toggle="${esc(s.slug)}"
+          data-sugg-dismissed="${s.dismissed ? "1" : ""}">
+          ${s.dismissed ? "Restore" : "Dismiss"}
+        </button>
+      </div>`;
+  }).join("");
+
+  host.querySelectorAll("[data-sugg-toggle]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const slug = btn.dataset.suggToggle;
+      const path = `/api/help/suggestions/${encodeURIComponent(slug)}/dismiss`;
+      btn.disabled = true;
+      try {
+        if (btn.dataset.suggDismissed) await apiDelete(path);
+        else await apiPost(path);
+      } catch (_) {
+        btn.disabled = false;
+        return;
+      }
+      refreshSuggestions(container);
+    });
+  });
 }

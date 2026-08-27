@@ -17,6 +17,11 @@ def _conn(rows, guild_id=1):
         "CREATE TABLE config (guild_id INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL, "
         "value TEXT NOT NULL, PRIMARY KEY (guild_id, key))"
     )
+    conn.execute(
+        "CREATE TABLE setup_suggestion_dismissals (guild_id INTEGER NOT NULL, "
+        "feature_key TEXT NOT NULL, dismissed_at REAL NOT NULL DEFAULT 0, "
+        "PRIMARY KEY (guild_id, feature_key))"
+    )
     conn.executemany(
         "INSERT INTO config VALUES (?, ?, ?)", [(guild_id, k, v) for k, v in rows]
     )
@@ -259,6 +264,11 @@ def _db_file(tmp_path, rows):
         "CREATE TABLE config (guild_id INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL, "
         "value TEXT NOT NULL, PRIMARY KEY (guild_id, key))"
     )
+    conn.execute(
+        "CREATE TABLE setup_suggestion_dismissals (guild_id INTEGER NOT NULL, "
+        "feature_key TEXT NOT NULL, dismissed_at REAL NOT NULL DEFAULT 0, "
+        "PRIMARY KEY (guild_id, feature_key))"
+    )
     conn.executemany("INSERT INTO config VALUES (1, ?, ?)", rows)
     conn.commit()
     conn.close()
@@ -296,3 +306,88 @@ def test_fetch_setup_gaps_returns_text_on_failure(tmp_path):
     out = ag.fetch_setup_gaps(tmp_path / "nope" / "missing.db", 1,
                               FakeMember(administrator=True))
     assert "Couldn't check" in out or "Welcome messages" in out
+
+
+# ── dismissal ────────────────────────────────────────────────────────
+
+# A dismissal says "this server has decided not to use that feature". It is
+# keyed by guild alone — not by the admin who clicked — so it holds for
+# everyone, and carries no personal data.
+
+
+def _real_slug(conn):
+    """The slug the live registry would suggest first for an empty guild."""
+    return ag.suggestions(conn, 1, limit=1)[0].feature.slug
+
+
+def test_dismissed_feature_drops_out_of_suggestions():
+    conn = _conn([])
+    first = _real_slug(conn)
+    assert ag.dismiss(conn, 1, first) is True
+    assert first not in {g.feature.slug for g in ag.suggestions(conn, 1, limit=3)}
+    # The row behind it gets its turn, which is the point of dismissing.
+    assert len(ag.suggestions(conn, 1, limit=3)) == 3
+
+
+def test_dismissal_is_guild_scoped():
+    conn = _conn([])
+    first = _real_slug(conn)
+    ag.dismiss(conn, 1, first)
+    assert ag.dismissed_slugs(conn, 1) == {first}
+    assert ag.dismissed_slugs(conn, 2) == set()
+
+
+def test_restore_brings_a_dismissed_suggestion_back():
+    conn = _conn([])
+    first = _real_slug(conn)
+    ag.dismiss(conn, 1, first)
+    assert ag.restore(conn, 1, first) is True
+    assert first in {g.feature.slug for g in ag.suggestions(conn, 1, limit=3)}
+
+
+def test_scan_marks_dismissed_rather_than_hiding_them():
+    """The full scan is the honest picture — Billy-bot reads this one."""
+    conn = _conn([])
+    first = _real_slug(conn)
+    ag.dismiss(conn, 1, first)
+    marked = {g.feature.slug: g.dismissed for g in ag.scan_guild(conn, 1)}
+    assert marked[first] is True
+    assert sum(marked.values()) == 1
+    report = ag.format_gap_report(ag.scan_guild(conn, 1))
+    assert "the server has dismissed this suggestion" in report
+
+
+def test_manage_view_can_ask_for_dismissed_rows():
+    conn = _conn([])
+    first = _real_slug(conn)
+    ag.dismiss(conn, 1, first)
+    shown = ag.suggestions(conn, 1, limit=40, include_dismissed=True)
+    assert first in {g.feature.slug for g in shown}
+
+
+def test_an_unknown_slug_is_refused_not_stored():
+    conn = _conn([])
+    assert ag.dismiss(conn, 1, "not-a-feature") is False
+    assert ag.restore(conn, 1, "not-a-feature") is False
+    assert ag.dismissed_slugs(conn, 1) == set()
+
+
+def test_a_stale_row_for_a_removed_feature_is_inert():
+    """Features get renamed; a dismissal naming one must not break the scan."""
+    conn = _conn([])
+    conn.execute(
+        "INSERT INTO setup_suggestion_dismissals VALUES (1, 'feature-that-left', 0)"
+    )
+    assert ag.dismissed_slugs(conn, 1) == set()
+    assert len(ag.suggestions(conn, 1, limit=3)) == 3
+
+
+def test_suggestions_survive_a_missing_dismissals_table():
+    """Advisory data: a DB that hasn't migrated yet still gets its tile."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE config (guild_id INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL, "
+        "value TEXT NOT NULL, PRIMARY KEY (guild_id, key))"
+    )
+    assert len(ag.suggestions(conn, 1, limit=3)) == 3

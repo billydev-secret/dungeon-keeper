@@ -568,16 +568,33 @@ def compute_gini(
     top10_abs = sum(msg_counts[top10_idx:])
     palma = round(top10_abs / bottom40_share, 2) if bottom40_share else 0
 
-    # Participation tiers
+    # Participation tiers. `rows` comes from a GROUP BY over messages, so every
+    # row has cnt >= 1 — a lurker, who posted nothing, is absent from it by
+    # construction and the old `wk == 0` branch could never be taken. Counting
+    # lurkers means reading membership and subtracting the people who posted.
+    # Members who have left (current_member=0) are not lurkers: they aren't
+    # here to be quiet.
+    poster_ids = {r["author_id"] for r in rows}
+    member_clause, member_params = bot_filter_clause(
+        guild_id, column="user_id", include_bots=include_bots
+    )
+    lurkers = sum(
+        1
+        for r in conn.execute(
+            f"SELECT user_id FROM known_users "
+            f"WHERE guild_id=? AND current_member=1{member_clause}",
+            (guild_id, *member_params),
+        )
+        if r["user_id"] not in poster_ids
+    )
+
     user_counts_weekly = {}
     for r in rows:
         user_counts_weekly[r["author_id"]] = r["cnt"] / 4.3  # approximate weekly
 
-    lurkers = power = active = moderate = light = 0
+    power = active = moderate = light = 0
     for wk in user_counts_weekly.values():
-        if wk == 0:
-            lurkers += 1
-        elif wk <= 5:
+        if wk <= 5:
             light += 1
         elif wk <= 20:
             moderate += 1
@@ -698,6 +715,11 @@ def compute_gini(
     return {
         "gini": gini_val,
         "badge": badge,
+        # Distinct authors in the window. `tiers` is a five-key dict that is
+        # never empty, so it can't answer "did anyone post?" — this can, and
+        # the panel's empty state hangs off it.
+        "posters": n,
+        "total_messages": total_msgs,
         "lorenz": lorenz,
         "top5_share": top5_share,
         "top10_share": top10_share,
@@ -1417,121 +1439,6 @@ def compute_mod_workload(
         "action_types": action_types,
         "escalation_rate": escalation_rate,
         "recidivism_rate": recidivism_rate,
-    }
-
-
-# ---------------------------------------------------------------------------
-# 11. Composite health score
-# ---------------------------------------------------------------------------
-
-
-def compute_composite_health(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    *,
-    dau_mau_data: dict | None = None,
-    gini_data: dict | None = None,
-    social_data: dict | None = None,
-    sentiment_data: dict | None = None,
-    retention_data: dict | None = None,
-    heatmap_data: dict | None = None,
-) -> dict:
-    """Compute the composite health score from the other tiles' data.
-    Callers should pass pre-computed tile data where available."""
-
-    def _dim_score(value, healthy_range, weight):
-        """Normalize a metric value to 0-100 based on healthy range."""
-        lo, hi = healthy_range
-        if hi == lo:
-            return 50
-        normalized = (value - lo) / (hi - lo)
-        return max(0, min(100, round(normalized * 100)))
-
-    # Activity (20%) — based on DAU/MAU ratio
-    dau_mau_ratio = (dau_mau_data or {}).get("dau_mau", 0)
-    activity_score = min(100, round(dau_mau_ratio * 2.5))  # 40% = 100
-
-    # Engagement (20%) — based on heatmap activity consistency
-    dead_hours = (heatmap_data or {}).get("dead_hours", 168)
-    engagement_score = max(0, min(100, round((1 - dead_hours / 168) * 100)))
-
-    # Distribution (15%) — based on inverse Gini
-    gini_val = (gini_data or {}).get("gini", 0.85)
-    distribution_score = max(
-        0, min(100, round((1 - gini_val) * 150))
-    )  # 0.33 gini = 100
-
-    # Network (15%) — based on clustering coefficient
-    clustering = (social_data or {}).get("clustering_coefficient", 0)
-    network_score = min(100, round(clustering * 200))  # 0.5 = 100
-
-    # Retention (15%) — based on D7 retention
-    d7 = (retention_data or {}).get("d7") or 0
-    retention_score = min(100, round(d7 * 1.25))  # 80% = 100
-
-    # Sentiment (15%) — based on avg sentiment
-    avg_sent = (sentiment_data or {}).get("avg_sentiment", 0)
-    sentiment_score = max(
-        0, min(100, round((avg_sent + 0.5) * 100))
-    )  # -0.5 to +0.5 -> 0-100
-
-    # Weighted composite
-    composite = round(
-        activity_score * 0.20
-        + engagement_score * 0.20
-        + distribution_score * 0.15
-        + network_score * 0.15
-        + retention_score * 0.15
-        + sentiment_score * 0.15
-    )
-
-    dimensions = [
-        {"name": "Activity", "score": activity_score, "weight": 20},
-        {"name": "Engagement", "score": engagement_score, "weight": 20},
-        {"name": "Distribution", "score": distribution_score, "weight": 15},
-        {"name": "Network", "score": network_score, "weight": 15},
-        {"name": "Retention", "score": retention_score, "weight": 15},
-        {"name": "Sentiment", "score": sentiment_score, "weight": 15},
-    ]
-
-    # Recommendations: weakest dimensions first
-    sorted_dims = sorted(dimensions, key=lambda d: d["score"])
-    recommendations = []
-    interventions = {
-        "Activity": "Schedule events during peak hours identified in the heatmap to boost daily return rate.",
-        "Engagement": "Reduce dead hours by scheduling discussion prompts during quiet periods.",
-        "Distribution": "Create structured activities (game nights, Q&A) that encourage broader participation.",
-        "Network": "Pair new members with mentors to accelerate relationship formation.",
-        "Retention": "Implement personal DM outreach for members who haven't returned after 7 days.",
-        "Sentiment": "Review the negative spike log and address recurring sources of friction.",
-    }
-    for dim in sorted_dims[:3]:
-        if dim["score"] < 80:
-            recommendations.append(
-                {
-                    "dimension": dim["name"],
-                    "score": dim["score"],
-                    "action": interventions.get(dim["name"], ""),
-                    "estimated_impact": round(
-                        (80 - dim["score"]) * dim["weight"] / 100, 1
-                    ),
-                }
-            )
-
-    if composite >= 80:
-        badge = "excellent"
-    elif composite >= 60:
-        badge = "healthy"
-    elif composite >= 40:
-        badge = "needs_work"
-    else:
-        badge = "critical"
-
-    return {
-        "score": composite,
-        "badge": badge,
-        "dimensions": dimensions,
-        "recommendations": recommendations,
     }
 
 

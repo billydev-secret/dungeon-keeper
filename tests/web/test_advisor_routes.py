@@ -32,7 +32,8 @@ def test_suggestions_on_a_bare_server_lists_gaps(open_client):
     body = r.json()
     assert len(body["suggestions"]) == 3  # default limit
     first = body["suggestions"][0]
-    assert {"slug", "label", "blurb", "panel", "status", "effort", "missing"} <= set(first)
+    assert {"slug", "label", "blurb", "panel", "status", "effort", "missing",
+            "dismissed"} <= set(first)
     assert first["status"] in ("ready_but_off", "partial", "unconfigured")
 
 
@@ -45,9 +46,10 @@ def test_suggestions_returns_guild_id_as_a_string(open_client, fake_ctx):
 
 def test_suggestions_limit_is_honoured_and_clamped(open_client):
     assert len(open_client.get("/api/help/suggestions?limit=1").json()["suggestions"]) == 1
-    # Out-of-range values clamp rather than erroring or returning everything.
+    # Out-of-range values clamp rather than erroring. The ceiling is 40 rather
+    # than the tile's 3 because the manage view asks for every gap at once.
     big = open_client.get("/api/help/suggestions?limit=999").json()["suggestions"]
-    assert len(big) <= 10
+    assert len(big) <= 40
     assert len(open_client.get("/api/help/suggestions?limit=0").json()["suggestions"]) >= 1
 
 
@@ -163,3 +165,52 @@ def test_advisor_name_requires_a_session(fake_ctx):
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
     with TestClient(create_app(fake_ctx, auth=auth), follow_redirects=False) as client:
         assert client.get("/api/help/advisor/name").status_code in (401, 403)
+
+
+# ── dismissal ───────────────────────────────────────────────────────────────
+
+# Dismissing is a decision on behalf of the server, so it takes the same admin
+# gate as reading the list, and it holds for every admin rather than for the
+# one who clicked. The authz sweep covers the gate itself; these cover the
+# round-trip and the shape the tile and manage card consume.
+
+
+def _slugs(client, **params):
+    q = "&".join(f"{k}={v}" for k, v in params.items())
+    body = client.get(f"/api/help/suggestions?{q}" if q else "/api/help/suggestions")
+    return [s["slug"] for s in body.json()["suggestions"]]
+
+
+def test_dismissing_a_suggestion_removes_it_from_the_tile(open_client):
+    first = _slugs(open_client)[0]
+    assert open_client.post(f"/api/help/suggestions/{first}/dismiss").status_code == 200
+    assert first not in _slugs(open_client)
+
+
+def test_a_dismissed_suggestion_can_be_restored(open_client):
+    first = _slugs(open_client)[0]
+    open_client.post(f"/api/help/suggestions/{first}/dismiss")
+    assert open_client.delete(f"/api/help/suggestions/{first}/dismiss").status_code == 200
+    assert first in _slugs(open_client)
+
+
+def test_the_manage_view_sees_dismissed_rows_flagged(open_client):
+    first = _slugs(open_client)[0]
+    open_client.post(f"/api/help/suggestions/{first}/dismiss")
+    rows = open_client.get(
+        "/api/help/suggestions?limit=40&include_dismissed=true"
+    ).json()["suggestions"]
+    by_slug = {r["slug"]: r["dismissed"] for r in rows}
+    assert by_slug[first] is True
+    assert sum(by_slug.values()) == 1
+    # The restore path has to leave the row visible and unflagged.
+    open_client.delete(f"/api/help/suggestions/{first}/dismiss")
+    rows = open_client.get(
+        "/api/help/suggestions?limit=40&include_dismissed=true"
+    ).json()["suggestions"]
+    assert {r["slug"]: r["dismissed"] for r in rows}[first] is False
+
+
+def test_dismissing_an_unknown_feature_is_a_404(open_client):
+    assert open_client.post("/api/help/suggestions/not-a-feature/dismiss").status_code == 404
+    assert open_client.delete("/api/help/suggestions/not-a-feature/dismiss").status_code == 404

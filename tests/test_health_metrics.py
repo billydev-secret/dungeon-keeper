@@ -478,6 +478,49 @@ def test_compute_gini_populated_distribution(db_conn):
     assert out["tiers"]["power"] >= 1
 
 
+def test_compute_gini_counts_silent_members_as_lurkers(db_conn):
+    """A lurker posts nothing, so they are absent from the message rows.
+
+    The tier loop reads ``SELECT … GROUP BY author_id``, where every row has
+    ``cnt >= 1`` — the old ``wk == 0`` branch could never be taken and the
+    Lurker slice was permanently zero. Counting lurkers means reading
+    membership and subtracting the people who posted.
+    """
+    now = 1_700_000_000.0
+    _seed_known_user(db_conn, 1)  # posts
+    _seed_known_user(db_conn, 2)  # silent → lurker
+    _seed_known_user(db_conn, 3)  # silent → lurker
+    _seed_known_user(db_conn, 4, current_member=0)  # left the guild → not a lurker
+    _seed_known_user(db_conn, 99, is_bot=1)  # bot → excluded by default
+    _seed_message(db_conn, mid=1, cid=1, aid=1, ts=int(now) - 60)
+    db_conn.commit()
+
+    out = hm.compute_gini(db_conn, GUILD, now=now)
+    assert out["tiers"]["lurker"] == 2
+    assert out["tiers"]["light"] == 1
+    assert out["posters"] == 1
+    # The bot toggle reaches the lurker count too: opted in, the silent bot is
+    # a silent member like any other.
+    opted_in = hm.compute_gini(db_conn, GUILD, now=now, include_bots=True)
+    assert opted_in["tiers"]["lurker"] == 3
+
+
+def test_compute_gini_reports_poster_count_for_the_empty_state(db_conn):
+    """``posters`` is the honest "nothing to measure" signal.
+
+    ``tiers`` is a five-key dict that is never empty, so the panel cannot ask
+    it whether anyone posted; it asks this instead.
+    """
+    _seed_known_user(db_conn, 2)
+    db_conn.commit()
+    out = hm.compute_gini(db_conn, GUILD, now=1_700_000_000.0)
+    assert out["posters"] == 0
+    assert out["total_messages"] == 0
+    # A silent server still has members — an empty distribution is not an
+    # empty guild.
+    assert out["tiers"]["lurker"] == 1
+
+
 # ── compute_sentiment ────────────────────────────────────────────────
 
 
@@ -890,49 +933,6 @@ def test_compute_mod_workload_excludes_voice_master_self_service(db_conn):
     assert out["total_actions_7d"] == 1
     assert out["mod_actions"][0]["actions"] == 1
     assert not any(t["action"].startswith("vm_") for t in out["action_types"])
-
-
-# ── compute_composite_health ─────────────────────────────────────────
-
-
-def test_compute_composite_health_perfect_inputs():
-    out = hm.compute_composite_health(
-        None,  # type: ignore[arg-type]
-        GUILD,
-        dau_mau_data={"dau_mau": 40},
-        gini_data={"gini": 0.3},
-        social_data={"clustering_coefficient": 0.5},
-        sentiment_data={"avg_sentiment": 0.5},
-        retention_data={"d7": 80},
-        heatmap_data={"dead_hours": 0},
-    )
-    assert out["score"] >= 80
-    assert out["badge"] == "excellent"
-
-
-def test_compute_composite_health_all_defaults_low():
-    out = hm.compute_composite_health(None, GUILD)  # type: ignore[arg-type]
-    # With nothing provided, distribution & engagement & retention & sentiment all stuck at floor
-    assert out["score"] >= 0
-    assert "dimensions" in out and len(out["dimensions"]) == 6
-
-
-def test_compute_composite_health_recommendations_show_weakest():
-    out = hm.compute_composite_health(
-        None,  # type: ignore[arg-type]
-        GUILD,
-        dau_mau_data={"dau_mau": 0},
-        gini_data={"gini": 0.99},
-        social_data={"clustering_coefficient": 0.0},
-        sentiment_data={"avg_sentiment": -0.5},
-        retention_data={"d7": 0},
-        heatmap_data={"dead_hours": 168},
-    )
-    # Three weakest recommended actions surfaced
-    assert len(out["recommendations"]) == 3
-    # Each carries an estimated_impact ≥ 0
-    for rec in out["recommendations"]:
-        assert rec["estimated_impact"] >= 0
 
 
 # ── compute_mod_engagement ───────────────────────────────────────────

@@ -647,3 +647,112 @@ def test_todo_panel_populated_flows_top_to_bottom(dashboard, browser):
         )
         assert not overlaps, f"[{vp}] panel sections overlap:\n" + "\n".join(overlaps)
         _assert_fits(res, f"Todo panel ({vp})")
+
+
+# Shape taken from prod (guild 1469491362444480666, read-only) and anonymised:
+# 155 nodes across 8 Louvain clusters, so the cross-cluster matrix is 8×8 — at
+# 42px a cell plus a 90px label gutter that is 446px, wider than a 390px phone.
+# Names are at or above prod's longest (37 chars). No real member data here.
+_GRAPH_NAMES = [
+    "Cordwainer Bibbleworth-Fanshawe III",
+    "a-fairly-long-hyphenated-membername-x",
+    "moth", "Quillon", "sparrowhawk", "Vex", "Marigold Thistlewaite", "nn",
+]
+_GRAPH_STUB = {
+    "nodes": [
+        {
+            "user_id": str(1469491362444480666 + i),
+            "user_name": name,
+            "total_outbound": 2915 - i * 300,
+            "total_inbound": 3653 - i * 380,
+            "unique_partners": 134 - i * 12,
+            "cluster_id": i,
+        }
+        for i, name in enumerate(_GRAPH_NAMES)
+    ],
+    "edges": [
+        {
+            "from_id": str(1469491362444480666 + i),
+            "from_name": _GRAPH_NAMES[i],
+            "to_id": str(1469491362444480666 + (i + 1) % len(_GRAPH_NAMES)),
+            "to_name": _GRAPH_NAMES[(i + 1) % len(_GRAPH_NAMES)],
+            "weight": 257 - i * 20,
+        }
+        for i in range(len(_GRAPH_NAMES))
+    ],
+    "top_pairs": [
+        {
+            "from_id": str(1469491362444480666 + i),
+            "from_name": _GRAPH_NAMES[i],
+            "to_id": str(1469491362444480666 + (i + 1) % len(_GRAPH_NAMES)),
+            "to_name": _GRAPH_NAMES[(i + 1) % len(_GRAPH_NAMES)],
+            "weight": 508 - i * 40,
+        }
+        for i in range(len(_GRAPH_NAMES))
+    ],
+    "metrics": {
+        "clustering_coefficient": 0.713,
+        "network_density": 0.1917,
+        "reciprocity": 0.871,
+        "isolates": 13,
+        "bridge_count": 5,
+        "bridge_users": [
+            {"user_id": str(1469491362444480666 + i), "user_name": _GRAPH_NAMES[i],
+             "betweenness": round(20.28 - i * 3.1, 2)}
+            for i in range(5)
+        ],
+        "top_betweenness_pct": 20.28,
+        "clusters": [
+            {"id": i, "size": s}
+            for i, s in enumerate([48, 40, 32, 14, 11, 6, 2, 2])
+        ],
+        "cross_cluster_matrix": [
+            [float(4874 - abs(i - j) * 520) for j in range(8)] for i in range(8)
+        ],
+        "cross_cluster_labels": [f"Cluster {i + 1}" for i in range(8)],
+        "avg_path_length": 1.84,
+        "small_world_quotient": 3.72,
+        "node_count": 155,
+        "edge_count": 4575,
+        "badge": "excellent",
+    },
+}
+
+
+def test_connection_graph_populated_fits_on_phone(dashboard, browser):
+    """The Connection Graph, *with data*, on a phone.
+
+    Everything wide on this panel lives behind having a graph to draw: a
+    nine-control strip, a six-tile scorecard, the bridge/cluster tables and an
+    8x8 cross-cluster matrix laid out at a fixed cell size. Against the sweep's
+    freshly-migrated DB the panel renders only its "no connections match these
+    filters" overlay, so none of that is visible to the plain sweep — the same
+    blind spot that hid the mod-engagement faults above.
+    """
+    import json
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        page.route(
+            "**/api/reports/interaction-graph*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(_GRAPH_STUB),
+            ),
+        )
+        _goto_panel(page, f"{dashboard.base}/#/connection-graph")
+        page.wait_for_selector("[data-metrics-tables] table")
+        _settle(page)
+        clusters = page.eval_on_selector_all(
+            "[data-metrics-tables] [data-cluster-row]", "els => els.length"
+        )
+        res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+    finally:
+        context.close()
+    assert clusters == 8, (
+        f"expected the 8 stub clusters, got {clusters} — did the "
+        "/api/reports/interaction-graph stub shape drift?"
+    )
+    _assert_fits(res, "Connection Graph with data")

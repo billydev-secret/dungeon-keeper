@@ -1206,6 +1206,14 @@ textarea.field-input { resize: vertical; }
   min-width: 160px;
 }
 
+/* Connection Graph's control strip carries nine controls. The shared
+   .controls floor of 160px would put every one of them on its own row at
+   phone width; these are all two- or three-digit numbers, so they get a
+   narrower floor and the strip stays a few rows instead of nine. */
+.graph-controls input[type="number"] { min-width: 0; width: 90px; }
+.graph-controls select { min-width: 0; }
+.graph-controls .ctrl-field { display: flex; flex-direction: column; gap: var(--s-1); font-size: var(--t-2); color: var(--ink-dim); }
+
 .chart-wrap {
   background: var(--bg-alt);
   border-radius: 6px;
@@ -4230,6 +4238,30 @@ input[type="radio"] { accent-color: var(--gold-solid); }
   margin-top: var(--s-2);
   font-style: italic;
 }
+/* Per-row dismiss. margin-left:auto pins it to the trailing edge of the row
+   without taking it out of the wrap flow, so on a phone it follows the badge
+   onto the next line instead of overhanging. */
+.sugg-dismiss {
+  margin-left: auto;
+  flex: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-mute);
+  font-size: var(--t-3);
+  line-height: 1;
+  /* A comfortable tap target without growing the row. */
+  padding: 0 var(--s-2);
+  border-radius: var(--r-sm);
+}
+.sugg-dismiss:hover { color: var(--ink); background: var(--rule-soft); }
+.sugg-dismiss:disabled { opacity: 0.4; cursor: default; }
+
+/* Suggested setup, manage view (AI Assistant page) — same rows, plus the
+   restore control the tile has no room for. */
+.sugg-manage-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); }
+.sugg-manage-row .sugg-row { flex: 1 1 240px; min-width: 0; border-bottom: none; }
+.sugg-dismissed { opacity: 0.55; }
 
 /* ══════════════════════════════════════════════════════════════════════
    UX cleanup round (2026-07-22) — see docs/reviews/2026-07-22-website-ux-review.md

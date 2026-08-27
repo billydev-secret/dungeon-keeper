@@ -19,7 +19,6 @@ const WIDGETS = [
   { id: "home-mod-actions", label: "Recent Mod Actions",      category: "Home", perms: ["admin"], source: "home", wide: true,  nav: "mod-audit" },
 
   // ── Health tiles ─────────────────────────────────────────────────
-  { id: "health-composite",        label: "Community Health",    category: "Health", perms: ["admin"], source: "health", tileKey: "composite",        wide: true,  nav: "health-composite-score", needsNames: false },
   { id: "health-dau-mau",          label: "DAU/MAU Stickiness",  category: "Health", perms: ["admin"], source: "health", tileKey: "dau_mau",          wide: false, nav: "health-dau-mau",         needsNames: false },
   { id: "health-heatmap",          label: "Activity Heatmap",    category: "Health", perms: ["admin"], source: "health", tileKey: "heatmap",          wide: false, nav: "health-heatmap",         needsNames: false },
   { id: "health-gini",             label: "Participation Gini",  category: "Health", perms: ["admin"], source: "health", tileKey: "gini",             wide: false, nav: "health-gini",            needsNames: false },
@@ -60,11 +59,10 @@ export const DEFAULT_MOD = [
   "home-loyalists",
 ];
 
-// Admin default: health score + full mod tiles
+// Admin default: setup/config health plus the full mod tile set
 export const DEFAULT_ADMIN = [
   "config-problems",
   "setup-suggestions",
-  "health-composite",
   "home-messages", "home-nsfw", "home-presence", "home-xp",
   "home-joins", "home-moderation", "home-voice", "home-channels",
   "home-users", "home-returned", "home-starters", "home-butterflies",
@@ -87,7 +85,6 @@ const TILE_LOADERS = {
   "home-butterflies":       () => import("./tiles/home-butterflies.js"),
   "home-loyalists":         () => import("./tiles/home-loyalists.js"),
   "home-mod-actions":       () => import("./tiles/home-mod-actions.js"),
-  "health-composite":       () => import("./tiles/composite-score.js"),
   "health-dau-mau":         () => import("./tiles/dau-mau.js"),
   "health-heatmap":         () => import("./tiles/heatmap.js"),
   "health-gini":            () => import("./tiles/gini.js"),
